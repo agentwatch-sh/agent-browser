@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-browser"
+version = "0.1.0"
+description = "Python adapter for agent-browser: typed methods that run its CLI (needs Node 26+ and the agent-browser package folder)"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["agent_browser"]
+
+[tool.setuptools.package-data]
+agent_browser = ["py.typed"]

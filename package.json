@@ -1,0 +1,38 @@
+{
+  "name": "agent-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent browser for agentwatch and vedlo: Chrome over a local proxy, allowlisted hosts only",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "agent-browser": "bin/agent-browser.js"
+  },
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "loader.js",
+    "bin/",
+    "src/",
+    "python/agent_browser/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "npm run test:node && npm run test:python",
+    "test:node": "node --test 'test/**/*.test.ts'",
+    "test:python": "python3 -m unittest discover -s python/tests -t python"
+  },
+  "dependencies": {
+    "ws": "8.21.0"
+  }
+}
