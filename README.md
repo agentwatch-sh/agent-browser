@@ -284,6 +284,13 @@ The host `github.com-AsyncAlchemist` is the SSH alias of the account that can re
 `npm install` then puts the package (with `python/agent_browser`) in `node_modules/agent-browser`, and
 its dependency `ws@8.21.0` beside it. No `prepare` script runs, and none is needed.
 
+**The npm `before=` date.** ws 8.21.0 was published on 2026-05-22. If the consumer's npm config sets
+an older `before=` date (the operator's global `~/.npmrc` does), npm finds no matching ws and the
+install fails with `ETARGET`. vedlo's `.npmrc` already sets `before=null`. Another consumer needs the
+same line in its own `.npmrc`, or `--before=null` for that install. Do not pin an older ws: 8.21.0
+fixes a remote memory-exhaustion DoS in 8.20.x. `npm ci` in a checkout of this repo works with the
+global date.
+
 **Python (agentwatch)**, one of:
 
 1. **A pinned checkout** (the adapter finds the CLI next to itself):
@@ -297,7 +304,10 @@ its dependency `ws@8.21.0` beside it. No `prepare` script runs, and none is need
    Then put `vendor/agent-browser/python` on `sys.path` (or `pip install ./vendor/agent-browser/python`
    and pass `package_dir="vendor/agent-browser"`).
 
-2. **pip from git at a commit** (the adapter only):
+2. **The npm install above**: put `node_modules/agent-browser/python` on `sys.path`. The adapter finds
+   the CLI next to itself there too.
+
+3. **pip from git at a commit** (the adapter only):
 
    ```sh
    pip install "agent-browser @ git+ssh://git@github.com-AsyncAlchemist/agentwatch-sh/agent-browser.git@<sha>#subdirectory=python"
