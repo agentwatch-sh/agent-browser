@@ -287,12 +287,12 @@ The host `github.com-AsyncAlchemist` is the SSH alias of the account that can re
 `npm install` then puts the package (with `python/agent_browser`) in `node_modules/agent-browser`, and
 its dependency `ws@8.21.0` beside it. No `prepare` script runs, and none is needed.
 
-**The npm `before=` date.** ws 8.21.0 was published on 2026-05-22. If the consumer's npm config sets
-an older `before=` date (the operator's global `~/.npmrc` does), npm finds no matching ws and the
-install fails with `ETARGET`. vedlo's `.npmrc` already sets `before=null`. Another consumer needs the
-same line in its own `.npmrc`, or `--before=null` for that install. Do not pin an older ws: 8.21.0
-fixes a remote memory-exhaustion DoS in 8.20.x. `npm ci` in a checkout of this repo works with the
-global date.
+**The npm release age.** The operator's global `~/.npmrc` sets `min-release-age=30` (2026-10-29):
+npm installs only versions published more than 30 days ago. ws 8.21.0 was published on 2026-05-22,
+so it passes. npm refuses `min-release-age` together with a `before=` line (even `before=null`), so a
+consumer must not set `before=` in its own `.npmrc`; to opt out of the age rule, set
+`min-release-age=null` instead. Do not pin an older ws: 8.21.0 fixes a remote memory-exhaustion DoS
+in 8.20.x.
 
 **Python (agentwatch)**, one of:
 
