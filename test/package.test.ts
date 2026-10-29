@@ -86,8 +86,9 @@ test("installed under node_modules, the library, the CLI and its proxy child all
     const { stdout: command } = await run("ps", ["-ww", "-o", "command=", "-p", String(proxy.pid)]);
     assert.ok(command.includes(join("node_modules", "agent-browser", "bin", "agent-browser.js")), "the proxy runs from the installed copy");
   } finally {
+    // The checkout's CLI stops the proxy that the installed copy started: the same consumer, another copy.
     const stop = await run(process.execPath, [join(ROOT, "bin", "agent-browser.js"), "stop", "--state-dir", c.stateDir, "--json"]).catch(() => null);
-    assert.ok(stop);
+    assert.deepEqual(JSON.parse(stop?.stdout ?? "null"), { ok: true, command: "stop", stopped: true });
     await fake.close();
     c.remove();
     rmSync(app, { recursive: true, force: true });

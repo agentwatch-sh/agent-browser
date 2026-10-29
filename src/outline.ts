@@ -1,6 +1,7 @@
 // Reading a page cheaply: `outline` numbers the interactive elements on screen, so an agent can
 // click `#N` without a screenshot; `net` logs a tab's fetch/XHR and WebSocket traffic, redacted.
 
+import { isAllowedUrl } from "./allowlist.ts";
 import type { Tab } from "./browser.ts";
 
 /** The attribute `outline` writes on each numbered element; `#N` refers to it. */
@@ -60,10 +61,16 @@ export type NetEntry =
   | { kind: "http"; method: string; url: string; body: string | null; status: number | null; mime: string | null; resp: string | null }
   | { kind: "ws"; direction: "recv" | "sent"; data: string | null };
 
-/** Log the tab's fetch/XHR/EventSource and WebSocket traffic for `seconds`. Never headers; bodies redacted and clipped at `max`. */
+/**
+ * Log the tab's fetch/XHR/EventSource and WebSocket traffic for `seconds`. Never headers; bodies
+ * redacted and clipped at `max`. Only while the tab's page is allowlisted: once its main frame
+ * navigates off the list (an OAuth redirect), nothing more is recorded, and a request whose
+ * document is off the list is never recorded.
+ */
 export async function netLog(tab: Tab, seconds: number, match: string | undefined, max: number, onEntry: (e: NetEntry) => void = () => {}): Promise<NetEntry[]> {
   await tab.assertAllowed();
   const conn = tab.browser.conn;
+  let onList = true;
   const entries: NetEntry[] = [];
   const emit = (e: NetEntry) => { entries.push(e); onEntry(e); };
   const reqs = new Map<string, { method: string; url: string; body: string | null; status: number | null; mime: string | null }>();
@@ -72,10 +79,14 @@ export async function netLog(tab: Tab, seconds: number, match: string | undefine
     x = redact(x);
     return x.length > max ? x.slice(0, max) + `…(+${x.length - max})` : x;
   };
-  const mine = (sid?: string) => sid === tab.sessionId;
+  const mine = (sid?: string) => sid === tab.sessionId && onList;
   const offs = [
+    conn.on("Page.frameNavigated", (p, sid) => {
+      if (sid === tab.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) { onList = false; reqs.clear(); }
+    }),
     conn.on("Network.requestWillBeSent", (p, sid) => {
       if (!mine(sid) || !["Fetch", "XHR", "EventSource"].includes(p.type)) return;
+      if (p.documentURL !== undefined && !isAllowedUrl(p.documentURL, tab.browser.allow)) return;
       if (match && !p.request.url.includes(match)) return;
       reqs.set(p.requestId, { method: p.request.method, url: redact(p.request.url), body: clip(p.request.postData), status: null, mime: null });
     }),
@@ -92,7 +103,7 @@ export async function netLog(tab: Tab, seconds: number, match: string | undefine
         const { body, base64Encoded } = await tab.send("Network.getResponseBody", { requestId: p.requestId });
         resp = base64Encoded ? `(${body.length} b64 chars)` : clip(body);
       } catch { /* streamed or evicted */ }
-      emit({ kind: "http", ...r, resp });
+      if (onList) emit({ kind: "http", ...r, resp });
     }),
     conn.on("Network.webSocketFrameReceived", (p, sid) => {
       if (mine(sid)) emit({ kind: "ws", direction: "recv", data: clip(p.response.payloadData) });

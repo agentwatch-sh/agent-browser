@@ -59,6 +59,8 @@ export function site(base: string): Site {
   return (url) => {
     if (url.origin !== base) return undefined;
     if (url.pathname === "/") return MAIN_PAGE;
+    // An OAuth-style redirect off the allowlist, right after the page loads.
+    if (url.pathname === "/redirect") return { title: "redirecting", onload: (p) => p.later(0, () => p.fake.navigate(p, "https://login.elsewhere.invalid/oauth?code=SECRET-CODE")) };
     if (url.pathname === "/next") return { title: "next", text: "the next page", elements: [{ tag: "a", text: "Back", attrs: { href: "/" } }] };
     return { title: "404", text: "not found" };
   };

@@ -56,14 +56,16 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | --- | --- | --- |
 | Never launch Chrome with `--remote-debugging-port`. That flag sets `navigator.webdriver`, and Cloudflare, hCaptcha and Google then block every page. The operator turns remote debugging on in `chrome://inspect/#remote-debugging` and approves once for each proxy. | `assertNoDebuggingFlag` in `src/agent.ts` refuses `--remote-debugging-port`, `-pipe` and `-address` before any spawn. | `test/agent.test.ts`, `test/package.test.ts` |
 | Every connection goes through the local proxy socket. | `AgentBrowser.connect` connects only to the proxy socket (`src/proxy.ts`); there is no direct mode. | `test/browser.test.ts` ("one upstream connection"), `test/proxy.test.ts` |
-| Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). The package reads the allowlist file and never writes it. No command or flag adds a host. Mail, account and admin hosts are refused even when a broad entry covers them. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
+| Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. Mail, account and admin hosts are refused even when a broad entry covers them. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window and keep off mail, banking and admin tabs. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
 tests). Under `node --test`, the state folder must be in the temp folder, and personal mode never
 reads the real Chrome profile. A refusal names only the host, never the full URL. `type` never
-echoes its text. `net` never records headers, and it redacts tokens, keys and JWTs.
+echoes its text. `net` never records headers, and it redacts tokens, keys and JWTs. `stop` and
+`quit` signal only this consumer's own proxy (checked by its command line and socket, so a stale pid
+file cannot hit another process) and the Chrome main process on this consumer's own profile.
 
 ## What a consumer provides
 
@@ -209,12 +211,13 @@ is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "tit
 | `fetch <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `contentType` |
 | `download <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `status` int |
 | `close <tab>` | `tab` |
-| `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds`, `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers) |
+| `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds` (at most 3600), `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers; nothing after the tab leaves the allowlist) |
 | `commands` | `commands`: the command list (`name`, `summary`, `usage`, `params`) |
 
-`fetch` and `download` act through an allowlisted tab with its cookies. Their URL can be a CDN on
-another host (as vedlo needs for media), but only `http(s)`. `fetch` follows the page's
-same-origin and CORS rules; `download` uses Chrome's network stack.
+`fetch` and `download` act through an allowlisted tab and send the profile's cookies, so their URL
+must be allowlisted too. A media CDN on another host (for example Suno's `cdn1.suno.ai`) needs its
+own entry in the consumer's allowlist file. `fetch` follows the page's same-origin and CORS rules;
+`download` uses Chrome's network stack.
 
 ## Python adapter (`python/agent_browser`)
 

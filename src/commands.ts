@@ -7,7 +7,8 @@ import { join, resolve } from "node:path";
 import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab } from "./browser.ts";
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
-import { AgentBrowserError, ReadFirstError, UsageError } from "./errors.ts";
+import { isAllowedUrl } from "./allowlist.ts";
+import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError } from "./errors.ts";
 import { resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
@@ -66,12 +67,12 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "shot", summary: "Screenshot as PNG; refused until outline or text has read the page at its current URL", usage: "shot <tab> [path] [--full]",
     params: [TAB, p("path", "string", false, "positional", "output PNG; default <state-dir>/shots/<time>.png"), p("full", "boolean", false, "--full", "the full page, not only the viewport")] },
   { name: "fetch", summary: "Save a URL with the page's fetch() and cookies (same-origin and CORS rules apply)", usage: "fetch <tab> <url> <path>",
-    params: [TAB, p("url", "string", true, "positional", "an http(s) URL"), p("path", "string", true, "positional", "output file")] },
+    params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("path", "string", true, "positional", "output file")] },
   { name: "download", summary: "Save a URL through Chrome's network stack (cross-origin CDN media)", usage: "download <tab> <url> <path>",
-    params: [TAB, p("url", "string", true, "positional", "an http(s) URL"), p("path", "string", true, "positional", "output file")] },
+    params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL (add a CDN's host to the allowlist)"), p("path", "string", true, "positional", "output file")] },
   { name: "close", summary: "Close a tab", usage: "close <tab>", params: [TAB] },
   { name: "net", summary: "Record the tab's fetch/XHR/WebSocket traffic; never headers, bodies redacted", usage: "net <tab> [--seconds N] [--match S] [--max N]",
-    params: [TAB, p("seconds", "number", false, "--seconds", "how long to record; default 60"), p("match", "string", false, "--match", "only URLs that contain this text"),
+    params: [TAB, p("seconds", "number", false, "--seconds", "how long to record; default 60, at most 3600"), p("match", "string", false, "--match", "only URLs that contain this text"),
       p("max", "number", false, "--max", "clip each body at this many characters; default 4000")] },
   { name: "commands", summary: "This list, as JSON", usage: "commands", params: [] },
 ];
@@ -108,6 +109,9 @@ export type CloseResult = Ok<"close", { tab: TabRef }>;
 export type NetResult = Ok<"net", { tab: TabRef; seconds: number; entries: NetEntry[] }>;
 export type CommandsResult = Ok<"commands", { commands: CommandSpec[] }>;
 
+/** The longest `net` capture, in seconds. */
+export const MAX_NET_SECONDS = 3600;
+
 // ---------- helpers ----------
 
 async function withBrowser<T>(o: BrowserOptions | Settings, fn: (b: AgentBrowser) => Promise<T>): Promise<T> {
@@ -117,9 +121,11 @@ async function withBrowser<T>(o: BrowserOptions | Settings, fn: (b: AgentBrowser
 
 const tabRef = (p: PageInfo): TabRef => ({ id: p.targetId.slice(0, 8), targetId: p.targetId, name: p.name ?? null, url: p.url, title: p.title });
 
-/** The tab's reference with its live URL and title (after a navigation). */
+/** The tab's reference with its live URL and title (after a navigation), refused if it was redirected off the allowlist. */
 async function liveRef(tab: Tab, name: string | null): Promise<TabRef> {
+  await tab.assertAllowed();
   const { url, title } = await tab.evaluate(() => ({ url: location.href, title: document.title }));
+  if (!isAllowedUrl(url, tab.browser.allow)) throw new NotAllowedError(url);
   return { id: tab.targetId.slice(0, 8), targetId: tab.targetId, name, url, title };
 }
 
@@ -349,6 +355,7 @@ export const commands = {
   async net(o: BrowserOptions | Settings, p: { tab: string; seconds?: number; match?: string; max?: number }, hooks: { onEntry?: (e: NetEntry) => void } = {}): Promise<NetResult> {
     const seconds = p.seconds ?? 60, max = p.max ?? 4000;
     if (!(seconds > 0) || !(max > 0)) throw new UsageError("--seconds and --max must be positive numbers");
+    if (seconds > MAX_NET_SECONDS) throw new UsageError(`--seconds is at most ${MAX_NET_SECONDS}`);
     return onTab(o, need(p.tab, "tab"), async (tab, info) => {
       const entries = await netLog(tab, seconds, p.match, max, hooks.onEntry);
       return { ok: true, command: "net", tab: info, seconds, entries };

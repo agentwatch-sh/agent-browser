@@ -487,8 +487,10 @@ export class Tab {
   /**
    * Fetch a URL from inside the page (so the site's cookies apply) and save it locally.
    * Streams in chunks so large media files never sit in one giant string.
+   * The URL must be allowlisted too: it is fetched with the profile's cookies.
    */
   async fetchToFile(url: string, path: string, chunkBytes = 8 * 1024 * 1024): Promise<{ bytes: number; contentType: string }> {
+    assertAllowedUrl(url, this.browser.allow);
     await this.assertAllowed();
     const key = `__agent_browser_${Math.random().toString(36).slice(2)}`;
     const head = await this.evaluate(async (u: string, k: string) => {
@@ -522,8 +524,10 @@ export class Tab {
   /**
    * Download a URL through Chrome's network stack (the browser's cookies, no page CORS),
    * streamed via CDP's IO domain. Use this for CDN media that pages can't fetch() cross-origin.
+   * The URL must be allowlisted too (add the CDN's host): it is loaded with the profile's cookies.
    */
   async download(url: string, path: string): Promise<{ bytes: number; status: number }> {
+    assertAllowedUrl(url, this.browser.allow);
     await this.assertAllowed();
     const { frameTree } = await this.send("Page.getFrameTree");
     const { resource } = await this.send("Network.loadNetworkResource", {

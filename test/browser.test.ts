@@ -135,6 +135,7 @@ test("fetchToFile streams a large file intact", async () => {
   assert.equal(r.contentType, "application/octet-stream");
   assert.ok(readFileSync(out).equals(BIN));
   await assert.rejects(tab.fetchToFile(`${base}/missing`, join(c.dir, "missing")), /HTTP 404/);
+  await assert.rejects(tab.fetchToFile("https://mail.example.org/export", join(c.dir, "mail")), NotAllowedError, "the URL is fetched with the profile's cookies, so it must be allowlisted");
   await tab.close();
 });
 
@@ -144,6 +145,8 @@ test("download streams through Chrome's network stack", async () => {
   const r = await tab.download(`${base}/file.bin`, out);
   assert.deepEqual(r, { bytes: BIN.length, status: 200 });
   assert.ok(readFileSync(out).equals(BIN));
+  await assert.rejects(tab.download("https://cdn.elsewhere.invalid/media.bin", join(c.dir, "media.bin")), NotAllowedError);
+  assert.ok(!fake.calls.some((x) => x.method === "Network.loadNetworkResource" && String(x.params.url).includes("elsewhere")), "never requested");
   await tab.close();
 });
 

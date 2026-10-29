@@ -235,13 +235,14 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
 }
 
 /**
- * Is `pid` this consumer's proxy? Its command line is the proxy command with this consumer's socket.
- * A stale pid file can name a pid that the system has given to another process since.
+ * Is `pid` this consumer's proxy? Its command line is an agent-browser proxy (from any copy of the
+ * package: a checkout or a node_modules install) with this consumer's socket. A stale pid file can
+ * name a pid that the system has given to another process since.
  */
 export function isOwnProxy(s: Settings, pid: number, command = (p: number) => execFileSync("ps", ["-ww", "-o", "command=", "-p", String(p)], { encoding: "utf8" })): boolean {
   try {
     const line = ` ${command(pid).trim()} `;
-    return line.includes(` ${BIN_PATH} proxy `) && line.includes(` --socket ${s.socketPath} `);
+    return /\/bin\/agent-browser\.js proxy /.test(line) && line.includes(` --socket ${s.socketPath} `);
   } catch { return false; }
 }
 

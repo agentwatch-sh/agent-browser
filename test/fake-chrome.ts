@@ -206,7 +206,7 @@ export class FakePage {
     if (url.hostname !== "127.0.0.1") throw new TypeError("Failed to fetch");
     const requestId = `${this.targetId.slice(0, 6)}.${this.nextRequest++}`;
     const method = init.method ?? "GET";
-    this.fake.network(this, "Network.requestWillBeSent", { requestId, type: "Fetch", request: { method, url: url.href, postData: init.body }, initiator: { type: "script" } });
+    this.fake.network(this, "Network.requestWillBeSent", { requestId, type: "Fetch", documentURL: this.url, request: { method, url: url.href, postData: init.body }, initiator: { type: "script" } });
     const res = await globalThis.fetch(url, { method, body: init.body });
     const body = Buffer.from(await res.arrayBuffer());
     const mime = (res.headers.get("content-type") ?? "").split(";")[0];
@@ -300,7 +300,7 @@ export class FakeChrome {
   /** Traffic a test injects into a page (as if the page had sent it). */
   traffic(page: FakePage, r: { method?: string; url: string; postData?: string; status?: number; body?: string; mime?: string }) {
     const requestId = `inj.${Math.random().toString(36).slice(2)}`;
-    this.network(page, "Network.requestWillBeSent", { requestId, type: "Fetch", request: { method: r.method ?? "GET", url: r.url, postData: r.postData } });
+    this.network(page, "Network.requestWillBeSent", { requestId, type: "Fetch", documentURL: page.url, request: { method: r.method ?? "GET", url: r.url, postData: r.postData } });
     page.bodies.set(requestId, { body: Buffer.from(r.body ?? ""), mime: r.mime ?? "application/json" });
     this.network(page, "Network.responseReceived", { requestId, type: "Fetch", response: { url: r.url, status: r.status ?? 200, mimeType: r.mime ?? "application/json" } });
     this.network(page, "Network.loadingFinished", { requestId });
@@ -308,6 +308,7 @@ export class FakeChrome {
 
   navigate(page: FakePage, url: string) {
     page.load(url);
+    this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url, loaderId: randomUUID() }, type: "Navigation" });
     setTimeout(() => this.toSessions(page, "Page.loadEventFired", { timestamp: Date.now() / 1000 }), 5);
   }
 

@@ -83,6 +83,8 @@ class AdapterTest(unittest.TestCase):
 
         fetched = b.fetch("work", base + "/small.txt", self.consumer.dir / "small.txt")
         self.assertEqual((fetched.bytes, fetched.content_type), (11, "text/plain"))
+        with self.assertRaises(NotAllowedError):
+            b.download("work", "https://cdn.elsewhere.invalid/media.bin", self.consumer.dir / "media.bin")
         downloaded = b.download("work", base + "/file.bin", self.consumer.dir / "file.bin")
         self.assertEqual((downloaded.status, downloaded.bytes), (200, 9 * 1024 * 1024 + 123))
 

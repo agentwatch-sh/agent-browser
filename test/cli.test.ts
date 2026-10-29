@@ -170,6 +170,11 @@ test("a full session: every tab command prints its documented JSON shape", async
   r = await run(["download", "work", "file:///etc/passwd", join(c.dir, "passwd")]);
   assert.equal(r.json.error.code, "usage");
   assert.equal(existsSync(join(c.dir, "passwd")), false);
+  for (const cmd of ["fetch", "download"]) {
+    r = await run([cmd, "work", "https://export.example.net/all?token=1", join(c.dir, "export")]);
+    assert.equal(r.json.error.code, "not_allowed", `${cmd} of an off-list URL`);
+    assert.equal(existsSync(join(c.dir, "export")), false);
+  }
 
   r = await run(["window"]);
   assert.deepEqual(r.json, { ok: true, command: "window", window: null, tabs: [] });
@@ -227,6 +232,35 @@ test("net records a tab's traffic as one JSON document, redacted", async () => {
     mime: "application/json", resp: '{"token":"<redacted>","clips":[]}',
   }]);
   await run(["close", "netted"]);
+});
+
+test("a redirect off the allowlist is refused by host, and its URL is never printed", async () => {
+  await run(["open", fx.base + "/", "--name", "redir"]);
+  const r = await run(["goto", "redir", fx.base + "/redirect"]);
+  assert.equal(r.json.error.code, "not_allowed");
+  assert.equal(r.json.error.message, "refusing: login.elsewhere.invalid is not on the allowlist");
+  assert.ok(!r.stdout.includes("SECRET-CODE") && !r.stderr.includes("SECRET-CODE"));
+  const tabs = await run(["tabs"]);
+  assert.ok(!tabs.json.tabs.some((t: any) => t.name === "redir"), "the tab is off the list now");
+  const id = [...fake.pages.values()].find((p) => p.url.includes("elsewhere"))!.targetId;
+  fake.pages.delete(id);
+});
+
+test("net stops recording when the tab navigates off the allowlist", async () => {
+  const opened = await run(["open", fx.base + "/", "--name", "wander"]);
+  const page = fake.pages.get(opened.json.tab.targetId)!;
+  const pending = run(["net", "wander", "--seconds", "1.5"]);
+  await new Promise((r) => setTimeout(r, 600));
+  fake.traffic(page, { url: `${fx.base}/api/before`, body: "{}" });
+  await new Promise((r) => setTimeout(r, 200)); // its body is read before the navigation; an entry still in flight then is dropped
+  fake.navigate(page, "https://login.elsewhere.invalid/inbox");
+  fake.traffic(page, { url: "https://login.elsewhere.invalid/api/mail", body: '{"subject":"private"}' });
+  const r = await pending;
+  assert.deepEqual(r.json.entries.map((e: any) => e.url), [`${fx.base}/api/before`]);
+  assert.ok(!r.stdout.includes("private"));
+  fake.pages.delete(page.targetId); // off the list now, so no command can close it
+  const tooLong = await run(["net", "any", "--seconds", "3601"]);
+  assert.equal(tooLong.json.error.code, "usage");
 });
 
 test("human output without --json", async () => {
