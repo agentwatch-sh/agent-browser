@@ -206,24 +206,16 @@ turn remote debugging on, and approve Chrome's prompt when the tooling connects.
 
 /** pid of the agent browser's main Chrome process, if it is running. */
 export function agentChromePid(s: Settings, ps: () => string = () => execFileSync("ps", ["axww", "-o", "pid=,command="], { encoding: "utf8", maxBuffer: 64 << 20 })): number | undefined {
-  return findAgentPid(ps(), s.profileDir, agentBins(s));
+  return findAgentPid(ps(), s.profileDir);
 }
 
-/** The binaries an agent browser on this profile may run from: the configured one, Beta and stable. */
-export function agentBins(s: Pick<Settings, "chromeBin">): string[] {
-  return [...new Set([s.chromeBin ?? CHROME_BETA_BIN, CHROME_BETA_BIN, CHROME_STABLE_BIN])];
-}
-
-/**
- * The main process on `profile`, launched from one of `bins` (an agent browser started before Beta
- * was installed must still be found, e.g. by `quit`).
- */
-export function findAgentPid(ps: string, profile: string, bins: string[]): number | undefined {
+/** The agent browser's main process on `profile`, found by its profile and role (see agentMainPid). */
+export function findAgentPid(ps: string, profile: string): number | undefined {
   const rows = ps.split("\n").flatMap((line) => {
     const m = line.trim().match(/^(\d+) (.*)$/);
     return m ? [{ pid: Number(m[1]), command: m[2] }] : [];
   });
-  return agentMainPid(rows, profile, bins);
+  return agentMainPid(rows, profile);
 }
 
 export type ProcessRow = { pid: number; ppid: number; command: string };
@@ -245,10 +237,22 @@ export function hasUserDataDir(command: string, dir: string): boolean {
   return ` ${command} `.includes(` --user-data-dir=${dir} `);
 }
 
-/** The agent browser's main process on `profile` among `rows` (see findAgentPid). */
-export function agentMainPid(rows: { pid: number; command: string }[], profile: string, bins: string[]): number | undefined {
+/** A Chrome child process (renderer, gpu, zygote, utility, broker) carries --type=; the main browser process does not. */
+export function isBrowserChild(command: string): boolean {
+  return ` ${command} `.includes(" --type=");
+}
+
+/**
+ * The agent browser's main process on `profile` among `rows`: the process started with
+ * --user-data-dir=<profile> that is not a --type= child. It is identified by its profile and its role,
+ * NOT by the launch binary path, because on Debian/Ubuntu `chromium` and `google-chrome` are wrapper
+ * scripts that exec a different real binary (e.g. /usr/lib/chromium/chromium), so the launch path never
+ * appears in ps. --user-data-dir on our dedicated throwaway profile is conclusive: our own CLI and proxy
+ * use --profile/--state-dir, never Chrome's --user-data-dir, so nothing else carries it.
+ */
+export function agentMainPid(rows: { pid: number; command: string }[], profile: string): number | undefined {
   for (const { pid, command } of rows) {
-    if (bins.some((b) => command.startsWith(`${b} `)) && hasUserDataDir(command, profile)) return pid;
+    if (hasUserDataDir(command, profile) && !isBrowserChild(command)) return pid;
   }
   return undefined;
 }

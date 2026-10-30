@@ -4,7 +4,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
-import { agentChromeBin, agentChromePid, agentEndpoint, agentBins, findAgentPid } from "./agent.ts";
+import { agentChromeBin, agentChromePid, agentEndpoint, findAgentPid } from "./agent.ts";
 import { statePath, type NotifyHook, type Settings } from "./options.ts";
 
 export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww", "-o", "pid=,command="], { encoding: "utf8", timeout: 2000, maxBuffer: 64 << 20 })): string {
@@ -14,7 +14,7 @@ export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww"
   try { configured = basename(agentChromeBin(s)); } catch { configured = "unknown"; }
   try {
     const rows = ps();
-    const pid = findAgentPid(rows, s.profileDir, agentBins(s));
+    const pid = findAgentPid(rows, s.profileDir);
     const command = rows.split("\n").find((line) => line.trim().startsWith(`${pid} `))?.trim().replace(/^\d+ /, "");
     if (pid && command) return `agent Chrome: agent browser on ${basename(command.split(" --")[0])} (pid ${pid})`;
   } catch { /* report the configured target without inventing a running channel */ }

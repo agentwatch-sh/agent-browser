@@ -163,28 +163,32 @@ test("the agent browser runs from Chrome Beta when installed, else Google Chrome
   assert.throws(() => resolveOptions({ stateDir: tmp, chromeBin: "/opt/chrome-headless-shell" }), /Chrome for Testing/);
 });
 
-test("findAgentPid: the main process on the agent profile, from Beta or Google Chrome, never another profile or a helper", () => {
+test("findAgentPid: the main process on the agent profile (by profile + role), never another profile, a helper, or a child", () => {
   const prof = "/p/agent/profile";
-  const bins = [CHROME_BETA_BIN, CHROME_STABLE_BIN];
   const ps = [
     `  11 ${CHROME_STABLE_BIN} --user-data-dir=/Users/x/other`,
     `  12 /Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Beta Framework.framework/Versions/156.0.8078.4/Helpers/Google Chrome Beta Helper (Renderer).app/Contents/MacOS/Google Chrome Beta Helper (Renderer) --type=renderer --user-data-dir=${prof}`,
     `  13 ${CHROME_BETA_BIN} --no-first-run --user-data-dir=${prof} chrome://inspect/#remote-debugging`,
   ].join("\n");
-  assert.equal(findAgentPid(ps, prof, bins), 13);
-  assert.equal(findAgentPid(`  21 ${CHROME_STABLE_BIN} --no-first-run --user-data-dir=${prof}`, prof, bins), 21, "a stable-launched agent browser is still found");
+  assert.equal(findAgentPid(ps, prof), 13);
+  assert.equal(findAgentPid(`  21 ${CHROME_STABLE_BIN} --no-first-run --user-data-dir=${prof}`, prof), 21, "a stable-launched agent browser is still found");
   const custom = resolveOptions({ stateDir: tmp, profileDir: prof, chromeBin: "/another/Chrome" });
   assert.equal(agentChromePid(custom, () => `  22 ${CHROME_BETA_BIN} --no-first-run --user-data-dir=${prof}`), 22, "a Beta-launched browser stays findable after a binary override");
-  assert.equal(findAgentPid(`  11 ${CHROME_STABLE_BIN} --user-data-dir=/Users/x/other`, prof, bins), undefined);
+  assert.equal(findAgentPid(`  11 ${CHROME_STABLE_BIN} --user-data-dir=/Users/x/other`, prof), undefined);
+  // Debian/Ubuntu: `chromium`/`google-chrome` are wrapper scripts that exec a different real binary,
+  // so the launch path (e.g. /usr/bin/chromium) never appears in ps. Find it by profile + role anyway.
+  assert.equal(findAgentPid(`  41 /usr/lib/chromium/chromium --no-first-run --user-data-dir=${prof} chrome://inspect/#remote-debugging`, prof), 41, "a Debian wrapper-launched Chromium is found by its real binary");
+  // A Linux child carries --user-data-dir too, but --type= marks it a child, never the main process.
+  assert.equal(findAgentPid(`  42 /usr/lib/chromium/chromium --type=zygote --user-data-dir=${prof}`, prof), undefined, "a zygote on the profile is not the main process");
+  assert.equal(findAgentPid(`  43 /usr/lib/chromium/chromium --type=gpu-process --user-data-dir=${prof}`, prof), undefined, "a gpu process on the profile is not the main process");
 });
 
 test("findAgentPid: a profile folder with spaces matches whole, never a longer folder that starts with it", () => {
   const prof = "/Users/x/My Projects/app/state/profile";
-  const bins = [CHROME_BETA_BIN, CHROME_STABLE_BIN];
-  assert.equal(findAgentPid(`  31 ${CHROME_BETA_BIN} --no-first-run --user-data-dir=${prof}`, prof, bins), 31, "flag last");
-  assert.equal(findAgentPid(`  32 ${CHROME_BETA_BIN} --user-data-dir=${prof} --no-first-run chrome://inspect/#remote-debugging`, prof, bins), 32, "flag in the middle");
-  assert.equal(findAgentPid(`  33 ${CHROME_BETA_BIN} --user-data-dir=${prof}2 --no-first-run`, prof, bins), undefined, "a sibling folder");
-  assert.equal(findAgentPid(`  34 ${CHROME_BETA_BIN} --user-data-dir=${prof}/Default`, prof, bins), undefined, "a folder inside it");
+  assert.equal(findAgentPid(`  31 ${CHROME_BETA_BIN} --no-first-run --user-data-dir=${prof}`, prof), 31, "flag last");
+  assert.equal(findAgentPid(`  32 ${CHROME_BETA_BIN} --user-data-dir=${prof} --no-first-run chrome://inspect/#remote-debugging`, prof), 32, "flag in the middle");
+  assert.equal(findAgentPid(`  33 ${CHROME_BETA_BIN} --user-data-dir=${prof}2 --no-first-run`, prof), undefined, "a sibling folder");
+  assert.equal(findAgentPid(`  34 ${CHROME_BETA_BIN} --user-data-dir=${prof}/Default`, prof), undefined, "a folder inside it");
 });
 
 test("parsePs reads `ps ax -o pid=,ppid=,command=` and skips lines that are not processes", () => {

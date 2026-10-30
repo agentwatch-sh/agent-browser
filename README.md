@@ -155,8 +155,11 @@ so it needs an OS tool, which is a documented prerequisite, not an npm dependenc
 Headless Linux server recipe: a private virtual display `Xvfb :N -nolisten tcp -auth <cookie>` (the
 cookie matters — without it the X socket is open to every local user), the seeded throwaway profile,
 headed Chromium with `chromeBin=/usr/bin/chromium` and **no** port flag, one long-lived proxy, and
-`approve: "xdotool"`. Do not fall back to `--remote-debugging-port` or headless: the first sets
-`navigator.webdriver`, the second adds the `HeadlessChrome` UA token.
+`approve: "xdotool"`. On Debian/Ubuntu `/usr/bin/chromium` (and `google-chrome`) is a wrapper script
+that execs a different real binary (for example `/usr/lib/chromium/chromium`); agent-browser finds the
+running browser by its profile, not by the launch path, so the wrapper path works. Do not fall back to
+`--remote-debugging-port` or headless: the first sets `navigator.webdriver`, the second adds the
+`HeadlessChrome` UA token.
 
 Auto-approve removes Chrome's one safeguard against an external app taking full control of the profile,
 so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by
