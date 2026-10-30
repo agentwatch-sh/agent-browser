@@ -59,3 +59,24 @@ export function safeHost(url: string): string {
 export function errorCode(e: unknown): ErrorCode {
   return e instanceof AgentBrowserError ? e.code : "error";
 }
+
+/**
+ * Run each cleanup step, even after one fails, and return the failures as messages. A cleanup
+ * failure never replaces the error of the work it cleans up after: see withCleanupErrors.
+ */
+export async function runCleanup(steps: [what: string, step: (() => Promise<unknown>) | false | undefined][]): Promise<string[]> {
+  const failed: string[] = [];
+  for (const [what, step] of steps) {
+    if (!step) continue;
+    try { await step(); } catch (e) { failed.push(`${what}: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+  return failed;
+}
+
+/** The work's own error, with any cleanup failures added to its message (its code is kept). */
+export function withCleanupErrors(error: unknown, cleanupErrors: string[]): unknown {
+  if (!cleanupErrors.length) return error;
+  const note = `; cleanup also failed: ${cleanupErrors.join("; ")}`;
+  if (error instanceof Error) { error.message += note; return error; }
+  return new Error(String(error) + note);
+}

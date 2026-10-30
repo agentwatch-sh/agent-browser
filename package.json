@@ -1,6 +1,6 @@
 {
   "name": "agent-browser",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "private": true,
   "description": "Agent browser for agentwatch and vedlo: Chrome over a local proxy, allowlisted hosts only",
   "license": "UNLICENSED",
@@ -30,9 +30,11 @@
   "scripts": {
     "test": "npm run test:node && npm run test:python",
     "test:node": "node --test --test-concurrency=1 'test/**/*.test.ts'",
-    "test:python": "python3 -m unittest discover -s python/tests -t python"
+    "test:python": "python3 -m unittest discover -s python/tests -t python",
+    "test:live": "node test/live/sheets.ts"
   },
   "dependencies": {
+    "ghost-cursor": "1.4.2",
     "ws": "8.21.0"
   }
 }

@@ -18,7 +18,7 @@ from typing import Callable, Dict, List, Literal, Mapping, Optional, Sequence, T
 from ._errors import ERRORS_BY_CODE, CLIError, NodeNotFoundError, NodeVersionError, PackageNotFoundError, ProtocolError
 from ._results import (
     ClickResult, CloseResult, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, GotoResult, HoverResult,
-    LaunchResult, NetResult, OpenResult, OutlineResult, PressResult, QuitResult, ShotResult, StatusResult, StopResult,
+    LaunchResult, NetResult, OpenResult, OutlineResult, PressResult, QuitResult, RecordResult, ShotResult, StatusResult, StopResult,
     TabsResult, TextResult, TypeResult, WindowResult,
 )
 
@@ -32,6 +32,9 @@ DEFAULT_TIMEOUT = 120.0
 
 #: `launch` waits up to 10 minutes for the operator to turn remote debugging on.
 LAUNCH_WAIT = 600.0
+
+#: `record` runs at most 30 minutes (the CLI's limit), then encodes the MP4.
+RECORD_WAIT = 1800.0 + 900.0
 
 
 def default_package_dir() -> Optional[Path]:
@@ -251,7 +254,7 @@ class AgentBrowser:
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else [])], TypeResult.from_json, stdin=text)
 
     def press(self, tab: str, key: str) -> PressResult:
-        """Press Enter, Tab, Escape, Backspace, ArrowUp or ArrowDown."""
+        """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown or F2."""
         return self._run("press", [tab, key], PressResult.from_json)
 
     def text(self, tab: str, selector: Optional[str] = None) -> TextResult:
@@ -263,9 +266,19 @@ class AgentBrowser:
         """Evaluate a JavaScript expression in the page and return its JSON value. The expression goes on stdin."""
         return self._run("eval", [tab, "--stdin"], EvalResult.from_json, stdin=expression)
 
-    def shot(self, tab: str, path: Optional[PathLike] = None, full: bool = False) -> ShotResult:
-        """A PNG screenshot, refused until outline or text has read the page at its current URL."""
-        return self._run("shot", [tab, *([os.fspath(path)] if path is not None else []), *(["--full"] if full else [])], ShotResult.from_json)
+    def shot(self, tab: str, path: Optional[PathLike] = None, full: bool = False, size: Optional[str] = None,
+             scale: Optional[float] = None) -> ShotResult:
+        """A PNG screenshot, refused until outline or text has read the page at its current URL.
+
+        `size` ("1920x1080", CSS pixels) and `scale` (the device pixel ratio) lay the page out at exactly
+        that size for the shot only, so the PNG is width x scale by height x scale pixels.
+        """
+        args = [tab, *([os.fspath(path)] if path is not None else []), *(["--full"] if full else [])]
+        if size is not None:
+            args += ["--size", size]
+        if scale is not None:
+            args += ["--scale", repr(float(scale))]
+        return self._run("shot", args, ShotResult.from_json)
 
     def fetch(self, tab: str, url: str, path: PathLike) -> FetchResult:
         """Save `url` with the page's fetch() and cookies (same-origin and CORS rules apply)."""
@@ -289,6 +302,33 @@ class AgentBrowser:
         if max is not None:
             args += ["--max", str(int(max))]
         return self._run("net", args, NetResult.from_json, extra_timeout=60.0 if seconds is None else float(seconds))
+
+    def record(self, tab: str, out: PathLike, script: Optional[PathLike] = None, setup: Optional[PathLike] = None, size: Optional[str] = None,
+               fps: Optional[int] = None, scale: Optional[float] = None, no_cursor: bool = False, settle: Optional[float] = None,
+               seed: Optional[int] = None, ffmpeg: Optional[PathLike] = None) -> RecordResult:
+        """Record the tab to the MP4 `out` while the step script drives it; the provenance JSON goes beside it.
+
+        `setup` steps run first, off camera. `size` is the page size in CSS pixels ("1920x1080"), `scale`
+        the device pixel ratio, `settle` the ms of still page before the first step and after the last,
+        and `seed` the seed of the cursor paths and typing pace. Needs ffmpeg (on PATH, or `ffmpeg`).
+        """
+        args = [tab, "--out", os.fspath(out)]
+        for flag, path in (("--script", script), ("--setup", setup), ("--ffmpeg", ffmpeg)):
+            if path is not None:
+                args += [flag, os.fspath(path)]
+        if size is not None:
+            args += ["--size", size]
+        if fps is not None:
+            args += ["--fps", str(int(fps))]
+        if scale is not None:
+            args += ["--scale", repr(float(scale))]
+        if no_cursor:
+            args.append("--no-cursor")
+        if settle is not None:
+            args += ["--settle", repr(float(settle))]
+        if seed is not None:
+            args += ["--seed", str(int(seed))]
+        return self._run("record", args, RecordResult.from_json, extra_timeout=RECORD_WAIT)
 
     def commands(self) -> CommandsResult:
         """Every CLI command with its parameters (the CLI's own description of itself)."""

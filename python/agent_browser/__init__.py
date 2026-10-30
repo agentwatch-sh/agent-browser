@@ -18,11 +18,11 @@ from ._errors import (
 from ._results import (
     ClickResult, CloseResult, CommandSpec, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, GotoResult,
     HoverResult, JSONValue, LaunchError, LaunchResult, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
-    OutlineElement, OutlineResult, ParamSpec, PressResult, ProxyInfo, QuitResult, ShotResult, StatusResult, StopResult, TabRef,
-    TabsResult, TextResult, TypeResult, WindowResult,
+    OutlineElement, OutlineResult, ParamSpec, PressResult, ProxyInfo, QuitResult, RecordEvent, RecordResult, ShotResult, StatusResult,
+    StopResult, TabRef, TabsResult, TextResult, TypeResult, WindowResult,
 )
 
-__version__ = "0.1.8"
+__version__ = "0.2.0"
 
 __all__ = [
     "AgentBrowser", "DEFAULT_TIMEOUT", "MIN_NODE_MAJOR", "default_package_dir",
@@ -31,5 +31,5 @@ __all__ = [
     "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "ConnectResult", "DownloadResult", "EvalResult", "FetchResult",
     "GotoResult", "HoverResult", "JSONValue", "LaunchError", "LaunchResult", "NetEntry", "NetHttp", "NetResult", "NetWs",
     "Notification", "OpenResult", "OutlineElement", "OutlineResult", "ParamSpec", "PressResult", "ProxyInfo", "QuitResult",
-    "ShotResult", "StatusResult", "StopResult", "TabRef", "TabsResult", "TextResult", "TypeResult", "WindowResult",
+    "RecordEvent", "RecordResult", "ShotResult", "StatusResult", "StopResult", "TabRef", "TabsResult", "TextResult", "TypeResult", "WindowResult",
 ]

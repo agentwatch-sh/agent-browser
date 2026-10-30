@@ -2,19 +2,22 @@
 //   import { AgentBrowser, commands } from "agent-browser";
 
 export { AgentBrowser, Tab, KEYS, allowlistOf, endpointCandidates, rememberEndpoint } from "./browser.ts";
-export type { TargetInfo, PageInfo, Download, CapturedResponse } from "./browser.ts";
+export type { TargetInfo, PageInfo, Download, CapturedResponse, Viewport } from "./browser.ts";
 export { commands, COMMAND_SPECS } from "./commands.ts";
 export type {
   CommandName, CommandSpec, ParamSpec, ParamType, TabRef, LaunchResult, QuitResult, StatusResult, ConnectResult, StopResult,
   WindowResult, TabsResult, OpenResult, GotoResult, OutlineResult, ClickResult, HoverResult, TypeResult, PressResult,
-  TextResult, EvalResult, ShotResult, FetchResult, DownloadResult, CloseResult, NetResult, CommandsResult,
+  TextResult, EvalResult, ShotResult, FetchResult, DownloadResult, CloseResult, NetResult, RecordResult, CommandsResult,
 } from "./commands.ts";
+export { recordTab, planRecording, planMove, pointAt, fittsMs, seededRandom, parseSteps, parseKey, parseSize, findFfmpeg, MAX_RECORD_SECONDS } from "./record.ts";
+export type { Step, StepTarget, Point, Box, Leg, RecordPlan, RecordOutcome, RecordEvent } from "./record.ts";
 export { main, USAGE } from "./cli.ts";
 export { resolveOptions, isChromeForTesting, DEFAULT_PROXY_IDLE_MS, MAX_SOCKET_PATH_BYTES } from "./options.ts";
 export type { BrowserOptions, BrowserMode, NotifyHook, Settings } from "./options.ts";
 export { isAllowedUrl, isDeniedHost, loadAllowlist, validateAllowlist, DENIED_HOSTS, DENIED_FIRST_LABELS } from "./allowlist.ts";
 export {
   AgentBrowserError, UsageError, NotAllowedError, PinRequiredError, ReadFirstError, TabNotFoundError, ChromeUnreachableError,
+  runCleanup, withCleanupErrors,
 } from "./errors.ts";
 export type { ErrorCode } from "./errors.ts";
 export {

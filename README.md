@@ -58,7 +58,8 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Every connection goes through the local proxy socket. | `AgentBrowser.connect` connects only to the proxy socket (`src/proxy.ts`); there is no direct mode. | `test/browser.test.ts` ("one upstream connection"), `test/proxy.test.ts` |
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. Mail, account and admin hosts are refused even when a broad entry covers them. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window and keep off mail, banking and admin tabs. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
-| Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
+| Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
+| A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
 tests). Under `node --test`, the state folder must be in the temp folder, and personal mode never
@@ -73,7 +74,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**, absolute. It holds `tabs.json`, `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log` and `shots/`. Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**, absolute. It holds `tabs.json`, `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes. |
@@ -168,6 +169,131 @@ so it is opt-in: keep the display private and the profile throwaway. The real cl
 the test suite (the fake Chrome raises no native dialog); the suite covers the orchestration and the
 fail-safe button-name targeting, and the Linux mechanism was verified on a live Chromium 156.
 
+## Recording (`record`)
+
+`record` films one allowlisted tab of the agent browser while a step script drives it, and writes an
+MP4 and a provenance JSON beside it. It records the agent browser itself, so a site that refuses
+automation-flagged Chrome (Google sign-in) can be filmed signed in, for example Google Sheets with an
+add-on whose custom functions fill on screen.
+
+```sh
+agent-browser record sheet --out /abs/clip.mp4 --script steps.json --size 1920x1080 --scale 2 \
+  --state-dir DIR --allowlist FILE --json
+```
+
+Needs ffmpeg with libx264 on `PATH`, or `--ffmpeg /abs/path` (not an npm dependency). Everything is
+checked before the tab is touched: the steps, the paths and ffmpeg.
+
+### Steps
+
+`--script` is a JSON array, the step format of vedlo capture plus targets and keys for canvas apps:
+
+| Step | Does |
+| --- | --- |
+| `{"wait": ms}` | pause |
+| `{"goto": url}` | navigate (an allowlisted URL), wait for `load`, then 300 ms |
+| `{"click": target, "duration": ms}` | move the cursor to the target, dwell 80-150 ms, press, 60-90 ms, release (the ripple shows at the press) |
+| `{"hover": target, "duration": ms}` | move only |
+| `{"type": "text", "into": target, "delay": ms}` | optional click into `target`, then one key event with text per character (`\n` is Enter, `\t` is Tab), each `delay` x 0.6-1.4 ms (default 55). A canvas app such as Sheets reads these key events, so its formula autocomplete shows as a person sees it. A character with no US-keyboard key is inserted as text. |
+| `{"press": key, "repeat": n, "delay": ms}` | a key or a chord: `Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, the arrows, `Home`, `End`, `PageUp`, `PageDown`, `F2`, one character, or chords such as `Shift+ArrowDown`, `Meta+A`, `Meta+C`, `Control+Home`. `delay` (default 150) follows each press. |
+| `{"scroll": px, "duration": ms}` | a mouse wheel at the cursor, with an eased total of `px` (it scrolls what is under the cursor: the page, or an inner pane such as the Sheets grid) |
+| `{"scroll": selector, "duration": ms}` | smooth `scrollIntoView` to the centre |
+| `{"highlight": target-or-box, "duration": ms}` | a ring around an element or `{"x", "y", "width", "height"}`, dimming the rest (default 1600 ms) |
+| `{"waitFor": selector, "text": "...", "timeoutMs": ms}` | wait until the element is visible (and its text or value contains `text`); default 30 s, then the run fails |
+| `{"eval": "js"}` | escape hatch: runs in agent-browser's isolated world (the page's own globals are not visible there) |
+
+A target is a CSS selector, `#N` from `outline`, or `{"x": .., "y": ..}` in CSS pixels of the recorded
+size. The Sheets grid is a canvas without selectors: go to a cell with the Name Box
+(`{"click": "#t-name-box"}`, `{"type": "C5"}`, `{"press": "Enter"}`), then type into the grid and use
+the arrow keys. A missing element fails the run with the step's number in the message.
+
+`--setup` takes steps in the same format that run **before** the recording starts, at the recorded
+size (for example, clear a cell off camera so a retake starts on a settled page).
+
+### What it does
+
+- **Exact size.** `Emulation.setDeviceMetricsOverride` lays the page out at `--size` CSS pixels and
+  `--scale` (device pixel ratio) for the run only; the override is cleared afterwards, so the window is
+  left as it was. The video is exactly size x scale pixels (default 1920x1080 at scale 1; scale 2 gives
+  3840x2160). The window itself can be smaller: Chrome still renders the full emulated size. A leading
+  frame of the window's own size, which Chrome can send before the override takes effect, is dropped.
+- **Frames.** `Page.startScreencast` through the consumer's proxy, each frame acknowledged. A 1x1 pixel
+  of the overlay changes every animation frame, so a still page still delivers frames. The frames sit in
+  `<state-dir>/recordings/` (mode 0700) and are removed after every run, good or failed.
+- **Encoding.** For each tick of the constant-rate MP4, the frame nearest that moment (by Chrome's own
+  frame times) is piped to ffmpeg: H.264, CRF 16, `preset medium`, yuv420p, limited range, `+faststart`,
+  no audio. (ffmpeg's concat demuxer, which vedlo capture uses, put each JPEG on a 1/25 s grid: frames
+  shifted by up to 40 ms and collided. Measured on ffmpeg 9.)
+- **Still handles.** `--settle` ms (default 600) of the page with no input are recorded before the first
+  step, counted from the first frame of the video, and after the last step. Use `--settle 400` for
+  0.4 s handles.
+- **The cursor.** The path is ghost-cursor's (`path()`: a Bezier curve with its spread; past 500 px an
+  overshoot to a point near the target, then a tight correction, as ghost-cursor's `move()` does). The
+  timing is agent-browser's: a Fitts's-law duration (about 250 ms + 110 ms x log2(1 + D/W), W the
+  target's smaller side, from 300 to 1000 ms; a step's `duration` overrides it) with a minimum-jerk
+  speed profile (slow start, fast middle, slow arrival) along the curve. ghost-cursor's own timestamps
+  move at one constant speed (0.2 to 0.3 px/ms). The page draws every frame of a move from one call
+  (`requestAnimationFrame`), and the real mouse (for hover effects) follows every 16 ms on its own. The
+  cursor aims at a point in the middle 40% of an element's box, and its tip is that point. It is still
+  while typing and scrolling. All randomness (paths, aim points, dwell, typing pace) comes from
+  `--seed` (default 1): a retake with the same seed and steps moves the same way.
+- **The overlay** (cursor, ripple, ring, repaint pixel) is built with DOM calls only (`createElement`,
+  `setAttribute`, `element.style`, `element.animate`) inside a closed shadow root, in agent-browser's
+  isolated world, and removed afterwards. Google Sheets enforces Trusted Types and a strict style-src,
+  which refuse `innerHTML` and a `<style>` element. `--no-cursor` hides the cursor and the ripple; a
+  `highlight` step still draws its ring.
+- **The window.** In the agent browser the tab is brought to the front of its window
+  (`Page.bringToFront`). In personal mode it is not, so the operator's own Chrome is not raised.
+- **Allowlist.** Only an allowlisted tab; a `goto` off the list is refused before the run. When the
+  tab's main frame navigates off the list, the run stops at once, writes no MP4 and no JSON, and runs
+  no code in the off-list page (the screencast is stopped and the size override cleared).
+- **Errors are never hidden.** Every cleanup step runs (stop the screencast, remove the overlay, clear
+  the override, remove the frames). A cleanup failure is added to the run's own error, which keeps its
+  code; after a good run it is a `warnings` entry and a line on standard error.
+- Not under the read-first rule (`shot`'s): a recording is a video for people, not a page read.
+- At most 30 minutes per recording.
+
+### The provenance JSON
+
+`clip.mp4` gets `clip.json` beside it (a run whose `--script` or `--setup` is that file is refused
+before it starts). Facts only: `service` ("agent-browser"), `generator`, `version`, `url`, `finalUrl`,
+`title`, `script`, `steps`, `setupScript`, `setup`, `width`, `height`, `scale`, `fps`, `video`
+(`path`, `width`, `height`, `codec`), `cursor`, `seed`, `settleMs`, `createdAt`, `startedAt`,
+`endedAt`, `seconds`, `frames`, `maxFrameGapMs`, `events`, `mode`, `chrome`, `warnings`.
+
+`events` (also in the result) says when each recorded step ran, in seconds from the first frame of
+the MP4, on the frames' own clock (so it matches the video within a frame):
+`{"step": 3, "kind": "type", "start": 4.21, "end": 6.03, "first": 4.25, "last": 5.98}`. A `click`
+has `press` (the moment of the press), a `press` step has `keys` (each key), a `type` step has
+`first` and `last` (characters). Setup steps are not in it.
+
+### Measured (2026-10-30, macOS, Chrome Beta, the public Sheets sample)
+
+| Window state of the agent browser | Frames (agent flags) | Frames (no flags) |
+| --- | --- | --- |
+| In front | 54 fps | 56 fps |
+| Background tab in its window | 57 fps | 28 fps, gaps of 0.63 s |
+| The same tab after `Page.bringToFront` | 59 fps | 59 fps |
+| Covered by another window | 60 fps | 47 fps, gaps of 0.23 s |
+| Minimized | 60 fps | 55 fps |
+| App hidden (Cmd-H) | 60 fps | 60 fps |
+
+"Agent flags" are the agent browser's own launch flags (`--disable-backgrounding-occluded-windows`,
+`--disable-renderer-backgrounding`, `--disable-background-timer-throttling`), which `launch` always
+sets: no `--chrome-args` are needed. The screencast itself keeps a minimized or hidden tab painting.
+So the operator can work in another window during a recording. A recording at 1920x1080 and
+`--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
+60 fps recording, has a smooth bell-shaped speed with no repeated or skipped frame.
+
+### Limits
+
+- Network-quiet waits are not in this release: a Sheets tab's own frame showed no sync requests, and
+  the calc worker's traffic does not reach a proxy client yet. Wait for an add-on's fill with a fixed
+  `wait`, or `waitFor` a DOM part.
+- `Meta+C`/`Meta+V` use the system clipboard of the machine, as a person's copy and paste do.
+- No audio. Timing is real time: page loads vary between takes.
+- `eval` steps run in the isolated world, not the page's.
+
 ### Why there is a `loader.js`
 
 Node 26 strips TypeScript types itself, but not for files under `node_modules`
@@ -192,8 +318,9 @@ result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)
 `tabs(o)`, `open(o, { url, name, tab })`, `goto(o, { tab, url })`, `outline(o, { tab, all })`,
 `click(o, { tab, target, text })`, `hover(o, { tab, target })`, `type(o, { tab, text, into })`,
 `press(o, { tab, key })`, `text(o, { tab, selector })`, `eval(o, { tab, expression })`,
-`shot(o, { tab, path, full })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
-`close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`, `commands()`.
+`shot(o, { tab, path, full, size, scale })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
+`close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`,
+`record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `commands()`.
 `COMMAND_SPECS` describes them (names, parameters, CLI usage).
 
 **`AgentBrowser`** (one connection for multi-step work):
@@ -207,7 +334,7 @@ result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)
 **`Tab`**: `goto(url)`, `url()`, `assertAllowed()`, `evaluate(fn | expression, ...args)`,
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
 `clickText(text, { within })`, `clickAt(x, y)`, `hover(selector)`, `type(text, selector?)`,
-`press(key)`, `setFiles(selector, paths)`, `text(selector?)`, `screenshot(path, { fullPage })`,
+`press(key)`, `setFiles(selector, paths)`, `text(selector?)`, `screenshot(path, { fullPage, viewport })`,
 `fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir)` (a download that a
 click starts), `expectResponse(match, action)` (capture an API response body; a CORS preflight's
 response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, transform, action)`
@@ -217,7 +344,9 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 **Lower level:** `launchAgentChrome`, `agentEndpoint`, `agentChromePid`, `agentChromeBin`,
 `findAgentPid`, `parsePs`, `processTree` (a Chrome's process tree, for example to record its audio),
 `restoresOnStartup`, `startProxy`, `stopProxy`, `proxyInfo`, `browserTarget`, `localBrowserStatus`,
-`notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `isDeniedHost`,
+`notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `isDeniedHost`, `recordTab`,
+`planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`, `pointAt`, `fittsMs`, `seededRandom`,
+`findFfmpeg`, `runCleanup`, `withCleanupErrors`,
 `loadAllowlist`, `resolveOptions`, `CDPConnection`, `main` (the CLI in-process). Errors:
 `AgentBrowserError` (with a stable `code`) and `UsageError`, `NotAllowedError`, `PinRequiredError`,
 `ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`.
@@ -264,14 +393,15 @@ is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "tit
 | `click <tab> <selector\|#N>` or `click <tab> --text LABEL` | `tab`, `target` string\|null, `text` string\|null |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
 | `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text) |
-| `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown) |
+| `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F2) |
 | `text <tab> [selector\|#N]` | `tab`, `selector` string\|null, `text` |
 | `eval <tab> (<js> \| --stdin)` | `tab`, `value` (the JSON value; `undefined` becomes `null`) |
-| `shot <tab> [path] [--full]` | `tab`, `path`, `fullPage` bool. Refused with `read_first` until `outline` or `text` read the tab at its current URL. Default path `<state-dir>/shots/<time>.png`. |
+| `shot <tab> [path] [--full] [--size WxH] [--scale N]` | `tab`, `path`, `fullPage` bool. Refused with `read_first` until `outline` or `text` read the tab at its current URL. Default path `<state-dir>/shots/<time>.png`. `--size`/`--scale` lay the page out at exactly that size for the shot only (the PNG is W x N by H x N pixels); a failure to restore the tab is an error that names the saved file. |
 | `fetch <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `contentType` |
 | `download <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `status` int |
 | `close <tab>` | `tab` |
 | `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds` (at most 3600), `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers; nothing after the tab leaves the allowlist) |
+| `record <tab> --out clip.mp4 [--script S] [--setup S] [--size WxH] [--fps N] [--scale N] [--no-cursor] [--settle MS] [--seed N] [--ffmpeg PATH]` | `tab`, `path`, `provenance` (the JSON beside the MP4), `width`, `height`, `scale`, `fps`, `videoWidth`, `videoHeight`, `frames` (screencast frames kept), `seconds`, `maxFrameGapMs`, `steps` int, `events` (see **Recording**), `warnings` string[] |
 | `commands` | `commands`: the command list (`name`, `summary`, `usage`, `params`) |
 
 `fetch` and `download` act through an allowlisted tab and send the profile's cookies, so their URL
@@ -310,11 +440,12 @@ dataclass:
 | `press(tab, key)` | `PressResult(tab, key)` |
 | `text(tab, selector=None)` | `TextResult(tab, selector, text)` |
 | `eval(tab, expression)` | `EvalResult(tab, value)`; the expression goes on stdin |
-| `shot(tab, path=None, full=False)` | `ShotResult(tab, path, full_page)` |
+| `shot(tab, path=None, full=False, size=None, scale=None)` | `ShotResult(tab, path, full_page)` |
 | `fetch(tab, url, path)` | `FetchResult(tab, url, path, bytes, content_type)` |
 | `download(tab, url, path)` | `DownloadResult(tab, url, path, bytes, status)` |
 | `close(tab)` | `CloseResult(tab)` |
 | `net(tab, seconds=None, match=None, max=None)` | `NetResult(tab, seconds, entries: list[NetHttp \| NetWs])` |
+| `record(tab, out, script=None, setup=None, size=None, fps=None, scale=None, no_cursor=False, settle=None, seed=None, ffmpeg=None)` | `RecordResult(tab, path, provenance, width, height, scale, fps, video_width, video_height, frames, seconds, max_frame_gap_ms, steps, events: list[RecordEvent(step, kind, start, end, press, keys, first, last)], warnings)` |
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
 `TabRef(id, target_id, name, url, title)`. `node_version()` returns the node version as a tuple.
@@ -400,6 +531,13 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   ported from vedlo.
 - `test/allowlist.test.ts`: matching, the file, the denylist.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
+- `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
+  frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
+  that encode need ffmpeg and ffprobe on `PATH` (skipped without them).
+- `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
+  `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
+  (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
+  is restored.
 - `test/package.test.ts`: the dependency rule, the exports, an install under `node_modules`, no
   consumer paths, no CI workflow.
 - `python/tests/test_adapter.py`: the adapter against the real CLI; missing or old Node; bad output.
@@ -410,10 +548,13 @@ There is no CI workflow; the tests run locally.
 
 ## Supply chain
 
-The only runtime dependency is `ws`, pinned exactly (8.21.0, the version vedlo vetted and ships) in
-`package.json` and `package-lock.json`. The repo `.npmrc` clears the global `before=` date, as vedlo's
-does, because 8.21.0 is newer than that date. `ignore-scripts=true` stays on. The Python adapter has
-no dependencies. Vet any new dependency the way vedlo's `docs/supply-chain.md` says; prefer none.
+The runtime dependencies are `ws` (8.21.0, the version vedlo vetted and ships) and `ghost-cursor`
+(1.4.2, the cursor paths of `record`; it brings `bezier-js` 6.1.4, `debug` 4.4.3, `ms` 2.1.3 and
+`@types/bezier-js` 4.1.3). All are pinned exactly in `package.json` and `package-lock.json`, and
+`test/package.test.ts` fails on any other package. ghost-cursor is loaded only when a recording runs.
+See `docs/supply-chain/ghost-cursor-1.4.2.md` for its vetting. `ignore-scripts=true` stays on. The
+Python adapter has no dependencies. Vet any new dependency the way vedlo's `docs/supply-chain.md` says;
+prefer none.
 
 ## What stayed in vedlo
 
@@ -435,6 +576,7 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 | `src/diagnostics.ts` | proxy attempt log, local status, notify hook |
 | `src/allowlist.ts` | allowlist and denylist |
 | `src/outline.ts` | `outline`, `redact`, `net` |
+| `src/record.ts` | `record`: steps, keys, cursor paths, overlay, screencast, encoder |
 | `src/options.ts` | consumer options and their checks |
 | `src/cdp.ts` | minimal CDP client on `ws` (Node's built-in WebSocket caps messages at 4 MB) |
 | `index.js`, `loader.js`, `bin/agent-browser.js` | JavaScript entry points (see "Why there is a `loader.js`") |

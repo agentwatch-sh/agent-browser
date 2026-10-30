@@ -442,6 +442,70 @@ class NetResult:
         return cls(tab=_tab(d, where), seconds=_num(d, "seconds", where), entries=_list(d, "entries", where, _net_entry))
 
 
+def _opt_num(d: Mapping[str, object], key: str, where: str) -> Optional[float]:
+    return _num(d, key, where) if key in d else None
+
+
+def _num_item(v: object, where: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ProtocolError(f"{where}: expected a number")
+    return float(v)
+
+
+@dataclass(frozen=True)
+class RecordEvent:
+    """When a recorded step ran, in seconds from the first frame of the MP4.
+
+    `press` is a click's press; `keys` holds each key of a press step; `first` and `last` are a type
+    step's first and last character. Each is None for the other kinds of step.
+    """
+
+    step: int
+    kind: str
+    start: float
+    end: float
+    press: Optional[float] = None
+    keys: Optional[List[float]] = None
+    first: Optional[float] = None
+    last: Optional[float] = None
+
+    @classmethod
+    def from_json(cls, value: object, where: str) -> "RecordEvent":
+        d = _obj(value, where)
+        return cls(step=_int(d, "step", where), kind=_str(d, "kind", where), start=_num(d, "start", where), end=_num(d, "end", where),
+                   press=_opt_num(d, "press", where), keys=_list(d, "keys", where, _num_item) if "keys" in d else None,
+                   first=_opt_num(d, "first", where), last=_opt_num(d, "last", where))
+
+
+@dataclass(frozen=True)
+class RecordResult:
+    """A recording: the MP4 (`path`), its provenance JSON beside it, the sizes, and when each step ran."""
+
+    tab: TabRef
+    path: str
+    provenance: str
+    width: int
+    height: int
+    scale: float
+    fps: int
+    video_width: int
+    video_height: int
+    frames: int
+    seconds: float
+    max_frame_gap_ms: int
+    steps: int
+    events: List[RecordEvent]
+    warnings: List[str]
+
+    @classmethod
+    def from_json(cls, d: Mapping[str, object], where: str = "record") -> "RecordResult":
+        return cls(tab=_tab(d, where), path=_str(d, "path", where), provenance=_str(d, "provenance", where), width=_int(d, "width", where),
+                   height=_int(d, "height", where), scale=_num(d, "scale", where), fps=_int(d, "fps", where),
+                   video_width=_int(d, "videoWidth", where), video_height=_int(d, "videoHeight", where), frames=_int(d, "frames", where),
+                   seconds=_num(d, "seconds", where), max_frame_gap_ms=_int(d, "maxFrameGapMs", where), steps=_int(d, "steps", where),
+                   events=_list(d, "events", where, RecordEvent.from_json), warnings=_list(d, "warnings", where, _string_item))
+
+
 @dataclass(frozen=True)
 class ParamSpec:
     """A command parameter: `name` is camelCase in JSON; the Python method takes its snake_case form."""

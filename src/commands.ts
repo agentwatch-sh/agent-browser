@@ -12,6 +12,7 @@ import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError } from "
 import { resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
+import { checkScale, parseSize, planRecording, recordTab, type RecordEvent } from "./record.ts";
 
 // ---------- the spec ----------
 
@@ -58,14 +59,16 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector")] },
   { name: "type", summary: "Insert text into #N or a selector, else the focused element; the text is never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
     params: [TAB, p("text", "string", true, "positional", "the text to insert", true), p("into", "string", false, "--into", "#N or a CSS selector to focus first")] },
-  { name: "press", summary: "Press a key: Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown", usage: "press <tab> <key>",
-    params: [TAB, p("key", "string", true, "positional", "Enter, Tab, Escape, Backspace, ArrowUp or ArrowDown")] },
+  { name: "press", summary: "Press a key: Enter, Tab, Escape, Backspace, Delete, an arrow, Home, End, PageUp, PageDown, F2", usage: "press <tab> <key>",
+    params: [TAB, p("key", "string", true, "positional", "Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown or F2")] },
   { name: "text", summary: "Visible text of the page or of an element (read this before a screenshot)", usage: "text <tab> [selector|#N]",
     params: [TAB, p("selector", "string", false, "positional", "#N or a CSS selector; default the whole page")] },
   { name: "eval", summary: "Evaluate a JavaScript expression in the page (awaits promises) and return its JSON value", usage: "eval <tab> (<js> | --stdin)",
     params: [TAB, p("expression", "string", true, "positional", "a JavaScript expression", true)] },
-  { name: "shot", summary: "Screenshot as PNG; refused until outline or text has read the page at its current URL", usage: "shot <tab> [path] [--full]",
-    params: [TAB, p("path", "string", false, "positional", "output PNG; default <state-dir>/shots/<time>.png"), p("full", "boolean", false, "--full", "the full page, not only the viewport")] },
+  { name: "shot", summary: "Screenshot as PNG; refused until outline or text has read the page at its current URL", usage: "shot <tab> [path] [--full] [--size WxH] [--scale N]",
+    params: [TAB, p("path", "string", false, "positional", "output PNG; default <state-dir>/shots/<time>.png"), p("full", "boolean", false, "--full", "the full page, not only the viewport"),
+      p("size", "string", false, "--size", "lay the page out at exactly WIDTHxHEIGHT CSS pixels for the shot (cleared afterwards)"),
+      p("scale", "number", false, "--scale", "the device pixel ratio for the shot, e.g. 1 or 2 (cleared afterwards)")] },
   { name: "fetch", summary: "Save a URL with the page's fetch() and cookies (same-origin and CORS rules apply)", usage: "fetch <tab> <url> <path>",
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("path", "string", true, "positional", "output file")] },
   { name: "download", summary: "Save a URL through Chrome's network stack (cross-origin CDN media)", usage: "download <tab> <url> <path>",
@@ -74,6 +77,17 @@ export const COMMAND_SPECS: CommandSpec[] = [
   { name: "net", summary: "Record the tab's fetch/XHR/WebSocket traffic; never headers, bodies redacted", usage: "net <tab> [--seconds N] [--match S] [--max N]",
     params: [TAB, p("seconds", "number", false, "--seconds", "how long to record; default 60, at most 3600"), p("match", "string", false, "--match", "only URLs that contain this text"),
       p("max", "number", false, "--max", "clip each body at this many characters; default 4000")] },
+  { name: "record", summary: "Record the tab to MP4 while a step script drives it (demo cursor, exact size)", usage: "record <tab> --out clip.mp4 [--script steps.json] [--setup steps.json] [--size 1920x1080] [--fps 30] [--scale 1|2] [--no-cursor] [--settle ms] [--seed N] [--ffmpeg PATH]",
+    params: [TAB, p("out", "string", true, "--out", "the MP4 to write; the provenance JSON goes beside it (clip.mp4 -> clip.json)"),
+      p("script", "string", false, "--script", "a JSON array of steps (wait, goto, click, hover, type, press, scroll, highlight, waitFor, eval); default none"),
+      p("setup", "string", false, "--setup", "steps in the same format that run before the recording starts (off camera)"),
+      p("size", "string", false, "--size", "the page size in CSS pixels for the run; default 1920x1080"),
+      p("fps", "number", false, "--fps", "frames per second of the MP4; default 30"),
+      p("scale", "number", false, "--scale", "the device pixel ratio: 1 (default) or 2; the video is size x scale pixels"),
+      p("noCursor", "boolean", false, "--no-cursor", "draw no demo cursor or click ripple (a highlight step still draws its ring)"),
+      p("settle", "number", false, "--settle", "ms of still page recorded before the first step and after the last; default 600"),
+      p("seed", "number", false, "--seed", "the seed of the cursor paths, aim points and typing pace; the same seed moves the same way; default 1"),
+      p("ffmpeg", "string", false, "--ffmpeg", "the ffmpeg binary (absolute path); default ffmpeg on PATH")] },
   { name: "commands", summary: "This list, as JSON", usage: "commands", params: [] },
 ];
 
@@ -107,6 +121,10 @@ export type FetchResult = Ok<"fetch", { tab: TabRef; url: string; path: string; 
 export type DownloadResult = Ok<"download", { tab: TabRef; url: string; path: string; bytes: number; status: number }>;
 export type CloseResult = Ok<"close", { tab: TabRef }>;
 export type NetResult = Ok<"net", { tab: TabRef; seconds: number; entries: NetEntry[] }>;
+export type RecordResult = Ok<"record", {
+  tab: TabRef; path: string; provenance: string; width: number; height: number; scale: number; fps: number; videoWidth: number; videoHeight: number;
+  frames: number; seconds: number; maxFrameGapMs: number; steps: number; events: RecordEvent[]; warnings: string[];
+}>;
 export type CommandsResult = Ok<"commands", { commands: CommandSpec[] }>;
 
 /** The longest `net` capture, in seconds. */
@@ -319,13 +337,19 @@ export const commands = {
     });
   },
 
-  async shot(o: BrowserOptions | Settings, p: { tab: string; path?: string; full?: boolean }): Promise<ShotResult> {
+  async shot(o: BrowserOptions | Settings, p: { tab: string; path?: string; full?: boolean; size?: string; scale?: number }): Promise<ShotResult> {
+    const size = p.size === undefined ? undefined : parseSize(p.size);
+    const scale = p.scale === undefined ? undefined : checkScale(p.scale);
     return onTab(o, need(p.tab, "tab"), async (tab, info, b) => {
       const s = b.settings;
       if (reads(s)[tab.targetId] !== await tab.url())
         throw new ReadFirstError(`read the page first: run \`${s.commandName} outline ${info.id}\` or \`text ${info.id}\`; a screenshot is the last resort`);
       const out = p.path ? resolve(p.path) : join(statePath(s, "shots"), `${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
-      return { ok: true, command: "shot", tab: info, path: await tab.screenshot(out, { fullPage: !!p.full }), fullPage: !!p.full };
+      // --scale alone keeps the tab's own size and changes only the pixel ratio.
+      const viewport = size || scale !== undefined
+        ? { ...(size ?? await tab.evaluate(() => ({ width: innerWidth, height: innerHeight }))), scale: scale ?? 1 }
+        : undefined;
+      return { ok: true, command: "shot", tab: info, path: await tab.screenshot(out, { fullPage: !!p.full, viewport }), fullPage: !!p.full };
     });
   },
 
@@ -359,6 +383,24 @@ export const commands = {
     return onTab(o, need(p.tab, "tab"), async (tab, info) => {
       const entries = await netLog(tab, seconds, p.match, max, hooks.onEntry);
       return { ok: true, command: "net", tab: info, seconds, entries };
+    });
+  },
+
+  /**
+   * Record the tab to MP4 while a step script drives it. Everything is checked before the connection
+   * (the steps, the paths, ffmpeg). Not under the read-first rule: a recording is a video for people,
+   * not a way for an agent to read a page.
+   */
+  async record(o: BrowserOptions | Settings, p: { tab: string; out: string; script?: string; setup?: string; size?: string; fps?: number; scale?: number;
+    noCursor?: boolean; settle?: number; seed?: number; ffmpeg?: string }): Promise<RecordResult> {
+    const s = resolveOptions(o);
+    const plan = planRecording(p, allowlistOf(s));
+    return onTab(s, need(p.tab, "tab"), async (tab, info) => {
+      const r = await recordTab(tab, plan);
+      const { width, height, scale } = plan.viewport;
+      return { ok: true, command: "record", tab: await liveRef(tab, info.name), path: plan.out, provenance: plan.provenance, width, height, scale, fps: plan.fps,
+        videoWidth: r.videoWidth, videoHeight: r.videoHeight, frames: r.frames, seconds: r.seconds, maxFrameGapMs: r.maxFrameGapMs, steps: plan.steps.length,
+        events: r.events, warnings: r.warnings };
     });
   },
 

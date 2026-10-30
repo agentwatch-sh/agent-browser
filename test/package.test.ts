@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import * as lib from "../src/index.ts";
 import { FakeChrome } from "./fake-chrome.ts";
@@ -15,16 +15,44 @@ import { ROOT, consumer } from "./helpers.ts";
 const run = promisify(execFile);
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
-test("ws is the only dependency, pinned exactly in package.json and package-lock.json", () => {
-  assert.deepEqual(pkg.dependencies, { ws: "8.21.0" });
+// The vetted set (docs/supply-chain/ghost-cursor-1.4.2.md for ghost-cursor and what it brings).
+const LOCKED: Record<string, string> = {
+  "node_modules/ws": "8.21.0",
+  "node_modules/ghost-cursor": "1.4.2",
+  "node_modules/bezier-js": "6.1.4",
+  "node_modules/debug": "4.4.3",
+  "node_modules/ms": "2.1.3",
+  "node_modules/@types/bezier-js": "4.1.3",
+};
+
+test("the dependencies are ws and ghost-cursor, pinned exactly, and the lockfile holds only the vetted set", () => {
+  assert.deepEqual(pkg.dependencies, { "ghost-cursor": "1.4.2", ws: "8.21.0" });
   assert.equal(pkg.devDependencies, undefined);
   assert.equal(pkg.optionalDependencies, undefined);
   assert.equal(pkg.engines.node, ">=26");
   assert.equal(pkg.private, true, "never published to a registry");
   const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"));
-  assert.deepEqual(Object.keys(lock.packages).sort(), ["", "node_modules/ws"]);
-  assert.equal(lock.packages["node_modules/ws"].version, "8.21.0");
-  assert.match(lock.packages["node_modules/ws"].integrity, /^sha512-/);
+  assert.deepEqual(Object.keys(lock.packages).sort(), ["", ...Object.keys(LOCKED)].sort());
+  for (const [path, version] of Object.entries(LOCKED)) {
+    assert.equal(lock.packages[path].version, version, path);
+    assert.match(lock.packages[path].integrity, /^sha512-/, path);
+    assert.equal(lock.packages[path].hasInstallScript, undefined, `${path} has no install script`);
+  }
+});
+
+test("ghost-cursor loads without puppeteer, and only when a recording needs it", async () => {
+  const { stdout } = await run(process.execPath, ["--input-type=module", "-e", `
+    const { createRequire } = await import("node:module");
+    const req = createRequire(${JSON.stringify(join(ROOT, "index.js"))});
+    await import(${JSON.stringify(join(ROOT, "src", "index.ts"))});
+    const before = Object.keys(req.cache).filter((k) => k.includes("ghost-cursor")).length;
+    await import("ghost-cursor");
+    const after = Object.keys(req.cache).map((k) => k.split("node_modules/")[1]).filter(Boolean);
+    console.log(JSON.stringify({ before, after }));`], { cwd: ROOT });
+  const { before, after } = JSON.parse(stdout);
+  assert.equal(before, 0, "the library does not load ghost-cursor until a recording runs");
+  assert.ok(after.some((m: string) => m.startsWith("ghost-cursor/")), "ghost-cursor loaded");
+  assert.ok(!after.some((m: string) => m.includes("puppeteer")), `no puppeteer: ${after.join(" ")}`);
 });
 
 test("index.js re-exports every runtime export of src/index.ts", async () => {
@@ -71,7 +99,10 @@ test("installed under node_modules, the library, the CLI and its proxy child all
   try {
     mkdirSync(installed, { recursive: true });
     for (const f of ["package.json", "index.js", "loader.js", "bin", "src"]) cpSync(join(ROOT, f), join(installed, f), { recursive: true });
-    symlinkSync(join(ROOT, "node_modules", "ws"), join(app, "node_modules", "ws"));
+    for (const dep of Object.keys(LOCKED)) {
+      mkdirSync(dirname(join(app, dep)), { recursive: true });
+      symlinkSync(join(ROOT, dep), join(app, dep));
+    }
 
     const imported = await run(process.execPath, ["--input-type=module", "-e",
       "const m = await import('agent-browser'); console.log(JSON.stringify([typeof m.AgentBrowser, typeof m.commands.tabs, m.COMMAND_SPECS.length]));"], { cwd: app });

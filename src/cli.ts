@@ -178,6 +178,9 @@ export function human(r: any): string {
     case "text": return r.text.endsWith("\n") ? r.text : r.text + "\n";
     case "eval": return JSON.stringify(r.value, null, 2) + "\n";
     case "shot": return lines([r.path]);
+    case "record":
+      return lines([`${r.path}  ${r.videoWidth}x${r.videoHeight}  ${r.fps} fps  ${r.seconds.toFixed(1)} s  ${r.frames} frames`, `provenance: ${r.provenance}`,
+        ...r.warnings.map((w: string) => `warning: ${w}`)]);
     case "fetch": return lines([`${r.path}  ${r.bytes} bytes  ${r.contentType}`]);
     case "download": return lines([`${r.path}  ${r.bytes} bytes  HTTP ${r.status}`]);
     case "close": return lines([`closed ${r.tab.id}`]);

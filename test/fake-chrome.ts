@@ -4,6 +4,10 @@
 // outline, text, click, type, eval and fetch run the library's real page functions. It starts no
 // browser, and its page fetch() and downloads reach only http://127.0.0.1 (the test's own fixture
 // server). It records every CDP call, so a test can prove which tabs were never touched.
+//
+// For `record` it also screencasts (real JPEG frames, acknowledged one at a time), emulates a device
+// size, and gives page code the DOM calls the recording overlay uses. Like Google Sheets, it refuses
+// innerHTML (Trusted Types), a <style> element and an inline style attribute (a strict style-src).
 
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -31,6 +35,92 @@ export type Call = { method: string; params: any; sessionId?: string; targetId?:
 
 /** A 1x1 PNG. */
 export const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/** A solid mid-grey baseline JPEG of any size: one component, one-symbol Huffman tables, so every 8x8 block is two zero bits. */
+export function greyJpeg(width: number, height: number): Buffer {
+  const seg = (marker: number, body: number[]) => [0xff, marker, (body.length + 2) >> 8, (body.length + 2) & 0xff, ...body];
+  const bits = Math.ceil(width / 8) * Math.ceil(height / 8) * 2;
+  const data = new Array(Math.ceil(bits / 8)).fill(0);
+  if (bits % 8) data[data.length - 1] = (1 << (8 - (bits % 8))) - 1; // pad the last byte with 1 bits
+  const oneSymbol = (cls: number) => [cls, 1, ...new Array(15).fill(0), 0]; // one code of length 1, symbol 0
+  return Buffer.from([
+    0xff, 0xd8,
+    ...seg(0xdb, [0, ...new Array(64).fill(1)]),
+    ...seg(0xc0, [8, height >> 8, height & 0xff, width >> 8, width & 0xff, 1, 1, 0x11, 0]),
+    ...seg(0xc4, [...oneSymbol(0x00), ...oneSymbol(0x10)]),
+    ...seg(0xda, [1, 1, 0x00, 0, 63, 0]),
+    ...data,
+    0xff, 0xd9,
+  ]);
+}
+
+const TRUSTED_HTML = "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.";
+
+/** A node that page code creates (the recording overlay): DOM calls only, as a strict page allows. */
+export class FakeNode {
+  readonly page: FakePage;
+  readonly tagName: string;
+  attrs = new Map<string, string>();
+  readonly style: Record<string, unknown> & { setProperty(k: string, v: string, priority?: string): void };
+  children: FakeNode[] = [];
+  parent: FakeNode | FakeShadowRoot | FakeElement | null = null;
+  shadow?: FakeShadowRoot;
+
+  constructor(page: FakePage, tag: string) {
+    this.page = page;
+    this.tagName = tag.toUpperCase();
+    const style: Record<string, unknown> = {};
+    Object.defineProperty(style, "setProperty", { value: (k: string, v: string) => { style[k] = v; } });
+    this.style = style as FakeNode["style"];
+  }
+  setAttribute(n: string, v: string) {
+    if (n.toLowerCase() === "style") throw new Error("fake CSP: an inline style attribute is refused (style-src)");
+    this.attrs.set(n, String(v));
+  }
+  getAttribute(n: string) { return this.attrs.get(n) ?? null; }
+  set innerHTML(_v: string) { throw new TypeError(TRUSTED_HTML); }
+  get innerHTML() { return ""; }
+  appendChild(c: FakeNode) { return this.insertBefore(c, null); }
+  insertBefore(c: FakeNode, ref: FakeNode | null) {
+    c.remove();
+    c.parent = this;
+    const i = ref ? this.children.indexOf(ref) : -1;
+    if (i < 0) this.children.push(c); else this.children.splice(i, 0, c);
+    return c;
+  }
+  remove() {
+    const p = this.parent;
+    if (p instanceof FakeElement) this.page.appended.splice(this.page.appended.indexOf(this), 1);
+    else if (p) p.children.splice(p.children.indexOf(this), 1);
+    this.parent = null;
+  }
+  get isConnected(): boolean {
+    let n: FakeNode = this;
+    for (;;) {
+      const p = n.parent;
+      if (p instanceof FakeShadowRoot) n = p.host;
+      else if (p instanceof FakeNode) n = p;
+      else return p === this.page.body && this.page.appended.includes(n);
+    }
+  }
+  attachShadow(_opts: { mode: string }) { return (this.shadow = new FakeShadowRoot(this)); }
+  animate(_keyframes: unknown[], opts: { duration?: number }) {
+    this.page.animations++;
+    const a = { onfinish: null as null | (() => void), cancelled: false, cancel() { a.cancelled = true; } };
+    this.page.later(opts.duration ?? 0, () => { if (!a.cancelled) a.onfinish?.(); });
+    return a;
+  }
+  getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }; }
+  getClientRects() { return []; }
+}
+
+export class FakeShadowRoot {
+  readonly host: FakeNode;
+  children: FakeNode[] = [];
+  constructor(host: FakeNode) { this.host = host; }
+  appendChild(c: FakeNode) { return this.insertBefore(c, null); }
+  insertBefore(c: FakeNode, ref: FakeNode | null) { return FakeNode.prototype.insertBefore.call(this as unknown as FakeNode, c, ref); }
+}
 
 export class FakeElement {
   readonly page: FakePage;
@@ -74,6 +164,15 @@ export class FakeElement {
   scrollIntoView() {}
   focus() { this.page.focused = this; }
   click() { void this.page.activate(this); }
+  set innerHTML(_v: string) { throw new TypeError(TRUSTED_HTML); }
+  get innerHTML() { return ""; }
+  /** Only the body takes children: page code appends its own nodes to the document element. */
+  appendChild(c: FakeNode) {
+    c.remove();
+    c.parent = this;
+    this.page.appended.push(c);
+    return c;
+  }
   querySelector(sel: string) { return this.querySelectorAll(sel)[0] ?? null; }
   querySelectorAll(sel: string): FakeElement[] { return this.tagName === "BODY" ? this.page.select(sel) : []; }
 }
@@ -117,6 +216,15 @@ export class FakePage {
   hovered: FakeElement | undefined;
   typed = "";
   keys: string[] = [];
+  /** Every key event, with its modifiers and macOS editing commands. */
+  keyEvents: { type: string; key: string; modifiers: number; text?: string; commands?: string[] }[] = [];
+  wheel = 0;
+  /** The device metrics override, while one is set. */
+  metrics: { width: number; height: number; deviceScaleFactor: number } | undefined;
+  /** Nodes page code appended to the document element (the recording overlay), and its animations. */
+  appended: FakeNode[] = [];
+  animations = 0;
+  body!: FakeElement;
   bodies = new Map<string, { body: Buffer; mime: string }>();
   private context: vm.Context = vm.createContext({});
   private isolatedContexts = new Map<number, vm.Context>();
@@ -145,6 +253,7 @@ export class FakePage {
     this.title = spec?.title ?? "";
     this.text = spec?.text ?? "";
     this.focused = this.hovered = undefined;
+    this.appended = [];
     this.elements = (spec?.elements ?? []).map((e, i) => {
       const Cls = e.tag === "input" ? FakeInputElement : e.tag === "a" ? FakeAnchorElement : FakeElement;
       return new Cls(this, e, i);
@@ -171,6 +280,7 @@ export class FakePage {
   private newContext(): vm.Context {
     const page = this;
     const body = new FakeElement(this, { tag: "body" }, 0);
+    this.body = body;
     Object.defineProperty(body, "innerText", { get: () => [page.text, ...page.elements.map((e) => e.innerText)].filter(Boolean).join("\n") });
     const document = {
       body,
@@ -179,12 +289,19 @@ export class FakePage {
       set title(v: string) { page.title = String(v); },
       querySelector: (s: string) => page.select(s)[0] ?? null,
       querySelectorAll: (s: string) => page.select(s),
+      createElement: (tag: string) => {
+        if (tag.toLowerCase() === "style") throw new Error("fake CSP: a <style> element is refused (style-src)");
+        return new FakeNode(page, tag);
+      },
+      createElementNS: (_ns: string, tag: string) => new FakeNode(page, tag),
     };
     const sandbox: Record<string, unknown> = {
       document,
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
-      innerWidth: 1280,
-      innerHeight: 800,
+      get innerWidth() { return page.metrics?.width ?? 1280; },
+      get innerHeight() { return page.metrics?.height ?? 800; },
+      requestAnimationFrame: (fn: (t: number) => void) => page.later(16, () => fn(performance.now())),
+      performance: { now: () => performance.now() },
       getComputedStyle: (el: FakeElement) => ({ visibility: el.hidden ? "hidden" : "visible", display: el.hidden ? "none" : "block" }),
       HTMLElement: FakeElement,
       HTMLInputElement: FakeInputElement,
@@ -247,7 +364,8 @@ export class FakePage {
   }
 }
 
-type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean };
+type Cast = { timer: NodeJS.Timeout; maxWidth: number; maxHeight: number; waiting: boolean; sent: number; acked: number };
+type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast };
 
 export class FakeChrome {
   readonly site: Site;
@@ -263,6 +381,10 @@ export class FakeChrome {
   private nextWindow = 1;
   currentWindow = 1;
   connections = 0;
+  /** A method named here fails once with this message (a test of error handling). */
+  readonly failOnce = new Map<string, string>();
+  /** Screencast frames sent and acknowledged, over every session. */
+  frames = { sent: 0, acked: 0 };
   ws = "";
 
   private constructor(site: Site) { this.site = site; }
@@ -279,13 +401,14 @@ export class FakeChrome {
       client.on("message", (raw) => { void fake.onMessage(client, JSON.parse(String(raw))); });
       client.on("close", () => {
         fake.clients.delete(client);
-        for (const [id, s] of fake.sessions) if (s.client === client) fake.sessions.delete(id);
+        for (const [id, s] of fake.sessions) if (s.client === client) { fake.stopCast(s); fake.sessions.delete(id); }
       });
     });
     return fake;
   }
 
   async close() {
+    for (const s of this.sessions.values()) this.stopCast(s);
     for (const p of this.pages.values()) p.close();
     for (const c of this.clients) c.terminate();
     await new Promise<void>((r) => this.wss.close(() => r()));
@@ -366,6 +489,8 @@ export class FakeChrome {
     const fail = (message: string, code = -32000) => client.send(JSON.stringify({ id: msg.id, error: { code, message }, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}) }));
     try {
       if (msg.sessionId && !session) return fail(`Session with given id not found.`);
+      const failure = this.failOnce.get(msg.method);
+      if (failure !== undefined) { this.failOnce.delete(msg.method); return fail(failure); }
       const result = session ? await this.onSession(session, msg.method, params) : await this.onBrowser(client, msg.method, params);
       if (result === undefined) return fail(`'${msg.method}' wasn't found`, -32601);
       reply(result);
@@ -400,6 +525,7 @@ export class FakeChrome {
       case "Target.detachFromTarget": {
         const s = this.sessions.get(params.sessionId);
         if (!s) throw new Error("No session with given id found");
+        this.stopCast(s);
         this.sessions.delete(s.id);
         this.broadcast("Target.detachedFromTarget", { sessionId: s.id, targetId: s.page.targetId });
         return {};
@@ -410,6 +536,7 @@ export class FakeChrome {
         page.close();
         this.pages.delete(page.targetId);
         for (const s of [...this.sessions.values()]) if (s.page === page) {
+          this.stopCast(s);
           this.sessions.delete(s.id);
           this.broadcast("Target.detachedFromTarget", { sessionId: s.id, targetId: page.targetId });
         }
@@ -429,10 +556,48 @@ export class FakeChrome {
     return { data: chunk.toString("base64"), base64Encoded: true, eof: st.offset >= st.data.length };
   }
 
+  /**
+   * Screencast: a frame every 33 ms, the next only after the last was acknowledged, as Chrome does. Like
+   * Chrome, the first frame has the window's own size; later ones have the emulated size.
+   */
+  private startCast(s: Session, params: { maxWidth?: number; maxHeight?: number }) {
+    this.stopCast(s);
+    const cast: Cast = { maxWidth: params.maxWidth ?? 1e9, maxHeight: params.maxHeight ?? 1e9, waiting: false, sent: 0, acked: 0, timer: setInterval(() => {
+      if (cast.waiting) return;
+      const m = cast.sent > 0 ? s.page.metrics : undefined;
+      let w = m ? Math.round(m.width * m.deviceScaleFactor) : 1280, h = m ? Math.round(m.height * m.deviceScaleFactor) : 800;
+      const k = Math.min(1, cast.maxWidth / w, cast.maxHeight / h);
+      w = Math.round(w * k); h = Math.round(h * k);
+      cast.waiting = true;
+      cast.sent++;
+      this.frames.sent++;
+      const metadata = { offsetTop: 0, pageScaleFactor: 1, deviceWidth: w, deviceHeight: h, scrollOffsetX: 0, scrollOffsetY: 0, timestamp: Date.now() / 1000 };
+      s.client.send(JSON.stringify({ method: "Page.screencastFrame", params: { data: this.jpeg(w, h), metadata, sessionId: cast.sent }, sessionId: s.id }));
+    }, 33) };
+    s.cast = cast;
+  }
+
+  stopCast(s: Session) {
+    if (s.cast) clearInterval(s.cast.timer);
+    s.cast = undefined;
+  }
+
+  private jpegs = new Map<string, string>();
+  private jpeg(w: number, h: number): string {
+    const key = `${w}x${h}`;
+    if (!this.jpegs.has(key)) this.jpegs.set(key, greyJpeg(w, h).toString("base64"));
+    return this.jpegs.get(key)!;
+  }
+
   private async onSession(s: Session, method: string, params: any): Promise<object | undefined> {
     const page = s.page;
     switch (method) {
-      case "Page.enable": case "Emulation.setFocusEmulationEnabled": case "Fetch.disable": case "Network.disable": return {};
+      case "Page.enable": case "Emulation.setFocusEmulationEnabled": case "Fetch.disable": case "Network.disable": case "Page.bringToFront": return {};
+      case "Emulation.setDeviceMetricsOverride": page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor }; return {};
+      case "Emulation.clearDeviceMetricsOverride": page.metrics = undefined; return {};
+      case "Page.startScreencast": this.startCast(s, params); return {};
+      case "Page.stopScreencast": this.stopCast(s); return {};
+      case "Page.screencastFrameAck": if (s.cast) { s.cast.waiting = false; s.cast.acked++; this.frames.acked++; } return {};
       case "Runtime.enable": s.runtime = true; return {};
       case "Network.enable": s.network = true; return {};
       case "Page.navigate": {
@@ -443,8 +608,10 @@ export class FakeChrome {
       case "Page.createIsolatedWorld": return { executionContextId: page.createIsolatedWorld() };
       case "Runtime.evaluate": return page.evaluate(String(params.expression), !!params.awaitPromise, params.contextId);
       case "Input.dispatchMouseEvent": {
+        if (params.type === "mouseWheel") { page.wheel += params.deltaY ?? 0; return {}; }
         const el = page.hit(params.x, params.y);
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }
+        if (params.type === "mousePressed" && el && el.value !== undefined) page.focused = el; // a press focuses a text field, as in Chrome
         if (params.type === "mouseReleased" && el) await page.activate(el);
         return {};
       }
@@ -452,7 +619,15 @@ export class FakeChrome {
         if (page.focused && page.focused.value !== undefined) page.focused.value += params.text;
         else page.typed += params.text;
         return {};
-      case "Input.dispatchKeyEvent": if (params.type === "keyDown") page.keys.push(params.key); return {};
+      case "Input.dispatchKeyEvent":
+        page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, text: params.text, commands: params.commands });
+        if (params.type === "keyDown" || params.type === "rawKeyDown") page.keys.push(params.key);
+        // A key with text types it, as in Chrome (Enter's "\r" only submits).
+        if (params.type === "keyDown" && params.text && params.text !== "\r") {
+          if (page.focused && page.focused.value !== undefined) page.focused.value += params.text;
+          else page.typed += params.text;
+        }
+        return {};
       case "DOM.getDocument": return { root: { nodeId: 1, nodeName: "#document" } };
       case "DOM.querySelector": {
         const el = page.select(params.selector)[0];
@@ -464,7 +639,7 @@ export class FakeChrome {
         el.files = (params.files as string[]).map((f) => ({ name: basename(f) }));
         return {};
       }
-      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: 1280, height: 2400 } };
+      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.metrics?.width ?? 1280, height: 2400 } };
       case "Page.captureScreenshot": return { data: PNG_1x1 };
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
 import threading
 import unittest
@@ -11,7 +13,7 @@ from unittest import mock
 
 from agent_browser import (
     AgentBrowser, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError, NotAllowedError, PackageNotFoundError,
-    PinRequiredError, ProtocolError, ReadFirstError, TabNotFoundError, TabRef, UsageError,
+    PinRequiredError, ProtocolError, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef, UsageError,
 )
 
 from .support import FakeChrome, Consumer, ROOT, stand_in_node
@@ -122,6 +124,28 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(result.entries, [NetHttp(method="POST", url=self.fake.base + "/api/x?token=<redacted>", body='{"password":"<redacted>"}',
                                                   status=200, mime="application/json", resp="{}")])
         b.close("netted")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "record needs ffmpeg on PATH")
+    def test_record_writes_an_mp4_and_returns_its_events(self) -> None:
+        b = self.browser
+        b.open(self.fake.base + "/", name="filmed")
+        steps = self.consumer.dir / "film-steps.json"
+        steps.write_text(json.dumps([{"click": "#b", "duration": 150}, {"type": "hi", "into": "#i", "delay": 10}, {"press": "Enter"}]))
+        out = self.consumer.dir / "film" / "clip.mp4"
+        result = b.record("filmed", out, script=steps, size="320x240", fps=10, scale=1, settle=100, seed=5)
+        self.assertIsInstance(result, RecordResult)
+        self.assertEqual((result.path, result.video_width, result.video_height, result.fps, result.steps), (str(out), 320, 240, 10, 3))
+        self.assertEqual(result.provenance, str(out.with_suffix(".json")))
+        self.assertTrue(out.read_bytes()[4:8] == b"ftyp", "an MP4")
+        self.assertEqual([(e.step, e.kind) for e in result.events], [(1, "click"), (2, "type"), (3, "press")])
+        self.assertIsInstance(result.events[0], RecordEvent)
+        self.assertIsNotNone(result.events[0].press)
+        self.assertEqual(len(result.events[2].keys or []), 1)
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(b.eval("filmed", "document.querySelector('#i').value").value, "hi")
+        with self.assertRaises(UsageError):
+            b.record("filmed", self.consumer.dir / "film-steps.mp4", script=steps)
+        b.close("filmed")
 
     def test_an_off_list_tab_is_never_listed_or_touched(self) -> None:
         mail = self.fake.add_page("https://mail.example.org/inbox")

@@ -12,7 +12,7 @@ import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
 import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
-import { ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError } from "./errors.ts";
+import { ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 
@@ -291,9 +291,20 @@ export const KEYS: Record<string, { code: string; keyCode: number; text?: string
   Tab: { code: "Tab", keyCode: 9 },
   Escape: { code: "Escape", keyCode: 27 },
   Backspace: { code: "Backspace", keyCode: 8 },
+  Delete: { code: "Delete", keyCode: 46 },
   ArrowDown: { code: "ArrowDown", keyCode: 40 },
   ArrowUp: { code: "ArrowUp", keyCode: 38 },
+  ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
+  ArrowRight: { code: "ArrowRight", keyCode: 39 },
+  Home: { code: "Home", keyCode: 36 },
+  End: { code: "End", keyCode: 35 },
+  PageUp: { code: "PageUp", keyCode: 33 },
+  PageDown: { code: "PageDown", keyCode: 34 },
+  F2: { code: "F2", keyCode: 113 },
 };
+
+/** An exact page size for a screenshot or a recording: CSS pixels and a device pixel ratio. */
+export type Viewport = { width: number; height: number; scale: number };
 
 export class Tab {
   readonly browser: AgentBrowser;
@@ -492,11 +503,31 @@ export class Tab {
     await this.send("DOM.setFileInputFiles", { nodeId, files });
   }
 
-  /** A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort. */
-  async screenshot(path: string, opts: { fullPage?: boolean } = {}): Promise<string> {
+  /**
+   * A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort.
+   * With a viewport, the page is laid out at exactly that size for the shot (so the PNG is
+   * width x scale by height x scale), and the override is cleared afterwards. A failure to clear it
+   * never hides the shot's own error.
+   */
+  async screenshot(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number } = {}): Promise<string> {
     await this.assertAllowed();
+    if (!opts.viewport) return this.capture(path, !!opts.fullPage);
+    const { width, height, scale } = opts.viewport;
+    await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
+    let failure: unknown;
+    try {
+      await new Promise((r) => setTimeout(r, opts.settleMs ?? 500)); // the page lays itself out again at the new size
+      await this.capture(path, !!opts.fullPage);
+    } catch (e) { failure = e; }
+    const cleanupErrors = await runCleanup([["clear the device metrics override", () => this.send("Emulation.clearDeviceMetricsOverride")]]);
+    if (failure) throw withCleanupErrors(failure, cleanupErrors);
+    if (cleanupErrors.length) throw new Error(`the screenshot was saved to ${path}, but the tab keeps the emulated size: ${cleanupErrors.join("; ")}`);
+    return path;
+  }
+
+  private async capture(path: string, fullPage: boolean): Promise<string> {
     const params: Record<string, unknown> = { format: "png" };
-    if (opts.fullPage) {
+    if (fullPage) {
       const { cssContentSize } = await this.send("Page.getLayoutMetrics");
       params.captureBeyondViewport = true;
       params.clip = { x: 0, y: 0, width: cssContentSize.width, height: cssContentSize.height, scale: 1 };
