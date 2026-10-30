@@ -21,7 +21,7 @@ export {
 } from "./errors.ts";
 export type { ErrorCode } from "./errors.ts";
 export {
-  launchAgentChrome, agentEndpoint, agentChromePid, agentChromeBin, agentProfileDir, findAgentPid, parsePs, processTree,
+  launchAgentChrome, appBundle, agentEndpoint, agentChromePid, agentChromeBin, agentProfileDir, findAgentPid, parsePs, processTree,
   hasUserDataDir, restoresOnStartup, seedRemoteDebugging, assertNoDebuggingFlag, INSPECT_URL, AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN,
 } from "./agent.ts";
 export type { ProcessRow } from "./agent.ts";

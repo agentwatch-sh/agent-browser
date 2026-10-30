@@ -178,6 +178,7 @@ export class FakeElement {
   get textContent() { return this.text; }
   set textContent(v: string) { this.text = String(v); }
   get placeholder() { return this.attrs.get("placeholder") ?? ""; }
+  get isContentEditable() { return this.attrs.get("contenteditable") === "true"; }
   get type() { return this.attrs.get("type") ?? "text"; }
   getBoundingClientRect() {
     const [x, y, width, height] = this.hidden ? [0, 0, 0, 0] : this.rect;
@@ -318,6 +319,7 @@ export class FakePage {
       set title(v: string) { page.title = String(v); },
       querySelector: (s: string) => page.select(s)[0] ?? null,
       querySelectorAll: (s: string) => page.select(s),
+      get activeElement() { return page.focused ?? body; },
       createElement: (tag: string) => {
         if (tag.toLowerCase() === "style") throw new Error("fake CSP: a <style> element is refused (style-src)");
         return new FakeNode(page, tag);
@@ -383,6 +385,14 @@ export class FakePage {
     // A download finishes after the click returns, as in Chrome.
     if (el.hasAttribute("download")) { void this.fake.download(this, target, el.getAttribute("download") || basename(new URL(target).pathname)); return; }
     this.fake.navigate(this, target);
+  }
+
+  /** Text typed into the focused field: an input's value, an editable element's text, else the page. */
+  typeInto(text: string) {
+    const f = this.focused;
+    if (f && f.value !== undefined) f.value += text;
+    else if (f?.isContentEditable) f.text += text;
+    else this.typed += text;
   }
 
   hit(x: number, y: number): FakeElement | undefined {
@@ -664,17 +674,15 @@ export class FakeChrome {
         return {};
       }
       case "Input.insertText":
-        if (page.focused && page.focused.value !== undefined) page.focused.value += params.text;
-        else page.typed += params.text;
+        // An app's own editor (data-keys-only, like the Google Sheets cell editor) ignores inserted text.
+        if (page.focused?.hasAttribute("data-keys-only")) return {};
+        page.typeInto(params.text);
         return {};
       case "Input.dispatchKeyEvent":
         page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, text: params.text, commands: params.commands });
         if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }
         // A key with text types it, as in Chrome (Enter's "\r" only submits).
-        if (params.type === "keyDown" && params.text && params.text !== "\r") {
-          if (page.focused && page.focused.value !== undefined) page.focused.value += params.text;
-          else page.typed += params.text;
-        }
+        if (params.type === "keyDown" && params.text && params.text !== "\r") page.typeInto(params.text);
         return {};
       case "DOM.getDocument": return { root: { nodeId: 1, nodeName: "#document" } };
       case "DOM.querySelector": {

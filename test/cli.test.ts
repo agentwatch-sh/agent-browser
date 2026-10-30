@@ -273,6 +273,28 @@ test("net stops recording when the tab navigates off the allowlist", async () =>
   assert.equal(tooLong.json.error.code, "usage");
 });
 
+test("type: inserted text first, key events when the field ignores it (the Sheets cell editor), an error when nothing arrives", async () => {
+  const opened = await run(["open", fx.base + "/editor", "--name", "editor"]);
+  const page = fake.pages.get(opened.json.tab.targetId)!;
+  let r = await run(["type", "editor", "--stdin", "--into", "#notes"], { input: "plain" });
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.equal(page.select("#notes")[0].text, "plain", "an editable element takes inserted text");
+  r = await run(["type", "editor", "--stdin", "--into", "#cell"], { input: "=SUM(1,2)" });
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.equal(page.select("#cell")[0].text, "=SUM(1,2)", "the cell editor got the text as key events");
+  assert.deepEqual(page.keyEvents.filter((k) => k.type === "keyDown").map((k) => k.text).join(""), "=SUM(1,2)");
+  r = await run(["type", "editor", "--stdin", "--into", "#label"], { input: "lost" });
+  assert.equal(r.json.error.code, "error");
+  assert.match(r.json.error.message, /^type: no text field has the focus/);
+  page.select("#cell")[0].setAttribute("data-ignores-keys", "");
+  page.typeInto = () => {}; // a field that takes nothing at all
+  r = await run(["type", "editor", "--stdin", "--into", "#cell"], { input: "secret-text" });
+  assert.equal(r.json.error.code, "error");
+  assert.equal(r.json.error.message, "type: the text did not arrive: the focused field is unchanged after inserted text and after key events");
+  assert.ok(!r.stdout.includes("secret-text") && !r.stderr.includes("secret-text"), "the text is never echoed");
+  await run(["close", "editor"]);
+});
+
 test("human output without --json", async () => {
   await run(["open", fx.base + "/", "--name", "plain"]);
   const r = await cli(["tabs", ...flags(c, fake.ws)]);

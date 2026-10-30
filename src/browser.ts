@@ -91,7 +91,7 @@ export class AgentBrowser {
     }
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
     const candidates = s.mode === "agent"
-      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await launchAgentChrome(s) }]
+      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await launchAgentChrome(s, { background: true }) }]
       : endpointCandidates(s);
     let lastErr: unknown;
     for (const c of candidates) {
@@ -176,10 +176,11 @@ export class AgentBrowser {
 
   /**
    * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
-   * browser it is a foreground tab in the current window (the whole browser belongs to this consumer).
-   * In the operator's Chrome with no pin, it gets a window of its own, opened behind theirs, and that
-   * window is pinned at once: a background *tab* is hidden, so Chrome throttles its rendering and
-   * trusted input stalls, while a separate window renders normally without stealing focus.
+   * browser it is a background tab in the current window: a foreground tab activates Chrome, which
+   * takes the operator's focus and Space (measured 2026-10-30); the agent browser's launch flags keep a
+   * background tab rendering. In the operator's Chrome with no pin, it gets a window of its own, opened
+   * behind theirs, and that window is pinned at once: without those flags a background *tab* is
+   * throttled and trusted input stalls, while a separate window renders normally without stealing focus.
    */
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);
@@ -190,7 +191,7 @@ export class AgentBrowser {
     else {
       if (!agent && opts.newWindow === false)
         throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
-      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: !agent, newWindow: opts.newWindow ?? !agent })).targetId;
+      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? !agent })).targetId;
       if (!agent) this.pinWindow(await this.windowOf(targetId));
     }
     const tab = await this.attach(targetId);
@@ -474,7 +475,12 @@ export class Tab {
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
   }
 
-  /** Focus an element (optional) and insert text as if typed. */
+  /**
+   * Focus an element (optional) and type the text into the focused field. First as inserted text; when
+   * the field's text did not change (an app's own editor, such as the Google Sheets cell editor, ignores
+   * inserted text), again as one key event per character, as a person types. When the text still did
+   * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
+   */
   async type(text: string, selector?: string): Promise<void> {
     await this.assertAllowed();
     if (selector) {
@@ -485,7 +491,21 @@ export class Tab {
       }, selector);
       if (!ok) throw new Error(`no element matches ${selector}`);
     }
+    // The focused field's text, or null when no text field (an input, a textarea, an editable element) has the focus.
+    const fieldText = () => this.evaluate(() => {
+      const el = document.activeElement as (HTMLElement & { value?: unknown }) | null;
+      if (!el || el === document.body) return null;
+      if (typeof el.value === "string") return el.value;
+      return el.isContentEditable ? el.innerText ?? el.textContent ?? "" : null;
+    });
+    const before = await fieldText();
+    if (before === null) throw new Error("type: no text field has the focus; click one first, or name it with --into");
+    if (!text) return;
     await this.send("Input.insertText", { text });
+    if ((await fieldText()) !== before) return;
+    const { typeChar } = await import("./record.ts");
+    for (const ch of text) await typeChar(this, ch);
+    if ((await fieldText()) === before) throw new Error("type: the text did not arrive: the focused field is unchanged after inserted text and after key events");
   }
 
   async press(key: keyof typeof KEYS | string): Promise<void> {

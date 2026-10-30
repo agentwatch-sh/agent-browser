@@ -153,14 +153,22 @@ export function seedRemoteDebugging(profileDir: string, file = join(profileDir, 
 
 export type SpawnLike = (bin: string, args: string[], opts: { detached: boolean; stdio: "ignore" }) => { pid?: number; exitCode: number | null; unref(): void };
 
+/** The app bundle of a macOS Chrome binary (".../X.app/Contents/MacOS/X" -> ".../X.app"), or undefined. */
+export function appBundle(bin: string): string | undefined {
+  return /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(bin)?.[1];
+}
+
 /**
  * Start the agent Chrome (unless it is already running); resolves with its browser endpoint
  * once the operator has remote debugging turned on in it. It outlives this process by design.
+ * With `background` on macOS it starts through `open -n -g`: a new instance that does not activate,
+ * so the operator's frontmost app and Space stay as they are (a sign-in, `launch --login`, starts in
+ * the foreground instead).
  */
 export async function launchAgentChrome(
   s: Settings,
-  opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void } = {},
-  deps: { endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean } = {},
+  opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void; background?: boolean } = {},
+  deps: { endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean; platform?: NodeJS.Platform } = {},
 ): Promise<string> {
   const extraArgs = [...(opts.extraArgs ?? []), ...(s.chromeArgs ?? [])];
   assertNoDebuggingFlag(extraArgs); // guards opts.extraArgs AND s.chromeArgs (e.g. a CLI --chrome-args), before any spawn
@@ -169,7 +177,7 @@ export async function launchAgentChrome(
   if (running) return running;
   const profile = agentProfileDir(s);
   const existingPid = (deps.pid ?? (() => agentChromePid(s)))();
-  let child: ReturnType<SpawnLike> | undefined;
+  let child: ReturnType<SpawnLike> | undefined, viaOpen = false;
   if (existingPid) {
     s.log(`agent browser already running (pid ${existingPid}; profile ${profile}); turn on remote debugging in ${INSPECT_URL}`);
   } else {
@@ -189,12 +197,16 @@ export async function launchAgentChrome(
     }
     const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, ...extraArgs, ...(opts.urls?.length ? opts.urls : [INSPECT_URL])];
     assertNoDebuggingFlag(args);
-    child = (deps.spawn ?? (spawn as unknown as SpawnLike))(bin, args, { detached: true, stdio: "ignore" });
+    const bundle = opts.background && (deps.platform ?? process.platform) === "darwin" ? appBundle(bin) : undefined;
+    const run = deps.spawn ?? (spawn as unknown as SpawnLike);
+    viaOpen = !!bundle;
+    child = bundle ? run("/usr/bin/open", ["-n", "-g", "-a", bundle, "--args", ...args], { detached: true, stdio: "ignore" })
+      : run(bin, args, { detached: true, stdio: "ignore" });
     child.unref();
     // Who started each Chrome: a flood of launches is traceable to the command and folder behind it.
     try {
       appendFileSync(statePath(s, "launches.log"),
-        `${new Date().toISOString()} chrome=${child.pid ?? "?"} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
+        `${new Date().toISOString()} chrome=${viaOpen ? "via-open-g" : child.pid ?? "?"} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
     } catch { /* logging never blocks a launch */ }
   }
   const deadline = Date.now() + (opts.timeoutMs ?? 30_000);
@@ -205,7 +217,8 @@ export async function launchAgentChrome(
     const ws = await endpoint();
     if (ws) return ws;
     if (!told && Date.now() > waitingAt) { told = true; opts.onWaiting?.(); }
-    if (child && child.exitCode !== null) {
+    // `open` exits at once with 0 when it has started Chrome; a direct child that exits handed off instead.
+    if (child && child.exitCode !== null && !(viaOpen && child.exitCode === 0)) {
       // Chrome hands the launch to an instance already running on this profile and exits.
       throw new Error(`the agent browser is open but remote debugging is off: turn it on in ${INSPECT_URL}
 (Profile: ${profile})`);

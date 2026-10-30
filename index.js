@@ -38,6 +38,7 @@ export const {
   agentEndpoint,
   agentProfileDir,
   allowlistOf,
+  appBundle,
   approveMechanism,
   assertNoDebuggingFlag,
   browserTarget,

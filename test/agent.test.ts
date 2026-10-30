@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { createServer } from "node:net";
 import {
   AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN, INSPECT_URL, agentChromeBin, agentChromePid, agentEndpoint, assertNoDebuggingFlag,
-  findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
+  appBundle, findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
 } from "../src/agent.ts";
 import { AgentBrowser, endpointCandidates } from "../src/browser.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type Settings } from "../src/options.ts";
@@ -82,6 +82,25 @@ test("a launch starts a regular Chrome on the consumer's profile, never with a d
   assert.match(log, new RegExp(`by=${process.pid}`));
   const localState = JSON.parse(readFileSync(join(s.profileDir, "Local State"), "utf8"));
   assert.equal(localState.devtools.remote_debugging["user-enabled"], true, "launch seeds remote debugging so no chrome://inspect click is needed");
+});
+
+test("a background launch on macOS starts a new instance through `open -n -g` (no activation); the flags are the same", async () => {
+  const calls: { bin: string; args: string[] }[] = [];
+  let probes = 0;
+  const ws = await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
+    endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/bg",
+    pid: () => undefined, spawn: (bin, args) => { calls.push({ bin, args }); return { pid: 77, exitCode: 0, unref() {} }; }, exists: (p) => p === CHROME_BETA_BIN, platform: "darwin",
+  });
+  assert.match(ws, /bg$/, "open's exit 0 is not a hand-off");
+  assert.equal(calls[0].bin, "/usr/bin/open");
+  assert.deepEqual(calls[0].args, ["-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args", ...AGENT_ARGS, `--user-data-dir=${s.profileDir}`, INSPECT_URL]);
+  calls.length = 0; probes = 0;
+  await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
+    endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/linux",
+    pid: () => undefined, spawn: fakeSpawn(calls), exists: (p) => p === CHROME_BETA_BIN, platform: "linux",
+  });
+  assert.equal(calls[0].bin, CHROME_BETA_BIN, "elsewhere the binary is started directly");
+  assert.equal(appBundle("/usr/bin/chromium"), undefined);
 });
 
 test("chromeArgs: extra Chrome flags reach the spawn (between --user-data-dir and the urls), and a --remote-debugging flag among them is refused before any spawn", async () => {

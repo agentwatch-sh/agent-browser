@@ -121,7 +121,9 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
         break;
       case "press":
         if (typeof step.press !== "string") throw bad("press is a key such as Enter or Shift+Tab");
-        try { parseKey(step.press); } catch (e) { throw bad((e as Error).message); }
+        let key: KeyEvent;
+        try { key = parseKey(step.press); } catch (e) { throw bad((e as Error).message); }
+        if (isClipboardChord(key)) throw bad(`${step.press} would use the machine's shared clipboard, which belongs to the person at the machine; type the text instead`);
         if (step.repeat !== undefined && (!Number.isInteger(step.repeat) || (step.repeat as number) < 1 || (step.repeat as number) > 100)) throw bad("repeat is a whole number from 1 to 100");
         ms("delay");
         break;
@@ -253,10 +255,18 @@ const MAC_COMMANDS: Record<string, string[]> = {
   "Shift+ArrowUp": ["moveUpAndModifySelection"], "Shift+ArrowDown": ["moveDownAndModifySelection"],
   "Shift+ArrowLeft": ["moveLeftAndModifySelection"], "Shift+ArrowRight": ["moveRightAndModifySelection"],
   Home: ["scrollToBeginningOfDocument"], End: ["scrollToEndOfDocument"], PageUp: ["scrollPageUp"], PageDown: ["scrollPageDown"],
-  "Meta+KeyA": ["selectAll"], "Meta+KeyC": ["copy"], "Meta+KeyX": ["cut"], "Meta+KeyV": ["paste"], "Meta+KeyZ": ["undo"], "Shift+Meta+KeyZ": ["redo"],
+  "Meta+KeyA": ["selectAll"], "Meta+KeyZ": ["undo"], "Shift+Meta+KeyZ": ["redo"],
   "Alt+Backspace": ["deleteWordBackward"], "Meta+Backspace": ["deleteToBeginningOfLine"],
   "Meta+ArrowLeft": ["moveToLeftEndOfLine"], "Meta+ArrowRight": ["moveToRightEndOfLine"], "Alt+ArrowLeft": ["moveWordLeft"], "Alt+ArrowRight": ["moveWordRight"],
 };
+
+/**
+ * Copy, cut and paste: their chords use the machine's shared clipboard, which belongs to the person at
+ * the machine. A recording never reads or writes it.
+ */
+export function isClipboardChord(k: KeyEvent): boolean {
+  return /^Key[CXV]$/.test(k.code) && !!(k.modifiers & (2 | 4)) || (k.code === "Insert" && !!(k.modifiers & (2 | SHIFT)));
+}
 
 export function macCommands(k: KeyEvent): string[] {
   const prefix = [[SHIFT, "Shift"], [2, "Control"], [1, "Alt"], [4, "Meta"]].filter(([bit]) => k.modifiers & (bit as number)).map(([, n]) => `${n}+`).join("");
@@ -722,6 +732,23 @@ export function jpegSize(buf: Buffer): [number, number] | undefined {
 type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number;
   changes?: number; settled?: number };
 
+/** One key: down (with its text, and on macOS its editing commands) and up. */
+export async function sendKey(tab: Tab, k: KeyEvent): Promise<void> {
+  const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.keyCode, nativeVirtualKeyCode: k.keyCode, modifiers: k.modifiers };
+  const commands = process.platform === "darwin" ? macCommands(k) : [];
+  await tab.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, ...(k.text ? { text: k.text, unmodifiedText: k.text } : {}), ...(commands.length ? { commands } : {}) });
+  await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+}
+
+/** One character as real key events (a canvas app such as Sheets reads those), else as inserted text. */
+export async function typeChar(tab: Tab, ch: string): Promise<void> {
+  if (ch === "\n") return sendKey(tab, parseKey("Enter"));
+  if (ch === "\t") return sendKey(tab, parseKey("Tab"));
+  const k = charKey(ch);
+  if (k) return sendKey(tab, k);
+  await tab.send("Input.insertText", { text: ch });
+}
+
 /** Drives the tab through the steps. The cursor's place is kept here, so the overlay survives a navigation. */
 class Driver {
   readonly tab: Tab;
@@ -740,7 +767,6 @@ class Driver {
   stillBefore?: StillShot;
   private current?: Mark;
   private stop = new AbortController();
-  private readonly mac = process.platform === "darwin";
 
   constructor(tab: Tab, plan: RecordPlan) {
     this.tab = tab;
@@ -796,21 +822,9 @@ class Driver {
     this.y = to.y;
   }
 
-  private async key(k: KeyEvent) {
-    const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.keyCode, nativeVirtualKeyCode: k.keyCode, modifiers: k.modifiers };
-    const commands = this.mac ? macCommands(k) : [];
-    await this.tab.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, ...(k.text ? { text: k.text, unmodifiedText: k.text } : {}), ...(commands.length ? { commands } : {}) });
-    await this.tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
-  }
+  private key(k: KeyEvent) { return sendKey(this.tab, k); }
 
-  /** One character as real key events (a canvas app such as Sheets reads those), else as inserted text. */
-  private async typeChar(ch: string) {
-    if (ch === "\n") return this.key(parseKey("Enter"));
-    if (ch === "\t") return this.key(parseKey("Tab"));
-    const k = charKey(ch);
-    if (k) return this.key(k);
-    await this.tab.send("Input.insertText", { text: ch });
-  }
+  private typeChar(ch: string) { return typeChar(this.tab, ch); }
 
   /**
    * A picture of a waitStill box. Its masks cover what the overlay draws in it: the cursor with its click
@@ -1205,7 +1219,11 @@ async function encode(ffmpeg: string, dir: string, frames: { file: string; t: nu
       const at = frames[0].t + (k + 0.5) / fps;
       while (j + 1 < frames.length && frames[j + 1].t <= at) j++;
       if (j !== shown) { jpeg = readFileSync(join(dir, frames[j].file)); shown = j; }
-      if (!ff.stdin.write(jpeg)) await new Promise<void>((r) => { ff.stdin.once("drain", r); ff.once("exit", () => r()); });
+      if (!ff.stdin.write(jpeg)) await new Promise<void>((r) => {
+        const done = () => { ff.stdin.off("drain", done); ff.off("exit", done); r(); };
+        ff.stdin.once("drain", done);
+        ff.once("exit", done);
+      });
     }
     ff.stdin.end();
     await exited;

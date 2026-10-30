@@ -250,7 +250,7 @@ class AgentBrowser:
         return self._run("hover", [tab, target], HoverResult.from_json)
 
     def type(self, tab: str, text: str, into: Optional[str] = None) -> TypeResult:
-        """Insert `text` (into `into`, else the focused element). The text goes on stdin, never into argv."""
+        """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv."""
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else [])], TypeResult.from_json, stdin=text)
 
     def press(self, tab: str, key: str) -> PressResult:

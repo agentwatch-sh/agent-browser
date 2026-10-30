@@ -57,7 +57,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text")] },
   { name: "hover", summary: "Move the mouse over an element (hover menus)", usage: "hover <tab> <selector|#N>",
     params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector")] },
-  { name: "type", summary: "Insert text into #N or a selector, else the focused element; the text is never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
+  { name: "type", summary: "Type text into #N or a selector, else the focused field; fails when it did not arrive; never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
     params: [TAB, p("text", "string", true, "positional", "the text to insert", true), p("into", "string", false, "--into", "#N or a CSS selector to focus first")] },
   { name: "press", summary: "Press a key: Enter, Tab, Escape, Backspace, Delete, an arrow, Home, End, PageUp, PageDown, F2", usage: "press <tab> <key>",
     params: [TAB, p("key", "string", true, "positional", "Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown or F2")] },
@@ -190,6 +190,7 @@ export const commands = {
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
+      background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
       urls: [INSPECT_URL, ...urls],
       timeoutMs: 10 * 60_000,
       onWaiting: () => s.log(`waiting for remote debugging: turn it on in ${INSPECT_URL} (Ctrl-C to stop waiting)`),

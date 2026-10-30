@@ -59,6 +59,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. Mail, account and admin hosts are refused even when a broad entry covers them. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window and keep off mail, banking and admin tabs. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in); input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/cli.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer) |
 | A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
@@ -94,7 +95,10 @@ used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch
 ## How it works
 
 - **The agent browser** is a regular Chrome on the consumer's profile. Any command that needs Chrome
-  starts it if it is not running (`noLaunch` turns that off). This is an agent browser, so it comes up
+  starts it if it is not running (`noLaunch` turns that off). On macOS that start goes through
+  `open -n -g`, so Chrome does not take the operator's focus; `launch --login` starts it in front,
+  because the operator signs in there. Tip: only agent browsers use Chrome Beta, so assigning Google
+  Chrome Beta to a desktop of its own (Dock, Options, Assign To) keeps every agent browser there. This is an agent browser, so it comes up
   ready: before it starts Chrome, `launch` writes `devtools.remote_debugging.user-enabled: true` into
   the profile's `Local State` (`seedRemoteDebugging`), so remote debugging is on without a
   `chrome://inspect` click. That setting is a plain, unsigned value (not the HMAC-signed "Secure
@@ -309,7 +313,8 @@ tab forward (`Page.bringToFront` would activate Chrome and switch the operator's
 - `waitStill` pictures its box with `Page.captureScreenshot` about every 100 ms (a PNG decoded with
   Node's zlib; no dependency). A box that keeps changing for a reason other than the fill (a blinking
   caret, an animation) keeps it busy until `timeoutMs`: choose a box around the cells only.
-- `Meta+C`/`Meta+V` use the system clipboard of the machine, as a person's copy and paste do.
+- No clipboard: copy, cut and paste chords (`Meta`/`Control` + `C`, `X`, `V`) are refused, because they
+  use the machine's shared clipboard, which belongs to the person at the machine. Type the text.
 - No audio. Timing is real time: page loads vary between takes.
 - `eval` steps run in the isolated world, not the page's.
 
@@ -419,7 +424,7 @@ is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "tit
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
 | `click <tab> <selector\|#N>` or `click <tab> --text LABEL` | `tab`, `target` string\|null, `text` string\|null |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
-| `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text) |
+| `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). It types into the focused field as inserted text; when the field ignores that (an app's own editor, such as the Google Sheets cell editor), as one key event per character. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. |
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F2) |
 | `text <tab> [selector\|#N]` | `tab`, `selector` string\|null, `text` |
 | `eval <tab> (<js> \| --stdin)` | `tab`, `value` (the JSON value; `undefined` becomes `null`) |
@@ -561,6 +566,9 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
   that encode need ffmpeg and ffprobe on `PATH` (skipped without them).
+- `test/live/takeover/` (macOS; see the head of `check.ts`): drives one `about:blank` tab of a running
+  agent browser while a monitor logs the frontmost app and the pointer, then names any command that
+  changed either. Not part of `npm test`.
 - `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
   `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
   (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
