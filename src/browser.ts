@@ -9,7 +9,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, rmSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
-import { CDPConnection } from "./cdp.ts";
+import { CDPConnection, CDPError } from "./cdp.ts";
 import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
 import { ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError } from "./errors.ts";
@@ -256,7 +256,8 @@ export class AgentBrowser {
     const { sessionId } = await this.conn.send("Target.attachToTarget", { targetId, flatten: true });
     const tab = new Tab(this, targetId, sessionId);
     await tab.send("Page.enable");
-    await tab.send("Runtime.enable");
+    // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
+    // a page can tell the Runtime domain is enabled, and we never need its events.
     // Lets pages in unfocused windows / background tabs still accept trusted input.
     await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     this.sessions.set(targetId, tab);
@@ -305,6 +306,9 @@ export class Tab {
     this.sessionId = sessionId;
   }
 
+  private isolatedContextId?: number;
+  private mainFrameId?: string;
+
   send<T = any>(method: string, params: object = {}, timeoutMs?: number): Promise<T> {
     return this.browser.conn.send<T>(method, params, this.sessionId, timeoutMs);
   }
@@ -334,23 +338,51 @@ export class Tab {
     await loaded;
   }
 
+  /** The main frame's id (stable for the tab's life); cached. */
+  private async frameId(): Promise<string> {
+    if (this.mainFrameId === undefined) {
+      const { frameTree } = await this.send("Page.getFrameTree");
+      this.mainFrameId = frameTree.frame.id as string;
+    }
+    return this.mainFrameId;
+  }
+
   /**
-   * Run a function in the page and return its (JSON-serialisable) result.
+   * A private isolated world for our injected code. It shares the page's DOM but has its own global
+   * scope, so the functions we run and the temporaries we store (fetchToFile) never appear on the
+   * page's own window, and the page cannot replace the globals we use. Created on demand and
+   * remembered; a navigation destroys it, and evaluate() makes a new one and retries once.
+   */
+  private async isolatedWorld(): Promise<number> {
+    if (this.isolatedContextId === undefined) {
+      const { executionContextId } = await this.send("Page.createIsolatedWorld", { frameId: await this.frameId(), worldName: "agent-browser" });
+      this.isolatedContextId = executionContextId as number;
+    }
+    return this.isolatedContextId;
+  }
+
+  /**
+   * Run a function in the page, in our isolated world, and return its (JSON-serialisable) result.
    * The function is serialised, so it cannot close over Node variables; pass them as args.
    */
   async evaluate<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
     const expression = typeof fn === "string" ? fn : `(${fn.toString()})(...${JSON.stringify(args)})`;
-    const res = await this.send("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true,
-    });
-    if (res.exceptionDetails) {
-      const d = res.exceptionDetails;
-      throw new Error(`page error: ${d.exception?.description ?? d.text}`);
+    for (let attempt = 0; ; attempt++) {
+      const contextId = await this.isolatedWorld();
+      let res: { exceptionDetails?: { exception?: { description?: string }; text?: string }; result: { value: Awaited<R> } };
+      try {
+        res = await this.send("Runtime.evaluate", { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true });
+      } catch (e) {
+        // A navigation destroys the isolated world; make a new one and retry once.
+        if (attempt === 0 && e instanceof CDPError && /context/i.test(e.message)) { this.isolatedContextId = undefined; continue; }
+        throw e;
+      }
+      if (res.exceptionDetails) {
+        const d = res.exceptionDetails;
+        throw new Error(`page error: ${d.exception?.description ?? d.text}`);
+      }
+      return res.result.value;
     }
-    return res.result.value;
   }
 
   /** Poll a page function until it returns a truthy value; returns that value. */

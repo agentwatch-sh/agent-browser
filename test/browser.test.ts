@@ -95,6 +95,27 @@ test("evaluate, waitFor, click, type, press, text", async () => {
   await tab.close();
 });
 
+test("injected code runs in an isolated world, and the Runtime domain is never enabled", async () => {
+  const tab = await browser.open(base);
+  assert.equal(await tab.evaluate(() => 1 + 1), 2);
+  const forTab = fake.callsFor(tab.targetId);
+  assert.ok(forTab.some((c) => c.method === "Page.createIsolatedWorld"), "an isolated world is created");
+  const evals = forTab.filter((c) => c.method === "Runtime.evaluate");
+  assert.ok(evals.length > 0 && evals.every((c) => typeof c.params.contextId === "number"), "every evaluate targets the isolated world");
+  assert.ok(!fake.calls.some((c) => c.method === "Runtime.enable"), "the Runtime domain is never enabled");
+  await tab.close();
+});
+
+test("evaluate recovers after a navigation destroys the isolated world", async () => {
+  const tab = await browser.open(base);
+  await tab.evaluate(() => 1);
+  await tab.goto(`${base}/next`); // destroys the isolated world
+  assert.equal(await tab.evaluate(() => document.title), "next", "a new world is made and the call retried");
+  const worlds = fake.callsFor(tab.targetId).filter((c) => c.method === "Page.createIsolatedWorld").length;
+  assert.ok(worlds >= 2, "a fresh isolated world after the navigation");
+  await tab.close();
+});
+
 test("a tab that wanders off the allowlist is refused before any read or input", async () => {
   const tab = await browser.open(base);
   await tab.click("#away");

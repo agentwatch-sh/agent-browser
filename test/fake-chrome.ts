@@ -119,6 +119,8 @@ export class FakePage {
   keys: string[] = [];
   bodies = new Map<string, { body: Buffer; mime: string }>();
   private context: vm.Context = vm.createContext({});
+  private isolatedContexts = new Map<number, vm.Context>();
+  private nextContextId = 1000;
   private timers = new Set<NodeJS.Timeout>();
   private nextRequest = 1;
 
@@ -147,6 +149,7 @@ export class FakePage {
       const Cls = e.tag === "input" ? FakeInputElement : e.tag === "a" ? FakeAnchorElement : FakeElement;
       return new Cls(this, e, i);
     });
+    this.isolatedContexts.clear(); // a navigation destroys every isolated world
     this.context = this.newContext();
     spec?.onload?.(this);
   }
@@ -157,6 +160,13 @@ export class FakePage {
   }
 
   close() { for (const t of this.timers) clearTimeout(t); this.timers.clear(); }
+
+  /** A new isolated world: its own global scope, the same shared DOM. */
+  createIsolatedWorld(): number {
+    const id = ++this.nextContextId;
+    this.isolatedContexts.set(id, this.newContext());
+    return id;
+  }
 
   private newContext(): vm.Context {
     const page = this;
@@ -189,10 +199,12 @@ export class FakePage {
     return vm.createContext(sandbox);
   }
 
-  /** Run page code the way Runtime.evaluate does. */
-  async evaluate(expression: string, awaitPromise: boolean): Promise<{ result: object } | { exceptionDetails: object }> {
+  /** Run page code the way Runtime.evaluate does. With a contextId, run it in that isolated world. */
+  async evaluate(expression: string, awaitPromise: boolean, contextId?: number): Promise<{ result: object } | { exceptionDetails: object }> {
+    const context = contextId === undefined ? this.context : this.isolatedContexts.get(contextId);
+    if (!context) throw new Error("Cannot find context with specified id"); // the world was destroyed by a navigation
     try {
-      let v = vm.runInContext(expression, this.context, { timeout: 5_000 });
+      let v = vm.runInContext(expression, context, { timeout: 5_000 });
       if (awaitPromise && v && typeof v.then === "function") v = await v;
       return { result: v === undefined ? { type: "undefined" } : { type: typeof v, value: JSON.parse(JSON.stringify(v)) } };
     } catch (e: any) {
@@ -428,7 +440,8 @@ export class FakeChrome {
         this.navigate(page, url);
         return { frameId: `F-${page.targetId}`, loaderId: randomUUID() };
       }
-      case "Runtime.evaluate": return page.evaluate(String(params.expression), !!params.awaitPromise);
+      case "Page.createIsolatedWorld": return { executionContextId: page.createIsolatedWorld() };
+      case "Runtime.evaluate": return page.evaluate(String(params.expression), !!params.awaitPromise, params.contextId);
       case "Input.dispatchMouseEvent": {
         const el = page.hit(params.x, params.y);
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }

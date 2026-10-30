@@ -62,8 +62,10 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
 tests). Under `node --test`, the state folder must be in the temp folder, and personal mode never
-reads the real Chrome profile. A refusal names only the host, never the full URL. `type` never
-echoes its text. `net` never records headers, and it redacts tokens, keys and JWTs. `stop` and
+reads the real Chrome profile. Our injected page code runs in an isolated world (so it stays off the
+page's own `window`), and the Runtime CDP domain is never enabled. A refusal names only the host,
+never the full URL. `type` never echoes its text. `net` never records headers, and it redacts
+tokens, keys and JWTs. `stop` and
 `quit` signal only this consumer's own proxy (checked by its command line and socket, so a stale pid
 file cannot hit another process) and the Chrome main process on this consumer's own profile.
 
@@ -108,6 +110,12 @@ is installed, else Google Chrome), `endpoint` (a known `ws://` endpoint, still u
   always among allowlisted tabs only.
 - **Cheap reading:** `outline` numbers the interactive elements on screen; `click <tab> #N` clicks one.
   Read with `outline` and `text`; take a screenshot last.
+- **Isolated world:** every `evaluate` (and so `outline`, `text`, `click`, `fetch` and the rest) runs
+  in a private isolated world created with `Page.createIsolatedWorld`, not in the page's main world.
+  Our functions and temporaries never touch the page's own `window`, and the page cannot replace the
+  globals we use. The Runtime CDP domain is never enabled. A navigation destroys the world; the next
+  `evaluate` makes a new one and retries. `outline` still marks elements with a `data-agent-browser-idx`
+  attribute, because the DOM is shared and a later `click #N` must find them across separate calls.
 
 ### Why there is a `loader.js`
 
