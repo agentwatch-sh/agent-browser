@@ -27,6 +27,8 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "personal-user-data-dir": { type: "string", description: "personal mode: the operator's Chrome user-data folder" },
   "no-launch": { type: "boolean", description: "never start Chrome; fail with the launch command instead" },
   "notify-command": { type: "string", description: 'status --notify runs this argv, a JSON array; "{message}" and stdin carry the text' },
+  approve: { type: "string", description: 'approve Chrome\'s debugging dialog for unattended use: auto|osascript|xdotool' },
+  "approve-command": { type: "string", description: "a custom approver argv, a JSON array (in place of --approve)" },
   "proxy-idle-ms": { type: "string", description: "the proxy exits after this long with no clients (default 12 h)" },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
 };
@@ -85,11 +87,21 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     try { argv = JSON.parse(str("notify-command")!); } catch { throw new UsageError("--notify-command must be a JSON array of strings"); }
     notify = { command: argv as string[] };
   }
+  let approve: BrowserOptions["approve"];
+  if (str("approve-command")) {
+    let argv: unknown;
+    try { argv = JSON.parse(str("approve-command")!); } catch { throw new UsageError("--approve-command must be a JSON array of strings"); }
+    approve = { command: argv as string[] };
+  } else if (str("approve")) {
+    const a = str("approve")!;
+    if (a !== "auto" && a !== "osascript" && a !== "xdotool" && a !== "true") throw new UsageError("--approve must be auto, osascript or xdotool");
+    approve = a === "true" ? true : (a as "auto" | "osascript" | "xdotool");
+  }
   const idle = str("proxy-idle-ms");
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), endpoint: str("endpoint"),
-    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], notify,
+    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], notify, approve,
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), log,
   });
 }

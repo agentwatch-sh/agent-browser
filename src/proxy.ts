@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 import { browserTarget, proxyLogPath, recordProxyAttempt, type ProxyAttempt } from "./diagnostics.ts";
 import { stateDir, statePath, type Settings } from "./options.ts";
+import { makeApprover } from "./approver.ts";
 
 /** The CLI entry the proxy child runs from: plain JavaScript, so it also starts from a node_modules install. */
 export const BIN_PATH = fileURLToPath(new URL("../bin/agent-browser.js", import.meta.url));
@@ -75,6 +76,10 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
   try {
     if (await socketAlive(s.socketPath)) throw new Error(`chrome proxy already running on ${s.socketPath}`);
     upstream = new WebSocket(upstreamUrl, { perMessageDeflate: false, maxPayload: 512 * 1024 * 1024, handshakeTimeout: opts.timeoutMs ?? 90_000 });
+    // The upstream open blocks on Chrome's "Allow?" dialog. If approval is configured, answer that one
+    // dialog (the connection we just caused) while we wait. Best-effort: it never rejects this startup.
+    const approver = makeApprover(s);
+    if (approver) { record("child-approve", "answering the remote-debugging dialog for this connection"); void approver().catch(() => {}); }
     await new Promise<void>((resolve, reject) => {
       upstream.once("open", () => resolve());
       upstream.once("error", reject);
@@ -169,11 +174,20 @@ export function proxyInfo(s: Settings): { pid: number; upstream: string } | unde
   try { return JSON.parse(readFileSync(pidFile(s), "utf8")); } catch { return undefined; }
 }
 
+/** The CLI flags that carry the approve setting to the proxy child. */
+export function approveArgs(approve: Settings["approve"]): string[] {
+  if (approve === undefined || approve === false) return [];
+  if (approve === true) return ["--approve", "auto"];
+  if (typeof approve === "string") return ["--approve", approve];
+  return ["--approve-command", JSON.stringify(approve.command)];
+}
+
 /** The argv of the proxy child: this consumer's settings, so it writes to the same state folder and socket. */
 export function proxyArgs(s: Settings, upstreamUrl: string, attempt: string, timeoutMs: number): string[] {
   return [BIN_PATH, "proxy", upstreamUrl, "--state-dir", s.stateDir, "--socket", s.socketPath, "--profile", s.profileDir,
     "--mode", s.mode, "--proxy-idle-ms", String(s.proxyIdleMs), "--command-name", s.commandName,
     ...(s.chromeBin ? ["--chrome-bin", s.chromeBin] : []), ...(s.endpoint ? ["--endpoint", s.endpoint] : []),
+    ...approveArgs(s.approve),
     "--attempt", attempt, "--timeout-ms", String(timeoutMs)];
 }
 

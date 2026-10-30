@@ -8,6 +8,7 @@ const lib = await importSource("./src/index.ts");
 
 export const {
   AGENT_ARGS,
+  APPROVE_TIMEOUT_MS,
   AgentBrowser,
   AgentBrowserError,
   CDPConnection,
@@ -35,6 +36,7 @@ export const {
   agentEndpoint,
   agentProfileDir,
   allowlistOf,
+  approveMechanism,
   assertNoDebuggingFlag,
   browserTarget,
   commands,
@@ -49,9 +51,12 @@ export const {
   launchAgentChrome,
   loadAllowlist,
   localBrowserStatus,
+  macProcessName,
   main,
+  makeApprover,
   netLog,
   notifyBrowserStatus,
+  osascriptApprove,
   outline,
   outlineText,
   parsePs,
@@ -66,4 +71,5 @@ export const {
   startProxy,
   stopProxy,
   validateAllowlist,
+  validateApprove,
 } = lib;

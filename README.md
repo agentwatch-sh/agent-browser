@@ -78,6 +78,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes. |
 | Notify hook | `notify` (callback or `{ command }`) | `--notify-command '["prog","arg","{message}"]'` | `notify_command=["prog", ...]` | Used only by `status --notify`. An argv list, never a shell string. The message goes on stdin, and `{message}` in an argument is replaced with it. Example for agentwatch: `["agentwatch", "session", "inbox", "--text", "{message}"]`. |
+| Approve dialog | `approve` (`true`/`"osascript"`/`"xdotool"`/`{ command }`) | `--approve auto\|osascript\|xdotool` or `--approve-command '[...]'` | `approve=True` / `approve="xdotool"` / `approve_command=[...]` | Unattended only. Answers Chrome's per-connection "Allow remote debugging?" dialog once per proxy. Default off (the operator clicks). See **Unattended approval**. |
 | Node | | | `node` (default `node` on PATH) | Node 26 or later. |
 | Package folder | | | `package_dir` | The agent-browser folder with `bin/agent-browser.js`. Default: the checkout that holds the adapter. |
 
@@ -99,8 +100,8 @@ is installed, else Google Chrome), `endpoint` (a known `ws://` endpoint, still u
   waits up to 10 minutes for the endpoint; other commands wait 30 s.
 - **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
-  headless server with no one to click, run headed Chrome under a virtual display (Xvfb) and accept that
-  one dialog on it; do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
+  headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
+  itself (see **Unattended approval**); do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -124,6 +125,41 @@ is installed, else Google Chrome), `endpoint` (a known `ws://` endpoint, still u
   globals we use. The Runtime CDP domain is never enabled. A navigation destroys the world; the next
   `evaluate` makes a new one and retries. `outline` still marks elements with a `data-agent-browser-idx`
   attribute, because the DOM is shared and a later `click #N` must find them across separate calls.
+
+### Unattended approval (headless server)
+
+Because agent-browser enables remote debugging the `chrome://inspect` way (never
+`--remote-debugging-port`, which sets `navigator.webdriver`), Chrome shows a native "Allow remote
+debugging?" dialog for each new DevTools connection, and the grant is not remembered. The proxy holds
+one upstream connection per Chrome start, so one approval per Chrome start is enough. Where a person
+can click (a normal Mac), they click. For unattended use, set `approve` and agent-browser answers that
+one dialog itself, and only the connection the proxy opened — it never answers a dialog it did not cause.
+
+The click is a real OS input event (CDP cannot dismiss a native dialog, and we are not connected yet),
+so it needs an OS tool, which is a documented prerequisite, not an npm dependency:
+
+- **macOS** (`approve: "osascript"` / `approve: true`): clicks the button **named "Allow"** through the
+  accessibility tree, so it can never hit "Cancel" or the left "Turn off in settings"; if it cannot find
+  "Allow" it clicks nothing. It needs **Accessibility permission** (System Settings → Privacy & Security →
+  Accessibility) for the process that runs `osascript`. Without the grant it fails safe with `-25211` and
+  approves nothing. In a headless `tmux`/`launchd` session there may be no terminal app to grant, so the
+  macOS approver suits an attended Mac or a session launched under a granted app.
+- **Linux** (`approve: "xdotool"` / `approve: true`): sends `Tab` then `Return` (the dialog opens with
+  focus on "Cancel"; one `Tab` moves it to "Allow"). Needs `xdotool` and a display. This relies on the
+  dialog's focus order, so pin the Chrome/Chromium version. Verified on Chromium 156.
+- **Custom** (`approve: { command: [...] }`, CLI `--approve-command`): runs your own argv at connect — for
+  a different mechanism (VNC, a verify-by-pixel clicker). It runs only when the proxy connects.
+
+Headless Linux server recipe: a private virtual display `Xvfb :N -nolisten tcp -auth <cookie>` (the
+cookie matters — without it the X socket is open to every local user), the seeded throwaway profile,
+headed Chromium with `chromeBin=/usr/bin/chromium` and **no** port flag, one long-lived proxy, and
+`approve: "xdotool"`. Do not fall back to `--remote-debugging-port` or headless: the first sets
+`navigator.webdriver`, the second adds the `HeadlessChrome` UA token.
+
+Auto-approve removes Chrome's one safeguard against an external app taking full control of the profile,
+so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by
+the test suite (the fake Chrome raises no native dialog); the suite covers the orchestration and the
+fail-safe button-name targeting, and the Linux mechanism was verified on a live Chromium 156.
 
 ### Why there is a `loader.js`
 
@@ -185,7 +221,8 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
               [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch]
-              [--notify-command JSON] [--proxy-idle-ms N] [--command-name NAME]
+              [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
+              [--proxy-idle-ms N] [--command-name NAME]
 ```
 
 With `--json`, each call prints exactly **one JSON document** on standard output, success or failure.

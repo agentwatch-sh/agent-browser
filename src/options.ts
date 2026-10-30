@@ -12,6 +12,20 @@ export type BrowserMode = "agent" | "personal";
 /** status --notify: a callback (library), or a command as an argv list (CLI and library). */
 export type NotifyHook = ((message: string) => unknown) | { command: string[] };
 
+/**
+ * Approve Chrome's per-connection "Allow remote debugging?" dialog for unattended use (approver.ts):
+ * true/"auto" pick a built-in mechanism by platform (macOS osascript, Linux xdotool); "osascript" or
+ * "xdotool" force one; { command } runs a custom argv. Undefined (default) means the operator clicks.
+ */
+export type ApproveSpec = boolean | "auto" | "osascript" | "xdotool" | { command: string[] };
+
+export function validateApprove(spec: ApproveSpec): void {
+  if (typeof spec === "boolean" || spec === "auto" || spec === "osascript" || spec === "xdotool") return;
+  const cmd = (spec as { command?: unknown }).command;
+  if (!Array.isArray(cmd) || !cmd.length || !cmd.every((a) => typeof a === "string") || !cmd[0])
+    throw new UsageError('approve must be true, "osascript", "xdotool", or { command: [program, ...args] }');
+}
+
 export type BrowserOptions = {
   /** Absolute folder for this consumer's state: tab names, window pin, proxy pid and log, launch log, screenshots. */
   stateDir: string;
@@ -35,6 +49,8 @@ export type BrowserOptions = {
   noLaunch?: boolean;
   /** status --notify sends one message here. */
   notify?: NotifyHook;
+  /** Approve Chrome's per-connection debugging dialog for unattended use. Default: the operator clicks. */
+  approve?: ApproveSpec;
   /** The proxy exits after this long with no clients. Default 12 hours. */
   proxyIdleMs?: number;
   /** How hints name the command line, for example "vedlo browser". Default "agent-browser". */
@@ -55,6 +71,7 @@ export type Settings = {
   personalUserDataDir?: string;
   noLaunch: boolean;
   notify?: NotifyHook;
+  approve?: ApproveSpec;
   proxyIdleMs: number;
   commandName: string;
   log: (line: string) => void;
@@ -96,6 +113,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every((a) => typeof a === "string") || !cmd[0])
       throw new UsageError("notify must be a function or { command: [program, ...args] }");
   }
+  if (o.approve !== undefined) validateApprove(o.approve);
   const proxyIdleMs = o.proxyIdleMs ?? DEFAULT_PROXY_IDLE_MS;
   if (!Number.isFinite(proxyIdleMs) || proxyIdleMs <= 0) throw new UsageError("proxyIdleMs must be a positive number");
   return {
@@ -110,6 +128,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     personalUserDataDir: o.personalUserDataDir === undefined ? undefined : absolute("personalUserDataDir", o.personalUserDataDir),
     noLaunch: !!o.noLaunch,
     notify: o.notify,
+    approve: o.approve,
     proxyIdleMs,
     commandName: o.commandName ?? "agent-browser",
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),

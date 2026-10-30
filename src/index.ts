@@ -28,3 +28,7 @@ export type { NotifyResult, ProxyAttempt } from "./diagnostics.ts";
 export { outline, outlineText, idx, redact, netLog, IDX_ATTR } from "./outline.ts";
 export type { OutlineElement, NetEntry } from "./outline.ts";
 export { CDPConnection, CDPError } from "./cdp.ts";
+export { makeApprover, approveMechanism, osascriptApprove, macProcessName, APPROVE_TIMEOUT_MS } from "./approver.ts";
+export type { ApproveMechanism, Runner, RunResult } from "./approver.ts";
+export { validateApprove } from "./options.ts";
+export type { ApproveSpec } from "./options.ts";
