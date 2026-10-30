@@ -50,6 +50,7 @@ export type Step =
   | { waitFor: string; text?: string; timeoutMs?: number }         // an element (with this text) is visible
   | { waitIdle: string | IdleWait }                                // the network of the tab and its workers goes quiet
   | { waitStill: StillWait }                                       // the pixels of a box stop changing
+  | { waitChange: ChangeWait }                                     // the pixels of a box change
   | { eval: string };                                              // escape hatch, in our isolated world
 
 /** waitIdle: a part of the request URLs to watch ("" for all), how long they must be quiet, and how long to wait at most. */
@@ -60,12 +61,14 @@ export type IdleWait = { match?: string; quietMs?: number; timeoutMs?: number };
  * changes is fine.
  */
 export type StillWait = { box?: Box | { x: number; y: number; w: number; h: number }; selector?: string; quietMs?: number; timeoutMs?: number; allowNoChange?: boolean };
+/** waitChange: a box (as waitStill's) whose pixels must change from their look at the step's start, and how long to wait at most. */
+export type ChangeWait = { box?: StillWait["box"]; selector?: string; timeoutMs?: number };
 
-const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "highlight", "waitFor", "waitIdle", "waitStill", "eval"] as const;
+const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "highlight", "waitFor", "waitIdle", "waitStill", "waitChange", "eval"] as const;
 type Action = (typeof ACTIONS)[number];
 const OPTIONS: Record<Action, string[]> = {
   wait: [], goto: [], click: ["duration"], hover: ["duration"], type: ["into", "delay"], press: ["repeat", "delay"],
-  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], waitStill: [], eval: [],
+  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], waitStill: [], waitChange: [], eval: [],
 };
 
 /** The longest recording, in seconds: the frames sit on disk until the MP4 is encoded. */
@@ -152,10 +155,11 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
           throw bad(`${k} must be a number of ms from 0 to ${MAX_STEP_MS}`);
         break;
       }
-      case "waitStill": {
-        const w = step.waitStill;
-        const usage = 'waitStill is {"box": {"x", "y", "width", "height"}} or {"selector": "..."}, with "quietMs", "timeoutMs" and "allowNoChange"';
-        if (!isObject(w) || Object.keys(w).some((k) => !["box", "selector", "quietMs", "timeoutMs", "allowNoChange"].includes(k))) throw bad(usage);
+      case "waitStill": case "waitChange": {
+        const w = step[action];
+        const extra = action === "waitStill" ? ["quietMs", "allowNoChange"] : [];
+        const usage = `${action} is {"box": {"x", "y", "width", "height"}} or {"selector": "..."}, with "timeoutMs"${action === "waitStill" ? ', "quietMs" and "allowNoChange"' : ""}`;
+        if (!isObject(w) || Object.keys(w).some((k) => !["box", "selector", "timeoutMs", ...extra].includes(k))) throw bad(usage);
         if ((w.box === undefined) === (w.selector === undefined)) throw bad(`${usage}: one of box and selector`);
         if (w.selector !== undefined && (typeof w.selector !== "string" || !w.selector)) throw bad("selector is a CSS selector or #N");
         if (w.box !== undefined) {
@@ -705,6 +709,7 @@ export type RecordEvent = {
   /** type: the first and the last character. */ first?: number; last?: number;
   /** waitIdle: how many matching requests it saw before the network went quiet. */ requests?: number;
   /** waitStill: how many times the box changed, and when it last changed (it was still from then on). */ changes?: number; settled?: number;
+  /** waitChange: when the box changed. */ changed?: number;
 };
 
 export type RecordOutcome = {
@@ -733,7 +738,7 @@ export function jpegSize(buf: Buffer): [number, number] | undefined {
 }
 
 type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number;
-  changes?: number; settled?: number };
+  changes?: number; settled?: number; changed?: number };
 
 /** One key: down (with its text, and on macOS its editing commands) and up. */
 export async function sendKey(tab: Tab, k: KeyEvent): Promise<void> {
@@ -993,6 +998,17 @@ class Driver {
       if (this.current) { this.current.changes = changes; this.current.settled = lastChange; }
       return;
     }
+    if ("waitChange" in step) {
+      // The box's look at this step's start; done at the first picture that differs from it.
+      const w = step.waitChange, timeoutMs = w.timeoutMs ?? 60_000, deadline = Date.now() + timeoutMs;
+      const start = await this.stillShot(w);
+      for (;;) {
+        await this.pause(100);
+        const cur = await this.stillShot(w);
+        if (!samePixels(start.pixels, cur.pixels, [...start.masks, ...cur.masks])) { if (this.current) this.current.changed = Date.now(); return; }
+        if (Date.now() > deadline) throw new Error(`waitChange: the box did not change in ${timeoutMs} ms`);
+      }
+    }
     if ("eval" in step) { await this.tab.evaluate(step.eval); return; }
     throw new UsageError(`unknown step ${describe(step)}`);
   }
@@ -1160,6 +1176,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     ...(m.first !== undefined ? { first: video(m.first), last: video(m.last!) } : {}),
     ...(m.requests !== undefined ? { requests: m.requests } : {}),
     ...(m.changes !== undefined ? { changes: m.changes, settled: video(m.settled!) } : {}),
+    ...(m.changed !== undefined ? { changed: video(m.changed) } : {}),
   }));
 
   s.log(`agent-browser record: encoding ${frames.length} frames (${seconds.toFixed(1)} s) to ${plan.out}`);

@@ -82,6 +82,7 @@ test("the step script is checked before anything runs: one action per step, know
     [{ waitStill: {} }, /one of box and selector/], [{ waitStill: { box: { x: 1, y: 1, w: 5, h: 5 }, selector: "#a" } }, /one of box and selector/],
     [{ waitStill: { box: { x: 1900, y: 0, width: 50, height: 10 } } }, /outside the 1920x1080 viewport/], [{ waitStill: { box: { x: 1, y: 1 } } }, /box is \{"x"/],
     [{ waitStill: { selector: "#a", allowNoChange: "yes" } }, /allowNoChange is true or false/], [{ waitStill: { selector: "#a", quiet: 3 } }, /waitStill is/],
+    [{ waitChange: { selector: "#a", quietMs: 3 } }, /waitChange is/], [{ waitChange: {} }, /one of box and selector/],
   ];
   for (const [step, message] of bad) assert.throws(() => parseSteps([step], vp, ["docs.google.com"]), message, JSON.stringify(step));
   assert.throws(() => parseSteps({ steps: [] }, vp, []), /JSON array/);
@@ -340,6 +341,26 @@ test("waitStill: done when a box's pixels stop changing; it fails when the box n
   assert.equal(r.json.ok, true, r.stdout);
   assert.equal(r.json.events.find((e: any) => e.kind === "waitStill").changes, 0);
   await run(["close", "still"]);
+});
+
+test("waitChange: done at the box's first change from its look at the step's start (a cell: \"Loading...\", then the values)", needsFfmpeg, async () => {
+  const page = await openTab("change");
+  // An add-on's fill: Enter shows "Loading..." after 300 ms, and the values 900 ms later.
+  page.onKey = (key) => { if (key === "Enter") { page.later(300, () => { page.paint++; }); page.later(1200, () => { page.paint++; }); } };
+  const box = { x: 100, y: 100, width: 200, height: 40 };
+  let r = await run(["record", "change", "--out", join(c.dir, "change.mp4"), "--size", "640x360", "--settle", "0", "--script",
+    script("change-steps.json", [{ press: "Enter", delay: 0 }, { waitChange: { box, timeoutMs: 5000 } }, { waitChange: { box, timeoutMs: 5000 } }, { waitStill: { box, quietMs: 300 } }])]);
+  assert.equal(r.json.ok, true, r.stdout);
+  const [press, loading, values, still] = r.json.events;
+  assert.ok(loading.changed - press.start >= 0.25 && loading.changed - press.start < 0.9, `the first change: ${JSON.stringify({ press, loading })}`);
+  assert.ok(values.changed - press.start >= 1.15, `the second change, the values: ${JSON.stringify({ press, values })}`);
+  assert.ok(still.settled >= values.changed - 0.05 && still.end >= still.settled + 0.29, `then still: ${JSON.stringify(still)}`);
+  page.onKey = undefined;
+  r = await run(["record", "change", "--out", join(c.dir, "change2.mp4"), "--size", "640x360", "--settle", "0", "--script",
+    script("change2-steps.json", [{ waitChange: { box, timeoutMs: 400 } }])]);
+  assert.equal(r.json.error.code, "error");
+  assert.match(r.json.error.message, /waitChange: the box did not change in 400 ms/);
+  await run(["close", "change"]);
 });
 
 test("record refuses a tab off the allowlist and never touches it", async () => {

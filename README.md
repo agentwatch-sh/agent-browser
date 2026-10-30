@@ -207,6 +207,7 @@ checked before the tab is touched: the steps, the paths and ffmpeg.
 | `{"waitFor": selector, "text": "...", "timeoutMs": ms}` | wait until the element is visible (and its text or value contains `text`); default 30 s, then the run fails |
 | `{"waitIdle": {"match": "...", "quietMs": 1500, "timeoutMs": 60000}}` (or `{"waitIdle": "..."}`) | wait until the network goes quiet: a request whose URL contains `match` (default: any) was active since the step before began, none is in flight, and none has been active for `quietMs`. It watches the tab and its dedicated workers (Google Sheets computes in one). It fails at `timeoutMs` when it saw no such request (it cannot tell a finished fill from traffic it cannot see) or when they are still busy. Its event has `requests`, how many it saw. |
 | `{"waitStill": {"box": {"x", "y", "width", "height"}, "quietMs": 1500, "timeoutMs": 60000, "allowNoChange": false}}` (or `"selector": "..."` for an element's box; `"w"`/`"h"` are accepted) | wait until the pixels of the box (CSS px at the recorded size) stop changing for `quietMs`: for a value drawn on a canvas, such as an add-on's fill in the Sheets grid. The box is pictured before the step before it begins, so a fill that starts at the Enter press counts. It fails when the box never changed since then (did the fill start?), unless `allowNoChange`, and when it is still changing at `timeoutMs`. The demo cursor, its click ripple and the repaint pixel never count as a change. Its event has `changes` and `settled` (the video time of the last change). |
+| `{"waitChange": {"box": {...} \| "selector": "...", "timeoutMs": 60000}}` | wait until the pixels of the box differ from their look at the start of this step (the cursor masked out, as in `waitStill`); it fails at `timeoutMs`. Its event has `changed`. For a value that shows a placeholder first, chain them: an add-on's cell shows "Loading..." and then its values, so `press Enter`, `waitChange` ("Loading..." appears), `waitChange` (the values replace it), `waitStill` (they settle). |
 | `{"eval": "js"}` | escape hatch: runs in agent-browser's isolated world (the page's own globals are not visible there) |
 
 A target is a CSS selector, `#N` from `outline`, or `{"x": .., "y": ..}` in CSS pixels of the recorded
@@ -302,6 +303,10 @@ tab forward (`Page.bringToFront` would activate Chrome and switch the operator's
 
 ### Limits
 
+- `waitIdle` cannot see a Google Sheets add-on's fill: the add-on runs on Google's servers, and its calls
+  never reach the tab. Measured on a signed-in sheet (2026-10-30): after Enter it saw 3 requests (Sheets'
+  own "Saving..." traffic) and passed while the cell still showed "Loading...". Use `waitChange` and
+  `waitStill` on the cell's box for such a fill.
 - `waitIdle` watches the tab and its dedicated workers only (not other frames). A worker is attached
   through the tab's session for the run only, and only on an allowlisted URL; Chrome's other targets are
   detached at once. On the public sample sheet signed out, the tab and its calc worker sent one request

@@ -458,8 +458,8 @@ class RecordEvent:
 
     `press` is a click's press; `keys` holds each key of a press step; `first` and `last` are a type
     step's first and last character; `requests` is how many matching requests a waitIdle step saw;
-    `changes` and `settled` are how many times a waitStill box changed and when it last changed. Each is
-    None for the other kinds of step.
+    `changes` and `settled` are how many times a waitStill box changed and when it last changed;
+    `changed` is when a waitChange box changed. Each is None for the other kinds of step.
     """
 
     step: int
@@ -473,6 +473,7 @@ class RecordEvent:
     requests: Optional[int] = None
     changes: Optional[int] = None
     settled: Optional[float] = None
+    changed: Optional[float] = None
 
     @classmethod
     def from_json(cls, value: object, where: str) -> "RecordEvent":
@@ -481,7 +482,8 @@ class RecordEvent:
                    press=_opt_num(d, "press", where), keys=_list(d, "keys", where, _num_item) if "keys" in d else None,
                    first=_opt_num(d, "first", where), last=_opt_num(d, "last", where),
                    requests=_int(d, "requests", where) if "requests" in d else None,
-                   changes=_int(d, "changes", where) if "changes" in d else None, settled=_opt_num(d, "settled", where))
+                   changes=_int(d, "changes", where) if "changes" in d else None, settled=_opt_num(d, "settled", where),
+                   changed=_opt_num(d, "changed", where))
 
 
 @dataclass(frozen=True)
