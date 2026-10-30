@@ -668,7 +668,12 @@ export class FakeChrome {
       case "Page.createIsolatedWorld": return { executionContextId: page.createIsolatedWorld() };
       case "Runtime.evaluate": return page.evaluate(String(params.expression), !!params.awaitPromise, params.contextId);
       case "Input.dispatchMouseEvent": {
-        if (params.type === "mouseWheel") { page.wheel += params.deltaY ?? 0; return {}; }
+        if (params.type === "mouseWheel") {
+          page.wheel += params.deltaY ?? 0;
+          // A pane that scrolls (data-scrolls, like the Sheets grid) redraws under the wheel; elsewhere nothing moves.
+          if (page.hit(params.x, params.y)?.hasAttribute("data-scrolls")) page.paint++;
+          return {};
+        }
         const el = page.hit(params.x, params.y);
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }
         if (params.type === "mousePressed" && el && el.value !== undefined) page.focused = el; // a press focuses a text field, as in Chrome

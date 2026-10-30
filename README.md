@@ -201,7 +201,7 @@ checked before the tab is touched: the steps, the paths and ffmpeg.
 | `{"hover": target, "duration": ms}` | move only |
 | `{"type": "text", "into": target, "delay": ms}` | optional click into `target`, then one key event with text per character (`\n` is Enter, `\t` is Tab), each `delay` x 0.6-1.4 ms (default 55). A canvas app such as Sheets reads these key events, so its formula autocomplete shows as a person sees it. A character with no US-keyboard key is inserted as text. |
 | `{"press": key, "repeat": n, "delay": ms}` | a key or a chord: `Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, the arrows, `Home`, `End`, `PageUp`, `PageDown`, `F2`, one character, or chords such as `Shift+ArrowDown`, `Meta+A`, `Meta+C`, `Control+Home`. `delay` (default 150) follows each press. |
-| `{"scroll": px, "duration": ms}` | a mouse wheel at the cursor, with an eased total of `px` (it scrolls what is under the cursor: the page, or an inner pane such as the Sheets grid) |
+| `{"scroll": px, "duration": ms, "at": target}` | a mouse wheel with an eased total of `px`, at the cursor, or first move the cursor to `at` (a point in the Sheets grid, for example): it scrolls what is under the cursor, the page or an inner pane. The wheel follows the clock, so the step keeps its duration. When nothing under the cursor moved, the take gets a warning that names the step. |
 | `{"scroll": selector, "duration": ms}` | smooth `scrollIntoView` to the centre |
 | `{"highlight": target-or-box, "duration": ms}` | a ring around an element or `{"x", "y", "width", "height"}`, dimming the rest (default 1600 ms) |
 | `{"waitFor": selector, "text": "...", "timeoutMs": ms}` | wait until the element is visible (and its text or value contains `text`); default 30 s, then the run fails |

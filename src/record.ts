@@ -45,7 +45,7 @@ export type Step =
   | { hover: StepTarget; duration?: number }
   | { type: string; into?: StepTarget; delay?: number }            // per-character ms
   | { press: string; repeat?: number; delay?: number }             // "Enter", "ArrowDown", "Shift+Tab", "Meta+A"
-  | { scroll: string | number; duration?: number }                 // selector (smooth, to the centre) or a wheel delta in px
+  | { scroll: string | number; duration?: number; at?: StepTarget } // selector (smooth, to the centre), or a wheel delta in px (at the cursor, or first move to `at`)
   | { highlight: string | Box; duration?: number }                 // a ring around an element or a box
   | { waitFor: string; text?: string; timeoutMs?: number }         // an element (with this text) is visible
   | { waitIdle: string | IdleWait }                                // the network of the tab and its workers goes quiet
@@ -68,7 +68,7 @@ const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "h
 type Action = (typeof ACTIONS)[number];
 const OPTIONS: Record<Action, string[]> = {
   wait: [], goto: [], click: ["duration"], hover: ["duration"], type: ["into", "delay"], press: ["repeat", "delay"],
-  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], waitStill: [], waitChange: [], eval: [],
+  scroll: ["duration", "at"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], waitStill: [], waitChange: [], eval: [],
 };
 
 /** The longest recording, in seconds: the frames sit on disk until the MP4 is encoded. */
@@ -132,6 +132,10 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
         break;
       case "scroll":
         if (!(typeof step.scroll === "string" && step.scroll) && !finite(step.scroll)) throw bad("scroll is a selector or a number of pixels");
+        if (step.at !== undefined) {
+          if (typeof step.scroll === "string") throw bad('"at" is for a wheel scroll (a number of pixels), not for a selector');
+          target("at");
+        }
         ms("duration");
         break;
       case "highlight": {
@@ -771,6 +775,9 @@ class Driver {
   network?: NetworkWatch;
   /** When each step began, setup included: waitIdle counts traffic from the start of the step before it. */
   private starts: number[] = [];
+  /** Things a person should know about a take that still worked (a wheel that moved nothing). */
+  readonly warnings: string[] = [];
+  private stepNumber = 0;
   /** A waitStill box's picture from before the step before it began (see runSteps). */
   stillBefore?: StillShot;
   private current?: Mark;
@@ -867,6 +874,7 @@ class Driver {
   async step(n: number, step: Step): Promise<void> {
     const kind = ACTIONS.find((a) => a in step)!;
     this.starts.push(Date.now());
+    this.stepNumber = n;
     this.current = this.marks ? { step: n, kind, start: Date.now(), end: 0 } : undefined;
     try { await this.run(step); } finally {
       if (this.current && this.marks) { this.current.end = Date.now(); this.marks.push(this.current); }
@@ -946,13 +954,31 @@ class Driver {
         if (!found) throw new Error(`no element matches ${step.scroll}`);
         return this.pause(ms);
       }
-      // A wheel at the cursor scrolls what is under it, as a mouse does: the window, or an inner pane such as the Sheets grid.
-      const n = Math.max(1, Math.round(ms / 16)), start = Date.now();
-      for (let i = 1; i <= n; i++) {
-        const deltaY = step.scroll * (minJerk(i / n) - minJerk((i - 1) / n));
-        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: this.x, y: this.y, deltaX: 0, deltaY });
-        await this.pause(start + (ms * i) / n - Date.now());
+      // A wheel at the cursor scrolls what is under it, as a mouse does: the window, or an inner pane such
+      // as the Sheets grid. With `at`, the cursor first moves there, as a person points at what to scroll.
+      if (step.at !== undefined) {
+        const { point, width } = await this.aim(step.at);
+        await this.moveTo(point, width);
       }
+      const vw = this.plan.viewport.width, vh = this.plan.viewport.height, side = Math.min(200, vw, vh);
+      const probe = { x: Math.max(0, Math.min(vw - side, this.x - side / 2)), y: Math.max(0, Math.min(vh - side, this.y - side / 2)), width: side, height: side };
+      const before = await this.stillShot({ box: probe });
+      // The wheel follows the clock, not a fixed count: each event waits for Chrome's answer, so a fixed
+      // number of events took 3.6 times the step's duration on a busy page (#8).
+      const start = Date.now();
+      for (let sent = 0; ;) {
+        const u = Math.min(1, (Date.now() - start) / ms), deltaY = step.scroll * minJerk(u) - sent;
+        if (Math.abs(deltaY) >= 1 || (u >= 1 && deltaY !== 0)) {
+          await this.tab.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: this.x, y: this.y, deltaX: 0, deltaY });
+          sent += deltaY;
+        }
+        if (u >= 1) break;
+        await this.pause(16);
+      }
+      await this.pause(150); // a smooth scroll ends after its last wheel event
+      const after = await this.stillShot({ box: probe });
+      if (samePixels(before.pixels, after.pixels, [...before.masks, ...after.masks]))
+        this.warnings.push(`step ${this.stepNumber}: the wheel at (${Math.round(this.x)}, ${Math.round(this.y)}) moved nothing there; point it at the scrolling area with "at"`);
       return;
     }
     if ("highlight" in step) {
@@ -1154,7 +1180,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   clearTimeout(limit);
   if (runError !== undefined) throw withCleanupErrors(runError, cleanupErrors);
   for (const c of cleanupErrors) s.log(`agent-browser record: cleanup failed: ${c}`);
-  const warnings = cleanupErrors.map((c) => `cleanup failed: ${c}`);
+  const warnings = [...driver.warnings, ...cleanupErrors.map((c) => `cleanup failed: ${c}`)];
 
   if (frames.length < 2) {
     if (dropped) throw new AgentBrowserError("error", `Chrome sent ${dropped} frame(s) of ${droppedSize?.join("x")}, never ${videoWidth}x${videoHeight}: the emulated size did not take effect`);

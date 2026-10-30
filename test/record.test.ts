@@ -83,6 +83,7 @@ test("the step script is checked before anything runs: one action per step, know
     [{ waitStill: { box: { x: 1900, y: 0, width: 50, height: 10 } } }, /outside the 1920x1080 viewport/], [{ waitStill: { box: { x: 1, y: 1 } } }, /box is \{"x"/],
     [{ waitStill: { selector: "#a", allowNoChange: "yes" } }, /allowNoChange is true or false/], [{ waitStill: { selector: "#a", quiet: 3 } }, /waitStill is/],
     [{ waitChange: { selector: "#a", quietMs: 3 } }, /waitChange is/], [{ waitChange: {} }, /one of box and selector/],
+    [{ scroll: "#a", at: "#b" }, /"at" is for a wheel scroll/], [{ scroll: 100, at: { x: 1 } }, /at is a CSS selector/],
   ];
   for (const [step, message] of bad) assert.throws(() => parseSteps([step], vp, ["docs.google.com"]), message, JSON.stringify(step));
   assert.throws(() => parseSteps({ steps: [] }, vp, []), /JSON array/);
@@ -175,10 +176,13 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   assert.equal(r.json.ok, true, r.stdout);
   assert.deepEqual(Object.keys(r.json).sort(), ["command", "events", "fps", "frames", "height", "maxFrameGapMs", "ok", "path", "provenance", "scale", "seconds",
     "steps", "tab", "videoHeight", "videoWidth", "warnings", "width"]);
-  assert.deepEqual({ ...r.json, tab: undefined, events: undefined, frames: undefined, seconds: undefined, maxFrameGapMs: undefined }, {
+  assert.deepEqual({ ...r.json, tab: undefined, events: undefined, frames: undefined, seconds: undefined, maxFrameGapMs: undefined, warnings: undefined }, {
     ok: true, command: "record", tab: undefined, path: out, provenance: join(c.dir, "out", "clip.json"), width: 640, height: 360, scale: 1, fps: 10,
-    videoWidth: 640, videoHeight: 360, steps: 8, events: undefined, frames: undefined, seconds: undefined, maxFrameGapMs: undefined, warnings: [],
+    videoWidth: 640, videoHeight: 360, steps: 8, events: undefined, frames: undefined, seconds: undefined, maxFrameGapMs: undefined, warnings: undefined,
   });
+  // The fixture page has no pane that scrolls, so the scroll step's wheel moved nothing: said, not hidden.
+  assert.equal(r.json.warnings.length, 1);
+  assert.match(r.json.warnings[0], /^step 6: the wheel at \(\d+, \d+\) moved nothing there/);
   assert.ok(r.json.frames >= 10 && r.json.seconds > 0.5, `${r.json.frames} frames, ${r.json.seconds} s`);
 
   const v = probe(out);
@@ -361,6 +365,21 @@ test("waitChange: done at the box's first change from its look at the step's sta
   assert.equal(r.json.error.code, "error");
   assert.match(r.json.error.message, /waitChange: the box did not change in 400 ms/);
   await run(["close", "change"]);
+});
+
+test("scroll: the wheel goes where the cursor is, or first to `at`; it keeps its duration; a wheel that moved nothing is a warning (#8)", needsFfmpeg, async () => {
+  const opened = await run(["open", fx.base + "/editor", "--name", "grid"]);
+  const page = fake.pages.get(opened.json.tab.targetId)!;
+  // The cursor starts at (384, 252), outside #grid (20,200 150x100): that wheel moves nothing.
+  const r = await run(["record", "grid", "--out", join(c.dir, "grid.mp4"), "--size", "640x360", "--settle", "0", "--script",
+    script("grid-steps.json", [{ scroll: 300, duration: 400 }, { scroll: 300, duration: 400, at: "#grid" }])]);
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.deepEqual(r.json.warnings, ['step 1: the wheel at (384, 252) moved nothing there; point it at the scrolling area with "at"'], "only the first wheel missed");
+  assert.ok(Math.abs(page.wheel - 600) < 1e-6, `both wheels sent their full delta: ${page.wheel}`);
+  const [first, second] = r.json.events;
+  assert.ok(first.end - first.start < 0.4 + 0.6, `the step keeps its duration: ${JSON.stringify(first)}`);
+  assert.ok(second.end - second.start < 0.4 + 1.6, `with a move to "at" first: ${JSON.stringify(second)}`);
+  await run(["close", "grid"]);
 });
 
 test("record refuses a tab off the allowlist and never touches it", async () => {

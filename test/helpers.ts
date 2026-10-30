@@ -67,6 +67,7 @@ export function site(base: string): Site {
       { tag: "div", id: "cell", attrs: { contenteditable: "true", "data-keys-only": "", "data-cells": "" } },
       { tag: "div", id: "notes", attrs: { contenteditable: "true" } },
       { tag: "div", id: "label", text: "not a field" },
+      { tag: "div", id: "grid", attrs: { "data-scrolls": "" }, rect: [20, 200, 150, 100] },
     ] };
     return { title: "404", text: "not found" };
   };
