@@ -8,6 +8,7 @@ export type ErrorCode =
   | "read_first"
   | "tab_not_found"
   | "unreachable"
+  | "approval_needed"
   | "notify_failed"
   | "error";
 
@@ -78,6 +79,14 @@ export class TabNotFoundError extends AgentBrowserError {
 /** No Chrome endpoint answered, and no proxy could be started. */
 export class ChromeUnreachableError extends AgentBrowserError {
   constructor(message: string, options?: { cause?: unknown }) { super("unreachable", message, options); }
+}
+
+/**
+ * No approved connection is up, and the caller asked never to open a new one (noPrompt): a new one
+ * waits on Chrome's "Allow remote debugging?" prompt, which only a person can answer.
+ */
+export class ApprovalNeededError extends AgentBrowserError {
+  constructor(message: string) { super("approval_needed", message); }
 }
 
 export function safeHost(url: string): string {

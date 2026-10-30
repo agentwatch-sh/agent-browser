@@ -112,7 +112,8 @@ test("installed under node_modules, the library, the CLI and its proxy child all
     const bin = join(installed, "bin", "agent-browser.js");
     const tabs = await run(process.execPath, [bin, "tabs", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", fake.ws, "--no-launch", "--json"], { cwd: app });
     assert.deepEqual(JSON.parse(tabs.stdout), { ok: true, command: "tabs", tabs: [], window: null });
-    assert.equal(tabs.stderr, "");
+    // The one stderr line: this call opened the first connection, which a person approves in Chrome.
+    assert.match(tabs.stderr, /^agent-browser: no approved connection\. Opening a new one to [^\n]*\n$/, "no ExperimentalWarning or other noise");
     const proxy = JSON.parse(readFileSync(join(c.stateDir, "chrome-proxy.json"), "utf8"));
     const { stdout: command } = await run("ps", ["-ww", "-o", "command=", "-p", String(proxy.pid)]);
     assert.ok(command.includes(join("node_modules", "agent-browser", "bin", "agent-browser.js")), "the proxy runs from the installed copy");

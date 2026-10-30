@@ -34,30 +34,71 @@ export function recordProxyAttempt(s: Settings, row: Omit<ProxyAttempt, "at" | "
   catch { /* a diagnostic never hides the connection result */ }
 }
 
-/** Read only the bounded tail. Preserve the latest attempt's timestamp, even when it is old. */
-export function lastProxyAttempt(s: Settings): ProxyAttempt | undefined {
+/** The records in the bounded tail of the log, the latest first. */
+function recentAttempts(s: Settings): ProxyAttempt[] {
   let fd: number | undefined;
+  const rows: ProxyAttempt[] = [];
   try {
     fd = openSync(proxyLogPath(s), "r");
     const size = fstatSync(fd).size, length = Math.min(size, 65536), bytes = Buffer.alloc(length);
     readSync(fd, bytes, 0, length, size - length);
-    const rows: ProxyAttempt[] = [];
     for (const line of bytes.toString("utf8").split("\n").reverse()) {
       try {
         const row = JSON.parse(line);
         if (typeof row.at === "string" && typeof row.attempt === "string" && typeof row.phase === "string" && typeof row.target === "string") rows.push(row);
       } catch { /* free text or a partial line */ }
     }
-    const latest = rows[0];
-    if (!latest) return undefined;
-    const attempt = rows.filter((row) => row.attempt === latest.attempt);
-    const failure = attempt.find((row) => ["parent-timeout", "parent-lock-error", "parent-spawn-error", "child-error"].includes(row.phase));
-    const exit = attempt.find((row) => row.phase === "parent-exit");
-    return { ...latest, ...failure, ...(exit ? { code: exit.code, signal: exit.signal } : {}) };
   } catch { /* no attempts recorded */ }
   finally { if (fd !== undefined) closeSync(fd); }
-  return undefined;
+  return rows;
 }
+
+/** Read only the bounded tail. Preserve the latest attempt's timestamp, even when it is old. */
+export function lastProxyAttempt(s: Settings): ProxyAttempt | undefined {
+  const rows = recentAttempts(s), latest = rows[0];
+  if (!latest) return undefined;
+  const attempt = rows.filter((row) => row.attempt === latest.attempt);
+  const failure = attempt.find((row) => ["parent-timeout", "parent-lock-error", "parent-spawn-error", "child-error"].includes(row.phase));
+  const exit = attempt.find((row) => row.phase === "parent-exit");
+  return { ...latest, ...failure, ...(exit ? { code: exit.code, signal: exit.signal } : {}) };
+}
+
+/** When and why the latest approved connection (a proxy that was up) ended, from its child-exit record. */
+export function lastConnectionEnd(s: Settings): { at: string; why: string } | undefined {
+  const exit = recentAttempts(s).find((row) => row.phase === "child-exit");
+  return exit ? { at: exit.at, why: exit.detail ?? "no reason recorded" } : undefined;
+}
+
+/** Which browser asks, for a person who must find its window: the target, and the agent profile. */
+function promptPlace(s: Settings, target: string): string {
+  return s.mode === "agent" && !s.endpoint ? `${target}, profile ${s.profileDir}` : target;
+}
+
+/**
+ * The end of the last approved connection, as a clause. Chrome closes an approved connection when
+ * the Mac goes to sleep: on 2026-10-30 two agent Chromes closed theirs 4 ms after macOS sent
+ * kIOMessageSystemWillSleep (a lid close), so a new connection, and a new prompt, follows each sleep.
+ */
+function endedClause(s: Settings): string {
+  const end = lastConnectionEnd(s);
+  if (!end) return "";
+  const sleep = /^Chrome connection closed/.test(end.why) ? "; a Mac sleep or a Chrome quit does this" : "";
+  return `; the last approved connection ended at ${end.at} (${end.why}${sleep})`;
+}
+
+/** What a caller sees as a new connection starts: a person must answer Chrome's prompt, and where. */
+export function promptNotice(s: Settings, target: string, timeoutMs: number): string {
+  const who = s.approve ? "the approve option answers" : "a person clicks Allow on";
+  return `${s.commandName}: no approved connection${endedClause(s)}. Opening a new one to ${promptPlace(s, target)}: Chrome holds it until ${who} its "Allow remote debugging?" prompt in that browser's window (waiting ${Math.round(timeoutMs / 1000)} s)`;
+}
+
+/** Why noPrompt refused to connect, and what a person does about it. */
+export function approvalNeededMessage(s: Settings, target: string): string {
+  return `no approved connection to ${promptPlace(s, target)}${endedClause(s)}. noPrompt (--no-prompt) opens no new one, because a new one waits on Chrome's "Allow remote debugging?" prompt, which a person must click in that browser's window. When a person is at the computer, run a command without --no-prompt and click Allow`;
+}
+
+/** The end of a startup that saw no answer: a pending handshake is not proof of a prompt, so it stays "unknown". */
+export const UNANSWERED = `approval status unknown: Chrome holds a new connection until a person answers its "Allow remote debugging?" prompt in that browser's window, and a prompt left unanswered can leave that Chrome refusing every later connection (an instant 403) until it restarts`;
 
 export async function localBrowserStatus(s: Settings, deps: {
   target?: () => string; pid?: () => number | undefined; endpoint?: () => Promise<string | undefined>;

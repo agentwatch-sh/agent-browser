@@ -329,6 +329,11 @@ test("stop, status without a proxy, status --notify, and quit", async () => {
   r = await run(["stop"]);
   assert.deepEqual(r.json, { ok: true, command: "stop", stopped: false });
 
+  // Unattended: no approved connection, so --no-prompt fails at once, names the last end, and starts nothing.
+  r = await run(["tabs"], { extra: ["--no-prompt"] });
+  assert.equal(r.json.error.code, "approval_needed");
+  assert.match(r.json.error.message, /^no approved connection to .*; the last approved connection ended at \S+ \(SIGTERM\)\. noPrompt \(--no-prompt\) opens no new one/);
+
   r = await run(["status"]);
   assert.equal(r.json.connected, false);
   assert.match(r.json.detail, /proxy not connected; approval status unknown/);

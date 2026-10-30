@@ -17,7 +17,7 @@ export type { BrowserOptions, BrowserMode, NotifyHook, Settings } from "./option
 export { isAllowedUrl, isDeniedHost, loadAllowlist, validateAllowlist, DENIED_HOSTS, DENIED_FIRST_LABELS } from "./allowlist.ts";
 export {
   AgentBrowserError, UsageError, NotAllowedError, PinRequiredError, ReadFirstError, TabNotFoundError, ChromeUnreachableError,
-  runCleanup, withCleanupErrors, isSignInHost, signInHint, redirectError,
+  ApprovalNeededError, runCleanup, withCleanupErrors, isSignInHost, signInHint, redirectError,
 } from "./errors.ts";
 export type { ErrorCode } from "./errors.ts";
 export {
@@ -26,7 +26,7 @@ export {
 } from "./agent.ts";
 export type { ProcessRow } from "./agent.ts";
 export { startProxy, stopProxy, proxyInfo, proxyUrl } from "./proxy.ts";
-export { browserTarget, localBrowserStatus, lastProxyAttempt, notifyBrowserStatus } from "./diagnostics.ts";
+export { browserTarget, localBrowserStatus, lastConnectionEnd, lastProxyAttempt, notifyBrowserStatus } from "./diagnostics.ts";
 export type { NotifyResult, ProxyAttempt } from "./diagnostics.ts";
 export { outline, outlineText, idx, redact, netLog, IDX_ATTR } from "./outline.ts";
 export type { OutlineElement, NetEntry } from "./outline.ts";

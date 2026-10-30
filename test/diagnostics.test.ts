@@ -11,10 +11,11 @@ import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { CHROME_BETA_BIN } from "../src/agent.ts";
 import { AgentBrowser } from "../src/browser.ts";
+import { ApprovalNeededError } from "../src/errors.ts";
 import { commands } from "../src/commands.ts";
-import { browserTarget, lastProxyAttempt, localBrowserStatus, notifyBrowserStatus, proxyLogPath, recordProxyAttempt } from "../src/diagnostics.ts";
+import { browserTarget, lastConnectionEnd, lastProxyAttempt, localBrowserStatus, notifyBrowserStatus, proxyLogPath, recordProxyAttempt } from "../src/diagnostics.ts";
 import { resolveOptions, stateDir, type Settings } from "../src/options.ts";
-import { runProxy, startProxy } from "../src/proxy.ts";
+import { proxyInfo, runProxy, startProxy, stopProxy } from "../src/proxy.ts";
 import { consumer, type Consumer } from "./helpers.ts";
 
 let c: Consumer, s: Settings;
@@ -85,7 +86,7 @@ test("a signal exit is distinct from an exit code and records its exact signal",
 test("startup timeout stops only its own child and retains approval uncertainty", async () => {
   const child = fakeChild(), signals: string[] = [];
   child.kill = (signal) => { signals.push(signal); child.signalCode = signal; child.emit("exit", null, signal); return true; };
-  await assert.rejects(startProxy(s, "ws://fixture/pending", 500, { spawn: (() => child) as never }), /startup timed out.*approval status unknown/);
+  await assert.rejects(startProxy(s, "ws://fixture/pending", 500, { spawn: (() => child) as never }), /startup timed out.*approval status unknown: Chrome holds a new connection until a person answers its "Allow remote debugging\?" prompt.*an instant 403/);
   assert.deepEqual(signals, ["SIGTERM"]);
   assert.ok(records().some((row) => row.phase === "parent-timeout" && row.child === 424242));
 });
@@ -218,6 +219,45 @@ test("Chrome's instant 403 (no prompt) is named, with the fix, in the log and in
       e.name === "ChromeUnreachableError" && /refused the connection without a prompt/.test(e.message) && !/enable\s+remote debugging/.test(e.message));
   } finally {
     await new Promise<void>((resolve) => http.close(() => resolve()));
+    other.remove();
+  }
+});
+
+test("Chrome's close of an approved connection is recorded with its code; then a new prompt is announced, or refused by noPrompt", async () => {
+  const other = consumer(["example.org"]), lines: string[] = [];
+  const t = resolveOptions(other.options({ chromeBin: "/fixture/Google Chrome Beta", log: (line: string) => { lines.push(line); } }));
+  stateDir(t);
+  const upstream = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => upstream.once("listening", () => resolve()));
+  let connections = 0;
+  upstream.on("connection", () => { connections++; });
+  const endpoint = `ws://127.0.0.1:${(upstream.address() as { port: number }).port}/devtools/browser/fixture`;
+  const gone = async () => { for (let i = 0; i < 200 && proxyInfo(t); i++) await new Promise((r) => setTimeout(r, 20)); };
+  try {
+    await startProxy(t, endpoint, 10_000);
+    assert.match(lines.join("\n"), /no approved connection\. Opening a new one to .*a person clicks Allow on its "Allow remote debugging\?" prompt/);
+    // What a Mac sleep does: Chrome's side ends the approved connection.
+    for (const client of upstream.clients) client.close(1001, "fixture sleep");
+    await gone();
+    assert.match(lastConnectionEnd(t)?.why ?? "", /^Chrome connection closed \(code 1001, reason "fixture sleep"\)$/);
+
+    await assert.rejects(AgentBrowser.connect({ ...t, endpoint, noPrompt: true }), (e: unknown) => {
+      assert.ok(e instanceof ApprovalNeededError);
+      assert.equal(e.code, "approval_needed");
+      assert.match(e.message, /the last approved connection ended at \S+ \(Chrome connection closed \(code 1001, reason "fixture sleep"\); a Mac sleep or a Chrome quit does this\)/);
+      return true;
+    });
+    assert.equal(connections, 1, "noPrompt opened no new connection, so no new prompt");
+
+    lines.length = 0;
+    await startProxy(t, endpoint, 10_000);
+    assert.match(lines.join("\n"), /no approved connection; the last approved connection ended at \S+ \(Chrome connection closed \(code 1001.*a Mac sleep or a Chrome quit does this\)\. Opening a new one/);
+    assert.equal(connections, 2);
+  } finally {
+    stopProxy(t);
+    await gone();
+    for (const client of upstream.clients) client.terminate();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
     other.remove();
   }
 });

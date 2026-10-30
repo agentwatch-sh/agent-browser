@@ -71,6 +71,10 @@ class ChromeUnreachableError(CLIError):
     """code "unreachable": no Chrome endpoint answered and no proxy could start."""
 
 
+class ApprovalNeededError(CLIError):
+    """code "approval_needed": no approved connection is up, and no_prompt forbids opening one (a person must click Allow)."""
+
+
 ERRORS_BY_CODE: Dict[str, Type[CLIError]] = {
     "usage": UsageError,
     "not_allowed": NotAllowedError,
@@ -78,4 +82,5 @@ ERRORS_BY_CODE: Dict[str, Type[CLIError]] = {
     "read_first": ReadFirstError,
     "tab_not_found": TabNotFoundError,
     "unreachable": ChromeUnreachableError,
+    "approval_needed": ApprovalNeededError,
 }

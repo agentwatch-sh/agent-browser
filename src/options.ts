@@ -49,6 +49,12 @@ export type BrowserOptions = {
   personalUserDataDir?: string;
   /** Never start Chrome: a missing agent browser is an error that names the launch command. */
   noLaunch?: boolean;
+  /**
+   * Never open a new debugging connection, so never a new "Allow remote debugging?" prompt: with no
+   * approved proxy up, fail at once (code approval_needed) and start nothing. For unattended callers:
+   * a prompt that nobody answers can leave Chrome refusing every later connection until it restarts.
+   */
+  noPrompt?: boolean;
   /** status --notify sends one message here. */
   notify?: NotifyHook;
   /** Approve Chrome's per-connection debugging dialog for unattended use. Default: the operator clicks. */
@@ -73,6 +79,7 @@ export type Settings = {
   endpoint?: string;
   personalUserDataDir?: string;
   noLaunch: boolean;
+  noPrompt: boolean;
   notify?: NotifyHook;
   approve?: ApproveSpec;
   proxyIdleMs: number;
@@ -137,6 +144,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     endpoint: o.endpoint,
     personalUserDataDir: o.personalUserDataDir === undefined ? undefined : absolute("personalUserDataDir", o.personalUserDataDir),
     noLaunch: !!o.noLaunch,
+    noPrompt: !!o.noPrompt,
     notify: o.notify,
     approve: o.approve,
     proxyIdleMs,

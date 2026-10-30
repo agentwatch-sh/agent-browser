@@ -12,7 +12,8 @@ import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
 import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
-import { ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
+import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
+import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 
@@ -90,6 +91,8 @@ export class AgentBrowser {
       try { return await AgentBrowser.fromProxy(s, allow); } catch { /* stale or broken proxy */ }
     }
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
+    // Checked before any launch: a new Chrome needs a new approval too.
+    if (s.noPrompt) throw new ApprovalNeededError(approvalNeededMessage(s, browserTarget(s)));
     const candidates = s.mode === "agent"
       ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await launchAgentChrome(s, { background: true }) }]
       : endpointCandidates(s);
@@ -101,9 +104,9 @@ export class AgentBrowser {
         return await AgentBrowser.fromProxy(s, allow);
       } catch (e) { lastErr = e; }
     }
-    // Chrome's instant refusal is its own cause, with its own fix: remote debugging is on there, so the general help would mislead.
+    // Chrome's instant refusal, and a prompt that nobody answered, are their own causes: remote debugging is on there, so the general help would mislead.
     const message = (lastErr as Error | undefined)?.message ?? "";
-    if (/refused the connection without a prompt/.test(message)) throw new ChromeUnreachableError(message, { cause: lastErr });
+    if (/refused the connection without a prompt|until a person answers its/.test(message)) throw new ChromeUnreachableError(message, { cause: lastErr });
     throw new ChromeUnreachableError(`${chromeHelp(s)}${lastErr ? `\n(${message})` : ""}`, { cause: lastErr });
   }
 

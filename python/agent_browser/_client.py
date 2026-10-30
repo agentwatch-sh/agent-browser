@@ -72,6 +72,7 @@ class AgentBrowser:
         endpoint: Optional[str] = None,
         personal_user_data_dir: Optional[PathLike] = None,
         no_launch: bool = False,
+        no_prompt: bool = False,
         notify_command: Optional[Sequence[str]] = None,
         proxy_idle_ms: Optional[int] = None,
         command_name: Optional[str] = None,
@@ -93,6 +94,7 @@ class AgentBrowser:
         self.endpoint = endpoint
         self.personal_user_data_dir = Path(personal_user_data_dir) if personal_user_data_dir is not None else None
         self.no_launch = no_launch
+        self.no_prompt = no_prompt
         self.notify_command: Optional[List[str]] = list(notify_command) if notify_command is not None else None
         self.proxy_idle_ms = proxy_idle_ms
         self.command_name = command_name
@@ -148,6 +150,8 @@ class AgentBrowser:
             flags += ["--endpoint", self.endpoint]
         if self.no_launch:
             flags.append("--no-launch")
+        if self.no_prompt:
+            flags.append("--no-prompt")
         if self.notify_command is not None:
             flags += ["--notify-command", json.dumps(self.notify_command)]
         if self.proxy_idle_ms is not None:

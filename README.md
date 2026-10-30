@@ -88,7 +88,8 @@ Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Googl
 is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.
 `["--enable-unsafe-swiftshader", "--lang=en-US"]`; a `--remote-debugging` flag is refused, and no
 secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws://` endpoint, still
-used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome),
+used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome), `noPrompt` (never open a new
+connection, so never a new approval prompt: with no approved proxy up, fail at once with `approval_needed`),
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
 `vedlo browser`) and `log` (progress lines; default standard error).
 
@@ -119,7 +120,22 @@ used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch
   that Chrome attaches through that one, such as a page's worker); browser events go to every client.
   A departed client's sessions are detached. A start lock next to the socket lets
   simultaneous callers elect one proxy, and a live socket is never removed. The proxy exits after
-  `proxyIdleMs` with no clients, when Chrome closes the connection, or on `stop`.
+  `proxyIdleMs` with no clients, when Chrome closes the connection, or on `stop`. Its log records
+  Chrome's close code and reason.
+- **A Mac sleep ends the approval.** Chrome closes the approved connection when the Mac goes to sleep
+  (measured 2026-10-30: two agent Chromes closed theirs 4 ms after macOS sent `kIOMessageSystemWillSleep`
+  for a lid close, before the screen lock and 5 s before the sleep). So the proxy exits, and the first
+  command after the wake opens a new connection, which waits for a new Allow click. agent-browser does
+  not bypass that prompt. Chrome's approval mode asks for each new connection.
+  - That command says so on standard error: no approved connection, when and why the last one ended,
+    and which browser asks (pid and profile).
+  - A prompt that nobody answers can leave that Chrome refusing every later connection (an instant 403)
+    until it restarts. So an unattended caller sets `noPrompt` (`--no-prompt`). With no approved proxy
+    up, it then fails at once with `approval_needed` and starts nothing. `status` also opens nothing.
+  - A power assertion does not prevent a lid-close sleep: a `PreventUserIdleSystemSleep` assertion
+    (what `caffeinate -i` holds) was active at that lid close. `caffeinate -s` acts only on AC power. To
+    keep the approval through an absence, keep the lid open, or use the Mac on power with an external
+    display.
 - **Diagnostics:** `status` reuses an existing proxy only. It never starts Chrome or a proxy. Without a
   proxy it reports local evidence and the last attempt from `chrome-proxy.log`. A pending handshake does
   not prove that Chrome shows a prompt, so the approval status is always "unknown".
@@ -379,14 +395,14 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 `findFfmpeg`, `runCleanup`, `withCleanupErrors`,
 `loadAllowlist`, `resolveOptions`, `CDPConnection`, `main` (the CLI in-process). Errors:
 `AgentBrowserError` (with a stable `code`) and `UsageError`, `NotAllowedError`, `PinRequiredError`,
-`ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`.
+`ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`, `ApprovalNeededError`.
 
 ## CLI
 
 ```
 agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
-              [--chrome-args JSON] [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch]
+              [--chrome-args JSON] [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
               [--proxy-idle-ms N] [--command-name NAME]
 ```
@@ -403,7 +419,7 @@ A failure:
 ```
 
 Error codes: `usage` (exit 2), `not_allowed`, `pin_required`, `read_first`, `tab_not_found`,
-`unreachable`, `error` (exit 1).
+`unreachable`, `approval_needed` (`--no-prompt` and no approved proxy), `error` (exit 1).
 
 Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
 `not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
@@ -453,7 +469,7 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 
 ```python
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
-             endpoint=None, personal_user_data_dir=None, no_launch=False, notify_command=None,
+             endpoint=None, personal_user_data_dir=None, no_launch=False, no_prompt=False, notify_command=None,
              proxy_idle_ms=None, command_name=None, node="node", package_dir=None, timeout=120.0, env=None)
 ```
 
@@ -496,7 +512,7 @@ Errors (all `AgentBrowserError`):
 - `ProtocolError`: the output is not one JSON document of the expected shape, or the call timed out.
 - `CLIError`, with `code`, `message`, `command`, `exit_status` and `stderr`. Its subclasses follow
   the code: `UsageError`, `NotAllowedError`, `PinRequiredError`, `ReadFirstError`,
-  `TabNotFoundError`, `ChromeUnreachableError`.
+  `TabNotFoundError`, `ChromeUnreachableError`, `ApprovalNeededError`.
 
 The adapter runs `node <package_dir>/bin/agent-browser.js <command> ... --json` with
 `subprocess.run` (an argv list, never a shell). Secrets never go into argv. Keep the adapter and the

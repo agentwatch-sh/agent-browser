@@ -12,7 +12,7 @@ from typing import List
 from unittest import mock
 
 from agent_browser import (
-    AgentBrowser, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError, NotAllowedError, PackageNotFoundError,
+    AgentBrowser, ApprovalNeededError, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError, NotAllowedError, PackageNotFoundError,
     PinRequiredError, ProtocolError, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef, UsageError,
 )
 
@@ -186,6 +186,18 @@ class AdapterTest(unittest.TestCase):
         with self.assertRaises(UsageError) as caught:
             no_allowlist.tabs()
         self.assertIn("allowlist is required", caught.exception.message)
+
+    def test_no_prompt_fails_at_once_without_an_approved_connection(self) -> None:
+        other = Consumer()
+        try:
+            b = AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, no_prompt=True)
+            with self.assertRaises(ApprovalNeededError) as caught:
+                b.tabs()
+            self.assertEqual(caught.exception.code, "approval_needed")
+            self.assertIn("--no-prompt", caught.exception.message)
+            self.assertFalse(b.status().connected, "and it started no proxy")
+        finally:
+            other.remove()
 
     def test_status_notify_runs_the_notify_command(self) -> None:
         other = Consumer()

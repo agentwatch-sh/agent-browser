@@ -27,6 +27,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   endpoint: { type: "string", description: "a known upstream ws:// endpoint (still used through the proxy)" },
   "personal-user-data-dir": { type: "string", description: "personal mode: the operator's Chrome user-data folder" },
   "no-launch": { type: "boolean", description: "never start Chrome; fail with the launch command instead" },
+  "no-prompt": { type: "boolean", description: "never open a new connection (a new Allow prompt); with no approved proxy, fail at once (approval_needed)" },
   "notify-command": { type: "string", description: 'status --notify runs this argv, a JSON array; "{message}" and stdin carry the text' },
   approve: { type: "string", description: 'approve Chrome\'s debugging dialog for unattended use: auto|osascript|xdotool' },
   "approve-command": { type: "string", description: "a custom approver argv, a JSON array (in place of --approve)" },
@@ -109,7 +110,7 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"),
-    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], notify, approve,
+    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), log,
   });
 }

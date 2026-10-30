@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
-import { browserTarget, lastProxyAttempt, proxyLogPath, recordProxyAttempt, type ProxyAttempt } from "./diagnostics.ts";
+import { browserTarget, lastProxyAttempt, promptNotice, proxyLogPath, recordProxyAttempt, UNANSWERED, type ProxyAttempt } from "./diagnostics.ts";
 import { stateDir, statePath, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
 
@@ -102,7 +102,8 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     });
   } catch (e) {
     const why = handshakeFailure((e as Error).message, s), refused = why !== (e as Error).message;
-    record("child-error", `upstream handshake failed: ${why}${refused ? "" : "; approval status unknown"}`, refused ? "refused" : undefined);
+    const unanswered = /handshake has timed out/i.test(why) ? `; ${UNANSWERED}` : "; approval status unknown";
+    record("child-error", `upstream handshake failed: ${why}${refused ? "" : unanswered}`, refused ? "refused" : undefined);
     throw e;
   }
   record("child-connected");
@@ -152,7 +153,10 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     if (owner) { if (owner.readyState === WebSocket.OPEN) owner.send(text); }
     else if (!msg.sessionId) for (const c of clients) if (c.readyState === WebSocket.OPEN) c.send(text);
   });
-  upstream.on("close", () => shutdown("Chrome connection closed"));
+  // The close code, its reason and any socket error say who ended the approved connection, and how.
+  let upstreamError: string | undefined;
+  upstream.on("error", (e) => { upstreamError = e.message; });
+  upstream.on("close", (code, reason) => shutdown(`Chrome connection closed (code ${code}${reason.length ? `, reason ${JSON.stringify(String(reason))}` : ""}${upstreamError ? `, error ${upstreamError}` : ""})`));
 
   if (await socketAlive(s.socketPath)) { upstream.close(); throw new Error(`chrome proxy already running on ${s.socketPath}`); }
   rmSync(s.socketPath, { force: true });
@@ -227,6 +231,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
   try { await withStartLock(`${s.socketPath}.start.lock`, deadline, async () => {
     entered = true;
     if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
+    s.log(promptNotice(s, target, deadline - Date.now()));
     const fd = openSync(proxyLogPath(s), "a");
     let child: ReturnType<typeof spawn>;
     try {
@@ -254,7 +259,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
       detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : ""}`;
     }
     else {
-      detail = "proxy startup timed out while connecting; approval status unknown";
+      detail = `proxy startup timed out while connecting; ${UNANSWERED}`;
       record("parent-timeout", { child: child.pid, detail });
       // Stop this attempt's child only. A peer's socket and process remain untouched.
       await new Promise<void>((resolve) => {
