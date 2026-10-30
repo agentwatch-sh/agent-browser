@@ -131,13 +131,19 @@ test("seedRemoteDebugging turns remote debugging on in the profile, merges other
   assert.equal(readFileSync(ls, "utf8"), "{ not json");
 });
 
-test("--remote-debugging-port, -pipe and -address are refused before anything is spawned", async () => {
-  for (const flag of ["--remote-debugging-port=9222", "--remote-debugging-port", "--remote-debugging-pipe", "--remote-debugging-address=0.0.0.0"]) {
+test("remote-debugging and enable-automation flags are refused before anything is spawned, incl. single-dash and mixed-case forms", async () => {
+  for (const flag of [
+    "--remote-debugging-port=9222", "--remote-debugging-port", "--remote-debugging-pipe", "--remote-debugging-address=0.0.0.0",
+    "-remote-debugging-port=9222",    // Chrome's POSIX parser accepts a single dash too
+    "--Remote-Debugging-Port=9222",   // defense in depth: the switch name is normalized to lowercase
+    "--enable-automation", "-enable-automation", // also sets navigator.webdriver
+  ]) {
     const calls: { bin: string; args: string[] }[] = [];
-    await assert.rejects(launchAgentChrome(s, { extraArgs: [flag] }, { endpoint: async () => undefined, pid: () => undefined, spawn: fakeSpawn(calls) }), /navigator\.webdriver/);
+    await assert.rejects(launchAgentChrome(s, { extraArgs: [flag] }, { endpoint: async () => undefined, pid: () => undefined, spawn: fakeSpawn(calls) }), /navigator\.webdriver/, flag);
     assert.equal(calls.length, 0, flag);
   }
-  assert.doesNotThrow(() => assertNoDebuggingFlag(["--remote-debugging-something-else", "--no-first-run"]));
+  // a near-miss switch and ordinary flags are allowed
+  assert.doesNotThrow(() => assertNoDebuggingFlag(["--remote-debugging-something-else", "--no-first-run", "--enable-unsafe-swiftshader", "--lang=en-US"]));
 });
 
 test("a Chrome that hands the launch to a running instance means debugging is off there", async () => {

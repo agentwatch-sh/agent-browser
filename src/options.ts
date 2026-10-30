@@ -122,7 +122,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
       throw new UsageError("approve is only for the agent browser; in personal mode a person must approve the dialog on the operator's own Chrome");
   }
   if (o.chromeArgs !== undefined && (!Array.isArray(o.chromeArgs) || o.chromeArgs.some((a) => typeof a !== "string" || a.length === 0)))
-    throw new UsageError("chromeArgs must be an array of non-empty strings"); // a --remote-debugging flag among them is refused at launch (assertNoDebuggingFlag)
+    throw new UsageError("chromeArgs must be an array of non-empty strings"); // a remote-debugging or enable-automation flag among them is refused at launch (assertNoDebuggingFlag), in any dash/case form
   const proxyIdleMs = o.proxyIdleMs ?? DEFAULT_PROXY_IDLE_MS;
   if (!Number.isFinite(proxyIdleMs) || proxyIdleMs <= 0) throw new UsageError("proxyIdleMs must be a positive number");
   return {

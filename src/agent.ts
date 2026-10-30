@@ -86,11 +86,23 @@ export const AGENT_ARGS: readonly string[] = [
 ];
 
 /** Flags that open a debugging port or pipe. They set navigator.webdriver, so bot checks block every page. */
-const DEBUGGING_FLAG = /^--remote-debugging-(port|pipe|address)(=|$)/;
+// Chrome switches that turn on remote debugging or automation mode: either one sets
+// navigator.webdriver, so bot checks then block every page. Match the switch NAME, not the raw arg.
+// Chrome's POSIX command-line parser accepts a single "-" as a switch prefix as well as "--" (and "/"
+// on Windows), and lowercases switch names on some platforms, so a raw /^--/ test is a parser
+// differential that "-remote-debugging-port" would slip through. Normalize first (strip leading
+// dashes/slashes, lowercase), then match. A denylist on this one dangerous class is deliberate:
+// chromeArgs exists to pass arbitrary legitimate flags, so an allowlist would defeat it.
+const WEBDRIVER_SWITCH = /^(remote-debugging-(port|pipe|address)|enable-automation)(=|$)/;
+
+/** The switch name of a Chrome command-line arg: leading dashes/slashes stripped, lowercased. */
+function chromeSwitchName(arg: string): string {
+  return arg.replace(/^[-/]+/, "").toLowerCase();
+}
 
 export function assertNoDebuggingFlag(args: readonly string[]): void {
-  const bad = args.find((a) => DEBUGGING_FLAG.test(a));
-  if (bad) throw new UsageError(`refusing to launch Chrome with ${bad.split("=")[0]}: it sets navigator.webdriver and bot checks then block every page; turn remote debugging on in ${INSPECT_URL} instead`);
+  const bad = args.find((a) => WEBDRIVER_SWITCH.test(chromeSwitchName(a)));
+  if (bad) throw new UsageError(`refusing to launch Chrome with ${bad.split("=")[0]}: it turns on remote debugging or automation mode, which sets navigator.webdriver and makes bot checks block every page; turn remote debugging on in ${INSPECT_URL} instead`);
 }
 
 /**
