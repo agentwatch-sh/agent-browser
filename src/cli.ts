@@ -23,6 +23,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   socket: { type: "string", description: "proxy socket (default <state-dir>/chrome-proxy.sock)" },
   mode: { type: "string", description: "agent (default) or personal (the operator's Chrome; only when asked)" },
   "chrome-bin": { type: "string", description: "agent Chrome binary (default Chrome Beta, else Google Chrome)" },
+  "chrome-args": { type: "string", description: 'extra Chrome flags, a JSON array e.g. ["--enable-unsafe-swiftshader"]; never a --remote-debugging flag; no secrets (flags show in ps)' },
   endpoint: { type: "string", description: "a known upstream ws:// endpoint (still used through the proxy)" },
   "personal-user-data-dir": { type: "string", description: "personal mode: the operator's Chrome user-data folder" },
   "no-launch": { type: "boolean", description: "never start Chrome; fail with the launch command instead" },
@@ -97,10 +98,17 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     if (a !== "auto" && a !== "osascript" && a !== "xdotool" && a !== "true") throw new UsageError("--approve must be auto, osascript or xdotool");
     approve = a === "true" ? true : (a as "auto" | "osascript" | "xdotool");
   }
+  let chromeArgs: BrowserOptions["chromeArgs"];
+  if (str("chrome-args")) {
+    let argv: unknown;
+    try { argv = JSON.parse(str("chrome-args")!); } catch { throw new UsageError("--chrome-args must be a JSON array of strings"); }
+    if (!Array.isArray(argv)) throw new UsageError("--chrome-args must be a JSON array of strings");
+    chromeArgs = argv as string[];
+  }
   const idle = str("proxy-idle-ms");
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
-    mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), endpoint: str("endpoint"),
+    mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"),
     personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], notify, approve,
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), log,
   });

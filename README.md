@@ -83,8 +83,10 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 | Package folder | | | `package_dir` | The agent-browser folder with `bin/agent-browser.js`. Default: the checkout that holds the adapter. |
 
 Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
-is installed, else Google Chrome), `endpoint` (a known `ws://` endpoint, still used through the proxy),
-`personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome),
+is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.
+`["--enable-unsafe-swiftshader", "--lang=en-US"]`; a `--remote-debugging` flag is refused, and no
+secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws://` endpoint, still
+used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome),
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
 `vedlo browser`) and `log` (progress lines; default standard error).
 
@@ -225,7 +227,7 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 ```
 agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
-              [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch]
+              [--chrome-args JSON] [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
               [--proxy-idle-ms N] [--command-name NAME]
 ```

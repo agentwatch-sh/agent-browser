@@ -8,11 +8,20 @@ import { join } from "node:path";
 import { COMMAND_SPECS, commands } from "../src/commands.ts";
 import { redact } from "../src/outline.ts";
 import { resolveOptions } from "../src/options.ts";
+import { optionsFromFlags } from "../src/cli.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { BIN, cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, mail: FakePage;
+
+test("--chrome-args parses a JSON array into chromeArgs; a non-array or bad JSON is a usage error", () => {
+  const opts = optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '["--enable-unsafe-swiftshader","--lang=en-US"]' }, () => {});
+  assert.deepEqual(opts.chromeArgs, ["--enable-unsafe-swiftshader", "--lang=en-US"]);
+  assert.equal(optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args" }, () => {}).chromeArgs, undefined);
+  assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": "not json" }, () => {}), /--chrome-args must be a JSON array/);
+  assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '{"a":1}' }, () => {}), /--chrome-args must be a JSON array/);
+});
 const outputs: CliRun[] = [];
 
 before(async () => {

@@ -1,6 +1,6 @@
 {
   "name": "agent-browser",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Agent browser for agentwatch and vedlo: Chrome over a local proxy, allowlisted hosts only",
   "license": "UNLICENSED",

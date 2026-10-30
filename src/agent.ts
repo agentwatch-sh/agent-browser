@@ -150,8 +150,8 @@ export async function launchAgentChrome(
   opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void } = {},
   deps: { endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean } = {},
 ): Promise<string> {
-  const extraArgs = opts.extraArgs ?? [];
-  assertNoDebuggingFlag(extraArgs);
+  const extraArgs = [...(opts.extraArgs ?? []), ...(s.chromeArgs ?? [])];
+  assertNoDebuggingFlag(extraArgs); // guards opts.extraArgs AND s.chromeArgs (e.g. a CLI --chrome-args), before any spawn
   const endpoint = deps.endpoint ?? (() => agentEndpoint(s));
   const running = await endpoint();
   if (running) return running;

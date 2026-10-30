@@ -41,6 +41,8 @@ export type BrowserOptions = {
   mode?: BrowserMode;
   /** The agent Chrome binary. Default: Google Chrome Beta when installed, else Google Chrome. Never Chrome for Testing. */
   chromeBin?: string;
+  /** Extra flags for the agent Chrome at launch, e.g. ["--enable-unsafe-swiftshader", "--lang=en-US"]. A --remote-debugging flag is refused. No secrets: Chrome flags show in `ps`. */
+  chromeArgs?: string[];
   /** A known upstream endpoint (ws://127.0.0.1:<port>/devtools/browser/<id>). The connection still goes through the proxy. */
   endpoint?: string;
   /** Personal mode: the operator's Chrome user-data folder, where Chrome writes DevToolsActivePort. */
@@ -67,6 +69,7 @@ export type Settings = {
   allow?: string[];
   mode: BrowserMode;
   chromeBin?: string;
+  chromeArgs?: string[];
   endpoint?: string;
   personalUserDataDir?: string;
   noLaunch: boolean;
@@ -118,6 +121,8 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     if (o.approve !== false && mode === "personal")
       throw new UsageError("approve is only for the agent browser; in personal mode a person must approve the dialog on the operator's own Chrome");
   }
+  if (o.chromeArgs !== undefined && (!Array.isArray(o.chromeArgs) || o.chromeArgs.some((a) => typeof a !== "string" || a.length === 0)))
+    throw new UsageError("chromeArgs must be an array of non-empty strings"); // a --remote-debugging flag among them is refused at launch (assertNoDebuggingFlag)
   const proxyIdleMs = o.proxyIdleMs ?? DEFAULT_PROXY_IDLE_MS;
   if (!Number.isFinite(proxyIdleMs) || proxyIdleMs <= 0) throw new UsageError("proxyIdleMs must be a positive number");
   return {
@@ -128,6 +133,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     allow: o.allow,
     mode,
     chromeBin: o.chromeBin,
+    chromeArgs: o.chromeArgs,
     endpoint: o.endpoint,
     personalUserDataDir: o.personalUserDataDir === undefined ? undefined : absolute("personalUserDataDir", o.personalUserDataDir),
     noLaunch: !!o.noLaunch,

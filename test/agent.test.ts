@@ -84,6 +84,29 @@ test("a launch starts a regular Chrome on the consumer's profile, never with a d
   assert.equal(localState.devtools.remote_debugging["user-enabled"], true, "launch seeds remote debugging so no chrome://inspect click is needed");
 });
 
+test("chromeArgs: extra Chrome flags reach the spawn (between --user-data-dir and the urls), and a --remote-debugging flag among them is refused before any spawn", async () => {
+  const calls: { bin: string; args: string[] }[] = [];
+  let probes = 0;
+  const withArgs = resolveOptions({ ...s, chromeArgs: ["--enable-unsafe-swiftshader", "--lang=en-US"] });
+  await launchAgentChrome(withArgs, { timeoutMs: 2_000, urls: [INSPECT_URL] }, {
+    endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/new",
+    pid: () => undefined, spawn: fakeSpawn(calls), exists: (p) => p === CHROME_BETA_BIN,
+  });
+  assert.deepEqual(calls[0].args, [...AGENT_ARGS, `--user-data-dir=${withArgs.profileDir}`, "--enable-unsafe-swiftshader", "--lang=en-US", INSPECT_URL]);
+
+  const sneaky = resolveOptions({ ...s, chromeArgs: ["--remote-debugging-port=9222"] });
+  await assert.rejects(launchAgentChrome(sneaky, { timeoutMs: 1_000 }, {
+    endpoint: async () => undefined, pid: () => undefined, spawn: () => { throw new Error("must not spawn"); },
+  }), /refusing to launch Chrome with --remote-debugging-port/);
+});
+
+test("chromeArgs must be an array of non-empty strings", () => {
+  assert.throws(() => resolveOptions({ ...s, chromeArgs: "--lang=en-US" as unknown as string[] }), /chromeArgs must be an array/);
+  assert.throws(() => resolveOptions({ ...s, chromeArgs: ["--ok", ""] }), /chromeArgs must be an array/);
+  assert.throws(() => resolveOptions({ ...s, chromeArgs: ["--ok", 5 as unknown as string] }), /chromeArgs must be an array/);
+  assert.doesNotThrow(() => resolveOptions({ ...s, chromeArgs: ["--enable-unsafe-swiftshader"] }));
+});
+
 test("seedRemoteDebugging turns remote debugging on in the profile, merges other keys, is idempotent, and never clobbers a corrupt file", () => {
   const prof = join(tmp, "seed-profile");
   mkdirSync(prof, { recursive: true });

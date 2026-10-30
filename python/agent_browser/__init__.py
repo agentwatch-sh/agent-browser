@@ -22,7 +22,7 @@ from ._results import (
     TabsResult, TextResult, TypeResult, WindowResult,
 )
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 __all__ = [
     "AgentBrowser", "DEFAULT_TIMEOUT", "MIN_NODE_MAJOR", "default_package_dir",
