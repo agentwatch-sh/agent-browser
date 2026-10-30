@@ -247,6 +247,8 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
 - **Allowlist.** Only an allowlisted tab; a `goto` off the list is refused before the run. When the
   tab's main frame navigates off the list, the run stops at once, writes no MP4 and no JSON, and runs
   no code in the off-list page (the screencast is stopped and the size override cleared).
+- **Nothing runs in the tab after the run.** The final URL and title are read while the navigation
+  guard is still on; the encode (which can take minutes) and the result never touch the tab again.
 - **Errors are never hidden.** Every cleanup step runs (stop the screencast, remove the overlay, clear
   the override, remove the frames). A cleanup failure is added to the run's own error, which keeps its
   code; after a good run it is a `warnings` entry and a line on standard error.
@@ -255,8 +257,10 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
 
 ### The provenance JSON
 
-`clip.mp4` gets `clip.json` beside it (a run whose `--script` or `--setup` is that file is refused
-before it starts). Facts only: `service` ("agent-browser"), `generator`, `version`, `url`, `finalUrl`,
+`clip.mp4` gets `clip.json` beside it, mode 0600 (a run whose `--script` or `--setup` is that file
+is refused before it starts). The recorded steps are kept as written (their typed text is on camera);
+a setup step's typed text is not on camera, so only its length is kept (`"<10 characters>"`). An
+error message shows a `type` step's text only as its length too, as the `type` command does. Facts only: `service` ("agent-browser"), `generator`, `version`, `url`, `finalUrl`,
 `title`, `script`, `steps`, `setupScript`, `setup`, `width`, `height`, `scale`, `fps`, `video`
 (`path`, `width`, `height`, `codec`), `cursor`, `seed`, `settleMs`, `createdAt`, `startedAt`,
 `endedAt`, `seconds`, `frames`, `maxFrameGapMs`, `events`, `mode`, `chrome`, `warnings`.

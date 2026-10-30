@@ -7,7 +7,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
@@ -76,6 +76,8 @@ test("the step script is checked before anything runs: one action per step, know
   ];
   for (const [step, message] of bad) assert.throws(() => parseSteps([step], vp, ["docs.google.com"]), message, JSON.stringify(step));
   assert.throws(() => parseSteps({ steps: [] }, vp, []), /JSON array/);
+  assert.throws(() => parseSteps([{ type: "hunter2-secret", delay: -1 }], vp, []), (e: Error) => e.message.includes('"type":"<14 characters>"') && !e.message.includes("hunter2"),
+    "a message shows typed text only as its length");
   assert.deepEqual(parseSize("1280x720"), { width: 1280, height: 720 });
   assert.throws(() => parseSize("1280"), /WIDTHxHEIGHT/);
 });
@@ -143,7 +145,7 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
     { hover: "#b", duration: 200 }, { click: "#b" }, { type: "abc", into: "#i", delay: 10 }, { press: "Shift+ArrowDown", repeat: 2, delay: 20 },
     { highlight: "#b", duration: 150 }, { scroll: 120, duration: 100 }, { waitFor: "#later", text: "ready", timeoutMs: 3000 }, { wait: 100 },
   ]);
-  const setup = script("rec-setup.json", [{ press: "Escape" }]);
+  const setup = script("rec-setup.json", [{ press: "Escape" }, { type: "off-camera", delay: 5 }]);
   const r = await run(["record", "rec", "--out", out, "--script", steps, "--setup", setup, "--size", "640x360", "--fps", "10", "--settle", "200", "--seed", "3"]);
   assert.equal(r.json.ok, true, r.stdout);
   assert.deepEqual(Object.keys(r.json).sort(), ["command", "events", "fps", "frames", "height", "maxFrameGapMs", "ok", "path", "provenance", "scale", "seconds",
@@ -161,7 +163,7 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   // The steps reached the page: a trusted click, key events with text, the chord, the wheel.
   assert.equal(page.title, "clicked");
   assert.equal(page.select("#i")[0].value, "abc");
-  assert.deepEqual(page.keyEvents.filter((k) => k.type !== "keyUp").map((k) => k.key), ["Escape", "a", "b", "c", "ArrowDown", "ArrowDown"]);
+  assert.deepEqual(page.keyEvents.filter((k) => k.type !== "keyUp").map((k) => k.key), ["Escape", ..."off-camera", "a", "b", "c", "ArrowDown", "ArrowDown"]);
   assert.ok(page.keyEvents.filter((k) => k.key === "ArrowDown").every((k) => k.modifiers === 8));
   assert.ok(Math.abs(page.wheel - 120) < 1e-6, `wheel ${page.wheel}`);
   assert.ok(page.animations >= 2, "the ripple and the ring animate");
@@ -183,7 +185,13 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   assert.equal(prov.service, "agent-browser");
   assert.equal("license" in prov, false);
   assert.deepEqual(prov.steps, JSON.parse(readFileSync(steps, "utf8")));
-  assert.deepEqual(prov.setup, [{ press: "Escape" }]);
+  assert.deepEqual(prov.setup, [{ press: "Escape" }, { type: "<10 characters>", delay: 5 }], "setup text is off camera: only its length is kept");
+  assert.ok(!readFileSync(join(c.dir, "out", "clip.json"), "utf8").includes("off-camera"));
+  assert.equal(statSync(join(c.dir, "out", "clip.json")).mode & 0o777, 0o600, "the provenance is private to this user");
+  assert.equal(r.json.tab.url, fx.base + "/", "the tab's URL from the end of the run");
+  const calls = fake.callsFor(page.targetId).map((x) => x.method);
+  assert.ok(calls.lastIndexOf("Runtime.evaluate") < calls.lastIndexOf("Emulation.clearDeviceMetricsOverride"),
+    "nothing runs in the tab after the cleanup (the encode can take minutes; the tab may have moved on)");
   for (const k of ["url", "finalUrl", "width", "height", "scale", "fps", "seed", "createdAt", "startedAt", "endedAt", "seconds", "frames", "events"]) assert.ok(k in prov, k);
   assert.equal(prov.seed, 3);
   const events = r.json.events;
@@ -239,10 +247,11 @@ test("a cleanup failure never hides the run's own error; after a good run it is 
   assert.ok(existsSync(join(c.dir, "c2.mp4")));
   page.metrics = undefined;
 
-  // A step that fails: its own error names the step, and the tab is restored.
-  r = await run(["record", "cleanup2", "--out", join(c.dir, "c3.mp4"), "--script", script("c3-steps.json", [{ wait: 10 }, { click: "#missing" }]), "--settle", "0"]);
+  // A step that fails: its own error names the step (typed text only as its length), and the tab is restored.
+  r = await run(["record", "cleanup2", "--out", join(c.dir, "c3.mp4"), "--script", script("c3-steps.json", [{ wait: 10 }, { type: "pa55word", into: "#missing" }]), "--settle", "0"]);
   assert.equal(r.json.error.code, "error");
-  assert.match(r.json.error.message, /^step 2 \(\{"click":"#missing"\}\): no element matches #missing$/);
+  assert.equal(r.json.error.message, 'step 2 ({"type":"<8 characters>","into":"#missing"}): no element matches #missing');
+  assert.ok(!r.stdout.includes("pa55word") && !r.stderr.includes("pa55word"));
   assert.equal(page.metrics, undefined);
   assert.deepEqual(page.appended, []);
   assert.equal(existsSync(join(c.dir, "c3.mp4")), false);

@@ -398,7 +398,9 @@ export const commands = {
     return onTab(s, need(p.tab, "tab"), async (tab, info) => {
       const r = await recordTab(tab, plan);
       const { width, height, scale } = plan.viewport;
-      return { ok: true, command: "record", tab: await liveRef(tab, info.name), path: plan.out, provenance: plan.provenance, width, height, scale, fps: plan.fps,
+      // The tab's URL and title from the end of the run: after the encode nothing runs in the tab again.
+      const ref: TabRef = { ...info, url: r.finalUrl, title: r.title };
+      return { ok: true, command: "record", tab: ref, path: plan.out, provenance: plan.provenance, width, height, scale, fps: plan.fps,
         videoWidth: r.videoWidth, videoHeight: r.videoHeight, frames: r.frames, seconds: r.seconds, maxFrameGapMs: r.maxFrameGapMs, steps: plan.steps.length,
         events: r.events, warnings: r.warnings };
     });

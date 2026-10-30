@@ -61,6 +61,16 @@ export const MAX_RECORD_SECONDS = 1800;
 const MAX_STEP_MS = 10 * 60_000;
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * A step as messages and the provenance's setup show it: a type step's text becomes its length, as the
+ * `type` command never echoes its text (it can be a secret, and setup text is never on camera).
+ */
+export function redactStep(step: unknown): unknown {
+  return isObject(step) && typeof step.type === "string" ? { ...step, type: `<${step.type.length} characters>` } : step;
+}
+
+const describe = (step: unknown) => JSON.stringify(redactStep(step))?.slice(0, 120);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /**
@@ -70,7 +80,7 @@ const finite = (v: unknown): v is number => typeof v === "number" && Number.isFi
 export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly string[], what = "step"): Step[] {
   if (!Array.isArray(raw)) throw new UsageError(`the ${what} script must be a JSON array of steps`);
   return raw.map((step, i) => {
-    const bad = (why: string) => new UsageError(`${what} ${i + 1} (${JSON.stringify(step)?.slice(0, 120)}): ${why}`);
+    const bad = (why: string) => new UsageError(`${what} ${i + 1} (${describe(step)}): ${why}`);
     if (!isObject(step)) throw bad("a step is an object such as {\"click\": \"#save\"}");
     const actions = ACTIONS.filter((a) => a in step);
     if (actions.length !== 1) throw bad(`a step has exactly one of ${ACTIONS.join(", ")}`);
@@ -494,6 +504,9 @@ export type RecordEvent = {
 
 export type RecordOutcome = {
   url: string;
+  /** The tab's URL and title at the end of the run, read while the run was still guarded. */
+  finalUrl: string;
+  title: string;
   frames: number;
   seconds: number;
   maxFrameGapMs: number;
@@ -707,14 +720,14 @@ class Driver {
       return;
     }
     if ("eval" in step) { await this.tab.evaluate(step.eval); return; }
-    throw new UsageError(`unknown step ${JSON.stringify(step)}`);
+    throw new UsageError(`unknown step ${describe(step)}`);
   }
 }
 
 /** A step's own error, named by its number (a refusal or a stop keeps its own error). */
 function stepError(what: string, n: number, step: Step, e: unknown): unknown {
   if (e instanceof AgentBrowserError) return e;
-  return new AgentBrowserError("error", `${what} ${n} (${JSON.stringify(step).slice(0, 120)}): ${(e as Error).message}`, { cause: e });
+  return new AgentBrowserError("error", `${what} ${n} (${describe(step)}): ${(e as Error).message}`, { cause: e });
 }
 
 /**
@@ -782,6 +795,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   const limit = setTimeout(() => driver.fail(new AgentBrowserError("error", `a recording is at most ${MAX_RECORD_SECONDS} s; nothing was written`)), MAX_RECORD_SECONDS * 1000);
   let emulated = false, casting = false;
   let startedAt = "", endedAt = "", tEnd = 0, runError: unknown;
+  let final = { url, title: "" };
   const marks: Mark[] = [];
   try {
     // In the agent browser the tab comes to the front of its window (a background tab paints at
@@ -814,6 +828,10 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     await tab.assertAllowed();
     driver.check();
     tEnd = Date.now() / 1000;
+    // Read while the navigation guard is still on: after the cleanup nothing runs in the tab again.
+    final = await tab.evaluate(() => ({ url: location.href, title: document.title }));
+    if (!isAllowedUrl(final.url, tab.browser.allow)) throw new NotAllowedError(final.url);
+    driver.check();
     endedAt = new Date().toISOString();
   } catch (e) { runError = driver.failure ?? e; }
   writing = false;
@@ -854,22 +872,24 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
 
   s.log(`agent-browser record: encoding ${frames.length} frames (${seconds.toFixed(1)} s) to ${plan.out}`);
   await encode(plan.ffmpeg, framesDir, frames, end, plan.fps, videoWidth, videoHeight, plan.out);
-  const final = await tab.evaluate(() => ({ url: location.href, title: document.title }));
   const createdAt = new Date().toISOString();
   const provenance = {
     service: "agent-browser", generator: "agent-browser record", version: packageVersion(), url, finalUrl: final.url, title: final.title,
-    script: plan.script, steps: plan.steps, setupScript: plan.setupScript, setup: plan.setup,
+    // The recorded steps are typed on camera; the setup's typed text is not, so only its length is kept.
+    script: plan.script, steps: plan.steps, setupScript: plan.setupScript, setup: plan.setup.map(redactStep),
     width, height, scale, fps: plan.fps, video: { path: plan.out, width: videoWidth, height: videoHeight, codec: "h264" },
     cursor: plan.cursor, seed: plan.seed, settleMs: plan.settleMs, createdAt, startedAt, endedAt, seconds: +seconds.toFixed(3), frames: frames.length,
     maxFrameGapMs: Math.round(maxGap * 1000), events, mode: s.mode, chrome: tab.browser.product, warnings,
   };
   writeAtomically(plan.provenance, JSON.stringify(provenance, null, 2) + "\n");
-  return { url, frames: frames.length, seconds: +seconds.toFixed(3), maxFrameGapMs: Math.round(maxGap * 1000), videoWidth, videoHeight, events, warnings };
+  return { url, finalUrl: final.url, title: final.title, frames: frames.length, seconds: +seconds.toFixed(3), maxFrameGapMs: Math.round(maxGap * 1000),
+    videoWidth, videoHeight, events, warnings };
 }
 
+/** Write a file whole (a reader never sees half of it), private to this user: it holds the steps and the URL. */
 function writeAtomically(path: string, text: string) {
   const part = `${path}.part`;
-  writeFileSync(part, text);
+  writeFileSync(part, text, { mode: 0o600 });
   renameSync(part, path);
 }
 

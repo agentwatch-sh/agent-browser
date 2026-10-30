@@ -73,6 +73,7 @@ export const {
   proxyInfo,
   proxyUrl,
   recordTab,
+  redactStep,
   redact,
   rememberEndpoint,
   resolveOptions,
