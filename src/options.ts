@@ -113,7 +113,11 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every((a) => typeof a === "string") || !cmd[0])
       throw new UsageError("notify must be a function or { command: [program, ...args] }");
   }
-  if (o.approve !== undefined) validateApprove(o.approve);
+  if (o.approve !== undefined) {
+    validateApprove(o.approve);
+    if (o.approve !== false && mode === "personal")
+      throw new UsageError("approve is only for the agent browser; in personal mode a person must approve the dialog on the operator's own Chrome");
+  }
   const proxyIdleMs = o.proxyIdleMs ?? DEFAULT_PROXY_IDLE_MS;
   if (!Number.isFinite(proxyIdleMs) || proxyIdleMs <= 0) throw new UsageError("proxyIdleMs must be a positive number");
   return {

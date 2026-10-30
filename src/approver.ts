@@ -8,6 +8,11 @@
 // connection the proxy itself opens (runProxy fires it right as it connects upstream), so it never
 // answers a dialog it did not cause.
 //
+// It is for the AGENT browser only. In personal mode the dialog guards the operator's own Chrome, so
+// auto-approval is refused there (options.ts and makeApprover both reject it). It targets the agent
+// Chrome by its own pid, so it never acts on another Chrome (for example the operator's) that happens
+// to share the binary name.
+//
 // The dialog is native Chrome UI, not a web page, and we are not connected to CDP yet, so CDP cannot
 // dismiss it: the click must be a real OS input event, which needs an OS tool. macOS uses osascript
 // (Accessibility permission required); Linux uses xdotool (a virtual display required). Neither is an
@@ -15,17 +20,17 @@
 //
 // Safety: the macOS mechanism clicks the button named "Allow" through the accessibility tree, so it
 // can never hit "Cancel" or the left "Turn off in settings" button; if it cannot find "Allow" it
-// clicks nothing. The success of an approval is confirmed by the upstream connection opening, never
-// by this module's own claim.
+// clicks nothing. Success is confirmed by the upstream connection opening, never by this module.
 
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
-import type { ApproveSpec, Settings } from "./options.ts";
+import { agentChromeBin, agentChromePid } from "./agent.ts";
 import { validateApprove } from "./options.ts";
+import type { Settings } from "./options.ts";
 
 export type ApproveMechanism = "osascript" | "xdotool" | "command";
 
-/** How long to keep looking for the dialog before giving up (it appears ~0.8 s after connect). */
+/** How long a single approver command may run (the dialog appears ~0.8 s after connect). */
 export const APPROVE_TIMEOUT_MS = 15_000;
 
 export type RunResult = { ok: boolean; detail: string };
@@ -39,7 +44,7 @@ const execRunner: Runner = (bin, args, timeoutMs) => new Promise((resolve) => {
 });
 
 /** Which mechanism a spec selects on a platform; undefined means no approver. */
-export function approveMechanism(spec: ApproveSpec | undefined, platform: NodeJS.Platform): ApproveMechanism | undefined {
+export function approveMechanism(spec: Settings["approve"], platform: NodeJS.Platform): ApproveMechanism | undefined {
   if (spec === undefined || spec === false) return undefined;
   if (typeof spec === "object") return "command";
   if (spec === "osascript") return "osascript";
@@ -48,47 +53,64 @@ export function approveMechanism(spec: ApproveSpec | undefined, platform: NodeJS
   return platform === "darwin" ? "osascript" : "xdotool";
 }
 
-/** The AppleScript that clicks the "Allow" button by name in the agent browser's process. */
-export function osascriptApprove(processName: string): string {
-  const p = processName.replace(/"/g, '\\"');
-  return `tell application "${p}" to activate
-delay 0.2
-tell application "System Events" to tell process "${p}"
-  repeat 40 times
-    repeat with w in windows
-      repeat with e in (entire contents of w)
-        try
-          if (role of e) is "AXButton" and (name of e) is "Allow" then
-            click e
-            return "clicked Allow"
-          end if
-        end try
+/**
+ * The AppleScript that clicks the "Allow" button by name. It addresses the agent Chrome by its unix
+ * id when known (so it never touches another same-named Chrome, e.g. the operator's), falling back to
+ * the process name only when the pid is unknown.
+ */
+export function osascriptApprove(processName: string, pid?: number): string {
+  const name = processName.replace(/"/g, '\\"');
+  const procRef = pid !== undefined ? `(first process whose unix id is ${pid})` : `process "${name}"`;
+  const bring = pid !== undefined ? `set frontmost of ${procRef} to true` : `tell application "${name}" to activate`;
+  return `tell application "System Events"
+  try
+    ${bring}
+  end try
+  delay 0.2
+  tell ${procRef}
+    repeat 40 times
+      repeat with w in windows
+        repeat with e in (entire contents of w)
+          try
+            if (role of e) is "AXButton" and (name of e) is "Allow" then
+              click e
+              return "clicked Allow"
+            end if
+          end try
+        end repeat
       end repeat
+      delay 0.25
     end repeat
-    delay 0.25
-  end repeat
-  return "no Allow button found"
+    return "no Allow button found"
+  end tell
 end tell`;
 }
 
 /** The macOS process name of the agent browser (how System Events addresses it), from the binary path. */
 export function macProcessName(chromeBin: string): string {
-  const name = basename(chromeBin); // "Google Chrome Beta" or "Google Chrome"
-  return name || "Google Chrome";
+  return basename(chromeBin) || "Google Chrome";
 }
 
+export type ApproverDeps = {
+  platform?: NodeJS.Platform;
+  run?: Runner;
+  chromeBin?: string;
+  pid?: number;
+  sleep?: (ms: number) => Promise<void>;
+};
+
 /**
- * A function that performs the one approval, or undefined when approval is off. It is best-effort:
- * it never throws, and it logs what it did. The caller fires it as the proxy opens upstream.
+ * A function that performs the one approval, or undefined when approval is off or refused (personal
+ * mode). It is best-effort: it never throws, and it logs what it did. The caller fires it as the
+ * proxy opens upstream.
  */
-export function makeApprover(
-  s: Settings,
-  deps: { platform?: NodeJS.Platform; run?: Runner; chromeBin?: string } = {},
-): (() => Promise<RunResult>) | undefined {
+export function makeApprover(s: Settings, deps: ApproverDeps = {}): (() => Promise<RunResult>) | undefined {
   if (s.approve === undefined || s.approve === false) return undefined;
+  if (s.mode === "personal") return undefined; // never auto-approve the operator's own Chrome dialog
   validateApprove(s.approve);
   const platform = deps.platform ?? process.platform;
   const run = deps.run ?? execRunner;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const mechanism = approveMechanism(s.approve, platform);
   if (!mechanism) return undefined;
 
@@ -100,22 +122,33 @@ export function makeApprover(
       return r;
     };
   }
+
   if (mechanism === "osascript") {
-    const proc = macProcessName(deps.chromeBin ?? s.chromeBin ?? "Google Chrome");
     return async () => {
-      const r = await run("osascript", ["-e", osascriptApprove(proc)], APPROVE_TIMEOUT_MS);
-      s.log(`approve (macOS): ${r.ok ? r.detail : `failed: ${r.detail}`}`);
+      const proc = macProcessName(deps.chromeBin ?? agentChromeBin(s));
+      const pid = deps.pid ?? agentChromePid(s);
+      const r = await run("osascript", ["-e", osascriptApprove(proc, pid)], APPROVE_TIMEOUT_MS);
+      s.log(`approve (macOS, ${proc}${pid ? ` pid ${pid}` : ""}): ${r.ok ? r.detail : `failed: ${r.detail}`}`);
       return r;
     };
   }
-  // xdotool (Linux): the agent browser is the one window on the virtual display; the dialog opens
-  // with keyboard focus on "Cancel", so one Tab moves it to "Allow", then Return grants it (verified
-  // on Chromium 156). This relies on the dialog's focus order, so pin the Chrome/Chromium version.
+
+  // xdotool (Linux): scope the keys to the agent Chrome's OWN window (found by its pid, waited for
+  // with --sync), then let the dialog render and send Tab -> Allow, Return. This relies on the
+  // dialog opening with focus on "Cancel", so pin the Chrome/Chromium version; for stronger safety
+  // point `approve` at a verify-first custom command.
   return async () => {
-    const seq = await run("xdotool", ["key", "--clearmodifiers", "Tab"], APPROVE_TIMEOUT_MS);
-    if (!seq.ok) { s.log(`approve (Linux): xdotool Tab failed: ${seq.detail}`); return seq; }
-    const enter = await run("xdotool", ["key", "--clearmodifiers", "Return"], APPROVE_TIMEOUT_MS);
-    s.log(`approve (Linux): ${enter.ok ? "sent Tab,Return to Allow" : `Return failed: ${enter.detail}`}`);
+    const pid = deps.pid ?? agentChromePid(s);
+    if (!pid) { s.log("approve (Linux): no agent Chrome pid found; not approving"); return { ok: false, detail: "no agent Chrome pid" }; }
+    const found = await run("xdotool", ["search", "--sync", "--onlyvisible", "--pid", String(pid)], APPROVE_TIMEOUT_MS);
+    if (!found.ok) { s.log(`approve (Linux): window search failed: ${found.detail}`); return found; }
+    const win = found.detail.split(/\s+/).filter(Boolean).pop();
+    if (!win) { s.log("approve (Linux): no window for the agent Chrome pid"); return { ok: false, detail: "no window" }; }
+    await run("xdotool", ["windowactivate", "--sync", win], APPROVE_TIMEOUT_MS);
+    await sleep(1200); // the dialog renders inside the window (not a window of its own); give it a moment
+    await run("xdotool", ["key", "--window", win, "--clearmodifiers", "Tab"], APPROVE_TIMEOUT_MS);
+    const enter = await run("xdotool", ["key", "--window", win, "--clearmodifiers", "Return"], APPROVE_TIMEOUT_MS);
+    s.log(`approve (Linux, window ${win}): ${enter.ok ? "sent Tab,Return to Allow" : `Return failed: ${enter.detail}`}`);
     return enter;
   };
 }

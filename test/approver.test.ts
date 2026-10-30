@@ -33,19 +33,25 @@ test("no approver unless configured", () => {
   assert.ok(makeApprover(base(true), { platform: "darwin" }));
 });
 
-test("macOS approver clicks the button named Allow, and can never hit Cancel or Turn off", async () => {
+test("macOS approver clicks the button named Allow on the agent Chrome by pid, never Cancel or Turn off", async () => {
   const { calls, run } = recorder();
-  const approver = makeApprover(base("osascript"), { platform: "darwin", run, chromeBin: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" });
+  const approver = makeApprover(base("osascript"), { platform: "darwin", run, chromeBin: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta", pid: 4242 });
   assert.ok(approver);
   const r = await approver!();
   assert.equal(r.ok, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].bin, "osascript");
   const script = calls[0].args[1];
-  assert.match(script, /process "Google Chrome Beta"/);
+  assert.match(script, /unix id is 4242/, "it targets the agent Chrome by pid, not by shared binary name");
+  assert.doesNotMatch(script, /to activate/, "it does not activate a Chrome by app name (which could be the operator's)");
   assert.match(script, /\(name of e\) is "Allow"/);
   assert.match(script, /click e/);
   assert.doesNotMatch(script, /Cancel|Turn off/, "the script never targets Cancel or Turn off in settings");
+});
+
+test("without a pid the osascript falls back to the process name and activate", () => {
+  assert.match(osascriptApprove("Google Chrome Beta"), /tell application "Google Chrome Beta" to activate/);
+  assert.match(osascriptApprove("Google Chrome Beta", 77), /unix id is 77/);
 });
 
 test("macProcessName and osascriptApprove derive from the binary", () => {
@@ -54,14 +60,17 @@ test("macProcessName and osascriptApprove derive from the binary", () => {
   assert.match(osascriptApprove("Google Chrome"), /tell application "Google Chrome" to activate/);
 });
 
-test("Linux approver sends Tab then Return via xdotool (focus Cancel -> Allow -> grant)", async () => {
-  const { calls, run } = recorder();
-  const approver = makeApprover(base("xdotool"), { platform: "linux", run });
+test("Linux approver scopes keys to the agent Chrome window (by pid) then Tab -> Allow, Return", async () => {
+  const calls: { bin: string; args: string[] }[] = [];
+  const run: Runner = async (bin, args) => { calls.push({ bin, args }); return { ok: true, detail: args[0] === "search" ? "900900" : "" }; };
+  const approver = makeApprover(base("xdotool"), { platform: "linux", run, pid: 4242, sleep: async () => {} });
   assert.ok(approver);
   await approver!();
   assert.deepEqual(calls.map((c) => [c.bin, ...c.args]), [
-    ["xdotool", "key", "--clearmodifiers", "Tab"],
-    ["xdotool", "key", "--clearmodifiers", "Return"],
+    ["xdotool", "search", "--sync", "--onlyvisible", "--pid", "4242"],
+    ["xdotool", "windowactivate", "--sync", "900900"],
+    ["xdotool", "key", "--window", "900900", "--clearmodifiers", "Tab"],
+    ["xdotool", "key", "--window", "900900", "--clearmodifiers", "Return"],
   ]);
 });
 
@@ -78,6 +87,15 @@ test("validateApprove rejects bad specs", () => {
     assert.throws(() => validateApprove(bad as never), /approve must be/);
   for (const ok of [true, false, "auto", "osascript", "xdotool", { command: ["x"] }] as unknown[])
     assert.doesNotThrow(() => validateApprove(ok as never));
+});
+
+test("approve is refused in personal mode (never auto-approve the operator's own Chrome)", () => {
+  assert.throws(() => resolveOptions({ stateDir: "/tmp/ab-approve-p", allow: ["example.org"], mode: "personal", approve: true }), /only for the agent browser/);
+  assert.throws(() => resolveOptions({ stateDir: "/tmp/ab-approve-p", allow: ["example.org"], mode: "personal", approve: "xdotool" }), /only for the agent browser/);
+  assert.doesNotThrow(() => resolveOptions({ stateDir: "/tmp/ab-approve-p", allow: ["example.org"], mode: "personal", approve: false }));
+  // defensive: makeApprover returns no approver for a personal-mode Settings even if one slipped through
+  const personal = { ...base("osascript"), mode: "personal" as const };
+  assert.equal(makeApprover(personal, { platform: "darwin" }), undefined);
 });
 
 test("approveArgs carries the setting to the proxy child, and the CLI parses it back", () => {

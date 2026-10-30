@@ -133,17 +133,19 @@ Because agent-browser enables remote debugging the `chrome://inspect` way (never
 debugging?" dialog for each new DevTools connection, and the grant is not remembered. The proxy holds
 one upstream connection per Chrome start, so one approval per Chrome start is enough. Where a person
 can click (a normal Mac), they click. For unattended use, set `approve` and agent-browser answers that
-one dialog itself, and only the connection the proxy opened — it never answers a dialog it did not cause.
+one dialog itself, and only the connection the proxy opened — it never answers a dialog it did not cause. It is
+refused in personal mode: there the dialog guards the operator's own Chrome, and a person must answer it.
 
 The click is a real OS input event (CDP cannot dismiss a native dialog, and we are not connected yet),
 so it needs an OS tool, which is a documented prerequisite, not an npm dependency:
 
 - **macOS** (`approve: "osascript"` / `approve: true`): clicks the button **named "Allow"** through the
-  accessibility tree, so it can never hit "Cancel" or the left "Turn off in settings"; if it cannot find
-  "Allow" it clicks nothing. It needs **Accessibility permission** (System Settings → Privacy & Security →
-  Accessibility) for the process that runs `osascript`. Without the grant it fails safe with `-25211` and
-  approves nothing. In a headless `tmux`/`launchd` session there may be no terminal app to grant, so the
-  macOS approver suits an attended Mac or a session launched under a granted app.
+  accessibility tree on the agent Chrome addressed **by its pid** (so it never touches another Chrome that
+  shares the binary name, e.g. the operator's), so it can never hit "Cancel" or the left "Turn off in
+  settings"; if it cannot find "Allow" it clicks nothing. It needs **Accessibility permission** (System
+  Settings → Privacy & Security → Accessibility) for the process that runs `osascript`. Without the grant
+  it fails safe with `-25211` and approves nothing. In a headless `tmux`/`launchd` session there may be no
+  terminal app to grant, so the macOS approver suits an attended Mac or a session launched under a granted app.
 - **Linux** (`approve: "xdotool"` / `approve: true`): sends `Tab` then `Return` (the dialog opens with
   focus on "Cancel"; one `Tab` moves it to "Allow"). Needs `xdotool` and a display. This relies on the
   dialog's focus order, so pin the Chrome/Chromium version. Verified on Chromium 156.
