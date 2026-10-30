@@ -11,8 +11,8 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
-import { findFfmpeg, fittsMs, parseKey, parseSize, parseSteps, planMove, planRecording, pointAt, seededRandom } from "../src/record.ts";
-import { FakeChrome, type FakePage } from "./fake-chrome.ts";
+import { findFfmpeg, fittsMs, parseKey, parseSize, parseSteps, planMove, planRecording, pngPixels, pointAt, samePixels, seededRandom } from "../src/record.ts";
+import { FakeChrome, rgbaPng, type FakePage } from "./fake-chrome.ts";
 import { cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
@@ -68,6 +68,8 @@ test("the step script is checked before anything runs: one action per step, know
     { goto: "https://docs.google.com/x" }, { waitIdle: "script.google" }, { waitIdle: { match: "/calc", quietMs: 1500, timeoutMs: 60000 } }, { waitIdle: {} }],
     vp, ["docs.google.com"]);
   assert.equal(ok.length, 14);
+  assert.equal(parseSteps([{ waitStill: { box: { x: 10, y: 10, w: 200, h: 40 }, quietMs: 1500, timeoutMs: 60000 } }, { waitStill: { selector: "#b", allowNoChange: true } },
+    { waitStill: { box: { x: 0, y: 0, width: 1920, height: 1080 } } }], vp, []).length, 3);
   const bad: [unknown, RegExp][] = [
     [{}, /exactly one of/], [{ click: "#a", hover: "#b" }, /exactly one of/], [{ click: "#a", delay: 3 }, /"delay" is not an option of click/],
     [{ wait: -1 }, /wait must be a number of ms/], [{ click: { x: 5000, y: 1 } }, /outside the 1920x1080 viewport/], [{ press: "Hyper+A" }, /unknown modifier/],
@@ -76,6 +78,9 @@ test("the step script is checked before anything runs: one action per step, know
     [{ goto: "https://example.com/" }, /example\.com is not on the allowlist/],
     [{ waitIdle: { match: 3 } }, /match is a part of the request URLs/], [{ waitIdle: { quiet: 5 } }, /waitIdle is \{"match"/],
     [{ waitIdle: { timeoutMs: -1 } }, /timeoutMs must be a number of ms/],
+    [{ waitStill: {} }, /one of box and selector/], [{ waitStill: { box: { x: 1, y: 1, w: 5, h: 5 }, selector: "#a" } }, /one of box and selector/],
+    [{ waitStill: { box: { x: 1900, y: 0, width: 50, height: 10 } } }, /outside the 1920x1080 viewport/], [{ waitStill: { box: { x: 1, y: 1 } } }, /box is \{"x"/],
+    [{ waitStill: { selector: "#a", allowNoChange: "yes" } }, /allowNoChange is true or false/], [{ waitStill: { selector: "#a", quiet: 3 } }, /waitStill is/],
   ];
   for (const [step, message] of bad) assert.throws(() => parseSteps([step], vp, ["docs.google.com"]), message, JSON.stringify(step));
   assert.throws(() => parseSteps({ steps: [] }, vp, []), /JSON array/);
@@ -112,6 +117,21 @@ test("the cursor path: ghost-cursor's curve, a minimum-jerk speed (slow, fast, s
   const fixed = await planMove(from, to, 30, seededRandom(1), 777);
   assert.ok(Math.abs(fixed.reduce((a, l) => a + l.ms, 0) - 777) < 1e-9, "a step's duration overrides the total");
   assert.deepEqual(await planMove(from, from, 30, seededRandom(1)), []);
+});
+
+test("waitStill's pixels: the PNG decoder reverses all five row filters, and masked pixels never count as a change", () => {
+  const px = (x: number, y: number): [number, number, number, number] => [(x * 37 + y * 11) & 255, (x * y) & 255, (255 - x * 3) & 255, 255];
+  for (let filter = 0; filter < 5; filter++) {
+    const p = pngPixels(rgbaPng(23, 17, px, filter));
+    assert.deepEqual([p.width, p.height, p.channels], [23, 17, 4]);
+    assert.ok(p.data.equals(Buffer.from(Array.from({ length: 23 * 17 }, (_, i) => px(i % 23, Math.floor(i / 23))).flat())), `filter ${filter}`);
+  }
+  const base = pngPixels(rgbaPng(20, 10, () => [200, 200, 200, 255]));
+  const cursor = pngPixels(rgbaPng(20, 10, (x, y) => (x >= 4 && x < 8 && y < 5 ? [0, 0, 0, 255] : [200, 200, 200, 255])));
+  assert.equal(samePixels(base, cursor), false);
+  assert.equal(samePixels(base, cursor, [{ x: 4, y: 0, width: 4, height: 5 }]), true, "a change inside a mask (the cursor) is no change");
+  assert.equal(samePixels(base, cursor, [{ x: 5, y: 0, width: 3, height: 5 }]), false, "a change outside the masks is one");
+  assert.equal(samePixels(base, pngPixels(rgbaPng(20, 11, () => [200, 200, 200, 255]))), false, "another size is a change");
 });
 
 test("planRecording: .mp4 only, even pixel sizes, the provenance never replaces a script, ffmpeg is required", () => {
@@ -175,7 +195,7 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   assert.deepEqual(page.appended, [], "the overlay is removed");
   assert.equal(page.metrics, undefined, "the device metrics override is cleared");
   const m = methods(page);
-  assert.ok(m.indexOf("Page.bringToFront") < m.indexOf("Emulation.setDeviceMetricsOverride"));
+  assert.ok(!m.includes("Page.bringToFront"), "the window is never raised: the operator stays on their own Space");
   assert.ok(m.lastIndexOf("Page.stopScreencast") > m.indexOf("Page.startScreencast"));
   assert.ok(m.lastIndexOf("Emulation.clearDeviceMetricsOverride") > m.indexOf("Page.startScreencast"));
   const set = fake.callsFor(page.targetId).find((x) => x.method === "Emulation.setDeviceMetricsOverride")!;
@@ -293,6 +313,32 @@ test("waitIdle waits for the tab's and its workers' requests to go quiet; it fai
   assert.ok(Date.now() - before < 15_000);
   assert.equal(page.metrics, undefined);
   await run(["close", "idle"]);
+});
+
+test("waitStill: done when a box's pixels stop changing; it fails when the box never changed, unless allowNoChange", needsFfmpeg, async () => {
+  const page = await openTab("still");
+  // The page's "fill": Enter starts it, and the box changes 4 times, 150 ms apart.
+  page.onKey = (key) => { if (key === "Enter") for (let i = 1; i <= 4; i++) page.later(i * 150, () => { page.paint++; }); };
+  const box = { x: 100, y: 100, width: 200, height: 40 };
+  let r = await run(["record", "still", "--out", join(c.dir, "still.mp4"), "--size", "640x360", "--settle", "100", "--script",
+    script("still-steps.json", [{ press: "Enter" }, { waitStill: { box, quietMs: 300, timeoutMs: 5000 } }])]);
+  assert.equal(r.json.ok, true, r.stdout);
+  const press = r.json.events.find((e: any) => e.kind === "press"), still = r.json.events.find((e: any) => e.kind === "waitStill");
+  assert.ok(still.changes >= 2, `it saw the fill change the box: ${JSON.stringify(still)}`);
+  assert.ok(still.settled >= press.start + 0.45, `it settled after the last change: ${JSON.stringify({ press, still })}`);
+  assert.ok(still.end >= still.settled + 0.29, "then stayed still for quietMs");
+
+  // A box that never changes: the fill never started. A failure, unless that is fine.
+  page.onKey = undefined;
+  r = await run(["record", "still", "--out", join(c.dir, "still2.mp4"), "--size", "640x360", "--settle", "0", "--script",
+    script("still2-steps.json", [{ press: "Enter" }, { waitStill: { box, quietMs: 100, timeoutMs: 600 } }])]);
+  assert.equal(r.json.error.code, "error");
+  assert.match(r.json.error.message, /^step 2 .*waitStill: the box did not change since the step before began \(600 ms\): did the fill start\?/);
+  r = await run(["record", "still", "--out", join(c.dir, "still3.mp4"), "--size", "640x360", "--settle", "0", "--script",
+    script("still3-steps.json", [{ press: "Enter" }, { waitStill: { selector: "#b", quietMs: 200, timeoutMs: 3000, allowNoChange: true } }])]);
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.equal(r.json.events.find((e: any) => e.kind === "waitStill").changes, 0);
+  await run(["close", "still"]);
 });
 
 test("record refuses a tab off the allowlist and never touches it", async () => {

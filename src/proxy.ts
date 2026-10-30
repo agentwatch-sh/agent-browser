@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
-import { browserTarget, proxyLogPath, recordProxyAttempt, type ProxyAttempt } from "./diagnostics.ts";
+import { browserTarget, lastProxyAttempt, proxyLogPath, recordProxyAttempt, type ProxyAttempt } from "./diagnostics.ts";
 import { stateDir, statePath, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
 
@@ -68,9 +68,24 @@ async function withStartLock<T>(path: string, deadline: number, fn: () => Promis
   }
 }
 
+/**
+ * What a failed upstream handshake means for the operator. Chrome answers "403 Connection rejected" at
+ * once, with no prompt, when this Chrome run holds a refusal (an "Allow remote debugging?" prompt for it
+ * was cancelled, closed or left unanswered): only a restart of that Chrome clears it (measured on Chrome
+ * Beta 158, 2026-10-30).
+ */
+export function handshakeFailure(message: string, s: Pick<Settings, "mode" | "commandName">): string {
+  if (!/Unexpected server response: 403\b/.test(message)) return message;
+  const fix = s.mode === "agent"
+    ? `run \`${s.commandName} quit\`, then \`${s.commandName} launch\`, and click Allow on Chrome's prompt`
+    : "quit and reopen that Chrome, then click Allow on its prompt";
+  return `${message}: Chrome refused the connection without a prompt, because this Chrome run holds an earlier refusal (a cancelled, closed or unanswered "Allow remote debugging?" prompt); ${fix}`;
+}
+
 export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt?: string; timeoutMs?: number } = {}): Promise<void> {
   const attempt = opts.attempt ?? randomUUID(), target = browserTarget(s);
-  const record = (phase: string, detail?: string) => recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...(detail ? { detail } : {}) });
+  const record = (phase: string, detail?: string, approval?: "refused") =>
+    recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...(detail ? { detail } : {}), ...(approval ? { approval } : {}) });
   record("child-connect", "upstream handshake starting; approval status unknown");
   let upstream: WebSocket;
   try {
@@ -86,7 +101,8 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
       upstream.once("close", (code) => reject(new Error(`upstream closed before ready (code ${code})`)));
     });
   } catch (e) {
-    record("child-error", `upstream handshake failed: ${(e as Error).message}; approval status unknown`);
+    const why = handshakeFailure((e as Error).message, s), refused = why !== (e as Error).message;
+    record("child-error", `upstream handshake failed: ${why}${refused ? "" : "; approval status unknown"}`, refused ? "refused" : undefined);
     throw e;
   }
   record("child-connected");
@@ -232,7 +248,11 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
     }
     let detail: string;
     if (spawnError) detail = `proxy spawn failed: ${spawnError.message}`;
-    else if (child.exitCode !== null || child.signalCode !== null) detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready`;
+    else if (child.exitCode !== null || child.signalCode !== null) {
+      // The child wrote why into the log: carry it into this error, so the caller sees the cause.
+      const why = lastProxyAttempt(s);
+      detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : ""}`;
+    }
     else {
       detail = "proxy startup timed out while connecting; approval status unknown";
       record("parent-timeout", { child: child.pid, detail });

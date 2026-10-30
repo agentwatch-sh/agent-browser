@@ -197,3 +197,27 @@ test("a configured endpoint override remains unverified and cannot borrow a prof
   assert.match(result, /endpoint override configured \(unverified\)/);
   assert.doesNotMatch(result, /DevTools endpoint found|no running Chrome found/);
 });
+
+test("Chrome's instant 403 (no prompt) is named, with the fix, in the log and in the caller's error", async () => {
+  const other = consumer(["example.org"]);
+  const t = resolveOptions(other.options({ chromeBin: "/fixture/Google Chrome Beta" }));
+  stateDir(t);
+  // What Chrome Beta 158 answers when this Chrome run holds an earlier refusal: at once, no prompt.
+  const http = createServer();
+  http.on("upgrade", (_req, socket) => { socket.end("HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 19\r\n\r\nConnection rejected"); });
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  try {
+    const upstream = `ws://127.0.0.1:${(http.address() as { port: number }).port}/devtools/browser/fixture`;
+    await assert.rejects(runProxy(t, upstream, { attempt: "refused", timeoutMs: 5000 }), /403/);
+    assert.match(lastProxyAttempt(t)?.detail ?? "", /refused the connection without a prompt.*run `agent-browser quit`, then `agent-browser launch`, and click Allow/);
+    assert.equal(lastProxyAttempt(t)?.approval, "refused", "the evidence is recorded: refused, not unknown");
+    await assert.rejects(startProxy(t, upstream, 20_000),
+      /proxy exited with 1 before its socket was ready: upstream handshake failed: Unexpected server response: 403: Chrome refused the connection without a prompt/);
+    // Through the library and the CLI: the cause and its fix, not "enable remote debugging".
+    await assert.rejects(AgentBrowser.connect({ ...t, endpoint: upstream }), (e: Error) =>
+      e.name === "ChromeUnreachableError" && /refused the connection without a prompt/.test(e.message) && !/enable\s+remote debugging/.test(e.message));
+  } finally {
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+    other.remove();
+  }
+});

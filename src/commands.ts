@@ -8,7 +8,7 @@ import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab } 
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
 import { isAllowedUrl } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError } from "./errors.ts";
+import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
 import { resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
@@ -267,7 +267,8 @@ export const commands = {
     const url = need(p.url, "url");
     return withBrowser(o, async (b) => {
       const tab = await b.open(url, { name: p.name, newWindow: p.tab ? false : undefined });
-      return { ok: true, command: "open", tab: await liveRef(tab, p.name ?? null), window: b.pinnedWindow() ?? null };
+      try { return { ok: true, command: "open", tab: await liveRef(tab, p.name ?? null), window: b.pinnedWindow() ?? null }; }
+      catch (e) { throw redirectError(e, url, b.settings); }
     });
   },
 
@@ -275,7 +276,8 @@ export const commands = {
     const url = need(p.url, "url");
     return onTab(o, need(p.tab, "tab"), async (tab, info) => {
       await tab.goto(url);
-      return { ok: true, command: "goto", tab: await liveRef(tab, info.name) };
+      try { return { ok: true, command: "goto", tab: await liveRef(tab, info.name) }; }
+      catch (e) { throw redirectError(e, url, tab.browser.settings); }
     });
   },
 

@@ -24,9 +24,10 @@ import { execFileSync, spawn } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { inflateSync } from "node:zlib";
 import { KEYS, type Tab, type Viewport } from "./browser.ts";
 import { assertAllowedUrl, isAllowedUrl } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, withCleanupErrors } from "./errors.ts";
+import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
 
@@ -48,16 +49,23 @@ export type Step =
   | { highlight: string | Box; duration?: number }                 // a ring around an element or a box
   | { waitFor: string; text?: string; timeoutMs?: number }         // an element (with this text) is visible
   | { waitIdle: string | IdleWait }                                // the network of the tab and its workers goes quiet
+  | { waitStill: StillWait }                                       // the pixels of a box stop changing
   | { eval: string };                                              // escape hatch, in our isolated world
 
 /** waitIdle: a part of the request URLs to watch ("" for all), how long they must be quiet, and how long to wait at most. */
 export type IdleWait = { match?: string; quietMs?: number; timeoutMs?: number };
+/**
+ * waitStill: a box (CSS px at the recorded size; "w"/"h" are accepted for width/height) or an element's
+ * box, how long its pixels must stay the same, how long to wait at most, and whether a box that never
+ * changes is fine.
+ */
+export type StillWait = { box?: Box | { x: number; y: number; w: number; h: number }; selector?: string; quietMs?: number; timeoutMs?: number; allowNoChange?: boolean };
 
-const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "highlight", "waitFor", "waitIdle", "eval"] as const;
+const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "highlight", "waitFor", "waitIdle", "waitStill", "eval"] as const;
 type Action = (typeof ACTIONS)[number];
 const OPTIONS: Record<Action, string[]> = {
   wait: [], goto: [], click: ["duration"], hover: ["duration"], type: ["into", "delay"], press: ["repeat", "delay"],
-  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], eval: [],
+  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], waitStill: [], eval: [],
 };
 
 /** The longest recording, in seconds: the frames sit on disk until the MP4 is encoded. */
@@ -140,6 +148,23 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
         if (w.match !== undefined && typeof w.match !== "string") throw bad("match is a part of the request URLs");
         for (const k of ["quietMs", "timeoutMs"]) if (w[k] !== undefined && (!finite(w[k]) || (w[k] as number) < 0 || (w[k] as number) > MAX_STEP_MS))
           throw bad(`${k} must be a number of ms from 0 to ${MAX_STEP_MS}`);
+        break;
+      }
+      case "waitStill": {
+        const w = step.waitStill;
+        const usage = 'waitStill is {"box": {"x", "y", "width", "height"}} or {"selector": "..."}, with "quietMs", "timeoutMs" and "allowNoChange"';
+        if (!isObject(w) || Object.keys(w).some((k) => !["box", "selector", "quietMs", "timeoutMs", "allowNoChange"].includes(k))) throw bad(usage);
+        if ((w.box === undefined) === (w.selector === undefined)) throw bad(`${usage}: one of box and selector`);
+        if (w.selector !== undefined && (typeof w.selector !== "string" || !w.selector)) throw bad("selector is a CSS selector or #N");
+        if (w.box !== undefined) {
+          const b = isObject(w.box) ? stillBox(w.box) : undefined;
+          if (!b) throw bad('box is {"x", "y", "width", "height"} (or "w", "h") in CSS pixels');
+          if (b.width < 1 || b.height < 1 || b.x < 0 || b.y < 0 || b.x + b.width > viewport.width || b.y + b.height > viewport.height)
+            throw bad(`box is outside the ${viewport.width}x${viewport.height} viewport or empty`);
+        }
+        for (const k of ["quietMs", "timeoutMs"]) if (w[k] !== undefined && (!finite(w[k]) || (w[k] as number) < 0 || (w[k] as number) > MAX_STEP_MS))
+          throw bad(`${k} must be a number of ms from 0 to ${MAX_STEP_MS}`);
+        if (w.allowNoChange !== undefined && typeof w.allowNoChange !== "boolean") throw bad("allowNoChange is true or false");
         break;
       }
       case "eval": if (typeof step.eval !== "string") throw bad("eval is a JavaScript expression"); break;
@@ -579,6 +604,69 @@ export class NetworkWatch {
   }
 }
 
+// ---------- waitStill: the pixels of a box ----------
+
+/** A waitStill box as {x, y, width, height}; "w"/"h" are accepted. Undefined if it is not a box. */
+function stillBox(b: Record<string, unknown>): Box | undefined {
+  const width = b.width ?? b.w, height = b.height ?? b.h;
+  const keys = Object.keys(b).sort().join();
+  if (!finite(b.x) || !finite(b.y) || !finite(width) || !finite(height) || (keys !== "height,width,x,y" && keys !== "h,w,x,y")) return undefined;
+  return { x: b.x, y: b.y, width, height };
+}
+
+export type Pixels = { width: number; height: number; channels: number; data: Buffer };
+
+/** The pixels of an 8-bit, non-interlaced PNG (grey, grey+alpha, RGB or RGBA), as Chrome's screenshots are. */
+export function pngPixels(png: Buffer): Pixels {
+  if (png.readUInt32BE(0) !== 0x89504e47) throw new Error("not a PNG");
+  let width = 0, height = 0, channels = 0;
+  const idat: Buffer[] = [];
+  for (let i = 8; i + 8 <= png.length;) {
+    const length = png.readUInt32BE(i), type = png.toString("latin1", i + 4, i + 8), body = png.subarray(i + 8, i + 8 + length);
+    if (type === "IHDR") {
+      width = body.readUInt32BE(0); height = body.readUInt32BE(4);
+      const depth = body[8], color = body[9], interlace = body[12];
+      channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[color] ?? 0;
+      if (depth !== 8 || !channels || interlace) throw new Error(`unsupported PNG (depth ${depth}, colour type ${color}, interlace ${interlace})`);
+    } else if (type === "IDAT") idat.push(body);
+    else if (type === "IEND") break;
+    i += 12 + length;
+  }
+  const raw = inflateSync(Buffer.concat(idat)), stride = width * channels, data = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)], row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), out = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= channels ? data[out + x - channels] : 0, b = y ? data[out - stride + x] : 0, c = x >= channels && y ? data[out - stride + x - channels] : 0;
+      let v = row[x];
+      if (filter === 1) v += a;
+      else if (filter === 2) v += b;
+      else if (filter === 3) v += (a + b) >> 1;
+      else if (filter === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      data[out + x] = v & 0xff;
+    }
+  }
+  return { width, height, channels, data };
+}
+
+/** Whether two pictures of a box are the same outside the masks (rectangles in the pictures' pixels). */
+export function samePixels(a: Pixels, b: Pixels, masks: Box[] = []): boolean {
+  if (a.width !== b.width || a.height !== b.height || a.channels !== b.channels) return false;
+  const stride = a.width * a.channels;
+  const masked = (x: number, y: number) => masks.some((m) => x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height);
+  for (let y = 0; y < a.height; y++) {
+    const row = y * stride;
+    if (a.data.compare(b.data, row, row + stride, row, row + stride) === 0) continue;
+    for (let x = 0; x < a.width; x++) {
+      if (masked(x, y)) continue;
+      for (let ch = 0; ch < a.channels; ch++) if (a.data[row + x * a.channels + ch] !== b.data[row + x * a.channels + ch]) return false;
+    }
+  }
+  return true;
+}
+
+/** A picture of a waitStill box, and the parts of it that the overlay draws (the cursor and its click ripple, the repaint pixel). */
+type StillShot = { pixels: Pixels; masks: Box[] };
+
 // ---------- the recording ----------
 
 export type RecordPlan = {
@@ -603,6 +691,7 @@ export type RecordEvent = {
   /** press: each key. */ keys?: number[];
   /** type: the first and the last character. */ first?: number; last?: number;
   /** waitIdle: how many matching requests it saw before the network went quiet. */ requests?: number;
+  /** waitStill: how many times the box changed, and when it last changed (it was still from then on). */ changes?: number; settled?: number;
 };
 
 export type RecordOutcome = {
@@ -630,7 +719,8 @@ export function jpegSize(buf: Buffer): [number, number] | undefined {
   return undefined;
 }
 
-type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number };
+type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number;
+  changes?: number; settled?: number };
 
 /** Drives the tab through the steps. The cursor's place is kept here, so the overlay survives a navigation. */
 class Driver {
@@ -646,6 +736,8 @@ class Driver {
   network?: NetworkWatch;
   /** When each step began, setup included: waitIdle counts traffic from the start of the step before it. */
   private starts: number[] = [];
+  /** A waitStill box's picture from before the step before it began (see runSteps). */
+  stillBefore?: StillShot;
   private current?: Mark;
   private stop = new AbortController();
   private readonly mac = process.platform === "darwin";
@@ -718,6 +810,35 @@ class Driver {
     const k = charKey(ch);
     if (k) return this.key(k);
     await this.tab.send("Input.insertText", { text: ch });
+  }
+
+  /**
+   * A picture of a waitStill box. Its masks cover what the overlay draws in it: the cursor with its click
+   * ripple (around the tip) and the repaint pixel, so only the page's own pixels count as a change.
+   */
+  async stillShot(w: StillWait): Promise<StillShot> {
+    let box = w.box ? stillBox(w.box as Record<string, unknown>)! : undefined;
+    if (!box) {
+      const r = await this.tab.evaluate((s: string) => {
+        const el = document.querySelector(s);
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        return { x: b.x, y: b.y, width: b.width, height: b.height };
+      }, idx(w.selector!));
+      if (!r) throw new Error(`no element matches ${w.selector}`);
+      if (r.width < 1 || r.height < 1) throw new Error(`element ${w.selector} is not visible`);
+      box = r;
+    }
+    // A screenshot clip is in page coordinates: add the scroll offset to the viewport box.
+    const { cssVisualViewport } = await this.tab.send("Page.getLayoutMetrics");
+    const clip = { x: box.x + (cssVisualViewport?.pageX ?? 0), y: box.y + (cssVisualViewport?.pageY ?? 0), width: box.width, height: box.height, scale: 1 };
+    const { data } = await this.tab.send("Page.captureScreenshot", { format: "png", clip, fromSurface: true, captureBeyondViewport: false });
+    const pixels = pngPixels(Buffer.from(data, "base64"));
+    const sx = pixels.width / box.width, sy = pixels.height / box.height;
+    const toPixels = (m: Box): Box => ({ x: Math.floor((m.x - box!.x) * sx), y: Math.floor((m.y - box!.y) * sy), width: Math.ceil(m.width * sx) + 1, height: Math.ceil(m.height * sy) + 1 });
+    // The cursor's arrow, its shadow and its click ripple stay inside 64 x 70 px around the tip.
+    const masks = [{ x: 0, y: 0, width: 2, height: 2 }, ...(this.plan.cursor ? [{ x: this.x - 32, y: this.y - 32, width: 64, height: 70 }] : [])].map(toPixels);
+    return { pixels, masks };
   }
 
   /** Run one step; while recording, note when it started and ended (and its clicks, keys and characters). */
@@ -834,8 +955,43 @@ class Driver {
       if (this.current) this.current.requests = seen;
       return;
     }
+    if ("waitStill" in step) {
+      const w = step.waitStill, quietMs = w.quietMs ?? 1500, timeoutMs = w.timeoutMs ?? 60_000;
+      const deadline = Date.now() + timeoutMs;
+      let prev = await this.stillShot(w), changes = 0, lastChange = Date.now();
+      const before = this.stillBefore;
+      this.stillBefore = undefined;
+      if (before && !samePixels(before.pixels, prev.pixels, [...before.masks, ...prev.masks])) changes++;
+      for (;;) {
+        if (Date.now() - lastChange >= quietMs && (changes > 0 || w.allowNoChange)) break;
+        if (Date.now() > deadline) {
+          throw new Error(changes
+            ? `waitStill: the box was still changing after ${timeoutMs} ms (${changes} changes)`
+            : `waitStill: the box did not change since the step before began (${timeoutMs} ms): did the fill start? Add "allowNoChange": true to accept a box that stays the same`);
+        }
+        await this.pause(100);
+        const cur = await this.stillShot(w);
+        if (!samePixels(prev.pixels, cur.pixels, [...prev.masks, ...cur.masks])) { changes++; lastChange = Date.now(); prev = cur; }
+      }
+      if (this.current) { this.current.changes = changes; this.current.settled = lastChange; }
+      return;
+    }
     if ("eval" in step) { await this.tab.evaluate(step.eval); return; }
     throw new UsageError(`unknown step ${describe(step)}`);
+  }
+}
+
+/**
+ * Run steps in order. Before a step that a waitStill follows, the waitStill box is pictured, so the wait
+ * knows whether the box changed since that step began (a fill that starts at the Enter press counts).
+ */
+async function runSteps(driver: Driver, steps: Step[], what: string): Promise<void> {
+  for (const [i, step] of steps.entries()) {
+    try {
+      const next = steps[i + 1];
+      if (next && "waitStill" in next) driver.stillBefore = await driver.stillShot(next.waitStill).catch(() => undefined); // an element that is not there yet: no picture
+      await driver.step(i + 1, step);
+    } catch (e) { throw driver.failure ?? stepError(what, i + 1, step, e); }
   }
 }
 
@@ -902,7 +1058,8 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   // A main-frame navigation off the allowlist ends the run at once; no frame after it is kept.
   const offNav = conn.on("Page.frameNavigated", (p: any, sid?: string) => {
     if (sid !== tab.sessionId || p.frame?.parentId || isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) return;
-    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${safeHost(p.frame?.url ?? "")}, which is not on the allowlist; the recording stopped and nothing was written`));
+    const host = safeHost(p.frame?.url ?? "");
+    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, s)}; the recording stopped and nothing was written`));
   });
   const offDetach = conn.on("Target.detachedFromTarget", (p: any) => {
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));
@@ -913,9 +1070,9 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   let final = { url, title: "" };
   const marks: Mark[] = [];
   try {
-    // In the agent browser the tab comes to the front of its window (a background tab paints at
-    // half rate). In personal mode it is not raised over the operator's own work.
-    if (s.mode === "agent") await tab.send("Page.bringToFront");
+    // No Page.bringToFront: it activates Chrome, and macOS then moves the operator to the agent
+    // browser's Space. It is not needed: with the agent launch flags a background tab, a covered,
+    // minimized or hidden window all send 57-60 fps while the screencast runs (measured 2026-10-30).
     await tab.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
     emulated = true;
     await driver.ensureOverlay();
@@ -926,9 +1083,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     await tab.evaluate(() => (document as Document & { fonts?: FontFaceSet }).fonts?.ready.then(() => true) ?? true).catch(() => true);
     await driver.pause(400); // the page lays itself out again at the new size
     // Setup steps run off camera, at the recorded size, so the recording starts on a settled page.
-    for (const [i, step] of plan.setup.entries()) {
-      try { await driver.step(i + 1, step); } catch (e) { throw driver.failure ?? stepError("setup step", i + 1, step, e); }
-    }
+    await runSteps(driver, plan.setup, "setup step");
     if (plan.setup.length) await driver.pause(300);
     await tab.send("Page.startScreencast", { format: "jpeg", quality: 90, maxWidth: videoWidth, maxHeight: videoHeight, everyNthFrame: 1 });
     casting = true;
@@ -940,9 +1095,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     driver.marks = marks;
     await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: driver.x, y: driver.y });
     await driver.pause(plan.settleMs);
-    for (const [i, step] of plan.steps.entries()) {
-      try { await driver.step(i + 1, step); } catch (e) { throw driver.failure ?? stepError("step", i + 1, step, e); }
-    }
+    await runSteps(driver, plan.steps, "step");
     await driver.pause(plan.settleMs);
     await tab.assertAllowed();
     driver.check();
@@ -989,6 +1142,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     ...(m.keys ? { keys: m.keys.map(video) } : {}),
     ...(m.first !== undefined ? { first: video(m.first), last: video(m.last!) } : {}),
     ...(m.requests !== undefined ? { requests: m.requests } : {}),
+    ...(m.changes !== undefined ? { changes: m.changes, settled: video(m.settled!) } : {}),
   }));
 
   s.log(`agent-browser record: encoding ${frames.length} frames (${seconds.toFixed(1)} s) to ${plan.out}`);

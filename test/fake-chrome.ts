@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import vm from "node:vm";
+import { crc32, deflateSync } from "node:zlib";
 import { WebSocketServer, type WebSocket } from "ws";
 
 export type ElementSpec = {
@@ -52,6 +53,28 @@ export function greyJpeg(width: number, height: number): Buffer {
     ...data,
     0xff, 0xd9,
   ]);
+}
+
+/** A PNG of width x height RGBA pixels, every row with PNG filter `filter` (0-4). */
+export function rgbaPng(width: number, height: number, pixel: (x: number, y: number) => [number, number, number, number], filter = 0): Buffer {
+  const stride = width * 4, raw = Buffer.alloc((stride + 1) * height), img = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) img.set(pixel(x, y), y * stride + x * 4);
+  for (let y = 0; y < height; y++) {
+    raw[y * (stride + 1)] = filter;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= 4 ? img[y * stride + i - 4] : 0, b = y ? img[(y - 1) * stride + i] : 0, c = i >= 4 && y ? img[(y - 1) * stride + i - 4] : 0;
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+      const pred = [0, a, b, (a + b) >> 1, pa <= pb && pa <= pc ? a : pb <= pc ? b : c][filter];
+      raw[y * (stride + 1) + 1 + i] = (img[y * stride + i] - pred) & 0xff;
+    }
+  }
+  const chunk = (type: string, body: Buffer) => {
+    const head = Buffer.alloc(8); head.writeUInt32BE(body.length, 0); head.write(type, 4, "latin1");
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), body])), 0);
+    return Buffer.concat([head, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr.set([8, 6, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
 const TRUSTED_HTML = "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.";
@@ -219,6 +242,10 @@ export class FakePage {
   /** Every key event, with its modifiers and macOS editing commands. */
   keyEvents: { type: string; key: string; modifiers: number; text?: string; commands?: string[] }[] = [];
   wheel = 0;
+  /** What a clipped screenshot shows: a test changes it to change the page's pixels (an add-on's fill). */
+  paint = 0;
+  /** Called with each key a key event presses. */
+  onKey?: (key: string) => void;
   /** The device metrics override, while one is set. */
   metrics: { width: number; height: number; deviceScaleFactor: number } | undefined;
   /** Nodes page code appended to the document element (the recording overlay), and its animations. */
@@ -642,7 +669,7 @@ export class FakeChrome {
         return {};
       case "Input.dispatchKeyEvent":
         page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, text: params.text, commands: params.commands });
-        if (params.type === "keyDown" || params.type === "rawKeyDown") page.keys.push(params.key);
+        if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }
         // A key with text types it, as in Chrome (Enter's "\r" only submits).
         if (params.type === "keyDown" && params.text && params.text !== "\r") {
           if (page.focused && page.focused.value !== undefined) page.focused.value += params.text;
@@ -660,8 +687,13 @@ export class FakeChrome {
         el.files = (params.files as string[]).map((f) => ({ name: basename(f) }));
         return {};
       }
-      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.metrics?.width ?? 1280, height: 2400 } };
-      case "Page.captureScreenshot": return { data: PNG_1x1 };
+      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.metrics?.width ?? 1280, height: 2400 }, cssVisualViewport: { pageX: 0, pageY: 0 } };
+      case "Page.captureScreenshot":
+        if (!params.clip) return { data: PNG_1x1 };
+        { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
+          const k = page.metrics?.deviceScaleFactor ?? 1, v = page.paint % 256;
+          return { data: rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64") };
+        }
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
         const b = page.bodies.get(params.requestId);

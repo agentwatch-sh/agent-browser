@@ -101,7 +101,10 @@ export class AgentBrowser {
         return await AgentBrowser.fromProxy(s, allow);
       } catch (e) { lastErr = e; }
     }
-    throw new ChromeUnreachableError(`${chromeHelp(s)}${lastErr ? `\n(${(lastErr as Error).message})` : ""}`, { cause: lastErr });
+    // Chrome's instant refusal is its own cause, with its own fix: remote debugging is on there, so the general help would mislead.
+    const message = (lastErr as Error | undefined)?.message ?? "";
+    if (/refused the connection without a prompt/.test(message)) throw new ChromeUnreachableError(message, { cause: lastErr });
+    throw new ChromeUnreachableError(`${chromeHelp(s)}${lastErr ? `\n(${message})` : ""}`, { cause: lastErr });
   }
 
   private static async fromProxy(s: Settings, allow: string[]): Promise<AgentBrowser> {

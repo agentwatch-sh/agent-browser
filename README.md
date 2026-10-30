@@ -202,6 +202,7 @@ checked before the tab is touched: the steps, the paths and ffmpeg.
 | `{"highlight": target-or-box, "duration": ms}` | a ring around an element or `{"x", "y", "width", "height"}`, dimming the rest (default 1600 ms) |
 | `{"waitFor": selector, "text": "...", "timeoutMs": ms}` | wait until the element is visible (and its text or value contains `text`); default 30 s, then the run fails |
 | `{"waitIdle": {"match": "...", "quietMs": 1500, "timeoutMs": 60000}}` (or `{"waitIdle": "..."}`) | wait until the network goes quiet: a request whose URL contains `match` (default: any) was active since the step before began, none is in flight, and none has been active for `quietMs`. It watches the tab and its dedicated workers (Google Sheets computes in one). It fails at `timeoutMs` when it saw no such request (it cannot tell a finished fill from traffic it cannot see) or when they are still busy. Its event has `requests`, how many it saw. |
+| `{"waitStill": {"box": {"x", "y", "width", "height"}, "quietMs": 1500, "timeoutMs": 60000, "allowNoChange": false}}` (or `"selector": "..."` for an element's box; `"w"`/`"h"` are accepted) | wait until the pixels of the box (CSS px at the recorded size) stop changing for `quietMs`: for a value drawn on a canvas, such as an add-on's fill in the Sheets grid. The box is pictured before the step before it begins, so a fill that starts at the Enter press counts. It fails when the box never changed since then (did the fill start?), unless `allowNoChange`, and when it is still changing at `timeoutMs`. The demo cursor, its click ripple and the repaint pixel never count as a change. Its event has `changes` and `settled` (the video time of the last change). |
 | `{"eval": "js"}` | escape hatch: runs in agent-browser's isolated world (the page's own globals are not visible there) |
 
 A target is a CSS selector, `#N` from `outline`, or `{"x": .., "y": ..}` in CSS pixels of the recorded
@@ -244,8 +245,11 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   isolated world, and removed afterwards. Google Sheets enforces Trusted Types and a strict style-src,
   which refuse `innerHTML` and a `<style>` element. `--no-cursor` hides the cursor and the ripple; a
   `highlight` step still draws its ring.
-- **The window.** In the agent browser the tab is brought to the front of its window
-  (`Page.bringToFront`). In personal mode it is not, so the operator's own Chrome is not raised.
+- **The window.** `record` never raises a window or switches the operator's Space: it sends no
+  `Page.bringToFront`, which activates Chrome. The agent browser can stay minimized, hidden (Cmd-H),
+  covered or on another Space during a take (see **Measured**). Only a Chrome start, its one
+  "Allow remote debugging?" prompt and a sign-in (`launch --login`) need the window. Start the agent
+  browser, click Allow, then hide it: takes run in the background.
 - **Allowlist.** Only an allowlisted tab; a `goto` off the list is refused before the run. When the
   tab's main frame navigates off the list, the run stops at once, writes no MP4 and no JSON, and runs
   no code in the off-list page (the screencast is stopped and the size override cleared).
@@ -287,7 +291,8 @@ has `press` (the moment of the press), a `press` step has `keys` (each key), a `
 "Agent flags" are the agent browser's own launch flags (`--disable-backgrounding-occluded-windows`,
 `--disable-renderer-backgrounding`, `--disable-background-timer-throttling`), which `launch` always
 sets: no `--chrome-args` are needed. The screencast itself keeps a minimized or hidden tab painting.
-So the operator can work in another window during a recording. A recording at 1920x1080 and
+So the operator can work in another window during a recording, and `record` does not bring the
+tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space). A recording at 1920x1080 and
 `--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
 60 fps recording, has a smooth bell-shaped speed with no repeated or skipped frame.
 
@@ -301,6 +306,9 @@ So the operator can work in another window during a recording. A recording at 19
   for the fill, or try `waitIdle` and read its `requests` count and times in the events.
 - A long-poll request (open for minutes) that matches keeps `waitIdle` busy until `timeoutMs`: use a
   `match` that names the calls you wait for.
+- `waitStill` pictures its box with `Page.captureScreenshot` about every 100 ms (a PNG decoded with
+  Node's zlib; no dependency). A box that keeps changing for a reason other than the fill (a blinking
+  caret, an animation) keeps it busy until `timeoutMs`: choose a box around the cells only.
 - `Meta+C`/`Meta+V` use the system clipboard of the machine, as a person's copy and paste do.
 - No audio. Timing is real time: page loads vary between takes.
 - `eval` steps run in the isolated world, not the page's.
@@ -385,6 +393,14 @@ A failure:
 
 Error codes: `usage` (exit 2), `not_allowed`, `pin_required`, `read_first`, `tab_not_found`,
 `unreachable`, `error` (exit 1).
+
+Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
+`not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
+(`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. When Chrome
+answers the connection with `403 Connection rejected` at once and shows no prompt, this Chrome run
+holds an earlier refusal (a cancelled, closed or unanswered prompt): the `unreachable` message says to
+`quit` and `launch` the agent browser again and click Allow, and the proxy log records the approval
+as "refused".
 
 Every success document has `"ok": true` and `"command": "<name>"`, plus the fields below. A `TabRef`
 is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "title"}`.

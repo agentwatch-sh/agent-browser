@@ -1,5 +1,6 @@
 // Local connection evidence. A pending handshake alone cannot identify a Chrome approval prompt, so
-// every record and message says "approval status unknown" rather than guess.
+// a record says "approval status unknown" rather than guess. The one exception is evidence: Chrome's
+// instant "403 Connection rejected" with no prompt is recorded as approval "refused".
 
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, fstatSync, openSync, readSync } from "node:fs";
@@ -25,10 +26,10 @@ export const proxyLogPath = (s: Settings) => statePath(s, "chrome-proxy.log");
 
 export type ProxyAttempt = {
   at: string; attempt: string; pid: number; phase: string; target: string; upstream: string;
-  code?: number | null; signal?: string | null; detail?: string; child?: number; approval: "unknown";
+  code?: number | null; signal?: string | null; detail?: string; child?: number; approval: "unknown" | "refused";
 };
 
-export function recordProxyAttempt(s: Settings, row: Omit<ProxyAttempt, "at" | "pid" | "approval">): void {
+export function recordProxyAttempt(s: Settings, row: Omit<ProxyAttempt, "at" | "pid" | "approval"> & { approval?: ProxyAttempt["approval"] }): void {
   try { appendFileSync(proxyLogPath(s), JSON.stringify({ at: new Date().toISOString(), pid: process.pid, approval: "unknown", ...row }) + "\n"); }
   catch { /* a diagnostic never hides the connection result */ }
 }

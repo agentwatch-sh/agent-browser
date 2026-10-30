@@ -247,7 +247,8 @@ test("a redirect off the allowlist is refused by host, and its URL is never prin
   await run(["open", fx.base + "/", "--name", "redir"]);
   const r = await run(["goto", "redir", fx.base + "/redirect"]);
   assert.equal(r.json.error.code, "not_allowed");
-  assert.equal(r.json.error.message, "refusing: login.elsewhere.invalid is not on the allowlist");
+  assert.equal(r.json.error.message, "refusing: 127.0.0.1 redirected the tab to login.elsewhere.invalid, which is not on the allowlist; login.elsewhere.invalid is a sign-in page, "
+    + "so this profile is not signed in: run `agent-browser launch --login` and sign in by hand in the agent browser. The tab stays open there; agent-browser does not touch it");
   assert.ok(!r.stdout.includes("SECRET-CODE") && !r.stderr.includes("SECRET-CODE"));
   const tabs = await run(["tabs"]);
   assert.ok(!tabs.json.tabs.some((t: any) => t.name === "redir"), "the tab is off the list now");
