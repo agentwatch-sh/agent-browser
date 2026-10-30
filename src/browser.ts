@@ -480,6 +480,9 @@ export class Tab {
    * the field's text did not change (an app's own editor, such as the Google Sheets cell editor, ignores
    * inserted text), again as one key event per character, as a person types. When the text still did
    * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
+   * A tab or a newline moves on (in a spreadsheet, to the next cell or row), after which the field is
+   * another one: only the text before the first of them is checked, and the rest goes as key events
+   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells.
    */
   async type(text: string, selector?: string): Promise<void> {
     await this.assertAllowed();
@@ -500,12 +503,16 @@ export class Tab {
     });
     const before = await fieldText();
     if (before === null) throw new Error("type: no text field has the focus; click one first, or name it with --into");
-    if (!text) return;
-    await this.send("Input.insertText", { text });
-    if ((await fieldText()) !== before) return;
+    const cut = text.search(/[\t\n]/), head = cut < 0 ? text : text.slice(0, cut), rest = cut < 0 ? "" : text.slice(cut);
     const { typeChar } = await import("./record.ts");
-    for (const ch of text) await typeChar(this, ch);
-    if ((await fieldText()) === before) throw new Error("type: the text did not arrive: the focused field is unchanged after inserted text and after key events");
+    if (head) {
+      await this.send("Input.insertText", { text: head });
+      if ((await fieldText()) === before) {
+        for (const ch of head) await typeChar(this, ch);
+        if ((await fieldText()) === before) throw new Error("type: the text did not arrive: the focused field is unchanged after inserted text and after key events");
+      }
+    }
+    for (const ch of rest) await typeChar(this, ch);
   }
 
   async press(key: keyof typeof KEYS | string): Promise<void> {

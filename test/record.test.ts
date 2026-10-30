@@ -74,7 +74,7 @@ test("the step script is checked before anything runs: one action per step, know
     [{}, /exactly one of/], [{ click: "#a", hover: "#b" }, /exactly one of/], [{ click: "#a", delay: 3 }, /"delay" is not an option of click/],
     [{ wait: -1 }, /wait must be a number of ms/], [{ click: { x: 5000, y: 1 } }, /outside the 1920x1080 viewport/], [{ press: "Hyper+A" }, /unknown modifier/],
     [{ press: "F13" }, /unknown key/], [{ press: "Meta+V" }, /Meta\+V would use the machine's shared clipboard/], [{ press: "Control+c" }, /shared clipboard/],
-    [{ press: "Meta+X" }, /shared clipboard/], [{ press: "Enter", repeat: 0 }, /repeat is a whole number/], [{ highlight: { x: 1 } }, /highlight is a selector/],
+    [{ press: "Meta+X" }, /shared clipboard/], [{ press: "Shift+Delete" }, /shared clipboard/], [{ press: "Meta+Shift+V" }, /shared clipboard/], [{ press: "Enter", repeat: 0 }, /repeat is a whole number/], [{ highlight: { x: 1 } }, /highlight is a selector/],
     [{ waitFor: "" }, /waitFor is a CSS selector/], [{ type: 5 }, /type is the text/], [{ goto: "https://mail.google.com/" }, /mail\.google\.com is not on the allowlist/],
     [{ goto: "https://example.com/" }, /example\.com is not on the allowlist/],
     [{ waitIdle: { match: 3 } }, /match is a part of the request URLs/], [{ waitIdle: { quiet: 5 } }, /waitIdle is \{"match"/],

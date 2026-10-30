@@ -64,7 +64,7 @@ export function site(base: string): Site {
     if (url.pathname === "/next") return { title: "next", text: "the next page", elements: [{ tag: "a", text: "Back", attrs: { href: "/" } }] };
     // An app's own cell editor that reads key events only (as the Google Sheets cell editor does), a plain field, and no field.
     if (url.pathname === "/editor") return { title: "editor", elements: [
-      { tag: "div", id: "cell", attrs: { contenteditable: "true", "data-keys-only": "" } },
+      { tag: "div", id: "cell", attrs: { contenteditable: "true", "data-keys-only": "", "data-cells": "" } },
       { tag: "div", id: "notes", attrs: { contenteditable: "true" } },
       { tag: "div", id: "label", text: "not a field" },
     ] };

@@ -283,6 +283,10 @@ test("type: inserted text first, key events when the field ignores it (the Sheet
   assert.equal(r.json.ok, true, r.stdout);
   assert.equal(page.select("#cell")[0].text, "=SUM(1,2)", "the cell editor got the text as key events");
   assert.deepEqual(page.keyEvents.filter((k) => k.type === "keyDown").map((k) => k.text).join(""), "=SUM(1,2)");
+  // A row of cells: Tab and Enter move on (the editor is empty again), so only "a" is checked.
+  r = await run(["type", "editor", "--stdin", "--into", "#cell"], { input: "a\tb\tc\n" });
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.deepEqual(page.cells.slice(-3), ["=SUM(1,2)a", "b", "c"], "Tab and Enter committed three cells");
   r = await run(["type", "editor", "--stdin", "--into", "#label"], { input: "lost" });
   assert.equal(r.json.error.code, "error");
   assert.match(r.json.error.message, /^type: no text field has the focus/);

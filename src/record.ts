@@ -262,10 +262,13 @@ const MAC_COMMANDS: Record<string, string[]> = {
 
 /**
  * Copy, cut and paste: their chords use the machine's shared clipboard, which belongs to the person at
- * the machine. A recording never reads or writes it.
+ * the machine. A recording never reads or writes it. Control/Meta + C, X, V everywhere; on Windows and
+ * Linux also Shift+Delete (cut) and Control/Shift+Insert (copy, paste).
  */
 export function isClipboardChord(k: KeyEvent): boolean {
-  return /^Key[CXV]$/.test(k.code) && !!(k.modifiers & (2 | 4)) || (k.code === "Insert" && !!(k.modifiers & (2 | SHIFT)));
+  if (/^Key[CXV]$/.test(k.code) && k.modifiers & (2 | 4)) return true;
+  if (k.code === "Delete" && k.modifiers & SHIFT) return true;
+  return k.code === "Insert" && !!(k.modifiers & (2 | SHIFT));
 }
 
 export function macCommands(k: KeyEvent): string[] {

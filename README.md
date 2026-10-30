@@ -313,8 +313,9 @@ tab forward (`Page.bringToFront` would activate Chrome and switch the operator's
 - `waitStill` pictures its box with `Page.captureScreenshot` about every 100 ms (a PNG decoded with
   Node's zlib; no dependency). A box that keeps changing for a reason other than the fill (a blinking
   caret, an animation) keeps it busy until `timeoutMs`: choose a box around the cells only.
-- No clipboard: copy, cut and paste chords (`Meta`/`Control` + `C`, `X`, `V`) are refused, because they
-  use the machine's shared clipboard, which belongs to the person at the machine. Type the text.
+- No clipboard: copy, cut and paste chords (`Meta`/`Control` + `C`, `X`, `V`, and `Shift+Delete`) are
+  refused, because they use the machine's shared clipboard, which belongs to the person at the machine.
+  Type the text: a `type` step with `\t` and `\n` fills cells and rows.
 - No audio. Timing is real time: page loads vary between takes.
 - `eval` steps run in the isolated world, not the page's.
 
@@ -424,7 +425,7 @@ is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "tit
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
 | `click <tab> <selector\|#N>` or `click <tab> --text LABEL` | `tab`, `target` string\|null, `text` string\|null |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
-| `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). It types into the focused field as inserted text; when the field ignores that (an app's own editor, such as the Google Sheets cell editor), as one key event per character. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. |
+| `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). It types into the focused field as inserted text; when the field ignores that (an app's own editor, such as the Google Sheets cell editor), as one key event per character. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. A tab or a newline in the text is a Tab or an Enter key: only the text before the first one is checked, so `type sheet $'a\tb\tc\n'` fills a row of cells in a spreadsheet without the clipboard. |
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F2) |
 | `text <tab> [selector\|#N]` | `tab`, `selector` string\|null, `text` |
 | `eval <tab> (<js> \| --stdin)` | `tab`, `value` (the JSON value; `undefined` becomes `null`) |

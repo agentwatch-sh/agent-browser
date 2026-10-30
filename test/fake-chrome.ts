@@ -245,6 +245,8 @@ export class FakePage {
   wheel = 0;
   /** What a clipped screenshot shows: a test changes it to change the page's pixels (an add-on's fill). */
   paint = 0;
+  /** The cells a grid editor (data-cells) committed with Tab or Enter, in order. */
+  cells: string[] = [];
   /** Called with each key a key event presses. */
   onKey?: (key: string) => void;
   /** The device metrics override, while one is set. */
@@ -681,6 +683,11 @@ export class FakeChrome {
       case "Input.dispatchKeyEvent":
         page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, text: params.text, commands: params.commands });
         if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }
+        // In a grid editor (data-cells), Tab and Enter commit the cell and leave the editor empty for the next one.
+        if ((params.key === "Tab" || params.key === "Enter") && params.type !== "keyUp" && page.focused?.hasAttribute("data-cells")) {
+          page.cells.push(page.focused.text);
+          page.focused.text = "";
+        }
         // A key with text types it, as in Chrome (Enter's "\r" only submits).
         if (params.type === "keyDown" && params.text && params.text !== "\r") page.typeInto(params.text);
         return {};
