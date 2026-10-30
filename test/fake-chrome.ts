@@ -225,6 +225,8 @@ export class FakePage {
   appended: FakeNode[] = [];
   animations = 0;
   body!: FakeElement;
+  /** The page's dedicated workers (by URL); a session's Target.setAutoAttach attaches them. */
+  workers: string[] = [];
   bodies = new Map<string, { body: Buffer; mime: string }>();
   private context: vm.Context = vm.createContext({});
   private isolatedContexts = new Map<number, vm.Context>();
@@ -365,7 +367,8 @@ export class FakePage {
 }
 
 type Cast = { timer: NodeJS.Timeout; maxWidth: number; maxHeight: number; waiting: boolean; sent: number; acked: number };
-type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast };
+/** A session on a page, or (with `worker`) on one of its workers, attached through the page's session. */
+type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string };
 
 export class FakeChrome {
   readonly site: Site;
@@ -430,15 +433,22 @@ export class FakeChrome {
     this.toSessions(page, "Runtime.consoleAPICalled", { type: "log", args: args.map((a) => ({ type: typeof a, value: a })) }, (s) => s.runtime);
   }
 
-  network(page: FakePage, method: string, params: object) { this.toSessions(page, method, params, (s) => s.network); }
+  network(page: FakePage, method: string, params: object, fromWorker = false) { this.toSessions(page, method, params, (s) => s.network && !!s.worker === fromWorker); }
 
-  /** Traffic a test injects into a page (as if the page had sent it). */
-  traffic(page: FakePage, r: { method?: string; url: string; postData?: string; status?: number; body?: string; mime?: string }) {
+  /**
+   * Traffic a test injects into a page (as if the page had sent it), or with `worker` into its workers'
+   * sessions. With `ms` the request stays in flight that long before its response.
+   */
+  traffic(page: FakePage, r: { method?: string; url: string; postData?: string; status?: number; body?: string; mime?: string }, opts: { worker?: boolean; ms?: number } = {}) {
     const requestId = `inj.${Math.random().toString(36).slice(2)}`;
-    this.network(page, "Network.requestWillBeSent", { requestId, type: "Fetch", documentURL: page.url, request: { method: r.method ?? "GET", url: r.url, postData: r.postData } });
+    const worker = !!opts.worker;
+    this.network(page, "Network.requestWillBeSent", { requestId, type: "Fetch", documentURL: page.url, request: { method: r.method ?? "GET", url: r.url, postData: r.postData } }, worker);
     page.bodies.set(requestId, { body: Buffer.from(r.body ?? ""), mime: r.mime ?? "application/json" });
-    this.network(page, "Network.responseReceived", { requestId, type: "Fetch", response: { url: r.url, status: r.status ?? 200, mimeType: r.mime ?? "application/json" } });
-    this.network(page, "Network.loadingFinished", { requestId });
+    const finish = () => {
+      this.network(page, "Network.responseReceived", { requestId, type: "Fetch", response: { url: r.url, status: r.status ?? 200, mimeType: r.mime ?? "application/json" } }, worker);
+      this.network(page, "Network.loadingFinished", { requestId }, worker);
+    };
+    if (opts.ms) setTimeout(finish, opts.ms); else finish();
   }
 
   navigate(page: FakePage, url: string) {
@@ -468,7 +478,7 @@ export class FakeChrome {
     return url;
   }
 
-  private toSessions(page: FakePage, method: string, params: object, want: (s: Session) => boolean = () => true) {
+  private toSessions(page: FakePage, method: string, params: object, want: (s: Session) => boolean = (s) => !s.worker) {
     for (const s of this.sessions.values()) if (s.page === page && want(s)) s.client.send(JSON.stringify({ method, params, sessionId: s.id }));
   }
 
@@ -592,7 +602,18 @@ export class FakeChrome {
   private async onSession(s: Session, method: string, params: any): Promise<object | undefined> {
     const page = s.page;
     switch (method) {
-      case "Page.enable": case "Emulation.setFocusEmulationEnabled": case "Fetch.disable": case "Network.disable": case "Page.bringToFront": return {};
+      case "Page.enable": case "Emulation.setFocusEmulationEnabled": case "Fetch.disable": case "Network.disable": case "Page.bringToFront":
+      case "Runtime.runIfWaitingForDebugger": return {};
+      case "Target.setAutoAttach":
+        // Like Chrome: each of the page's workers is attached through this session, announced on it.
+        if (params.autoAttach) for (const url of page.workers) {
+          const id = randomUUID().replace(/-/g, "").toUpperCase();
+          this.sessions.set(id, { id, page, client: s.client, runtime: false, network: false, worker: url });
+          s.client.send(JSON.stringify({ method: "Target.attachedToTarget", sessionId: s.id,
+            params: { sessionId: id, waitingForDebugger: false, targetInfo: { targetId: `W-${id.slice(0, 8)}`, type: "worker", url, title: "", attached: true } } }));
+        }
+        return {};
+      case "Target.detachFromTarget": return this.onBrowser(s.client, method, params);
       case "Emulation.setDeviceMetricsOverride": page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor }; return {};
       case "Emulation.clearDeviceMetricsOverride": page.metrics = undefined; return {};
       case "Page.startScreencast": this.startCast(s, params); return {};

@@ -65,14 +65,17 @@ test("the step script is checked before anything runs: one action per step, know
   const vp = { width: 1920, height: 1080, scale: 1 };
   const ok = parseSteps([{ wait: 10 }, { click: "#b", duration: 300 }, { click: { x: 10, y: 20 } }, { type: "=SUM(1,2)", into: "#i", delay: 40 }, { press: "Shift+ArrowDown", repeat: 2 },
     { scroll: 300 }, { scroll: "#b" }, { highlight: { x: 1, y: 2, width: 3, height: 4 } }, { waitFor: "#later", text: "ready", timeoutMs: 1000 }, { eval: "1" },
-    { goto: "https://docs.google.com/x" }], vp, ["docs.google.com"]);
-  assert.equal(ok.length, 11);
+    { goto: "https://docs.google.com/x" }, { waitIdle: "script.google" }, { waitIdle: { match: "/calc", quietMs: 1500, timeoutMs: 60000 } }, { waitIdle: {} }],
+    vp, ["docs.google.com"]);
+  assert.equal(ok.length, 14);
   const bad: [unknown, RegExp][] = [
     [{}, /exactly one of/], [{ click: "#a", hover: "#b" }, /exactly one of/], [{ click: "#a", delay: 3 }, /"delay" is not an option of click/],
     [{ wait: -1 }, /wait must be a number of ms/], [{ click: { x: 5000, y: 1 } }, /outside the 1920x1080 viewport/], [{ press: "Hyper+A" }, /unknown modifier/],
     [{ press: "F13" }, /unknown key/], [{ press: "Enter", repeat: 0 }, /repeat is a whole number/], [{ highlight: { x: 1 } }, /highlight is a selector/],
     [{ waitFor: "" }, /waitFor is a CSS selector/], [{ type: 5 }, /type is the text/], [{ goto: "https://mail.google.com/" }, /mail\.google\.com is not on the allowlist/],
     [{ goto: "https://example.com/" }, /example\.com is not on the allowlist/],
+    [{ waitIdle: { match: 3 } }, /match is a part of the request URLs/], [{ waitIdle: { quiet: 5 } }, /waitIdle is \{"match"/],
+    [{ waitIdle: { timeoutMs: -1 } }, /timeoutMs must be a number of ms/],
   ];
   for (const [step, message] of bad) assert.throws(() => parseSteps([step], vp, ["docs.google.com"]), message, JSON.stringify(step));
   assert.throws(() => parseSteps({ steps: [] }, vp, []), /JSON array/);
@@ -256,6 +259,40 @@ test("a cleanup failure never hides the run's own error; after a good run it is 
   assert.deepEqual(page.appended, []);
   assert.equal(existsSync(join(c.dir, "c3.mp4")), false);
   await run(["close", "cleanup2"]);
+});
+
+test("waitIdle waits for the tab's and its workers' requests to go quiet; it fails when it sees none; an off-list worker is never watched", needsFfmpeg, async () => {
+  const page = await openTab("idle");
+  page.workers.push(fx.base + "/calc-worker.js", "https://elsewhere.invalid/worker.js");
+  // Mid-run, the allowlisted worker starts a request that stays in flight for 2.5 s.
+  const timer = setTimeout(() => fake.traffic(page, { url: fx.base + "/api/calc?cell=B2" }, { worker: true, ms: 2500 }), 2000);
+  let r: CliRun;
+  try {
+    r = await run(["record", "idle", "--out", join(c.dir, "idle.mp4"), "--size", "320x240", "--settle", "100", "--script",
+      script("idle-steps.json", [{ wait: 2000 }, { waitIdle: { match: "/api/calc", quietMs: 300, timeoutMs: 10_000 } }])]);
+  } finally { clearTimeout(timer); }
+  assert.equal(r.json.ok, true, r.stdout);
+  const idle = r.json.events.find((e: any) => e.kind === "waitIdle");
+  assert.ok(idle.end - idle.start >= 0.8, `it waited for the worker's request to finish: ${JSON.stringify(idle)}`);
+  assert.equal(idle.requests, 1, "the event says how many matching requests it saw");
+  const calls = fake.callsFor(page.targetId);
+  const attach = calls.filter((x) => x.method === "Target.setAutoAttach").map((x) => x.params.autoAttach);
+  assert.deepEqual(attach, [true, false], "workers are attached for the run only");
+  assert.deepEqual(r.json.warnings, [], "the cleanup detached the worker without an error");
+  const workerSessions = calls.filter((x) => x.method === "Network.enable").map((x) => x.sessionId);
+  const detached = calls.filter((x) => x.method === "Target.detachFromTarget").map((x) => x.params.sessionId);
+  assert.equal(new Set(workerSessions).size, 2, "the tab and its allowlisted worker");
+  assert.ok(detached.some((sid) => !workerSessions.includes(sid)), "the off-list worker is detached at once, never watched");
+  assert.ok(calls.some((x) => x.method === "Network.disable"), "the watch is stopped");
+
+  const before = Date.now();
+  r = await run(["record", "idle", "--out", join(c.dir, "idle2.mp4"), "--size", "320x240", "--settle", "0", "--script",
+    script("idle2-steps.json", [{ waitIdle: { match: "/api/never", timeoutMs: 400 } }])]);
+  assert.equal(r.json.error.code, "error");
+  assert.match(r.json.error.message, /^step 1 .*waitIdle: no request matching "\/api\/never" since the step before it began \(400 ms\)/);
+  assert.ok(Date.now() - before < 15_000);
+  assert.equal(page.metrics, undefined);
+  await run(["close", "idle"]);
 });
 
 test("record refuses a tab off the allowlist and never touches it", async () => {

@@ -47,13 +47,17 @@ export type Step =
   | { scroll: string | number; duration?: number }                 // selector (smooth, to the centre) or a wheel delta in px
   | { highlight: string | Box; duration?: number }                 // a ring around an element or a box
   | { waitFor: string; text?: string; timeoutMs?: number }         // an element (with this text) is visible
+  | { waitIdle: string | IdleWait }                                // the network of the tab and its workers goes quiet
   | { eval: string };                                              // escape hatch, in our isolated world
 
-const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "highlight", "waitFor", "eval"] as const;
+/** waitIdle: a part of the request URLs to watch ("" for all), how long they must be quiet, and how long to wait at most. */
+export type IdleWait = { match?: string; quietMs?: number; timeoutMs?: number };
+
+const ACTIONS = ["wait", "goto", "click", "hover", "type", "press", "scroll", "highlight", "waitFor", "waitIdle", "eval"] as const;
 type Action = (typeof ACTIONS)[number];
 const OPTIONS: Record<Action, string[]> = {
   wait: [], goto: [], click: ["duration"], hover: ["duration"], type: ["into", "delay"], press: ["repeat", "delay"],
-  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], eval: [],
+  scroll: ["duration"], highlight: ["duration"], waitFor: ["text", "timeoutMs"], waitIdle: [], eval: [],
 };
 
 /** The longest recording, in seconds: the frames sit on disk until the MP4 is encoded. */
@@ -129,6 +133,15 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
         if (step.text !== undefined && typeof step.text !== "string") throw bad("text is the text the element must contain");
         ms("timeoutMs");
         break;
+      case "waitIdle": {
+        const w = typeof step.waitIdle === "string" ? { match: step.waitIdle } : step.waitIdle;
+        if (!isObject(w) || Object.keys(w).some((k) => !["match", "quietMs", "timeoutMs"].includes(k)))
+          throw bad('waitIdle is {"match": "a part of the URLs", "quietMs": 1500, "timeoutMs": 60000}, or the URL part alone');
+        if (w.match !== undefined && typeof w.match !== "string") throw bad("match is a part of the request URLs");
+        for (const k of ["quietMs", "timeoutMs"]) if (w[k] !== undefined && (!finite(w[k]) || (w[k] as number) < 0 || (w[k] as number) > MAX_STEP_MS))
+          throw bad(`${k} must be a number of ms from 0 to ${MAX_STEP_MS}`);
+        break;
+      }
       case "eval": if (typeof step.eval !== "string") throw bad("eval is a JavaScript expression"); break;
     }
     return step as Step;
@@ -477,6 +490,95 @@ function elementReady(selector: string, text: string | null): boolean {
   return (typeof value === "string" ? value : el.innerText ?? el.textContent ?? "").includes(text);
 }
 
+// ---------- waitIdle: the network of the tab and its workers ----------
+
+/**
+ * Network activity of the tab and of its dedicated workers (Google Sheets computes in a worker). Workers
+ * are attached through the tab's session only for the run, and only on an allowlisted URL; any other
+ * target that Chrome attaches is detached at once. URLs stay in memory: a message names only the match.
+ */
+export class NetworkWatch {
+  private readonly tab: Tab;
+  private readonly requests = new Map<string, { url: string; last: number; open: boolean }>();
+  private readonly sessions = new Set<string>();
+  private offs: (() => void)[] = [];
+
+  constructor(tab: Tab) { this.tab = tab; }
+
+  async start(): Promise<void> {
+    const tab = this.tab, conn = tab.browser.conn;
+    this.sessions.add(tab.sessionId);
+    const find = (p: any, sid?: string) => (sid && this.sessions.has(sid) ? this.requests.get(`${sid}:${p.requestId}`) : undefined);
+    const touch = (p: any, sid?: string) => { const r = find(p, sid); if (r) r.last = Date.now(); };
+    const done = (p: any, sid?: string) => { const r = find(p, sid); if (r) { r.last = Date.now(); r.open = false; } };
+    this.offs.push(
+      conn.on("Target.attachedToTarget", (p: any, sid?: string) => {
+        if (sid !== tab.sessionId) return;
+        if (/worker$/.test(p.targetInfo?.type ?? "") && isAllowedUrl(p.targetInfo?.url ?? "", tab.browser.allow)) {
+          this.sessions.add(p.sessionId);
+          void conn.send("Network.enable", {}, p.sessionId).catch(() => {});
+          void conn.send("Runtime.runIfWaitingForDebugger", {}, p.sessionId).catch(() => {});
+        } else void conn.send("Target.detachFromTarget", { sessionId: p.sessionId }, tab.sessionId).catch(() => {});
+      }),
+      conn.on("Target.detachedFromTarget", (p: any) => { this.sessions.delete(p.sessionId); }),
+      conn.on("Network.requestWillBeSent", (p: any, sid?: string) => {
+        if (sid && this.sessions.has(sid)) this.requests.set(`${sid}:${p.requestId}`, { url: String(p.request?.url ?? ""), last: Date.now(), open: true });
+      }),
+      conn.on("Network.responseReceived", touch),
+      conn.on("Network.dataReceived", touch),
+      conn.on("Network.loadingFinished", done),
+      conn.on("Network.loadingFailed", done),
+      // A WebSocket stays open for the page's life: only its frames count as activity.
+      conn.on("Network.webSocketCreated", (p: any, sid?: string) => {
+        if (sid && this.sessions.has(sid)) this.requests.set(`${sid}:${p.requestId}`, { url: String(p.url ?? ""), last: Date.now(), open: false });
+      }),
+      conn.on("Network.webSocketFrameReceived", touch),
+      conn.on("Network.webSocketFrameSent", touch),
+    );
+    await tab.send("Network.enable");
+    await tab.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: "worker", exclude: false }, { exclude: true }] });
+  }
+
+  /**
+   * Done when a request whose URL contains `match` was active since `since` (the start of the step
+   * before), none is in flight, and none has been active for `quietMs`. A wait that sees no such request
+   * fails: it cannot tell a finished fill from traffic it cannot see.
+   */
+  async idle(w: IdleWait, since: number, pause: (ms: number) => Promise<void>): Promise<number> {
+    const match = w.match ?? "", quietMs = w.quietMs ?? 1500, timeoutMs = w.timeoutMs ?? 60_000;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const mine = [...this.requests.values()].filter((r) => r.url.includes(match) && (r.open || r.last >= since));
+      const last = Math.max(0, ...mine.map((r) => r.last));
+      if (mine.length && !mine.some((r) => r.open) && Date.now() - last >= quietMs) return mine.length;
+      if (Date.now() > deadline) {
+        throw new Error(mine.length
+          ? `waitIdle: requests matching ${JSON.stringify(match)} were still busy after ${timeoutMs} ms`
+          : `waitIdle: no request matching ${JSON.stringify(match)} since the step before it began (${timeoutMs} ms): the tab and its workers sent none that this wait can see`);
+      }
+      await pause(50);
+    }
+  }
+
+  /**
+   * The cleanup steps: detach the workers attached, stop attaching more, stop the Network domain. A
+   * worker that is gone already (it ended, or Chrome detached it) is the state we want, not a failure.
+   */
+  stop(): [string, () => Promise<unknown>][] {
+    const tab = this.tab, conn = tab.browser.conn;
+    for (const off of this.offs) off();
+    this.offs = [];
+    const children = [...this.sessions].filter((s) => s !== tab.sessionId);
+    const detach = (sid: string) => conn.send("Target.detachFromTarget", { sessionId: sid }, tab.sessionId)
+      .catch((e: Error) => { if (!/no session/i.test(e.message)) throw e; });
+    return [
+      ...children.map((sid): [string, () => Promise<unknown>] => ["detach a worker", () => detach(sid)]),
+      ["stop attaching workers", () => tab.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true })],
+      ["stop the network watch", () => tab.send("Network.disable")],
+    ];
+  }
+}
+
 // ---------- the recording ----------
 
 export type RecordPlan = {
@@ -500,6 +602,7 @@ export type RecordEvent = {
   /** click: the press. */ press?: number;
   /** press: each key. */ keys?: number[];
   /** type: the first and the last character. */ first?: number; last?: number;
+  /** waitIdle: how many matching requests it saw before the network went quiet. */ requests?: number;
 };
 
 export type RecordOutcome = {
@@ -527,7 +630,7 @@ export function jpegSize(buf: Buffer): [number, number] | undefined {
   return undefined;
 }
 
-type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number };
+type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number };
 
 /** Drives the tab through the steps. The cursor's place is kept here, so the overlay survives a navigation. */
 class Driver {
@@ -539,6 +642,10 @@ class Driver {
   failure?: unknown;
   /** Step times on this machine's clock (ms); converted to video time at the end. Set only while recording. */
   marks?: Mark[];
+  /** Set when a step waits for the network to go quiet. */
+  network?: NetworkWatch;
+  /** When each step began, setup included: waitIdle counts traffic from the start of the step before it. */
+  private starts: number[] = [];
   private current?: Mark;
   private stop = new AbortController();
   private readonly mac = process.platform === "darwin";
@@ -616,6 +723,7 @@ class Driver {
   /** Run one step; while recording, note when it started and ended (and its clicks, keys and characters). */
   async step(n: number, step: Step): Promise<void> {
     const kind = ACTIONS.find((a) => a in step)!;
+    this.starts.push(Date.now());
     this.current = this.marks ? { step: n, kind, start: Date.now(), end: 0 } : undefined;
     try { await this.run(step); } finally {
       if (this.current && this.marks) { this.current.end = Date.now(); this.marks.push(this.current); }
@@ -719,6 +827,13 @@ class Driver {
       }
       return;
     }
+    if ("waitIdle" in step) {
+      if (!this.network) throw new Error("waitIdle: the network watch is not running");
+      const w = typeof step.waitIdle === "string" ? { match: step.waitIdle } : step.waitIdle;
+      const seen = await this.network.idle(w, this.starts[this.starts.length - 2] ?? this.starts[0], (ms) => this.pause(ms));
+      if (this.current) this.current.requests = seen;
+      return;
+    }
     if ("eval" in step) { await this.tab.evaluate(step.eval); return; }
     throw new UsageError(`unknown step ${describe(step)}`);
   }
@@ -804,6 +919,10 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     await tab.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
     emulated = true;
     await driver.ensureOverlay();
+    if ([...plan.setup, ...plan.steps].some((st) => "waitIdle" in st)) {
+      driver.network = new NetworkWatch(tab);
+      await driver.network.start();
+    }
     await tab.evaluate(() => (document as Document & { fonts?: FontFaceSet }).fonts?.ready.then(() => true) ?? true).catch(() => true);
     await driver.pause(400); // the page lays itself out again at the new size
     // Setup steps run off camera, at the recorded size, so the recording starts on a settled page.
@@ -841,6 +960,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     // Never run code in a page off the allowlist: its document is new, so no overlay is left in it anyway.
     ["remove the overlay", !offList && (() => tab.evaluate(overlayRemove))],
     ["clear the device metrics override", emulated && (() => tab.send("Emulation.clearDeviceMetricsOverride"))],
+    ...(driver.network?.stop() ?? []),
   ]);
   offFrame();
   offNav();
@@ -868,6 +988,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     ...(m.press !== undefined ? { press: video(m.press) } : {}),
     ...(m.keys ? { keys: m.keys.map(video) } : {}),
     ...(m.first !== undefined ? { first: video(m.first), last: video(m.last!) } : {}),
+    ...(m.requests !== undefined ? { requests: m.requests } : {}),
   }));
 
   s.log(`agent-browser record: encoding ${frames.length} frames (${seconds.toFixed(1)} s) to ${plan.out}`);

@@ -125,6 +125,12 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
       return;
     }
     if (msg.method === "Target.detachedFromTarget") sessionOwner.delete(msg.params.sessionId);
+    // A session that Chrome attaches through another one (auto-attach: a page's worker) belongs to the
+    // client that owns the parent session, so its events reach that client and nobody else.
+    if (msg.method === "Target.attachedToTarget" && msg.sessionId && msg.params?.sessionId) {
+      const parent = sessionOwner.get(msg.sessionId);
+      if (parent) sessionOwner.set(msg.params.sessionId, parent);
+    }
     const owner = msg.sessionId ? sessionOwner.get(msg.sessionId) : undefined;
     const text = JSON.stringify(msg);
     if (owner) { if (owner.readyState === WebSocket.OPEN) owner.send(text); }

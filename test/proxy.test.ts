@@ -88,6 +88,33 @@ test("two clients share one upstream and get only their own session events", asy
   await b.close();
 });
 
+test("a session Chrome attaches through a client's session (a page's worker) belongs to that client only", async () => {
+  const a = await CDPConnection.connect(proxyUrl(s));
+  const b = await CDPConnection.connect(proxyUrl(s));
+  try {
+    const sa = await attachBlank(a);
+    await attachBlank(b);
+    const page = fake.pages.get(sa.targetId)!;
+    page.workers.push("http://127.0.0.1/worker.js");
+    const seenByB: string[] = [];
+    b.on("Target.attachedToTarget", () => seenByB.push("attached"));
+    b.on("Network.requestWillBeSent", () => seenByB.push("request"));
+    const attached = a.waitForEvent("Target.attachedToTarget", { sessionId: sa.sessionId });
+    await a.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sa.sessionId);
+    const child = (await attached).sessionId as string;
+    await a.send("Network.enable", {}, child);
+    const request = a.waitForEvent("Network.requestWillBeSent", { sessionId: child });
+    fake.traffic(page, { url: "http://127.0.0.1/api/calc" }, { worker: true });
+    assert.equal((await request).request.url, "http://127.0.0.1/api/calc", "the worker's events reach the client that owns the page's session");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(seenByB, [], "and no other client");
+    await a.send("Target.closeTarget", { targetId: sa.targetId });
+  } finally {
+    await a.close();
+    await b.close();
+  }
+});
+
 test("a departing client's sessions are detached upstream", async () => {
   const a = await CDPConnection.connect(proxyUrl(s));
   const { targetId } = await attachBlank(a);

@@ -25,6 +25,7 @@ export const {
   KEYS,
   MAX_RECORD_SECONDS,
   MAX_SOCKET_PATH_BYTES,
+  NetworkWatch,
   NotAllowedError,
   PinRequiredError,
   ReadFirstError,

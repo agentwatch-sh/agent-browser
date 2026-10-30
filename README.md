@@ -111,8 +111,9 @@ used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch
 - **The proxy:** one background Node process (`agent-browser proxy`, started by the first command that
   needs Chrome) holds the single upstream connection and shares it over the consumer's Unix socket.
   So the operator approves once for each proxy, not once for each command. Request ids are remapped
-  for each client. Session events go only to the client that attached the session; browser events go
-  to every client. A departed client's sessions are detached. A start lock next to the socket lets
+  for each client. Session events go only to the client that attached the session (also for a session
+  that Chrome attaches through that one, such as a page's worker); browser events go to every client.
+  A departed client's sessions are detached. A start lock next to the socket lets
   simultaneous callers elect one proxy, and a live socket is never removed. The proxy exits after
   `proxyIdleMs` with no clients, when Chrome closes the connection, or on `stop`.
 - **Diagnostics:** `status` reuses an existing proxy only. It never starts Chrome or a proxy. Without a
@@ -200,6 +201,7 @@ checked before the tab is touched: the steps, the paths and ffmpeg.
 | `{"scroll": selector, "duration": ms}` | smooth `scrollIntoView` to the centre |
 | `{"highlight": target-or-box, "duration": ms}` | a ring around an element or `{"x", "y", "width", "height"}`, dimming the rest (default 1600 ms) |
 | `{"waitFor": selector, "text": "...", "timeoutMs": ms}` | wait until the element is visible (and its text or value contains `text`); default 30 s, then the run fails |
+| `{"waitIdle": {"match": "...", "quietMs": 1500, "timeoutMs": 60000}}` (or `{"waitIdle": "..."}`) | wait until the network goes quiet: a request whose URL contains `match` (default: any) was active since the step before began, none is in flight, and none has been active for `quietMs`. It watches the tab and its dedicated workers (Google Sheets computes in one). It fails at `timeoutMs` when it saw no such request (it cannot tell a finished fill from traffic it cannot see) or when they are still busy. Its event has `requests`, how many it saw. |
 | `{"eval": "js"}` | escape hatch: runs in agent-browser's isolated world (the page's own globals are not visible there) |
 
 A target is a CSS selector, `#N` from `outline`, or `{"x": .., "y": ..}` in CSS pixels of the recorded
@@ -291,9 +293,14 @@ So the operator can work in another window during a recording. A recording at 19
 
 ### Limits
 
-- Network-quiet waits are not in this release: a Sheets tab's own frame showed no sync requests, and
-  the calc worker's traffic does not reach a proxy client yet. Wait for an add-on's fill with a fixed
-  `wait`, or `waitFor` a DOM part.
+- `waitIdle` watches the tab and its dedicated workers only (not other frames). A worker is attached
+  through the tab's session for the run only, and only on an allowlisted URL; Chrome's other targets are
+  detached at once. On the public sample sheet signed out, the tab and its calc worker sent one request
+  in 20 s (a log ping), even with input: a view-only sheet has no sync traffic. Whether an add-on's
+  fill shows as requests on a signed-in sheet is not measured yet; until it is, keep a fixed `wait`
+  for the fill, or try `waitIdle` and read its `requests` count and times in the events.
+- A long-poll request (open for minutes) that matches keeps `waitIdle` busy until `timeoutMs`: use a
+  `match` that names the calls you wait for.
 - `Meta+C`/`Meta+V` use the system clipboard of the machine, as a person's copy and paste do.
 - No audio. Timing is real time: page loads vary between takes.
 - `eval` steps run in the isolated world, not the page's.
