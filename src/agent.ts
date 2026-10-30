@@ -9,7 +9,7 @@
 // approves Chrome's prompt once per proxy. assertNoDebuggingFlag() enforces this for every launch.
 
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { UsageError } from "./errors.ts";
@@ -110,6 +110,35 @@ export function restoresOnStartup(profile: string): boolean | undefined {
   return undefined;
 }
 
+/**
+ * Turn remote debugging on in the profile before Chrome starts, so the agent browser comes up ready
+ * for an agent with no `chrome://inspect` click. This is a plain, unsigned setting in `Local State`
+ * (`devtools.remote_debugging.user-enabled`), not the HMAC-signed "Secure Preferences" that holds
+ * session restore, so writing it is safe and Chrome keeps it. It is agent-browser's own dedicated
+ * profile, never the operator's. The per-connection approval prompt is Chrome's own gate and stays.
+ * A corrupt existing file is left untouched (never clobber Chrome's own state). Returns whether the
+ * setting is now on.
+ */
+export function seedRemoteDebugging(profileDir: string, file = join(profileDir, "Local State")): boolean {
+  let state: Record<string, any>;
+  if (existsSync(file)) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      if (!parsed || typeof parsed !== "object") return false;
+      state = parsed as Record<string, any>;
+    } catch { return false; }
+  } else {
+    mkdirSync(profileDir, { recursive: true });
+    state = {};
+  }
+  const devtools = state.devtools && typeof state.devtools === "object" ? state.devtools : (state.devtools = {});
+  const rd = devtools.remote_debugging && typeof devtools.remote_debugging === "object" ? devtools.remote_debugging : (devtools.remote_debugging = {});
+  if (rd["user-enabled"] === true) return true;
+  rd["user-enabled"] = true;
+  writeFileSync(file, JSON.stringify(state));
+  return true;
+}
+
 export type SpawnLike = (bin: string, args: string[], opts: { detached: boolean; stdio: "ignore" }) => { pid?: number; exitCode: number | null; unref(): void };
 
 /**
@@ -141,6 +170,7 @@ export async function launchAgentChrome(
       s.log(`agent browser: logins that use session cookies are lost on quit; set "Continue where you left off" in chrome://settings/onStartup`);
     }
     rmSync(join(profile, "DevToolsActivePort"), { force: true });
+    seedRemoteDebugging(profile); // come up with remote debugging on; no chrome://inspect click needed
     const bin = agentChromeBin(s, deps.exists);
     if (bin === CHROME_STABLE_BIN && !s.chromeBin) {
       s.log(`agent browser: running from Google Chrome, so while it is open the Dock's Chrome icon brings it forward instead of your own profile; install Google Chrome Beta (brew install --cask google-chrome@beta) to keep them apart`);

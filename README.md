@@ -90,9 +90,17 @@ is installed, else Google Chrome), `endpoint` (a known `ws://` endpoint, still u
 ## How it works
 
 - **The agent browser** is a regular Chrome on the consumer's profile. Any command that needs Chrome
-  starts it if it is not running (`noLaunch` turns that off). The first launch opens
-  `chrome://inspect/#remote-debugging`, where the operator turns remote debugging on. The toggle
-  persists in the profile. `launch` waits up to 10 minutes for it; other commands wait 30 s.
+  starts it if it is not running (`noLaunch` turns that off). This is an agent browser, so it comes up
+  ready: before it starts Chrome, `launch` writes `devtools.remote_debugging.user-enabled: true` into
+  the profile's `Local State` (`seedRemoteDebugging`), so remote debugging is on without a
+  `chrome://inspect` click. That setting is a plain, unsigned value (not the HMAC-signed "Secure
+  Preferences"), so Chrome keeps it; `launch` merges it in and never overwrites other keys or a corrupt
+  file. The launch still opens `chrome://inspect/#remote-debugging` as a visible fallback. `launch`
+  waits up to 10 minutes for the endpoint; other commands wait 30 s.
+- **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
+  approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
+  headless server with no one to click, run headed Chrome under a virtual display (Xvfb) and accept that
+  one dialog on it; do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.

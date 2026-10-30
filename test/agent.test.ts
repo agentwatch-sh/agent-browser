@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { createServer } from "node:net";
 import {
   AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN, INSPECT_URL, agentChromeBin, agentChromePid, agentEndpoint, assertNoDebuggingFlag,
-  findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, type SpawnLike,
+  findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
 } from "../src/agent.ts";
 import { AgentBrowser, endpointCandidates } from "../src/browser.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type Settings } from "../src/options.ts";
@@ -80,6 +80,32 @@ test("a launch starts a regular Chrome on the consumer's profile, never with a d
   const log = readFileSync(join(s.stateDir, "launches.log"), "utf8");
   assert.match(log, /chrome=4242/);
   assert.match(log, new RegExp(`by=${process.pid}`));
+  const localState = JSON.parse(readFileSync(join(s.profileDir, "Local State"), "utf8"));
+  assert.equal(localState.devtools.remote_debugging["user-enabled"], true, "launch seeds remote debugging so no chrome://inspect click is needed");
+});
+
+test("seedRemoteDebugging turns remote debugging on in the profile, merges other keys, is idempotent, and never clobbers a corrupt file", () => {
+  const prof = join(tmp, "seed-profile");
+  mkdirSync(prof, { recursive: true });
+  const ls = join(prof, "Local State");
+  // no file yet: it is created with only the toggle
+  assert.equal(seedRemoteDebugging(prof), true);
+  assert.deepEqual(JSON.parse(readFileSync(ls, "utf8")), { devtools: { remote_debugging: { "user-enabled": true } } });
+  // merges into existing content without losing other keys
+  writeFileSync(ls, JSON.stringify({ browser: { last_version: 42 }, devtools: { adb_key: "x" } }));
+  assert.equal(seedRemoteDebugging(prof), true);
+  const after = JSON.parse(readFileSync(ls, "utf8"));
+  assert.equal(after.browser.last_version, 42, "other top-level keys kept");
+  assert.equal(after.devtools.adb_key, "x", "other devtools keys kept");
+  assert.equal(after.devtools.remote_debugging["user-enabled"], true);
+  // idempotent: already on, so the file is not rewritten
+  const before = readFileSync(ls, "utf8");
+  assert.equal(seedRemoteDebugging(prof), true);
+  assert.equal(readFileSync(ls, "utf8"), before);
+  // a corrupt Local State is left untouched (never clobber Chrome's own state)
+  writeFileSync(ls, "{ not json");
+  assert.equal(seedRemoteDebugging(prof), false);
+  assert.equal(readFileSync(ls, "utf8"), "{ not json");
 });
 
 test("--remote-debugging-port, -pipe and -address are refused before anything is spawned", async () => {

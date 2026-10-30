@@ -76,7 +76,8 @@ export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
   return {
     dir, stateDir, allowlist,
     options: (extra = {}) => ({ stateDir, allowlistFile: allowlist, noLaunch: true, log: () => {}, ...extra }),
-    remove: () => rmSync(dir, { recursive: true, force: true }),
+    // A just-stopped proxy may still be writing its socket/pid file as this runs; retry past the race.
+    remove: () => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }),
   };
 }
 

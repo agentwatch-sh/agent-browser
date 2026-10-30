@@ -62,6 +62,7 @@ export const {
   rememberEndpoint,
   resolveOptions,
   restoresOnStartup,
+  seedRemoteDebugging,
   startProxy,
   stopProxy,
   validateAllowlist,
