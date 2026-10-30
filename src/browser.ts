@@ -476,9 +476,10 @@ export class Tab {
   }
 
   /**
-   * Focus an element (optional) and type the text into the focused field. First as inserted text; when
-   * the field's text did not change (an app's own editor, such as the Google Sheets cell editor, ignores
-   * inserted text), again as one key event per character, as a person types. When the text still did
+   * Focus an element (optional) and type the text into the focused field. Into an input or a textarea,
+   * first as inserted text, and when the field's text did not change, again as one key event per
+   * character. Into an editable element (an app's own editor, such as the Google Sheets cell editor) as
+   * key events at once: inserted text can reach its DOM and never reach the app (#6). When the text did
    * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
    * A tab or a newline moves on (in a spreadsheet, to the next cell or row), after which the field is
    * another one: only the text before the first of them is checked, and the rest goes as key events
@@ -494,22 +495,23 @@ export class Tab {
       }, selector);
       if (!ok) throw new Error(`no element matches ${selector}`);
     }
-    // The focused field's text, or null when no text field (an input, a textarea, an editable element) has the focus.
-    const fieldText = () => this.evaluate(() => {
+    // The focused field's text and kind, or null when no text field (an input, a textarea, an editable element) has the focus.
+    const field = () => this.evaluate(() => {
       const el = document.activeElement as (HTMLElement & { value?: unknown }) | null;
       if (!el || el === document.body) return null;
-      if (typeof el.value === "string") return el.value;
-      return el.isContentEditable ? el.innerText ?? el.textContent ?? "" : null;
+      if (typeof el.value === "string") return { text: el.value, editable: false };
+      return el.isContentEditable ? { text: el.innerText ?? el.textContent ?? "", editable: true } : null;
     });
-    const before = await fieldText();
+    const before = await field();
     if (before === null) throw new Error("type: no text field has the focus; click one first, or name it with --into");
     const cut = text.search(/[\t\n]/), head = cut < 0 ? text : text.slice(0, cut), rest = cut < 0 ? "" : text.slice(cut);
     const { typeChar } = await import("./record.ts");
+    const unchanged = async () => (await field())?.text === before.text;
     if (head) {
-      await this.send("Input.insertText", { text: head });
-      if ((await fieldText()) === before) {
+      if (!before.editable) await this.send("Input.insertText", { text: head });
+      if (before.editable || await unchanged()) {
         for (const ch of head) await typeChar(this, ch);
-        if ((await fieldText()) === before) throw new Error("type: the text did not arrive: the focused field is unchanged after inserted text and after key events");
+        if (await unchanged()) throw new Error(`type: the text did not arrive: the focused field is unchanged after ${before.editable ? "" : "inserted text and after "}key events`);
       }
     }
     for (const ch of rest) await typeChar(this, ch);

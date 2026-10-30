@@ -278,11 +278,13 @@ test("type: inserted text first, key events when the field ignores it (the Sheet
   const page = fake.pages.get(opened.json.tab.targetId)!;
   let r = await run(["type", "editor", "--stdin", "--into", "#notes"], { input: "plain" });
   assert.equal(r.json.ok, true, r.stdout);
-  assert.equal(page.select("#notes")[0].text, "plain", "an editable element takes inserted text");
+  assert.equal(page.select("#notes")[0].text, "plain");
+  assert.equal(page.keyEvents.filter((k) => k.type === "keyDown").map((k) => k.text).join(""), "plain",
+    "an editable element gets key events at once: inserted text can reach its DOM and not the app (#6)");
   r = await run(["type", "editor", "--stdin", "--into", "#cell"], { input: "=SUM(1,2)" });
   assert.equal(r.json.ok, true, r.stdout);
   assert.equal(page.select("#cell")[0].text, "=SUM(1,2)", "the cell editor got the text as key events");
-  assert.deepEqual(page.keyEvents.filter((k) => k.type === "keyDown").map((k) => k.text).join(""), "=SUM(1,2)");
+  assert.deepEqual(page.keyEvents.filter((k) => k.type === "keyDown").map((k) => k.text).join(""), "plain=SUM(1,2)");
   // A row of cells: Tab and Enter move on (the editor is empty again), so only "a" is checked.
   r = await run(["type", "editor", "--stdin", "--into", "#cell"], { input: "a\tb\tc\n" });
   assert.equal(r.json.ok, true, r.stdout);
@@ -294,7 +296,7 @@ test("type: inserted text first, key events when the field ignores it (the Sheet
   page.typeInto = () => {}; // a field that takes nothing at all
   r = await run(["type", "editor", "--stdin", "--into", "#cell"], { input: "secret-text" });
   assert.equal(r.json.error.code, "error");
-  assert.equal(r.json.error.message, "type: the text did not arrive: the focused field is unchanged after inserted text and after key events");
+  assert.equal(r.json.error.message, "type: the text did not arrive: the focused field is unchanged after key events");
   assert.ok(!r.stdout.includes("secret-text") && !r.stderr.includes("secret-text"), "the text is never echoed");
   await run(["close", "editor"]);
 });
