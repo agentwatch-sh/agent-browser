@@ -291,7 +291,7 @@ its dependency `ws@8.21.0` beside it. No `prepare` script runs, and none is need
 npm installs only versions published more than 30 days ago. ws 8.21.0 was published on 2026-05-22,
 so it passes. npm refuses `min-release-age` together with a `before=` line (even `before=null`), so a
 consumer must not set `before=` in its own `.npmrc`; to opt out of the age rule, set
-`min-release-age=null` instead. Do not pin an older ws: 8.21.0 fixes a remote memory-exhaustion DoS
+`min-release-age=0` instead (`null` does not clear the global value; tested with npm 11.12.1). Do not pin an older ws: 8.21.0 fixes a remote memory-exhaustion DoS
 in 8.20.x.
 
 **Python (agentwatch)**, one of:
