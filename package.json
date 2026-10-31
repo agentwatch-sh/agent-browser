@@ -3,7 +3,7 @@
   "version": "0.2.9",
   "private": true,
   "description": "Agent browser for agentwatch and vedlo: Chrome over a local proxy, allowlisted hosts only",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=26"
