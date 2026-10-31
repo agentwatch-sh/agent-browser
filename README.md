@@ -321,14 +321,13 @@ tab forward (`Page.bringToFront` would activate Chrome and switch the operator's
 
 - `waitIdle` cannot see a Google Sheets add-on's fill: the add-on runs on Google's servers, and its calls
   never reach the tab. Measured on a signed-in sheet (2026-10-30): after Enter it saw 3 requests (Sheets'
-  own "Saving..." traffic) and passed while the cell still showed "Loading...". Use `waitChange` and
-  `waitStill` on the cell's box for such a fill.
+  own "Saving..." traffic) and passed while the cell still showed "Loading...". In vedlo's production
+  takes the same day, the fills came 2.0-3.9 s after Enter. Use `waitChange` and `waitStill` on the
+  cell's box for such a fill.
 - `waitIdle` watches the tab and its dedicated workers only (not other frames). A worker is attached
   through the tab's session for the run only, and only on an allowlisted URL; Chrome's other targets are
   detached at once. On the public sample sheet signed out, the tab and its calc worker sent one request
-  in 20 s (a log ping), even with input: a view-only sheet has no sync traffic. Whether an add-on's
-  fill shows as requests on a signed-in sheet is not measured yet; until it is, keep a fixed `wait`
-  for the fill, or try `waitIdle` and read its `requests` count and times in the events.
+  in 20 s (a log ping), even with input: a view-only sheet has no sync traffic.
 - A long-poll request (open for minutes) that matches keeps `waitIdle` busy until `timeoutMs`: use a
   `match` that names the calls you wait for.
 - `waitStill` pictures its box with `Page.captureScreenshot` about every 100 ms (a PNG decoded with
