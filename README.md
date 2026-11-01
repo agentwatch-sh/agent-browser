@@ -54,7 +54,8 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 
 | Rule | In the code | In the tests |
 | --- | --- | --- |
-| Never launch Chrome with `--remote-debugging-port`. That flag sets `navigator.webdriver`, and Cloudflare, hCaptcha and Google then block every page. The operator turns remote debugging on in `chrome://inspect/#remote-debugging` and approves once for each proxy. | `assertNoDebuggingFlag` in `src/agent.ts` refuses `--remote-debugging-port`, `-pipe` and `-address` before any spawn. | `test/agent.test.ts`, `test/package.test.ts` |
+| Never launch Chrome with `--remote-debugging-port`. That flag sets `navigator.webdriver`, and Cloudflare, hCaptcha and Google then block every page. The operator turns remote debugging on in `chrome://inspect/#remote-debugging` and approves once for each proxy. | `assertSafeChromeArgs` in `src/agent.ts` refuses every `--remote-debugging-*` switch and `--enable-automation` before any spawn, in every dash, slash and case form. | `test/agent.test.ts`, `test/cli.test.ts`, `test/package.test.ts` |
+| The agent Chrome always runs with a window and on its own profile. `--headless` lets every page tell that the browser is headless. A caller's flags come after agent-browser's own `--user-data-dir`, so a `--user-data-dir` or `--profile-directory` among them would point the agent Chrome at another profile, for example the operator's. | `assertSafeChromeArgs` also refuses `--headless` in every form (`--headless=new`, `--headless=old`, ...), `--user-data-dir` and `--profile-directory`, in `chromeArgs`, `--chrome-args` and a library caller's launch flags, before any spawn. | `test/agent.test.ts`, `test/cli.test.ts` |
 | Every connection goes through the local proxy socket. | `AgentBrowser.connect` connects only to the proxy socket (`src/proxy.ts`); there is no direct mode. | `test/browser.test.ts` ("one upstream connection"), `test/proxy.test.ts` |
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. Mail, account and admin hosts are refused even when a broad entry covers them. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window and keep off mail, banking and admin tabs. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
@@ -86,8 +87,10 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
 is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.
-`["--enable-unsafe-swiftshader", "--lang=en-US"]`; a `--remote-debugging` flag is refused, and no
-secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws://` endpoint, still
+`["--enable-unsafe-swiftshader", "--lang=en-US"]`; `--remote-debugging-*`, `--enable-automation`,
+`--headless`, `--user-data-dir` and `--profile-directory` are refused before any spawn, in every dash,
+slash and case form; only the switch name is checked, never its value, so `--user-agent=...` passes; the
+profile comes from `profileDir`; no secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws://` endpoint, still
 used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome), `noPrompt` (never open a new
 connection, so never a new approval prompt: with no approved proxy up, fail at once with `approval_needed`),
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
@@ -183,7 +186,7 @@ headed Chromium with `chromeBin=/usr/bin/chromium` and **no** port flag, one lon
 that execs a different real binary (for example `/usr/lib/chromium/chromium`); agent-browser finds the
 running browser by its profile, not by the launch path, so the wrapper path works. Do not fall back to
 `--remote-debugging-port` or headless: the first sets `navigator.webdriver`, the second adds the
-`HeadlessChrome` UA token.
+`HeadlessChrome` UA token. agent-browser refuses both flags in `chromeArgs`.
 
 Auto-approve removes Chrome's one safeguard against an external app taking full control of the profile,
 so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by

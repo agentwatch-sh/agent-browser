@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { createServer } from "node:net";
 import {
   AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN, INSPECT_URL, agentChromeBin, agentChromePid, agentEndpoint, assertNoDebuggingFlag,
-  appBundle, findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
+  assertSafeChromeArgs, appBundle, findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
 } from "../src/agent.ts";
 import { AgentBrowser, endpointCandidates } from "../src/browser.ts";
+import { UsageError } from "../src/errors.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type Settings } from "../src/options.ts";
 
 let tmp: string, s: Settings;
@@ -150,19 +151,69 @@ test("seedRemoteDebugging turns remote debugging on in the profile, merges other
   assert.equal(readFileSync(ls, "utf8"), "{ not json");
 });
 
-test("remote-debugging and enable-automation flags are refused before anything is spawned, incl. single-dash and mixed-case forms", async () => {
-  for (const flag of [
-    "--remote-debugging-port=9222", "--remote-debugging-port", "--remote-debugging-pipe", "--remote-debugging-address=0.0.0.0",
-    "-remote-debugging-port=9222",    // Chrome's POSIX parser accepts a single dash too
-    "--Remote-Debugging-Port=9222",   // defense in depth: the switch name is normalized to lowercase
-    "--enable-automation", "-enable-automation", // also sets navigator.webdriver
-  ]) {
+// Every form of a switch name that Chrome's parser reads as that switch (one argv element; whitespace
+// trimmed; "--" or "-" as the prefix, "/" on Windows; the name ends at "="), plus upper and mixed case.
+function switchForms(name: string): string[] {
+  const mixed = name.replace(/(^|-)([a-z])/g, (_, d: string, c: string) => d + c.toUpperCase());
+  return [`--${name}`, `-${name}`, `/${name}`, `--${name.toUpperCase()}`, `-${mixed}`, `--${name}=value`, `-${name}=`,
+    ` --${name}`, `\t--${name}=x\n`];
+}
+
+const REFUSED: { why: RegExp; names: string[]; extra?: string[] }[] = [
+  { why: /navigator\.webdriver/, names: ["remote-debugging-port", "remote-debugging-pipe", "remote-debugging-address",
+    "remote-debugging-targets", "remote-debugging-io-pipes", "remote-debugging-something-else", "enable-automation"],
+    extra: ["--remote-debugging-port=9222", "--remote-debugging-address=0.0.0.0"] },
+  { why: /runs Chrome headless/, names: ["headless"],
+    extra: ["--headless=new", "--headless=old", "--headless=chrome", "-headless=new", "--HEADLESS=NEW", "/headless=new", " --headless=new"] },
+  { why: /another profile, for example the operator's own/, names: ["user-data-dir", "profile-directory"],
+    extra: ["--user-data-dir=/Users/operator/Library/Application Support/Google/Chrome", "--profile-directory=Default", "--profile-directory=Profile 1"] },
+];
+
+test("assertSafeChromeArgs refuses every remote-debugging, automation, headless and profile switch, in every dash, slash, case and whitespace form, with or without a value", () => {
+  for (const { why, names, extra = [] } of REFUSED) {
+    for (const flag of [...names.flatMap(switchForms), ...extra]) {
+      assert.throws(() => assertSafeChromeArgs(["--lang=en-US", flag]), (e: unknown) => e instanceof UsageError && why.test(e.message), JSON.stringify(flag));
+    }
+  }
+  // The error names the switch as given, never its value (a value can be a path or a secret).
+  assert.throws(() => assertSafeChromeArgs(["--user-data-dir=/Users/operator/Library/Application Support/Google/Chrome"]), (e: unknown) =>
+    e instanceof UsageError && /^refusing to launch Chrome with --user-data-dir: /.test(e.message) && !e.message.includes("/Users/operator"));
+  assert.throws(() => assertSafeChromeArgs([" -Headless=new"]), /: refusing to launch Chrome with -Headless: it runs Chrome headless/);
+  assert.throws(() => assertSafeChromeArgs(["--profile-directory=Profile 1"]), /choose it with the profileDir option \(--profile\)/);
+  // The old exported name still works: it is the same function.
+  assert.equal(assertNoDebuggingFlag, assertSafeChromeArgs);
+});
+
+test("assertSafeChromeArgs lets ordinary flags through, and reads one argv element as one switch, as Chrome does", () => {
+  assert.doesNotThrow(() => assertSafeChromeArgs([
+    ...AGENT_ARGS, "--lang=en-US", "--enable-unsafe-swiftshader", "--window-size=1280,800", "--no-first-run", INSPECT_URL,
+    // Decided: a switch's value is never inspected. Chrome reads each of these as the switch before the
+    // first "=" with the rest as its value, so none of them turns headless mode on or names a profile.
+    "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessX/1.0 Chrome/154.0.0.0 Safari/537.36",
+    "--lang=en-US --headless", "--lang=en-US --user-data-dir=/other", "--js-flags=--remote-debugging-port=9222",
+    "--disable-features=HeadlessMode,UserDataDir",
+    // Not a switch at all (no "-" or "/" prefix): Chrome opens these as URLs.
+    "https://headless.example.org/", "headless.example.org", "user-data-dir",
+    // Near misses: a different switch name.
+    "--enable-automation-something", "--user-data-dir-x", "--profile-directory-x", "--no-headless-x",
+  ]));
+});
+
+test("a refused switch in chromeArgs, extraArgs or urls stops the launch before any probe or spawn; agent-browser's own --user-data-dir still goes first", async () => {
+  for (const flag of ["--headless=new", "--user-data-dir=/Users/operator/Library/Application Support/Google/Chrome", "-profile-directory=Default", "--remote-debugging-pipe", " --enable-automation"]) {
     const calls: { bin: string; args: string[] }[] = [];
-    await assert.rejects(launchAgentChrome(s, { extraArgs: [flag] }, { endpoint: async () => undefined, pid: () => undefined, spawn: fakeSpawn(calls) }), /navigator\.webdriver/, flag);
+    let probed = false;
+    const deps = { endpoint: async () => { probed = true; return undefined; }, pid: () => undefined, spawn: fakeSpawn(calls) };
+    for (const [settings, opts] of [
+      [resolveOptions({ ...s, chromeArgs: ["--lang=en-US", flag] }), {}],
+      [s, { extraArgs: [flag] }],
+      [s, { urls: [INSPECT_URL, flag] }],
+    ] as [Settings, { extraArgs?: string[]; urls?: string[] }][]) {
+      await assert.rejects(launchAgentChrome(settings, { timeoutMs: 1_000, ...opts }, deps), (e: unknown) => e instanceof UsageError && /^refusing to launch Chrome with /.test(e.message), flag);
+    }
+    assert.equal(probed, false, flag);
     assert.equal(calls.length, 0, flag);
   }
-  // a near-miss switch and ordinary flags are allowed
-  assert.doesNotThrow(() => assertNoDebuggingFlag(["--remote-debugging-something-else", "--no-first-run", "--enable-unsafe-swiftshader", "--lang=en-US"]));
 });
 
 test("a Chrome that hands the launch to a running instance means debugging is off there", async () => {

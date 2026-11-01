@@ -22,6 +22,26 @@ test("--chrome-args parses a JSON array into chromeArgs; a non-array or bad JSON
   assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": "not json" }, () => {}), /--chrome-args must be a JSON array/);
   assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '{"a":1}' }, () => {}), /--chrome-args must be a JSON array/);
 });
+
+test("--chrome-args with a headless, profile or remote-debugging switch is a usage error that says why, before any launch", async () => {
+  const own = consumer();
+  try {
+    for (const [flag, why] of [
+      ["--headless=new", /runs Chrome headless/],
+      ["--user-data-dir=/Users/operator/Library/Application Support/Google/Chrome", /another profile, for example the operator's own/],
+      ["-Profile-Directory=Default", /another profile, for example the operator's own/],
+      ["--remote-debugging-pipe", /navigator\.webdriver/],
+    ] as [string, RegExp][]) {
+      // --no-launch: even a guard that let the flag through would start no Chrome here.
+      const r = await cli(["launch", "--state-dir", own.stateDir, "--allowlist", own.allowlist, "--no-launch",
+        "--chrome-args", JSON.stringify(["--lang=en-US", flag]), "--json"]);
+      assert.equal(r.status, 2, `${flag}: ${r.stdout} ${r.stderr}`);
+      assert.equal(r.json?.error?.code, "usage", flag);
+      assert.match(r.json.error.message, /^refusing to launch Chrome with /, flag);
+      assert.match(r.json.error.message, why, flag);
+    }
+  } finally { own.remove(); }
+});
 const outputs: CliRun[] = [];
 
 before(async () => {
