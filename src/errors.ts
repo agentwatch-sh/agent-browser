@@ -26,7 +26,7 @@ export class UsageError extends AgentBrowserError {
   constructor(message: string) { super("usage", message); }
 }
 
-/** A URL or tab whose host is not on the allowlist (or is a mail, account or admin host). Only the host is ever named. */
+/** A URL or tab whose host is not on the allowlist. Only the host is ever named. */
 export class NotAllowedError extends AgentBrowserError {
   /** The refused host (never the full URL). */
   readonly host: string;

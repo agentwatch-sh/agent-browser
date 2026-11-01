@@ -52,7 +52,7 @@ class UsageError(CLIError):
 
 
 class NotAllowedError(CLIError):
-    """code "not_allowed": a URL or tab off the allowlist (or a mail, account or admin host)."""
+    """code "not_allowed": a URL or tab off the allowlist."""
 
 
 class PinRequiredError(CLIError):
