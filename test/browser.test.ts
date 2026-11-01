@@ -193,7 +193,7 @@ test("a pinned window confines listing, attaching and opening", async () => {
   const b = await browser.open(`${base}/?other`, { newWindow: true });
   const winA = await browser.windowOf(a.targetId);
   assert.notEqual(winA, await browser.windowOf(b.targetId));
-  browser.pinWindow(winA);
+  await browser.pinWindow(winA);
   try {
     const ids = (await browser.allowedPages()).map((p) => p.targetId);
     assert.ok(ids.includes(a.targetId) && !ids.includes(b.targetId));
@@ -202,7 +202,7 @@ test("a pinned window confines listing, attaching and opening", async () => {
     assert.equal(await browser.windowOf(cTab.targetId), winA, "opened from a tab in the pinned window");
     await cTab.close();
   } finally {
-    browser.pinWindow(undefined);
+    await browser.pinWindow(undefined);
     await a.close();
     await b.close();
   }
@@ -225,7 +225,7 @@ test("personal mode acts only in the caller's own pinned window, which its first
     assert.deepEqual(ids, [own.targetId], "the operator's tabs are out of scope");
     const second = await personal.open(`${base}/next`);
     assert.equal(await personal.windowOf(second.targetId), win, "later tabs open in the same window");
-    personal.pinWindow(undefined);
+    await personal.pinWindow(undefined);
     await assert.rejects(own.text(), PinRequiredError, "an unpinned personal browser stops acting");
     assert.deepEqual(fake.callsFor(mail.targetId), [], "an off-list tab: no call at all");
     assert.deepEqual(fake.callsFor(operatorTab.targetId).filter((x) => x.method !== "Browser.getWindowForTarget"), [],

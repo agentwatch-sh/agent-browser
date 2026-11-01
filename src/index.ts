@@ -12,7 +12,7 @@ export type {
 export { recordTab, planRecording, redactStep, NetworkWatch, pngPixels, samePixels, planMove, pointAt, fittsMs, seededRandom, parseSteps, parseKey, parseSize, findFfmpeg, MAX_RECORD_SECONDS } from "./record.ts";
 export type { Step, StepTarget, IdleWait, StillWait, ChangeWait, Pixels, Point, Box, Leg, RecordPlan, RecordOutcome, RecordEvent } from "./record.ts";
 export { main, USAGE } from "./cli.ts";
-export { resolveOptions, isChromeForTesting, DEFAULT_PROXY_IDLE_MS, MAX_SOCKET_PATH_BYTES } from "./options.ts";
+export { resolveOptions, isChromeForTesting, DEFAULT_PROXY_IDLE_MS, MAX_SOCKET_PATH_BYTES, TAB_SCOPE_RE } from "./options.ts";
 export type { BrowserOptions, BrowserMode, NotifyHook, Settings } from "./options.ts";
 export { isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 export {

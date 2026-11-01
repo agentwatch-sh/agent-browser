@@ -33,6 +33,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "approve-command": { type: "string", description: "a custom approver argv, a JSON array (in place of --approve)" },
   "proxy-idle-ms": { type: "string", description: "the proxy exits after this long with no clients (default 12 h)" },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
+  "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
 };
 
 /** Flags of the internal `proxy` command, which startProxy runs in the background. */
@@ -62,6 +63,10 @@ Commands:
 ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
 
 <tab> is a name given to 'open --name', a target-id prefix, or a URL substring (allowlisted tabs only).
+With --tab-scope NAME, open records each new tab under that scope, <tab> resolves only among the
+scope's tabs, and tabs lists them and counts the others. Names are kept per scope. --any-scope (on
+tabs, window and every command that takes <tab>) reaches the tabs outside the scope. In a scope,
+window pin and window unpin need --any-scope: the pin confines every scope.
 
 Options:
 ${Object.entries(GLOBAL_FLAGS).map(([k, f]) => `  --${(k + (f.type === "string" ? " X" : "")).padEnd(30)} ${f.description}`).join("\n")}`;
@@ -111,7 +116,7 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"),
     personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
-    proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), log,
+    proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"), log,
   });
 }
 
@@ -123,6 +128,7 @@ export async function paramsFor(spec: CommandSpec, positionals: string[], v: Val
     if (positionals.length === 2 && positionals[0] === "pin") params.pin = positionals[1];
     else if (positionals.length === 1 && positionals[0] === "unpin") params.unpin = true;
     else if (positionals.length) throw usage();
+    if (v["any-scope"]) params.anyScope = true;
     return params;
   }
   const positional = spec.params.filter((p) => p.cli === "positional");
@@ -149,6 +155,12 @@ function tabLine(t: { id: string; name: string | null; title: string; url: strin
   return `${t.id}  ${(t.name ?? "").padEnd(10)}  ${t.title.slice(0, 50).padEnd(50)}  ${t.url}`;
 }
 
+/** The text form of `tabs` with a tab scope: each tab outside the scope says whose it is, then the count of the others. */
+function scopedTabLines(r: { tabs: { id: string; name: string | null; scope?: string; title: string; url: string }[]; scope: string; outOfScope: number }): string[] {
+  return [...r.tabs.map((t) => tabLine(t) + (t.scope === r.scope ? "" : t.scope === undefined ? "  [no scope]" : `  [scope ${t.scope}]`)),
+    `${r.outOfScope} allowlisted tab${r.outOfScope === 1 ? "" : "s"} outside scope ${r.scope}`];
+}
+
 /** The human (non-JSON) form of a result. */
 export function human(r: any): string {
   const lines = (xs: string[]) => xs.filter((x) => x !== "").join("\n") + "\n";
@@ -169,7 +181,9 @@ export function human(r: any): string {
     case "window":
       return lines([r.window === null ? "no window pinned: any window may be used" : `pinned to window ${r.window}; tabs in it:`,
         ...r.tabs.map((t: any) => `  ${t.id}  ${t.url}`)]);
-    case "tabs": return r.tabs.length ? lines(r.tabs.map(tabLine)) : "";
+    case "tabs":
+      if (r.scope !== undefined) return lines(scopedTabLines(r));
+      return r.tabs.length ? lines(r.tabs.map(tabLine)) : "";
     case "open": case "goto": return lines([`${r.tab.id}  ${r.tab.url}`]);
     case "outline": return lines([outlineText(r.elements)]);
     case "click": return lines([`clicked ${r.text !== null ? JSON.stringify(r.text) : r.target} in ${r.tab.id}`]);

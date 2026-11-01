@@ -48,6 +48,11 @@ def default_package_dir() -> Optional[Path]:
     return root if _is_package(root) else None
 
 
+def _scope(any_scope: bool) -> List[str]:
+    """The CLI flag that reaches tabs outside the tab scope."""
+    return ["--any-scope"] if any_scope else []
+
+
 def _is_package(path: Path) -> bool:
     try:
         name = json.loads((path / "package.json").read_text(encoding="utf-8")).get("name")
@@ -82,6 +87,13 @@ class AgentBrowser:
     `ps`; the CLI refuses a --remote-debugging flag). `approve` answers Chrome's "Allow remote
     debugging?" dialog for unattended use: True or "auto" picks the approver by platform, "osascript"
     or "xdotool" forces one. `approve_command` runs a custom approver argv in its place.
+
+    `tab_scope` (for example the calling session's name) keeps callers that share one agent browser
+    apart: `open` records each new tab under the scope, a `tab` argument resolves only among the
+    scope's tabs, and `tabs()` lists them with a count of the others. The `any_scope=True` argument of
+    a method reaches the tabs outside the scope. The CLI checks the name (1 to 64 letters, digits,
+    ".", "_" or "-", starting with a letter or a digit) and raises UsageError for any other; a
+    tab_scope that is not a string raises ValueError here, before any call.
     """
 
     def __init__(
@@ -103,6 +115,7 @@ class AgentBrowser:
         approve_command: Optional[Sequence[str]] = None,
         proxy_idle_ms: Optional[int] = None,
         command_name: Optional[str] = None,
+        tab_scope: Optional[str] = None,
         node: str = "node",
         package_dir: Optional[PathLike] = None,
         timeout: float = DEFAULT_TIMEOUT,
@@ -118,6 +131,8 @@ class AgentBrowser:
             raise ValueError("approve or approve_command, not both")
         if chrome_args is not None and not _strings(chrome_args):
             raise ValueError("chrome_args must be a sequence of strings (one Chrome flag each, not one shell string)")
+        if tab_scope is not None and not isinstance(tab_scope, str):
+            raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
         self.state_dir = Path(state_dir)
         self.allowlist = Path(allowlist) if allowlist is not None else None
         self.profile = Path(profile) if profile is not None else None
@@ -134,6 +149,7 @@ class AgentBrowser:
         self.approve_command = approve_argv
         self.proxy_idle_ms = proxy_idle_ms
         self.command_name = command_name
+        self.tab_scope = tab_scope
         self.node = node
         self.package_dir = Path(package_dir) if package_dir is not None else None
         self.timeout = timeout
@@ -202,6 +218,8 @@ class AgentBrowser:
             flags += ["--proxy-idle-ms", str(self.proxy_idle_ms)]
         if self.command_name is not None:
             flags += ["--command-name", self.command_name]
+        if self.tab_scope is not None:
+            flags += ["--tab-scope", self.tab_scope]
         return flags
 
     def _run(self, command: str, args: Sequence[str], parse: Callable[[Mapping[str, object]], R], *, stdin: Optional[str] = None,
@@ -265,57 +283,63 @@ class AgentBrowser:
         """Stop this consumer's proxy (the next command restarts it, with one more approval)."""
         return self._run("stop", [], StopResult.from_json)
 
-    def window(self, pin: Optional[str] = None, unpin: bool = False) -> WindowResult:
-        """Show the pinned window; `pin` pins the window that holds that tab; `unpin` clears the pin."""
+    def window(self, pin: Optional[str] = None, unpin: bool = False, any_scope: bool = False) -> WindowResult:
+        """Show the pinned window; `pin` pins the window that holds that tab; `unpin` clears the pin.
+
+        Under a tab scope, `pin` and `unpin` need any_scope=True: the pin confines every scope.
+        """
         if pin is not None and unpin:
             raise ValueError("window: pin or unpin, not both")
-        return self._run("window", ["pin", pin] if pin is not None else ["unpin"] if unpin else [], WindowResult.from_json)
+        return self._run("window", [*(["pin", pin] if pin is not None else ["unpin"] if unpin else []), *_scope(any_scope)], WindowResult.from_json)
 
-    def tabs(self) -> TabsResult:
-        """Allowlisted tabs only (other tabs are never shown)."""
-        return self._run("tabs", [], TabsResult.from_json)
+    def tabs(self, any_scope: bool = False) -> TabsResult:
+        """Allowlisted tabs only (other tabs are never shown). With a tab scope, the scope's tabs and a count of the others."""
+        return self._run("tabs", _scope(any_scope), TabsResult.from_json)
 
     def open(self, url: str, name: Optional[str] = None, tab: bool = False) -> OpenResult:
         """Open an allowlisted URL; `name` remembers the tab; `tab` (personal mode) uses the pinned window."""
         return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else [])], OpenResult.from_json)
 
-    def goto(self, tab: str, url: str) -> GotoResult:
+    # Each method that takes a `tab` also takes `any_scope`: True reaches a tab outside this tab scope.
+
+    def goto(self, tab: str, url: str, any_scope: bool = False) -> GotoResult:
         """Navigate a tab to an allowlisted URL."""
-        return self._run("goto", [tab, url], GotoResult.from_json)
+        return self._run("goto", [tab, url, *_scope(any_scope)], GotoResult.from_json)
 
-    def outline(self, tab: str, all: bool = False) -> OutlineResult:
+    def outline(self, tab: str, all: bool = False, any_scope: bool = False) -> OutlineResult:
         """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot."""
-        return self._run("outline", [tab, *(["--all"] if all else [])], OutlineResult.from_json)
+        return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json)
 
-    def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None) -> ClickResult:
+    def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False) -> ClickResult:
         """Trusted click on `target` (#N from outline, or a CSS selector), or on the element whose text is `text`."""
         if (target is None) == (text is None):
             raise ValueError("click needs target or text, not both")
-        return self._run("click", [tab, target] if target is not None else [tab, "--text", text or ""], ClickResult.from_json)
+        args = [tab, target] if target is not None else [tab, "--text", text or ""]
+        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json)
 
-    def hover(self, tab: str, target: str) -> HoverResult:
+    def hover(self, tab: str, target: str, any_scope: bool = False) -> HoverResult:
         """Move the mouse over `target` (#N or a CSS selector)."""
-        return self._run("hover", [tab, target], HoverResult.from_json)
+        return self._run("hover", [tab, target, *_scope(any_scope)], HoverResult.from_json)
 
-    def type(self, tab: str, text: str, into: Optional[str] = None) -> TypeResult:
+    def type(self, tab: str, text: str, into: Optional[str] = None, any_scope: bool = False) -> TypeResult:
         """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv."""
-        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else [])], TypeResult.from_json, stdin=text)
+        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json, stdin=text)
 
-    def press(self, tab: str, key: str) -> PressResult:
+    def press(self, tab: str, key: str, any_scope: bool = False) -> PressResult:
         """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown or F2."""
-        return self._run("press", [tab, key], PressResult.from_json)
+        return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json)
 
-    def text(self, tab: str, selector: Optional[str] = None) -> TextResult:
+    def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:
         """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot."""
-        return self._run("text", [tab, *([selector] if selector is not None else [])], TextResult.from_json)
+        return self._run("text", [tab, *([selector] if selector is not None else []), *_scope(any_scope)], TextResult.from_json)
 
     # Not Python's eval(): the CLI runs the expression inside the allowlisted page (CDP Runtime.evaluate).
-    def eval(self, tab: str, expression: str) -> EvalResult:
+    def eval(self, tab: str, expression: str, any_scope: bool = False) -> EvalResult:
         """Evaluate a JavaScript expression in the page and return its JSON value. The expression goes on stdin."""
-        return self._run("eval", [tab, "--stdin"], EvalResult.from_json, stdin=expression)
+        return self._run("eval", [tab, "--stdin", *_scope(any_scope)], EvalResult.from_json, stdin=expression)
 
     def shot(self, tab: str, path: Optional[PathLike] = None, full: bool = False, size: Optional[str] = None,
-             scale: Optional[float] = None) -> ShotResult:
+             scale: Optional[float] = None, any_scope: bool = False) -> ShotResult:
         """A PNG screenshot, refused until outline or text has read the page at its current URL.
 
         `size` ("1920x1080", CSS pixels) and `scale` (the device pixel ratio) lay the page out at exactly
@@ -326,21 +350,22 @@ class AgentBrowser:
             args += ["--size", size]
         if scale is not None:
             args += ["--scale", repr(float(scale))]
-        return self._run("shot", args, ShotResult.from_json)
+        return self._run("shot", [*args, *_scope(any_scope)], ShotResult.from_json)
 
-    def fetch(self, tab: str, url: str, path: PathLike) -> FetchResult:
+    def fetch(self, tab: str, url: str, path: PathLike, any_scope: bool = False) -> FetchResult:
         """Save `url` with the page's fetch() and cookies (same-origin and CORS rules apply)."""
-        return self._run("fetch", [tab, url, os.fspath(path)], FetchResult.from_json)
+        return self._run("fetch", [tab, url, os.fspath(path), *_scope(any_scope)], FetchResult.from_json)
 
-    def download(self, tab: str, url: str, path: PathLike) -> DownloadResult:
+    def download(self, tab: str, url: str, path: PathLike, any_scope: bool = False) -> DownloadResult:
         """Save `url` through Chrome's network stack (cross-origin CDN media)."""
-        return self._run("download", [tab, url, os.fspath(path)], DownloadResult.from_json)
+        return self._run("download", [tab, url, os.fspath(path), *_scope(any_scope)], DownloadResult.from_json)
 
-    def close(self, tab: str) -> CloseResult:
+    def close(self, tab: str, any_scope: bool = False) -> CloseResult:
         """Close a tab."""
-        return self._run("close", [tab], CloseResult.from_json)
+        return self._run("close", [tab, *_scope(any_scope)], CloseResult.from_json)
 
-    def net(self, tab: str, seconds: Optional[float] = None, match: Optional[str] = None, max: Optional[int] = None) -> NetResult:
+    def net(self, tab: str, seconds: Optional[float] = None, match: Optional[str] = None, max: Optional[int] = None,
+            any_scope: bool = False) -> NetResult:
         """Record the tab's fetch/XHR/WebSocket traffic for `seconds` (default 60); never headers, bodies redacted."""
         args = [tab]
         if seconds is not None:
@@ -349,11 +374,11 @@ class AgentBrowser:
             args += ["--match", match]
         if max is not None:
             args += ["--max", str(int(max))]
-        return self._run("net", args, NetResult.from_json, extra_timeout=60.0 if seconds is None else float(seconds))
+        return self._run("net", [*args, *_scope(any_scope)], NetResult.from_json, extra_timeout=60.0 if seconds is None else float(seconds))
 
     def record(self, tab: str, out: PathLike, script: Optional[PathLike] = None, setup: Optional[PathLike] = None, size: Optional[str] = None,
                fps: Optional[int] = None, scale: Optional[float] = None, no_cursor: bool = False, settle: Optional[float] = None,
-               seed: Optional[int] = None, ffmpeg: Optional[PathLike] = None) -> RecordResult:
+               seed: Optional[int] = None, ffmpeg: Optional[PathLike] = None, any_scope: bool = False) -> RecordResult:
         """Record the tab to the MP4 `out` while the step script drives it; the provenance JSON goes beside it.
 
         `setup` steps run first, off camera. `size` is the page size in CSS pixels ("1920x1080"), `scale`
@@ -376,7 +401,7 @@ class AgentBrowser:
             args += ["--settle", repr(float(settle))]
         if seed is not None:
             args += ["--seed", str(int(seed))]
-        return self._run("record", args, RecordResult.from_json, extra_timeout=RECORD_WAIT)
+        return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT)
 
     def commands(self) -> CommandsResult:
         """Every CLI command with its parameters (the CLI's own description of itself)."""

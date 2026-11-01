@@ -88,21 +88,31 @@ def _one_of(d: Mapping[str, object], key: str, where: str, allowed: tuple[str, .
     return v
 
 
+def _absent_or_str(d: Mapping[str, object], key: str, where: str) -> Optional[str]:
+    """A field that the CLI sends only in some documents: None when absent, else a string."""
+    return _str(d, key, where) if key in d else None
+
+
+def _absent_or_int(d: Mapping[str, object], key: str, where: str) -> Optional[int]:
+    return _int(d, key, where) if key in d else None
+
+
 @dataclass(frozen=True)
 class TabRef:
-    """An allowlisted tab: `id` is the first 8 characters of `target_id`."""
+    """An allowlisted tab: `id` is the first 8 characters of `target_id`. `scope` is set only for a tab opened under a tab scope."""
 
     id: str
     target_id: str
     name: Optional[str]
     url: str
     title: str
+    scope: Optional[str] = None
 
     @classmethod
     def from_json(cls, value: object, where: str = "tab") -> "TabRef":
         d = _obj(value, where)
         return cls(id=_str(d, "id", where), target_id=_str(d, "targetId", where), name=_opt_str(d, "name", where),
-                   url=_str(d, "url", where), title=_str(d, "title", where))
+                   url=_str(d, "url", where), title=_str(d, "title", where), scope=_absent_or_str(d, "scope", where))
 
 
 def _tab(d: Mapping[str, object], where: str) -> TabRef:
@@ -231,12 +241,19 @@ class WindowResult:
 
 @dataclass(frozen=True)
 class TabsResult:
+    """With a tab scope, `scope` and `out_of_scope` (the number of allowlisted tabs outside the scope) are set; else both are None."""
+
     tabs: List[TabRef]
     window: Optional[int]
+    scope: Optional[str] = None
+    out_of_scope: Optional[int] = None
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "tabs") -> "TabsResult":
-        return cls(tabs=_opt_tab_list(d, "tabs", where), window=_opt_int(d, "window", where))
+        scope, out_of_scope = _absent_or_str(d, "scope", where), _absent_or_int(d, "outOfScope", where)
+        if (scope is None) != (out_of_scope is None):
+            raise ProtocolError(f"{where}: scope and outOfScope come together")
+        return cls(tabs=_opt_tab_list(d, "tabs", where), window=_opt_int(d, "window", where), scope=scope, out_of_scope=out_of_scope)
 
 
 @dataclass(frozen=True)

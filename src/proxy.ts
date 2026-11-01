@@ -9,7 +9,7 @@
 
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { rmSync, writeFileSync, readFileSync, chmodSync, openSync, closeSync, statSync, fstatSync } from "node:fs";
+import { rmSync, writeFileSync, readFileSync, chmodSync, openSync, closeSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -17,6 +17,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import { browserTarget, lastProxyAttempt, promptNotice, proxyLogPath, recordProxyAttempt, UNANSWERED, type ProxyAttempt } from "./diagnostics.ts";
 import { stateDir, statePath, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
+import { withFileLock } from "./lock.ts";
 
 /** The CLI entry the proxy child runs from: plain JavaScript, so it also starts from a node_modules install. */
 export const BIN_PATH = fileURLToPath(new URL("../bin/agent-browser.js", import.meta.url));
@@ -34,38 +35,6 @@ export function socketAlive(path: string): Promise<boolean> {
     socket.once("connect", () => { socket.destroy(); resolve(true); });
     socket.once("error", () => resolve(false));
   });
-}
-
-async function withStartLock<T>(path: string, deadline: number, fn: () => Promise<T>): Promise<T> {
-  let fd: number | undefined;
-  while (Date.now() < deadline) {
-    try {
-      fd = openSync(path, "wx", 0o600);
-      writeFileSync(fd, String(process.pid));
-      break;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      // A crashed launcher can leave a lock. Never clear a live owner's lock.
-      let owner = 0;
-      try { owner = Number(readFileSync(path, "utf8")); } catch { /* being written */ }
-      if (owner > 0) {
-        try { process.kill(owner, 0); } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ESRCH") rmSync(path, { force: true });
-        }
-      } else {
-        try { if (Date.now() - statSync(path).mtimeMs > 5_000) rmSync(path, { force: true }); } catch { /* another caller removed it */ }
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-  }
-  if (fd === undefined) throw new Error(`chrome proxy startup lock timed out: ${path}`);
-  try { return await fn(); }
-  finally {
-    const owned = statSync(path, { throwIfNoEntry: false });
-    const mine = fstatSync(fd);
-    if (owned && mine && owned.dev === mine.dev && owned.ino === mine.ino) rmSync(path, { force: true });
-    closeSync(fd);
-  }
 }
 
 /**
@@ -228,7 +197,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
   record("parent-start");
   if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
   let entered = false;
-  try { await withStartLock(`${s.socketPath}.start.lock`, deadline, async () => {
+  try { await withFileLock(`${s.socketPath}.start.lock`, deadline, async () => {
     entered = true;
     if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
     s.log(promptNotice(s, target, deadline - Date.now()));
@@ -272,7 +241,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
       });
     }
     throw new Error(`chrome proxy did not start (${target}; ${detail}); see ${proxyLogPath(s)}`);
-  }); } catch (e) {
+  }, "chrome proxy startup lock"); } catch (e) {
     if (entered) throw e;
     record("parent-lock-error", { detail: (e as Error).message });
     throw new Error(`chrome proxy did not start (${target}; startup lock failed: ${(e as Error).message}); see ${proxyLogPath(s)}`);

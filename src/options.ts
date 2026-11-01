@@ -27,7 +27,7 @@ export function validateApprove(spec: ApproveSpec): void {
 }
 
 export type BrowserOptions = {
-  /** Absolute folder for this consumer's state: tab names, window pin, proxy pid and log, launch log, screenshots. */
+  /** Absolute folder for this consumer's state: tab names and scopes, window pin, proxy pid and log, launch log, screenshots. */
   stateDir: string;
   /** The agent Chrome's profile: its cookies and logins. Default `<stateDir>/profile`. */
   profileDir?: string;
@@ -63,6 +63,14 @@ export type BrowserOptions = {
   proxyIdleMs?: number;
   /** How hints name the command line, for example "vedlo browser". Default "agent-browser". */
   commandName?: string;
+  /**
+   * Work only in the tabs of this scope (for example the calling agent session's name), when several
+   * callers share one agent browser: `open` records each new tab under the scope, a `<tab>` resolves
+   * only among the scope's tabs, and `tabs` lists them with a count of the others. A command's
+   * anyScope (--any-scope) reaches the other tabs. Advisory: it keeps callers apart, it is not a
+   * security boundary. Default: no scope, every tab is visible. See TAB_SCOPE_RE for the name.
+   */
+  tabScope?: string;
   /** Progress and warning lines. Default: standard error. */
   log?: (line: string) => void;
 };
@@ -84,6 +92,7 @@ export type Settings = {
   approve?: ApproveSpec;
   proxyIdleMs: number;
   commandName: string;
+  tabScope?: string;
   log: (line: string) => void;
 };
 
@@ -91,6 +100,14 @@ export const DEFAULT_PROXY_IDLE_MS = 12 * 60 * 60 * 1000;
 
 /** macOS limits a Unix socket path to 104 bytes, including the final NUL. */
 export const MAX_SOCKET_PATH_BYTES = 103;
+
+/**
+ * A tab scope name: 1 to 64 characters, letters, digits, ".", "_" and "-", the first a letter or a
+ * digit. The name goes into tab-scopes.json, error messages and the CLI's text output, so it is one
+ * plain word: no space, quote, slash, colon or control character, and it never looks like a flag.
+ * agentwatch's session names (letters, digits, "_" and "-", at most 64) all fit.
+ */
+export const TAB_SCOPE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const absolute = (name: string, p: string) => {
   if (typeof p !== "string" || !p) throw new UsageError(`${name} is required`);
@@ -130,6 +147,8 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
   }
   if (o.chromeArgs !== undefined && (!Array.isArray(o.chromeArgs) || o.chromeArgs.some((a) => typeof a !== "string" || a.length === 0)))
     throw new UsageError("chromeArgs must be an array of non-empty strings"); // a remote-debugging, automation, headless or profile switch among them is refused at launch (assertSafeChromeArgs), in any dash/case form
+  if (o.tabScope !== undefined && (typeof o.tabScope !== "string" || !TAB_SCOPE_RE.test(o.tabScope)))
+    throw new UsageError(`tabScope must be 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or a digit, not ${JSON.stringify(o.tabScope)}`);
   const proxyIdleMs = o.proxyIdleMs ?? DEFAULT_PROXY_IDLE_MS;
   if (!Number.isFinite(proxyIdleMs) || proxyIdleMs <= 0) throw new UsageError("proxyIdleMs must be a positive number");
   return {
@@ -149,6 +168,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     approve: o.approve,
     proxyIdleMs,
     commandName: o.commandName ?? "agent-browser",
+    tabScope: o.tabScope,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
   };
 }
