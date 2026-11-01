@@ -56,7 +56,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | --- | --- | --- |
 | Never launch Chrome with `--remote-debugging-port`. That flag sets `navigator.webdriver`, and Cloudflare, hCaptcha and Google then block every page. The operator turns remote debugging on in `chrome://inspect/#remote-debugging` and approves once for each proxy. | `assertNoDebuggingFlag` in `src/agent.ts` refuses `--remote-debugging-port`, `-pipe` and `-address` before any spawn. | `test/agent.test.ts`, `test/package.test.ts` |
 | Every connection goes through the local proxy socket. | `AgentBrowser.connect` connects only to the proxy socket (`src/proxy.ts`); there is no direct mode. | `test/browser.test.ts` ("one upstream connection"), `test/proxy.test.ts` |
-| Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. Mail, account and admin hosts are refused even when a broad entry covers them. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
+| Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window and keep off mail, banking and admin tabs. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
 | Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in); input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/cli.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer) |
@@ -76,7 +76,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
 | State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**, absolute. It holds `tabs.json`, `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
-| Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). |
+| Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes. |
 | Notify hook | `notify` (callback or `{ command }`) | `--notify-command '["prog","arg","{message}"]'` | `notify_command=["prog", ...]` | Used only by `status --notify`. An argv list, never a shell string. The message goes on stdin, and `{message}` in an argument is replaced with it. Example for agentwatch: `["agentwatch", "session", "inbox", "--text", "{message}"]`. |
@@ -389,7 +389,7 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 **Lower level:** `launchAgentChrome`, `agentEndpoint`, `agentChromePid`, `agentChromeBin`,
 `findAgentPid`, `parsePs`, `processTree` (a Chrome's process tree, for example to record its audio),
 `restoresOnStartup`, `startProxy`, `stopProxy`, `proxyInfo`, `browserTarget`, `localBrowserStatus`,
-`notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `isDeniedHost`, `recordTab`,
+`notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `recordTab`,
 `planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`, `pointAt`, `fittsMs`, `seededRandom`,
 `findFfmpeg`, `runCleanup`, `withCleanupErrors`,
 `loadAllowlist`, `resolveOptions`, `CDPConnection`, `main` (the CLI in-process). Errors:
@@ -582,7 +582,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/browser.test.ts`: the library through the real proxy (ported from vedlo's `chrome.test.ts`).
 - `test/agent.test.ts`, `test/proxy.test.ts`, `test/diagnostics.test.ts`, `test/tab-intercept.test.ts`:
   ported from vedlo.
-- `test/allowlist.test.ts`: matching, the file, the denylist.
+- `test/allowlist.test.ts`: matching, the file, and no built-in denylist.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
@@ -630,7 +630,7 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 | `src/agent.ts` | the agent Chrome: binary, launch, endpoint check, pid lookup, process tree |
 | `src/proxy.ts` | the multiplexing CDP proxy |
 | `src/diagnostics.ts` | proxy attempt log, local status, notify hook |
-| `src/allowlist.ts` | allowlist and denylist |
+| `src/allowlist.ts` | the allowlist: entry checks and host matching |
 | `src/outline.ts` | `outline`, `redact`, `net` |
 | `src/record.ts` | `record`: steps, keys, cursor paths, overlay, screencast, encoder |
 | `src/options.ts` | consumer options and their checks |

@@ -14,7 +14,7 @@ export type { Step, StepTarget, IdleWait, StillWait, ChangeWait, Pixels, Point, 
 export { main, USAGE } from "./cli.ts";
 export { resolveOptions, isChromeForTesting, DEFAULT_PROXY_IDLE_MS, MAX_SOCKET_PATH_BYTES } from "./options.ts";
 export type { BrowserOptions, BrowserMode, NotifyHook, Settings } from "./options.ts";
-export { isAllowedUrl, isDeniedHost, loadAllowlist, validateAllowlist, DENIED_HOSTS, DENIED_FIRST_LABELS } from "./allowlist.ts";
+export { isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 export {
   AgentBrowserError, UsageError, NotAllowedError, PinRequiredError, ReadFirstError, TabNotFoundError, ChromeUnreachableError,
   ApprovalNeededError, runCleanup, withCleanupErrors, isSignInHost, signInHint, redirectError,

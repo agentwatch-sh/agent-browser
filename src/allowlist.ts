@@ -2,28 +2,12 @@
 // and its subdomains; only http(s) URLs and about:blank pass. The package reads the consumer's file and
 // never writes it, and no command or flag adds a host: an agent never widens the list on its own.
 //
-// A short denylist backs it up: mail, account and admin hosts are refused even when a broad entry
-// (for example "google.com") would cover them, and an allowlist that names one is rejected.
+// The operator's list alone decides. There is no built-in denylist (the operator's decision O12): an
+// entry may name a mail, account or admin host such as "gmail.com" or "accounts.google.com", and a
+// broad entry such as "google.com" covers every one of its subdomains, mail.google.com included.
 
 import { readFileSync } from "node:fs";
 import { NotAllowedError, UsageError } from "./errors.ts";
-
-/** Mail, account and admin consoles that no allowlist entry can open. Each matches itself and its subdomains. */
-export const DENIED_HOSTS: readonly string[] = [
-  "gmail.com", "mail.google.com", "inbox.google.com", "accounts.google.com", "myaccount.google.com", "admin.google.com",
-  "console.cloud.google.com", "outlook.live.com", "outlook.office.com", "outlook.office365.com", "mail.yahoo.com",
-  "mail.proton.me", "account.proton.me", "console.aws.amazon.com", "signin.aws.amazon.com", "portal.azure.com",
-  "dash.cloudflare.com",
-];
-
-/** A host whose first label is one of these (mail.example.com, admin.example.com) is refused. */
-export const DENIED_FIRST_LABELS: readonly string[] = ["mail", "webmail", "admin", "bank", "banking", "onlinebanking", "netbanking"];
-
-export function isDeniedHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/\.$/, "");
-  if (DENIED_FIRST_LABELS.includes(h.split(".")[0])) return true;
-  return DENIED_HOSTS.some((d) => h === d || h.endsWith("." + d));
-}
 
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -37,7 +21,6 @@ export function validateAllowlist(entries: unknown, source = "allowlist"): strin
     if (typeof e !== "string") throw new UsageError(`${source}: every entry must be a string`);
     const h = e.trim();
     if (h !== "localhost" && !HOST.test(h)) throw new UsageError(`${source}: ${JSON.stringify(e)} is not a lowercase host name with a dot (no scheme, port, path or wildcard)`);
-    if (isDeniedHost(h)) throw new UsageError(`${source}: ${h} is a mail, account or admin host and can never be allowlisted`);
     return h;
   });
 }
@@ -56,7 +39,6 @@ export function isAllowedUrl(url: string, allow: readonly string[]): boolean {
   try { u = new URL(url); } catch { return false; }
   if (u.protocol !== "https:" && u.protocol !== "http:") return false;
   const host = u.hostname.toLowerCase();
-  if (isDeniedHost(host)) return false;
   return allow.some((d) => host === d || host.endsWith("." + d));
 }
 
