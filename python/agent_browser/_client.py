@@ -84,9 +84,11 @@ class AgentBrowser:
     (default: the checkout this module is in).
 
     `chrome_args` are extra Chrome flags at launch, one string each (no secrets: Chrome flags show in
-    `ps`; the CLI refuses a --remote-debugging flag). `approve` answers Chrome's "Allow remote
-    debugging?" dialog for unattended use: True or "auto" picks the approver by platform, "osascript"
-    or "xdotool" forces one. `approve_command` runs a custom approver argv in its place.
+    `ps`). The CLI refuses, before any launch, every --remote-debugging-* switch, --enable-automation,
+    --headless, --user-data-dir and --profile-directory, in every dash, slash and case form
+    (assertSafeChromeArgs in src/agent.ts), and raises UsageError. `approve` answers Chrome's "Allow
+    remote debugging?" dialog for unattended use: True or "auto" picks the approver by platform,
+    "osascript" or "xdotool" forces one. `approve_command` runs a custom approver argv in its place.
 
     `tab_scope` (for example the calling session's name) keeps callers that share one agent browser
     apart: `open` records each new tab under the scope, a `tab` argument resolves only among the
