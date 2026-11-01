@@ -30,6 +30,7 @@ export const {
   NotAllowedError,
   PinRequiredError,
   ReadFirstError,
+  TAB_SCOPE_RE,
   Tab,
   TabNotFoundError,
   USAGE,

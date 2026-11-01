@@ -9,7 +9,8 @@ sites once inside that profile (`launch --login`), and those logins stay in that
 each consumer has its own cookies and logins, its own tab names and its own proxy socket. The
 operator's own Chrome (mail, banking, admin) is not reachable from the tooling. A consumer uses the
 operator's Chrome only in personal mode, only when the operator asks, and then only in one pinned
-window of its own.
+window of its own. Several callers of one consumer (for example agentwatch's agent sessions) can
+share its agent browser, each in a tab scope of its own (see **Tab scopes**).
 
 It has two surfaces, and both are tested:
 
@@ -75,7 +76,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**, absolute. It holds `tabs.json`, `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**, absolute. It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes. |
@@ -91,7 +92,8 @@ secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws:
 used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome), `noPrompt` (never open a new
 connection, so never a new approval prompt: with no approved proxy up, fail at once with `approval_needed`),
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
-`vedlo browser`) and `log` (progress lines; default standard error).
+`vedlo browser`), `tabScope` (CLI `--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of
+this scope; see **Tab scopes**) and `log` (progress lines; default standard error).
 
 ## How it works
 
@@ -140,7 +142,7 @@ connection, so never a new approval prompt: with no approved proxy up, fail at o
   proxy it reports local evidence and the last attempt from `chrome-proxy.log`. A pending handshake does
   not prove that Chrome shows a prompt, so the approval status is always "unknown".
 - **Tab references:** `<tab>` is a name from `open --name`, a target-id prefix, or a URL substring,
-  always among allowlisted tabs only.
+  always among allowlisted tabs only. With a tab scope, among the scope's tabs only (see **Tab scopes**).
 - **Cheap reading:** `outline` numbers the interactive elements on screen; `click <tab> #N` clicks one.
   Read with `outline` and `text`; take a screenshot last.
 - **Isolated world:** every `evaluate` (and so `outline`, `text`, `click`, `fetch` and the rest) runs
@@ -189,6 +191,71 @@ Auto-approve removes Chrome's one safeguard against an external app taking full 
 so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by
 the test suite (the fake Chrome raises no native dialog); the suite covers the orchestration and the
 fail-safe button-name targeting, and the Linux mechanism was verified on a live Chromium 156.
+
+## Tab scopes
+
+One agent browser can serve several callers at the same time, for example the agent sessions of one
+agentwatch box. Each caller passes its own tab scope (`tabScope`, `--tab-scope NAME`,
+`tab_scope=`); agentwatch passes the calling session's name. A scope name is 1 to 64 letters, digits,
+`.`, `_` or `-`, and starts with a letter or a digit (`TAB_SCOPE_RE`). It goes into
+`tab-scopes.json`, error messages and the text output, so it is one plain word: no space, quote,
+slash, colon or control character, and it never looks like a flag. agentwatch's session names all
+fit. The scope keeps the callers apart. It is advisory: the callers run as one OS user and share one
+state folder, and any caller can pass `--any-scope`. The allowlist is the security boundary, not
+the scope.
+
+With a scope:
+
+- `open` records the new tab under the scope, also a tab without `--name`.
+- A `<tab>` resolves only among the scope's tabs, in all three forms: a name, a target-id prefix and
+  a URL substring. Every command that takes a `<tab>`, and `window pin <tab>`, uses the same resolver.
+  A tab of another scope, a tab opened with no scope and a tab opened by hand are not visible.
+- When a `<tab>` matches only a tab outside the scope, the command fails with `tab_not_found`. The
+  message says that a tab outside this scope matches, and names `--any-scope`. It never shows that
+  tab's URL or title.
+- `tabs` lists the scope's tabs and adds `scope` and `outOfScope`: the number of allowlisted tabs
+  outside the scope. Of those tabs it gives the count only: no URL, title or name.
+- `--any-scope` (`anyScope`, `any_scope=True`) on a command reaches every allowlisted tab. `tabs
+  --any-scope` lists every allowlisted tab, each with its `scope` (none for a tab with no scope), and
+  `outOfScope` keeps its meaning. `window --any-scope` lists every tab of the pinned window.
+- `close` removes the tab from the scope's record, also when another scope closes it with `--any-scope`.
+- `status` counts the tabs of the whole browser, also with a scope.
+
+With no scope, nothing changes for a consumer that does not use scopes: every tab is visible, every
+result document has the same fields as before, and `tabs.json` keeps its format. A tab that another
+caller opened under a scope shows its `scope` in a `TabRef`. `--any-scope` has no effect without a scope.
+
+**Names are kept per scope.** Two scopes can each name a tab `main`, and each finds its own. A new
+tab takes a name only from an older tab of the same scope (the older tab stays in the scope without
+a name), as `open --name` always did without a scope. With no scope, or with `--any-scope`, a name
+resolves in this order: the caller's own scope, the tabs with no scope (`tabs.json`), then another
+scope when only one scope uses the name. When two other scopes use it, the command fails and asks for
+the target-id prefix: it never guesses. After the names come the target-id prefix and the URL
+substring, as before.
+
+**The record.** `tabs.json` keeps its format, `{"<name>": "<targetId>"}`, and holds only the tabs
+opened with no scope. `tab-scopes.json` holds each tab opened under a scope, by target id, so a tab
+is in one scope at most:
+
+```json
+{
+  "8C1F0A2B...": { "scope": "session-a", "name": "main" },
+  "77AB12CD...": { "scope": "session-a", "name": null },
+  "91DE34EF...": { "scope": "session-b", "name": "main" }
+}
+```
+
+**Several processes.** Each CLI call is a process, and several sessions call at the same time, so
+several processes write the record. Each change (`open`, `close`) takes the lock file `tabs.lock` in
+the state folder: an exclusive create that holds the pid, like the proxy's start lock (`src/lock.ts`).
+A crashed holder's lock is cleared; a live holder's lock is never cleared. Under the lock the change
+reads both files, changes them, and writes each changed file to a temporary file that it renames over
+the old one. So no change is lost, and a reader, which takes no lock, never sees half a file. Under the
+lock, the entries of tabs that Chrome no longer has (closed by hand, or by another caller) are dropped
+from both files. Such a tab is gone from every list before that.
+
+**Limits.** The pinned window (`window pin`) and the read-first record (`reads.json`) belong to the
+state folder, not to a scope: a pin confines every caller of that state folder.
 
 ## Recording (`record`)
 
@@ -359,22 +426,25 @@ TypeScript consumers get types from `src/index.ts` (the `types` condition in `pa
 
 **`commands`**: one async function for each CLI command, with the same parameters and the same
 result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)`,
-`status(o, { notify })`, `connect(o, { endpoint })`, `stop(o)`, `window(o, { pin, unpin })`,
-`tabs(o)`, `open(o, { url, name, tab })`, `goto(o, { tab, url })`, `outline(o, { tab, all })`,
+`status(o, { notify })`, `connect(o, { endpoint })`, `stop(o)`, `window(o, { pin, unpin, anyScope })`,
+`tabs(o, { anyScope })`, `open(o, { url, name, tab })`, `goto(o, { tab, url })`, `outline(o, { tab, all })`,
 `click(o, { tab, target, text })`, `hover(o, { tab, target })`, `type(o, { tab, text, into })`,
 `press(o, { tab, key })`, `text(o, { tab, selector })`, `eval(o, { tab, expression })`,
 `shot(o, { tab, path, full, size, scale })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
 `close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`,
 `record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `commands()`.
+Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `COMMAND_SPECS` describes them (names, parameters, CLI usage).
 
 **`AgentBrowser`** (one connection for multi-step work):
 
 - `AgentBrowser.connect(options, { existingOnly? })`: connect through the proxy (see above).
-- `allowedPages()`, `otherPageCount()`, `open(url, { name?, newWindow?, timeoutMs? })`, `resolve(ref)`
-  (find a tab without attaching), `find(ref)`, `attach(targetId)`, `windowOf(targetId)`,
-  `pinnedWindow()`, `pinWindow(id | undefined)`, `disconnect()`. Properties: `conn`, `settings`,
-  `allow`, `product`, `mode`.
+- `allowedPages({ anyScope? })`, `otherPageCount()`, `open(url, { name?, newWindow?, timeoutMs? })`,
+  `resolve(ref, { anyScope? })` (find a tab without attaching), `find(ref, { anyScope? })`,
+  `attach(targetId)`, `windowOf(targetId)`, `pinnedWindow()`, `pinWindow(id | undefined)`,
+  `disconnect()`. Properties: `conn`, `settings`, `allow`, `product`, `mode`, `tabScope`. The tab
+  scope applies to `allowedPages`, `resolve`, `find` and `open`; `attach(targetId)` is the low-level
+  call by exact target id, and it checks the allowlist and the pin only.
 
 **`Tab`**: `goto(url)`, `url()`, `assertAllowed()`, `evaluate(fn | expression, ...args)`,
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
@@ -392,7 +462,7 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 `notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `isDeniedHost`, `recordTab`,
 `planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`, `pointAt`, `fittsMs`, `seededRandom`,
 `findFfmpeg`, `runCleanup`, `withCleanupErrors`,
-`loadAllowlist`, `resolveOptions`, `CDPConnection`, `main` (the CLI in-process). Errors:
+`loadAllowlist`, `resolveOptions`, `TAB_SCOPE_RE`, `CDPConnection`, `main` (the CLI in-process). Errors:
 `AgentBrowserError` (with a stable `code`) and `UsageError`, `NotAllowedError`, `PinRequiredError`,
 `ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`, `ApprovalNeededError`.
 
@@ -403,8 +473,10 @@ agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
               [--chrome-args JSON] [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
-              [--proxy-idle-ms N] [--command-name NAME]
+              [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME]
 ```
+
+`--any-scope` goes on `tabs`, `window` and every command that takes a `<tab>`; see **Tab scopes**.
 
 With `--json`, each call prints exactly **one JSON document** on standard output, success or failure.
 Progress and warnings go to standard error. Exit status: 0 success, 1 failure, 2 usage error. Without
@@ -429,7 +501,8 @@ holds an earlier refusal (a cancelled, closed or unanswered prompt): the `unreac
 as "refused".
 
 Every success document has `"ok": true` and `"command": "<name>"`, plus the fields below. A `TabRef`
-is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "title"}`.
+is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "title"}`, plus `"scope"` for a tab
+opened under a tab scope.
 
 | Command | Result fields |
 | --- | --- |
@@ -439,7 +512,7 @@ is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "tit
 | `connect <ws-url>` (personal) | `endpoint`, `product` |
 | `stop` | `stopped` bool |
 | `window [pin <tab> \| unpin]` | `window` int\|null, `tabs` TabRef[] (the pinned window's) |
-| `tabs` | `tabs` TabRef[], `window` int\|null |
+| `tabs [--any-scope]` | `tabs` TabRef[], `window` int\|null; with a tab scope also `scope` and `outOfScope` int (the allowlisted tabs outside the scope: a count only) |
 | `open <url> [--name N] [--tab]` | `tab` TabRef, `window` int\|null |
 | `goto <tab> <url>` | `tab` TabRef (live URL and title) |
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
@@ -469,7 +542,8 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 ```python
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
              endpoint=None, personal_user_data_dir=None, no_launch=False, no_prompt=False, notify_command=None,
-             proxy_idle_ms=None, command_name=None, node="node", package_dir=None, timeout=120.0, env=None)
+             proxy_idle_ms=None, command_name=None, tab_scope=None, node="node", package_dir=None, timeout=120.0,
+             env=None)
 ```
 
 One method for each CLI command, with the same options (snake_case), each returning a frozen
@@ -483,7 +557,7 @@ dataclass:
 | `connect(endpoint)` | `ConnectResult(endpoint, product)` |
 | `stop()` | `StopResult(stopped)` |
 | `window(pin=None, unpin=False)` | `WindowResult(window, tabs: list[TabRef])` |
-| `tabs()` | `TabsResult(tabs, window)` |
+| `tabs(any_scope=False)` | `TabsResult(tabs, window, scope, out_of_scope)`; `scope` and `out_of_scope` are None with no tab scope |
 | `open(url, name=None, tab=False)` | `OpenResult(tab: TabRef, window)` |
 | `goto(tab, url)` | `GotoResult(tab)` |
 | `outline(tab, all=False)` | `OutlineResult(tab, elements: list[OutlineElement(index, role, type, label, href)])` |
@@ -501,7 +575,9 @@ dataclass:
 | `record(tab, out, script=None, setup=None, size=None, fps=None, scale=None, no_cursor=False, settle=None, seed=None, ffmpeg=None)` | `RecordResult(tab, path, provenance, width, height, scale, fps, video_width, video_height, frames, seconds, max_frame_gap_ms, steps, events: list[RecordEvent(step, kind, start, end, press, keys, first, last)], warnings)` |
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
-`TabRef(id, target_id, name, url, title)`. `node_version()` returns the node version as a tuple.
+Each method that takes a `tab`, and `window`, also takes `any_scope=False` as its last argument (see
+**Tab scopes**). `TabRef(id, target_id, name, url, title, scope)`; `scope` is None for a tab with no
+scope. `node_version()` returns the node version as a tuple.
 
 Errors (all `AgentBrowserError`):
 
@@ -584,6 +660,9 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   ported from vedlo.
 - `test/allowlist.test.ts`: matching, the file, the denylist.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
+- `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
+  command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
+  lock (parallel CLI calls of two scopes lose no record), and no change without a scope.
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
   that encode need ffmpeg and ffprobe on `PATH` (skipped without them).
@@ -597,6 +676,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/package.test.ts`: the dependency rule, the exports, an install under `node_modules`, no
   consumer paths, no CI workflow.
 - `python/tests/test_adapter.py`: the adapter against the real CLI; missing or old Node; bad output.
+- `python/tests/test_tab_scope.py`: `tab_scope` and `any_scope` through the adapter, the argv, and the
+  shape checks of the scope fields.
 - `python/tests/test_parity.py`: fails when a CLI or library command has no Python method with the
   same parameters.
 
@@ -634,6 +715,7 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 | `src/outline.ts` | `outline`, `redact`, `net` |
 | `src/record.ts` | `record`: steps, keys, cursor paths, overlay, screencast, encoder |
 | `src/options.ts` | consumer options and their checks |
+| `src/lock.ts` | the lock file of the proxy start and of the tab record |
 | `src/cdp.ts` | minimal CDP client on `ws` (Node's built-in WebSocket caps messages at 4 MB) |
 | `index.js`, `loader.js`, `bin/agent-browser.js` | JavaScript entry points (see "Why there is a `loader.js`") |
 | `python/agent_browser/` | the Python adapter |
