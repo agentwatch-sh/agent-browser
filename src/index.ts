@@ -22,7 +22,7 @@ export {
 export type { ErrorCode } from "./errors.ts";
 export {
   launchAgentChrome, appBundle, agentEndpoint, agentChromePid, agentChromeBin, agentProfileDir, findAgentPid, parsePs, processTree,
-  hasUserDataDir, restoresOnStartup, seedRemoteDebugging, assertNoDebuggingFlag, INSPECT_URL, AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN,
+  hasUserDataDir, restoresOnStartup, seedRemoteDebugging, assertSafeChromeArgs, assertNoDebuggingFlag, INSPECT_URL, AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN,
 } from "./agent.ts";
 export type { ProcessRow } from "./agent.ts";
 export { startProxy, stopProxy, proxyInfo, proxyUrl } from "./proxy.ts";

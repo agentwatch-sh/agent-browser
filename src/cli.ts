@@ -23,7 +23,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   socket: { type: "string", description: "proxy socket (default <state-dir>/chrome-proxy.sock)" },
   mode: { type: "string", description: "agent (default) or personal (the operator's Chrome; only when asked)" },
   "chrome-bin": { type: "string", description: "agent Chrome binary (default Chrome Beta, else Google Chrome)" },
-  "chrome-args": { type: "string", description: 'extra Chrome flags, a JSON array e.g. ["--enable-unsafe-swiftshader"]; never a --remote-debugging flag; no secrets (flags show in ps)' },
+  "chrome-args": { type: "string", description: 'extra Chrome flags, a JSON array e.g. ["--enable-unsafe-swiftshader"]; never --remote-debugging-*, --enable-automation, --headless, --user-data-dir or --profile-directory; no secrets (flags show in ps)' },
   endpoint: { type: "string", description: "a known upstream ws:// endpoint (still used through the proxy)" },
   "personal-user-data-dir": { type: "string", description: "personal mode: the operator's Chrome user-data folder" },
   "no-launch": { type: "boolean", description: "never start Chrome; fail with the launch command instead" },

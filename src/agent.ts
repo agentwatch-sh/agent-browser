@@ -6,7 +6,7 @@
 // It is NEVER started with --remote-debugging-port: that flag makes navigator.webdriver true in
 // every page, and Cloudflare, hCaptcha and Google then block even a human (verified on Chrome 154).
 // Instead the operator turns remote debugging on in chrome://inspect/#remote-debugging, and
-// approves Chrome's prompt once per proxy. assertNoDebuggingFlag() enforces this for every launch.
+// approves Chrome's prompt once per proxy. assertSafeChromeArgs() enforces this for every launch.
 
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -85,25 +85,67 @@ export const AGENT_ARGS: readonly string[] = [
   "--disable-background-timer-throttling",
 ];
 
-/** Flags that open a debugging port or pipe. They set navigator.webdriver, so bot checks block every page. */
-// Chrome switches that turn on remote debugging or automation mode: either one sets
-// navigator.webdriver, so bot checks then block every page. Match the switch NAME, not the raw arg.
-// Chrome's POSIX command-line parser accepts a single "-" as a switch prefix as well as "--" (and "/"
-// on Windows), and lowercases switch names on some platforms, so a raw /^--/ test is a parser
-// differential that "-remote-debugging-port" would slip through. Normalize first (strip leading
-// dashes/slashes, lowercase), then match. A denylist on this one dangerous class is deliberate:
-// chromeArgs exists to pass arbitrary legitimate flags, so an allowlist would defeat it.
-const WEBDRIVER_SWITCH = /^(remote-debugging-(port|pipe|address)|enable-automation)(=|$)/;
+// The Chrome switches a caller's flags (chromeArgs, extraArgs, urls) may never carry, by class:
+// - remote debugging (every --remote-debugging-* switch) and automation mode (--enable-automation)
+//   set navigator.webdriver, so bot checks then block every page;
+// - --headless, in every form (--headless=new, --headless=old, ...), lets every page tell that the
+//   browser is headless, so bot checks block it too;
+// - --user-data-dir and --profile-directory: the caller's flags come AFTER agent-browser's own
+//   --user-data-dir, so either one could point the agent Chrome at another profile, for example
+//   the operator's own.
+// Match the switch NAME as Chrome's own parser reads it (base/command_line.cc), not the raw arg:
+// one argv element is one switch; Chrome first trims whitespace from the element, accepts "--" or a
+// single "-" as the prefix ("/" too on Windows), ends the name at the first "=", and lowercases the
+// name on Windows. So a raw /^--/ test is a parser differential that "-remote-debugging-port" or
+// " --headless" would slip through. Normalize first (trim, strip leading dashes/slashes, cut at "=",
+// lowercase), then match: a superset of what Chrome reads as that switch. Text after a space or an
+// "=" inside one element is that switch's value, never a second switch, so it is not inspected.
+// A denylist on these classes is deliberate: chromeArgs exists to pass arbitrary legitimate flags,
+// so an allowlist would defeat it.
+// The refusal names the switch by the text its pattern matched (lowercase letters, digits and "-"
+// only), never the raw element: one element can hold the switch's value after a space or a "/"
+// ("--headless /a/path"), and a value can be a path or a secret.
+const REFUSED_SWITCHES: readonly { name: RegExp; why: string }[] = [
+  {
+    name: /^(?:remote-debugging-[a-z0-9-]*|enable-automation$)/,
+    why: `it turns on remote debugging or automation mode, which sets navigator.webdriver and makes bot checks block every page; turn remote debugging on in ${INSPECT_URL} instead`,
+  },
+  {
+    name: /^headless/,
+    why: "it runs Chrome headless, which every page can tell (the user agent carries the HeadlessChrome token), and bot checks then block it; the agent browser always runs Chrome with a window (on a box with no screen, give it a virtual display)",
+  },
+  {
+    name: /^(?:user-data-dir|profile-directory)$/,
+    why: "it would point the agent Chrome at another profile, for example the operator's own; agent-browser sets the agent profile itself: choose it with the profileDir option (--profile)",
+  },
+];
 
-/** The switch name of a Chrome command-line arg: leading dashes/slashes stripped, lowercased. */
-function chromeSwitchName(arg: string): string {
-  return arg.replace(/^[-/]+/, "").toLowerCase();
+/** The normalized switch name of one Chrome argv element (see above), or undefined if Chrome reads it as no switch. */
+function chromeSwitchName(arg: string): string | undefined {
+  const trimmed = arg.trim();
+  if (!/^[-/]/.test(trimmed)) return undefined;
+  return trimmed.replace(/^[-/]+/, "").split("=")[0].toLowerCase();
 }
 
-export function assertNoDebuggingFlag(args: readonly string[]): void {
-  const bad = args.find((a) => WEBDRIVER_SWITCH.test(chromeSwitchName(a)));
-  if (bad) throw new UsageError(`refusing to launch Chrome with ${bad.split("=")[0]}: it turns on remote debugging or automation mode, which sets navigator.webdriver and makes bot checks block every page; turn remote debugging on in ${INSPECT_URL} instead`);
+/**
+ * Refuse, before any spawn, a Chrome argv that turns on remote debugging, automation mode or
+ * headless mode, or that names a profile (--user-data-dir, --profile-directory), in any dash, slash
+ * or case form, with or without a value. Throws a UsageError that says why and names the switch as
+ * "--" plus its canonical (matched, lowercase) name: never the element's value.
+ */
+export function assertSafeChromeArgs(args: readonly string[]): void {
+  for (const arg of args) {
+    const name = chromeSwitchName(arg);
+    if (name === undefined) continue;
+    for (const r of REFUSED_SWITCHES) {
+      const m = r.name.exec(name);
+      if (m) throw new UsageError(`refusing to launch Chrome with --${m[0]}: ${r.why}`);
+    }
+  }
 }
+
+/** @deprecated The old name of assertSafeChromeArgs, which now refuses more than debugging flags. */
+export const assertNoDebuggingFlag = assertSafeChromeArgs;
 
 /**
  * Whether the profile restores the previous session on startup ("Continue where you left off"),
@@ -171,7 +213,11 @@ export async function launchAgentChrome(
   deps: { endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean; platform?: NodeJS.Platform } = {},
 ): Promise<string> {
   const extraArgs = [...(opts.extraArgs ?? []), ...(s.chromeArgs ?? [])];
-  assertNoDebuggingFlag(extraArgs); // guards opts.extraArgs AND s.chromeArgs (e.g. a CLI --chrome-args), before any spawn
+  const urls = opts.urls?.length ? opts.urls : [INSPECT_URL];
+  // One check, before any probe or spawn, of every element Chrome gets except agent-browser's own
+  // --user-data-dir: AGENT_ARGS, opts.extraArgs, s.chromeArgs (the library option, a CLI
+  // --chrome-args) and the urls (a library caller's urls could hold a switch too).
+  assertSafeChromeArgs([...AGENT_ARGS, ...extraArgs, ...urls]);
   const endpoint = deps.endpoint ?? (() => agentEndpoint(s));
   const running = await endpoint();
   if (running) return running;
@@ -195,8 +241,8 @@ export async function launchAgentChrome(
     if (bin === CHROME_STABLE_BIN && !s.chromeBin) {
       s.log(`agent browser: running from Google Chrome, so while it is open the Dock's Chrome icon brings it forward instead of your own profile; install Google Chrome Beta (brew install --cask google-chrome@beta) to keep them apart`);
     }
-    const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, ...extraArgs, ...(opts.urls?.length ? opts.urls : [INSPECT_URL])];
-    assertNoDebuggingFlag(args);
+    // Exactly the elements checked above, plus the one profile switch agent-browser sets itself.
+    const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, ...extraArgs, ...urls];
     const bundle = opts.background && (deps.platform ?? process.platform) === "darwin" ? appBundle(bin) : undefined;
     const run = deps.spawn ?? (spawn as unknown as SpawnLike);
     viaOpen = !!bundle;

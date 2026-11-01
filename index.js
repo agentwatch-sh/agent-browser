@@ -40,6 +40,7 @@ export const {
   appBundle,
   approveMechanism,
   assertNoDebuggingFlag,
+  assertSafeChromeArgs,
   browserTarget,
   commands,
   endpointCandidates,
