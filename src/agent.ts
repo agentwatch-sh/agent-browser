@@ -102,9 +102,12 @@ export const AGENT_ARGS: readonly string[] = [
 // "=" inside one element is that switch's value, never a second switch, so it is not inspected.
 // A denylist on these classes is deliberate: chromeArgs exists to pass arbitrary legitimate flags,
 // so an allowlist would defeat it.
+// The refusal names the switch by the text its pattern matched (lowercase letters, digits and "-"
+// only), never the raw element: one element can hold the switch's value after a space or a "/"
+// ("--headless /a/path"), and a value can be a path or a secret.
 const REFUSED_SWITCHES: readonly { name: RegExp; why: string }[] = [
   {
-    name: /^(remote-debugging-|enable-automation$)/,
+    name: /^(?:remote-debugging-[a-z0-9-]*|enable-automation$)/,
     why: `it turns on remote debugging or automation mode, which sets navigator.webdriver and makes bot checks block every page; turn remote debugging on in ${INSPECT_URL} instead`,
   },
   {
@@ -112,7 +115,7 @@ const REFUSED_SWITCHES: readonly { name: RegExp; why: string }[] = [
     why: "it runs Chrome headless, which every page can tell (the user agent carries the HeadlessChrome token), and bot checks then block it; the agent browser always runs Chrome with a window (on a box with no screen, give it a virtual display)",
   },
   {
-    name: /^(user-data-dir|profile-directory)$/,
+    name: /^(?:user-data-dir|profile-directory)$/,
     why: "it would point the agent Chrome at another profile, for example the operator's own; agent-browser sets the agent profile itself: choose it with the profileDir option (--profile)",
   },
 ];
@@ -127,13 +130,17 @@ function chromeSwitchName(arg: string): string | undefined {
 /**
  * Refuse, before any spawn, a Chrome argv that turns on remote debugging, automation mode or
  * headless mode, or that names a profile (--user-data-dir, --profile-directory), in any dash, slash
- * or case form, with or without a value. Throws a UsageError that says why.
+ * or case form, with or without a value. Throws a UsageError that says why and names the switch as
+ * "--" plus its canonical (matched, lowercase) name: never the element's value.
  */
 export function assertSafeChromeArgs(args: readonly string[]): void {
   for (const arg of args) {
     const name = chromeSwitchName(arg);
-    const refused = name === undefined ? undefined : REFUSED_SWITCHES.find((r) => r.name.test(name));
-    if (refused) throw new UsageError(`refusing to launch Chrome with ${arg.trim().split("=")[0]}: ${refused.why}`);
+    if (name === undefined) continue;
+    for (const r of REFUSED_SWITCHES) {
+      const m = r.name.exec(name);
+      if (m) throw new UsageError(`refusing to launch Chrome with --${m[0]}: ${r.why}`);
+    }
   }
 }
 

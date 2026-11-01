@@ -175,13 +175,36 @@ test("assertSafeChromeArgs refuses every remote-debugging, automation, headless 
       assert.throws(() => assertSafeChromeArgs(["--lang=en-US", flag]), (e: unknown) => e instanceof UsageError && why.test(e.message), JSON.stringify(flag));
     }
   }
-  // The error names the switch as given, never its value (a value can be a path or a secret).
+  // The error names the switch as "--" and its canonical name, never its value (a value can be a path or a secret).
   assert.throws(() => assertSafeChromeArgs(["--user-data-dir=/Users/operator/Library/Application Support/Google/Chrome"]), (e: unknown) =>
     e instanceof UsageError && /^refusing to launch Chrome with --user-data-dir: /.test(e.message) && !e.message.includes("/Users/operator"));
-  assert.throws(() => assertSafeChromeArgs([" -Headless=new"]), /: refusing to launch Chrome with -Headless: it runs Chrome headless/);
+  assert.throws(() => assertSafeChromeArgs([" -Headless=new"]), /: refusing to launch Chrome with --headless: it runs Chrome headless/);
   assert.throws(() => assertSafeChromeArgs(["--profile-directory=Profile 1"]), /choose it with the profileDir option \(--profile\)/);
   // The old exported name still works: it is the same function.
   assert.equal(assertNoDebuggingFlag, assertSafeChromeArgs);
+});
+
+test("a refusal names only '--' and the canonical switch name: nothing after the name in the element (a space, a '/', an '=') reaches the message", () => {
+  for (const [flag, shown] of [
+    ["--headless /secret/path", "--headless"],
+    ["--headless\t/secret/path", "--headless"],
+    [" -HEADLESS /secret/path=x", "--headless"],
+    ["--headlessSECRET", "--headless"],
+    ["--remote-debugging-port /secret/path", "--remote-debugging-port"],
+    ["--remote-debugging-port/secret/path", "--remote-debugging-port"],
+    ["/Remote-Debugging-Pipe=/secret/path", "--remote-debugging-pipe"],
+    ["--enable-automation=/secret/path", "--enable-automation"],
+    ["--user-data-dir=/secret/path", "--user-data-dir"],
+    ["-Profile-Directory=secret path", "--profile-directory"],
+  ]) {
+    assert.throws(() => assertSafeChromeArgs([flag]), (e: unknown) => {
+      assert.ok(e instanceof UsageError, flag);
+      const head = `refusing to launch Chrome with ${shown}: `;
+      assert.ok(e.message.startsWith(head), `${JSON.stringify(flag)}: ${e.message}`);
+      assert.ok(!/secret/i.test(e.message), `${JSON.stringify(flag)} leaks its value: ${e.message}`);
+      return true;
+    }, flag);
+  }
 });
 
 test("assertSafeChromeArgs lets ordinary flags through, and reads one argv element as one switch, as Chrome does", () => {
