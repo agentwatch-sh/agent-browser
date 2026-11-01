@@ -210,15 +210,19 @@ With a scope:
 - A `<tab>` resolves only among the scope's tabs, in all three forms: a name, a target-id prefix and
   a URL substring. Every command that takes a `<tab>`, and `window pin <tab>`, uses the same resolver.
   A tab of another scope, a tab opened with no scope and a tab opened by hand are not visible.
-- When a `<tab>` matches only a tab outside the scope, the command fails with `tab_not_found`. The
-  message says that a tab outside this scope matches, and names `--any-scope`. It never shows that
-  tab's URL or title.
+- When a name or a target-id prefix matches only a tab outside the scope, the command fails with
+  `tab_not_found`. The message says that a tab outside this scope matches, and names `--any-scope`. It
+  never shows that tab's URL or title. A URL substring that matches only outside the scope gets the
+  plain `tab_not_found` message, with no hint: else a caller could test the other scopes' URLs one
+  substring at a time.
 - `tabs` lists the scope's tabs and adds `scope` and `outOfScope`: the number of allowlisted tabs
   outside the scope. Of those tabs it gives the count only: no URL, title or name.
 - `--any-scope` (`anyScope`, `any_scope=True`) on a command reaches every allowlisted tab. `tabs
   --any-scope` lists every allowlisted tab, each with its `scope` (none for a tab with no scope), and
   `outOfScope` keeps its meaning. `window --any-scope` lists every tab of the pinned window.
 - `close` removes the tab from the scope's record, also when another scope closes it with `--any-scope`.
+- `window pin <tab>` and `window unpin` fail with a usage error unless `--any-scope` is given: the pin
+  belongs to the state folder, so it changes the tabs of every scope (see **Limits** below).
 - `status` counts the tabs of the whole browser, also with a scope.
 
 With no scope, nothing changes for a consumer that does not use scopes: every tab is visible, every
@@ -246,16 +250,33 @@ is in one scope at most:
 ```
 
 **Several processes.** Each CLI call is a process, and several sessions call at the same time, so
-several processes write the record. Each change (`open`, `close`) takes the lock file `tabs.lock` in
-the state folder: an exclusive create that holds the pid, like the proxy's start lock (`src/lock.ts`).
-A crashed holder's lock is cleared; a live holder's lock is never cleared. Under the lock the change
-reads both files, changes them, and writes each changed file to a temporary file that it renames over
-the old one. So no change is lost, and a reader, which takes no lock, never sees half a file. Under the
-lock, the entries of tabs that Chrome no longer has (closed by hand, or by another caller) are dropped
-from both files. Such a tab is gone from every list before that.
+several processes write the record: `tabs.json`, `tab-scopes.json`, the read-first marks
+(`reads.json`) and the pinned window (`window.json`). Each change (`open`, `close`, the read mark of
+`outline` and `text`, `window pin` and `unpin`) takes the lock file `tabs.lock` in the state folder:
+an exclusive create that holds the pid, like the proxy's start lock (`src/lock.ts`). A crashed
+holder's lock is cleared; a live holder's lock is never cleared. Under the lock the change reads the
+files, changes them, and writes each changed file to a temporary file that it renames over the old
+one. So no change is lost, and a reader, which takes no lock, never sees half a file. Under the lock,
+the entries of tabs that Chrome no longer has (closed by hand, or by another caller) are dropped from
+the names, the scopes and the read marks. Such a tab is gone from every list before that. When `open`
+cannot record its new tab (the lock timed out after 10 s), it closes that tab again and fails: no tab
+stays behind that nobody recorded.
 
-**Limits.** The pinned window (`window pin`) and the read-first record (`reads.json`) belong to the
-state folder, not to a scope: a pin confines every caller of that state folder.
+**Limits.**
+
+- The pinned window (`window pin`) and the read-first record (`reads.json`) belong to the state
+  folder, not to a scope: a pin confines every caller of that state folder. So under a scope,
+  `window pin` and `unpin` need `--any-scope`. In personal mode, the first `open` with no pin still
+  pins its own new window, also under a scope.
+- With a pinned window, `open` makes its tab with `window.open` from a tab that is already in that
+  window (CDP cannot create a tab in a chosen window). It uses a tab of this scope first. When this
+  scope has no tab in the pinned window, it uses a tab of another scope, or one with no scope: the
+  call runs in that tab's page (it opens `about:blank` only, and reads nothing there).
+- The lock can, in theory, be broken twice. When a holder crashes and two waiters see its dead pid
+  in the same few milliseconds, the first one clears the lock and takes it, and the second one can
+  then remove that live lock and take its own: for that one change, two holders run at the same time,
+  and one of their changes (a tab's name, scope or read mark, or the pin) can be lost. Each file is
+  still written whole. It needs a crashed holder and two waiters at the same moment.
 
 ## Recording (`record`)
 
@@ -442,9 +463,12 @@ Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 - `allowedPages({ anyScope? })`, `otherPageCount()`, `open(url, { name?, newWindow?, timeoutMs? })`,
   `resolve(ref, { anyScope? })` (find a tab without attaching), `find(ref, { anyScope? })`,
   `attach(targetId)`, `windowOf(targetId)`, `pinnedWindow()`, `pinWindow(id | undefined)`,
-  `disconnect()`. Properties: `conn`, `settings`, `allow`, `product`, `mode`, `tabScope`. The tab
-  scope applies to `allowedPages`, `resolve`, `find` and `open`; `attach(targetId)` is the low-level
-  call by exact target id, and it checks the allowlist and the pin only.
+  `forget(targetId)` (drop a closed tab from the record), `markRead(targetId, url)` and
+  `readMark(targetId)` (the read-first record of `shot`), `disconnect()`. Properties: `conn`,
+  `settings`, `allow`, `product`, `mode`, `tabScope`. The tab scope applies to `allowedPages`,
+  `resolve`, `find` and `open`; `attach(targetId)` is the low-level call by exact target id, and it
+  checks the allowlist and the pin only. `pinWindow`, `forget` and `markRead` are async (they change
+  the record under its lock): await them. `pinWindow` and `forget` were synchronous before tab scopes.
 
 **`Tab`**: `goto(url)`, `url()`, `assertAllowed()`, `evaluate(fn | expression, ...args)`,
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
@@ -476,7 +500,8 @@ agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME]
 ```
 
-`--any-scope` goes on `tabs`, `window` and every command that takes a `<tab>`; see **Tab scopes**.
+`--any-scope` goes on `tabs`, `window` and every command that takes a `<tab>`; under a tab scope,
+`window pin` and `window unpin` need it. See **Tab scopes**.
 
 With `--json`, each call prints exactly **one JSON document** on standard output, success or failure.
 Progress and warnings go to standard error. Exit status: 0 success, 1 failure, 2 usage error. Without
@@ -577,7 +602,8 @@ dataclass:
 
 Each method that takes a `tab`, and `window`, also takes `any_scope=False` as its last argument (see
 **Tab scopes**). `TabRef(id, target_id, name, url, title, scope)`; `scope` is None for a tab with no
-scope. `node_version()` returns the node version as a tuple.
+scope. `tab_scope` must be a `str` or None: any other type raises `ValueError` in the constructor,
+before any call (the CLI checks the name itself). `node_version()` returns the node version as a tuple.
 
 Errors (all `AgentBrowserError`):
 
@@ -662,7 +688,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
 - `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
-  lock (parallel CLI calls of two scopes lose no record), and no change without a scope.
+  lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it
+  cannot record), `window pin` and `unpin` under a scope, and no change without a scope.
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
   that encode need ffmpeg and ffprobe on `PATH` (skipped without them).
@@ -676,8 +703,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/package.test.ts`: the dependency rule, the exports, an install under `node_modules`, no
   consumer paths, no CI workflow.
 - `python/tests/test_adapter.py`: the adapter against the real CLI; missing or old Node; bad output.
-- `python/tests/test_tab_scope.py`: `tab_scope` and `any_scope` through the adapter, the argv, and the
-  shape checks of the scope fields.
+- `python/tests/test_tab_scope.py`: `tab_scope` and `any_scope` through the adapter, the argv, a
+  `tab_scope` that is not a string, and the shape checks of the scope fields.
 - `python/tests/test_parity.py`: fails when a CLI or library command has no Python method with the
   same parameters.
 

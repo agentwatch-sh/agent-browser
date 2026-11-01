@@ -23,6 +23,10 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
       try { owner = Number(readFileSync(path, "utf8")); } catch { /* being written */ }
       if (owner > 0) {
         try { process.kill(owner, 0); } catch (err) {
+          // A known gap: two waiters can both read the same dead pid. If the first one clears the lock
+          // and takes it before the second one's rmSync, the second one removes the first one's live
+          // lock and takes its own, and for that one change two holders run at the same time. It needs
+          // a crashed holder and two waiters in the same few milliseconds; the README's limits say so.
           if ((err as NodeJS.ErrnoException).code === "ESRCH") rmSync(path, { force: true });
         }
       } else {

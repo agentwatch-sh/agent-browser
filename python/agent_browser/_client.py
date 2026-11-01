@@ -68,7 +68,8 @@ class AgentBrowser:
     apart: `open` records each new tab under the scope, a `tab` argument resolves only among the
     scope's tabs, and `tabs()` lists them with a count of the others. The `any_scope=True` argument of
     a method reaches the tabs outside the scope. The CLI checks the name (1 to 64 letters, digits,
-    ".", "_" or "-", starting with a letter or a digit) and raises UsageError for any other.
+    ".", "_" or "-", starting with a letter or a digit) and raises UsageError for any other; a
+    tab_scope that is not a string raises ValueError here, before any call.
     """
 
     def __init__(
@@ -97,6 +98,8 @@ class AgentBrowser:
             raise ValueError(f'mode must be "agent" or "personal", not {mode!r}')
         if notify_command is not None and (isinstance(notify_command, str) or not all(isinstance(a, str) for a in notify_command) or not notify_command):
             raise ValueError("notify_command must be a non-empty sequence of strings (an argv list, not a shell string)")
+        if tab_scope is not None and not isinstance(tab_scope, str):
+            raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
         self.state_dir = Path(state_dir)
         self.allowlist = Path(allowlist) if allowlist is not None else None
         self.profile = Path(profile) if profile is not None else None
@@ -237,7 +240,10 @@ class AgentBrowser:
         return self._run("stop", [], StopResult.from_json)
 
     def window(self, pin: Optional[str] = None, unpin: bool = False, any_scope: bool = False) -> WindowResult:
-        """Show the pinned window; `pin` pins the window that holds that tab; `unpin` clears the pin."""
+        """Show the pinned window; `pin` pins the window that holds that tab; `unpin` clears the pin.
+
+        Under a tab scope, `pin` and `unpin` need any_scope=True: the pin confines every scope.
+        """
         if pin is not None and unpin:
             raise ValueError("window: pin or unpin, not both")
         return self._run("window", [*(["pin", pin] if pin is not None else ["unpin"] if unpin else []), *_scope(any_scope)], WindowResult.from_json)

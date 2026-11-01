@@ -2,7 +2,6 @@
 // document. The CLI prints these results as JSON; Node code calls them in-process; the Python
 // adapter runs the CLI. COMMAND_SPECS describes them all, and the parity tests read it.
 
-import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab } from "./browser.ts";
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
@@ -46,7 +45,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [p("endpoint", "string", true, "positional", "ws://127.0.0.1:<port>/devtools/browser/<id>")] },
   { name: "stop", summary: "Stop this consumer's proxy (the next command restarts it, with one more approval)", usage: "stop", params: [] },
   { name: "window", summary: "Show the pinned window, pin the window that holds <tab>, or unpin", usage: "window [pin <tab> | unpin]",
-    params: [p("pin", "string", false, "pin <tab>", "pin the window that holds this tab"), p("unpin", "boolean", false, "unpin", "clear the pin"), ANY_SCOPE] },
+    params: [p("pin", "string", false, "pin <tab>", "pin the window that holds this tab"), p("unpin", "boolean", false, "unpin", "clear the pin"),
+      { ...ANY_SCOPE, description: "reach tabs outside this tab scope; with a tab scope, pin and unpin need it (the pin confines every scope); no effect without a tab scope" }] },
   { name: "tabs", summary: "List allowlisted tabs (other tabs are never shown); with a tab scope, the scope's tabs and a count of the others", usage: "tabs [--any-scope]",
     params: [ANY_SCOPE] },
   { name: "open", summary: "Open an allowlisted URL in a new tab", usage: "open <url> [--name N] [--tab]",
@@ -175,15 +175,6 @@ function httpUrl(url: string): string {
   return url;
 }
 
-// The read-first rule: a screenshot needs an outline or text of the same tab at the same URL.
-const readsPath = (s: Settings) => statePath(s, "reads.json");
-function reads(s: Settings): Record<string, string> {
-  try { return JSON.parse(readFileSync(readsPath(s), "utf8")); } catch { return {}; }
-}
-function markRead(s: Settings, targetId: string, url: string) {
-  writeFileSync(readsPath(s), JSON.stringify({ ...reads(s), [targetId]: url }, null, 2));
-}
-
 async function stopProxyAndWait(s: Settings): Promise<boolean> {
   const stopped = stopProxy(s);
   for (let i = 0; stopped && i < 150 && await socketAlive(s.socketPath); i++) await new Promise((r) => setTimeout(r, 20));
@@ -261,9 +252,13 @@ export const commands = {
 
   async window(o: BrowserOptions | Settings, p: { pin?: string; unpin?: boolean; anyScope?: boolean } = {}): Promise<WindowResult> {
     if (p.pin && p.unpin) throw new UsageError("window: pin or unpin, not both");
-    return withBrowser(o, async (b) => {
-      if (p.pin) b.pinWindow(await b.windowOf((await b.resolve(p.pin, { anyScope: p.anyScope })).targetId));
-      else if (p.unpin) b.pinWindow(undefined);
+    const s = resolveOptions(o);
+    // The pin belongs to the state folder, not to a scope: under a tab scope, a pin or an unpin is a change for every caller.
+    if ((p.pin || p.unpin) && s.tabScope !== undefined && !p.anyScope)
+      throw new UsageError(`window ${p.pin ? "pin" : "unpin"}: the pinned window belongs to the whole state folder, so this changes the tabs of every scope, not only of scope "${s.tabScope}"; pass --any-scope to do it anyway`);
+    return withBrowser(s, async (b) => {
+      if (p.pin) await b.pinWindow(await b.windowOf((await b.resolve(p.pin, { anyScope: p.anyScope })).targetId));
+      else if (p.unpin) await b.pinWindow(undefined);
       const w = b.pinnedWindow();
       return { ok: true, command: "window", window: w ?? null, tabs: w === undefined ? [] : (await b.allowedPages({ anyScope: p.anyScope })).map(tabRef) };
     });
@@ -299,7 +294,7 @@ export const commands = {
   async outline(o: BrowserOptions | Settings, p: { tab: string; all?: boolean; anyScope?: boolean }): Promise<OutlineResult> {
     return onTab(o, p, async (tab, info, b) => {
       const elements = await outlineTab(tab, !!p.all);
-      markRead(b.settings, tab.targetId, await tab.url());
+      await b.markRead(tab.targetId, await tab.url()); // the read-first rule of shot
       return { ok: true, command: "outline", tab: info, elements };
     });
   },
@@ -339,7 +334,7 @@ export const commands = {
   async text(o: BrowserOptions | Settings, p: { tab: string; selector?: string; anyScope?: boolean }): Promise<TextResult> {
     return onTab(o, p, async (tab, info, b) => {
       const text = await tab.text(p.selector ? idx(p.selector) : undefined);
-      markRead(b.settings, tab.targetId, await tab.url());
+      await b.markRead(tab.targetId, await tab.url()); // the read-first rule of shot
       return { ok: true, command: "text", tab: info, selector: p.selector ?? null, text };
     });
   },
@@ -359,7 +354,7 @@ export const commands = {
     const scale = p.scale === undefined ? undefined : checkScale(p.scale);
     return onTab(o, p, async (tab, info, b) => {
       const s = b.settings;
-      if (reads(s)[tab.targetId] !== await tab.url())
+      if (b.readMark(tab.targetId) !== await tab.url())
         throw new ReadFirstError(`read the page first: run \`${s.commandName} outline ${info.id}\` or \`text ${info.id}\`; a screenshot is the last resort`);
       const out = p.path ? resolve(p.path) : join(statePath(s, "shots"), `${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
       // --scale alone keeps the tab's own size and changes only the pixel ratio.

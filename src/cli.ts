@@ -65,7 +65,8 @@ ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
 <tab> is a name given to 'open --name', a target-id prefix, or a URL substring (allowlisted tabs only).
 With --tab-scope NAME, open records each new tab under that scope, <tab> resolves only among the
 scope's tabs, and tabs lists them and counts the others. Names are kept per scope. --any-scope (on
-tabs, window and every command that takes <tab>) reaches the tabs outside the scope.
+tabs, window and every command that takes <tab>) reaches the tabs outside the scope. In a scope,
+window pin and window unpin need --any-scope: the pin confines every scope.
 
 Options:
 ${Object.entries(GLOBAL_FLAGS).map(([k, f]) => `  --${(k + (f.type === "string" ? " X" : "")).padEnd(30)} ${f.description}`).join("\n")}`;

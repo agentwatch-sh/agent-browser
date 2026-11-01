@@ -67,11 +67,16 @@ remote debugging. Approve the connection prompt, then retry. If needed, run
  * The tab record, in the state folder. tabs.json maps the name of each tab opened with no tab scope
  * to its targetId, as it always has. tab-scopes.json holds each tab opened under a tab scope, by
  * targetId: its scope and its name there (null: no name). So a name belongs to one scope, and two
- * scopes can each have a tab named "main". Both files change only under the record lock.
+ * scopes can each have a tab named "main". reads.json holds the read-first marks (targetId -> the URL
+ * that outline or text last read there), and window.json the pinned window. Every caller of the state
+ * folder writes these four files, so each of them changes only under the record lock (updateRecord).
  */
 type Registry = Record<string, string>; // tab name -> targetId (tabs with no scope)
 type ScopeRecord = Record<string, { scope: string; name: string | null }>; // targetId -> its scope and its name there
-const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", RECORD_LOCK = "tabs.lock";
+type Reads = Record<string, string>; // targetId -> the URL that outline or text read
+/** The whole record, as a change under the lock sees it and changes it. */
+type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined };
+const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", RECORD_LOCK = "tabs.lock";
 
 /** Write JSON to a temporary file and rename it over `path`, so a reader never sees half a file. */
 function writeJsonAtomic(path: string, value: unknown) {
@@ -158,38 +163,67 @@ export class AgentBrowser {
     return out;
   }
 
+  private readMarks(): Reads {
+    let raw: unknown;
+    try { raw = JSON.parse(readFileSync(statePath(this.settings, READS_FILE), "utf8")); } catch { return {}; }
+    const out: Reads = {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) for (const [id, url] of Object.entries(raw as Record<string, unknown>))
+      if (typeof url === "string") out[id] = url;
+    return out;
+  }
+
   /**
-   * Change the tab record under the state folder's lock (tabs.lock): several processes (CLI calls of
-   * different sessions) write it, and a read-modify-write without the lock can lose another's change.
-   * The entries of tabs that Chrome no longer has are dropped here. The target list is read inside the
-   * lock, so a tab that another process recorded before this one took the lock is in it; when the list
-   * cannot be read, nothing is dropped. Only a file that changed is written.
+   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json) under the state
+   * folder's lock (tabs.lock): several processes (CLI calls of different sessions) write it, and a
+   * read-modify-write without the lock can lose another's change. The entries of tabs that Chrome no
+   * longer has are dropped here, from the names, the scopes and the read marks. The target list is
+   * read inside the lock, so a tab that another process recorded before this one took the lock is in
+   * it; when the list cannot be read, nothing is dropped. Only a file that changed is written, to a
+   * temporary file renamed over it, so a reader (which takes no lock) never sees half a file.
    */
-  private async updateRecord(change: (registry: Registry, scopes: ScopeRecord) => void): Promise<void> {
+  private async updateRecord(change: (r: TabRecord) => void): Promise<void> {
     await withFileLock(statePath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
-      const registry = this.readRegistry(), scopes = this.readScopes();
-      const before = [JSON.stringify(registry), JSON.stringify(scopes)];
-      change(registry, scopes);
+      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow() };
+      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window };
+      change(r);
       const live = await this.conn.send("Target.getTargets", {}, undefined, 5_000)
         .then(({ targetInfos }) => new Set((targetInfos as TargetInfo[]).map((t) => t.targetId)), () => undefined);
       if (live) {
-        for (const [name, id] of Object.entries(registry)) if (!live.has(id)) delete registry[name];
-        for (const id of Object.keys(scopes)) if (!live.has(id)) delete scopes[id];
+        for (const [name, id] of Object.entries(r.registry)) if (!live.has(id)) delete r.registry[name];
+        for (const id of Object.keys(r.scopes)) if (!live.has(id)) delete r.scopes[id];
+        for (const id of Object.keys(r.reads)) if (!live.has(id)) delete r.reads[id];
       }
-      if (JSON.stringify(registry) !== before[0]) writeJsonAtomic(statePath(this.settings, REGISTRY_FILE), registry);
-      if (JSON.stringify(scopes) !== before[1]) writeJsonAtomic(statePath(this.settings, SCOPES_FILE), scopes);
+      if (JSON.stringify(r.registry) !== before.registry) writeJsonAtomic(statePath(this.settings, REGISTRY_FILE), r.registry);
+      if (JSON.stringify(r.scopes) !== before.scopes) writeJsonAtomic(statePath(this.settings, SCOPES_FILE), r.scopes);
+      if (JSON.stringify(r.reads) !== before.reads) writeJsonAtomic(statePath(this.settings, READS_FILE), r.reads);
+      if (r.window !== before.window) {
+        if (r.window === undefined) rmSync(statePath(this.settings, WINDOW_FILE), { force: true });
+        else writeJsonAtomic(statePath(this.settings, WINDOW_FILE), { windowId: r.window });
+      }
     }, "the tab record lock");
+  }
+
+  // --- the read-first rule: a screenshot needs an outline or text of the same tab at the same URL ---
+
+  /** The URL at which outline or text last read this tab, if any (commands.shot checks it). */
+  readMark(targetId: string): string | undefined {
+    return this.readMarks()[targetId];
+  }
+
+  /** Record that outline or text read this tab at this URL (under the record lock). */
+  async markRead(targetId: string, url: string): Promise<void> {
+    await this.updateRecord((r) => { r.reads[targetId] = url; });
   }
 
   // --- the pinned window: when pinned, nothing outside that one Chrome window is touched ---
 
   pinnedWindow(): number | undefined {
-    try { return JSON.parse(readFileSync(statePath(this.settings, "window.json"), "utf8")).windowId; } catch { return undefined; }
+    try { return JSON.parse(readFileSync(statePath(this.settings, WINDOW_FILE), "utf8")).windowId; } catch { return undefined; }
   }
 
-  pinWindow(windowId: number | undefined) {
-    if (windowId === undefined) rmSync(statePath(this.settings, "window.json"), { force: true });
-    else writeFileSync(statePath(this.settings, "window.json"), JSON.stringify({ windowId }, null, 2));
+  /** Pin this window, or clear the pin (undefined). Async: it writes window.json under the record lock. */
+  async pinWindow(windowId: number | undefined): Promise<void> {
+    await this.updateRecord((r) => { r.window = windowId; });
   }
 
   /** Personal mode acts only inside the caller's own pinned window. */
@@ -254,16 +288,28 @@ export class AgentBrowser {
       if (!agent && opts.newWindow === false)
         throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
       targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? !agent })).targetId;
-      if (!agent) this.pinWindow(await this.windowOf(targetId));
     }
-    const tab = await this.attach(targetId);
-    const scope = this.tabScope, name = opts.name;
-    if (scope !== undefined) await this.updateRecord((_, scopes) => {
-      // A name belongs to one tab of the scope: a tab that had it before keeps its place in the scope, without the name.
-      if (name) for (const e of Object.values(scopes)) if (e.scope === scope && e.name === name) e.name = null;
-      scopes[targetId] = { scope, name: name || null };
-    });
-    else if (name) await this.updateRecord((registry) => { registry[name] = targetId; });
+    // The new tab exists from here. When it cannot be recorded (the record lock timed out, say) or
+    // attached, it is closed again (best effort), so it never stays as a tab that nobody recorded:
+    // under a tab scope that would be a "no scope" tab that every other caller sees.
+    let tab: Tab;
+    try {
+      // Personal mode with no pin: the tab's own new window is pinned at once, in the same change as its record.
+      const pin = win === undefined && !agent ? await this.windowOf(targetId) : undefined;
+      const scope = this.tabScope, name = opts.name;
+      if (pin !== undefined || scope !== undefined || name) await this.updateRecord((r) => {
+        if (pin !== undefined) r.window = pin;
+        if (scope !== undefined) {
+          // A name belongs to one tab of the scope: a tab that had it before keeps its place in the scope, without the name.
+          if (name) for (const e of Object.values(r.scopes)) if (e.scope === scope && e.name === name) e.name = null;
+          r.scopes[targetId] = { scope, name: name || null };
+        } else if (name) r.registry[name] = targetId;
+      });
+      tab = await this.attach(targetId);
+    } catch (e) {
+      await this.conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
+      throw e;
+    }
     if (url !== "about:blank") await tab.goto(url, { timeoutMs: opts.timeoutMs });
     return tab;
   }
@@ -298,8 +344,10 @@ export class AgentBrowser {
   /**
    * Resolve an allowlisted tab by name, targetId (prefix), or URL substring, without attaching. With a
    * tab scope, all three forms look only among the scope's tabs; when only a tab outside the scope
-   * matches, the error says so and names --any-scope, and never that tab's URL or title. With no scope,
-   * or with anyScope, they look among every allowlisted tab (see match).
+   * matches by name or target-id prefix, the error says so and names --any-scope, and never that tab's
+   * URL or title. A URL substring that matches only outside the scope gets the plain "no tab" error:
+   * the hint would let a caller test the other scopes' URLs one substring at a time. With no scope, or
+   * with anyScope, they look among every allowlisted tab (see match).
    */
   async resolve(ref: string, opts: { anyScope?: boolean } = {}): Promise<PageInfo> {
     if (!ref) throw new UsageError("a tab reference is required");
@@ -310,7 +358,7 @@ export class AgentBrowser {
     if (hit) return hit;
     if (scope === undefined || opts.anyScope) throw new TabNotFoundError(`no allowlisted tab matches "${ref}" (see: ${cmd} tabs${scope === undefined ? "" : " --any-scope"})`);
     let outside = false;
-    try { outside = this.match(ref, await this.allowedPages({ anyScope: true }), reg) !== undefined; }
+    try { outside = this.match(ref, await this.allowedPages({ anyScope: true }), reg, { byUrl: false }) !== undefined; }
     catch (e) { if (!(e instanceof TabNotFoundError)) throw e; outside = true; } // a name of two other scopes: it matches outside too
     if (outside) throw new TabNotFoundError(`no tab of scope "${scope}" matches "${ref}", but a tab outside this scope does (another scope's, or one with no scope); pass --any-scope to reach it`);
     throw new TabNotFoundError(`no allowlisted tab of scope "${scope}" matches "${ref}" (see: ${cmd} tabs)`);
@@ -319,9 +367,9 @@ export class AgentBrowser {
   /**
    * The tab `ref` names among `pages`, first hit wins: a name (of this scope, then of a tab with no
    * scope, then of another scope, an error when two other scopes use it), a target-id prefix, a URL
-   * substring.
+   * substring (unless byUrl is false).
    */
-  private match(ref: string, pages: PageInfo[], reg: Registry): PageInfo | undefined {
+  private match(ref: string, pages: PageInfo[], reg: Registry, opts: { byUrl?: boolean } = {}): PageInfo | undefined {
     const scope = this.tabScope;
     const own = scope === undefined ? undefined : pages.find((p) => p.scope === scope && p.name === ref);
     if (own) return own;
@@ -332,7 +380,7 @@ export class AgentBrowser {
       throw new TabNotFoundError(`"${ref}" names a tab in each of ${others.length} other scopes; use the tab's target-id prefix (see: ${this.settings.commandName} tabs${scope === undefined ? "" : " --any-scope"})`);
     return others[0]
       ?? pages.find((p) => p.targetId.toLowerCase().startsWith(ref.toLowerCase()))
-      ?? pages.find((p) => p.url.includes(ref));
+      ?? (opts.byUrl === false ? undefined : pages.find((p) => p.url.includes(ref)));
   }
 
   /** Find an allowlisted tab (see resolve) and attach to it. */
@@ -360,12 +408,13 @@ export class AgentBrowser {
     return tab;
   }
 
-  /** Drop a closed tab: its session, its name, and its place in a tab scope. */
+  /** Drop a closed tab: its session, its name, its place in a tab scope and its read mark. Async: the record changes under its lock. */
   async forget(targetId: string): Promise<void> {
     this.sessions.delete(targetId);
-    await this.updateRecord((registry, scopes) => {
-      for (const [n, id] of Object.entries(registry)) if (id === targetId) delete registry[n];
-      delete scopes[targetId];
+    await this.updateRecord((r) => {
+      for (const [n, id] of Object.entries(r.registry)) if (id === targetId) delete r.registry[n];
+      delete r.scopes[targetId];
+      delete r.reads[targetId];
     });
   }
 

@@ -46,12 +46,15 @@ class TabScopeTest(unittest.TestCase):
             self.assertEqual((listed.scope, listed.out_of_scope), ("py-a", 1))
             self.assertEqual(self.a.eval("main", "location.href").value, base + "/", "both scopes name a tab main")
             self.assertEqual(self.b.eval("main", "location.href").value, base + "/next")
-            for ref in (theirs.id, "/next"):
-                with self.assertRaises(TabNotFoundError) as caught:
-                    self.a.text(ref)
-                self.assertIn("a tab outside this scope does", caught.exception.message)
-                self.assertIn("--any-scope", caught.exception.message)
-                self.assertNotIn(base, caught.exception.message, "never the other tab's URL")
+            with self.assertRaises(TabNotFoundError) as caught:
+                self.a.text(theirs.id)
+            self.assertIn("a tab outside this scope does", caught.exception.message)
+            self.assertIn("--any-scope", caught.exception.message)
+            self.assertNotIn(base, caught.exception.message, "never the other tab's URL")
+            # A URL substring that matches only outside the scope gets no hint: it would be an oracle on other scopes' URLs.
+            with self.assertRaises(TabNotFoundError) as caught:
+                self.a.text("/next")
+            self.assertEqual(caught.exception.message, 'no allowlisted tab of scope "py-a" matches "/next" (see: agent-browser tabs)')
             reached = self.a.text(theirs.id, any_scope=True)
             self.assertEqual((reached.tab.name, reached.tab.scope), ("main", "py-b"))
             self.assertEqual(sorted(t.target_id for t in self.a.tabs(any_scope=True).tabs), sorted([mine.target_id, theirs.target_id]))
@@ -96,6 +99,16 @@ class TabScopeTest(unittest.TestCase):
         self.assertEqual(clicked[2:6], ["click", "nothing-here", "#1", "--any-scope"])
         self.assertNotIn("--tab-scope", plain)
         self.assertNotIn("--any-scope", plain)
+
+    def test_a_scope_that_is_not_a_string_is_a_value_error_before_any_call(self) -> None:
+        with mock.patch("agent_browser._client.subprocess.run") as run:
+            for bad in (5, 1.5, b"py-a", ["py-a"], ("py-a",), {"scope": "py-a"}, True, object()):
+                with self.assertRaises(ValueError, msg=repr(bad)) as caught:
+                    AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, endpoint=self.fake.ws, no_launch=True, tab_scope=bad)  # type: ignore[arg-type]
+                self.assertIn("tab_scope must be a string", str(caught.exception))
+            self.assertEqual(AgentBrowser(self.consumer.state_dir, tab_scope=None).tab_scope, None)
+            self.assertEqual(AgentBrowser(self.consumer.state_dir, tab_scope="py-a").tab_scope, "py-a")
+        run.assert_not_called()
 
     def test_an_invalid_scope_is_a_usage_error(self) -> None:
         for bad in ("two words", "", "-flag", "a/b", "x" * 65):
