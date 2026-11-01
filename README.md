@@ -468,9 +468,18 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 
 ```python
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
-             endpoint=None, personal_user_data_dir=None, no_launch=False, no_prompt=False, notify_command=None,
-             proxy_idle_ms=None, command_name=None, node="node", package_dir=None, timeout=120.0, env=None)
+             chrome_args=None, endpoint=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
+             notify_command=None, approve=None, approve_command=None, proxy_idle_ms=None, command_name=None,
+             node="node", package_dir=None, timeout=120.0, env=None)
 ```
+
+Each argument from `state_dir` to `command_name` is the CLI flag of the same name (`chrome_args` is
+`--chrome-args`). `node`, `package_dir`, `timeout` and `env` tell the adapter how to run the CLI.
+`chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
+`"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
+of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
+sends `chrome_args`, `notify_command` and `approve_command` to the CLI as one JSON array each, and
+raises `ValueError` for a value of the wrong type.
 
 One method for each CLI command, with the same options (snake_case), each returning a frozen
 dataclass:
@@ -596,9 +605,10 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   is restored.
 - `test/package.test.ts`: the dependency rule, the exports, an install under `node_modules`, no
   consumer paths, no CI workflow.
-- `python/tests/test_adapter.py`: the adapter against the real CLI; missing or old Node; bad output.
+- `python/tests/test_adapter.py`: the adapter against the real CLI; the argv of each option; missing or
+  old Node; bad output.
 - `python/tests/test_parity.py`: fails when a CLI or library command has no Python method with the
-  same parameters.
+  same parameters, or when a CLI option (from `agent-browser --help`) has no `AgentBrowser` argument.
 
 There is no CI workflow; the tests run locally.
 

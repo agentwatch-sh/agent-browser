@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence as AnySequence
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
@@ -24,6 +25,10 @@ from ._results import (
 
 PathLike = Union[str, "os.PathLike[str]"]
 R = TypeVar("R")
+
+#: The built-in approvers of Chrome's "Allow remote debugging?" dialog: "auto" picks one by platform.
+Approver = Literal["auto", "osascript", "xdotool"]
+APPROVERS: Tuple[Approver, ...] = ("auto", "osascript", "xdotool")
 
 MIN_NODE_MAJOR = 26
 
@@ -51,6 +56,20 @@ def _is_package(path: Path) -> bool:
     return name == "agent-browser" and (path / "bin" / "agent-browser.js").is_file()
 
 
+def _strings(value: object) -> bool:
+    """A sequence of strings (a list or a tuple), not one string."""
+    return isinstance(value, AnySequence) and not isinstance(value, (str, bytes)) and all(isinstance(a, str) for a in value)
+
+
+def _argv_list(name: str, value: Optional[Sequence[str]]) -> Optional[List[str]]:
+    """A command for the CLI to run: a non-empty argv list, never a shell string."""
+    if value is None:
+        return None
+    if not _strings(value) or not value:
+        raise ValueError(f"{name} must be a non-empty sequence of strings (an argv list, not a shell string)")
+    return list(value)
+
+
 class AgentBrowser:
     """This consumer's agent browser, driven through the `agent-browser` CLI.
 
@@ -58,6 +77,11 @@ class AgentBrowser:
     logins), tab names and proxy socket live under state_dir. The allowlist file is read, never
     written. `node` is the Node 26+ binary, and `package_dir` the agent-browser package folder
     (default: the checkout this module is in).
+
+    `chrome_args` are extra Chrome flags at launch, one string each (no secrets: Chrome flags show in
+    `ps`; the CLI refuses a --remote-debugging flag). `approve` answers Chrome's "Allow remote
+    debugging?" dialog for unattended use: True or "auto" picks the approver by platform, "osascript"
+    or "xdotool" forces one. `approve_command` runs a custom approver argv in its place.
     """
 
     def __init__(
@@ -69,11 +93,14 @@ class AgentBrowser:
         socket: Optional[PathLike] = None,
         mode: Literal["agent", "personal"] = "agent",
         chrome_bin: Optional[PathLike] = None,
+        chrome_args: Optional[Sequence[str]] = None,
         endpoint: Optional[str] = None,
         personal_user_data_dir: Optional[PathLike] = None,
         no_launch: bool = False,
         no_prompt: bool = False,
         notify_command: Optional[Sequence[str]] = None,
+        approve: Union[bool, Approver, None] = None,
+        approve_command: Optional[Sequence[str]] = None,
         proxy_idle_ms: Optional[int] = None,
         command_name: Optional[str] = None,
         node: str = "node",
@@ -83,19 +110,28 @@ class AgentBrowser:
     ) -> None:
         if mode not in ("agent", "personal"):
             raise ValueError(f'mode must be "agent" or "personal", not {mode!r}')
-        if notify_command is not None and (isinstance(notify_command, str) or not all(isinstance(a, str) for a in notify_command) or not notify_command):
-            raise ValueError("notify_command must be a non-empty sequence of strings (an argv list, not a shell string)")
+        notify_argv = _argv_list("notify_command", notify_command)
+        approve_argv = _argv_list("approve_command", approve_command)
+        if approve is not None and not isinstance(approve, bool) and approve not in APPROVERS:
+            raise ValueError(f'approve must be True, False, "auto", "osascript" or "xdotool", not {approve!r}')
+        if approve_argv is not None and approve not in (None, False):
+            raise ValueError("approve or approve_command, not both")
+        if chrome_args is not None and not _strings(chrome_args):
+            raise ValueError("chrome_args must be a sequence of strings (one Chrome flag each, not one shell string)")
         self.state_dir = Path(state_dir)
         self.allowlist = Path(allowlist) if allowlist is not None else None
         self.profile = Path(profile) if profile is not None else None
         self.socket = Path(socket) if socket is not None else None
         self.mode: Literal["agent", "personal"] = mode
         self.chrome_bin = Path(chrome_bin) if chrome_bin is not None else None
+        self.chrome_args: Optional[List[str]] = list(chrome_args) if chrome_args is not None else None
         self.endpoint = endpoint
         self.personal_user_data_dir = Path(personal_user_data_dir) if personal_user_data_dir is not None else None
         self.no_launch = no_launch
         self.no_prompt = no_prompt
-        self.notify_command: Optional[List[str]] = list(notify_command) if notify_command is not None else None
+        self.notify_command = notify_argv
+        self.approve: Union[bool, Approver, None] = approve
+        self.approve_command = approve_argv
         self.proxy_idle_ms = proxy_idle_ms
         self.command_name = command_name
         self.node = node
@@ -144,6 +180,8 @@ class AgentBrowser:
         for flag, path in paths:
             if path is not None:
                 flags += [flag, os.fspath(path)]
+        if self.chrome_args is not None:
+            flags += ["--chrome-args", json.dumps(self.chrome_args)]
         if self.mode != "agent":
             flags += ["--mode", self.mode]
         if self.endpoint is not None:
@@ -154,6 +192,12 @@ class AgentBrowser:
             flags.append("--no-prompt")
         if self.notify_command is not None:
             flags += ["--notify-command", json.dumps(self.notify_command)]
+        if self.approve_command is not None:
+            flags += ["--approve-command", json.dumps(self.approve_command)]
+        elif self.approve is True:
+            flags += ["--approve", "auto"]
+        elif isinstance(self.approve, str):
+            flags += ["--approve", self.approve]
         if self.proxy_idle_ms is not None:
             flags += ["--proxy-idle-ms", str(self.proxy_idle_ms)]
         if self.command_name is not None:

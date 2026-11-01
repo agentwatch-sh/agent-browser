@@ -6,9 +6,10 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 import unittest
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 from unittest import mock
 
 from agent_browser import (
@@ -199,6 +200,37 @@ class AdapterTest(unittest.TestCase):
         finally:
             other.remove()
 
+    def test_approve_command_runs_when_the_proxy_connects(self) -> None:
+        other = Consumer()
+        out = other.dir / "approved.txt"
+        b = AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True,
+                         approve_command=["/bin/sh", "-c", 'echo approved > "$0"', str(out)])
+        try:
+            self.assertEqual(b.tabs().tabs, [])
+            deadline = time.monotonic() + 10
+            while not out.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(out.read_text(), "approved\n", "the proxy ran the custom approver as it connected")
+        finally:
+            b.stop()
+            other.remove()
+
+    def test_the_cli_parses_and_checks_the_new_options(self) -> None:
+        # Each refusal comes from the CLI's own checks, so the CLI read each flag in the form the adapter sent.
+        other = Consumer()
+        try:
+            with self.assertRaises(UsageError) as personal:
+                AgentBrowser(other.state_dir, other.allowlist, mode="personal", endpoint=self.fake.ws, approve="xdotool").tabs()
+            self.assertIn("approve is only for the agent browser", personal.exception.message)
+            with self.assertRaises(UsageError) as no_program:
+                AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, approve_command=["", "--once"]).tabs()
+            self.assertIn("approve must be", no_program.exception.message)
+            with self.assertRaises(UsageError) as empty_flag:
+                AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, chrome_args=["--lang=en-US", ""]).tabs()
+            self.assertIn("chromeArgs must be an array of non-empty strings", empty_flag.exception.message)
+        finally:
+            other.remove()
+
     def test_status_notify_runs_the_notify_command(self) -> None:
         other = Consumer()
         out = other.dir / "notified.txt"
@@ -212,6 +244,80 @@ class AdapterTest(unittest.TestCase):
             self.assertTrue(out.read_text().startswith("agentwatch browser connection needs attention: "))
         finally:
             other.remove()
+
+
+class OptionArgvTest(unittest.TestCase):
+    """The argv the adapter builds for each option. subprocess.run is faked, so no CLI and no Chrome run."""
+
+    def setUp(self) -> None:
+        self.consumer = Consumer()
+
+    def tearDown(self) -> None:
+        self.consumer.remove()
+
+    def argv(self, **options: Any) -> List[str]:
+        """The argv of one `tabs` call with these AgentBrowser options."""
+        calls: List[List[str]] = []
+
+        def fake_run(argv: List[str], *args: object, **kwargs: object) -> "subprocess.CompletedProcess[Any]":
+            calls.append(list(argv))
+            if argv[1:] == ["--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="v26.0.0\n", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=b'{"ok": true, "command": "tabs", "tabs": [], "window": null}\n', stderr=b"")
+
+        with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
+            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, **options).tabs()
+        self.assertEqual(calls[-1][2], "tabs")
+        return calls[-1]
+
+    def value(self, argv: List[str], flag: str) -> str:
+        """The one value that follows `flag` in argv."""
+        self.assertEqual(argv.count(flag), 1, f"{flag} once in {argv}")
+        return argv[argv.index(flag) + 1]
+
+    def test_no_new_flag_by_default(self) -> None:
+        argv = self.argv()
+        for flag in ("--approve", "--approve-command", "--chrome-args"):
+            self.assertNotIn(flag, argv)
+        self.assertEqual(argv[-1], "--json")
+
+    def test_approve(self) -> None:
+        for choice in ("auto", "osascript", "xdotool"):
+            self.assertEqual(self.value(self.argv(approve=choice), "--approve"), choice)
+        self.assertEqual(self.value(self.argv(approve=True), "--approve"), "auto", "True picks the approver by platform, as in the library")
+        argv = self.argv(approve=False)
+        self.assertNotIn("--approve", argv)
+        self.assertNotIn("--approve-command", argv)
+
+    def test_approve_command(self) -> None:
+        command = ["/opt/approve dialog.sh", "--pid", "it's \"quoted\"", "é"]
+        argv = self.argv(approve_command=command)
+        self.assertEqual(json.loads(self.value(argv, "--approve-command")), command, "one JSON array, every argument kept whole")
+        self.assertNotIn("--approve", argv)
+        self.assertEqual(json.loads(self.value(self.argv(approve_command=("/opt/approve.sh",)), "--approve-command")), ["/opt/approve.sh"])
+        self.assertIn("--approve-command", self.argv(approve=False, approve_command=["/opt/approve.sh"]))
+
+    def test_chrome_args(self) -> None:
+        flags = ["--enable-unsafe-swiftshader", "--lang=en-US", "--window-name=a b"]
+        argv = self.argv(chrome_args=flags)
+        self.assertEqual(json.loads(self.value(argv, "--chrome-args")), flags)
+        self.assertFalse(any(arg in argv for arg in flags), "the Chrome flags go inside the one JSON value, never loose in argv")
+        self.assertEqual(json.loads(self.value(self.argv(chrome_args=()), "--chrome-args")), [])
+
+    def test_invalid_options_raise_before_any_call(self) -> None:
+        state, allowlist = self.consumer.state_dir, self.consumer.allowlist
+        bad: List[Dict[str, Any]] = [
+            {"approve": "yes"}, {"approve": "XDOTOOL"}, {"approve": 1}, {"approve": ["xdotool"]},
+            {"approve_command": "/opt/approve.sh --once"}, {"approve_command": []}, {"approve_command": ["/opt/approve.sh", 1]},
+            {"approve_command": {"/opt/approve.sh"}}, {"approve": "xdotool", "approve_command": ["/opt/approve.sh"]},
+            {"approve": True, "approve_command": ["/opt/approve.sh"]},
+            {"chrome_args": "--lang=en-US"}, {"chrome_args": ["--lang=en-US", None]}, {"chrome_args": b"--lang=en-US"}, {"chrome_args": 3},
+        ]
+        with mock.patch("agent_browser._client.subprocess.run") as run:
+            for options in bad:
+                with self.assertRaises(ValueError, msg=repr(options)):
+                    AgentBrowser(state, allowlist, **options)
+            run.assert_not_called()
 
 
 class NodeAndOutputTest(unittest.TestCase):
