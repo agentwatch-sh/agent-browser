@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseKey } from "../src/record.ts";
-import { beforeFields, chromeArgs, failures, lsappinfoPid, MAC_KEY_CODES, notMeasured, requiredControls, startMode, stopsRun, trialTable, type Mode, type Result } from "./live/function-keys/trials.ts";
+import { beforeFields, chromeArgs, failures, fullScreenEnded, isAsn, lsappinfoPid, MAC_KEY_CODES, notMeasured, requiredControls, startMode, stopReason, trialTable, type Mode, type Result } from "./live/function-keys/trials.ts";
 
 const MODS = ["", "Shift+", "Control+", "Alt+", "Meta+", "Control+Shift+", "Alt+Shift+", "Control+Alt+"];
 const F = Array.from({ length: 12 }, (_, i) => `F${i + 1}`);
@@ -132,21 +132,42 @@ test("failures on macOS: the Cmd controls must show an effect; Shift+F10 opens n
 test("lsappinfoPid: the pid of `lsappinfo info -only pid <ASN>`, else undefined", () => {
   assert.equal(lsappinfoPid('"pid"=48285\n'), 48285);
   assert.equal(lsappinfoPid('"pid" = 7'), 7);
+  // The unquoted line of a full `lsappinfo info`.
+  assert.equal(lsappinfoPid('    pid = 48285 type="Foreground" flavor=3 Version="156.0.8078.80" fileType="APPL" creator="rimZ" Arch=ARM64\n'), 48285);
+  assert.equal(lsappinfoPid("ASN:0x0-0x14dd4dc:\n"), undefined, "the output of `lsappinfo front` holds no pid");
+  assert.equal(lsappinfoPid("ppid = 5"), undefined);
   assert.equal(lsappinfoPid(""), undefined);
   assert.equal(lsappinfoPid("[ NULL ]"), undefined);
 });
 
+test("isAsn: only an ASN from `lsappinfo front` goes to the second lsappinfo call", () => {
+  assert.equal(isAsn("ASN:0x0-0x14dd4dc:"), true);
+  assert.equal(isAsn("ASN:0x0-0x1d01d:"), true);
+  for (const bad of ["", "[ NULL ]", "ASN:0x0-0x14dd4dc", "-only", "ASN:0x0-0x1:\nASN:0x0-0x2:", " ASN:0x0-0x1:"]) assert.equal(isAsn(bad), false, JSON.stringify(bad));
+});
+
+test("fullScreenEnded: only a real window state, or a target confirmed closed, ends a full screen", () => {
+  for (const state of ["normal", "maximized", "minimized"]) assert.equal(fullScreenEnded(state, false), true, state);
+  assert.equal(fullScreenEnded("fullscreen", false), false);
+  assert.equal(fullScreenEnded("fullscreen", true), false);
+  assert.equal(fullScreenEnded("gone", false), false, "gone alone can be a CDP timeout");
+  assert.equal(fullScreenEnded("gone", true), true, "the target is confirmed closed");
+});
+
 test("notMeasured (macOS): Chrome must be the front app before and after the key, and Meta+L must prove the window was key", () => {
   const m = { chromePid: 500, frontBefore: 500, frontAfter: 500 };
-  assert.equal(notMeasured({ ...m, way: "record", effects: [], control: true }), undefined);
-  assert.equal(notMeasured({ ...m, way: "press", effects: [], control: true }), undefined);
-  assert.equal(notMeasured({ ...m, way: "before", effects: [] }), undefined, "a before trial has no control");
+  assert.equal(notMeasured({ ...m, way: "record", effects: [], control: "blur" }), undefined);
+  assert.equal(notMeasured({ ...m, way: "press", effects: [], control: "blur" }), undefined);
+  assert.equal(notMeasured({ ...m, way: "before", effects: [] }), undefined, "a before trial's control is information only");
+  assert.equal(notMeasured({ ...m, way: "before", effects: [], control: "no blur" }), undefined, "a before trial's control is information only");
   assert.equal(notMeasured({ ...m, way: "record", effects: ["reload"] }), undefined, "an effect is measured (and a failure)");
   assert.match(notMeasured({ ...m, frontBefore: 77, way: "before", effects: ["reload"] }) ?? "", /^Chrome was not the front app before the key \(front app pid 77, Chrome 500\)$/);
-  assert.match(notMeasured({ ...m, frontBefore: undefined, way: "record", effects: [], control: true }) ?? "", /^Chrome was not the front app before the key \(front app pid unknown, Chrome 500\)$/);
-  assert.match(notMeasured({ ...m, frontAfter: 77, way: "press", effects: [], control: true }) ?? "", /^Chrome was not the front app after the key/);
-  assert.match(notMeasured({ ...m, way: "record", effects: [], control: false }) ?? "", /Meta\+L control showed no page blur/);
-  assert.match(notMeasured({ ...m, way: "record", effects: [] }) ?? "", /Meta\+L control/, "a record or press trial without an effect needs the control");
+  assert.match(notMeasured({ ...m, frontBefore: undefined, way: "record", effects: [], control: "blur" }) ?? "", /^Chrome was not the front app before the key \(front app pid unknown, Chrome 500\)$/);
+  assert.match(notMeasured({ ...m, frontAfter: 77, way: "press", effects: [], control: "blur" }) ?? "", /^Chrome was not the front app after the key/);
+  assert.match(notMeasured({ ...m, way: "record", effects: [], control: "no blur" }) ?? "", /Meta\+L control showed no page blur, so the window was not key when the control ran/);
+  assert.match(notMeasured({ ...m, way: "record", effects: [], control: "no page focus" }) ?? "", /page had no focus when the Meta\+L control was to run/);
+  assert.match(notMeasured({ ...m, way: "press", effects: [], control: "error" }) ?? "", /Meta\+L control failed/);
+  assert.match(notMeasured({ ...m, way: "record", effects: [] }) ?? "", /Meta\+L control did not run/, "a record or press trial without an effect needs the control");
 });
 
 test("failures: a trial not measured, and a full screen not left (which also stops the run)", () => {
@@ -154,7 +175,14 @@ test("failures: a trial not measured, and a full screen not left (which also sto
   assert.deepEqual(failures([nm], mac), ["record F5: not measured: Chrome was not the front app before the key (front app pid 77)"]);
   const stuck = ok("before", "Meta+Control+F", { effects: ["window normal -> fullscreen, not left in 10 s"], fullScreenNotLeft: true });
   assert.deepEqual(failures([stuck], { ...mac, fullScreen: true } as Mode), ["before Meta+Control+F: full screen not left in 10 s"]);
-  assert.equal(stopsRun(stuck), true);
-  assert.equal(stopsRun(ok("before", "Meta+Control+F", { effects: ["window normal -> fullscreen, left in 900 ms"] })), false);
-  assert.equal(stopsRun(nm), false);
+  assert.equal(stopReason(stuck, mac), "after before:Meta+Control+F: full screen not left in 10 s");
+  assert.equal(stopReason(stuck, linux), "after before:Meta+Control+F: full screen not left in 10 s");
+  assert.equal(stopReason(ok("before", "Meta+Control+F", { effects: ["window normal -> fullscreen, left in 900 ms"] }), mac), undefined);
+  assert.equal(stopReason(nm, mac), undefined);
+});
+
+test("stopReason: on macOS a trial error stops the run (its window can be left on the screen); on Linux it does not", () => {
+  const err = ok("record", "F3", { focused: false, reachedPage: false, effects: ["trial error: Target.attachToTarget: no answer in 8000 ms"], trialError: "Target.attachToTarget: no answer in 8000 ms" });
+  assert.equal(stopReason(err, mac), "after record:F3: trial error: Target.attachToTarget: no answer in 8000 ms");
+  assert.equal(stopReason(err, linux), undefined);
 });

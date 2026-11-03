@@ -7,8 +7,15 @@ import type { KeyEvent } from "../../../src/record.ts";
 
 export type Way = "before" | "record" | "press";
 export type Trial = { way: Way; spec: string };
-/** notMeasured (macOS): why the trial proves nothing. fullScreenNotLeft (macOS): the run stops after it. */
-export type Result = { way: Way; spec: string; focused: boolean; reachedPage: boolean; effects: string[]; sendError?: string; notMeasured?: string; fullScreenNotLeft?: boolean };
+/** The Meta+L control (macOS): "blur" shows that the trial window was key when the control ran. */
+export type Control = "blur" | "no blur" | "no page focus" | "late events" | "error";
+/**
+ * control (macOS): the Meta+L control after a key without an effect; it decides a record or press
+ * trial, and is information for a before trial. notMeasured (macOS): why the trial proves nothing.
+ * fullScreenNotLeft (macOS) and trialError (macOS) stop the run after the trial.
+ */
+export type Result = { way: Way; spec: string; focused: boolean; reachedPage: boolean; effects: string[]; sendError?: string; control?: Control; notMeasured?: string;
+  fullScreenNotLeft?: boolean; trialError?: string };
 /** linux: a private Xvfb. darwin: the person's own screen; `front` brings each trial window to the front. */
 export type Mode = { platform: "linux"; chrome: string; display: number } | { platform: "darwin"; chrome: string; front: boolean; fullScreen: boolean };
 export type Flags = { onMyScreen?: boolean; background?: boolean; fullScreen?: boolean; chrome?: string; display?: string };
@@ -98,28 +105,50 @@ export function chromeArgs(mode: Mode, profile: string): string[] {
   ];
 }
 
-/** The pid in the output of `lsappinfo info -only pid <ASN>` (macOS), for example `"pid"=48285`. */
+/** The pid in the output of `lsappinfo info -only pid <ASN>` (macOS), `"pid"=48285`, or of a full `lsappinfo info`, `pid = 48285`. */
 export function lsappinfoPid(out: string): number | undefined {
-  const m = /"pid"\s*=\s*(\d+)/.exec(out);
+  const m = /(?<![A-Za-z])"?pid"?\s*=\s*(\d+)/.exec(out);
   return m ? Number(m[1]) : undefined;
+}
+
+/** One ASN, as `lsappinfo front` prints it, for example `ASN:0x0-0x14dd4dc:`: only that goes to `lsappinfo info`. */
+export function isAsn(s: string): boolean {
+  return /^ASN:0x[0-9a-f]+-0x[0-9a-f]+:$/i.test(s);
+}
+
+/** macOS: a full screen has ended only at a real window state, or when its target is confirmed closed ("gone" alone can be a CDP timeout). */
+export function fullScreenEnded(state: string, targetClosed: boolean): boolean {
+  return ["normal", "maximized", "minimized"].includes(state) || (state === "gone" && targetClosed);
 }
 
 /**
  * macOS: why a trial measured nothing, or undefined. Chrome runs a shortcut only in its key window,
  * and document.hasFocus() does not show that, so the check's Chrome must be the front app before and
  * after the key, and a record or press key without an effect must be followed by a before-way Meta+L
- * that moves the focus to the address bar (control: a page blur, so the window was key).
+ * that moves the focus to the address bar (control "blur": the window was key when the control ran).
+ * A before trial's control is information only: its required controls fail by their own rule.
  */
-export function notMeasured(t: { way: Way; effects: string[]; chromePid: number; frontBefore?: number; frontAfter?: number; control?: boolean }): string | undefined {
+export function notMeasured(t: { way: Way; effects: string[]; chromePid: number; frontBefore?: number; frontAfter?: number; control?: Control }): string | undefined {
   if (t.frontBefore !== t.chromePid) return `Chrome was not the front app before the key (front app pid ${t.frontBefore ?? "unknown"}, Chrome ${t.chromePid})`;
   if (t.frontAfter !== t.chromePid) return `Chrome was not the front app after the key (front app pid ${t.frontAfter ?? "unknown"}, Chrome ${t.chromePid})`;
-  if (t.way !== "before" && !t.effects.length && t.control !== true) return "the Meta+L control showed no page blur, so the window was not key";
+  if (t.way !== "before" && !t.effects.length && t.control !== "blur") return t.control ? CONTROL_FAILS[t.control] : "the Meta+L control did not run";
   return undefined;
 }
+const CONTROL_FAILS: Record<Exclude<Control, "blur">, string> = {
+  "no blur": "the Meta+L control showed no page blur, so the window was not key when the control ran",
+  "no page focus": "the page had no focus when the Meta+L control was to run",
+  "late events": "the key had late events, and the Meta+L control did not run",
+  error: "the Meta+L control failed with an error",
+};
 
-/** A full screen that the check could not leave stops the run, after its window is closed. */
-export function stopsRun(r: Result): boolean {
-  return !!r.fullScreenNotLeft;
+/**
+ * Why the run stops after this trial (its window is closed then), or undefined: a full screen that
+ * the check could not leave; on macOS also a trial error, which can leave its window on the screen.
+ */
+export function stopReason(r: Result, mode: Mode): string | undefined {
+  if (r.fullScreenNotLeft) return `after ${r.way}:${r.spec}: full screen not left in 10 s`;
+  if (mode.platform === "darwin" && r.trialError) return `after ${r.way}:${r.spec}: trial error: ${r.trialError}`;
+  return undefined;
 }
 
 /**

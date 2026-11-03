@@ -22,11 +22,15 @@
 // connects to a Chrome that it did not start. Each macOS run leaves its DIR/profile-XXXXXX behind.
 // Each trial window comes to the front (Page.bringToFront) and takes the keyboard focus, as on Linux.
 // On macOS a trial counts only when the check's Chrome is the front app before and after the key, and
-// when a record or press key without an effect is followed by a Meta+L control that moves the focus to
-// the address bar; else it is "not measured", a failure (see observe). --background drops the focus
-// step, so that its trials are not measured. Full screen moves a window into its own Space, and the
-// screen switches to it: Meta+Control+F runs only with --full-screen, a trial that enters full screen
-// leaves it at once and records it, and a full screen that does not end in 10 s fails and stops the run.
+// a key without an effect is followed by a Meta+L control that must move the focus to the address bar
+// (then the window was key when the control ran). A trial that fails one of these is "not measured",
+// a failure (see observe); for a before trial the control is information only (its "control" field,
+// and the summary's beforeUnproven). --background drops the focus step: then the record and press
+// trials are not measured, and the required before controls fail with no effect (when another app is
+// in front, every trial is not measured). Full screen moves a window into its own Space, and the
+// screen switches to it: Meta+Control+F runs only with --full-screen, and a trial that enters full
+// screen leaves it at once and records it. A full screen that does not end in 10 s fails and stops the
+// run; on macOS a trial error stops it too, because its window can stay on the screen.
 //
 // Three ways to send each key:
 //   before  agent-browser before #7: keyFields plus nativeVirtualKeyCode, as rawKeyDown. Chrome's
@@ -45,9 +49,10 @@
 //           macOS's Blink opens none); a required before control without an effect; a page without
 //           focus before its key; on macOS a trial not measured, or a full screen not left. Also an
 //           error with a stack trace and no summary (for example Xvfb did not start).
-//   exit 2  no trial ran, one line on stderr: a usage error, an --only entry that names no trial, a
-//           start that the platform refuses, a --chrome that cannot start, or (macOS) a DevTools port
-//           that is not the check's own Chrome.
+//   exit 2  no trial ran, and stderr says why in one line (the usage text has two): a usage error,
+//           an --only entry that names no trial, a start that the platform refuses, a --chrome that
+//           cannot start, a --chrome that runs but writes no DevTools port (it exits, or 10 s pass;
+//           30 s on macOS), or (macOS) a DevTools port that is not the check's own Chrome.
 //
 // Measured 2026-11-03 (Chromium 156.0.8078.73, Debian 13, Xvfb; 207 trials, exit 0): before: F1 (a
 // help tab), F3, Shift+F3, F6, Shift+F6, F7, F10 (the focus left the page), Control+F4, Alt+F4 (the
@@ -64,7 +69,7 @@ import { join, resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { keyFields, type Tab } from "../../../src/browser.ts";
 import { parseKey, sendKey } from "../../../src/record.ts";
-import { beforeFields, chromeArgs, failures as failuresOf, lsappinfoPid, notMeasured, startMode, stopsRun, trialTable, type Result, type Way } from "./trials.ts";
+import { beforeFields, chromeArgs, failures as failuresOf, fullScreenEnded, isAsn, lsappinfoPid, notMeasured, startMode, stopReason, trialTable, type Control, type Result, type Way } from "./trials.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "wait-ms": { type: "string" }, only: { type: "string" },
   "on-my-screen": { type: "boolean" }, background: { type: "boolean" }, "full-screen": { type: "boolean" } } });
@@ -151,9 +156,11 @@ rmSync(join(profile, "DevToolsActivePort"), { force: true }); // a run before in
 const chrome = spawn(CHROME, chromeArgs(mode, profile), { env: chromeEnv(), stdio: "ignore" });
 children.push(chrome);
 chrome.on("error", (e) => refuse(`--chrome ${CHROME} cannot start: ${e.message}`)); // for example a wrong path
+const START_S = MAC ? 30 : 10;
+const exited = () => chrome.exitCode !== null || chrome.signalCode !== null;
 let active = "";
-for (let i = 0; i < (MAC ? 300 : 100) && !active; i++) { try { active = readFileSync(join(profile, "DevToolsActivePort"), "utf8"); } catch { await sleep(100); } }
-if (!active) throw new Error(`${CHROME} did not start`);
+for (let i = 0; i < START_S * 10 && !active && !exited(); i++) { try { active = readFileSync(join(profile, "DevToolsActivePort"), "utf8"); } catch { await sleep(100); } }
+if (!active) refuse(`--chrome ${CHROME} did not start: no DevTools port ${exited() ? `(it exited: ${chrome.exitCode ?? chrome.signalCode})` : `in ${START_S} s`}`);
 const [port, path] = active.trim().split("\n");
 
 // A small CDP client. Every call times out: a key such as Control+T can leave its own call unanswered.
@@ -227,7 +234,8 @@ async function observe(way: Way, spec: string, targetId: string, before: Set<str
   // 2 s for its Chrome to be the front app (macOS activates an app asynchronously), checks that before
   // and after the key (lsappinfo), and after a record or press key without an effect sends the Meta+L
   // control: a trial that fails one of these is not measured (notMeasured). --background drops the
-  // focus step: its windows open inactive, and its trials are expected to be not measured.
+  // focus step: its windows open inactive, so its record and press trials are expected to be not
+  // measured, and its required before controls to fail with no effect.
   if (FRONT) await send("Page.bringToFront", {}, sessionId);
   await sleep(300);
   for (let i = 0; i < 20 && MAC && FRONT && (await frontAppPid()) !== chrome.pid; i++) await sleep(100);
@@ -244,13 +252,13 @@ async function observe(way: Way, spec: string, targetId: string, before: Set<str
   const frontBefore = MAC ? await frontAppPid() : undefined;
   await press(way, spec, sessionId).catch((e: Error) => { sendError = e.message; });
   let full: FullScreen | undefined;
-  if (MAC) full = await waitLeavingFullScreen(windowId); else await sleep(WAIT_MS);
+  if (MAC) full = await waitLeavingFullScreen(windowId, targetId); else await sleep(WAIT_MS);
   listeners.splice(listeners.indexOf(onNav), 1);
   const alive = (await send("Target.getTargets")).targetInfos.some((x: any) => x.targetId === targetId);
   const page = alive ? await evaluate(`({ log: window.__log ?? [], focus: document.hasFocus(), kept: window.__mark === "${mark}" })`).catch(() => null) : null;
   let stateAfter = await windowState(windowId);
-  // macOS: a full screen that starts after --wait-ms is left too.
-  if (MAC && !full && stateAfter === "fullscreen") { full = await leaveFullScreen(windowId); stateAfter = await windowState(windowId); }
+  // macOS: a full screen that is on after --wait-ms (it started late, or came back) is left too.
+  if (MAC && stateAfter === "fullscreen") { full = await leaveFullScreen(windowId, targetId); stateAfter = await windowState(windowId); }
   const key = parseKey(spec).key;
   const newTargets = created.filter((c) => !before.has(c.id) && c.id !== targetId);
   const effects = [
@@ -262,39 +270,50 @@ async function observe(way: Way, spec: string, targetId: string, before: Set<str
     ...(page?.log.some((e: any) => e.t === "contextmenu") ? ["contextmenu"] : []),
   ];
   for (const c of newTargets) await send("Target.closeTarget", { targetId: c.id }).catch(() => {});
-  let unmeasured: string | undefined;
+  let unmeasured: string | undefined, control: Control | undefined;
   if (MAC) {
-    const control = way !== "before" && !effects.length && alive && frontBefore === chrome.pid ? await metaLControl(sessionId, evaluate) : undefined;
+    // A key without an effect gets the Meta+L control (information for a before trial). Events of the
+    // key that come after the read above are its late effects, never the control's blur.
+    if (!effects.length && alive && frontBefore === chrome.pid) {
+      const c = await metaLControl(sessionId, evaluate, page?.log.length ?? 0);
+      control = c.control;
+      effects.push(...c.late.map((e) => `late ${e.t}`));
+    }
     unmeasured = notMeasured({ way, effects, chromePid: chrome.pid ?? -1, frontBefore, frontAfter: await frontAppPid(), control });
   }
   return { way, spec, focused, reachedPage: !!page?.log.some((e: any) => e.t === "keydown" && e.key === key), effects, ...(sendError ? { sendError } : {}),
-    ...(unmeasured ? { notMeasured: unmeasured } : {}), ...(full && !full.left ? { fullScreenNotLeft: true } : {}) };
+    ...(control ? { control } : {}), ...(unmeasured ? { notMeasured: unmeasured } : {}), ...(full && !full.left ? { fullScreenNotLeft: true } : {}) };
 }
 
 const execFileP = promisify(execFile);
 /** macOS: the pid of the front app (`lsappinfo front`, then `lsappinfo info -only pid <ASN>`; read only), or undefined. */
 async function frontAppPid(): Promise<number | undefined> {
+  const lsappinfo = async (...args: string[]) => (await execFileP("/usr/bin/lsappinfo", args, { encoding: "utf8", timeout: 2000 })).stdout;
   try {
-    const asn = (await execFileP("lsappinfo", ["front"], { encoding: "utf8" })).stdout.trim();
-    return lsappinfoPid((await execFileP("lsappinfo", ["info", "-only", "pid", asn], { encoding: "utf8" })).stdout);
+    const asn = (await lsappinfo("front")).trim();
+    return isAsn(asn) ? lsappinfoPid(await lsappinfo("info", "-only", "pid", asn)) : undefined;
   } catch { return undefined; }
 }
 
 /**
- * macOS: the positive control after a record or press key without an effect. The before way's Meta+L
- * in the same window must move the focus to the address bar (a page blur): then the window was key,
- * and Chrome would have run a shortcut of the key under test.
+ * macOS: the positive control after a key without an effect. The before way's Meta+L in the same
+ * window must move the focus to the address bar (a page blur): then the window was key when the
+ * control ran, and Chrome would have run a shortcut of the key under test. It runs only while the page
+ * has the focus and its log is as the trial read it (`seen` events); newer events are the key's late
+ * events, returned as such, and the control does not run.
  */
-async function metaLControl(sessionId: string, evaluate: (expression: string) => Promise<any>): Promise<boolean> {
+async function metaLControl(sessionId: string, evaluate: (expression: string) => Promise<any>, seen: number): Promise<{ control: Control; late: { t: string }[] }> {
   try {
-    const n = await evaluate("window.__log.length");
+    const start = await evaluate(`({ late: window.__log.slice(${seen}), focus: document.hasFocus() })`);
+    if (start.late.length) return { control: "late events", late: start.late };
+    if (!start.focus) return { control: "no page focus", late: [] };
     await press("before", "Meta+L", sessionId);
     for (const end = Date.now() + WAIT_MS; Date.now() < end;) {
       await sleep(100);
-      if (await evaluate(`window.__log.slice(${n}).some((e) => e.t === "blur") || !document.hasFocus()`)) return true;
+      if (await evaluate(`window.__log.slice(${seen}).some((e) => e.t === "blur") || !document.hasFocus()`)) return { control: "blur", late: [] };
     }
-  } catch { /* the control failed: not measured */ }
-  return false;
+    return { control: "no blur", late: [] };
+  } catch { return { control: "error", late: [] }; }
 }
 
 const windowState = (windowId: number): Promise<string> => send("Browser.getWindowBounds", { windowId }).then((r) => r.bounds.windowState, () => "gone");
@@ -304,23 +323,26 @@ type FullScreen = { left: boolean; ms: number };
  * macOS: leaves full screen (a Space of its own, to which the screen switches). The transition takes
  * about a second, and a request during it can fail, so it asks again until it ends, for up to 10 s.
  */
-async function leaveFullScreen(windowId: number): Promise<FullScreen> {
+async function leaveFullScreen(windowId: number, targetId: string): Promise<FullScreen> {
   const t0 = Date.now();
   while (Date.now() - t0 < 10_000) {
     await send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } }).catch(() => {});
     await sleep(500);
-    if ((await windowState(windowId)) !== "fullscreen") return { left: true, ms: Date.now() - t0 };
+    // windowState says "gone" for any error, a CDP timeout too: only a closed target counts then.
+    const state = await windowState(windowId);
+    const closed = state === "gone" && await send("Target.getTargets").then((r) => !r.targetInfos.some((x: any) => x.targetId === targetId), () => false);
+    if (fullScreenEnded(state, closed)) return { left: true, ms: Date.now() - t0 };
   }
   return { left: false, ms: Date.now() - t0 };
 }
 
 /** macOS: waits --wait-ms, and a window that enters full screen in that time leaves it at once. */
-async function waitLeavingFullScreen(windowId: number): Promise<FullScreen | undefined> {
+async function waitLeavingFullScreen(windowId: number, targetId: string): Promise<FullScreen | undefined> {
   const end = Date.now() + WAIT_MS;
   let full: FullScreen | undefined;
   while (Date.now() < end) {
     await sleep(100);
-    if (!full && (await windowState(windowId)) === "fullscreen") full = await leaveFullScreen(windowId);
+    if (!full && (await windowState(windowId)) === "fullscreen") full = await leaveFullScreen(windowId, targetId);
   }
   return full;
 }
@@ -328,12 +350,13 @@ async function waitLeavingFullScreen(windowId: number): Promise<FullScreen | und
 const results: Result[] = [];
 let stopped: string | undefined;
 for (const t of trials) {
-  const r: Result = await trial(t.way, t.spec).catch((e: Error) => ({ way: t.way, spec: t.spec, focused: false, reachedPage: false, effects: [`trial error: ${e.message}`] }));
+  const r: Result = await trial(t.way, t.spec).catch((e: Error) => ({ way: t.way, spec: t.spec, focused: false, reachedPage: false, effects: [`trial error: ${e.message}`], trialError: e.message }));
   results.push(r);
   writeFileSync(RESULTS, JSON.stringify(r) + "\n", { flag: "a" });
-  process.stderr.write(`${r.way.padEnd(6)} ${r.spec.padEnd(18)} ${r.reachedPage ? "page" : "    "} ${r.effects.join(", ")}${r.notMeasured ? ` (not measured: ${r.notMeasured})` : ""}\n`);
-  // A full screen that the check could not leave stops the run; trial() has closed its window.
-  if (stopsRun(r)) { stopped = `after ${r.way}:${r.spec}: full screen not left in 10 s`; break; }
+  process.stderr.write(`${r.way.padEnd(6)} ${r.spec.padEnd(18)} ${r.reachedPage ? "page" : "    "} ${r.effects.join(", ")}${r.control && r.control !== "blur" ? ` [Meta+L control: ${r.control}]` : ""}${r.notMeasured ? ` (not measured: ${r.notMeasured})` : ""}\n`);
+  // A full screen that the check could not leave, or (macOS) a trial error, stops the run; trial() has closed its window.
+  stopped = stopReason(r, mode);
+  if (stopped) break;
 }
 const of = (way: Way) => results.filter((r) => r.way === way);
 const failures = failuresOf(results, mode);
@@ -342,6 +365,8 @@ const summary = {
   before: of("before").filter((r) => r.effects.length).map((r) => `${r.spec}: ${r.effects.join(", ")}`),
   record: of("record").filter((r) => r.effects.length).map((r) => `${r.spec}: ${r.effects.join(", ")}`),
   press: of("press").filter((r) => r.effects.length).map((r) => `${r.spec}: ${r.effects.join(", ")}`),
+  // macOS: before keys without an effect whose window the Meta+L control did not show to be key: their "no shortcut" is unproven.
+  ...(MAC ? { beforeUnproven: of("before").filter((r) => !r.effects.length && r.control !== "blur").map((r) => `${r.spec}: Meta+L control: ${r.control ?? "not run"}`) } : {}),
   failures,
   ...(stopped ? { stopped } : {}),
 };
