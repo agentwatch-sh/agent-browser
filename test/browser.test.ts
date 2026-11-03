@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
+import { parseKey, sendKey } from "../src/record.ts";
 import { NotAllowedError, PinRequiredError } from "../src/errors.ts";
 import { resolveOptions } from "../src/options.ts";
 import { proxyInfo, stopProxy } from "../src/proxy.ts";
@@ -92,6 +93,22 @@ test("evaluate, waitFor, click, type, press, text", async () => {
   await assert.rejects(tab.click("#nope"), /no element/);
   await assert.rejects(tab.click("#hidden"), /not visible/);
   await assert.rejects(tab.evaluate(() => { throw new Error("boom"); }), /boom/);
+  await tab.close();
+});
+
+test("a function key goes to the page only: without nativeVirtualKeyCode, so Chrome never runs it as its own shortcut (#7)", async () => {
+  const tab = await browser.open(base);
+  const page = fake.pages.get(tab.targetId)!;
+  await tab.press("F11");
+  await tab.press("Enter");
+  await sendKey(tab, parseKey("Shift+F11"));
+  await sendKey(tab, parseKey("Shift+ArrowDown"));
+  assert.deepEqual(page.keyEvents.map((k) => [k.type, k.key, k.modifiers, k.keyCode, k.native]), [
+    ["keyDown", "F11", 0, 122, undefined], ["keyUp", "F11", 0, 122, undefined],
+    ["keyDown", "Enter", 0, 13, 13], ["keyUp", "Enter", 0, 13, 13],
+    ["rawKeyDown", "F11", 8, 122, undefined], ["keyUp", "F11", 8, 122, undefined],
+    ["rawKeyDown", "ArrowDown", 8, 40, 40], ["keyUp", "ArrowDown", 8, 40, 40],
+  ]);
   await tab.close();
 });
 
