@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
-import { CHROME_BETA_BIN } from "../src/agent.ts";
+import { CHROME_BETA_BIN, INSPECT_URL, agentWindowName } from "../src/agent.ts";
 import { AgentBrowser } from "../src/browser.ts";
 import { ApprovalNeededError } from "../src/errors.ts";
 import { commands } from "../src/commands.ts";
@@ -111,7 +111,17 @@ test("the child's upstream handshake has a deadline and logs connection failure 
 
 test("target names the running channel, and labels the configured channel when no process is found", () => {
   const beta = resolveOptions({ ...s, chromeBin: CHROME_BETA_BIN });
-  assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir}`), /agent browser on Google Chrome Beta \(pid 42\)/);
+  assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir}`), /agent browser on Google Chrome Beta \(pid 42\)$/,
+    "a Chrome that runs without agent-browser's window name: no window is named");
+  // #3: the Chrome that agent-browser started has its window name, so the prompt's window is named too.
+  const named = browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=${agentWindowName(beta)} ${INSPECT_URL}`);
+  assert.equal(named, `agent Chrome: agent browser on Google Chrome Beta (pid 42), window "${agentWindowName(beta)}"`);
+  assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=someone-else`), /\(pid 42\)$/,
+    "another window name is not ours");
+  assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=${agentWindowName(beta)}2`), /\(pid 42\)$/,
+    "a longer name is not ours");
+  assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=${agentWindowName(beta)} --window-name=mine`), /\(pid 42\)$/,
+    "Chrome takes the last --window-name: a later one (a chromeArgs flag) wins");
   assert.match(browserTarget(s, () => ""), /configured binary Google Chrome Beta; running channel unknown/);
   assert.equal(browserTarget({ ...s, mode: "personal" }, () => { throw new Error("must not inspect processes"); }), "personal Chrome: operator's Chrome");
 });

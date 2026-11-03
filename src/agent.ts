@@ -193,6 +193,16 @@ export function seedRemoteDebugging(profileDir: string, file = join(profileDir, 
   return true;
 }
 
+/**
+ * The agent Chrome's window name (Chrome's --window-name, the name that "Name window" gives: the
+ * window's title): the consumer's command name and its state folder, so a person who must answer an
+ * "Allow remote debugging?" prompt can tell which agent browser asks (#3). The restored window keeps
+ * it after a restart that restores the session (measured on Chromium 156 on Linux).
+ */
+export function agentWindowName(s: Settings): string {
+  return `${s.commandName}: ${s.stateDir}`;
+}
+
 export type SpawnLike = (bin: string, args: string[], opts: { detached: boolean; stdio: "ignore" }) => { pid?: number; exitCode: number | null; unref(): void };
 
 /** The app bundle of a macOS Chrome binary (".../X.app/Contents/MacOS/X" -> ".../X.app"), or undefined. */
@@ -241,8 +251,8 @@ export async function launchAgentChrome(
     if (bin === CHROME_STABLE_BIN && !s.chromeBin) {
       s.log(`agent browser: running from Google Chrome, so while it is open the Dock's Chrome icon brings it forward instead of your own profile; install Google Chrome Beta (brew install --cask google-chrome@beta) to keep them apart`);
     }
-    // Exactly the elements checked above, plus the one profile switch agent-browser sets itself.
-    const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, ...extraArgs, ...urls];
+    // Exactly the elements checked above, plus agent-browser's own profile switch and window name.
+    const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, `--window-name=${agentWindowName(s)}`, ...extraArgs, ...urls];
     const bundle = opts.background && (deps.platform ?? process.platform) === "darwin" ? appBundle(bin) : undefined;
     const run = deps.spawn ?? (spawn as unknown as SpawnLike);
     viaOpen = !!bundle;

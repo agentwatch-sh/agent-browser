@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
 import {
-  AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN, INSPECT_URL, agentChromeBin, agentChromePid, agentEndpoint, assertNoDebuggingFlag,
+  AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN, INSPECT_URL, agentChromeBin, agentChromePid, agentEndpoint, agentWindowName, assertNoDebuggingFlag,
   assertSafeChromeArgs, appBundle, findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
 } from "../src/agent.ts";
 import { AgentBrowser, endpointCandidates } from "../src/browser.ts";
@@ -58,6 +58,11 @@ test("launch waits for an existing Chrome to enable debugging without spawning a
   assert.match(lines.join("\n"), /42.*profile/);
 });
 
+test("the agent window's name says whose it is: the consumer's command name and its state folder (#3)", () => {
+  assert.equal(agentWindowName(s), `agent-browser: ${s.stateDir}`);
+  assert.equal(agentWindowName(resolveOptions({ ...s, commandName: "vedlo browser" })), `vedlo browser: ${s.stateDir}`);
+});
+
 test("noLaunch: no running agent browser fails with the consumer's launch command instead of starting one", async () => {
   const named = resolveOptions({ ...s, noLaunch: true, commandName: "vedlo browser" });
   await assert.rejects(launchAgentChrome(named, { timeoutMs: 1_000 }, {
@@ -75,7 +80,7 @@ test("a launch starts a regular Chrome on the consumer's profile, never with a d
   assert.match(ws, /new$/);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].bin, CHROME_BETA_BIN);
-  assert.deepEqual(calls[0].args, [...AGENT_ARGS, `--user-data-dir=${s.profileDir}`, INSPECT_URL, "https://example.org/"]);
+  assert.deepEqual(calls[0].args, [...AGENT_ARGS, `--user-data-dir=${s.profileDir}`, `--window-name=${agentWindowName(s)}`, INSPECT_URL, "https://example.org/"]);
   assert.ok(!calls[0].args.some((a) => a.startsWith("--remote-debugging")), "no --remote-debugging-port or pipe");
   assert.ok(!calls[0].args.some((a) => a.startsWith("--headless")), "a visible browser the operator can approve");
   const log = readFileSync(join(s.stateDir, "launches.log"), "utf8");
@@ -94,7 +99,8 @@ test("a background launch on macOS starts a new instance through `open -n -g` (n
   });
   assert.match(ws, /bg$/, "open's exit 0 is not a hand-off");
   assert.equal(calls[0].bin, "/usr/bin/open");
-  assert.deepEqual(calls[0].args, ["-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args", ...AGENT_ARGS, `--user-data-dir=${s.profileDir}`, INSPECT_URL]);
+  assert.deepEqual(calls[0].args, ["-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args", ...AGENT_ARGS, `--user-data-dir=${s.profileDir}`,
+    `--window-name=${agentWindowName(s)}`, INSPECT_URL]);
   calls.length = 0; probes = 0;
   await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
     endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/linux",
@@ -112,7 +118,8 @@ test("chromeArgs: extra Chrome flags reach the spawn (between --user-data-dir an
     endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/new",
     pid: () => undefined, spawn: fakeSpawn(calls), exists: (p) => p === CHROME_BETA_BIN,
   });
-  assert.deepEqual(calls[0].args, [...AGENT_ARGS, `--user-data-dir=${withArgs.profileDir}`, "--enable-unsafe-swiftshader", "--lang=en-US", INSPECT_URL]);
+  assert.deepEqual(calls[0].args, [...AGENT_ARGS, `--user-data-dir=${withArgs.profileDir}`, `--window-name=${agentWindowName(withArgs)}`,
+    "--enable-unsafe-swiftshader", "--lang=en-US", INSPECT_URL]);
 
   const sneaky = resolveOptions({ ...s, chromeArgs: ["--remote-debugging-port=9222"] });
   await assert.rejects(launchAgentChrome(sneaky, { timeoutMs: 1_000 }, {

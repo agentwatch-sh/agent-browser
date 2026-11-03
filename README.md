@@ -129,6 +129,15 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
   headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
   itself (see **Unattended approval**); do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
+- **Which window asks.** Several agent browsers can run on one machine, and their windows look the
+  same. So a launch names the window (Chrome's `--window-name`) after the consumer: its command name
+  and its state folder, for example `agent-browser: /Users/me/.vedlo/agent-browser/marketdata`. It is
+  the name that Chrome's "Name window" gives a window, and it is the window's title. The window keeps
+  it after a restart that restores the session (measured on Chromium 156 on Linux; the macOS look is
+  not measured yet). While a command waits for the prompt, its
+  notice names that window, the Chrome pid and the profile. A Chrome that started without this name
+  (before this version, or by hand) gets it at its next start by agent-browser; until then the notice
+  names only the pid and the profile.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
