@@ -6,48 +6,55 @@ Chromium 156.0.8078.73 (Debian), Playwright 1.64.1, Playwright MCP 0.0.84. Gener
 
 | Case | Expected | Loopback TCP | Unix socket | What Playwright saw (TCP) |
 | --- | --- | --- | --- | --- |
-| connectOverCDP | works | pass (46 ms) | pass (47 ms) | {"version":"156.0.8078.73","contexts":1} |
-| context.newPage (Target.createTarget) | works | pass (58 ms) | pass (55 ms) | {"pages":1} |
-| page.goto allowlisted page | works | pass (99 ms) | pass (103 ms) | {"status":200,"title":"probe a"} |
+| connectOverCDP | works | pass (48 ms) | pass (43 ms) | {"version":"156.0.8078.73","contexts":1} |
+| context.newPage (Target.createTarget) | works | pass (60 ms) | pass (68 ms) | {"pages":1} |
+| page.goto allowlisted page | works | pass (98 ms) | pass (109 ms) | {"status":200,"title":"probe a"} |
+| response.body() | works | pass (132 ms) | pass (126 ms) | true |
 | navigator.webdriver (page.evaluate) | works | pass (11 ms) | pass (10 ms) | false |
-| locator.fill + click + read text | works | pass (144 ms) | pass (137 ms) | "Hello, Ada" |
-| keyboard.type + press | works | pass (108 ms) | pass (104 ms) | "Grace" |
-| hover | works | pass (52 ms) | pass (59 ms) | "hovered" |
-| selectOption | works | pass (21 ms) | pass (20 ms) | "y" |
-| ariaSnapshot (the MCP's page read) | works | pass (25 ms) | pass (25 ms) | "23 lines" |
-| screenshot | works | pass (84 ms) | pass (94 ms) | "23456 bytes" |
-| cross-site frame: click and read (c.localhost) | works | pass (186 ms) | pass (169 ms) | "frame clicked" |
-| dialog (confirm) accept | works | pass (59 ms) | pass (65 ms) | "true" |
-| page.route (network interception, fulfill) | works | pass (88 ms) | pass (85 ms) | "mocked" |
-| setInputFiles (file path) | works | pass (29 ms) | pass (24 ms) | "upload.txt:18" |
-| setInputFiles (buffer) | works | pass (22 ms) | pass (19 ms) | "buf.txt:13" |
-| download | works | pass (136 ms) | pass (68 ms) | {"name":"probe.txt","body":"probe download body"} |
-| popup (window.open) | works | pass (165 ms) | pass (167 ms) | {"url":"http://a.localhost:8781/popup?via=open","text":"Popup open"} |
-| popup (target=_blank link) | works | pass (144 ms) | pass (140 ms) | {"url":"http://a.localhost:8781/popup?via=blank"} |
-| context.addInitScript, then a new page | works | pass (144 ms) | pass (167 ms) | "number" |
-| init script in a popup (late attach) | works | pass (114 ms) | pass (124 ms) | "number" |
-| page.exposeFunction | works | pass (138 ms) | pass (144 ms) | 42 |
-| context.cookies + addCookies (allowlisted) | works | pass (10 ms) | pass (6 ms) | ["pw"] |
-| context.addCookies (off-list domain) | refused | pass (3 ms) | pass (2 ms) | browserContext.addCookies: Protocol error (Storage.setCookies): Not allowed: b.localhost is not on the allowlist |
-| setViewportSize (Emulation) | works | pass (8 ms) | pass (10 ms) | [900,700] |
-| page.goto off-list host (DNR) | refused | pass (99 ms) | pass (95 ms) | page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/ |
-| after a blocked goto, the same page goes on | works | pass (218 ms) | pass (219 ms) | {"url":"http://a.localhost:8781/m","title":"probe m"} |
-| an off-list link click stays blocked (DNR) | works | pass (1335 ms) | pass (1374 ms) | {"url":"chrome-error://chromewebdata/","title":"b.localhost","bRequests":"see site-log"} |
-| an off-list popup is blocked (DNR) | works | pass (1228 ms) | pass (1251 ms) | {"url":"chrome-error://chromewebdata/","title":"b.localhost"} |
-| page.route fulfill of an off-list document (does Fetch come before DNR?) | refused | pass (104 ms) | pass (126 ms) | page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/x |
-| context.grantPermissions geolocation (chrome.contentSettings) | works | pass (143 ms) | pass (143 ms) | "granted" |
-| context.grantPermissions clipboard-read | refused | pass (14 ms) | pass (16 ms) | browserContext.grantPermissions: Protocol error (Browser.grantPermissions): Not available in the agent browser: the permission clipboardReadWrite |
-| context.clearPermissions | works | pass (138 ms) | pass (137 ms) | "prompt" |
-| CDPSession on a page (newCDPSession) | works | pass (18 ms) | pass (23 ms) | 42 |
-| context.tracing start/stop | works | pass (186 ms) | pass (164 ms) | "34073 bytes" |
-| page.pdf | works | pass (29 ms) | pass (28 ms) | "5527 bytes" |
-| browser.newContext (an isolated context) | refused | pass (2 ms) | pass (3 ms) | browser.newContext: Protocol error (Target.createBrowserContext): Not available in the agent browser: a new browser context (Target.createBrowserContext). Use t |
-| browser.newBrowserCDPSession | works | pass (3 ms) | pass (2 ms) | "Chrome/156.0.8078.73" |
-| context.serviceWorkers() | works | pass (0 ms) | pass (0 ms) | "0 (the relay reports none)" |
-| site report (trusted click on #report) | works | pass (175 ms) | pass (176 ms) | "sent" |
-| round trip: 20 x page.evaluate | works | pass (64 ms) | pass (74 ms) | "3 ms each" |
-| page.close | works | pass (28 ms) | pass (26 ms) | {"pages":0} |
-| browser.close (ends this connection only) | works | pass (10 ms) | pass (8 ms) | "closed" |
+| locator.fill + click + read text | works | pass (165 ms) | pass (164 ms) | "Hello, Ada" |
+| keyboard.type + press | works | pass (131 ms) | pass (119 ms) | "Grace" |
+| mouse press pressure (the relay sets force 0.5) | works | pass (47 ms) | pass (52 ms) | ["mouse:0.5"] |
+| hover | works | pass (49 ms) | pass (51 ms) | "hovered" |
+| selectOption | works | pass (25 ms) | pass (21 ms) | "y" |
+| ariaSnapshot (the MCP's page read) | works | pass (33 ms) | pass (27 ms) | true |
+| screenshot | works | pass (89 ms) | pass (83 ms) | 23305 |
+| cross-site frame: click and read (c.localhost) | works | pass (200 ms) | pass (177 ms) | "frame clicked" |
+| dialog (confirm) accept | works | pass (79 ms) | pass (67 ms) | "true" |
+| page.route (network interception, fulfill) | works | pass (86 ms) | pass (87 ms) | "mocked" |
+| setInputFiles (file path) | works | pass (27 ms) | pass (24 ms) | "upload.txt:18" |
+| setInputFiles (buffer) | works | pass (20 ms) | pass (20 ms) | "buf.txt:13" |
+| download | works | pass (124 ms) | pass (72 ms) | {"name":"probe.txt","body":"probe download body"} |
+| popup (window.open) | works | pass (193 ms) | pass (177 ms) | {"url":"http://a.localhost:8781/popup?via=open","text":"Popup open"} |
+| popup (target=_blank link) | works | pass (169 ms) | pass (140 ms) | {"url":"http://a.localhost:8781/popup?via=blank"} |
+| a dedicated worker (page.on worker) | works | pass (149 ms) | pass (151 ms) | 42 |
+| context.addInitScript, then a new page | works | pass (146 ms) | pass (142 ms) | "number" |
+| init script in a popup (late attach) | works | pass (132 ms) | pass (130 ms) | "number" |
+| page.exposeFunction | works | pass (159 ms) | pass (134 ms) | 42 |
+| context.cookies + addCookies (allowlisted) | works | pass (14 ms) | pass (12 ms) | ["pw"] |
+| context.addCookies (off-list domain) | refused | pass (3 ms) | pass (3 ms) | browserContext.addCookies: Protocol error (Storage.setCookies): Not allowed: b.localhost is not on the allowlist |
+| context.storageState() after a page with an off-list frame | refused | pass (115 ms) | pass (109 ms) | browserContext.storageState: net::ERR_BLOCKED_BY_CLIENT at http://c.localhost:8781 |
+| setViewportSize (Emulation) | works | pass (16 ms) | pass (14 ms) | [900,700] |
+| page.goto off-list host (DNR) | refused | pass (90 ms) | pass (108 ms) | page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/ |
+| after a blocked goto, the same page goes on | works | pass (223 ms) | pass (237 ms) | {"url":"http://a.localhost:8781/m","title":"probe m"} |
+| an off-list link click stays blocked (DNR) | works | pass (1367 ms) | pass (1355 ms) | {"url":"chrome-error://chromewebdata/","title":"b.localhost"} |
+| an off-list popup is blocked (DNR) | works | pass (1226 ms) | pass (1230 ms) | {"url":"chrome-error://chromewebdata/","title":"b.localhost"} |
+| page.route fulfill of an off-list document (does Fetch come before DNR?) | refused | pass (116 ms) | pass (105 ms) | page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/x |
+| an off-list frame in a page that is not on the list (setContent) | works | pass (1166 ms) | pass (1131 ms) | {"frameLoaded":false} |
+| Page.navigate to a data: URL with an off-list frame | works | pass (1120 ms) | pass (1083 ms) | {"url":"about:blank","frameLoaded":false} |
+| context.grantPermissions geolocation, one origin (chrome.contentSettings) | works | pass (152 ms) | pass (134 ms) | "granted" |
+| context.grantPermissions clipboard-read, no origin (the allowlisted domains) | works | pass (148 ms) | pass (158 ms) | "granted" |
+| context.grantPermissions midi | refused | pass (3 ms) | pass (2 ms) | browserContext.grantPermissions: Protocol error (Browser.grantPermissions): Not available in the agent browser: the permission midi |
+| context.clearPermissions | works | pass (151 ms) | pass (201 ms) | "prompt" |
+| CDPSession on a page (newCDPSession) | works | pass (18 ms) | pass (15 ms) | 42 |
+| context.tracing start/stop | works | pass (161 ms) | pass (160 ms) | 34170 |
+| page.pdf | works | pass (28 ms) | pass (41 ms) | 5527 |
+| browser.newContext (an isolated context) | refused | pass (3 ms) | pass (4 ms) | browser.newContext: Protocol error (Target.createBrowserContext): Not available in the agent browser: a new browser context (Target.createBrowserContext). Use t |
+| browser.newBrowserCDPSession | works | pass (2 ms) | pass (2 ms) | "Chrome/156.0.8078.73" |
+| context.serviceWorkers() | works | pass (0 ms) | pass (0 ms) | 0 |
+| site report (trusted click on #report) | works | pass (208 ms) | pass (206 ms) | "sent" |
+| round trip: 20 x page.evaluate | works | pass (65 ms) | pass (54 ms) | 3 |
+| page.close | works | pass (30 ms) | pass (36 ms) | {"pages":0} |
+| browser.close (closes Playwright's connection) | works | pass (10 ms) | pass (15 ms) | "closed" |
 
 ## The Playwright MCP through the extension (PLAYWRIGHT_MCP_CDP_ENDPOINT)
 
@@ -55,22 +62,43 @@ Chromium 156.0.8078.73 (Debian), Playwright 1.64.1, Playwright MCP 0.0.84. Gener
 
 | Tool call | Result | What the MCP answered |
 | --- | --- | --- |
-| browser_navigate | ok (392 ms) | page title: probe a |
-| browser_snapshot | ok (35 ms) | 34 lines |
-| browser_type | ok (103 ms) | ref e4 |
-| browser_click | ok (629 ms) | ref e5 |
-| browser_snapshot | ok (29 ms) | status shows: Hello, MCP |
-| browser_take_screenshot | ok (86 ms) | text,image |
-| browser_tabs | ok (9 ms) | - 0: (current) [probe a](http://a.localhost:8781/) |
-| browser_tabs | ok (76 ms) | ### Result \| - 0: [probe a](http://a.localhost:8781/) |
-| browser_navigate | error (23 ms) | ### Error Error: browserBackend.callTool: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/ Call log: [2m - navigating to "http://b.localhost:8781/", wait |
-| browser_close | ok (38 ms) | ### Result No open tabs. Navigate to a URL to create one. ### Ran Playwright code ```js await page.close() ``` |
+| browser_navigate | pass (361 ms) | page title: probe a |
+| browser_snapshot | pass (34 ms) | 34 lines |
+| browser_type | pass (93 ms) | ref e4 |
+| browser_click | pass (622 ms) | ref e5 |
+| browser_snapshot | pass (30 ms) | status shows: Hello, MCP |
+| browser_click | pass (1106 ms) | report after browser_type (fill) |
+| browser_type | pass (589 ms) | browser_type slowly |
+| browser_click | pass (1098 ms) | report after browser_type slowly |
+| browser_take_screenshot | pass (101 ms) | text,image |
+| browser_tabs | pass (10 ms) | - 0: (current) [probe a](http://a.localhost:8781/) |
+| browser_tabs | pass (70 ms) | ### Result \| - 0: [probe a](http://a.localhost:8781/) |
+| browser_navigate (refusal expected) | pass (21 ms) | ### Error Error: browserBackend.callTool: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/ Call log: [2m - navigating to "http://b.localhost:8781/", wait |
+| browser_close | pass (43 ms) | ### Result No open tabs. Navigate to a URL to create one. ### Ran Playwright code ```js await page.close() ``` |
+
+## Several clients at the same time (concurrency.mjs)
+
+| Case | Result | What it saw |
+| --- | --- | --- |
+| a second connection of the scope gets no page for a tab that the first holds | pass (1 ms) | 0 |
+| it sees the held tab in Target.getTargets, marked attached | pass (4 ms) | {"attached":true} |
+| it cannot attach to the held tab | pass (3 ms) | "cdpSession.send: Protocol error (Target.attachToTarget): The tab is in use by another connection of this scope" |
+| both connections work at the same time (10 evaluates each, interleaved) | pass (26 ms) | true |
+| a popup belongs to the connection that holds its opener | pass (199 ms) | {"inA":true,"pagesInB":1} |
+| a dialog in A's tab goes to A only | pass (1065 ms) | "true" |
+| the next connection of the scope takes the tab that B left | pass (0 ms) | ["http://a.localhost:8781/"] |
+| B's interception did not stay behind in that tab | pass (167 ms) | "real" |
+| another scope gets no page of scope s1 | pass (1 ms) | 0 |
+| another scope does not see s1's tab in Target.getTargets | pass (1 ms) | false |
+| another scope cannot attach to s1's tab | pass (3 ms) | "cdpSession.send: Protocol error (Target.attachToTarget): No target with given id found" |
+| context.storageState() in a context that showed no off-list frame | pass (176 ms) | {"origins":["http://a.localhost:8781"],"local":["k"]} |
+| a raw client's Browser.close ends only its own connection | pass (61 ms) | {"code":1000,"reason":"Browser.close ends this connection; the agent browser keeps running","otherPageTitle":"probe a"} |
 
 ## What chrome.debugger allows an extension (the matrix)
 
 | CDP command on a tab session | Result |
 | --- | --- |
-| Target.getTargetInfo | ok: ["page","773930D62B44F1C6981E42A1E81E47D0"] |
+| Target.getTargetInfo | ok: ["page","649820B171FA5FB9EC2A1262ECAB575C"] |
 | Browser.getVersion | refused: {"code":-32601,"message":"'Browser.getVersion' wasn't found"} |
 | Browser.getWindowForTarget | refused: {"code":-32601,"message":"'Browser.getWindowForTarget' wasn't found"} |
 | Browser.getWindowBounds | refused: {"code":-32601,"message":"'Browser.getWindowBounds' wasn't found"} |
@@ -168,31 +196,38 @@ Target types that chrome.debugger.getTargets shows: worker, page, other. Attach 
 
 ## What the site saw
 
-The first row is the baseline: a tab that the extension opened, with no debugger attached. `new globals` lists window properties that the baseline page did not have.
+The first row is the baseline: a tab that the extension opened, with no debugger attached. `new globals` lists window properties that the baseline page did not have. The Runtime tell (a getter on `Error.stack` logged with `console.debug`) has no positive control: it stays at 0 on Chromium 156 also under `Runtime.enable`, so it shows nothing either way.
 
-| Time | Report | Page | webdriver | innerHeight | resize events | Runtime tell | hasFocus | visibility | trusted events | untrusted events | new globals |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 16:22:13 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible |  |  |  |
-| 16:22:16 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible |  |  |  |
-| 16:22:19 | load | a.localhost:8781/m?nav=plain | false | 812 | 0 | 0 | true | visible |  |  | __probeBinding |
-| 16:22:20 | load | a.localhost:8781/m?nav=typed | false | 812 | 0 | 0 | true | visible |  |  | __probeBinding |
-| 16:22:20 | load | a.localhost:8781/m?nav=address_bar | false | 812 | 0 | 0 | true | visible |  |  | __probeBinding |
-| 16:22:20 | load | a.localhost:8781/m?nav=auto_bookmark | false | 812 | 0 | 0 | true | visible |  |  | __probeBinding |
-| 16:22:21 | load | a.localhost:8781/m?nav=script_gesture | false | 812 | 0 | 0 | true | visible |  |  | __probeBinding |
-| 16:22:22 | load | a.localhost:8781/m?nav=back_to_site | false | 812 | 0 | 0 | true | visible | mousemove |  |  |
-| 16:22:23 | load | a.localhost:8781/m?nav=plain_with_dnr_rule | false | 812 | 0 | 0 | true | visible |  |  |  |
-| 16:22:24 | load | a.localhost:8781/m?nav=initiator_rule_navigate | false | 812 | 0 | 0 | true | visible |  |  |  |
-| 16:22:24 | load | a.localhost:8781/m?nav=initiator_rule_script | false | 812 | 0 | 0 | true | visible |  |  |  |
-| 16:22:25 | load | a.localhost:8781/m?nav=tabs_update | false | 812 | 0 | 0 | true | visible |  |  |  |
-| 16:22:27 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | input mousemove click keydown |  |  |
-| 16:22:29 | load | a.localhost:8781/ | false | 700 | 1 | 0 | true | visible | mousemove |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed |
-| 16:22:31 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mousemove click |  | __playwright__binding__ __playwright__binding__controller__ __probeInit |
-| 16:22:32 | click | a.localhost:8781/ | false | 700 | 0 | 0 | true | visible | mousemove click |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed __playwright_snapshot_streamer_9bad8cdb59d7a9264013ef73ef6daed3 |
-| 16:22:33 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | input mousemove click keydown |  |  |
-| 16:22:35 | load | a.localhost:8781/ | false | 700 | 1 | 0 | true | visible | mousemove |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed |
-| 16:22:37 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mousemove click |  | __playwright__binding__ __playwright__binding__controller__ __probeInit |
-| 16:22:39 | click | a.localhost:8781/ | false | 700 | 0 | 0 | true | visible | mousemove click |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed __playwright_snapshot_streamer_91af1ebe89760e50e1aa63c478834644 |
-| 16:22:40 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | input |  |  |
+| Time | Report | Page | webdriver | innerHeight | resize events | Runtime tell | hasFocus | visibility | pointer pressure | keydown / input | trusted events | untrusted events | new globals |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 17:04:34 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:37 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:40 | load | a.localhost:8781/m?nav=plain | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  | __probeBinding |
+| 17:04:41 | load | a.localhost:8781/m?nav=typed | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  | __probeBinding |
+| 17:04:41 | load | a.localhost:8781/m?nav=address_bar | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  | __probeBinding |
+| 17:04:42 | load | a.localhost:8781/m?nav=auto_bookmark | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  | __probeBinding |
+| 17:04:42 | load | a.localhost:8781/m?nav=script_gesture | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  | __probeBinding |
+| 17:04:43 | load | a.localhost:8781/m?nav=back_to_site | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:44 | load | a.localhost:8781/m?nav=plain_with_dnr_rule | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:45 | load | a.localhost:8781/m?nav=initiator_rule_navigate | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:45 | load | a.localhost:8781/m?nav=initiator_rule_script | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:46 | load | a.localhost:8781/m?nav=tabs_update | false | 812 | 0 | 0 | true | visible |  | 0 / 0 |  |  |  |
+| 17:04:48 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 7 / 7 | input mousemove click keydown |  |  |
+| 17:04:49 | click | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 7 / 7 | input mousemove click keydown |  |  |
+| 17:04:51 | load | a.localhost:8781/ | false | 700 | 1 | 0 | true | visible |  | 0 / 0 | mousemove |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed |
+| 17:04:53 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 0 / 0 | mousemove click |  | __playwright__binding__ __playwright__binding__controller__ __probeInit |
+| 17:04:57 | click | a.localhost:8781/ | false | 700 | 0 | 0 | true | visible | mouse:0.5 | 0 / 0 | mousemove click |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed __playwright_snapshot_streamer_2a9b3375cdbcbd689127e61d528d9b7a |
+| 17:04:58 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 7 / 7 | input mousemove click keydown |  |  |
+| 17:04:58 | click | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 7 / 7 | input mousemove click keydown |  |  |
+| 17:05:00 | load | a.localhost:8781/ | false | 700 | 1 | 0 | true | visible |  | 0 / 0 | mousemove |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed |
+| 17:05:02 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 0 / 0 | mousemove click |  | __playwright__binding__ __playwright__binding__controller__ __probeInit |
+| 17:05:06 | click | a.localhost:8781/ | false | 700 | 0 | 0 | true | visible | mouse:0.5 | 0 / 0 | mousemove click |  | __playwright__binding__ __probeInit __playwright__binding__controller__ __probeExposed __playwright_snapshot_streamer_c696c27416e4fa3ea3985ed0b17d0cb7 |
+| 17:05:07 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible |  | 0 / 1 | input |  |  |
+| 17:05:08 | click | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 0 / 1 | input mousemove click |  |  |
+| 17:05:09 | click | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 4 / 5 | input mousemove click keydown |  |  |
+| 17:05:12 | load | a.localhost:8781/ | false | 812 | 0 | 0 | true | visible | mouse:0.5 | 0 / 0 | mousemove click |  |  |
+| 17:05:12 | load | a.localhost:8781/m | false | 812 | 0 | 0 | true | visible |  | 0 / 0 | mousemove |  |  |
+| 17:05:13 | load | a.localhost:8781/ | false | 812 | 0 | 0 | false | visible |  | 0 / 0 |  |  |  |
 
 ## Navigation headers, by how the navigation started
 

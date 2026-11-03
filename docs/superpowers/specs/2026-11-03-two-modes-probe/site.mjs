@@ -11,7 +11,10 @@ const OUT = process.env.SITE_LOG || "site-log.jsonl";
 const log = (o) => fs.appendFileSync(OUT, JSON.stringify({ at: new Date().toISOString(), ...o }) + "\n");
 
 const DETECT = `(() => {
-  const ev = { resize: 0, trusted: [], untrusted: [] };
+  const ev = { resize: 0, trusted: [], untrusted: [], pressure: [], keydowns: 0, inputs: 0 };
+  addEventListener("pointerdown", (e) => ev.pressure.push(e.pointerType + ":" + e.pressure), true);
+  addEventListener("keydown", () => ev.keydowns++, true);
+  addEventListener("input", () => ev.inputs++, true);
   addEventListener("resize", () => ev.resize++);
   for (const t of ["click", "keydown", "mousemove", "input"])
     addEventListener(t, (e) => (e.isTrusted ? ev.trusted : ev.untrusted).push(t), true);
@@ -26,7 +29,7 @@ const DETECT = `(() => {
       innerHeight, outerHeight, innerWidth, outerWidth,
       hasFocus: document.hasFocus(), visibility: document.visibilityState,
       plugins: navigator.plugins.length, languages: navigator.languages,
-      runtimeTell: tell, resize: ev.resize,
+      runtimeTell: tell, resize: ev.resize, pressure: [...new Set(ev.pressure)], keydowns: ev.keydowns, inputs: ev.inputs,
       trusted: [...new Set(ev.trusted)], untrusted: [...new Set(ev.untrusted)],
       globals: Object.getOwnPropertyNames(window).filter((k) => !k.startsWith("__site")),
       init: typeof window.__probeInit, url: location.href,
@@ -91,6 +94,8 @@ const server = http.createServer((req, res) => {
     if (url.pathname === "/popup") return send(200, "text/html; charset=utf-8", page("probe popup", `<h1 id="p">Popup ${url.searchParams.get("via")}</h1>`));
     if (url.pathname === "/m") return send(200, "text/html; charset=utf-8", page("probe m", "<p id='m'>m</p>"));
     if (url.pathname === "/geo") return send(200, "text/html; charset=utf-8", page("probe geo", "<p id='g'>geo</p>"));
+    if (url.pathname === "/worker") return send(200, "text/html; charset=utf-8", page("probe worker", "<script>window.__siteWorker = new Worker('/w.js')</script><p>worker</p>"));
+    if (url.pathname === "/w.js") return send(200, "text/javascript", "self.onmessage = () => {};");
     if (url.pathname === "/api/data") return send(200, "text/plain", "real");
     if (url.pathname === "/file.txt")
       return send(200, "text/plain", "probe download body\n", { "Content-Disposition": 'attachment; filename="probe.txt"' });

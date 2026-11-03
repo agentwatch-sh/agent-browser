@@ -4,16 +4,28 @@
 // outside a page: a chrome:// tab, and the target types the extension sees.
 import fs from "node:fs";
 
-const RELAY = `http://127.0.0.1:${process.env.RELAY_PORT || 8790}/control`;
+import http from "node:http";
+
+// The probe's control calls go over the relay's 0600 Unix socket only.
+const SOCK = process.env.RELAY_SOCK;
 const OUT = process.env.OUT || "results/matrix.json";
 const UPLOAD = process.env.UPLOAD_FILE;
 const DL_DIR = process.env.DL_DIR;
 
-async function ctl(method, ...params) {
-  const r = await fetch(RELAY, { method: "POST", body: JSON.stringify({ method, params }) });
-  const j = await r.json();
-  if (j.error) throw new Error(j.error);
-  return j.result;
+function ctl(method, ...params) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ socketPath: SOCK, path: "/control", method: "POST" }, (res) => {
+      let body = "";
+      res.on("data", (d) => (body += d));
+      res.on("end", () => {
+        const j = JSON.parse(body);
+        if (j.error) reject(new Error(j.error));
+        else resolve(j.result);
+      });
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify({ method, params }));
+  });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -9,9 +9,12 @@
 // bridge (ext/sw.js). Each connection belongs to a scope: it sees only the
 // tabs of that scope, and the tabs it opens (and their popups) join it.
 //
-// Sessions, as Chrome has them: a client may hold several sessions on one
-// tab (auto-attach, Target.attachToTarget, Playwright's newCDPSession). All
-// of them share the one chrome.debugger attachment of that tab.
+// Sessions: a client may hold several sessions on one tab (auto-attach,
+// Target.attachToTarget, Playwright's newCDPSession). All of them share the
+// one chrome.debugger attachment of that tab, so a tab belongs to one client
+// connection at a time (its owner): another connection of the scope sees the
+// tab but cannot attach. When the owner leaves, the relay detaches, so no
+// domain state (Fetch, Emulation, the file chooser) stays behind.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,6 +27,9 @@ const PORT = Number(process.env.RELAY_PORT || 8790);
 const SOCK = process.env.RELAY_SOCK || "";
 const ALLOW = (process.env.ALLOWLIST || "a.localhost").split(",");
 const LOGFILE = process.env.RELAY_LOG || "relay-log.jsonl";
+// A CDP client over loopback TCP must send this token in the x-probe-token header
+// (every local user can reach the port). The Unix socket (0600) needs none.
+const TOKEN = process.env.RELAY_TOKEN || "";
 // Playwright needs a non-empty browserContextId on each target; one stable id names the one profile.
 const DEFAULT_CONTEXT = "agentwatch-default";
 
@@ -65,8 +71,9 @@ let nextClient = 1;
 let nextSession = 1;
 // download guid -> { client, url }
 const downloads = new Map();
-// content settings this relay set, for Browser.resetPermissions
-const granted = new Set();
+// Target.createTarget calls in flight: a new tab with no opener waits for them,
+// so that only its creator takes a tab that createTarget opened.
+const creating = new Set();
 
 function tabByTarget(targetId) {
   for (const t of tabs.values()) if (t.targetId === targetId) return t;
@@ -88,7 +95,7 @@ async function targetInfo(tab) {
   const opener = tab.opener !== null && tabs.get(tab.opener) ? tabs.get(tab.opener).targetId : undefined;
   return {
     targetId: tab.targetId, type: "page", title: t ? t.title || "" : "", url: t ? t.pendingUrl || t.url || "" : "",
-    attached: tab.sessions.size > 0, canAccessOpener: false, browserContextId: DEFAULT_CONTEXT,
+    attached: Boolean(tab.owner), canAccessOpener: false, browserContextId: DEFAULT_CONTEXT,
     ...(opener ? { openerId: opener } : {}),
   };
 }
@@ -111,6 +118,8 @@ function ensureDebugger(tab) {
 // A new session of client on tab. eventSession is the session that carries
 // the Target.attachedToTarget event: undefined for the root, or a browser session.
 async function newSession(client, tab, eventSession) {
+  if (tab.owner && tab.owner !== client) throw new Error("The tab is in use by another connection of this scope");
+  tab.owner = client;
   await ensureDebugger(tab);
   const sessionId = `AB${client.id}S${nextSession++}`;
   const info = await targetInfo(tab);
@@ -125,6 +134,7 @@ async function newSession(client, tab, eventSession) {
 // and the tabs.onCreated event both ask for it.
 function autoAttach(client, tab) {
   if (client.auto.has(tab.tabId)) return Promise.resolve(client.auto.get(tab.tabId));
+  if (tab.owner && tab.owner !== client) return Promise.resolve(null);
   if (tab.pending.has(client)) return tab.pending.get(client);
   const p = newSession(client, tab, undefined)
     .then((sid) => {
@@ -147,10 +157,14 @@ async function endSession(client, sessionId, notify = true) {
   if (!tab) return;
   tab.sessions.delete(sessionId);
   if (notify) client.event(parent, "Target.detachedFromTarget", { sessionId, targetId: tab.targetId });
-  // The last session leaves: detach, so no domain state (Fetch, Emulation) stays behind.
-  if (tab.sessions.size === 0 && tab.attached) {
-    tab.attached = false;
-    await extCall("debugger.detach", tab.tabId).catch(() => {});
+  // The owner's last session leaves: the tab is free again, and the relay
+  // detaches, so no domain state (Fetch, Emulation) stays behind.
+  if (tab.sessions.size === 0) {
+    tab.owner = null;
+    if (tab.attached) {
+      tab.attached = false;
+      await extCall("debugger.detach", tab.tabId).catch(() => {});
+    }
   }
 }
 
@@ -161,7 +175,7 @@ function scopeTabs(scope) {
 async function addTab(chromeTab, scope) {
   let tab = tabs.get(chromeTab.id);
   if (!tab) {
-    tab = { tabId: chromeTab.id, targetId: null, scope, opener: chromeTab.openerTabId ?? null, attached: false, attaching: null, sessions: new Map(), pending: new Map() };
+    tab = { tabId: chromeTab.id, targetId: null, scope, opener: chromeTab.openerTabId ?? null, attached: false, attaching: null, owner: null, sessions: new Map(), pending: new Map() };
     tabs.set(chromeTab.id, tab);
   }
   if (tab.scope === null && scope !== null) tab.scope = scope;
@@ -170,10 +184,17 @@ async function addTab(chromeTab, scope) {
 }
 
 async function announce(tab) {
+  const opener = tab.opener !== null ? tabs.get(tab.opener) : null;
+  const heir = opener && opener.owner ? opener.owner : null;
   for (const c of clients) {
     if (c.scope !== tab.scope) continue;
     if (c.discover) c.event(undefined, "Target.targetCreated", { targetInfo: await targetInfo(tab) });
-    if (c.autoAttach) await autoAttach(c, tab).catch((e) => log({ t: "attach-failed", tab: tab.tabId, error: e.message }));
+  }
+  // A popup belongs to the connection that holds its opener.
+  const takers = heir ? [heir] : [...clients].filter((c) => c.scope === tab.scope && c.autoAttach);
+  for (const c of takers) {
+    if (!c.autoAttach || tab.owner) continue;
+    await autoAttach(c, tab).catch((e) => log({ t: "attach-failed", tab: tab.tabId, error: e.message }));
   }
 }
 
@@ -189,8 +210,21 @@ function cdpCookie(c) {
   };
 }
 
-// The Playwright permission names that chrome.contentSettings can grant.
-const CONTENT = { geolocation: "location", notifications: "notifications", camera: "camera", microphone: "microphone" };
+// The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant.
+const CONTENT = {
+  geolocation: "location", notifications: "notifications", videoCapture: "camera", audioCapture: "microphone",
+  clipboardReadWrite: "clipboard", clipboardSanitizedWrite: "clipboard",
+};
+// Content settings are profile-wide; each connection's grants are kept apart, and a
+// type is rebuilt from the grants that remain when a connection resets or leaves.
+async function rebuildGrants(types) {
+  for (const type of types) {
+    await extCall("contentSettings.clear", type);
+    const patterns = new Set();
+    for (const c of clients) for (const g of c.grants) if (g.type === type) patterns.add(g.pattern);
+    for (const pattern of patterns) await extCall("contentSettings.set", type, { primaryPattern: pattern, setting: "allow" });
+  }
+}
 
 // --------------------------------------------------------- browser commands
 // Each handler gets (client, params, ctx); ctx.tab is the tab of the page
@@ -231,18 +265,28 @@ const BROWSER = {
   async "Browser.grantPermissions"(client, p) {
     const origin = p.origin || "";
     if (origin && !covers(new URL(origin).hostname)) throw new Error(`Not allowed: ${new URL(origin).hostname} is not on the allowlist`);
-    const pattern = origin ? origin.replace(/\/$/, "") + "/*" : "<all_urls>";
+    // No origin means every origin: the relay grants it for each allowlisted domain only.
+    const patterns = origin ? [origin.replace(/\/$/, "") + "/*"] : ALLOW.map((d) => `*://*.${d}/*`);
+    for (const name of p.permissions || []) if (!CONTENT[name]) throw new Error(`Not available in the agent browser: the permission ${name}`);
     for (const name of p.permissions || []) {
-      const type = CONTENT[name];
-      if (!type) throw new Error(`Not available in the agent browser: the permission ${name}`);
-      await extCall("contentSettings.set", type, { primaryPattern: pattern, setting: "allow" });
-      granted.add(type);
+      for (const pattern of patterns) {
+        await extCall("contentSettings.set", CONTENT[name], { primaryPattern: pattern, setting: "allow" });
+        client.grants.push({ type: CONTENT[name], pattern });
+      }
     }
     return {};
   },
-  async "Browser.resetPermissions"() {
-    for (const type of granted) await extCall("contentSettings.clear", type);
-    granted.clear();
+  async "Browser.resetPermissions"(client) {
+    const types = new Set(client.grants.map((g) => g.type));
+    client.grants = [];
+    await rebuildGrants(types);
+    return {};
+  },
+  async "Browser.cancelDownload"(client, p) {
+    const d = downloads.get(p.guid);
+    if (!d) return {};
+    const items = await extCall("downloads.search", { url: d.url, state: "in_progress" });
+    for (const item of items) await extCall("downloads.cancel", item.id).catch(() => {});
     return {};
   },
   async "Target.attachToBrowserTarget"(client) {
@@ -282,11 +326,20 @@ const BROWSER = {
   async "Target.createTarget"(client, p) {
     if (p.browserContextId && p.browserContextId !== DEFAULT_CONTEXT) throw new Error("No browser context with given id found");
     const url = p.url || "about:blank";
-    const created = p.newWindow ? (await extCall("windows.create", { url, focused: false })).tabs[0] : await extCall("tabs.create", { url, active: !p.background });
-    const tab = await addTab(created, client.scope);
-    // Playwright expects Target.attachedToTarget before the createTarget answer.
-    for (const c of clients) if (c.scope === client.scope && c.autoAttach) await autoAttach(c, tab).catch(() => {});
-    return { targetId: tab.targetId };
+    let done;
+    const flight = new Promise((r) => (done = r));
+    creating.add(flight);
+    try {
+      const created = p.newWindow ? (await extCall("windows.create", { url, focused: false })).tabs[0] : await extCall("tabs.create", { url, active: !p.background });
+      const tab = await addTab(created, client.scope);
+      tab.claimed = true;
+      // The creator owns the new tab. Playwright expects Target.attachedToTarget before the answer.
+      if (client.autoAttach) await autoAttach(client, tab);
+      return { targetId: tab.targetId };
+    } finally {
+      creating.delete(flight);
+      done();
+    }
   },
   async "Target.closeTarget"(client, p) {
     const tab = tabByTarget(p.targetId);
@@ -350,6 +403,7 @@ class Client {
     this.autoAttach = false;
     this.discover = false;
     this.download = null;
+    this.grants = []; // { type, pattern } content settings this connection granted
   }
   send(msg) {
     if (this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
@@ -383,7 +437,10 @@ async function onClientMessage(client, msg) {
       log({ t: "no-session", c: client.id, method });
       return fail("Session not found");
     }
-    reply(await extCall("debugger.sendCommand", target, method, params || {}));
+    // A CDP mouse press reports pointer pressure 0, a real mouse 0.5 (ab-v16.2 interim finding 5).
+    const sent = params || {};
+    if (method === "Input.dispatchMouseEvent" && sent.force === undefined && (sent.type === "mousePressed" || (sent.type === "mouseMoved" && sent.buttons))) sent.force = 0.5;
+    reply(await extCall("debugger.sendCommand", target, method, sent));
   } catch (e) {
     fail(String(e && e.message ? e.message : e));
   }
@@ -449,13 +506,34 @@ async function onExtEvent(m) {
     return;
   }
   if (m.ev === "tabs.onCreated") {
-    const opener = m.tab.openerTabId !== undefined ? tabs.get(m.tab.openerTabId) : null;
     const known = tabs.has(m.tab.id);
-    const tab = await addTab(m.tab, opener ? opener.scope : null);
+    const tab = await addTab(m.tab, null);
     if (m.eager === "attached") tab.attached = true;
-    log({ t: "tab-created", tab: m.tab.id, opener: m.tab.openerTabId ?? null, scope: tab.scope, eager: m.eager, known });
-    // A tab that Target.createTarget opened is announced there.
-    if (!known) await announce(tab);
+    // A tab that Target.createTarget opened goes to its creator only.
+    if (known) return;
+    await Promise.allSettled([...creating]);
+    if (tab.claimed || tab.owner) return;
+    // The opener comes from Chrome's own target info: chrome.tabs' openerTabId can
+    // name the active tab instead of the tab that called window.open (measured).
+    tab.opener = null;
+    try {
+      await ensureDebugger(tab);
+      const { targetInfo: ti } = await extCall("debugger.sendCommand", { tabId: tab.tabId }, "Target.getTargetInfo");
+      const opener = ti && ti.openerId ? tabByTarget(ti.openerId) : null;
+      if (opener) {
+        tab.opener = opener.tabId;
+        tab.scope = opener.scope;
+      }
+    } catch (e) {
+      log({ t: "opener-unknown", tab: tab.tabId, error: e.message });
+    }
+    log({ t: "tab-created", tab: m.tab.id, chromeOpener: m.tab.openerTabId ?? null, opener: tab.opener, scope: tab.scope });
+    await announce(tab);
+    // Nobody took it: detach again, so the tab carries no debugger.
+    if (!tab.owner && tab.attached) {
+      tab.attached = false;
+      await extCall("debugger.detach", tab.tabId).catch(() => {});
+    }
     return;
   }
   if (m.ev === "tabs.onRemoved") {
@@ -487,9 +565,9 @@ function scopeOf(pathname) {
   return m ? m[1] : null;
 }
 
-function onHttp(req, res) {
+function onHttp(req, res, viaUnix) {
   const url = new URL(req.url, "http://relay");
-  if (req.method === "POST" && url.pathname === "/control") {
+  if (req.method === "POST" && url.pathname === "/control" && viaUnix) {
     // Probe control only (the matrix, a plain tab for the baseline). Not part of the design.
     let body = "";
     req.on("data", (d) => (body += d));
@@ -542,6 +620,7 @@ function onUpgrade(req, socket, head, viaUnix) {
   if (!scope) return socket.destroy();
   // A page's script cannot reach this endpoint: a browser WebSocket carries an Origin header.
   if (req.headers.origin) return socket.destroy();
+  if (!viaUnix && (!TOKEN || req.headers["x-probe-token"] !== TOKEN)) return socket.destroy();
   wss.handleUpgrade(req, socket, head, (ws) => {
     const client = new Client(ws, scope);
     clients.add(client);
@@ -551,15 +630,18 @@ function onUpgrade(req, socket, head, viaUnix) {
       clients.delete(client);
       log({ t: "client-close", c: client.id });
       for (const sid of [...client.sessions.keys()]) await endSession(client, sid, false).catch(() => {});
+      const types = new Set(client.grants.map((g) => g.type));
+      client.grants = [];
+      await rebuildGrants(types).catch(() => {});
     });
   });
 }
 
-const tcp = http.createServer(onHttp);
+const tcp = http.createServer((req, res) => onHttp(req, res, false));
 tcp.on("upgrade", (req, socket, head) => onUpgrade(req, socket, head, false));
 tcp.listen(PORT, "127.0.0.1", () => log({ t: "listen", port: PORT }));
 if (SOCK) {
-  const unix = http.createServer(onHttp);
+  const unix = http.createServer((req, res) => onHttp(req, res, true));
   unix.on("upgrade", (req, socket, head) => onUpgrade(req, socket, head, true));
   unix.listen(SOCK, () => {
     fs.chmodSync(SOCK, 0o600);

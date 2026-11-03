@@ -41,12 +41,14 @@ const rpc = (method, params) =>
   });
 const text = (r) => (r.result && r.result.content ? r.result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n") : JSON.stringify(r.error));
 const results = [];
-async function tool(name, args, check) {
+// refused: the call must fail with this text (a refusal that the design wants).
+async function tool(name, args, check, refused) {
   const t0 = Date.now();
   const r = await rpc("tools/call", { name, arguments: args });
   const t = text(r);
   const isError = Boolean(r.error || (r.result && r.result.isError));
-  const row = { tool: name, ms: Date.now() - t0, isError, saw: isError ? t.replace(/\s+/g, " ").slice(0, 300) : check ? check(r, t) : t.split("\n").slice(0, 3).join(" | ").slice(0, 200) };
+  const ok = refused ? isError && refused.test(t) : !isError;
+  const row = { tool: name, ms: Date.now() - t0, isError, ok, ...(refused ? { expect: "refused" } : {}), saw: isError ? t.replace(/\s+/g, " ").slice(0, 300) : check ? check(r, t) : t.split("\n").slice(0, 3).join(" | ").slice(0, 200) };
   results.push(row);
   return t;
 }
@@ -64,14 +66,21 @@ const goRef = ref(/button "Greet"[^\n]*\[ref=(\w+)\]/);
 await tool("browser_type", { element: "Name", target: nameRef, text: "MCP" }, () => `ref ${nameRef}`);
 await tool("browser_click", { element: "Greet", target: goRef }, () => `ref ${goRef}`);
 await tool("browser_snapshot", {}, (r, t) => (t.includes("Hello, MCP") ? "status shows: Hello, MCP" : "no greeting"));
+// What the site sees of the MCP's typing: browser_type fills the field (an input
+// event, no key events) unless slowly is set. #report sends the page's counts.
+const reportRef = ref(/button "Report"[^\n]*\[ref=(\w+)\]/);
+await tool("browser_click", { element: "Report", target: reportRef }, () => "report after browser_type (fill)");
+await tool("browser_type", { element: "Name", target: nameRef, text: "slow", slowly: true }, () => "browser_type slowly");
+await tool("browser_click", { element: "Report", target: reportRef }, () => "report after browser_type slowly");
 await tool("browser_take_screenshot", {}, (r) => (r.result && r.result.content ? r.result.content.map((c) => c.type).join(",") : JSON.stringify(r.error)));
 await tool("browser_tabs", { action: "list" }, (r, t) => t.split("\n").filter((l) => l.includes("localhost") || l.includes("about:")).join(" | ").slice(0, 200));
 await tool("browser_tabs", { action: "new" }, (r, t) => t.split("\n").slice(0, 2).join(" | ").slice(0, 160));
-await tool("browser_navigate", { url: B + "/" }, (r, t) => (t.match(/ERR_[A-Z_]+/) || [t.slice(0, 160)])[0]);
+await tool("browser_navigate", { url: B + "/" }, null, /ERR_BLOCKED_BY_CLIENT/);
 await tool("browser_close", {}, (r, t) => t.slice(0, 120));
 
 fs.writeFileSync(OUT, JSON.stringify({ tools: names.length, results }, null, 2) + "\n");
 console.log(`mcp: ${names.length} tools`);
-for (const r of results) console.log(`${r.isError ? "ERR " : "ok  "} ${r.tool} (${r.ms} ms): ${r.saw}`);
+for (const r of results) console.log(`${r.ok ? "ok  " : "ERR "} ${r.tool}${r.expect ? " [refusal expected]" : ""} (${r.ms} ms): ${r.saw}`);
 child.kill();
-if (stderr.trim()) fs.writeFileSync(OUT.replace(/\.json$/, ".stderr.txt"), stderr);
+// The MCP's own log goes to the run's scratch folder, never into the repo.
+if (stderr.trim()) fs.writeFileSync(path.join(process.env.MCP_OUT_DIR, "mcp.stderr.txt"), stderr);

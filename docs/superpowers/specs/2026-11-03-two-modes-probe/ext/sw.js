@@ -61,6 +61,7 @@ const CALLS = {
   "cookies.set": (d) => chrome.cookies.set(d),
   "cookies.remove": (d) => chrome.cookies.remove(d),
   "downloads.search": (q) => chrome.downloads.search(q || {}),
+  "downloads.cancel": (id) => chrome.downloads.cancel(id),
   "contentSettings.set": (type, details) => chrome.contentSettings[type].set(details),
   "contentSettings.clear": (type) => chrome.contentSettings[type].clear({}),
   "dnr.getMatchedRules": (q) => chrome.declarativeNetRequest.getMatchedRules(q || {}),
