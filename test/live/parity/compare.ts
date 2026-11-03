@@ -115,7 +115,7 @@ for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j
 
 const RUNS = ["cmdline-ext", "cmdline-ext-feature", "cdp-install", "relaunch-cdp-flag", "relaunch-cdp", "cdp-install-devmode", "relaunch-cdp-devmode",
   "ui-install", "relaunch-silent", "relaunch-banner", "update", "update-devmode-off", "update-devmode-off-relaunch", "ui-install-2", "devmode-off",
-  "devmode-off-relaunch", "external-crx", "external-crx-relaunch"];
+  "devmode-off-relaunch", "external-crx", "external-crx-relaunch", "external-crx-banner"];
 const ours = (r: Run | undefined) => {
   const v = Object.values(r?.prefs?.ours ?? {})[0] as any;
   return v ? `in prefs (location ${v.location}${v.disable_reasons?.length ? `, disabled ${v.disable_reasons.join("+")}` : ""})` : "not in prefs";
@@ -134,10 +134,11 @@ for (const l of labels) {
 
 // --- While an agent drives ---------------------------------------------------------------------------
 
-// The run where the extension drove a tab: relaunch-silent, else cmdline-ext (Chromium), else the
-// update run of another label that ran this label's browser (Chrome Beta: stable's profile updated).
+// The run where the extension drove a tab: relaunch-silent, else cmdline-ext (Chromium), else
+// external-crx-relaunch, else the update run of another label that ran this label's browser. Without
+// the silent flag: relaunch-banner, else external-crx-banner.
 const driven = (l: string, silent: boolean) => {
-  for (const run of silent ? ["relaunch-silent", "cmdline-ext", "external-crx-relaunch"] : ["relaunch-banner"]) { const r = load(l, run); if (r && mark(r, "attach")) return r; }
+  for (const run of silent ? ["relaunch-silent", "cmdline-ext", "external-crx-relaunch"] : ["relaunch-banner", "external-crx-banner"]) { const r = load(l, run); if (r && mark(r, "attach")) return r; }
   if (silent) for (const o of labels) { const r = load(o, "update"); if (r && r.bin === summary.browsers[l].bin && mark(r, "attach")) return r; }
   return undefined;
 };
@@ -189,7 +190,7 @@ table("While the agent drives through chrome.debugger (relaunch-silent; Chromium
 console.log("\n## Screenshots (review them for prompts, bars and banners)\n");
 for (const l of labels) {
   const shots: string[] = [];
-  for (const run of ["site", "site-plain", "tls", "cmdline-ext", "cdp-install", "ui-install", "relaunch-silent", "relaunch-banner", "update", "devmode-off-relaunch", "external-crx", "external-crx-relaunch", "inspect-approval"]) {
+  for (const run of ["site", "site-plain", "tls", "cmdline-ext", "cdp-install", "ui-install", "relaunch-silent", "relaunch-banner", "update", "devmode-off-relaunch", "external-crx", "external-crx-relaunch", "external-crx-banner", "inspect-approval"]) {
     const r = load(l, run);
     for (const [k, v] of Object.entries(r?.shots ?? {})) if (typeof v === "string" && !v.startsWith("failed")) shots.push(`${run}/${k}: \`${v.replace(DIR + "/", "")}\``);
   }

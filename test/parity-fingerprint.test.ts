@@ -21,11 +21,12 @@ const SPEC_CIPHERS = [0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0x
 const SPEC_EXTS = [0x001b, 0x0000, 0x0033, 0x0010, 0x4469, 0x0017, 0x002d, 0x000d, 0x0005, 0x0023, 0x0012, 0x002b, 0xff01, 0x000b, 0x000a, 0x0015];
 const SPEC_SIGALGS = [0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601];
 
-function clientHello(): Buffer {
+function clientHello(o: { sni?: boolean; alpn?: Buffer[] | null } = {}): Buffer {
+  const alpn = o.alpn === undefined ? [Buffer.from("h2"), Buffer.from("http/1.1")] : o.alpn;
   const extData = (t: number): Buffer => {
     switch (t) {
       case 0x0000: { const name = Buffer.from("probe.localhost"); return vec16(Buffer.concat([Buffer.from([0]), vec16(name)])); }
-      case 0x0010: return vec16(Buffer.concat([vec8(Buffer.from("h2")), vec8(Buffer.from("http/1.1"))]));
+      case 0x0010: return vec16(Buffer.concat((alpn ?? []).map(vec8)));
       case 0x000d: return vec16(list16(SPEC_SIGALGS));
       case 0x002b: return vec8(list16([0x7a7a, 0x0304, 0x0303]));
       case 0x000a: return vec16(list16([0x2a2a, 0x001d, 0x0017]));
@@ -34,7 +35,8 @@ function clientHello(): Buffer {
       default: return Buffer.alloc(0);
     }
   };
-  const exts = [0x0a0a, ...SPEC_EXTS, 0xfafa].map((t) => Buffer.concat([u16(t), vec16(extData(t))]));
+  const types = SPEC_EXTS.filter((t) => !(t === 0x0000 && o.sni === false) && !(t === 0x0010 && alpn === null));
+  const exts = [0x0a0a, ...types, 0xfafa].map((t) => Buffer.concat([u16(t), vec16(extData(t))]));
   const body = Buffer.concat([
     u16(0x0303), Buffer.alloc(32, 1), vec8(Buffer.alloc(32, 2)),
     vec16(list16([0x3a3a, ...SPEC_CIPHERS])), vec8(Buffer.from([0])), vec16(Buffer.concat(exts)),
@@ -56,6 +58,17 @@ test("JA4 of the specification's example is t13d1516h2_8daaf6152771_e5627efa2ab1
   // The spec's intermediate values.
   assert.equal(ja4CipherHash(SPEC_CIPHERS), "8daaf6152771");
   assert.equal(ja4ExtensionHash(SPEC_EXTS, []), "6d807ffa2a79");
+});
+
+test("JA4 part a: no SNI gives i, no ALPN gives 00, a non-alphanumeric ALPN gives its first and last hex digit", () => {
+  const a = (o: Parameters<typeof clientHello>[0]) => ja4(parseClientHello(clientHello(o))!).split("_")[0];
+  assert.equal(a({ sni: false }), "t13i1515h2");
+  assert.equal(a({ alpn: null }), "t13d151500");
+  assert.equal(a({ alpn: [Buffer.from([0xab, 0xcd])] }), "t13d1516ad");
+  assert.equal(a({ alpn: [Buffer.from([0x30, 0xab, 0xcd, 0x31])] }), "t13d151601");
+  assert.equal(a({ alpn: [Buffer.from("http/1.1")] }), "t13d1516h1");
+  // The parts b and c leave SNI and ALPN out, so they stay the specification's values.
+  assert.equal(ja4(parseClientHello(clientHello({ sni: false, alpn: null }))!).slice(-25), "8daaf6152771_e5627efa2ab1");
 });
 
 test("a ClientHello cut short is not parsed yet, and a non-TLS start is refused", () => {

@@ -12,6 +12,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { createServer as createHttp2Server, type Http2ServerRequest, type Http2ServerResponse } from "node:http2";
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { Duplex } from "node:stream";
 import { TLSSocket, createSecureContext } from "node:tls";
 import { akamaiH2, describeClientHello, parseClientHello, parseH2Start } from "./fingerprint.ts";
@@ -37,6 +38,8 @@ export class ProbeServer extends EventEmitter {
   private connSeq = 0;
   readonly port: number;
   private readonly tls: { key: string; cert: string };
+  // Each command carries this token; the stand-in extension runs no command without it.
+  readonly token = randomBytes(16).toString("hex");
   constructor(port: number, tls: { key: string; cert: string }) { super(); this.port = port; this.tls = tls; }
 
   get origin() { return `http://probe.localhost:${this.port}`; }
@@ -65,7 +68,7 @@ export class ProbeServer extends EventEmitter {
   /** Send one command to the probe extension and wait for its result. */
   async ext(op: string, args: { [k: string]: unknown } = {}, ms = 15_000): Promise<{ result?: any; error?: string; timeout?: true }> {
     const id = this.nextId++;
-    const cmd = { id, op, ...args };
+    const cmd = { ...args, id, op, token: this.token };
     const w = this.waiters.shift();
     if (w) w(cmd); else this.queue.push(cmd);
     const r = await this.waitFor("ext-result", ms, (d) => d.id === id);
@@ -106,13 +109,13 @@ export class ProbeServer extends EventEmitter {
     });
     // Every page request: its headers in the order they came (pseudo-headers first on HTTP/2).
     if (!url.pathname.startsWith("/ext/") && !url.pathname.startsWith("/page/")) {
-      this.record("request", { proto, path: url.pathname, connection: (req.socket as any)?.__probeConn, rawHeaders: pairs(req.rawHeaders) });
+      this.recordFor(run, "request", { proto, path: url.pathname, connection: (req.socket as any)?.__probeConn, rawHeaders: pairs(req.rawHeaders) });
     }
     if (url.pathname === "/" || url.pathname === "/site") {
       const page = `<!doctype html><html><head><meta charset="utf-8"><title>parity probe</title>
 <style>body{font:16px sans-serif;margin:0}#target{position:fixed;left:100px;top:120px;width:300px;height:40px;font-size:18px}#links{position:fixed;left:100px;top:200px}</style></head>
 <body><input id="target" placeholder="click and type here"><div id="links"><a id="go" href="/blank?from=link">a link</a></div>
-<script>window.PROBE={run:${JSON.stringify(run)},origin:location.origin}</script><script src="/site.js"></script></body></html>`;
+<script>window.PROBE={run:${JSON.stringify(run)},origin:location.origin}</script><script src="/site.js?run=${encodeURIComponent(run)}"></script></body></html>`;
       return send(200, "text/html; charset=utf-8", page, {
         "accept-ch": ACCEPT_CH,
         "critical-ch": "Sec-CH-UA-Full-Version-List",
@@ -123,7 +126,7 @@ export class ProbeServer extends EventEmitter {
     }
     if (url.pathname === "/site.js") return send(200, "text/javascript", SITE_JS);
     if (url.pathname === "/blank") return send(200, "text/html", "<!doctype html><title>blank</title><p>blank</p>");
-    if (url.pathname.startsWith("/dbsc/")) { this.record("dbsc", { path: url.pathname, rawHeaders: pairs(req.rawHeaders) }); return send(200, "application/json", "{}"); }
+    if (url.pathname.startsWith("/dbsc/")) { this.recordFor(run, "dbsc", { path: url.pathname, rawHeaders: pairs(req.rawHeaders) }); return send(200, "application/json", "{}"); }
     if (url.pathname === "/page/report" && req.method === "POST") {
       // Answer after the body: on HTTP/2 an early answer ends the stream before the body arrives.
       void body().then((b) => { for (const e of Array.isArray(b) ? b : [b]) this.recordFor(run, `page-${e.kind}`, { ...e.data, pageT: e.t }); send(204, "text/plain", ""); });

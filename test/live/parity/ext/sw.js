@@ -4,6 +4,7 @@
 import config from "./config.js";
 
 const S = config.server;
+const TOKEN = config.token;
 const post = (body) => fetch(`${S}/ext/report`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,9 +20,10 @@ const cb = (f) => new Promise((resolve, reject) => f((r) => (chrome.runtime.last
 const send = (method, params = {}) => cb((done) => chrome.debugger.sendCommand({ tabId }, method, params, done));
 
 const ops = {
-  async findTab({ urlPrefix }) {
+  // Only a tab of the probe server: a command cannot point the extension at another site.
+  async findTab() {
     for (let i = 0; i < 40; i++) {
-      const t = (await chrome.tabs.query({})).find((x) => x.url && x.url.startsWith(urlPrefix));
+      const t = (await chrome.tabs.query({})).find((x) => x.url && x.url.startsWith(`${S}/`));
       if (t) { tabId = t.id; return { tabId, url: t.url, windowId: t.windowId }; }
       await sleep(250);
     }
@@ -73,6 +75,7 @@ const ops = {
       cmd = await r.json();
     } catch { await sleep(500); continue; }
     let result, error;
+    if (cmd.token !== TOKEN || !Object.hasOwn(ops, cmd.op)) continue;   // not from this probe run
     try { result = await ops[cmd.op](cmd); } catch (e) { error = String((e && e.message) || e); }
     await post({ kind: "result", id: cmd.id, op: cmd.op, result, error, t: Date.now() });
   }

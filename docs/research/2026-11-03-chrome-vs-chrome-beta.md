@@ -19,7 +19,8 @@ another channel, read "stable" as "the operator's channel".
 Chrome. Do not use Chrome Beta.**
 
 1. **Beta is a different browser to a site.** Beta sends a different major version in the
-   User-Agent, in every client hint and in `navigator.userAgentData`, and it uses a different GREASE
+   User-Agent, in the version client hints (`Sec-CH-UA`, `Sec-CH-UA-Full-Version`,
+   `Sec-CH-UA-Full-Version-List`) and in `navigator.userAgentData`, and it uses a different GREASE
    brand. Today Beta is 158 and the operator's stable is 156. Over the last 172 days, Beta was one
    major version ahead of stable on 137 days, two ahead on 32 days, and equal on 3 days. Beta also
    has web features that stable does not have, and it lacks some that stable has. One line of page
@@ -28,12 +29,15 @@ Chrome. Do not use Chrome Beta.**
 2. **Stable at the same version sends the same identity.** The User-Agent, the client hints, the
    header order, the JA4 TLS fingerprint and the HTTP/2 fingerprint are the operator's own. This is
    inferred from the measurements: these values changed only with the version and the brand, and
-   JA4 and HTTP/2 did not change even between the two versions. The Mac's check 5 confirms it.
-3. **The extension works the same in both channels.** Both ignore `--load-extension`. On Linux both
-   install the receiver persistently from Chrome's external extensions file (no developer mode, no
-   prompt), and both keep an extension that "Load unpacked" installed with developer mode on. Both
-   drive a tab through `chrome.debugger` with `--silent-debugger-extension-api`: no banner, no
-   prompt, `navigator.webdriver` false.
+   JA4 and HTTP/2 did not change even between the two versions. The Mac's check 5 is to confirm it.
+   One limit: Chrome turns some web features on through field trials, and each profile draws its
+   own trial groups. So two stable profiles of one version can still differ in a few features. The
+   probe ran with no field trials (section 1), so it cannot measure that.
+3. **The extension works the same in both channels (measured on Linux).** Both ignore
+   `--load-extension`. Both install the receiver persistently from Chrome's external extensions
+   file (no developer mode, no prompt), and both keep an extension that "Load unpacked" installed
+   with developer mode on. Both drive a tab through `chrome.debugger` with
+   `--silent-debugger-extension-api`: no banner, no prompt, `navigator.webdriver` false.
 
 Two limits stay with either channel:
 
@@ -54,13 +58,15 @@ Two limits stay with either channel:
 
 Channel versions on 2026-11-03 (Google's public version history API): Mac stable 156.0.8078.80 for
 99% of users and 157.0.8103.26 for 0.5% (the early stable rollout); Linux stable 156.0.8078.79;
-Beta 158.0.8127.2 on Mac, Linux and Windows. The gap count in "The answer" comes from the same API
-(Mac, 2026-05-15 to 2026-11-02, the release that served at least half of the users each day).
+Beta 158.0.8127.2 on Mac, Linux and Windows. The gap count in "The answer" comes from the same API:
+`https://versionhistory.googleapis.com/v1/chrome/platforms/mac/channels/{stable,beta}/versions/all/releases?filter=starttime>2026-05-01T00:00:00Z`.
+For each day from 2026-05-15 to 2026-11-02, it compares the highest major version of the releases
+that served at least half of the users of each channel that day.
 
 The probe (`test/live/parity/probe.ts`) runs each browser on throwaway profiles with
-agent-browser's own launch flags (`AGENT_ARGS` in `src/agent.ts`). Each browser runs on a private
-Xvfb display with a random `-auth` cookie, and `HOME` is a folder of the run. A local site at
-`probe.localhost` records what a site sees:
+agent-browser's own launch flags (`AGENT_ARGS` in `src/agent.ts`). On Linux the browsers run on one
+private Xvfb display with a random `-auth` cookie, and `HOME` is a folder of the run. A local site
+at `probe.localhost` records what a site sees:
 
 - the request headers in order, and the client hints after `Accept-CH`;
 - a page fingerprint: navigator, screen, fonts, canvas, audio, WebGL, WebGPU, media, permissions,
@@ -79,15 +85,18 @@ Limits of the method:
 - taylor is Linux, and the operator's Chrome is on a Mac. Section 8 lists the checks that only the
   Mac can run. The probe runs there unchanged.
 - The proxy also blocks Chrome's own background traffic, for example the variations seed and the
-  component updates. So each browser ran with no field trials. A real agent browser gets the seed
-  of its channel, and the Beta seed turns on experiments that stable does not have.
+  component updates. So each browser ran with no field trials. A real Chrome gets the seed of its
+  channel and draws trial groups for each profile, so a real profile can show features that this
+  probe did not see. Beta's seed serves experiments that stable's does not; that is Google's
+  channel design, not measured here. The probe's `--serve` mode records a browser that a person
+  opens, with its own seed, for example the operator's own Chrome (the Mac's check 5).
 - The probe turned developer mode on and clicked "Load unpacked" through the page's own API, then
   answered Chrome's folder dialog with xdotool. That makes the same install as a person. In Chrome
   stable the click worked. In Chrome Beta 158 and in Chromium the dialog kept its Open button
-  greyed out under Xvfb, so the probe could not finish the dialog there. For Beta, the `update`
-  runs give the same evidence: Beta 158 loaded, at start, an extension that "Load unpacked" had put
-  into a stable 156 profile, and it disabled the extension when developer mode went off. Beta's
-  driven tab (section 3) is the `external-crx-relaunch` run.
+  greyed out under Xvfb, so the probe could not finish the dialog there. For Beta there is partial
+  evidence: Beta 158 loaded, at start, an extension that "Load unpacked" had put into a stable 156
+  profile (the `update` runs), and it disabled that extension when developer mode went off. Beta's
+  driven tabs (section 3) are the `external-crx-relaunch` and `external-crx-banner` runs.
 
 ## 2. Can a site tell the agent browser from the operator's Chrome after a beam?
 
@@ -115,14 +124,19 @@ Every other measured value was the same in both, also below the page:
 - The order of the request headers, `Accept`, `Accept-Language`.
 - Canvas, audio, fonts, plugins, media codecs, Widevine, voices and storage quota.
 
-So the TLS and HTTP/2 layers cannot tell the channels apart. The page and the headers can, at once.
+Two values change for each connection and are not a channel signal: the ClientHello's length (its
+GREASE parts vary) and `navigator.connection.downlink`.
+
+So the TLS and HTTP/2 layers cannot tell the two channels apart. The page and the request headers
+can, from the first request.
 
 The same check also shows what a site sees of Chromium: `Sec-CH-UA` has no `"Google Chrome"`
 brand, Widevine is absent and there are no speech voices. Chromium is not an option for parity
 with the operator's Chrome.
 
 The patch number can differ between platforms too: the Mac's stable is 156.0.8078.80, Linux's is
-156.0.8078.79. Only a site that asks for `Sec-CH-UA-Full-Version-List` sees that.
+156.0.8078.79. A site sees that in `Sec-CH-UA-Full-Version-List` (when it asks for the hint) and in
+`navigator.userAgentData.getHighEntropyValues()`.
 
 ### 2.2 The machine: a beam carries no machine
 
@@ -134,42 +148,46 @@ were the same in all three browsers on taylor:
 | Platform (User-Agent, `Sec-CH-UA-Platform`) | `X11; Linux x86_64`, `"Linux"` | `Macintosh; Intel Mac OS X 10_15_7`, `"macOS"` |
 | WebGL | none: Chrome blocks WebGL with no GPU | ANGLE on the Mac's Apple GPU |
 | WebGPU | the API is there, with no adapter | an Apple adapter |
-| Fonts (of 65 probed) | 14: DejaVu, Liberation, Noto Color Emoji, FreeSans | the Mac's fonts |
+| Fonts (of 65 probed) | 14: DejaVu, Liberation, Noto Color Emoji, FreeSans, and Arial, Helvetica, Times, Courier (fontconfig aliases of the Liberation fonts) | the Mac's fonts |
 | CPUs and memory | `hardwareConcurrency` 32, `deviceMemory` 32 | the Mac's values |
 | Screen | 1920x1080, device pixel ratio 1; window 945x1060 at (10, 10) | the Mac's display, ratio 2 |
 | Time zone | `America/New_York` (taylor's clock) | the Mac's time zone |
 | Network | taylor's IP address | the operator's IP address |
 | Speech voices | 19 Google network voices | the macOS voices and the Google voices |
 
-`--enable-unsafe-swiftshader` can turn WebGL on without a GPU, but then the renderer names
-SwiftShader, which only servers and headless setups show.
+`--enable-unsafe-swiftshader` can turn WebGL on without a GPU. Then the renderer names SwiftShader,
+Chrome's software renderer, which a site does not expect on a desktop (not measured here).
 
 ## 3. Automation signals while an agent drives through the extension
 
 Measured in a tab that the stand-in extension drove through `chrome.debugger`: in Chrome stable 156
-after "Load unpacked", in Chrome Beta 158 after the external extensions file, and in Chromium after
-`--load-extension`. The results were the same in all three. Each signal is something a page can
-read.
+after "Load unpacked" and after the external extensions file, in Chrome Beta 158 after the external
+extensions file, and in Chromium after `--load-extension`. Each result was the same in every browser
+in which it was measured; the banner itself was measured in stable and Beta only. Each signal is
+something a page can read.
 
 | Signal | What a page sees | Cause | How agent mode avoids it |
 | --- | --- | --- | --- |
 | `navigator.webdriver` | `false` while attached | — | Keep it so: no `--remote-debugging-*`, no `--enable-automation`. With `--remote-debugging-pipe` it is `true` (measured). |
-| The debugging banner ([screenshot](2026-11-03-chrome-vs-chrome-beta/debugging-banner.png)) | the page shrinks by 56 px (`innerHeight` 973 to 917) at attach | `chrome.debugger.attach` without `--silent-debugger-extension-api` | Start Chrome with `--silent-debugger-extension-api`: no banner, no resize (measured in all three). |
+| The debugging banner ([screenshot](2026-11-03-chrome-vs-chrome-beta/debugging-banner.png)) | the page shrinks by 56 px (`innerHeight` 973 to 917) at attach, in stable and Beta | `chrome.debugger.attach` without `--silent-debugger-extension-api` | Start Chrome with `--silent-debugger-extension-api`: no banner, no resize (measured in all three). |
 | Mouse pressure | `pointerdown` with `pressure` 0 and `buttons` 1; a real mouse gives 0.5 | CDP `Input.dispatchMouseEvent` without `force` | Send `force: 0.5` on the press (measured: then `pressure` is 0.5). |
-| `Runtime.enable` | `console.debug` of a 2 MB string takes about 47–58 ms instead of about 20 ms (two runs) | the inspector copies console arguments while the Runtime domain is on | Never enable the Runtime domain; evaluate in an isolated world, as agent-browser does today. The older `Error.stack` getter trap stayed silent in all three browsers. |
-| Hidden-tab timers | a 50 ms timer in a hidden tab keeps 50 ms; in plain Chrome it slows to 1000–1041 ms | agent-browser's `--disable-background-timer-throttling` (with `--disable-renderer-backgrounding` and `--disable-backgrounding-occluded-windows`) | Drop the three flags, or accept the signal. Without them a hidden tab of the agent also runs slowly. |
+| `Runtime.enable` | `console.debug` of a 2 MB string takes 41.6–49.5 ms while the Runtime domain is on, against 19.6–31.9 ms before the attach (the final run: 16 and 24 samples over the driven runs; the first full run gave up to 58.5 ms) | the inspector copies console arguments while the Runtime domain is on | Never enable the Runtime domain; evaluate in an isolated world, as agent-browser does today. The older `Error.stack` getter trap stayed silent in all three browsers. |
+| Hidden-tab timers | a 50 ms timer in a hidden tab keeps 50 ms; in plain Chrome it slows to about 1000 ms | agent-browser's `--disable-background-timer-throttling` (with `--disable-renderer-backgrounding` and `--disable-backgrounding-occluded-windows`) | Drop the three flags, or accept the signal. Without them a hidden tab of the agent also runs slowly. The plain-flag value comes from a run with no extension; a run without the flags and with `chrome.debugger` attached was not made. |
+| Focus and visibility | under Xvfb the agent's window always had the focus (`document.hasFocus()` true) | — | On the Mac the agent window usually sits behind the operator's windows (`src/agent.ts`): then a page can see no focus while it gets input, and without `--disable-backgrounding-occluded-windows` also `visibilityState` hidden. Not measured: the Mac's check 9. |
+| The rhythm of input | the stand-in sends one `mouseMoved` and then the press at the same point, and keys 40 ms apart | the stand-in's own simple input | Use paths and timings like a person's (agent-browser's `record` uses ghost-cursor paths). Not measured as a detection here. |
 | Key events | the same fields as real keys (`key`, `code`, `keyCode`, `charCode`, `isTrusted`) | — | — |
 | Mouse position | `screenX`/`screenY` match the window position, as for real input | — | — |
 | The extension | no web-accessible resource (`fetch` of its manifest fails), no `chrome.runtime` on the page | the receiver has no content script and no `externally_connectable` | Keep it so. |
 | An isolated world | nothing: `Page.createIsolatedWorld` and `Runtime.evaluate` in it tripped no trap | — | — |
 
 Two more signals come from ab-v16.1's own probe (branch `ab-v16.1-design-the-two-modes-and-how-agent-mode`,
-`docs/superpowers/specs/2026-11-03-two-modes-probe/results/summary.md`); this probe did not measure
-them:
+`docs/superpowers/specs/2026-11-03-two-modes-probe/results/summary.md`, "Navigation headers"); this
+probe did not measure them:
 
-- `Page.navigate` through `chrome.debugger` sends `Sec-Fetch-Site: cross-site`, while a typed URL
-  sends none. A `declarativeNetRequest` rule that sets the header for the extension's own
-  navigations fixes it.
+- `Page.navigate` through `chrome.debugger` sends `Sec-Fetch-Site: cross-site`, also when it names
+  the `typed` or `address_bar` transition. A URL that a person types sends the value `none`. A
+  `declarativeNetRequest` rule for the extension's own navigations gives `none`, and so does
+  `chrome.tabs.create`; `chrome.tabs.update` gives `cross-site`.
 - Playwright's `addInitScript`, `exposeFunction` and tracing snapshots put `__playwright__binding__`
   and related names on the page's `window`. Plain `goto`, `click`, `type` and `screenshot` add none.
 
@@ -178,28 +196,32 @@ agent-browser's `outline` also writes a `data-agent-browser-idx` attribute into 
 
 ## 4. Every prompt each browser shows
 
+Here a prompt is anything that Chrome shows and that a person could have to answer or close: a
+dialog, a bar or a toolbar chip.
+
 | Prompt | Chrome stable 156 | Chrome Beta 158 | When, and how often | How to avoid it |
 | --- | --- | --- | --- | --- |
 | "Allow remote debugging?" with Cancel focused ([screenshot](2026-11-03-chrome-vs-chrome-beta/allow-remote-debugging.png)) | yes | yes | at each new DevTools connection, on the chrome://inspect path that agent-browser uses today | Drive through the extension: `chrome.debugger` raises no such prompt. |
-| `"<extension>" started debugging this browser` with Cancel | yes | yes | at each `chrome.debugger.attach` | `--silent-debugger-extension-api` |
+| `"<extension>" started debugging this browser` with Cancel ([screenshot](2026-11-03-chrome-vs-chrome-beta/debugging-banner.png)) | yes | yes | at each `chrome.debugger.attach` | `--silent-debugger-extension-api` |
 | "You are using an unsupported command-line flag" bar ([screenshot](2026-11-03-chrome-vs-chrome-beta/unsupported-flag-bar.png)) | yes | yes | at start, for `--ignore-certificate-errors-spki-list` (the probe's TLS run only) | Do not use the flag. `--silent-debugger-extension-api` and `--enable-unsafe-extension-debugging` showed no bar. |
-| "Sign in to Chrome?" chip in the toolbar | yes | yes | at each start; not modal, and a page cannot see it | — |
+| "Sign in to Chrome?" chip in the toolbar | yes | yes | on a new profile; later starts show only the avatar. Not modal, and a page cannot see it | — |
 | Developer mode switch and the folder dialog of "Load unpacked" | yes | yes | once per profile, by a person | on Linux, the external extensions file (section 5) |
 | The external extension's confirmation dialog | none on Linux | none on Linux | macOS and Windows: once, to enable an extension from the external file (Google's documentation; not measured) | an enterprise policy (MDM) |
 | A bar or bubble about developer-mode or external extensions at start | none | none | measured on Linux after relaunches | — (the Mac: check 2) |
 | "Chrome is being controlled by automated test software" | no | no | only with `--enable-automation`, which agent-browser refuses | — |
 | First-run, default-browser and keyring dialogs | none | none | `--no-first-run` and `--no-default-browser-check`; no keyring on taylor | — |
+| "Restore pages?" after Chrome did not exit cleanly | not measured | not measured | after a crash or a kill | quit Chrome cleanly |
 
 With the network blocked, no ad-privacy notice or search-engine choice appeared. With a network,
 Chrome can show them on a new profile (the Mac: check 7). On the Mac, the agent-browser code notes
 one more prompt for Beta: macOS asks once to let Chrome Beta use the "Chrome Safe Storage" keychain
-item (`src/agent.ts`).
+item (`src/agent.ts`). macOS can also ask a new app for the Local Network permission; not measured.
 
-So with the extension path, an agent browser on Linux can run with **no prompt at all**: install
-the receiver through the external extensions file, start Chrome with
-`--silent-debugger-extension-api`, and drive through `chrome.debugger`. On the Mac, the run itself
-needs no prompt either, but the install needs one step once per profile (section 5) unless an MDM
-policy installs the receiver.
+So with the extension path, an agent browser on Linux can run with **no prompt at all** (measured):
+install the receiver through the external extensions file, start Chrome with
+`--silent-debugger-extension-api`, and drive through `chrome.debugger`. On the Mac the same is
+expected for the run itself if the Mac's checks 2 and 4 pass, and the install then needs one step
+per profile (section 5), unless an MDM policy installs the receiver.
 
 ## 5. How each browser loads the extension
 
@@ -208,8 +230,8 @@ policy installs the receiver.
 | `--load-extension=<folder>` | ignored | ignored | loads (location 8, command line) |
 | the same with `--disable-features=DisableLoadExtensionCommandLineSwitch` | ignored | ignored | loads |
 | CDP `Extensions.loadUnpacked` (needs `--remote-debugging-pipe` and `--enable-unsafe-extension-debugging`) | loads for that session only; the next start removes it, also with developer mode on | the same | the same |
-| "Load unpacked", developer mode on | loads, stays across relaunches and an update 156 to 158 | loads at start an extension that stable installed (the `update` run; the probe could not click Beta's dialog) | (the probe could not click the dialog) |
-| then developer mode off | disabled at once (reason code 16777216, that is 1 << 24), also after a relaunch | the same (the `update-devmode-off` runs, in the stable column of the appendix) | — |
+| "Load unpacked", developer mode on | loads, and stays across relaunches and across a start of the same profile under the 158 binary (as an update does) | loads at start an extension that stable installed (the `update` run; the probe could not click Beta's dialog) | (the probe could not click the dialog) |
+| then developer mode off | disabled at once (reason code 16777216, that is 1 << 24), also after a relaunch | the same: Beta 158 disabled it too (the `update-devmode-off` runs; the appendix lists them under stable, because they used stable's profile) | — |
 | external extensions file `<id>.json` with `external_crx` | loads at the first start and after a relaunch; location 2, installType `sideload`, no developer mode, no prompt | the same | not measured (Debian reads a system folder) |
 | `--policy='{"ExtensionInstallForcelist": [...]}'` | ignored: no update check | ignored | not measured |
 
@@ -224,7 +246,8 @@ What each path needs, per OS:
     system change, done once by the operator. Google's documentation also names
     `/usr/share/google-chrome/extensions/`. For a Chrome that agentwatch unpacks into its own
     folder, as this probe did, it needs no system change. The file applies to every profile of
-    that Chrome installation. Google's documentation agrees: on Linux the file can name a local
+    that Chrome installation, so on a box with a system Chrome it also installs the receiver into a
+    person's own profile there. Google's documentation agrees: on Linux the file can name a local
     CRX, and "Linux users won't be prompted to enable the extension".
   - macOS: Google's documentation names `~/Library/Application Support/Google/Chrome/External
     Extensions/` (one user) and `/Library/Application Support/Google/Chrome/External Extensions/`
@@ -249,18 +272,21 @@ What each path needs, per OS:
 
 ## 6. What the beam carries, and what it cannot
 
-The channel does not change what the beam carries: the sender and the receiver read and write
-through Chrome's extension APIs, which are the same in stable and Beta. From the chrome-extension
-repository (`README.md`, "What is not moved" and "Limits"):
+No beam ran in this probe. The sender and the receiver read and write through Chrome's extension
+APIs, and these APIs are the same in stable and Beta, so the channel is not expected to change what
+the beam carries. The table takes the chrome-extension repository's `README.md` ("What it reads",
+"What is not moved", "Limits"); the rows marked * are this report's own additions, not measured:
 
 | Carried | Not carried |
 | --- | --- |
 | every cookie of the domain and its subdomains, also `httpOnly`, `SameSite`, partitioned | service workers (the site registers them again on its next visit) |
-| localStorage and sessionStorage of the tab's origin | third-party (partitioned) storage of embedded frames |
-| every IndexedDB database of the origin, with typed values | values that the codec cannot carry, for example a `CryptoKey` |
-| Cache Storage (not opaque entries) | device-bound sign-ins: a key in the operator's TPM or Secure Enclave never leaves it |
-| | passkeys, client certificates, and session cookies after an agent Chrome restart |
-| | the machine (section 2.2) and the IP address |
+| localStorage and sessionStorage of the tab's origin | page storage of other origins and other subdomains of the site |
+| every IndexedDB database of the origin, with typed values | third-party (partitioned) storage of embedded frames |
+| Cache Storage (not opaque entries) | values that the codec cannot carry, for example a `CryptoKey` |
+| | device-bound sign-ins (for example device-bound session credentials) |
+| | session cookies after an agent Chrome restart |
+| | * passkeys and client certificates: their keys stay on the operator's device |
+| | * the machine (section 2.2) and the IP address |
 
 Device Bound Session Credentials: the probe sent a registration header
 (`Sec-Session-Registration` and `Secure-Session-Registration`) on its TLS page. No browser on
@@ -277,7 +303,7 @@ sends 156.
 | | Chrome stable as the agent browser | Chrome Beta as the agent browser |
 | --- | --- | --- |
 | On the Mac | a second instance of the operator's own `Google Chrome.app` with its own profile. The Dock icon, Cmd-Tab and `open -a "Google Chrome"` can bring the agent's window forward instead of the operator's (`src/agent.ts`). | its own app with its own Dock icon. macOS asks once to let it use the "Chrome Safe Storage" keychain item (`src/agent.ts`). |
-| Version | the operator's version, from the same app and updater. A running Chrome keeps its old version until it restarts (Chrome's "Relaunch to update"; not measured here, the Mac's check 6), so agentwatch must restart the agent Chrome when the app's version changes. | one or two majors ahead of the operator, by design |
+| Version | the operator's version, from the same app and updater. A running Chrome keeps its old version until it restarts (Chrome's "Relaunch to update"; not measured here, the Mac's check 6), so agentwatch must restart the agent Chrome when the app's version changes. | usually one or two majors ahead of the operator (equal on 3 of the 172 days) |
 | Field trials | stable's seed | Beta's seed, with more experiments |
 | On Linux | no auto-update for a Chrome that agentwatch unpacks; agentwatch must fetch each new stable `.deb`. A system install updates through apt. | the same, on a weekly cycle |
 | Profile separation | `--user-data-dir`, the same in both | the same |
@@ -288,12 +314,21 @@ sends 156.
 Run the probe on the Mac with no `--browser`: it takes Google Chrome and Google Chrome Beta from
 `/Applications`. It opens visible Chrome windows, so run it when the operator does not use the Mac.
 Screenshots need the Screen Recording permission. In the `ui-install` runs a person picks the
-folder that the log names in Chrome's dialog.
+folder that the log names in Chrome's dialog. On macOS the probe's browsers run with
+`--use-mock-keychain`, so they never ask for, or read, the login keychain's "Chrome Safe Storage";
+so the probe does not show Beta's keychain prompt. The real-input parts of the `site` and
+`site-plain` runs are Linux-only, so their rows stay empty on the Mac.
 
 ```sh
 node test/live/parity/probe.ts --out <dir>
+node test/live/parity/probe.ts --out <dir> --serve operator     # then open the two URLs it prints in the operator's own Chrome
 node test/live/parity/compare.ts <dir> > <dir>/report.md
 ```
+
+`--serve` records the operator's own Chrome, with its own profile and field trials, as one more
+column. It needs the operator's consent: the page reads only properties of the browser and the
+machine, and sends them only to the probe server on 127.0.0.1. The TLS page shows a certificate
+warning (Advanced, then Proceed).
 
 1. `--load-extension` and the CDP install on macOS: the same as on Linux?
 2. "Load unpacked" on macOS stable and Beta: does it stay across a relaunch, and does Chrome show a
@@ -303,14 +338,17 @@ node test/live/parity/compare.ts <dir> > <dir>/report.md
    the per-user folder also applies to the operator's own Chrome. The probe's `--external-dir`
    takes the folder.
 4. `--silent-debugger-extension-api` on macOS: no banner and no resize?
-5. Parity on one Mac: the agent profile of `Google Chrome.app` against the operator's own Chrome
-   (expected identical, except the window and the profile's state); and Beta against stable.
+5. Parity on one Mac: the `--serve operator` column (the operator's own Chrome) against the probe's
+   `stable` column (a new profile of the same app), and Beta against stable. Expected: identical
+   except the window, the profile's state and some field-trial features.
 6. Two instances of `Google Chrome.app`: the Dock, Cmd-Tab and the Google updater with a running
    agent instance.
 7. First-run notices with a network: the ad-privacy notice and the search-engine choice on a new
    profile.
 8. Device Bound Session Credentials: does the operator's Chrome answer the probe's registration
-   header on the TLS page?
+   header on the TLS page (`--serve`; a `dbsc` record)?
+9. Focus and visibility of an agent window behind the operator's windows, with and without
+   `--disable-backgrounding-occluded-windows`, while the agent drives it.
 
 ## 9. Recommendation and reasons
 
@@ -329,8 +367,9 @@ And, for either channel:
 - Run the agent browser on the operator's kind of machine when parity matters. A Linux box cannot
   look like the operator's Mac.
 - Install the receiver on Linux through the external extensions file with a packed CRX. On the Mac,
-  use "Load unpacked" once per agent profile with developer mode on, until the operator chooses a
-  store item or an MDM policy. Keep the `--load-extension` start only for Chromium.
+  use "Load unpacked" once per agent profile with developer mode on, if the Mac's check 2 passes,
+  until the operator chooses a store item or an MDM policy. Keep the `--load-extension` start only
+  for Chromium.
 - Start Chrome with `--silent-debugger-extension-api`, drive through `chrome.debugger`, never enable
   the Runtime domain, send mouse presses with `force: 0.5`, and set `Sec-Fetch-Site` for the
   agent's navigations.
@@ -343,7 +382,8 @@ And, for either channel:
    Mac like it), or on a box such as taylor? On a Linux box a site sees Linux, no GPU and another IP
    address, in either channel.
 2. How does the receiver get into the agent's Chrome? (a) On Linux, the external extensions file:
-   no prompt; with a system Chrome it needs one root step. (b) "Load unpacked" by you, once per agent
+   no prompt; with a system Chrome it needs one root step, and it then installs the receiver into
+   every profile of that Chrome on the box. (b) "Load unpacked" by you, once per agent
    profile, with developer mode on (both OSes). (c) An enterprise policy: root on Linux, MDM on the
    Mac. (d) An unlisted Chrome Web Store item: one click per profile, or on the Mac the external
    file plus one confirmation.
@@ -353,12 +393,12 @@ And, for either channel:
 
 ## Appendix: the probe's tables
 
-The output of `compare.ts` for the final run on taylor, 2026-11-03 16:45 to 17:00 UTC, with worker
+The output of `compare.ts` for the final run on taylor, 2026-11-03 17:30 to 17:47 UTC, with worker
 folder paths shortened. The screenshots stay in the run folder, except the three in
-[`2026-11-03-chrome-vs-chrome-beta/`](2026-11-03-chrome-vs-chrome-beta/). An earlier full run
-(16:20 to 16:34 UTC) gave the same identity and feature tables.
+[`2026-11-03-chrome-vs-chrome-beta/`](2026-11-03-chrome-vs-chrome-beta/). Two earlier full runs
+(16:20 and 16:45 UTC) gave the same identity and feature tables.
 
-Platform linux, started 2026-11-03T16:45:02.178Z.
+Platform linux, started 2026-11-03T17:30:45.676Z.
 
 - **stable**: Google Chrome 156.0.8078.79 (`<worker folder>/chrome-stable/opt/google/chrome/google-chrome`)
 - **beta**: Google Chrome 158.0.8127.2 beta (`<worker folder>/chrome-beta/opt/google/chrome-beta/google-chrome-beta`)
@@ -449,6 +489,7 @@ Platform linux, started 2026-11-03T16:45:02.178Z.
 | devmode-off-relaunch | not loaded; in prefs (location 4, disabled 16777216); developer mode false | not loaded; not in prefs; developer mode false | not loaded; not in prefs; developer mode false |
 | external-crx | **loaded**; in prefs (location 2); developer mode false | **loaded**; in prefs (location 2); developer mode false | – |
 | external-crx-relaunch | **loaded**; in prefs (location 2); developer mode false | **loaded**; in prefs (location 2); developer mode false | – |
+| external-crx-banner | **loaded**; in prefs (location 2); developer mode false | **loaded**; in prefs (location 2); developer mode false | – |
 
 The update rows of stable ran beta (a newer browser of the same product) on stable's "Load unpacked" profile.
 
@@ -461,17 +502,17 @@ The update rows of stable ran beta (a newer browser of the same product) on stab
 | navigator.webdriver while attached | false | false | false |
 | the run | stable/relaunch-silent (this browser) | beta/external-crx-relaunch (this browser) | chromium/cmdline-ext (this browser) |
 | page resize at attach (silent flag) | none | none | none |
-| page resize at attach (no silent flag) | 973 -> 917 | – | – |
+| page resize at attach (no silent flag) | 973 -> 917 | 973 -> 917 | – |
 | Error.stack trap after Runtime.enable | silent | silent | silent |
-| console.debug(2 MB) ms: before / Runtime on / after | 20.1 / 46.9 / 27 | 21.8 / 49.2 / 20.1 | 20.9 / 48.5 / 23.2 |
+| console.debug(2 MB) ms: before / Runtime on / after | 20.3 / 43.4 / 21 | 21.4 / 46.4 / 20.5 | 19.3 / 43.5 / 19.1 |
 | CDP click: pointerdown | pressure 0, width 1, screenY-clientY 97 | pressure 0, width 1, screenY-clientY 97 | pressure 0, width 1, screenY-clientY 97 |
 | CDP click with force 0.5: pointerdown | pressure 0.5, width 1, screenY-clientY 97 | pressure 0.5, width 1, screenY-clientY 97 | pressure 0.5, width 1, screenY-clientY 97 |
 | real click (xdotool, site run): pointerdown | pressure 0.5, width 1, screenY-clientY 97 | pressure 0.5, width 1, screenY-clientY 97 | pressure 0.5, width 1, screenY-clientY 97 |
 | CDP keys | keydown key=a code=KeyA keyCode=65 charCode=0; keypress key=a code=KeyA keyCode=97 charCode=97 | keydown key=a code=KeyA keyCode=65 charCode=0; keypress key=a code=KeyA keyCode=97 charCode=97 | keydown key=a code=KeyA keyCode=65 charCode=0; keypress key=a code=KeyA keyCode=97 charCode=97 |
 | real keys (xdotool, site run) | keydown key=a code=KeyA keyCode=65 charCode=0; keypress key=a code=KeyA keyCode=97 charCode=97 | keydown key=a code=KeyA keyCode=65 charCode=0; keypress key=a code=KeyA keyCode=97 charCode=97 | keydown key=a code=KeyA keyCode=65 charCode=0; keypress key=a code=KeyA keyCode=97 charCode=97 |
-| hidden tab timers, agent flags (extension's new tab) | median 50 ms, max 94 ms (121 ticks in 6028 ms; 50 ms asked) | median 50 ms, max 94 ms (120 ticks in 6023 ms; 50 ms asked) | median 50 ms, max 94 ms (121 ticks in 6029 ms; 50 ms asked) |
-| hidden tab timers, agent flags (real Ctrl+T) | median 50 ms, max 91 ms (121 ticks in 6023 ms; 50 ms asked) | median 50 ms, max 103 ms (120 ticks in 6018 ms; 50 ms asked) | median 50 ms, max 87 ms (120 ticks in 6033 ms; 50 ms asked) |
-| hidden tab timers, plain flags (real Ctrl+T) | median 1039 ms, max 1041 ms (6 ticks in 6024 ms; 50 ms asked) | median 1000 ms, max 1004 ms (6 ticks in 6016 ms; 50 ms asked) | median 1000 ms, max 1000 ms (6 ticks in 6034 ms; 50 ms asked) |
+| hidden tab timers, agent flags (extension's new tab) | median 50 ms, max 104 ms (119 ticks in 6024 ms; 50 ms asked) | median 50 ms, max 92 ms (121 ticks in 6025 ms; 50 ms asked) | median 50 ms, max 91 ms (121 ticks in 6029 ms; 50 ms asked) |
+| hidden tab timers, agent flags (real Ctrl+T) | median 50 ms, max 86 ms (120 ticks in 6016 ms; 50 ms asked) | median 50 ms, max 91 ms (121 ticks in 6024 ms; 50 ms asked) | median 50 ms, max 88 ms (121 ticks in 6032 ms; 50 ms asked) |
+| hidden tab timers, plain flags (real Ctrl+T) | median 1000 ms, max 1000 ms (6 ticks in 6021 ms; 50 ms asked) | median 1000 ms, max 1000 ms (6 ticks in 6025 ms; 50 ms asked) | median 1000 ms, max 1000 ms (6 ticks in 6036 ms; 50 ms asked) |
 
 
 ### Outside hosts each browser tried at start (all refused by the probe's proxy; site-plain run)

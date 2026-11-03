@@ -7,10 +7,20 @@
 //   node test/live/parity/probe.ts --out DIR --browser stable=PATH --browser beta=PATH [--browser chromium=PATH]
 //   node test/live/parity/compare.ts DIR > DIR/report.md
 //
-// Linux: needs Xvfb, xdotool and ffmpeg; each run gets a private display (-auth, a random cookie that
-// never enters an argv) and HOME is a folder of the run. macOS: no Xvfb; Chrome windows open on the
-// screen, screenshots use `screencapture` (Screen Recording permission), and there is no real-input
-// run. With no --browser on macOS, it takes Google Chrome and Google Chrome Beta from /Applications.
+// Linux: needs Xvfb, xdotool and ffmpeg; the probe gets one private display (-auth, a random cookie
+// that never enters an argv) and HOME is a folder of the run. macOS: no Xvfb; Chrome windows open on
+// the screen, screenshots use `screencapture` (Screen Recording permission), Chrome runs with
+// --use-mock-keychain (so it never asks for, or reads, the login keychain's "Chrome Safe Storage"),
+// and the real-input parts of site and site-plain do not run. With no --browser on macOS, it takes
+// Google Chrome and Google Chrome Beta from /Applications.
+//
+//   node test/live/parity/probe.ts --out DIR --serve LABEL [--serve-ms 600000]
+//
+// --serve starts only the probe site and records what a browser that a person opens there shows,
+// for example the operator's own Chrome (with its own field trials): http://probe.localhost:PORT/
+// and https://probe.localhost:PORT+1/ (a certificate warning; Advanced, then Proceed). It writes
+// DIR/LABEL/site.json and tls.json for compare.ts. The page reads only properties of the browser and
+// the machine, and sends them only to the probe server on 127.0.0.1.
 //
 // The runs (each on a fresh profile unless it says otherwise):
 //   site          the plain agent flags: the page fingerprint, then a real click and typing (Linux)
@@ -31,12 +41,13 @@
 //                 survive? Then the agent's controls, in that newer browser
 //   update-devmode-off(-relaunch)  developer mode off in that newer browser, then its relaunch
 //   devmode-off(-relaunch)  a second "Load unpacked" profile, developer mode off, then a relaunch
-//   external-crx, external-crx-relaunch   only with --external-dir LABEL=DIR: the probe extension
+//   external-crx, external-crx-relaunch, external-crx-banner   only with --external-dir LABEL=DIR: the probe extension
 //                 packed into a CRX by the browser itself, and DIR/<id>.json with its external_crx
-//                 path (Chrome's "external extensions" file), then a relaunch with the agent's controls.
+//                 path (Chrome's "external extensions" file), then a relaunch with the agent's controls,
+//                 then one more without --silent-debugger-extension-api (the banner).
 //                 DIR is the folder that this Chrome reads: on Linux <the binary's folder>/extensions.
-//                 For an unpacked Chrome that folder is the worker's own; never pass a system folder.
-//                 The probe removes its JSON file after the two runs.
+//                 For an unpacked Chrome that folder is the worker's own. The probe refuses a system
+//                 folder, and removes its JSON file after the runs, also when it is stopped.
 //   inspect-approval  the chrome://inspect switch seeded in Local State, then one DevTools
 //                 WebSocket: today's agent-browser path and its "Allow remote debugging?" prompt
 
@@ -60,6 +71,8 @@ const { values } = parseArgs({
     port: { type: "string", default: "8941" },     // and the next two ports
     runs: { type: "string" },
     "external-dir": { type: "string", multiple: true },
+    serve: { type: "string" },
+    "serve-ms": { type: "string", default: "600000" },
   },
 });
 if (!values.out) { console.error("usage: probe.ts --out DIR --browser LABEL=PATH ..."); process.exit(2); }
@@ -70,9 +83,14 @@ let browsers: [string, string][] = (values.browser ?? []).map((b) => { const i =
 if (!browsers.length && MAC) {
   browsers = ([["stable", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"], ["beta", "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"]] as [string, string][]).filter(([, p]) => existsSync(p));
 }
-if (!browsers.length) { console.error("no --browser given"); process.exit(2); }
-const RUNS = new Set((values.runs ?? "site,site-plain,tls,cmdline-ext,cmdline-ext-feature,cdp-install,relaunch-cdp-flag,relaunch-cdp,cdp-install-devmode,relaunch-cdp-devmode,ui-install,relaunch-silent,relaunch-banner,update,update-devmode-off,update-devmode-off-relaunch,devmode-off,devmode-off-relaunch,external-crx,external-crx-relaunch,inspect-approval").split(","));
+if (!browsers.length && !values.serve) { console.error("no --browser given"); process.exit(2); }
+const RUNS = new Set((values.runs ?? "site,site-plain,tls,cmdline-ext,cmdline-ext-feature,cdp-install,relaunch-cdp-flag,relaunch-cdp,cdp-install-devmode,relaunch-cdp-devmode,ui-install,relaunch-silent,relaunch-banner,update,update-devmode-off,update-devmode-off-relaunch,devmode-off,devmode-off-relaunch,external-crx,external-crx-relaunch,external-crx-banner,inspect-approval").split(","));
 const EXTERNAL_DIRS = new Map((values["external-dir"] ?? []).map((b) => { const i = b.indexOf("="); return [b.slice(0, i), resolve(b.slice(i + 1))] as [string, string]; }));
+// A system folder would install the probe extension for every user of that Chrome: refuse it.
+for (const [label, d] of EXTERNAL_DIRS) {
+  if (/^\/(opt|usr|etc|Library|Applications|System)(\/|$)/.test(d)) { console.error(`--external-dir ${label}: ${d} is a system folder; the probe never writes there`); process.exit(2); }
+}
+let EXTERNAL_JSON: string | undefined;   // the external extensions file of the current runs, if any
 
 const log = (...a: unknown[]) => console.error(new Date().toISOString().slice(11, 23), ...a);
 
@@ -108,9 +126,11 @@ async function startDisplay(): Promise<Display> {
   writeFileSync(xauth, xauthEntry(String(n), randomBytes(16)), { mode: 0o600 });
   const xvfb = spawn("Xvfb", [`:${n}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1920x1080x24"], { stdio: "ignore" });
   const env = { DISPLAY: `:${n}`, XAUTHORITY: xauth };
-  for (let i = 0; i < 50; i++) {
-    try { execFileSync("xdotool", ["getdisplaygeometry"], { env: { ...process.env, ...env }, stdio: "ignore" }); break; } catch { await sleep(100); }
+  let up = false;
+  for (let i = 0; i < 50 && !up; i++) {
+    try { execFileSync("xdotool", ["getdisplaygeometry"], { env: { ...process.env, ...env }, stdio: "ignore" }); up = true; } catch { await sleep(100); }
   }
+  if (!up) { xvfb.kill(); throw new Error(`display :${n} did not start`); }
   let open = false;
   try { execFileSync("xdotool", ["getdisplaygeometry"], { env: { ...process.env, DISPLAY: `:${n}`, XAUTHORITY: "/dev/null" }, stdio: "ignore" }); open = true; } catch { /* refused: good */ }
   if (open) { xvfb.kill(); throw new Error(`display :${n} accepts a client without the cookie`); }
@@ -163,12 +183,14 @@ function chromeEnv(d: Display, home: string): NodeJS.ProcessEnv {
 
 // The operator's own Chrome runs without the agent's three background flags: the "plain" runs.
 const PLAIN_ARGS = AGENT_ARGS.filter((a) => a === "--no-first-run" || a === "--no-default-browser-check");
+// macOS: a mock keychain, so the probe's browsers never ask for, or read, "Chrome Safe Storage".
+const MAC_ARGS = MAC ? ["--use-mock-keychain"] : [];
 
 const RUNNING = new Set<Chrome>();
 
 function launch(server: ProbeServer, d: Display, bin: string, profile: string, extra: string[], url: string, logFile: string, pipe = false, plain = false): Chrome {
   mkdirSync(profile, { recursive: true, mode: 0o700 });
-  const args = [...(plain ? PLAIN_ARGS : AGENT_ARGS), `--user-data-dir=${profile}`, `--proxy-server=${server.proxy}`, ...extra, url];
+  const args = [...(plain ? PLAIN_ARGS : AGENT_ARGS), `--user-data-dir=${profile}`, `--proxy-server=${server.proxy}`, ...MAC_ARGS, ...extra, url];
   const proc = spawn(bin, args, { env: chromeEnv(d, join(profile, "..", "home")), stdio: pipe ? ["ignore", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"] });
   const chunks: Buffer[] = [];
   proc.stdout!.on("data", (b) => chunks.push(b));
@@ -217,9 +239,15 @@ type RunOpts = { plain?: boolean; extra?: string[]; url?: string; pipe?: boolean
 async function main() {
   const server = new ProbeServer(Number(values.port), { key, cert });
   await server.start();
+  if (values.serve) return serve(server, values.serve);
   const display = await startDisplay();
   // A stopped probe stops its display and its browsers too.
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { for (const c of RUNNING) c.proc.kill("SIGKILL"); display.stop(); process.exit(130); });
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => {
+    for (const c of RUNNING) c.proc.kill("SIGKILL");
+    if (EXTERNAL_JSON) rmSync(EXTERNAL_JSON, { force: true });
+    display.stop();
+    process.exit(130);
+  });
   const summary: any = { started: new Date().toISOString(), platform: process.platform, spki, browsers: {} };
   try {
     for (let bi = 0; bi < browsers.length; bi++) {
@@ -232,7 +260,7 @@ async function main() {
       // The probe extension, copied into the run folder (Chrome writes into a loaded folder).
       const ext = join(dir, "parity-ext");
       cpSync(join(HERE, "ext"), ext, { recursive: true });
-      writeFileSync(join(ext, "config.js"), `export default ${JSON.stringify({ server: server.origin })};\n`);
+      writeFileSync(join(ext, "config.js"), `export default ${JSON.stringify({ server: server.origin, token: server.token })};\n`);
 
       const run = async (name: string, profile: string, o: RunOpts) => {
         if (!RUNS.has(name)) return;
@@ -242,7 +270,7 @@ async function main() {
         const started = Date.now();
         const url = o.url ?? `${server.origin}/?run=${encodeURIComponent(server.run)}`;
         const chrome = launch(server, display, o.bin ?? bin, profile, o.extra ?? [], url, join(dir, `${name}.chrome.log`), o.pipe, o.plain);
-        const out: any = { flags: [...(o.plain ? PLAIN_ARGS : AGENT_ARGS), `--user-data-dir=<profile>`, `--proxy-server=<blocking proxy>`, ...(o.extra ?? [])], bin: o.bin ?? bin, marks: [], shots: {} };
+        const out: any = { flags: [...(o.plain ? PLAIN_ARGS : AGENT_ARGS), `--user-data-dir=<profile>`, `--proxy-server=<blocking proxy>`, ...MAC_ARGS, ...(o.extra ?? [])], bin: o.bin ?? bin, marks: [], shots: {} };
         const mark = (what: string, detail?: unknown) => { const m = { t: Date.now(), what, detail }; out.marks.push(m); server.record("mark", m); };
         try {
           if (o.installExt && chrome.cdp) mark("Extensions.loadUnpacked", await chrome.cdp.send("Extensions.loadUnpacked", { path: o.installExt }));
@@ -279,7 +307,7 @@ async function main() {
           }
           if (o.control && alive && target) {
             const x = Math.round(target.x + target.width / 2), y = Math.round(target.y + target.height / 2);
-            mark("findTab", await server.ext("findTab", { urlPrefix: server.origin }));
+            mark("findTab", await server.ext("findTab"));
             mark("self", await server.ext("self"));
             await sleep(1500);
             mark("attach", await server.ext("attach"));
@@ -341,10 +369,10 @@ async function main() {
       const major = (v: string) => Number(/(\d+)\.\d+\.\d+\.\d+/.exec(v)?.[1] ?? 0);
       const product = (v: string) => v.replace(/\s*\d.*$/, "");
       const newer = browsers.find(([, b]) => product(versionOf(b)) === product(version) && major(versionOf(b)) > major(version));
-      // It also runs the agent's controls: for Chrome Beta this is the run that drives a tab.
+      // It also runs the agent's controls, in the newer browser.
       if (newer) await run("update", P, { bin: newer[1], extra: ["--silent-debugger-extension-api"], control: true, extAliveMs: 15_000 });
       // Developer mode off under the newer browser, then its relaunch: the same check as below, for a
-      // browser whose folder dialog the probe cannot click (measured: Chrome Beta 158 keeps Open greyed).
+      // browser whose folder dialog the probe cannot finish (measured: Chrome Beta 158 kept Open greyed).
       if (newer && RUNS.has("update-devmode-off")) {
         await extensionsPage(server, display, label, newer[1], dir, "update-devmode-off", P, ext, "devmode-off");
         await run("update-devmode-off-relaunch", P, { bin: newer[1], extAliveMs: 15_000 });
@@ -363,19 +391,22 @@ async function main() {
         cpSync(ext, src, { recursive: true });
         // Its own profile: without --user-data-dir the pack request could go to a Chrome that runs on
         // the default profile (the operator's own Chrome on a Mac).
-        execFileSync(bin, [`--user-data-dir=${join(dir, "pack-profile")}`, `--pack-extension=${src}`, "--no-message-box"], { env: chromeEnv(display, join(dir, "pack-home")), stdio: "ignore" });
+        execFileSync(bin, [`--user-data-dir=${join(dir, "pack-profile")}`, `--proxy-server=${server.proxy}`, ...MAC_ARGS, `--pack-extension=${src}`, "--no-message-box"], { env: chromeEnv(display, join(dir, "pack-home")), stdio: "ignore" });
         const id = extensionId(readFileSync(`${src}.pem`, "utf8"));
         OUR_IDS.add(id);
         const json = join(externalDir, `${id}.json`);
         const version = JSON.parse(readFileSync(join(src, "manifest.json"), "utf8")).version;
+        EXTERNAL_JSON = json;
         writeFileSync(json, JSON.stringify({ external_crx: `${src}.crx`, external_version: version }));
         log(`${label}: external extensions file ${json} (ID ${id})`);
         try {
           const PE = join(dir, "external", "profile");
           await run("external-crx", PE, { extAliveMs: 30_000 });
           await run("external-crx-relaunch", PE, { extra: ["--silent-debugger-extension-api"], control: true, extAliveMs: 30_000 });
+          await run("external-crx-banner", PE, { control: true, extAliveMs: 30_000 });
         } finally {
           rmSync(json);
+          EXTERNAL_JSON = undefined;
         }
       }
       if (RUNS.has("inspect-approval")) await inspectApproval(server, display, label, bin, dir, summary);
@@ -437,7 +468,7 @@ async function extensionsPage(server: ProbeServer, display: Display, label: stri
         const g = execFileSync("xdotool", ["getwindowgeometry", "--shell", dialog[0]], { env, encoding: "utf8" });
         const v = Object.fromEntries(g.trim().split("\n").map((l) => l.split("=")).map(([k, x]) => [k, Number(x)]));
         // GTK can miss a click that arrives with the pointer: move, wait, click, and click again while
-        // the dialog is still there (measured: one click missed in Chrome Beta 158).
+        // the dialog is still there.
         execFileSync("xdotool", ["mousemove", "--sync", String(v.X + v.WIDTH - 49), String(v.Y + v.HEIGHT - 24)], { env });
         for (let i = 0; i < 4; i++) {
           await sleep(500);
@@ -462,6 +493,25 @@ async function extensionsPage(server: ProbeServer, display: Display, label: stri
   out.records = server.records.filter((r) => r.run === server.run);
   writeFileSync(join(dir, `${name}.json`), JSON.stringify(out, null, 1));
   log(`${server.run}: done, extension ${out.extAlive ? "loaded" : "not loaded"}, developer mode ${out.prefs.developerMode}`);
+}
+
+/** Only the probe site, for a browser that a person opens there; then DIR/LABEL/site.json and tls.json. */
+async function serve(server: ProbeServer, label: string) {
+  const dir = join(OUT, label);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  server.run = `${label}/tls`;   // TLS connections carry the current run; HTTP pages carry their own
+  log(`open ${server.origin}/?run=${encodeURIComponent(`${label}/site`)} and ${server.tlsOrigin}/?run=${encodeURIComponent(`${label}/tls`)} (certificate warning: Advanced, then Proceed); stop with Ctrl+C`);
+  await new Promise<void>((resolve) => { const t = setTimeout(resolve, Number(values["serve-ms"])); process.once("SIGINT", () => { clearTimeout(t); resolve(); }); });
+  for (const name of ["site", "tls"]) {
+    const records = server.records.filter((r) => r.run === `${label}/${name}`);
+    writeFileSync(join(dir, `${name}.json`), JSON.stringify({ bin: `(${label}: a browser that a person opened)`, marks: [], shots: {}, records }, null, 1));
+  }
+  const file = join(OUT, "summary.json");
+  const summary = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { started: new Date().toISOString(), platform: process.platform, browsers: {}, blockedEgress: [] };
+  summary.browsers[label] = { bin: `(${label}: a browser that a person opened)`, version: "the browser's own", runs: {} };
+  writeFileSync(file, JSON.stringify(summary, null, 1));
+  log(`${label}: ${server.records.filter((r) => r.run.startsWith(`${label}/`)).length} records`);
+  await server.stop();
 }
 
 /** Today's path: the chrome://inspect switch, then one DevTools WebSocket and Chrome's prompt. */
