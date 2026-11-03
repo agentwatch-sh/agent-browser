@@ -51,8 +51,11 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"] } };
 }
 
-/** One line of monitor.swift: the frontmost app changed, the pointer moved, or its once-a-second heartbeat. */
-export type MonitorEvent = { t: number; front: number; name: string } | { t: number; pointer: [number, number] } | { t: number; alive: true };
+/**
+ * One line of monitor.swift: the frontmost app changed (pid 0 and name "?" when the monitor cannot see
+ * it), the pointer moved, its once-a-second heartbeat, or an app launched (information only).
+ */
+export type MonitorEvent = { t: number; front: number; name: string } | { t: number; pointer: [number, number] } | { t: number; alive: true } | { t: number; launched: number; name: string };
 
 /** The events, and the numbers (from 1) of the lines that start with "{" but are no event. */
 export type MonitorLog = { events: MonitorEvent[]; bad: number[] };
@@ -67,7 +70,8 @@ export function parseMonitorLog(text: string): MonitorLog {
     if (!line.startsWith("{")) return;
     let e: any;
     try { e = JSON.parse(line); } catch { /* bad, below */ }
-    if (typeof e?.t === "number" && ((typeof e.front === "number" && typeof e.name === "string") || Array.isArray(e.pointer) || e.alive === true)) events.push(e);
+    const named = typeof e?.name === "string";
+    if (typeof e?.t === "number" && ((typeof e.front === "number" && named) || (typeof e.launched === "number" && named) || Array.isArray(e.pointer) || e.alive === true)) events.push(e);
     else if (i < lines.length - 1) bad.push(i + 1);
   });
   return { events, bad };
@@ -75,6 +79,24 @@ export function parseMonitorLog(text: string): MonitorLog {
 
 /** The longest silence of the monitor (it beats once a second) that still counts as a working monitor. */
 export const MAX_MONITOR_GAP_S = 2;
+
+/** The pid in the output of `lsappinfo info -only pid <ASN>` ("pid"=123), or undefined. */
+export function lsappinfoPid(text: string): number | undefined {
+  const m = /"?pid"?\s*=\s*(\d+)/.exec(text);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * The liveness check before start 1: the monitor's latest front pid must be the front pid that
+ * lsappinfo gives. Null when they agree, else why the monitor cannot be trusted.
+ */
+export function livenessProblem(monitorPid: number | undefined, lsappinfo: number | undefined): string | null {
+  if (monitorPid === undefined) return "the monitor logged no frontmost app";
+  if (monitorPid === 0) return "the monitor cannot see the frontmost app (pid 0)";
+  if (lsappinfo === undefined) return "lsappinfo gave no frontmost app, so the monitor cannot be checked";
+  if (monitorPid !== lsappinfo) return `the monitor's frontmost app (pid ${monitorPid}) is not lsappinfo's (pid ${lsappinfo})`;
+  return null;
+}
 
 /** A line of the check's marks.jsonl, in analyse.py's format: "start X", "end X" or "fail X", and "log". */
 export type Mark = { t: number; what: string; detail?: unknown };
@@ -89,11 +111,13 @@ export type StartFocus = {
   changed: boolean;
   changes: FrontChange[];
   /**
-   * Changes while the check quit its own Chrome. They count against the start (quitCounted) when the
-   * start's own Chrome took the focus, or when the focus did not come back to frontBefore.
+   * Changes from "start quit N" to the next start (or the end of the run). Each one counts against the
+   * start (quitCounted): a Chrome that is not in front moves no focus when it quits.
    */
   quitChanges: FrontChange[];
   quitCounted: boolean;
+  /** Whether the monitor logged the launch of this start's own Chrome (information only). */
+  launchSeen: boolean;
   /** Pointer moves from the start to the quit: a person moved the mouse, so a change can be their own click. */
   pointerMoves: number;
   problem: string | null;
@@ -101,12 +125,14 @@ export type StartFocus = {
 
 /**
  * Each start's window: from "start launch N" to "start quit N" ("launch" until "end launch N" or
- * "fail launch N", then "after"), then the quit until "end quit N". The monitor logs only changes,
+ * "fail launch N", then "after"), then "quit" until the next start's "start launch" (or "done", the end
+ * of the run), so a change between two starts counts too. The monitor logs only changes,
  * so the app in front before a start is the last front event at or before its "start launch N".
  * `chromePids` maps a start to its own agent Chrome's pid, so a change to that pid is marked.
  * A start is a problem, never a pass, when the monitor could have missed a change in it: it stopped
  * (`monitorEnd`, the time its process exited) before the start ended, it logged nothing for more than
- * MAX_MONITOR_GAP_S in the start, or the log has a bad line.
+ * MAX_MONITOR_GAP_S in the start, it could not see the front app (pid 0 or name "?") before the start
+ * or at a change, or the log has a bad line.
  */
 export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record<number, number | undefined>, opts: { monitorEnd?: number } = {}): StartFocus[] {
   const { events, bad } = log;
@@ -120,7 +146,7 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
     const t0 = at(`start launch ${n}`)!;
     const quit = at(`start quit ${n}`) ?? next;
     const launched = at(`end launch ${n}`) ?? at(`fail launch ${n}`) ?? quit;
-    const quitEnd = at(`end quit ${n}`) ?? at(`fail quit ${n}`) ?? next;
+    const quitEnd = i + 1 < starts.length ? next : at("done") ?? at(`end quit ${n}`) ?? at(`fail quit ${n}`) ?? Infinity;
     const before = fronts.filter((e) => e.t <= t0).at(-1);
     const frontBefore = before ? { pid: before.front, name: before.name } : null;
     const changes: FrontChange[] = [], quitChanges: FrontChange[] = [];
@@ -132,9 +158,12 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
       const change = { t: e.t, afterStartMs: Math.round((e.t - t0) * 1000), phase, pid: e.front, name: e.name, agentChrome: e.front === chromePids[n] } as const;
       (phase === "quit" ? quitChanges : changes).push(change);
     }
-    const quitCounted = quitChanges.some((c) => c.agentChrome) || (quitChanges.length > 0 && current !== before?.front);
+    const quitCounted = quitChanges.length > 0;
+    const blind = (pid: number, name: string) => pid === 0 || name === "?";
     const problems: string[] = [];
     if (!frontBefore) problems.push(`the monitor logged no frontmost app before start ${n}`);
+    else if (blind(frontBefore.pid, frontBefore.name)) problems.push(`the monitor could not see the frontmost app before start ${n}`);
+    for (const c of [...changes, ...quitChanges]) if (blind(c.pid, c.name)) problems.push(`the monitor could not see the frontmost app at +${c.afterStartMs} ms of start ${n}`);
     if (bad.length) problems.push(`monitor.jsonl line${bad.length > 1 ? "s" : ""} ${bad.join(", ")} ${bad.length > 1 ? "are" : "is"} not a monitor event`);
     if (quitEnd === Infinity) problems.push(`start ${n} has no end mark`);
     else {
@@ -147,6 +176,7 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
     return {
       start: n, frontBefore, changed: changes.length > 0 || quitCounted, changes, quitChanges, quitCounted,
       pointerMoves: pointers.filter((e) => e.t > t0 && e.t < quit).length,
+      launchSeen: chromePids[n] !== undefined && events.some((e) => "launched" in e && e.launched === chromePids[n] && e.t > t0 && e.t < quitEnd),
       problem: problems.length ? problems.join("; ") : null,
     };
   });

@@ -5,12 +5,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { analyseStarts, exitCode, parseMonitorLog, startArgs, type Mark } from "./live/takeover/focus.ts";
+import { analyseStarts, exitCode, livenessProblem, lsappinfoPid, parseMonitorLog, startArgs, type Mark } from "./live/takeover/focus.ts";
 import { ROOT } from "./helpers.ts";
 
 const run = promisify(execFile);
@@ -79,19 +79,33 @@ test("the monitor log: one event per JSON line; a bad JSON line is reported unle
     "monitor: started",
     '{"t": 100.050, "pointer": [10, 20]}',
     '{"t": 101.000, "alive": true}',
+    '{"t": 101.200, "launched": 702, "name": "Google Chrome Beta"}',
     '{"t": 101.5',
   ].join("\n");
-  assert.deepEqual(parseMonitorLog(text), { events: [{ t: 100, front: 500, name: "Terminal" }, { t: 100.05, pointer: [10, 20] }, { t: 101, alive: true }], bad: [] });
+  assert.deepEqual(parseMonitorLog(text), { events: [{ t: 100, front: 500, name: "Terminal" }, { t: 100.05, pointer: [10, 20] }, { t: 101, alive: true }, { t: 101.2, launched: 702, name: "Google Chrome Beta" }], bad: [] });
   const broken = parseMonitorLog('{"t": 100.000, "front": 500, "name": "Bad "quote""}\n{"t": 100.1, "alive": true}\n{"t": 100.2, "what": 1}\n');
   assert.deepEqual(broken.bad, [1, 3], "an unescaped name and a line that is no event, both before the last line");
   assert.deepEqual(broken.events, [{ t: 100.1, alive: true }]);
 });
 
-// Three starts. The monitor's heartbeat comes once a second, from t=5 to t=65.
+test("the liveness check: lsappinfo's front pid must be the monitor's latest front pid", () => {
+  assert.equal(lsappinfoPid('"pid"=48285\n'), 48285);
+  assert.equal(lsappinfoPid("[ NULL ]\n"), undefined);
+  assert.equal(lsappinfoPid(""), undefined);
+  assert.equal(livenessProblem(500, 500), null);
+  assert.match(livenessProblem(500, undefined) ?? "", /lsappinfo/);
+  assert.match(livenessProblem(undefined, 500) ?? "", /the monitor logged no frontmost app/);
+  assert.match(livenessProblem(0, 500) ?? "", /the monitor cannot see the frontmost app/);
+  assert.match(livenessProblem(500, 600) ?? "", /pid 500.*pid 600/);
+});
+
+// Three starts, then the end of the run at t=64. The monitor's heartbeat comes once a second, from
+// t=5 to t=65. A start's quit phase runs to the next start (or to the end of the run).
 const marks: Mark[] = [
   { t: 10, what: "start launch 1" }, { t: 12, what: "end launch 1" }, { t: 22, what: "start quit 1" }, { t: 23, what: "end quit 1" },
   { t: 30, what: "start launch 2" }, { t: 32, what: "end launch 2" }, { t: 42, what: "start quit 2" }, { t: 43, what: "end quit 2" },
   { t: 50, what: "start launch 3" }, { t: 52, what: "end launch 3" }, { t: 62, what: "start quit 3" }, { t: 63, what: "end quit 3" },
+  { t: 64, what: "done" },
 ];
 const pids = { 1: 701, 2: 702, 3: 703 };
 const beats = (from = 5, to = 65, skip: (t: number) => boolean = () => false) =>
@@ -107,7 +121,7 @@ test("the analysis names the start that changed the frontmost app, when, and to 
   ]);
   const r = analyseStarts(log, marks, pids);
   assert.deepEqual(r.map((x) => [x.start, x.changed]), [[1, false], [2, true], [3, false]]);
-  assert.deepEqual(r[0], { start: 1, frontBefore: { pid: 500, name: "TextEdit" }, changed: false, changes: [], quitChanges: [], quitCounted: false, pointerMoves: 0, problem: null });
+  assert.deepEqual(r[0], { start: 1, frontBefore: { pid: 500, name: "TextEdit" }, changed: false, changes: [], quitChanges: [], quitCounted: false, pointerMoves: 0, launchSeen: false, problem: null });
   assert.deepEqual(r[1].changes, [
     { t: 33.2, afterStartMs: 3200, phase: "after", pid: 702, name: "Google Chrome Beta", agentChrome: true },
     { t: 35.1, afterStartMs: 5100, phase: "after", pid: 500, name: "TextEdit", agentChrome: false },
@@ -134,10 +148,10 @@ test("the start's own Chrome takes the focus after the launch, and the focus goe
   assert.equal(r[0].changed, true);
   assert.deepEqual(r[0].changes, [{ t: 13, afterStartMs: 3000, phase: "after", pid: 701, name: "Google Chrome Beta", agentChrome: true }]);
   assert.deepEqual(r[0].quitChanges, [{ t: 22.5, afterStartMs: 12500, phase: "quit", pid: 500, name: "TextEdit", agentChrome: false }]);
-  assert.equal(r[0].quitCounted, false, "the focus came back to the app in front before: the quit adds nothing");
+  assert.equal(r[0].quitCounted, true, "every change in the quit phase counts");
 });
 
-test("a change in the quit phase counts when the start's own Chrome takes the focus, or when the focus does not come back", () => {
+test("every change in the quit phase counts: a Chrome that is not in front moves no focus when it quits", () => {
   const late = analyseStarts(monitorLog([
     '{"t": 5.0, "front": 500, "name": "TextEdit"}',
     '{"t": 22.2, "front": 701, "name": "Google Chrome Beta"}',
@@ -157,8 +171,31 @@ test("a change in the quit phase counts when the start's own Chrome takes the fo
     '{"t": 22.5, "front": 600, "name": "Finder"}',
     '{"t": 22.9, "front": 500, "name": "TextEdit"}',
   ]), marks, pids);
-  assert.equal(back[0].quitCounted, false, "another app for a moment, then the app in front before");
-  assert.equal(back[0].changed, false);
+  assert.equal(back[0].quitCounted, true, "another app for a moment, then the app in front before");
+  assert.equal(back[0].changed, true);
+
+  // Between "end quit 1" (t=23) and "start launch 2" (t=30): still start 1's quit phase.
+  const gap = analyseStarts(monitorLog(['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 26.0, "front": 701, "name": "Google Chrome Beta"}']), marks, pids);
+  assert.deepEqual(gap[0].quitChanges, [{ t: 26, afterStartMs: 16000, phase: "quit", pid: 701, name: "Google Chrome Beta", agentChrome: true }]);
+  assert.equal(gap[0].changed, true);
+  assert.equal(gap[1].changed, false);
+});
+
+test("a front pid of 0 or a name \"?\" (the monitor sees no front app) is a problem, before a start and as a change", () => {
+  const blind = analyseStarts(monitorLog(['{"t": 5.0, "front": 0, "name": "?"}']), marks, pids, { monitorEnd: 70 });
+  for (const x of blind) assert.match(x.problem ?? "", /the monitor could not see the frontmost app before start \d/);
+  assert.equal(exitCode(blind), 1);
+  const lost = analyseStarts(monitorLog(['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 33.0, "front": 0, "name": "?"}']), marks, pids, { monitorEnd: 70 });
+  assert.equal(lost[0].problem, null);
+  assert.match(lost[1].problem ?? "", /the monitor could not see the frontmost app at \+3000 ms of start 2/);
+  const noName = analyseStarts(monitorLog(['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 13.0, "front": 701, "name": "?"}']), marks, pids, { monitorEnd: 70 });
+  assert.match(noName[0].problem ?? "", /could not see the frontmost app at \+3000 ms of start 1/);
+});
+
+test("the analysis records whether the monitor saw the launch of the start's own Chrome (information only)", () => {
+  const r = analyseStarts(monitorLog(['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 30.5, "launched": 702, "name": "Google Chrome Beta"}']), marks, pids, { monitorEnd: 70 });
+  assert.deepEqual(r.map((x) => x.launchSeen), [false, true, false]);
+  assert.deepEqual(r.map((x) => x.problem), [null, null, null]);
 });
 
 test("no change at any start gives exit 0; a start with no front app before it is a problem, not a pass", () => {
@@ -203,12 +240,16 @@ test("a bad line in the monitor log makes every start a problem: the lost line c
 
 // ---------- the check as a process ----------
 
-/** A private folder: a darwin preload for start.ts only, a fake monitor, and a fake Chrome app binary. */
+/**
+ * A private folder: a darwin preload for start.ts only, a fake monitor, a fake lsappinfo, and a fake
+ * Chrome app binary. ABFS_TEST (read by start.ts only when a test sets it) points start.ts at the fake
+ * lsappinfo and shortens its waits.
+ */
 function fakes() {
   const dir = mkdtempSync(join(tmpdir(), "abfs-test-"));
   const preload = join(dir, "darwin.mjs");
   writeFileSync(preload, 'Object.defineProperty(process, "platform", { value: "darwin" });\n');
-  // A stand-in for monitor.swift: TextEdit in front, a heartbeat once a second; ABFS_MONITOR_STOP_MS stops it early.
+  // A stand-in for monitor.swift: TextEdit (pid 111) in front, a heartbeat once a second; ABFS_MONITOR_STOP_MS stops it early.
   const monitor = join(dir, "monitor");
   writeFileSync(monitor, `#!${process.execPath}
 const line = (o) => process.stdout.write(JSON.stringify({ t: Number((Date.now() / 1000).toFixed(3)), ...o }) + "\\n");
@@ -217,41 +258,72 @@ setInterval(() => line({ alive: true }), 1000);
 setTimeout(() => process.exit(0), Number(process.env.ABFS_MONITOR_STOP_MS || Number(process.argv[2]) * 1000));
 process.on("SIGTERM", () => process.exit(0));
 `);
-  // A stand-in for the Chrome main process: it listens, writes DevToolsActivePort, records a SIGTERM,
-  // and starts a decoy on "<profile>-x" that records a SIGTERM and stays alive.
+  // A stand-in for lsappinfo: the front app is pid 111, or ABFS_FAKE_FRONT_PID.
+  const lsappinfo = join(dir, "lsappinfo");
+  writeFileSync(lsappinfo, `#!${process.execPath}
+if (process.argv[2] === "front") console.log("ASN:0x0-0x1:");
+else if (process.argv[2] === "info") console.log('"pid"=' + (process.env.ABFS_FAKE_FRONT_PID || 111));
+`);
+  // A stand-in for the Chrome main process: it listens, writes DevToolsActivePort and records a
+  // SIGTERM (ABFS_FAKE_IGNORE_TERM: and stays alive). It starts a decoy that shares the state folder's
+  // name as a prefix but lies outside it ("<state folder>-x/profile"), and with ABFS_FAKE_HELPER a
+  // "--type=renderer" helper on its own profile that outlives it. Decoy and helper record a SIGTERM
+  // and stay alive.
   const out = join(dir, "fake-out");
   mkdirSync(out);
   const bin = join(dir, "X.app", "Contents", "MacOS", "X");
   mkdirSync(join(dir, "X.app", "Contents", "MacOS"), { recursive: true });
-  const decoy = `process.on("SIGTERM", () => require("node:fs").writeFileSync(require("node:path").join(process.argv[1], "decoy-sigterm-" + process.pid), "")); setInterval(() => {}, 1000);`;
+  const stay = (name: string) => `process.on("SIGTERM", () => require("node:fs").writeFileSync(require("node:path").join(process.argv[1], "${name}-sigterm-" + process.pid), "")); setInterval(() => {}, 1000);`;
   writeFileSync(bin, `#!${process.execPath}
 const { createServer } = require("node:net");
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { dirname, join } = require("node:path");
 const profile = process.argv.find((a) => a.startsWith("--user-data-dir=")).slice("--user-data-dir=".length);
 const out = process.env.ABFS_FAKE_OUT;
-const decoy = spawn(process.execPath, ["-e", ${JSON.stringify(decoy)}, "--", out, "--user-data-dir=" + profile + "-x"], { detached: true, stdio: "ignore" });
-decoy.unref();
-writeFileSync(join(out, "fake-" + process.pid + ".json"), JSON.stringify({ pid: process.pid, decoy: decoy.pid, profile }));
-process.on("SIGTERM", () => { writeFileSync(join(out, "sigterm-" + process.pid), ""); process.exit(0); });
+const keep = (script, args) => { const c = spawn(process.execPath, ["-e", script, "--", out, ...args], { detached: true, stdio: "ignore" }); c.unref(); return c.pid; };
+const decoy = keep(${JSON.stringify(stay("decoy"))}, ["--user-data-dir=" + dirname(profile) + "-x/profile"]);
+const helper = process.env.ABFS_FAKE_HELPER ? keep(${JSON.stringify(stay("helper"))}, ["--type=renderer", "--user-data-dir=" + profile]) : null;
+writeFileSync(join(out, "fake-" + process.pid + ".json"), JSON.stringify({ pid: process.pid, decoy, helper, profile }));
+process.on("SIGTERM", () => { writeFileSync(join(out, "sigterm-" + process.pid), ""); if (!process.env.ABFS_FAKE_IGNORE_TERM) process.exit(0); });
 const srv = createServer((s) => s.destroy());
 srv.listen(0, "127.0.0.1", () => writeFileSync(join(profile, "DevToolsActivePort"), srv.address().port + "\\n/devtools/browser/fake\\n"));
 `);
-  chmodSync(monitor, 0o755);
-  chmodSync(bin, 0o755);
+  for (const f of [monitor, lsappinfo, bin]) chmodSync(f, 0o755);
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  const started = () => readdirSync(out).filter((f) => /^fake-\d+\.json$/.test(f)).map((f) => JSON.parse(readFileSync(join(out, f), "utf8")) as { pid: number; decoy: number; profile: string });
+  const commandOf = (pid: number) => { try { return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }); } catch { return ""; } };
+  type Started = { pid: number; decoy: number; helper: number | null; profile: string };
+  const started = () => readdirSync(out).filter((f) => /^fake-\d+\.json$/.test(f)).map((f) => JSON.parse(readFileSync(join(out, f), "utf8")) as Started);
+  const test = { lsappinfo, beforeMs: 1500, quitWaitMs: 1500, killWaitMs: 1500 };
   return {
     dir, preload, monitor, out, bin, alive, started,
-    check: (args: string[], env: Record<string, string> = {}) => run(process.execPath, ["--import", preload, START, ...args], { env: { ...process.env, ABFS_FAKE_OUT: out, ...env }, timeout: 120_000 })
-      .then((r) => ({ code: 0, ...r }), (e) => ({ code: e.code as number, stdout: e.stdout as string, stderr: e.stderr as string })),
+    check: (args: string[], env: Record<string, string> = {}, overrides: Record<string, unknown> = {}) =>
+      run(process.execPath, ["--import", preload, START, ...args], { env: { ...process.env, ABFS_FAKE_OUT: out, ABFS_TEST: JSON.stringify({ ...test, ...overrides }), ...env }, timeout: 120_000 })
+        .then((r) => ({ code: 0, ...r }), (e) => ({ code: e.code as number, stdout: e.stdout as string, stderr: e.stderr as string })),
+    /** The check as a child that the test can interrupt: Ctrl-C (SIGINT) once `until` is in its marks. */
+    interrupt: (args: string[], outDir: string, until: RegExp) => new Promise<{ code: number | null; stderr: string }>((done) => {
+      const c = spawn(process.execPath, ["--import", preload, START, ...args, "--out-dir", outDir], { env: { ...process.env, ABFS_FAKE_OUT: out, ABFS_TEST: JSON.stringify(test) }, stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      c.stderr!.on("data", (b) => (stderr += b));
+      const poll = setInterval(() => {
+        let marks = "";
+        try { marks = readFileSync(join(outDir, "marks.jsonl"), "utf8"); } catch { /* not yet */ }
+        if (until.test(marks)) { clearInterval(poll); c.kill("SIGINT"); }
+      }, 100);
+      c.on("close", (code) => { clearInterval(poll); done({ code, stderr }); });
+    }),
+    /** Ends this test's own fakes (each checked by its command line) and removes a state folder that its own run left. */
     cleanup: () => {
-      for (const f of started()) for (const pid of [f.pid, f.decoy]) if (alive(pid)) process.kill(pid, "SIGKILL");
+      for (const f of started()) {
+        for (const pid of [f.pid, f.decoy, f.helper]) if (pid && alive(pid) && commandOf(pid).includes(dir)) process.kill(pid, "SIGKILL");
+        const stateDir = dirname(f.profile);
+        if (/^\/tmp\/abfs-(\d+|s)-[A-Za-z0-9]{6}$/.test(stateDir) && existsSync(stateDir)) rmSync(stateDir, { recursive: true });
+      }
       rmSync(dir, { recursive: true, force: true });
     },
   };
 }
+const jsonl = (file: string) => readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 
 test("the start check, run here, refuses and starts nothing (exit 2), and makes no output folder", async () => {
   const f = fakes();
@@ -281,22 +353,38 @@ test("the check's whole flow with a fake Chrome: it quits only its own Chrome, d
     const outDir = join(f.dir, "results");
     const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "1", "--after-ms", "1000"]);
     assert.equal(r.code, 1, r.stderr);
-    const results = readFileSync(join(outDir, "results.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const results = jsonl(join(outDir, "results.jsonl"));
     assert.equal(results.length, 1);
-    assert.equal(results[0].problem, "the start did not go through open -n -g (launches.log)", "on Linux the CLI spawns the binary itself");
+    assert.match(results[0].problem, /the start did not go through open -n -g/, "on Linux the CLI spawns the binary itself");
     assert.equal(results[0].changed, false);
+    assert.deepEqual(results[0].quit, { code: 0, ended: true, killed: false });
     const [fake] = f.started();
     assert.equal(results[0].chromePid, fake.pid);
     assert.equal(fake.profile, join(results[0].stateDir, "profile"));
     assert.ok(existsSync(join(f.out, `sigterm-${fake.pid}`)), "the fake on the check's own profile got SIGTERM");
     assert.equal(f.alive(fake.pid), false);
-    assert.ok(f.alive(fake.decoy), "the decoy on <profile>-x still runs");
+    assert.ok(f.alive(fake.decoy), "the decoy beside the state folder still runs");
     assert.equal(existsSync(join(f.out, `decoy-sigterm-${fake.decoy}`)), false, "and got no signal");
     assert.equal(existsSync(results[0].stateDir), false, "the check deleted the state folder that it made");
     assert.equal(results[0].stateDeleted, true);
     const summary = JSON.parse(readFileSync(join(outDir, "summary.json"), "utf8"));
     assert.equal(summary.ok, false);
     assert.equal(summary.monitorStopped, null);
+    assert.equal(summary.liveness, null);
+  } finally { f.cleanup(); }
+});
+
+test("the liveness check before start 1: a monitor that does not show lsappinfo's front app, or no lsappinfo, starts no Chrome (exit 1)", onLinux, async () => {
+  const f = fakes();
+  try {
+    const mismatch = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", join(f.dir, "a")], { ABFS_FAKE_FRONT_PID: "222" });
+    assert.equal(mismatch.code, 1, mismatch.stderr);
+    assert.match(JSON.parse(readFileSync(join(f.dir, "a", "summary.json"), "utf8")).liveness, /pid 111.*pid 222/);
+    assert.deepEqual(jsonl(join(f.dir, "a", "results.jsonl")), []);
+    const missing = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", join(f.dir, "b")], {}, { lsappinfo: join(f.dir, "no-such-lsappinfo") });
+    assert.equal(missing.code, 1, missing.stderr);
+    assert.match(JSON.parse(readFileSync(join(f.dir, "b", "summary.json"), "utf8")).liveness, /lsappinfo/);
+    assert.deepEqual(f.started(), [], "no Chrome started");
   } finally { f.cleanup(); }
 });
 
@@ -304,11 +392,12 @@ test("a monitor that stops during a start: that start is a problem, and the chec
   const f = fakes();
   try {
     const outDir = join(f.dir, "results");
-    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "2", "--after-ms", "3000"], { ABFS_MONITOR_STOP_MS: "5000" });
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "2", "--after-ms", "3000"], { ABFS_MONITOR_STOP_MS: "4000" });
     assert.equal(r.code, 1, r.stderr);
-    const results = readFileSync(join(outDir, "results.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const results = jsonl(join(outDir, "results.jsonl"));
     assert.equal(results.length, 1, "no second start after the monitor stopped");
     assert.match(results[0].problem, /the monitor stopped/);
+    assert.match(results[0].problem, /did not go through open -n -g/, "all the causes, not the first only");
     assert.equal(f.started().length, 1);
     const summary = JSON.parse(readFileSync(join(outDir, "summary.json"), "utf8"));
     assert.equal(typeof summary.monitorStopped, "string");
@@ -322,7 +411,7 @@ test("--same-profile: one folder for all starts, so the later starts restart a u
     const outDir = join(f.dir, "results");
     const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "2", "--after-ms", "1000", "--same-profile"]);
     assert.equal(r.code, 1, r.stderr);
-    const results = readFileSync(join(outDir, "results.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const results = jsonl(join(outDir, "results.jsonl"));
     assert.deepEqual(results.map((x) => x.profile), ["fresh", "used"]);
     assert.equal(results[0].stateDir, results[1].stateDir);
     assert.match(results[0].stateDir, /^\/tmp\/abfs-s-/);
@@ -333,5 +422,66 @@ test("--same-profile: one folder for all starts, so the later starts restart a u
     assert.deepEqual(new Set(fakesStarted.map((x) => x.profile)), new Set([join(results[0].stateDir, "profile")]));
     for (const x of fakesStarted) assert.ok(existsSync(join(f.out, `sigterm-${x.pid}`)));
     assert.equal(JSON.parse(readFileSync(join(outDir, "summary.json"), "utf8")).mode, "same-profile");
+  } finally { f.cleanup(); }
+});
+
+test("a Chrome that ignores SIGTERM gets SIGKILL (only it), and --same-profile then stops: the next start would be a crash restart", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "2", "--after-ms", "1000", "--same-profile"], { ABFS_FAKE_IGNORE_TERM: "1" });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /sent SIGKILL/);
+    const results = jsonl(join(outDir, "results.jsonl"));
+    assert.equal(results.length, 1, "no restart after a SIGKILL");
+    assert.deepEqual(results[0].quit, { code: 0, ended: true, killed: true });
+    const [fake] = f.started();
+    assert.ok(existsSync(join(f.out, `sigterm-${fake.pid}`)), "quit sent SIGTERM first");
+    assert.equal(f.alive(fake.pid), false, "SIGKILL ended it");
+    assert.ok(f.alive(fake.decoy));
+    assert.equal(existsSync(join(f.out, `decoy-sigterm-${fake.decoy}`)), false, "the decoy got no signal");
+    assert.equal(existsSync(results[0].stateDir), false, "no process names the folder any more, so it is deleted");
+  } finally { f.cleanup(); }
+});
+
+test("a process that still names the profile after SIGTERM and SIGKILL: \"did not end\", the folder stays, and no more starts", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "2", "--after-ms", "1000"], { ABFS_FAKE_HELPER: "1" });
+    assert.equal(r.code, 1, r.stderr);
+    const results = jsonl(join(outDir, "results.jsonl"));
+    assert.equal(results.length, 1, "no more starts");
+    assert.match(results[0].problem, /did not end; its state folder is left in place/);
+    assert.equal(results[0].quit.ended, false);
+    assert.equal(results[0].quit.killed, false, "the main process ended; the check never signals a helper");
+    assert.ok(existsSync(results[0].stateDir), "the folder stays while a process names it");
+    assert.match(r.stderr, new RegExp(`left in place.*${results[0].stateDir}`));
+    const [fake] = f.started();
+    assert.ok(fake.helper && f.alive(fake.helper));
+    assert.equal(existsSync(join(f.out, `helper-sigterm-${fake.helper}`)), false, "the helper got no signal");
+    assert.equal(existsSync(join(f.out, `decoy-sigterm-${fake.decoy}`)), false, "the decoy got no signal");
+  } finally { f.cleanup(); }
+});
+
+test("Ctrl-C in --same-profile mode: the check names the shared folder that it leaves, or deletes it when no process names it", onLinux, async () => {
+  const f = fakes();
+  try {
+    const args = ["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--starts", "2", "--after-ms", "3000", "--same-profile"];
+    // During start 1: its Chrome runs, so it gets SIGTERM and the folder stays.
+    const during = await f.interrupt(args, join(f.dir, "a"), /"end launch 1"/);
+    assert.equal(during.code, 130);
+    const [fake] = f.started();
+    const shared = dirname(fake.profile);
+    assert.match(shared, /^\/tmp\/abfs-s-/);
+    assert.ok(during.stderr.includes(`left in place (its Chrome, pid ${fake.pid}, got SIGTERM): ${shared}\n`), during.stderr);
+    for (let i = 0; i < 50 && !existsSync(join(f.out, `sigterm-${fake.pid}`)); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(existsSync(join(f.out, `sigterm-${fake.pid}`)));
+    // Between start 1 and start 2: no process names the folder, so the check deletes it.
+    const between = await f.interrupt(args, join(f.dir, "b"), /"end quit 1"/);
+    assert.equal(between.code, 130);
+    const second = f.started().find((x) => x.pid !== fake.pid)!;
+    assert.ok(between.stderr.includes(`deleted ${dirname(second.profile)}: no process names it\n`), between.stderr);
+    assert.equal(existsSync(dirname(second.profile)), false);
   } finally { f.cleanup(); }
 });

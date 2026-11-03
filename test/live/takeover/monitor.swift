@@ -1,8 +1,10 @@
 // Logs every change of the frontmost app (pid) and of the pointer position for N seconds: one JSON line
 // per change. It reads both 10 times a second, and it also logs each app activation that NSWorkspace
-// announces, so a front change shorter than 100 ms is seen too. Once a second it prints
-// {"t": ..., "alive": true}, so a reader can tell a hung or stopped monitor from a quiet screen. Reads
-// only; needs no Accessibility or Screen Recording grant.
+// announces, so a front change shorter than 100 ms is seen too. When it cannot see the front app, it
+// logs pid 0 and the name "?". Once a second it prints {"t": ..., "alive": true}, so a reader can tell
+// a hung or stopped monitor from a quiet screen. It also logs each app launch that NSWorkspace announces
+// as {"t": ..., "launched": pid, "name": ...}, for information only (not verified for `open -g`). Reads
+// only; needs no Accessibility or Screen Recording grant. Compile: swiftc -swift-version 5 -O monitor.swift -o monitor
 import AppKit
 
 let seconds = Double(CommandLine.arguments.dropFirst().first ?? "120") ?? 120
@@ -25,6 +27,11 @@ func logFront(_ app: NSRunningApplication?) {
 }
 NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
   logFront(note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)
+}
+NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { note in
+  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+  print("{\"t\": \(now()), \"launched\": \(app?.processIdentifier ?? 0), \"name\": \(quoted(app?.localizedName ?? "?"))}")
+  fflush(stdout)
 }
 Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
   print("{\"t\": \(now()), \"alive\": true}")

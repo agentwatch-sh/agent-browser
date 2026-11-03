@@ -4,7 +4,7 @@
 // monitor.swift logs the frontmost app and the pointer. analyse.py then names any command that changed
 // either. Not part of `npm test`. The Chrome start itself has its own check: start.ts (ab-b84.11).
 //
-//   swiftc -O test/live/takeover/monitor.swift -o <dir>/monitor && (<dir>/monitor 60 > <dir>/monitor.jsonl &)
+//   swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o <dir>/monitor && (<dir>/monitor 60 > <dir>/monitor.jsonl &)
 //   node test/live/takeover/check.ts --state-dir DIR --allowlist FILE --out-dir <dir>
 //   python3 -I test/live/takeover/analyse.py <dir> <agent Chrome pid>
 //
