@@ -19,7 +19,9 @@ const results = [];
 async function step(name, fn, want) {
   const t0 = Date.now();
   try {
-    const detail = await fn();
+    let timer;
+    const limit = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("probe timeout: no answer in 20 s")), 20000)));
+    const detail = await Promise.race([fn(), limit]).finally(() => clearTimeout(timer));
     results.push({ case: name, ok: want(detail), ms: Date.now() - t0, detail });
   } catch (e) {
     results.push({ case: name, ok: false, ms: Date.now() - t0, error: String(e.message || e).split("\n")[0].slice(0, 240) });
@@ -74,6 +76,13 @@ await step("a dialog in A's tab goes to A only", async () => {
 // B intercepts /api/data in its own tab, then leaves with the route still on.
 await pageB.goto(A + "/");
 await pageB.route("**/api/data", (r) => r.fulfill({ body: "from B", contentType: "text/plain" }));
+await step("B's interception is on before B leaves (the control)", async () => {
+  await pageB.locator("#fetch").click();
+  await pageB.waitForFunction(() => document.getElementById("fetchout").textContent !== "", null, { timeout: 5000 });
+  const t = await pageB.locator("#fetchout").textContent();
+  await pageB.evaluate(() => (document.getElementById("fetchout").textContent = ""));
+  return t;
+}, (d) => d === "from B");
 await b.close();
 await new Promise((r) => setTimeout(r, 500));
 const c = await chromium.connectOverCDP(url("s1"));

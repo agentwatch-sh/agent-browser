@@ -120,7 +120,13 @@ function ensureDebugger(tab) {
 async function newSession(client, tab, eventSession) {
   if (tab.owner && tab.owner !== client) throw new Error("The tab is in use by another connection of this scope");
   tab.owner = client;
-  await ensureDebugger(tab);
+  try {
+    await ensureDebugger(tab);
+  } catch (e) {
+    // A failed attach leaves the tab free again.
+    if (tab.sessions.size === 0) tab.owner = null;
+    throw e;
+  }
   const sessionId = `AB${client.id}S${nextSession++}`;
   const info = await targetInfo(tab);
   tab.sessions.set(sessionId, client);
@@ -226,6 +232,12 @@ async function rebuildGrants(types) {
   }
 }
 
+// A window call acts only on a window that holds a tab of the client's scope.
+async function windowInScope(client, windowId) {
+  const inWindow = await extCall("tabs.query", { windowId });
+  if (!inWindow.some((t) => tabs.has(t.id) && tabs.get(t.id).scope === client.scope)) throw new Error("Browser window not found");
+}
+
 // --------------------------------------------------------- browser commands
 // Each handler gets (client, params, ctx); ctx.tab is the tab of the page
 // session it came on, ctx.browserSession the browser session it came on.
@@ -245,16 +257,18 @@ const BROWSER = {
   },
   async "Browser.getWindowForTarget"(client, p, ctx) {
     const tab = ctx.tab || tabByTarget(p.targetId);
-    if (!tab) throw new Error("No target with given id found");
+    if (!tab || tab.scope !== client.scope) throw new Error("No target with given id found");
     const t = await extCall("tabs.get", tab.tabId);
     const w = await extCall("windows.get", t.windowId);
     return { windowId: t.windowId, bounds: { left: w.left, top: w.top, width: w.width, height: w.height, windowState: w.state } };
   },
   async "Browser.getWindowBounds"(client, p) {
+    await windowInScope(client, p.windowId);
     const w = await extCall("windows.get", p.windowId);
     return { bounds: { left: w.left, top: w.top, width: w.width, height: w.height, windowState: w.state } };
   },
   async "Browser.setWindowBounds"(client, p) {
+    await windowInScope(client, p.windowId);
     const b = p.bounds || {};
     const props = {};
     for (const k of ["left", "top", "width", "height"]) if (b[k] !== undefined) props[k] = b[k];
@@ -369,8 +383,10 @@ const BROWSER = {
   },
   async "Storage.setCookies"(client, p) {
     for (const c of p.cookies || []) {
-      const host = (c.domain || new URL(c.url).hostname).replace(/^\./, "");
-      if (!covers(host)) throw new Error(`Not allowed: ${host} is not on the allowlist`);
+      // Both the cookie's domain and its URL must be on the list.
+      const hosts = [c.domain ? c.domain.replace(/^\./, "") : null, c.url ? new URL(c.url).hostname : null].filter(Boolean);
+      for (const h of hosts) if (!covers(h)) throw new Error(`Not allowed: ${h} is not on the allowlist`);
+      const host = hosts[0];
       const d = { url: c.url || `${c.secure ? "https" : "http"}://${host}${c.path || "/"}`, name: c.name, value: c.value, path: c.path, secure: c.secure, httpOnly: c.httpOnly };
       if (c.domain && c.domain.startsWith(".")) d.domain = c.domain;
       if (c.expires && c.expires > 0) d.expirationDate = c.expires;

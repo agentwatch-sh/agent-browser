@@ -73,7 +73,7 @@ sleep 3
 echo "== matrix"; RELAY_SOCK="$SOCK" OUT="$RES/matrix.json" UPLOAD_FILE="$RUN/upload.txt" DL_DIR="$RUN/dl" node "$HERE/matrix.mjs"
 echo "== playwright over loopback TCP"; PW_DIR="$PW_DIR" ENDPOINT="ws://127.0.0.1:8790/devtools/browser/pw-tcp" OUT="$RES/pw-tcp.json" UPLOAD_FILE="$RUN/upload.txt" RUN_DIR="$RUN" node "$HERE/pw-probe.mjs"
 echo "== playwright over the Unix socket"; PW_DIR="$PW_DIR" ENDPOINT="ws+unix://$SOCK:/devtools/browser/pw-unix" OUT="$RES/pw-unix.json" UPLOAD_FILE="$RUN/upload.txt" RUN_DIR="$RUN" node "$HERE/pw-probe.mjs"
-echo "== playwright mcp"; PW_DIR="$PW_DIR" ENDPOINT="ws+unix://$SOCK:/devtools/browser/mcp" OUT="$RES/mcp.json" MCP_OUT_DIR="$RUN/mcp-out" node "$HERE/mcp-probe.mjs"
+echo "== playwright mcp"; PW_DIR="$PW_DIR" ENDPOINT="ws+unix://$SOCK:/devtools/browser/mcp" OUT="$RES/mcp.json" MCP_OUT_DIR="$RUN/mcp-out" SITE_LOG="$RUN/site-log.jsonl" node "$HERE/mcp-probe.mjs"
 echo "== concurrent clients and scopes"; PW_DIR="$PW_DIR" RELAY_SOCK="$SOCK" OUT="$RES/concurrency.json" node "$HERE/concurrency.mjs"
 sleep 1
 echo "== chromium still runs after every client's browser.close:"; curl -s http://127.0.0.1:8790/status; echo

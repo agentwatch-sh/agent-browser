@@ -21,9 +21,10 @@ design changes a part of it; none changes an operator decision.
   Playwright MCP with `PLAYWRIGHT_MCP_CDP_ENDPOINT`, and agent-browser itself. A **browser model**
   behind the endpoint answers the browser-level CDP calls (Browser, Target, Storage) from `chrome.*`
   APIs and sends every page-level call to `chrome.debugger` in the agent-mode extension (section 4).
-- **Measured on taylor:** 49 of 49 Playwright cases (six of them are refusals that the design wants),
-  13 of 13 Playwright MCP calls and 13 of 13 cases with several clients at the same time, over a Unix
-  socket and over loopback TCP. No prompt appears (sections 5 and 4.4).
+- **Measured on taylor:** 49 of 49 Playwright cases (six of them are refusals that the design wants)
+  over a Unix socket and over loopback TCP; 13 Playwright MCP calls and two checks of what the site
+  saw (15 of 15), and 14 of 14 cases on several connections and scopes, over the Unix socket. No
+  prompt appears (sections 5 and 4.4).
 - **No prompt on any path that agentwatch uses.** Every feature that agentwatch offers goes through
   the extension. The few features that only Chrome's "Allow remote debugging?" connection gives (a
   new isolated context, service-worker targets, JS coverage, a few browser-wide domains) give a clear
@@ -187,7 +188,7 @@ these itself:
 | `Target.attachToTarget`, `detachFromTarget`, `attachToBrowserTarget` | Sessions of the model (section 4.4) |
 | `Target.getBrowserContexts`, `createBrowserContext` | No contexts; a new context is refused (Q1) |
 | `Browser.setDownloadBehavior`, `cancelDownload` and the download events | Section 4.5 |
-| `Browser.grantPermissions`, `resetPermissions` | `chrome.contentSettings` for geolocation, notifications, camera, microphone and the clipboard, for allowlisted origins only; a grant with no origin covers the allowlisted domains; each connection's grants are kept apart and rebuilt when it resets or leaves; other permissions are refused |
+| `Browser.grantPermissions`, `resetPermissions` | `chrome.contentSettings` for geolocation, notifications, camera, microphone and the clipboard, for allowlisted origins only; a grant with no origin covers the allowlisted domains; other permissions are refused. The model records each connection's grants and rebuilds a type from the remaining ones when a connection resets or leaves. Content settings act on the whole profile, so one connection's grant also applies to another connection's pages (the rebuild ran with one connection only) |
 | `Browser.getWindowForTarget`, `getWindowBounds`, `setWindowBounds` | `chrome.windows` (also when they arrive on a page session) |
 | `Storage.*` and the Network cookie calls | `chrome.cookies`, for allowlisted domains only (section 8; Q4) |
 | `Browser.close` | Ends that client's connection only; the agent browser keeps running (measured with a raw client). Playwright's own `browser.close()` sends no `Browser.close`: it closes its connection |
@@ -214,14 +215,19 @@ the file chooser, emulation) is shared too. So **a tab belongs to one connection
   free for the next connection.
 - The popup's owner comes from Chrome's own `openerId` (from `Target.getTargetInfo` of the new tab):
   `chrome.tabs`' `openerTabId` named the active tab instead of the tab that called `window.open`
-  (measured).
+  (measured). To read it, the model attaches `chrome.debugger` to each new tab that no
+  `Target.createTarget` call claimed, and detaches again when no connection takes the tab. In the
+  build the extension does this itself in `tabs.onCreated`, and skips the tabs that are not agent
+  tabs: the operator's live-view tabs and the import's restore tab. One module of the extension owns
+  every `chrome.debugger.attach`, so the import's own attach (contract C6 step 2) never collides with
+  it.
 
-Measured (`results/concurrency.json`, 13 of 13): two Playwright connections of one scope work at
+Measured (`results/concurrency.json`, 14 of 14): two Playwright connections of one scope work at
 the same time (interleaved evaluates); the second gets no page for the first's tab and cannot attach
-to it; a popup and a dialog go to the tab's owner only; after a connection leaves with a
-`page.route` still on, the next connection takes its tab and that interception is gone; a second
-scope neither sees nor attaches the first scope's tab; a raw client's `Browser.close` ends only its
-own connection.
+to it; a popup and a dialog go to the tab's owner only; a connection's `page.route` is on (the
+control) and, after that connection leaves, the next connection takes its tab and the interception
+is gone; a second scope neither sees nor attaches the first scope's tab; a raw client's
+`Browser.close` ends only its own connection.
 
 ### 4.5 Downloads
 
@@ -236,8 +242,8 @@ and `download.path()` return the file and its content.
 Chrome's own download prompts stay possible on this path. A site's second automatic download asks
 "download multiple files" unless `chrome.contentSettings.automaticDownloads` allows it; the model
 sets that for the allowlisted domains (not measured). A file that Chrome marks as dangerous waits for
-a person's confirmation; agent mode does not confirm it (the download stays incomplete and the agent
-gets an error). The daemon sets the profile's download folder to a folder in the state folder, so
+a person's confirmation; agent mode does not confirm it. Not measured: the model must then report
+the download as canceled, so that `download.path()` does not wait (stage 3). The daemon sets the profile's download folder to a folder in the state folder, so
 downloads stay out of the user's own Downloads folder (Linux: the unit's HOME and the profile
 preference; the Mac: the profile preference, not measured on branded Chrome).
 
@@ -271,9 +277,9 @@ relay's code, not run by a client.
 | 8 | Screenshot: `page.screenshot`, MCP `browser_take_screenshot` | `Page.captureScreenshot` | 1 | Sent | None | Nothing | P, MCP |
 | 9 | Viewport: `setViewportSize` | `Emulation.setDeviceMetricsOverride` | 1 | Sent | None | The new size and one `resize` event, as with any Playwright | P, S |
 | 10 | Window bounds (a context with a viewport, `page.windowBounds`) | `Browser.getWindowForTarget`, `set/getWindowBounds` | 1 | `chrome.windows` | None | Window size, by intent | M (refused to the extension), C |
-| 11 | Popups: `page.on("popup")` for `window.open` and `target=_blank` | browser auto-attach with `openerId` | 1 | The model attaches on `chrome.tabs.onCreated`, reads Chrome's `openerId`, and gives the popup to the opener's owner | None | Nothing. **Limit:** the attach comes just after the tab exists; a popup case hung in 2 of 18 runs (section 10) | P, K |
+| 11 | Popups: `page.on("popup")` for `window.open` and `target=_blank` | browser auto-attach with `openerId` | 1 | The model attaches on `chrome.tabs.onCreated`, reads Chrome's `openerId`, and gives the popup to the opener's owner | None | Nothing. **Limit:** the attach comes just after the tab exists; a popup case hung in 2 of 21 runs (section 10) | P, K |
 | 12 | Close: `page.close` | `Target.closeTarget` | 1 | `chrome.tabs.remove` | None | Nothing | P |
-| 13 | MCP `browser_close` | none | 1 | The MCP sends no CDP; its tabs stay open (measured). The daemon closes a session's scope tabs when the session ends (stage 4) | None | Nothing | MCP, C |
+| 13 | MCP `browser_close` | no `Target.closeTarget` | 1 | The MCP closes no tab; its tabs stay open (measured). The daemon closes a session's scope tabs when the session ends (stage 4) | None | Nothing | MCP, C |
 | 14 | Cross-site frames: `frameLocator`, frame clicks | page `Target.setAutoAttach`, flat child sessions | 1 | Sent | None | Nothing | P, M |
 | 15 | Workers: `page.on("worker")`, `worker.evaluate` | flat child sessions | 1 | Sent | None | Nothing | P |
 | 16 | Dialogs: `page.on("dialog")`, MCP `browser_handle_dialog` | `Page.handleJavaScriptDialog` | 1 | Sent; a dialog goes to the tab's owner only | None | Nothing | P, K |
@@ -284,7 +290,7 @@ relay's code, not run by a client.
 | 21 | Downloads: `waitForEvent("download")`, `download.path()`, `cancel()` | `Browser.setDownloadBehavior`, `Browser.download*`, `cancelDownload` | 1 | Section 4.5 | None for one download (measured); a second automatic download would ask, unless the model's content setting allows it (not measured); a dangerous file waits for a person | Nothing | P, M (refused to the extension), C |
 | 22 | Cookies: `context.cookies`, `addCookies`, `clearCookies` | `Storage.*`, `Network` cookie calls | 1 | `chrome.cookies`, allowlisted domains only; who may read and remove the sent sign-ins is Q4 | None | Nothing | P (an off-list cookie refused), M |
 | 23 | Storage state: `context.storageState()` | rows 6 and 22, and one page per frame origin | 1, with a limit | Playwright opens a page for each origin that a frame of the context showed; DNR blocks an off-list frame origin, so the call fails after such a page (measured). In a context that showed no off-list frame it works (measured) | None | Nothing | P, K |
-| 24 | Permissions: `grantPermissions`, `clearPermissions` | `Browser.grantPermissions` | 1 for geolocation, notifications, camera, microphone and the clipboard; 2 for MIDI, sensors, background sync, payment handler, storage access, local fonts, wake lock and local network access | `chrome.contentSettings`, per connection | None | The permission state, by intent | P (geolocation "granted", then "prompt"; clipboard with no origin "granted"; MIDI refused), M |
+| 24 | Permissions: `grantPermissions`, `clearPermissions` | `Browser.grantPermissions` | 1 for geolocation, notifications, camera, microphone and the clipboard; 2 for MIDI, sensors, background sync, payment handler, storage access, local fonts, wake lock and local network access | `chrome.contentSettings` (profile-wide; section 4.3) | None | The permission state, by intent | P for geolocation ("granted", then "prompt"), the clipboard with no origin ("granted") and MIDI (refused); C for notifications, camera and microphone; M |
 | 25 | Init scripts and bindings: `addInitScript`, `exposeFunction`, `exposeBinding` | `Page.addScriptToEvaluateOnNewDocument`, `Runtime.addBinding` | 1 | Sent | None | **Yes**: Playwright puts `__playwright__binding__` and `__playwright__binding__controller__` on the page's `window` (and the script's own globals). Playwright's own mark, on any transport (Q3) | P, S |
 | 26 | Emulation: geolocation, timezone, locale, media, offline, extra headers | `Emulation.*`, `Network.emulateNetworkConditions`, `Network.setExtraHTTPHeaders` | 1 | Sent | None | The emulated values, by intent | M |
 | 27 | Tracing: `context.tracing` with screenshots and snapshots | `Page.startScreencast`, `Runtime` | 1 | Sent | None | **Yes**, while it records snapshots: a `__playwright_snapshot_streamer_<id>` global (Q3) | P, S |
@@ -343,6 +349,9 @@ first page is the baseline: a tab with no debugger and no client.
   `console.debug` of a 2 MB string takes about 2.5 times as long (interim finding 5). Playwright
   enables the Runtime domain on every page, so a site that times this can see a Playwright client.
   agent-browser's own commands never enable it. The design does not hide it.
+- ab-v16.2 also measured that agent-browser's `--disable-background-timer-throttling` flag lets a
+  hidden tab run 50 ms timers (plain Chrome: 1000 ms). The agent-mode unit does not pass that flag
+  (stage 1's flags), and agent mode keeps it so.
 - **Fixed in the model:** the navigation header (row 4: a DNR `modifyHeaders` rule with
   `initiatorDomains` = the agent package's own ID sets `Sec-Fetch-Site: none` for the navigations
   the extension starts and for no other navigation; measured: `Page.navigate` then sends `none` +
@@ -466,7 +475,7 @@ approves this design.
 
 **A measured limit: popups.** The model attaches a popup just after Chrome creates it, not before its
 first script as Chrome's own auto-attach (`waitForDebuggerOnStart`) does. Playwright's init script
-still ran in the popup in every passing run. But in 2 of 18 runs a popup case hung: the popup's
+still ran in the popup in every passing run. But in 2 of 21 runs a popup case hung: the popup's
 `waitForLoadState` or `evaluate` got no answer. The cause is not found; the suspected cause is a race
 between the popup's load and Playwright's setup of its session. The build (stage 2 and 3) makes the
 extension attach a new tab of an attached scope at once in its `tabs.onCreated` handler, holds the
@@ -511,7 +520,7 @@ the tab and tells the client, and runs the popup cases many times in its live te
 | Stage | Repo | What | Depends on |
 | --- | --- | --- | --- |
 | 1. Contracts | chrome-extension (`docs/protocol.md`) | C10: the bridge (the fixed call list, the events, the deadline, parts). The C4 change: a second channel for the bridge, never queued behind an import, parts that name their channel. C11: the endpoint path, the scope, one connection per tab, the refusal texts. The agentwatch side reads the same file | — |
-| 2. Two packages | chrome-extension | `sender/` becomes `operator/`, `receiver/` becomes `agent/`; the bridge in `agent/`; the DNR navigation-header rule and the frame rule; the attach of a new tab in `tabs.onCreated` and the hold of its first request; manifest tests (the operator package has no control permission); bridge unit tests with the fake chrome; the native host's parent check (with stage 4) | 1 |
+| 2. Two packages | chrome-extension | `sender/` becomes `operator/`, `receiver/` becomes `agent/`; the bridge in `agent/`; the DNR navigation-header rule and the frame rule; the attach of a new tab in `tabs.onCreated` (not of the restore tab or an operator tab; one module owns every attach) and the hold of its first request; manifest tests (the operator package has no control permission); bridge unit tests with the fake chrome; the native host's parent check (with stage 4) | 1 |
 | 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie (per Q4), permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install, popups many times; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
 | 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; the way the agent package gets in (section 10, after ab-v16.2); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
 | 5. The Mac | agentwatch, chrome-extension | Mac checks 1 and 4 with the operator; the manual-load guide; the Mac launch path | 4 |
@@ -568,11 +577,14 @@ allowlisted site, the httpOnly sign-in cookies too, and `clearCookies()` removes
 session. O9 kept the allowlist because of the risk to the signed-in profile.
 - a. Full access for allowlisted domains: Playwright compatible. Any session reads every sign-in
   value and can remove the sign-ins.
-- **b. Hide the sign-in values (recommended).** The cookie calls list every allowlisted cookie, but a
-  value appears only for cookies that agents set themselves; `clearCookies()` removes only those. The
-  model also blanks `Cookie` and `Set-Cookie` values in the network events that it passes on. Sites
-  work as before, because Chrome itself sends the cookies; only a program that copies cookies out (a
-  `storageState` file) loses the sign-in values.
+- **b. Hide the httpOnly sign-in values (recommended).** The cookie calls list every allowlisted
+  cookie, but give the value of an httpOnly cookie only when an agent set it; `clearCookies()` removes
+  only cookies that agents set. The model also blanks `Cookie` and `Set-Cookie` values in the network
+  events and the `Fetch` interception that it passes on. Sites work as before, because Chrome itself
+  sends the cookies. A page script, also one that an agent runs with `evaluate`, still reads the
+  cookies that are not httpOnly (`document.cookie`) and the page storage, as any page script can;
+  most sign-ins sit in httpOnly cookies. A program that copies cookies out (a `storageState` file)
+  loses the httpOnly sign-in values.
 - c. No cookie calls at all through the endpoint. The browser still uses its cookies; programs that
   read or set cookies fail.
 - With any answer the limit of section 8 stays: a hostile process of the same OS user can read the
@@ -600,8 +612,8 @@ session. O9 kept the allowlist because of the risk to the signed-in profile.
 The probe: [2026-11-03-two-modes-probe/README.md](2026-11-03-two-modes-probe/README.md), its source
 (`ext/`, `relay.mjs`, `site.mjs`, `matrix.mjs`, `pw-probe.mjs`, `mcp-probe.mjs`, `concurrency.mjs`,
 `run.sh`) and its results ([results/summary.md](2026-11-03-two-modes-probe/results/summary.md),
-run 18). It ran in a private Xvfb with an auth file, a throwaway HOME and profile, and `*.localhost`
+run 19, and its control run). It ran in a private Xvfb with an auth file, a throwaway HOME and profile, and `*.localhost`
 sites on 127.0.0.1 only. The probe joins the extension and the relay with a loopback WebSocket; the
-design uses the native link. Rows marked D or C in section 5 are not measured by a client. A fresh
-reviewer read the first draft and the probe; this version takes its findings (the PR description
-lists them). The interim findings of ab-v16.2 are cited as such; its final report decides section 9.
+design uses the native link. Rows marked D or C in section 5 are not measured by a client. Two fresh
+reviewers read the draft and the probe; this version takes their findings (the PR description lists
+them). The interim findings of ab-v16.2 are cited as such; its final report decides section 9.

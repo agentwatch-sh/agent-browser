@@ -1,10 +1,10 @@
 {
-  "endpoint": "ws+unix:///run/user/1001/ab-v16-probe-1586017.sock:/devtools/browser/<scope>",
+  "endpoint": "ws+unix:///run/user/1001/ab-v16-probe-1794694.sock:/devtools/browser/<scope>",
   "results": [
     {
       "case": "connectOverCDP",
       "ok": true,
-      "ms": 43,
+      "ms": 44,
       "detail": {
         "version": "156.0.8078.73",
         "contexts": 1
@@ -13,7 +13,7 @@
     {
       "case": "context.newPage (Target.createTarget)",
       "ok": true,
-      "ms": 68,
+      "ms": 59,
       "detail": {
         "pages": 1
       }
@@ -21,7 +21,7 @@
     {
       "case": "page.goto allowlisted page",
       "ok": true,
-      "ms": 109,
+      "ms": 106,
       "detail": {
         "status": 200,
         "title": "probe a"
@@ -30,31 +30,31 @@
     {
       "case": "response.body()",
       "ok": true,
-      "ms": 126,
+      "ms": 147,
       "detail": true
     },
     {
       "case": "navigator.webdriver (page.evaluate)",
       "ok": true,
-      "ms": 10,
+      "ms": 11,
       "detail": false
     },
     {
       "case": "locator.fill + click + read text",
       "ok": true,
-      "ms": 164,
+      "ms": 150,
       "detail": "Hello, Ada"
     },
     {
       "case": "keyboard.type + press",
       "ok": true,
-      "ms": 119,
+      "ms": 104,
       "detail": "Grace"
     },
     {
       "case": "mouse press pressure (the relay sets force 0.5)",
       "ok": true,
-      "ms": 52,
+      "ms": 63,
       "detail": [
         "mouse:0.5"
       ]
@@ -62,61 +62,61 @@
     {
       "case": "hover",
       "ok": true,
-      "ms": 51,
+      "ms": 63,
       "detail": "hovered"
     },
     {
       "case": "selectOption",
       "ok": true,
-      "ms": 21,
+      "ms": 20,
       "detail": "y"
     },
     {
       "case": "ariaSnapshot (the MCP's page read)",
       "ok": true,
-      "ms": 27,
+      "ms": 29,
       "detail": true
     },
     {
       "case": "screenshot",
       "ok": true,
-      "ms": 83,
+      "ms": 82,
       "detail": 23668
     },
     {
       "case": "cross-site frame: click and read (c.localhost)",
       "ok": true,
-      "ms": 177,
+      "ms": 179,
       "detail": "frame clicked"
     },
     {
       "case": "dialog (confirm) accept",
       "ok": true,
-      "ms": 67,
+      "ms": 77,
       "detail": "true"
     },
     {
       "case": "page.route (network interception, fulfill)",
       "ok": true,
-      "ms": 87,
+      "ms": 90,
       "detail": "mocked"
     },
     {
       "case": "setInputFiles (file path)",
       "ok": true,
-      "ms": 24,
+      "ms": 27,
       "detail": "upload.txt:18"
     },
     {
       "case": "setInputFiles (buffer)",
       "ok": true,
-      "ms": 20,
+      "ms": 21,
       "detail": "buf.txt:13"
     },
     {
       "case": "download",
       "ok": true,
-      "ms": 72,
+      "ms": 83,
       "detail": {
         "name": "probe.txt",
         "body": "probe download body"
@@ -125,7 +125,7 @@
     {
       "case": "popup (window.open)",
       "ok": true,
-      "ms": 177,
+      "ms": 176,
       "detail": {
         "url": "http://a.localhost:8781/popup?via=open",
         "text": "Popup open"
@@ -134,7 +134,7 @@
     {
       "case": "popup (target=_blank link)",
       "ok": true,
-      "ms": 140,
+      "ms": 141,
       "detail": {
         "url": "http://a.localhost:8781/popup?via=blank"
       }
@@ -142,31 +142,31 @@
     {
       "case": "a dedicated worker (page.on worker)",
       "ok": true,
-      "ms": 151,
+      "ms": 153,
       "detail": 42
     },
     {
       "case": "context.addInitScript, then a new page",
       "ok": true,
-      "ms": 142,
+      "ms": 155,
       "detail": "number"
     },
     {
       "case": "init script in a popup (late attach)",
       "ok": true,
-      "ms": 130,
+      "ms": 120,
       "detail": "number"
     },
     {
       "case": "page.exposeFunction",
       "ok": true,
-      "ms": 134,
+      "ms": 130,
       "detail": 42
     },
     {
       "case": "context.cookies + addCookies (allowlisted)",
       "ok": true,
-      "ms": 12,
+      "ms": 9,
       "detail": [
         "pw"
       ]
@@ -182,13 +182,13 @@
       "case": "context.storageState() after a page with an off-list frame",
       "expect": "refused",
       "ok": true,
-      "ms": 109,
+      "ms": 121,
       "error": "browserContext.storageState: net::ERR_BLOCKED_BY_CLIENT at http://c.localhost:8781"
     },
     {
       "case": "setViewportSize (Emulation)",
       "ok": true,
-      "ms": 14,
+      "ms": 17,
       "detail": [
         900,
         700
@@ -198,13 +198,13 @@
       "case": "page.goto off-list host (DNR)",
       "expect": "refused",
       "ok": true,
-      "ms": 108,
+      "ms": 89,
       "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/"
     },
     {
       "case": "after a blocked goto, the same page goes on",
       "ok": true,
-      "ms": 237,
+      "ms": 224,
       "detail": {
         "url": "http://a.localhost:8781/m",
         "title": "probe m"
@@ -213,7 +213,7 @@
     {
       "case": "an off-list link click stays blocked (DNR)",
       "ok": true,
-      "ms": 1355,
+      "ms": 1336,
       "detail": {
         "url": "chrome-error://chromewebdata/",
         "title": "b.localhost"
@@ -222,7 +222,7 @@
     {
       "case": "an off-list popup is blocked (DNR)",
       "ok": true,
-      "ms": 1230,
+      "ms": 1228,
       "detail": {
         "url": "chrome-error://chromewebdata/",
         "title": "b.localhost"
@@ -232,13 +232,13 @@
       "case": "page.route fulfill of an off-list document (does Fetch come before DNR?)",
       "expect": "refused",
       "ok": true,
-      "ms": 105,
+      "ms": 123,
       "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/x"
     },
     {
       "case": "an off-list frame in a page that is not on the list (setContent)",
       "ok": true,
-      "ms": 1131,
+      "ms": 1146,
       "detail": {
         "frameLoaded": false
       }
@@ -246,7 +246,7 @@
     {
       "case": "Page.navigate to a data: URL with an off-list frame",
       "ok": true,
-      "ms": 1083,
+      "ms": 1087,
       "detail": {
         "url": "about:blank",
         "frameLoaded": false
@@ -255,13 +255,13 @@
     {
       "case": "context.grantPermissions geolocation, one origin (chrome.contentSettings)",
       "ok": true,
-      "ms": 134,
+      "ms": 137,
       "detail": "granted"
     },
     {
       "case": "context.grantPermissions clipboard-read, no origin (the allowlisted domains)",
       "ok": true,
-      "ms": 158,
+      "ms": 138,
       "detail": "granted"
     },
     {
@@ -274,32 +274,32 @@
     {
       "case": "context.clearPermissions",
       "ok": true,
-      "ms": 201,
+      "ms": 142,
       "detail": "prompt"
     },
     {
       "case": "CDPSession on a page (newCDPSession)",
       "ok": true,
-      "ms": 15,
+      "ms": 17,
       "detail": 42
     },
     {
       "case": "context.tracing start/stop",
       "ok": true,
-      "ms": 160,
-      "detail": 34172
+      "ms": 151,
+      "detail": 34076
     },
     {
       "case": "page.pdf",
       "ok": true,
-      "ms": 41,
+      "ms": 29,
       "detail": 5527
     },
     {
       "case": "browser.newContext (an isolated context)",
       "expect": "refused",
       "ok": true,
-      "ms": 4,
+      "ms": 3,
       "error": "browser.newContext: Protocol error (Target.createBrowserContext): Not available in the agent browser: a new browser context (Target.createBrowserContext). Use the default context: browser.contexts()[0]."
     },
     {
@@ -317,19 +317,19 @@
     {
       "case": "site report (trusted click on #report)",
       "ok": true,
-      "ms": 206,
+      "ms": 188,
       "detail": "sent"
     },
     {
       "case": "round trip: 20 x page.evaluate",
       "ok": true,
-      "ms": 54,
+      "ms": 61,
       "detail": 3
     },
     {
       "case": "page.close",
       "ok": true,
-      "ms": 36,
+      "ms": 31,
       "detail": {
         "pages": 0
       }
@@ -337,7 +337,7 @@
     {
       "case": "browser.close (closes Playwright's connection)",
       "ok": true,
-      "ms": 15,
+      "ms": 9,
       "detail": "closed"
     }
   ]

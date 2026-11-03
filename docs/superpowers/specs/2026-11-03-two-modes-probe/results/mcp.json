@@ -3,7 +3,7 @@
   "results": [
     {
       "tool": "browser_navigate",
-      "ms": 361,
+      "ms": 356,
       "isError": false,
       "ok": true,
       "saw": "page title: probe a"
@@ -17,7 +17,7 @@
     },
     {
       "tool": "browser_type",
-      "ms": 93,
+      "ms": 101,
       "isError": false,
       "ok": true,
       "saw": "ref e4"
@@ -31,35 +31,47 @@
     },
     {
       "tool": "browser_snapshot",
-      "ms": 30,
+      "ms": 32,
       "isError": false,
       "ok": true,
       "saw": "status shows: Hello, MCP"
     },
     {
       "tool": "browser_click",
-      "ms": 1106,
+      "ms": 1101,
       "isError": false,
       "ok": true,
       "saw": "report after browser_type (fill)"
     },
     {
+      "tool": "(site) key events after browser_type",
+      "ms": 0,
+      "ok": true,
+      "saw": "keydown 0, input 1"
+    },
+    {
       "tool": "browser_type",
-      "ms": 589,
+      "ms": 592,
       "isError": false,
       "ok": true,
       "saw": "browser_type slowly"
     },
     {
       "tool": "browser_click",
-      "ms": 1098,
+      "ms": 1093,
       "isError": false,
       "ok": true,
       "saw": "report after browser_type slowly"
     },
     {
+      "tool": "(site) key events after browser_type slowly",
+      "ms": 0,
+      "ok": true,
+      "saw": "keydown 4, input 5"
+    },
+    {
       "tool": "browser_take_screenshot",
-      "ms": 101,
+      "ms": 96,
       "isError": false,
       "ok": true,
       "saw": "text,image"
@@ -73,14 +85,14 @@
     },
     {
       "tool": "browser_tabs",
-      "ms": 70,
+      "ms": 71,
       "isError": false,
       "ok": true,
       "saw": "### Result | - 0: [probe a](http://a.localhost:8781/)"
     },
     {
       "tool": "browser_navigate",
-      "ms": 21,
+      "ms": 20,
       "isError": true,
       "ok": true,
       "expect": "refused",
@@ -91,7 +103,7 @@
       "ms": 43,
       "isError": false,
       "ok": true,
-      "saw": "### Result\nNo open tabs. Navigate to a URL to create one.\n### Ran Playwright code\n```js\nawait page.close()\n```"
+      "saw": "### Result\nNo open tabs. Navigate to a URL to create one.\n### Ran Playwright code\n```js\nawait page.close()\n```\n### Open "
     }
   ]
 }

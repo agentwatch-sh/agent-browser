@@ -15,8 +15,8 @@ production code. Nothing in `src/` or `test/` uses it, and `npm test` does not r
 | `site.mjs` | Local test sites on 127.0.0.1:8781: `a.localhost` (on the allowlist), `b.localhost` (off the list), `c.localhost` (a cross-site frame). Each page reports what its own script can see (`navigator.webdriver`, size, focus, event kinds, pointer pressure, key and input counts, globals); the server logs the headers of each request. |
 | `matrix.mjs` | Sends 93 CDP commands to one tab through `chrome.debugger` and records which ones Chrome refuses; then the navigation-header variants. |
 | `pw-probe.mjs` | 49 Playwright cases through `chromium.connectOverCDP`, with no change to Playwright. Each case checks its value; six cases check a refusal that the design wants. |
-| `mcp-probe.mjs` | The Playwright MCP over stdio, with the endpoint in `PLAYWRIGHT_MCP_CDP_ENDPOINT`. 13 tool calls. |
-| `concurrency.mjs` | 13 cases with several connections at the same time: two in one scope, one in another scope, and a raw CDP client. |
+| `mcp-probe.mjs` | The Playwright MCP over stdio, with the endpoint in `PLAYWRIGHT_MCP_CDP_ENDPOINT`. 13 tool calls, each with a value check, and two checks of the key events that the site saw. |
+| `concurrency.mjs` | 14 cases on several connections and scopes: two connections in one scope at the same time, one in another scope, and a raw CDP client. |
 | `run.sh` | Starts everything in a private display and a throwaway profile, runs the five probes, stops everything. `NO_FRAME_GUARD=1` is the control run without rule 3. |
 | `summarize.mjs` | Writes `results/summary.md` and the compact result files. |
 
@@ -47,7 +47,7 @@ MCP's log stay in `$RUN`. Only `*.localhost` sites on 127.0.0.1 are used.
 
 ## Results
 
-The run of record is run 18 on taylor, 2026-11-03: Chromium 156.0.8078.73 (Debian 13), Playwright
+The run of record is run 19 on taylor, 2026-11-03: Chromium 156.0.8078.73 (Debian 13), Playwright
 1.64.1, Playwright MCP 0.0.84 (it brings Playwright 1.65.0-alpha-2026-10-30). Read
 [results/summary.md](results/summary.md).
 
@@ -55,19 +55,24 @@ The run of record is run 18 on taylor, 2026-11-03: Chromium 156.0.8078.73 (Debia
   are refusals that the design wants: an off-list cookie, an off-list page, an off-list document
   through `page.route`, a permission outside `chrome.contentSettings`, `browser.newContext`, and
   `storageState()` after a page with an off-list frame.
-- The Playwright MCP: 13 of 13 tool calls as expected; the off-list navigation is refused.
-- Several clients at the same time: 13 of 13.
+- The Playwright MCP (over the Unix socket): 15 of 15 (13 tool calls and two site checks); the
+  off-list navigation is refused; `browser_type` gives no key events, `browser_type` with `slowly`
+  gives four.
+- Several connections and scopes (over the Unix socket): 14 of 14.
 - The off-list host `b.localhost` got no request in any run.
-- The control run (run 17, `NO_FRAME_GUARD=1`) loads the off-list frame in a page that is not on
-  the list (`results/control-no-frame-guard-pw-tcp.json`, `frameLoaded: true`); with rule 3 the frame
-  does not load.
+- The control run (run 19 with `NO_FRAME_GUARD=1`, the same scripts) loads the off-list frame in a
+  page that is not on the list (`results/control-no-frame-guard-pw-tcp.json`, `frameLoaded: true`);
+  with rule 3 the frame does not load.
 
-The runs: runs 1 to 5, 12 and 13 failed on probe bugs that later runs fixed (they are not results).
-In the 18 runs from run 6 on (run 8, run 15 and run 16 ran several times), a popup case hung twice
-(run 6 and the third run of run 15): a popup's `waitForLoadState` or `evaluate` got no answer. The
-cause is not found; design section 10 names the suspected race and the fix. The probe has a time
-limit per case (20 s) and per bridge call (15 s), so a hang shows as a failed row. Only the run of
-record keeps its files.
+The runs: runs 1 to 5 failed on probe bugs that later runs fixed (they are not results). From run 6
+to run 19, 21 runs ran the popup cases: each repeat counts (run 8 and run 15 three times, run 16
+twice) and so do the two control runs (17 and 19). Runs 12 and 13 failed on probe bugs in other
+cases. A popup case hung twice, in run 6 and in the third run of 15: a popup's `waitForLoadState` or
+`evaluate` got no answer. The cause is not found; design section 10 names the suspected race and the
+fix. Each case of `pw-probe.mjs` and `concurrency.mjs` and each MCP call has a 20 s limit, and each
+bridge call 15 s, so a hang shows as a failed row; a case that timed out can still run while the
+next one starts. Only run 19 and its control run keep their files; the other runs' counts come from
+their console output, which is not kept.
 
 Files kept in git: `summary.md`, `pw-tcp.json`, `pw-unix.json`, `mcp.json`, `concurrency.json`,
 `matrix.json`, `control-no-frame-guard-pw-tcp.json`, `site-log.compact.jsonl` (each page report

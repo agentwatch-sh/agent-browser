@@ -3,13 +3,13 @@
     {
       "case": "a second connection of the scope gets no page for a tab that the first holds",
       "ok": true,
-      "ms": 1,
+      "ms": 0,
       "detail": 0
     },
     {
       "case": "it sees the held tab in Target.getTargets, marked attached",
       "ok": true,
-      "ms": 4,
+      "ms": 6,
       "detail": {
         "attached": true
       }
@@ -29,7 +29,7 @@
     {
       "case": "a popup belongs to the connection that holds its opener",
       "ok": true,
-      "ms": 199,
+      "ms": 194,
       "detail": {
         "inA": true,
         "pagesInB": 1
@@ -38,8 +38,14 @@
     {
       "case": "a dialog in A's tab goes to A only",
       "ok": true,
-      "ms": 1065,
+      "ms": 2089,
       "detail": "true"
+    },
+    {
+      "case": "B's interception is on before B leaves (the control)",
+      "ok": true,
+      "ms": 166,
+      "detail": "from B"
     },
     {
       "case": "the next connection of the scope takes the tab that B left",
@@ -52,19 +58,19 @@
     {
       "case": "B's interception did not stay behind in that tab",
       "ok": true,
-      "ms": 167,
+      "ms": 138,
       "detail": "real"
     },
     {
       "case": "another scope gets no page of scope s1",
       "ok": true,
-      "ms": 1,
+      "ms": 0,
       "detail": 0
     },
     {
       "case": "another scope does not see s1's tab in Target.getTargets",
       "ok": true,
-      "ms": 1,
+      "ms": 2,
       "detail": false
     },
     {
@@ -76,7 +82,7 @@
     {
       "case": "context.storageState() in a context that showed no off-list frame",
       "ok": true,
-      "ms": 176,
+      "ms": 173,
       "detail": {
         "origins": [
           "http://a.localhost:8781"
@@ -89,7 +95,7 @@
     {
       "case": "a raw client's Browser.close ends only its own connection",
       "ok": true,
-      "ms": 61,
+      "ms": 63,
       "detail": {
         "code": 1000,
         "reason": "Browser.close ends this connection; the agent browser keeps running",

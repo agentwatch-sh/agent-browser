@@ -1,19 +1,19 @@
 {
-  "started": "2026-11-03T17:04:37.220Z",
+  "started": "2026-11-03T17:25:28.557Z",
   "info": {
     "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
     "fullVersion": "156.0.8078.73",
-    "id": "odcapfbpmajhkhklgbnpmhmpgdlmloae"
+    "id": "fmpaaapppknaenkdlocmoicjjnfohlkf"
   },
   "page": [
     {
       "label": "Target.getTargetInfo",
       "method": "Target.getTargetInfo",
       "ok": true,
-      "ms": 0.8,
+      "ms": 0.6,
       "note": [
         "page",
-        "649820B171FA5FB9EC2A1262ECAB575C"
+        "F499F6B0B57A4F5A13C75C90C18D365B"
       ]
     },
     {
@@ -74,7 +74,7 @@
       "label": "Target.createTarget",
       "method": "Target.createTarget",
       "ok": true,
-      "ms": 21.1
+      "ms": 23.3
     },
     {
       "label": "Target.attachToTarget",
@@ -110,13 +110,13 @@
       "label": "Target.setAutoAttach (page session)",
       "method": "Target.setAutoAttach",
       "ok": true,
-      "ms": 1.3
+      "ms": 1.7
     },
     {
       "label": "Storage.getCookies",
       "method": "Storage.getCookies",
       "ok": true,
-      "ms": 0.7,
+      "ms": 0.9,
       "note": [
         1,
         "c.localhost",
@@ -127,25 +127,25 @@
       "label": "Storage.setCookies",
       "method": "Storage.setCookies",
       "ok": true,
-      "ms": 0.8
+      "ms": 1.1
     },
     {
       "label": "Storage.getUsageAndQuota",
       "method": "Storage.getUsageAndQuota",
       "ok": true,
-      "ms": 0.8
+      "ms": 1.1
     },
     {
       "label": "Network.enable",
       "method": "Network.enable",
       "ok": true,
-      "ms": 0.9
+      "ms": 1
     },
     {
       "label": "Network.getAllCookies",
       "method": "Network.getAllCookies",
       "ok": true,
-      "ms": 2.9
+      "ms": 0.8
     },
     {
       "label": "Network.getCookies",
@@ -157,19 +157,19 @@
       "label": "Network.setCookie",
       "method": "Network.setCookie",
       "ok": true,
-      "ms": 1
+      "ms": 0.9
     },
     {
       "label": "Network.setExtraHTTPHeaders",
       "method": "Network.setExtraHTTPHeaders",
       "ok": true,
-      "ms": 0.9
+      "ms": 0.8
     },
     {
       "label": "Network.emulateNetworkConditions",
       "method": "Network.emulateNetworkConditions",
       "ok": true,
-      "ms": 1
+      "ms": 0.8
     },
     {
       "label": "Network.setBypassServiceWorker",
@@ -181,55 +181,55 @@
       "label": "Network.setCacheDisabled",
       "method": "Network.setCacheDisabled",
       "ok": true,
-      "ms": 0.8
+      "ms": 0.7
     },
     {
       "label": "Page.enable",
       "method": "Page.enable",
       "ok": true,
-      "ms": 0.9
+      "ms": 0.8
     },
     {
       "label": "Page.getFrameTree",
       "method": "Page.getFrameTree",
       "ok": true,
-      "ms": 0.9
+      "ms": 3.9
     },
     {
       "label": "Page.setLifecycleEventsEnabled",
       "method": "Page.setLifecycleEventsEnabled",
       "ok": true,
-      "ms": 1.5
+      "ms": 5.5
     },
     {
       "label": "Page.addScriptToEvaluateOnNewDocument",
       "method": "Page.addScriptToEvaluateOnNewDocument",
       "ok": true,
-      "ms": 0.9
+      "ms": 2.2
     },
     {
       "label": "Page.createIsolatedWorld",
       "method": "Page.createIsolatedWorld",
       "ok": true,
-      "ms": 3
+      "ms": 3.3
     },
     {
       "label": "Page.setBypassCSP",
       "method": "Page.setBypassCSP",
       "ok": true,
-      "ms": 2.7
+      "ms": 0.9
     },
     {
       "label": "Page.setInterceptFileChooserDialog",
       "method": "Page.setInterceptFileChooserDialog",
       "ok": true,
-      "ms": 1.4
+      "ms": 6.5
     },
     {
       "label": "Page.setInterceptFileChooserDialog off",
       "method": "Page.setInterceptFileChooserDialog",
       "ok": true,
-      "ms": 1.1
+      "ms": 1
     },
     {
       "label": "Page.setDownloadBehavior",
@@ -241,121 +241,121 @@
       "label": "Page.getLayoutMetrics",
       "method": "Page.getLayoutMetrics",
       "ok": true,
-      "ms": 1.2
+      "ms": 1.4
     },
     {
       "label": "Page.captureScreenshot",
       "method": "Page.captureScreenshot",
       "ok": true,
-      "ms": 63.3
+      "ms": 63.9
     },
     {
       "label": "Page.printToPDF",
       "method": "Page.printToPDF",
       "ok": true,
-      "ms": 41.2
+      "ms": 40.6
     },
     {
       "label": "Page.startScreencast",
       "method": "Page.startScreencast",
       "ok": true,
-      "ms": 1.8
+      "ms": 0.9
     },
     {
       "label": "Page.stopScreencast",
       "method": "Page.stopScreencast",
       "ok": true,
-      "ms": 0.4
+      "ms": 0.5
     },
     {
       "label": "Page.getNavigationHistory",
       "method": "Page.getNavigationHistory",
       "ok": true,
-      "ms": 0.4
+      "ms": 0.3
     },
     {
       "label": "Page.bringToFront",
       "method": "Page.bringToFront",
       "ok": true,
-      "ms": 15.8
+      "ms": 14.7
     },
     {
       "label": "Runtime.enable",
       "method": "Runtime.enable",
       "ok": true,
-      "ms": 13.6
+      "ms": 11.4
     },
     {
       "label": "Runtime.evaluate",
       "method": "Runtime.evaluate",
       "ok": true,
-      "ms": 4
+      "ms": 1.7
     },
     {
       "label": "Runtime.addBinding",
       "method": "Runtime.addBinding",
       "ok": true,
-      "ms": 1.2
+      "ms": 0.8
     },
     {
       "label": "Runtime.runIfWaitingForDebugger",
       "method": "Runtime.runIfWaitingForDebugger",
       "ok": true,
-      "ms": 1
+      "ms": 0.7
     },
     {
       "label": "DOM.enable",
       "method": "DOM.enable",
       "ok": true,
-      "ms": 2.7
+      "ms": 0.8
     },
     {
       "label": "DOM.getDocument",
       "method": "DOM.getDocument",
       "ok": true,
-      "ms": 1.7
+      "ms": 1.2
     },
     {
       "label": "DOM.querySelector",
       "method": "DOM.querySelector",
       "ok": true,
-      "ms": 3.2
+      "ms": 2.9
     },
     {
       "label": "DOM.setFileInputFiles",
       "method": "DOM.setFileInputFiles",
       "ok": true,
-      "ms": 5.8
+      "ms": 7.4
     },
     {
       "label": "CSS.enable",
       "method": "CSS.enable",
       "ok": true,
-      "ms": 4.8
+      "ms": 3.9
     },
     {
       "label": "Overlay.enable",
       "method": "Overlay.enable",
       "ok": true,
-      "ms": 1.1
+      "ms": 0.8
     },
     {
       "label": "Accessibility.getFullAXTree",
       "method": "Accessibility.getFullAXTree",
       "ok": true,
-      "ms": 9.1
+      "ms": 9.4
     },
     {
       "label": "Input.dispatchMouseEvent",
       "method": "Input.dispatchMouseEvent",
       "ok": true,
-      "ms": 1.3
+      "ms": 1.7
     },
     {
       "label": "Input.dispatchKeyEvent",
       "method": "Input.dispatchKeyEvent",
       "ok": true,
-      "ms": 1.9
+      "ms": 1.5
     },
     {
       "label": "Input.dispatchKeyEvent keyUp",
@@ -373,19 +373,19 @@
       "label": "Emulation.setDeviceMetricsOverride",
       "method": "Emulation.setDeviceMetricsOverride",
       "ok": true,
-      "ms": 2.7
+      "ms": 2.6
     },
     {
       "label": "Emulation.clearDeviceMetricsOverride",
       "method": "Emulation.clearDeviceMetricsOverride",
       "ok": true,
-      "ms": 1.8
+      "ms": 1.1
     },
     {
       "label": "Emulation.setFocusEmulationEnabled",
       "method": "Emulation.setFocusEmulationEnabled",
       "ok": true,
-      "ms": 0.9
+      "ms": 0.8
     },
     {
       "label": "Emulation.setFocusEmulationEnabled off",
@@ -397,7 +397,7 @@
       "label": "Emulation.setGeolocationOverride",
       "method": "Emulation.setGeolocationOverride",
       "ok": true,
-      "ms": 0.5
+      "ms": 0.4
     },
     {
       "label": "Emulation.clearGeolocationOverride",
@@ -409,7 +409,7 @@
       "label": "Emulation.setTimezoneOverride",
       "method": "Emulation.setTimezoneOverride",
       "ok": true,
-      "ms": 0.9
+      "ms": 1.9
     },
     {
       "label": "Emulation.setTimezoneOverride reset",
@@ -421,19 +421,19 @@
       "label": "Emulation.setEmulatedMedia",
       "method": "Emulation.setEmulatedMedia",
       "ok": true,
-      "ms": 1.1
+      "ms": 2.1
     },
     {
       "label": "Fetch.enable",
       "method": "Fetch.enable",
       "ok": true,
-      "ms": 1.4
+      "ms": 1.8
     },
     {
       "label": "Fetch.disable",
       "method": "Fetch.disable",
       "ok": true,
-      "ms": 1.5
+      "ms": 2
     },
     {
       "label": "Security.setIgnoreCertificateErrors",
@@ -445,19 +445,19 @@
       "label": "Log.enable",
       "method": "Log.enable",
       "ok": true,
-      "ms": 0.8
+      "ms": 0.7
     },
     {
       "label": "Debugger.enable",
       "method": "Debugger.enable",
       "ok": true,
-      "ms": 3.1
+      "ms": 2.5
     },
     {
       "label": "Debugger.disable",
       "method": "Debugger.disable",
       "ok": true,
-      "ms": 1.1
+      "ms": 0.6
     },
     {
       "label": "Profiler.enable",
@@ -487,13 +487,13 @@
       "label": "Tracing.start",
       "method": "Tracing.start",
       "ok": true,
-      "ms": 15.8
+      "ms": 17.1
     },
     {
       "label": "Tracing.end",
       "method": "Tracing.end",
       "ok": true,
-      "ms": 0.6
+      "ms": 1.6
     },
     {
       "label": "SystemInfo.getInfo",
@@ -511,13 +511,13 @@
       "label": "Network.clearBrowserCookies",
       "method": "Network.clearBrowserCookies",
       "ok": true,
-      "ms": 1.8
+      "ms": 1.5
     },
     {
       "label": "Page.navigate off-list b.localhost",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 19.4,
+      "ms": 23.2,
       "note": [
         "net::ERR_BLOCKED_BY_CLIENT"
       ]
@@ -526,7 +526,7 @@
       "label": "history after the off-list navigate",
       "method": "Page.getNavigationHistory",
       "ok": true,
-      "ms": 1.1,
+      "ms": 1,
       "note": [
         1,
         [
@@ -551,37 +551,37 @@
       "label": "Page.navigate (plain), for the headers",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 17.5
+      "ms": 21.1
     },
     {
       "label": "Page.navigate transitionType typed",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 16.4
+      "ms": 19.3
     },
     {
       "label": "Page.navigate transitionType address_bar",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 18.9
+      "ms": 16.5
     },
     {
       "label": "Page.navigate transitionType auto_bookmark",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 17.5
+      "ms": 18.7
     },
     {
       "label": "location.href with a user gesture",
       "method": "Runtime.evaluate",
       "ok": true,
-      "ms": 3.6
+      "ms": 2.5
     },
     {
       "label": "Page.navigate file://",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 27.2,
+      "ms": 20,
       "note": [
         "net::ERR_BLOCKED_BY_CLIENT"
       ]
@@ -590,7 +590,7 @@
       "label": "what the file:// tab shows",
       "method": "Runtime.evaluate",
       "ok": true,
-      "ms": 2.2,
+      "ms": 2.4,
       "note": [
         "chrome-error: 115 characters"
       ]
@@ -607,7 +607,7 @@
       "label": "Page.navigate with a DNR rule that sets sec-fetch-site",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 22.5
+      "ms": 23.9
     }
   ],
   "dnrInitiator": [
@@ -615,7 +615,7 @@
       "label": "Page.navigate, rule limited to the extension's initiator",
       "method": "Page.navigate",
       "ok": true,
-      "ms": 15.9
+      "ms": 18.9
     },
     {
       "label": "a page script navigates, same rule",

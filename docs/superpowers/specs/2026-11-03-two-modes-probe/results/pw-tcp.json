@@ -4,7 +4,7 @@
     {
       "case": "connectOverCDP",
       "ok": true,
-      "ms": 48,
+      "ms": 46,
       "detail": {
         "version": "156.0.8078.73",
         "contexts": 1
@@ -13,7 +13,7 @@
     {
       "case": "context.newPage (Target.createTarget)",
       "ok": true,
-      "ms": 60,
+      "ms": 55,
       "detail": {
         "pages": 1
       }
@@ -30,31 +30,31 @@
     {
       "case": "response.body()",
       "ok": true,
-      "ms": 132,
+      "ms": 128,
       "detail": true
     },
     {
       "case": "navigator.webdriver (page.evaluate)",
       "ok": true,
-      "ms": 11,
+      "ms": 14,
       "detail": false
     },
     {
       "case": "locator.fill + click + read text",
       "ok": true,
-      "ms": 165,
+      "ms": 149,
       "detail": "Hello, Ada"
     },
     {
       "case": "keyboard.type + press",
       "ok": true,
-      "ms": 131,
+      "ms": 105,
       "detail": "Grace"
     },
     {
       "case": "mouse press pressure (the relay sets force 0.5)",
       "ok": true,
-      "ms": 47,
+      "ms": 64,
       "detail": [
         "mouse:0.5"
       ]
@@ -62,61 +62,61 @@
     {
       "case": "hover",
       "ok": true,
-      "ms": 49,
+      "ms": 58,
       "detail": "hovered"
     },
     {
       "case": "selectOption",
       "ok": true,
-      "ms": 25,
+      "ms": 23,
       "detail": "y"
     },
     {
       "case": "ariaSnapshot (the MCP's page read)",
       "ok": true,
-      "ms": 33,
+      "ms": 27,
       "detail": true
     },
     {
       "case": "screenshot",
       "ok": true,
-      "ms": 89,
+      "ms": 79,
       "detail": 23305
     },
     {
       "case": "cross-site frame: click and read (c.localhost)",
       "ok": true,
-      "ms": 200,
+      "ms": 182,
       "detail": "frame clicked"
     },
     {
       "case": "dialog (confirm) accept",
       "ok": true,
-      "ms": 79,
+      "ms": 66,
       "detail": "true"
     },
     {
       "case": "page.route (network interception, fulfill)",
       "ok": true,
-      "ms": 86,
+      "ms": 91,
       "detail": "mocked"
     },
     {
       "case": "setInputFiles (file path)",
       "ok": true,
-      "ms": 27,
+      "ms": 28,
       "detail": "upload.txt:18"
     },
     {
       "case": "setInputFiles (buffer)",
       "ok": true,
-      "ms": 20,
+      "ms": 24,
       "detail": "buf.txt:13"
     },
     {
       "case": "download",
       "ok": true,
-      "ms": 124,
+      "ms": 130,
       "detail": {
         "name": "probe.txt",
         "body": "probe download body"
@@ -125,7 +125,7 @@
     {
       "case": "popup (window.open)",
       "ok": true,
-      "ms": 193,
+      "ms": 198,
       "detail": {
         "url": "http://a.localhost:8781/popup?via=open",
         "text": "Popup open"
@@ -134,7 +134,7 @@
     {
       "case": "popup (target=_blank link)",
       "ok": true,
-      "ms": 169,
+      "ms": 154,
       "detail": {
         "url": "http://a.localhost:8781/popup?via=blank"
       }
@@ -142,31 +142,31 @@
     {
       "case": "a dedicated worker (page.on worker)",
       "ok": true,
-      "ms": 149,
+      "ms": 170,
       "detail": 42
     },
     {
       "case": "context.addInitScript, then a new page",
       "ok": true,
-      "ms": 146,
+      "ms": 180,
       "detail": "number"
     },
     {
       "case": "init script in a popup (late attach)",
       "ok": true,
-      "ms": 132,
+      "ms": 145,
       "detail": "number"
     },
     {
       "case": "page.exposeFunction",
       "ok": true,
-      "ms": 159,
+      "ms": 165,
       "detail": 42
     },
     {
       "case": "context.cookies + addCookies (allowlisted)",
       "ok": true,
-      "ms": 14,
+      "ms": 8,
       "detail": [
         "pw"
       ]
@@ -182,13 +182,13 @@
       "case": "context.storageState() after a page with an off-list frame",
       "expect": "refused",
       "ok": true,
-      "ms": 115,
+      "ms": 103,
       "error": "browserContext.storageState: net::ERR_BLOCKED_BY_CLIENT at http://c.localhost:8781"
     },
     {
       "case": "setViewportSize (Emulation)",
       "ok": true,
-      "ms": 16,
+      "ms": 20,
       "detail": [
         900,
         700
@@ -198,13 +198,13 @@
       "case": "page.goto off-list host (DNR)",
       "expect": "refused",
       "ok": true,
-      "ms": 90,
+      "ms": 107,
       "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/"
     },
     {
       "case": "after a blocked goto, the same page goes on",
       "ok": true,
-      "ms": 223,
+      "ms": 235,
       "detail": {
         "url": "http://a.localhost:8781/m",
         "title": "probe m"
@@ -213,7 +213,7 @@
     {
       "case": "an off-list link click stays blocked (DNR)",
       "ok": true,
-      "ms": 1367,
+      "ms": 1374,
       "detail": {
         "url": "chrome-error://chromewebdata/",
         "title": "b.localhost"
@@ -222,7 +222,7 @@
     {
       "case": "an off-list popup is blocked (DNR)",
       "ok": true,
-      "ms": 1226,
+      "ms": 1204,
       "detail": {
         "url": "chrome-error://chromewebdata/",
         "title": "b.localhost"
@@ -232,13 +232,13 @@
       "case": "page.route fulfill of an off-list document (does Fetch come before DNR?)",
       "expect": "refused",
       "ok": true,
-      "ms": 116,
+      "ms": 111,
       "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/x"
     },
     {
       "case": "an off-list frame in a page that is not on the list (setContent)",
       "ok": true,
-      "ms": 1166,
+      "ms": 1145,
       "detail": {
         "frameLoaded": false
       }
@@ -246,7 +246,7 @@
     {
       "case": "Page.navigate to a data: URL with an off-list frame",
       "ok": true,
-      "ms": 1120,
+      "ms": 1110,
       "detail": {
         "url": "about:blank",
         "frameLoaded": false
@@ -255,13 +255,13 @@
     {
       "case": "context.grantPermissions geolocation, one origin (chrome.contentSettings)",
       "ok": true,
-      "ms": 152,
+      "ms": 155,
       "detail": "granted"
     },
     {
       "case": "context.grantPermissions clipboard-read, no origin (the allowlisted domains)",
       "ok": true,
-      "ms": 148,
+      "ms": 135,
       "detail": "granted"
     },
     {
@@ -274,20 +274,20 @@
     {
       "case": "context.clearPermissions",
       "ok": true,
-      "ms": 151,
+      "ms": 148,
       "detail": "prompt"
     },
     {
       "case": "CDPSession on a page (newCDPSession)",
       "ok": true,
-      "ms": 18,
+      "ms": 17,
       "detail": 42
     },
     {
       "case": "context.tracing start/stop",
       "ok": true,
-      "ms": 161,
-      "detail": 34170
+      "ms": 169,
+      "detail": 34172
     },
     {
       "case": "page.pdf",
@@ -299,13 +299,13 @@
       "case": "browser.newContext (an isolated context)",
       "expect": "refused",
       "ok": true,
-      "ms": 3,
+      "ms": 2,
       "error": "browser.newContext: Protocol error (Target.createBrowserContext): Not available in the agent browser: a new browser context (Target.createBrowserContext). Use the default context: browser.contexts()[0]."
     },
     {
       "case": "browser.newBrowserCDPSession",
       "ok": true,
-      "ms": 2,
+      "ms": 3,
       "detail": "Chrome/156.0.8078.73"
     },
     {
@@ -317,19 +317,19 @@
     {
       "case": "site report (trusted click on #report)",
       "ok": true,
-      "ms": 208,
+      "ms": 205,
       "detail": "sent"
     },
     {
       "case": "round trip: 20 x page.evaluate",
       "ok": true,
-      "ms": 65,
+      "ms": 61,
       "detail": 3
     },
     {
       "case": "page.close",
       "ok": true,
-      "ms": 30,
+      "ms": 31,
       "detail": {
         "pages": 0
       }
