@@ -182,7 +182,7 @@ export class ProbeServer extends EventEmitter {
         secureContext: createSecureContext({ key: this.tls.key, cert: this.tls.cert }),
         ALPNProtocols: ["h2", "http/1.1"],
       });
-      tls.on("error", () => sock.destroy());
+      tls.on("error", (e) => { this.recordFor(run, "tls-error", { conn, error: String(e) }); sock.destroy(); });
       let plain = Buffer.alloc(0);
       let done = false;
       const tapped = replay(tls, Buffer.alloc(0), (b) => {

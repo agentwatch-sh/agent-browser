@@ -19,8 +19,9 @@
 // --serve starts only the probe site and records what a browser that a person opens there shows,
 // for example the operator's own Chrome (with its own field trials): http://probe.localhost:PORT/
 // and https://probe.localhost:PORT+1/ (a certificate warning; Advanced, then Proceed). It writes
-// DIR/LABEL/site.json and tls.json for compare.ts, and a LABEL column in DIR/summary.json that a full
-// run into the same folder keeps. Ctrl+C ends it, also while the browser keeps its connections open.
+// DIR/LABEL/site.json and tls.json for compare.ts, and a LABEL column in DIR/summary.json (with its
+// start and platform) that a full run into the same folder keeps. Ctrl+C ends it, also while the
+// browser keeps its connections open.
 // The page reads only properties of the browser and the machine, and sends them only to the probe
 // server on 127.0.0.1.
 //
@@ -59,7 +60,7 @@ import { createHash, createPublicKey, randomBytes, X509Certificate } from "node:
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AGENT_ARGS } from "../../../src/agent.ts";
-import { readPrefs, writeSummary } from "./files.ts";
+import { readPrefs, writeServeColumn, writeSummary } from "./files.ts";
 import { ProbeServer } from "./server.ts";
 
 const HERE = new URL(".", import.meta.url).pathname;
@@ -494,6 +495,7 @@ async function extensionsPage(server: ProbeServer, display: Display, label: stri
 
 /** Only the probe site, for a browser that a person opens there; then DIR/LABEL/site.json and tls.json. */
 async function serve(server: ProbeServer, label: string) {
+  const started = new Date().toISOString();
   const dir = join(OUT, label);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   server.run = `${label}/tls`;   // TLS connections carry the current run; HTTP pages carry their own
@@ -503,10 +505,7 @@ async function serve(server: ProbeServer, label: string) {
     const records = server.records.filter((r) => r.run === `${label}/${name}`);
     writeFileSync(join(dir, `${name}.json`), JSON.stringify({ bin: `(${label}: a browser that a person opened)`, marks: [], shots: {}, records }, null, 1));
   }
-  const file = join(OUT, "summary.json");
-  const summary = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { started: new Date().toISOString(), platform: process.platform, browsers: {}, blockedEgress: [] };
-  summary.browsers[label] = { bin: `(${label}: a browser that a person opened)`, version: "the browser's own", runs: {} };
-  writeFileSync(file, JSON.stringify(summary, null, 1));
+  writeServeColumn(join(OUT, "summary.json"), label, started);
   log(`${label}: ${server.records.filter((r) => r.run.startsWith(`${label}/`)).length} records`);
   await server.stop();
 }

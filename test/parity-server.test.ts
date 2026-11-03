@@ -17,7 +17,9 @@ import { parseClientHello } from "./live/parity/fingerprint.ts";
 import { ProbeServer } from "./live/parity/server.ts";
 
 const OPENSSL = (() => { try { execFileSync("openssl", ["version"], { stdio: "ignore" }); return true; } catch { return false; } })();
-const needsOpenssl = { skip: OPENSSL ? false : "no openssl on PATH" };
+// A server test that hangs fails instead.
+const limit = { timeout: 15_000 };
+const needsOpenssl = { ...limit, skip: OPENSSL ? false : "no openssl on PATH" };
 
 let tmp = "";
 let tls = { key: "", cert: "" };
@@ -93,6 +95,7 @@ test("a TLS client that ends the handshake with alert 46 (a person's certificate
     sock.write(Buffer.from([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 46]));
     assert.ok(await closed, "the server ends that connection");
     assert.ok(server.records.some((r) => r.kind === "tls-hello"), "the ClientHello is recorded");
+    assert.ok(server.records.some((r) => r.kind === "tls-error" && /alert number 46/.test((r.data as { error: string }).error)), "the alert is recorded");
     // The server is still up: a browser that clicks Proceed gets the page over TLS and HTTP/2.
     const r = await h2Get(server, "/blank");
     session = r.session;
@@ -104,7 +107,7 @@ test("a TLS client that ends the handshake with alert 46 (a person's certificate
   }
 });
 
-test("stop() ends the connections that a browser keeps open, on each of the three ports", async () => {
+test("stop() ends the connections that a browser keeps open, on each of the three ports", limit, async () => {
   const server = await start();
   const clients: Socket[] = [];
   try {
@@ -121,6 +124,7 @@ test("stop() ends the connections that a browser keeps open, on each of the thre
     assert.equal(await stopped, true, "stop() returns");
   } finally {
     for (const c of clients) c.destroy();
+    await server.stop();
   }
 });
 
@@ -136,5 +140,6 @@ test("stop() ends an HTTP/2 session over TLS that a browser keeps open", needsOp
     assert.equal(await closed, true, "the session is closed");
   } finally {
     session?.destroy();
+    await server.stop();
   }
 });

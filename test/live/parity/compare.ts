@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { otherRun } from "./files.ts";
 import { akamaiH2 } from "./fingerprint.ts";
 
 const DIR = process.argv[2];
@@ -37,7 +38,7 @@ const header = (r: Run | undefined, name: string, path = "/") => {
 
 console.log(`# Parity probe: ${DIR}\n`);
 console.log(`Platform ${summary.platform}, started ${summary.started}.\n`);
-for (const l of labels) console.log(`- **${l}**: ${summary.browsers[l].version} (\`${summary.browsers[l].bin}\`)`);
+for (const l of labels) { const o = otherRun(summary, l); console.log(`- **${l}**: ${summary.browsers[l].version} (\`${summary.browsers[l].bin}\`)${o ? `; ${o}` : ""}`); }
 
 // --- What a site sees ------------------------------------------------------------------------------
 
