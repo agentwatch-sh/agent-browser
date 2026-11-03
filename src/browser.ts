@@ -447,8 +447,21 @@ export const KEYS: Record<string, { code: string; keyCode: number; text?: string
   End: { code: "End", keyCode: 35 },
   PageUp: { code: "PageUp", keyCode: 33 },
   PageDown: { code: "PageDown", keyCode: 34 },
-  F2: { code: "F2", keyCode: 113 },
+  // F1 to F12, key codes 112 to 123. Most are also Chrome's own shortcuts; keyFields sends them to the page only.
+  ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`F${i + 1}`, { code: `F${i + 1}`, keyCode: 112 + i }])),
 };
+
+/**
+ * The key fields of one Input.dispatchKeyEvent. A function key goes without nativeVirtualKeyCode: Chrome
+ * then marks the event skip_if_unhandled, and never runs it as one of its own shortcuts, before the page
+ * or after it (F1 help, F5 reload, F11 full screen, F12 DevTools, Control+F4 closes the tab; F3, F6, F7
+ * and F10 take the focus to Chrome's own UI). The page still gets the key. (Chromium
+ * content/browser/devtools/protocol/input_handler.cc, InputHandler::DispatchKeyEvent; measured in
+ * test/live/function-keys/.) Other keys keep their native key code, as before.
+ */
+export function keyFields(key: string, code: string, keyCode: number, modifiers = 0) {
+  return { key, code, windowsVirtualKeyCode: keyCode, ...(/^F\d+$/.test(code) ? {} : { nativeVirtualKeyCode: keyCode }), modifiers };
+}
 
 /** An exact page size for a screenshot or a recording: CSS pixels and a device pixel ratio. */
 export type Viewport = { width: number; height: number; scale: number };
@@ -664,7 +677,7 @@ export class Tab {
     const k = KEYS[key];
     if (!k) throw new UsageError(`unsupported key ${key}; known: ${Object.keys(KEYS).join(", ")}`);
     await this.assertAllowed();
-    const base = { key, code: k.code, windowsVirtualKeyCode: k.keyCode, nativeVirtualKeyCode: k.keyCode };
+    const base = keyFields(key, k.code, k.keyCode);
     await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: k.text });
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
   }

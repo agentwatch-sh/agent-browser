@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
+import { parseKey, sendKey } from "../src/record.ts";
 import { NotAllowedError, PinRequiredError } from "../src/errors.ts";
 import { resolveOptions } from "../src/options.ts";
 import { proxyInfo, stopProxy } from "../src/proxy.ts";
@@ -92,6 +93,24 @@ test("evaluate, waitFor, click, type, press, text", async () => {
   await assert.rejects(tab.click("#nope"), /no element/);
   await assert.rejects(tab.click("#hidden"), /not visible/);
   await assert.rejects(tab.evaluate(() => { throw new Error("boom"); }), /boom/);
+  await tab.close();
+});
+
+test("a function key goes to the page only: without nativeVirtualKeyCode, so Chrome never runs it as its own shortcut (#7)", async () => {
+  const tab = await browser.open(base);
+  const page = fake.pages.get(tab.targetId)!;
+  const fkeys = Array.from({ length: 12 }, (_, i) => `F${i + 1}`);
+  for (const f of fkeys) {
+    await tab.press(f); // the press command
+    await sendKey(tab, parseKey(`Shift+${f}`)); // record's press step
+  }
+  await tab.press("Enter");
+  await sendKey(tab, parseKey("Shift+ArrowDown"));
+  const fields = (key: string) => page.keyEvents.filter((k) => k.key === key).map((k) => [k.type, k.modifiers, k.keyCode, k.native]);
+  for (const [i, f] of fkeys.entries())
+    assert.deepEqual(fields(f), [["keyDown", 0, 112 + i, undefined], ["keyUp", 0, 112 + i, undefined], ["rawKeyDown", 8, 112 + i, undefined], ["keyUp", 8, 112 + i, undefined]], f);
+  assert.deepEqual(fields("Enter"), [["keyDown", 0, 13, 13], ["keyUp", 0, 13, 13]], "other keys keep their native key code");
+  assert.deepEqual(fields("ArrowDown"), [["rawKeyDown", 8, 40, 40], ["keyUp", 8, 40, 40]]);
   await tab.close();
 });
 

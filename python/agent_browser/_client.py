@@ -328,7 +328,7 @@ class AgentBrowser:
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json, stdin=text)
 
     def press(self, tab: str, key: str, any_scope: bool = False) -> PressResult:
-        """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown or F2."""
+        """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown, or F1 to F12."""
         return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json)
 
     def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:

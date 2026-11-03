@@ -25,7 +25,7 @@ import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { inflateSync } from "node:zlib";
-import { KEYS, type Tab, type Viewport } from "./browser.ts";
+import { KEYS, keyFields, type Tab, type Viewport } from "./browser.ts";
 import { assertAllowedUrl, isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
@@ -127,6 +127,7 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
         let key: KeyEvent;
         try { key = parseKey(step.press); } catch (e) { throw bad((e as Error).message); }
         if (isClipboardChord(key)) throw bad(`${step.press} would use the machine's shared clipboard, which belongs to the person at the machine; type the text instead`);
+        if (isContextMenuChord(key)) throw bad(`${step.press} opens Chrome's own context menu on Windows and Linux, a Chrome window outside the page`);
         if (step.repeat !== undefined && (!Number.isInteger(step.repeat) || (step.repeat as number) < 1 || (step.repeat as number) > 100)) throw bad("repeat is a whole number from 1 to 100");
         ms("delay");
         break;
@@ -277,6 +278,15 @@ export function isClipboardChord(k: KeyEvent): boolean {
   if (/^Key[CXV]$/.test(k.code) && k.modifiers & (2 | 4)) return true;
   if (k.code === "Delete" && k.modifiers & SHIFT) return true;
   return k.code === "Insert" && !!(k.modifiers & (2 | SHIFT));
+}
+
+/**
+ * Shift+F10 is the context-menu key on Windows and Linux. When the page does not handle it, Blink itself
+ * opens Chrome's context menu (WebFrameWidgetImpl::HandleKeyEvent), so keyFields cannot keep it in the
+ * page. Refused on every platform, so that a script runs the same everywhere.
+ */
+export function isContextMenuChord(k: KeyEvent): boolean {
+  return k.code === "F10" && k.modifiers === SHIFT;
 }
 
 export function macCommands(k: KeyEvent): string[] {
@@ -746,7 +756,7 @@ type Mark = { step: number; kind: Action; start: number; end: number; press?: nu
 
 /** One key: down (with its text, and on macOS its editing commands) and up. */
 export async function sendKey(tab: Tab, k: KeyEvent): Promise<void> {
-  const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.keyCode, nativeVirtualKeyCode: k.keyCode, modifiers: k.modifiers };
+  const base = keyFields(k.key, k.code, k.keyCode, k.modifiers);
   const commands = process.platform === "darwin" ? macCommands(k) : [];
   await tab.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, ...(k.text ? { text: k.text, unmodifiedText: k.text } : {}), ...(commands.length ? { commands } : {}) });
   await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });

@@ -240,8 +240,8 @@ export class FakePage {
   hovered: FakeElement | undefined;
   typed = "";
   keys: string[] = [];
-  /** Every key event, with its modifiers and macOS editing commands. */
-  keyEvents: { type: string; key: string; modifiers: number; text?: string; commands?: string[] }[] = [];
+  /** Every key event, with its modifiers, its key codes and macOS editing commands. */
+  keyEvents: { type: string; key: string; modifiers: number; keyCode?: number; native?: number; text?: string; commands?: string[] }[] = [];
   wheel = 0;
   /** What a clipped screenshot shows: a test changes it to change the page's pixels (an add-on's fill). */
   paint = 0;
@@ -686,7 +686,8 @@ export class FakeChrome {
         page.typeInto(params.text);
         return {};
       case "Input.dispatchKeyEvent":
-        page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, text: params.text, commands: params.commands });
+        page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, keyCode: params.windowsVirtualKeyCode,
+          native: params.nativeVirtualKeyCode, text: params.text, commands: params.commands });
         if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }
         // In a grid editor (data-cells), Tab and Enter commit the cell and leave the editor empty for the next one.
         if ((params.key === "Tab" || params.key === "Enter") && params.type !== "keyUp" && page.focused?.hasAttribute("data-cells")) {

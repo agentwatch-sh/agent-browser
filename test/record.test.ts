@@ -70,10 +70,13 @@ test("the step script is checked before anything runs: one action per step, know
   assert.equal(ok.length, 14);
   assert.equal(parseSteps([{ waitStill: { box: { x: 10, y: 10, w: 200, h: 40 }, quietMs: 1500, timeoutMs: 60000 } }, { waitStill: { selector: "#b", allowNoChange: true } },
     { waitStill: { box: { x: 0, y: 0, width: 1920, height: 1080 } } }], vp, []).length, 3);
+  assert.equal(parseSteps([{ press: "Shift+F11" }, { press: "F1" }, { press: "Control+Shift+F12", repeat: 2 }, { press: "F10" }, { press: "Control+Shift+F10" }], vp, []).length, 5,
+    "function keys (#7); only Shift+F10 alone opens the context menu");
   const bad: [unknown, RegExp][] = [
     [{}, /exactly one of/], [{ click: "#a", hover: "#b" }, /exactly one of/], [{ click: "#a", delay: 3 }, /"delay" is not an option of click/],
     [{ wait: -1 }, /wait must be a number of ms/], [{ click: { x: 5000, y: 1 } }, /outside the 1920x1080 viewport/], [{ press: "Hyper+A" }, /unknown modifier/],
-    [{ press: "F13" }, /unknown key/], [{ press: "Meta+V" }, /Meta\+V would use the machine's shared clipboard/], [{ press: "Control+c" }, /shared clipboard/],
+    [{ press: "F13" }, /unknown key/], [{ press: "Shift+F10" }, /Shift\+F10 opens Chrome's own context menu/], [{ press: "shift+F10" }, /context menu/],
+    [{ press: "Meta+V" }, /Meta\+V would use the machine's shared clipboard/], [{ press: "Control+c" }, /shared clipboard/],
     [{ press: "Meta+X" }, /shared clipboard/], [{ press: "Shift+Delete" }, /shared clipboard/], [{ press: "Meta+Shift+V" }, /shared clipboard/], [{ press: "Enter", repeat: 0 }, /repeat is a whole number/], [{ highlight: { x: 1 } }, /highlight is a selector/],
     [{ waitFor: "" }, /waitFor is a CSS selector/], [{ type: 5 }, /type is the text/], [{ goto: "https://mail.google.com/" }, /mail\.google\.com is not on the allowlist/],
     [{ goto: "https://example.com/" }, /example\.com is not on the allowlist/],
@@ -99,6 +102,9 @@ test("keys: chords keep their letter, Shift is implied only by a character, and 
   assert.deepEqual(parseKey("("), { key: "(", code: "Digit9", keyCode: 57, text: "(", modifiers: 8 });
   assert.deepEqual(parseKey("Enter"), { key: "Enter", code: "Enter", keyCode: 13, text: "\r", modifiers: 0 });
   assert.equal(parseKey("Control+c").text, undefined, "a chord types nothing");
+  assert.deepEqual(parseKey("Shift+F11"), { key: "F11", code: "F11", keyCode: 122, text: undefined, modifiers: 8 });
+  assert.deepEqual([parseKey("F1").keyCode, parseKey("F12").keyCode, parseKey("Control+Alt+F5").modifiers], [112, 123, 3]);
+  assert.throws(() => parseKey("F13"), /unknown key "F13"; known: .*PageDown, F1, F2, F3, .*F12, or one US-keyboard character/);
 });
 
 test("the cursor path: ghost-cursor's curve, a minimum-jerk speed (slow, fast, slow), Fitts timing, the same path for the same seed", async () => {
