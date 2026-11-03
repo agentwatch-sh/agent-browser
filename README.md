@@ -140,11 +140,13 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   ("Continue where you left off", which agent-browser asks for) keeps the restored window's old name,
   so a launch of such a profile logs one line that asks you to name the window once in Chrome
   ("Name window…" in the tab strip's menu, or the Window menu on macOS) with that exact name. A
-  restored window keeps its name at each restart. (Measured on Chromium 156 on Linux; the macOS look
-  is not measured yet.) While a command waits for the prompt, its notice names the Chrome pid and the
-  profile, and the window too when there is evidence for its name: agent-browser started that Chrome
-  with the name, and the profile does not restore its session. Chrome shows the prompt over the
-  profile's last active window, so with a second window open the prompt can be on the other one.
+  restored window keeps its name at each restart. (Measured on Chromium 156 on Linux, and on macOS
+  on 2026-11-03 with Chrome Beta 158: there the name shows in the Dock menu and the Window menu, and
+  a restored window keeps its old name, as on Linux.) While a command waits for the prompt, its
+  notice names the Chrome pid and the profile, and the window too when there is evidence for its
+  name: agent-browser started that Chrome with the name, and the profile does not restore its
+  session. Chrome shows the prompt over the profile's last active window, so with a second window
+  open the prompt can be on the other one.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
