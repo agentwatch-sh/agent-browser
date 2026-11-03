@@ -77,7 +77,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**, absolute. It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes. |
@@ -85,6 +85,20 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 | Approve dialog | `approve` (`true`/`"osascript"`/`"xdotool"`/`{ command }`) | `--approve auto\|osascript\|xdotool` or `--approve-command '[...]'` | `approve=True` / `approve="xdotool"` / `approve_command=[...]` | Unattended only. Answers Chrome's per-connection "Allow remote debugging?" dialog once per proxy. Default off (the operator clicks). See **Unattended approval**. |
 | Node | | | `node` (default `node` on PATH) | Node 26 or later. |
 | Package folder | | | `package_dir` | The agent-browser folder with `bin/agent-browser.js`. Default: the checkout that holds the adapter. |
+
+**Paths.** The paths in the Node options (`stateDir`, `allowlistFile`, `profileDir`, `socketPath`,
+`chromeBin`, `personalUserDataDir`) must be absolute; a relative one is a usage error. Their CLI
+flags (`--state-dir`, `--allowlist`, `--profile`, `--socket`, `--chrome-bin`,
+`--personal-user-data-dir`) also take a relative path, and the CLI resolves it from its current
+folder. The path of `shot`, `fetch` and `download`, and `record`'s `--out`, `--script` and `--setup`,
+resolve from the current folder in the CLI and in the library alike. `--ffmpeg` is the exception: it
+must be absolute. `Tab.setFiles` and `Tab.expectDownload` give their paths to Chrome as they are, so
+give them absolute paths. The Python adapter passes its paths to the CLI as they are, and runs the
+CLI in the caller's current folder. Neither the CLI nor the adapter expands `~`: the shell does so
+only at the start of a word (`--state-dir ~/s`, not `--state-dir=~/s`), and Python's `Path("~/s")` keeps it. The 103-byte
+limit of the socket path applies to the resolved path. Give the state folder as an absolute path: a
+relative one names another folder, so another profile with other logins, when the current folder
+changes.
 
 Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
 is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.

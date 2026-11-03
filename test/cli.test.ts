@@ -10,6 +10,7 @@ import { redact } from "../src/outline.ts";
 import { resolveOptions } from "../src/options.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { stopProxy } from "../src/proxy.ts";
+import { findFfmpeg, planRecording } from "../src/record.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { BIN, cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -21,6 +22,28 @@ test("--chrome-args parses a JSON array into chromeArgs; a non-array or bad JSON
   assert.equal(optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args" }, () => {}).chromeArgs, undefined);
   assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": "not json" }, () => {}), /--chrome-args must be a JSON array/);
   assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '{"a":1}' }, () => {}), /--chrome-args must be a JSON array/);
+});
+
+test("the CLI takes a relative path flag from its current folder; a Node option must be absolute (README: Paths)", () => {
+  const own = consumer();
+  const before = process.cwd();
+  process.chdir(own.dir); // a short folder: the socket path stays under 103 bytes
+  try {
+    const here = process.cwd();
+    const o = optionsFromFlags({ "state-dir": "st", allowlist: "allow.json", profile: "p", socket: "s.sock", "chrome-bin": "bin/chrome",
+      "personal-user-data-dir": "ud" }, () => {});
+    assert.deepEqual([o.stateDir, o.allowlistFile, o.profileDir, o.socketPath, o.chromeBin, o.personalUserDataDir],
+      ["st", "allow.json", "p", "s.sock", "bin/chrome", "ud"].map((p) => join(here, p)));
+    // record's paths resolve from the current folder too, in the CLI and in the library: the missing script is named there.
+    assert.throws(() => planRecording({ out: "c.mp4", script: "nope.json" }, []), (e: Error) => e.message.includes(join(here, "nope.json")));
+  } finally {
+    process.chdir(before);
+    own.remove();
+  }
+  for (const [k, v] of [["stateDir", "st"], ["allowlistFile", "a.json"], ["profileDir", "p"], ["socketPath", "s.sock"], ["chromeBin", "bin/chrome"],
+    ["personalUserDataDir", "ud"]])
+    assert.throws(() => resolveOptions({ stateDir: "/tmp/ab-abs", [k]: v }), new RegExp(`${k} must be an absolute path`), k);
+  assert.throws(() => findFfmpeg("ffmpeg"), /--ffmpeg must be an absolute path/, "--ffmpeg is the exception");
 });
 
 test("--chrome-args with a headless, profile or remote-debugging switch is a usage error that says why, before any launch", async () => {
