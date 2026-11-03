@@ -68,6 +68,14 @@ test("--starts is 3 by default and a whole number from 1 to 20; --after-ms is 10
   for (const ms of ["999", "x", "120001"]) assert.match(refused([...full, "--after-ms", ms]), /--after-ms/, ms);
 });
 
+test("the start check refuses an --out-dir that holds the logs of a run, so a second run never deletes them", () => {
+  for (const name of ["marks.jsonl", "results.jsonl", "monitor.jsonl"]) {
+    const message = refused(full, { ...mac, exists: (p) => mac.exists(p) || p === `/tmp/abfs-out/${name}` });
+    assert.match(message, new RegExp(`--out-dir already holds the logs of a run \\(${name.replace(".", "\\.")}\\)`), name);
+    assert.doesNotMatch(message, /\n/, "one line");
+  }
+});
+
 test("the start check refuses an unknown flag or a stray argument", () => {
   assert.match(refused([...full, "--login"]), /--login|unknown/i);
   assert.match(refused([...full, "extra"]), /extra|argument/i);
@@ -181,6 +189,17 @@ test("every change in the quit phase counts: a Chrome that is not in front moves
   assert.equal(gap[1].changed, false);
 });
 
+test("a change at the same instant as the next start's launch mark, or as \"done\", still counts for the start before", () => {
+  const atNext = analyseStarts(monitorLog(['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 30.0, "front": 600, "name": "Finder"}']), marks, pids, { monitorEnd: 70 });
+  assert.deepEqual(atNext[0].quitChanges, [{ t: 30, afterStartMs: 20000, phase: "quit", pid: 600, name: "Finder", agentChrome: false }]);
+  assert.equal(atNext[0].changed, true);
+  assert.deepEqual(atNext[1].frontBefore, { pid: 600, name: "Finder" }, "it is what is in front when start 2 begins");
+  assert.equal(atNext[1].changed, false, "and it counts once, for start 1");
+  const atDone = analyseStarts(monitorLog(['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 64.0, "front": 703, "name": "Google Chrome Beta"}']), marks, pids, { monitorEnd: 70 });
+  assert.deepEqual(atDone[2].quitChanges, [{ t: 64, afterStartMs: 14000, phase: "quit", pid: 703, name: "Google Chrome Beta", agentChrome: true }]);
+  assert.equal(atDone[2].changed, true);
+});
+
 test("a front pid of 0 or a name \"?\" (the monitor sees no front app) is a problem, before a start and as a change", () => {
   const blind = analyseStarts(monitorLog(['{"t": 5.0, "front": 0, "name": "?"}']), marks, pids, { monitorEnd: 70 });
   for (const x of blind) assert.match(x.problem ?? "", /the monitor could not see the frontmost app before start \d/);
@@ -265,7 +284,7 @@ if (process.argv[2] === "front") console.log("ASN:0x0-0x1:");
 else if (process.argv[2] === "info") console.log('"pid"=' + (process.env.ABFS_FAKE_FRONT_PID || 111));
 `);
   // A stand-in for the Chrome main process: it listens, writes DevToolsActivePort and records a
-  // SIGTERM (ABFS_FAKE_IGNORE_TERM: and stays alive). It starts a decoy that shares the state folder's
+  // SIGTERM (ABFS_FAKE_IGNORE_TERM: and stays alive; ABFS_FAKE_EXIT_MS: it ends by itself after that time). It starts a decoy that shares the state folder's
   // name as a prefix but lies outside it ("<state folder>-x/profile"), and with ABFS_FAKE_HELPER a
   // "--type=renderer" helper on its own profile that outlives it. Decoy and helper record a SIGTERM
   // and stay alive.
@@ -286,6 +305,7 @@ const decoy = keep(${JSON.stringify(stay("decoy"))}, ["--user-data-dir=" + dirna
 const helper = process.env.ABFS_FAKE_HELPER ? keep(${JSON.stringify(stay("helper"))}, ["--type=renderer", "--user-data-dir=" + profile]) : null;
 writeFileSync(join(out, "fake-" + process.pid + ".json"), JSON.stringify({ pid: process.pid, decoy, helper, profile }));
 process.on("SIGTERM", () => { writeFileSync(join(out, "sigterm-" + process.pid), ""); if (!process.env.ABFS_FAKE_IGNORE_TERM) process.exit(0); });
+if (process.env.ABFS_FAKE_EXIT_MS) setTimeout(() => process.exit(0), Number(process.env.ABFS_FAKE_EXIT_MS));
 const srv = createServer((s) => s.destroy());
 srv.listen(0, "127.0.0.1", () => writeFileSync(join(profile, "DevToolsActivePort"), srv.address().port + "\\n/devtools/browser/fake\\n"));
 `);
@@ -300,15 +320,18 @@ srv.listen(0, "127.0.0.1", () => writeFileSync(join(profile, "DevToolsActivePort
     check: (args: string[], env: Record<string, string> = {}, overrides: Record<string, unknown> = {}) =>
       run(process.execPath, ["--import", preload, START, ...args], { env: { ...process.env, ABFS_FAKE_OUT: out, ABFS_TEST: JSON.stringify({ ...test, ...overrides }), ...env }, timeout: 120_000 })
         .then((r) => ({ code: 0, ...r }), (e) => ({ code: e.code as number, stdout: e.stdout as string, stderr: e.stderr as string })),
-    /** The check as a child that the test can interrupt: Ctrl-C (SIGINT) once `until` is in its marks. */
-    interrupt: (args: string[], outDir: string, until: RegExp) => new Promise<{ code: number | null; stderr: string }>((done) => {
-      const c = spawn(process.execPath, ["--import", preload, START, ...args, "--out-dir", outDir], { env: { ...process.env, ABFS_FAKE_OUT: out, ABFS_TEST: JSON.stringify(test) }, stdio: ["ignore", "ignore", "pipe"] });
+    /**
+     * The check as a child that the test can interrupt: SIGINT once `until` is in its marks, to the check
+     * only, or with `group` to its whole process group (the check and its CLI child), as a terminal's Ctrl-C does.
+     */
+    interrupt: (args: string[], outDir: string, until: RegExp, group = false) => new Promise<{ code: number | null; stderr: string }>((done) => {
+      const c = spawn(process.execPath, ["--import", preload, START, ...args, "--out-dir", outDir], { env: { ...process.env, ABFS_FAKE_OUT: out, ABFS_TEST: JSON.stringify(test) }, stdio: ["ignore", "ignore", "pipe"], detached: group });
       let stderr = "";
       c.stderr!.on("data", (b) => (stderr += b));
       const poll = setInterval(() => {
         let marks = "";
         try { marks = readFileSync(join(outDir, "marks.jsonl"), "utf8"); } catch { /* not yet */ }
-        if (until.test(marks)) { clearInterval(poll); c.kill("SIGINT"); }
+        if (until.test(marks)) { clearInterval(poll); if (group) process.kill(-c.pid!, "SIGINT"); else c.kill("SIGINT"); }
       }, 100);
       c.on("close", (code) => { clearInterval(poll); done({ code, stderr }); });
     }),
@@ -484,4 +507,35 @@ test("Ctrl-C in --same-profile mode: the check names the shared folder that it l
     assert.ok(between.stderr.includes(`deleted ${dirname(second.profile)}: no process names it\n`), between.stderr);
     assert.equal(existsSync(dirname(second.profile)), false);
   } finally { f.cleanup(); }
+});
+
+test("a Chrome that ends by itself before the quit is no pass: the start may have shown no window", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "1", "--after-ms", "3000"], { ABFS_FAKE_EXIT_MS: "1500" });
+    assert.equal(r.code, 1, r.stderr);
+    const [result] = jsonl(join(outDir, "results.jsonl"));
+    assert.equal(typeof result.chromePid, "number", "the Chrome ran after the launch");
+    assert.match(result.problem, /Chrome ended by itself before the quit \(quit found no Chrome\): the start may have shown no window/);
+    assert.equal(existsSync(join(f.out, `sigterm-${result.chromePid}`)), false, "quit found nothing to signal");
+  } finally { f.cleanup(); }
+});
+
+test("Ctrl-C to the process group just after a launch began: the check keeps that start's folder and names it", onLinux, async () => {
+  const f = fakes();
+  let left: string | undefined;
+  try {
+    const r = await f.interrupt(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--starts", "1", "--after-ms", "3000"], join(f.dir, "results"), /"start launch 1"/, true);
+    assert.equal(r.code, 130);
+    left = /left in place \([^)]*\): (\/tmp\/abfs-1-[A-Za-z0-9]{6})\n/.exec(r.stderr)?.[1];
+    assert.ok(left, r.stderr);
+    assert.ok(existsSync(left), "a start was in progress: its Chrome can still be starting on that folder");
+    assert.doesNotMatch(r.stderr, /deleted \/tmp\/abfs-/);
+    // The CLI child may have started the fake before it got SIGINT; give it time to show, so that cleanup ends it.
+    for (let i = 0; i < 30 && !f.started().length; i++) await new Promise((res) => setTimeout(res, 100));
+  } finally {
+    f.cleanup();
+    if (left && /^\/tmp\/abfs-1-[A-Za-z0-9]{6}$/.test(left) && existsSync(left)) rmSync(left, { recursive: true }); // this test's own run made it
+  }
 });

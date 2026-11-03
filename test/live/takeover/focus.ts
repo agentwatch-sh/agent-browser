@@ -2,12 +2,15 @@
 // monitor.swift's log with the check's marks and names each start that changed the frontmost app.
 // Unit-tested in test/takeover-start.test.ts; the check itself is not part of `npm test`.
 
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { appBundle } from "../../../src/agent.ts";
 import { isChromeForTesting } from "../../../src/options.ts";
 
 export const USAGE = "usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile] [--keep-state]";
+
+/** The logs that a run writes into --out-dir; a folder that holds one of them belongs to an earlier run. */
+export const RUN_LOGS = ["marks.jsonl", "results.jsonl", "monitor.jsonl"];
 
 export type StartOptions = { chromeBin: string; starts: number; monitor: string; outDir: string; afterMs: number; keepState: boolean; sameProfile: boolean };
 
@@ -39,6 +42,8 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   if (!env.exists(resolve(monitor))) return no(`--monitor: no such file: ${monitor} (compile test/live/takeover/monitor.swift with swiftc first)`);
   const out = values["out-dir"];
   if (typeof out !== "string" || !out) return no("--out-dir is required: the folder for the logs and results");
+  const used = RUN_LOGS.find((name) => env.exists(join(resolve(out), name)));
+  if (used) return no(`--out-dir already holds the logs of a run (${used}): ${out}; give a new folder, so that those logs stay`);
   const whole = (flag: string, raw: unknown, dflt: number, min: number, max: number): number | string => {
     if (raw === undefined) return dflt;
     if (typeof raw !== "string" || !/^\d+$/.test(raw) || Number(raw) < min || Number(raw) > max) return `${flag} must be a whole number from ${min} to ${max}, not ${JSON.stringify(raw)}`;
@@ -152,7 +157,7 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
     const changes: FrontChange[] = [], quitChanges: FrontChange[] = [];
     let current = before?.front;
     for (const e of fronts) {
-      if (e.t <= t0 || e.t >= quitEnd || e.front === current) continue;
+      if (e.t <= t0 || e.t > quitEnd || e.front === current) continue; // a change at the next mark's instant is still this start's
       current = e.front;
       const phase = e.t < launched ? "launch" : e.t < quit ? "after" : "quit";
       const change = { t: e.t, afterStartMs: Math.round((e.t - t0) * 1000), phase, pid: e.front, name: e.name, agentChrome: e.front === chromePids[n] } as const;

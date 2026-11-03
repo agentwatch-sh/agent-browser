@@ -22,9 +22,10 @@
 // The check deletes each state folder that it made once no process names it (--keep-state keeps them).
 // It runs only `launch` and `quit`: `launch` probes the debugging port with a plain TCP connect, so the
 // check opens no debugging WebSocket and Chrome shows no "Allow remote debugging?" prompt. It does not
-// measure a change of the Space. It refuses to run without --on-my-screen: the windows reach the
-// person's screen. Not part of `npm test` (test/takeover-start.test.ts runs its flow with a fake Chrome;
-// only those tests set ABFS_TEST, a JSON object that replaces the lsappinfo binary and shortens the waits).
+// measure a change of the Space. It refuses to run without --on-my-screen (the windows reach the
+// person's screen), and with an --out-dir that holds the logs of an earlier run. Not part of `npm
+// test` (test/takeover-start.test.ts runs its flow with a fake Chrome; only those tests set ABFS_TEST,
+// a JSON object that replaces the lsappinfo binary and shortens the waits).
 //
 //   swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o /tmp/abfs-monitor
 //   node test/live/takeover/start.ts --on-my-screen --monitor /tmp/abfs-monitor --out-dir <dir> \
@@ -43,7 +44,8 @@
 // next start counts too) and <dir>/summary.json, and prints the summary. Exit 0: every start was
 // measured and none changed the frontmost app; 1: a start changed it, or a start could not be measured;
 // 2: a usage error; 130: stopped with Ctrl-C (the check sends SIGTERM to its own Chromes, deletes a
-// folder of its own that no process names, and names on stderr each folder that it leaves).
+// folder of its own that no process names and that no start is using, and names on stderr each folder
+// that it leaves). A start whose Chrome ended before the quit is a problem: it may have shown no window.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -127,19 +129,25 @@ function cli(args: string[], timeoutMs: number): Promise<{ code: number | null; 
 
 // Only the check's own state folders and Chromes are ever signalled or deleted. At any exit (also
 // Ctrl-C), a folder of its own that still exists gets: SIGTERM to its Chrome main process if one runs,
-// deletion if no process names it (and --keep-state is off), else a stderr line with its path.
+// deletion if no process names it (and --keep-state is off), else a stderr line with its path. The
+// folder of a start in progress (from its launch to the end of its quit) is never deleted: after `open`
+// exits, its Chrome can still be starting there before its main process shows in ps.
 const made: { stateDir: string; ended: boolean }[] = [];
+let inProgress: string | undefined;
 let monitor: ChildProcess | undefined;
 process.on("exit", () => {
   monitor?.kill("SIGTERM");
   for (const m of made) {
     if (!existsSync(m.stateDir) || (o.keepState && m.ended)) continue;
-    const pid = ownPid(m.stateDir);
+    const pid = ownPid(m.stateDir), starting = m.stateDir === inProgress;
     if (pid) try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
-    if (!pid && !o.keepState && !usesFolder(m.stateDir)) {
+    if (!pid && !starting && !o.keepState && !usesFolder(m.stateDir)) {
       rmSync(m.stateDir, { recursive: true });
       process.stderr.write(`deleted ${m.stateDir}: no process names it\n`);
-    } else process.stderr.write(`left in place${pid ? ` (its Chrome, pid ${pid}, got SIGTERM)` : " (a process still names it)"}: ${m.stateDir}\n`);
+    } else {
+      const why = pid ? `its Chrome, pid ${pid}, got SIGTERM` : starting ? "a start was in progress: its Chrome can still be starting there" : "a process still names it";
+      process.stderr.write(`left in place (${why}): ${m.stateDir}\n`);
+    }
   }
 });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
@@ -183,6 +191,7 @@ for (let n = 1; n <= o.starts && !liveness; n++) {
   const { stateDir } = own;
   const profile = join(stateDir, "profile");
   const logged = launchLines(stateDir).length;
+  inProgress = stateDir;
   mark(`start launch ${n}`, { stateDir });
   const launch = await cli(["launch", "--state-dir", stateDir, "--chrome-bin", o.chromeBin, "--json"], LAUNCH_TIMEOUT_MS);
   const launched = launch.code === 0 && launch.doc?.ok === true;
@@ -202,12 +211,14 @@ for (let n = 1; n <= o.starts && !liveness; n++) {
     ended = await gone(stateDir, KILL_WAIT_MS);
   }
   own.ended = ended;
+  inProgress = undefined;
   mark(`${ended ? "end" : "fail"} quit ${n}`, { code: quit.code, closed: quit.doc?.closed ?? null, killed });
 
   const viaOpenG = launchLines(stateDir).slice(logged).some((l) => /\bchrome=via-open-g\b/.test(l));
   const problems = [
     !launched && `launch failed (exit ${launch.code}): ${launch.doc?.error?.message ?? "no result"}`,
     launched && chromePid === null && `no Chrome main process ran on ${profile} after the launch`,
+    launched && chromePid !== null && quit.doc?.closed !== true && "Chrome ended by itself before the quit (quit found no Chrome): the start may have shown no window",
     !viaOpenG && "the start did not go through open -n -g (launches.log)",
     !ended && `Chrome on ${profile} did not end; its state folder is left in place`,
   ].filter((p): p is string => !!p);
