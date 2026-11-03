@@ -63,6 +63,26 @@ test("the agent window's name says whose it is: the consumer's command name and 
   assert.equal(agentWindowName(resolveOptions({ ...s, commandName: "vedlo browser" })), `vedlo browser: ${s.stateDir}`);
 });
 
+test("a launch of a profile that restores its session asks, once, to name the window by hand with the exact name (#3)", async () => {
+  const prof = resolveOptions({ ...s, stateDir: join(tmp, "restoring"), log: (l) => lines.push(l) });
+  mkdirSync(join(prof.profileDir, "Default"), { recursive: true });
+  writeFileSync(join(prof.profileDir, "Default", "Preferences"), JSON.stringify({ session: { restore_on_startup: 1 } }));
+  lines.length = 0;
+  let probes = 0;
+  await launchAgentChrome(prof, { timeoutMs: 2_000 }, {
+    endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/r",
+    pid: () => undefined, spawn: fakeSpawn([]), exists: (p) => p === CHROME_BETA_BIN,
+  });
+  const hint = lines.filter((l) => /Name window/.test(l));
+  assert.equal(hint.length, 1);
+  assert.ok(hint[0].includes(JSON.stringify(agentWindowName(prof))), hint[0]);
+  lines.length = 0;
+  await launchAgentChrome(s, { timeoutMs: 2_000 }, {
+    endpoint: async () => "ws://127.0.0.1:9222/devtools/browser/running", pid: () => undefined, spawn: fakeSpawn([]),
+  });
+  assert.deepEqual(lines.filter((l) => /Name window/.test(l)), [], "no hint without a start of Chrome");
+});
+
 test("noLaunch: no running agent browser fails with the consumer's launch command instead of starting one", async () => {
   const named = resolveOptions({ ...s, noLaunch: true, commandName: "vedlo browser" });
   await assert.rejects(launchAgentChrome(named, { timeoutMs: 1_000 }, {

@@ -130,14 +130,18 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
   itself (see **Unattended approval**); do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
 - **Which window asks.** Several agent browsers can run on one machine, and their windows look the
-  same. So a launch names the window (Chrome's `--window-name`) after the consumer: its command name
-  and its state folder, for example `agent-browser: /Users/me/.vedlo/agent-browser/marketdata`. It is
-  the name that Chrome's "Name window" gives a window, and it is the window's title. The window keeps
-  it after a restart that restores the session (measured on Chromium 156 on Linux; the macOS look is
-  not measured yet). While a command waits for the prompt, its
-  notice names that window, the Chrome pid and the profile. A Chrome that started without this name
-  (before this version, or by hand) gets it at its next start by agent-browser; until then the notice
-  names only the pid and the profile.
+  same. So a launch gives the window a name after the consumer (Chrome's `--window-name`): its command
+  name and its state folder, for example `agent-browser: /Users/me/.vedlo/agent-browser/marketdata`.
+  It is the name that Chrome's "Name window…" gives, and it is the window's title. Chrome gives it
+  only to a window that it makes new at its start. A profile that restores its last session
+  ("Continue where you left off", which agent-browser asks for) keeps the restored window's old name,
+  so a launch of such a profile logs one line that asks you to name the window once in Chrome
+  ("Name window…" in the tab strip's menu, or the Window menu on macOS) with that exact name. A
+  restored window keeps its name at each restart. (Measured on Chromium 156 on Linux; the macOS look
+  is not measured yet.) While a command waits for the prompt, its notice names the Chrome pid and the
+  profile, and the window too when there is evidence for its name: agent-browser started that Chrome
+  with the name, and the profile does not restore its session. Chrome shows the prompt over the
+  profile's last active window, so with a second window open the prompt can be on the other one.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -156,7 +160,8 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   command after the wake opens a new connection, which waits for a new Allow click. agent-browser does
   not bypass that prompt. Chrome's approval mode asks for each new connection.
   - That command says so on standard error: no approved connection, when and why the last one ended,
-    and which browser asks (pid and profile).
+    and which browser asks (pid and profile, and its window name when there is evidence for it: see
+    **Which window asks**).
   - A prompt that nobody answers can leave that Chrome refusing every later connection (an instant 403)
     until it restarts. So an unattended caller sets `noPrompt` (`--no-prompt`). With no approved proxy
     up, it then fails at once with `approval_needed` and starts nothing. `status` also opens nothing.

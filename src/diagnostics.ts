@@ -5,7 +5,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
-import { agentChromeBin, agentChromePid, agentEndpoint, agentWindowName, findAgentPid } from "./agent.ts";
+import { agentChromeBin, agentChromePid, agentEndpoint, agentWindowName, chromeSwitchName, findAgentPid, restoresOnStartup } from "./agent.ts";
 import { statePath, type NotifyHook, type Settings } from "./options.ts";
 
 export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww", "-o", "pid=,command="], { encoding: "utf8", timeout: 2000, maxBuffer: 64 << 20 })): string {
@@ -23,15 +23,19 @@ export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww"
 }
 
 /**
- * `, window "<name>"` when the running agent Chrome got agentWindowName at its start, else "": a
- * Chrome started before #3, or by hand, has no such name, and the text never names a window that
- * does not exist. Chrome uses the last --window-name, so a later one (a chromeArgs flag) wins.
+ * `, window "<name>"` only with evidence that the agent window has that name, else "". The running
+ * Chrome must have got agentWindowName as its last --window-name, no chromeArgs flag may set another
+ * one (Chrome takes the last, in any dash form), and the profile must not restore its session: then
+ * Chrome keeps the restored window's old name (agentWindowName). A Chrome started before #3, or by
+ * hand, has no such switch. So the text never names a window that may lack the name.
  */
 function namedWindow(s: Settings, command: string): string {
+  if ((s.chromeArgs ?? []).some((a) => chromeSwitchName(a) === "window-name")) return "";
+  if (restoresOnStartup(s.profileDir) === true) return "";
   const name = agentWindowName(s), arg = ` --window-name=${name}`;
   const at = command.lastIndexOf(" --window-name=");
   const ours = at >= 0 && command.startsWith(arg, at) && (command.length === at + arg.length || command[at + arg.length] === " ");
-  return ours ? `, window "${name}"` : "";
+  return ours ? `, window ${JSON.stringify(name)}` : "";
 }
 
 export const proxyLogPath = (s: Settings) => statePath(s, "chrome-proxy.log");

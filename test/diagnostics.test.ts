@@ -6,7 +6,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { CHROME_BETA_BIN, INSPECT_URL, agentWindowName } from "../src/agent.ts";
@@ -122,6 +122,18 @@ test("target names the running channel, and labels the configured channel when n
     "a longer name is not ours");
   assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=${agentWindowName(beta)} --window-name=mine`), /\(pid 42\)$/,
     "Chrome takes the last --window-name: a later one (a chromeArgs flag) wins");
+  const ownName = resolveOptions({ ...s, chromeBin: CHROME_BETA_BIN, chromeArgs: ["-window-name=mine"] });
+  assert.match(browserTarget(ownName, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=${agentWindowName(ownName)} -window-name=mine`),
+    /\(pid 42\)$/, "a chromeArgs window name in any dash form wins too");
+  // A profile that restores its last session keeps the restored window's old name, whatever the switch says.
+  mkdirSync(join(s.profileDir, "Default"), { recursive: true });
+  writeFileSync(join(s.profileDir, "Default", "Preferences"), JSON.stringify({ session: { restore_on_startup: 1 } }));
+  try {
+    assert.match(browserTarget(beta, () => `  42 ${CHROME_BETA_BIN} --user-data-dir=${s.profileDir} --window-name=${agentWindowName(beta)} ${INSPECT_URL}`),
+      /\(pid 42\)$/, "no window is named for a profile that restores its session");
+  } finally {
+    rmSync(join(s.profileDir, "Default"), { recursive: true, force: true });
+  }
   assert.match(browserTarget(s, () => ""), /configured binary Google Chrome Beta; running channel unknown/);
   assert.equal(browserTarget({ ...s, mode: "personal" }, () => { throw new Error("must not inspect processes"); }), "personal Chrome: operator's Chrome");
 });
