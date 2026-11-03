@@ -99,16 +99,18 @@ test("evaluate, waitFor, click, type, press, text", async () => {
 test("a function key goes to the page only: without nativeVirtualKeyCode, so Chrome never runs it as its own shortcut (#7)", async () => {
   const tab = await browser.open(base);
   const page = fake.pages.get(tab.targetId)!;
-  await tab.press("F11");
+  const fkeys = Array.from({ length: 12 }, (_, i) => `F${i + 1}`);
+  for (const f of fkeys) {
+    await tab.press(f); // the press command
+    await sendKey(tab, parseKey(`Shift+${f}`)); // record's press step
+  }
   await tab.press("Enter");
-  await sendKey(tab, parseKey("Shift+F11"));
   await sendKey(tab, parseKey("Shift+ArrowDown"));
-  assert.deepEqual(page.keyEvents.map((k) => [k.type, k.key, k.modifiers, k.keyCode, k.native]), [
-    ["keyDown", "F11", 0, 122, undefined], ["keyUp", "F11", 0, 122, undefined],
-    ["keyDown", "Enter", 0, 13, 13], ["keyUp", "Enter", 0, 13, 13],
-    ["rawKeyDown", "F11", 8, 122, undefined], ["keyUp", "F11", 8, 122, undefined],
-    ["rawKeyDown", "ArrowDown", 8, 40, 40], ["keyUp", "ArrowDown", 8, 40, 40],
-  ]);
+  const fields = (key: string) => page.keyEvents.filter((k) => k.key === key).map((k) => [k.type, k.modifiers, k.keyCode, k.native]);
+  for (const [i, f] of fkeys.entries())
+    assert.deepEqual(fields(f), [["keyDown", 0, 112 + i, undefined], ["keyUp", 0, 112 + i, undefined], ["rawKeyDown", 8, 112 + i, undefined], ["keyUp", 8, 112 + i, undefined]], f);
+  assert.deepEqual(fields("Enter"), [["keyDown", 0, 13, 13], ["keyUp", 0, 13, 13]], "other keys keep their native key code");
+  assert.deepEqual(fields("ArrowDown"), [["rawKeyDown", 8, 40, 40], ["keyUp", 8, 40, 40]]);
   await tab.close();
 });
 

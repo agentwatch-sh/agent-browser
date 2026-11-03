@@ -70,7 +70,8 @@ test("the step script is checked before anything runs: one action per step, know
   assert.equal(ok.length, 14);
   assert.equal(parseSteps([{ waitStill: { box: { x: 10, y: 10, w: 200, h: 40 }, quietMs: 1500, timeoutMs: 60000 } }, { waitStill: { selector: "#b", allowNoChange: true } },
     { waitStill: { box: { x: 0, y: 0, width: 1920, height: 1080 } } }], vp, []).length, 3);
-  assert.equal(parseSteps([{ press: "Shift+F11" }, { press: "F1" }, { press: "Control+Shift+F12", repeat: 2 }, { press: "F10" }], vp, []).length, 4, "function keys (#7)");
+  assert.equal(parseSteps([{ press: "Shift+F11" }, { press: "F1" }, { press: "Control+Shift+F12", repeat: 2 }, { press: "F10" }, { press: "Control+Shift+F10" }], vp, []).length, 5,
+    "function keys (#7); only Shift+F10 alone opens the context menu");
   const bad: [unknown, RegExp][] = [
     [{}, /exactly one of/], [{ click: "#a", hover: "#b" }, /exactly one of/], [{ click: "#a", delay: 3 }, /"delay" is not an option of click/],
     [{ wait: -1 }, /wait must be a number of ms/], [{ click: { x: 5000, y: 1 } }, /outside the 1920x1080 viewport/], [{ press: "Hyper+A" }, /unknown modifier/],
