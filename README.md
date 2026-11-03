@@ -739,6 +739,14 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/live/takeover/` (macOS; see the head of `check.ts`): drives one `about:blank` tab of a running
   agent browser while a monitor logs the frontmost app and the pointer, then names any command that
   changed either. Not part of `npm test`.
+- `test/live/function-keys/` (Linux, in a private Xvfb; macOS only with `--on-my-screen`, because
+  its windows reach the person's screen and take the keyboard focus; see the head of `check.ts`): the
+  function-key check of #7. Its own Chrome, on a throwaway profile, with one local page, gets each key
+  three ways (as before #7, through `record`'s press step, through `press`), and the check records
+  what the page saw and what Chrome did. Not part of `npm test`.
+- `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
+  the start guard, the trials and Chrome switches of each platform, the "before" key events and the
+  failure rules.
 - `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
   `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
   (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
