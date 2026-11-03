@@ -1,0 +1,109 @@
+{
+  "tools": 25,
+  "results": [
+    {
+      "tool": "browser_navigate",
+      "ms": 356,
+      "isError": false,
+      "ok": true,
+      "saw": "page title: probe a"
+    },
+    {
+      "tool": "browser_snapshot",
+      "ms": 34,
+      "isError": false,
+      "ok": true,
+      "saw": "34 lines"
+    },
+    {
+      "tool": "browser_type",
+      "ms": 101,
+      "isError": false,
+      "ok": true,
+      "saw": "ref e4"
+    },
+    {
+      "tool": "browser_click",
+      "ms": 622,
+      "isError": false,
+      "ok": true,
+      "saw": "ref e5"
+    },
+    {
+      "tool": "browser_snapshot",
+      "ms": 32,
+      "isError": false,
+      "ok": true,
+      "saw": "status shows: Hello, MCP"
+    },
+    {
+      "tool": "browser_click",
+      "ms": 1101,
+      "isError": false,
+      "ok": true,
+      "saw": "report after browser_type (fill)"
+    },
+    {
+      "tool": "(site) key events after browser_type",
+      "ms": 0,
+      "ok": true,
+      "saw": "keydown 0, input 1"
+    },
+    {
+      "tool": "browser_type",
+      "ms": 592,
+      "isError": false,
+      "ok": true,
+      "saw": "browser_type slowly"
+    },
+    {
+      "tool": "browser_click",
+      "ms": 1093,
+      "isError": false,
+      "ok": true,
+      "saw": "report after browser_type slowly"
+    },
+    {
+      "tool": "(site) key events after browser_type slowly",
+      "ms": 0,
+      "ok": true,
+      "saw": "keydown 4, input 5"
+    },
+    {
+      "tool": "browser_take_screenshot",
+      "ms": 96,
+      "isError": false,
+      "ok": true,
+      "saw": "text,image"
+    },
+    {
+      "tool": "browser_tabs",
+      "ms": 10,
+      "isError": false,
+      "ok": true,
+      "saw": "- 0: (current) [probe a](http://a.localhost:8781/)"
+    },
+    {
+      "tool": "browser_tabs",
+      "ms": 71,
+      "isError": false,
+      "ok": true,
+      "saw": "### Result | - 0: [probe a](http://a.localhost:8781/)"
+    },
+    {
+      "tool": "browser_navigate",
+      "ms": 20,
+      "isError": true,
+      "ok": true,
+      "expect": "refused",
+      "saw": "### Error Error: browserBackend.callTool: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/ Call log: \u001b[2m - navigating to \"http://b.localhost:8781/\", waiting until \"domcontentloaded\"\u001b[22m "
+    },
+    {
+      "tool": "browser_close",
+      "ms": 43,
+      "isError": false,
+      "ok": true,
+      "saw": "### Result\nNo open tabs. Navigate to a URL to create one.\n### Ran Playwright code\n```js\nawait page.close()\n```\n### Open "
+    }
+  ]
+}
