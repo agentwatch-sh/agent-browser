@@ -33,14 +33,17 @@ design changes a part of it; none changes an operator decision.
   for normal use. The probe found four marks. Two are fixed in the model: the navigation header
   `Sec-Fetch-Site` and the pointer pressure of a click. `fill` types with no key events (the skill
   tells agents how to type). Playwright's own globals for init scripts, bindings and tracing are open
-  question Q3. ab-v16.2 measured a timing mark of Playwright's Runtime domain, which this design does
+  question Q3. The Chrome comparison measured a timing mark of Playwright's Runtime domain, which this design does
   not hide (section 7).
 - **The allowlist holds for any CDP client:** DNR blocks every off-list top-level navigation in
   Chrome, and a new DNR rule blocks every frame of a tab whose top-level page is not on the list. The
   off-list host got no request in any run. The browser model adds a cookie and permission filter,
   one connection per tab, and the tab scope (section 8). Q4 asks who may read and remove the sent
   sign-ins.
-- **Which Chrome:** section 9 takes the result of the Chrome comparison (ab-v16.2).
+- **Which Chrome:** Google Chrome stable at the operator's version, on the operator's kind of
+  machine, not Beta (the Chrome comparison, ab-v16.2). On Linux the agent package installs with no
+  prompt through Chrome's external extensions file; on the Mac it needs one "Load unpacked" per agent
+  profile, a store item or an MDM policy (sections 9 and 10).
 - **Build:** six stages over three repos (section 12). Four open questions (section 14).
 
 ## 2. The operator's words and the measure
@@ -198,7 +201,7 @@ Every other call on a page session goes to `chrome.debugger.sendCommand({tabId, 
 Frames and workers of a tab are flat child sessions of its attachment (measured with a cross-site
 frame and a dedicated worker). One change on the way: a mouse press with no `force` gets
 `force: 0.5`, because a CDP press reports pointer pressure 0 where a real mouse reports 0.5
-(ab-v16.2 interim finding 5; measured here: the page sees 0.5).
+(the Chrome comparison, section 3; measured here: the page sees 0.5).
 
 ### 4.4 Several clients at the same time
 
@@ -341,17 +344,25 @@ first page is the baseline: a tab with no debugger and no client.
   `visibilityState` visible, every input event trusted, the same user agent, and no new page global
   for plain use (navigate, click, type, read, screenshot, the MCP's default tools).
 - No `resize` at attach and detach with the silent flag: measured in the stage-1 probe (agentwatch
-  design §5.16) and by ab-v16.2 (interim finding 4); this probe's pages loaded after the attach, so
-  it did not measure that event.
+  design §5.16) and in the Chrome comparison (section 3, in Chrome stable, Beta and Chromium); this
+  probe's pages loaded after the attach, so it did not measure that event.
 - The old CDP console mark (a getter on `Error.stack` logged with `console.debug`) stayed at 0 also
   under Playwright's `Runtime.enable`. That check has no positive control on Chromium 156, so it
-  shows nothing either way. ab-v16.2 measured a mark that does work: with `Runtime.enable`,
-  `console.debug` of a 2 MB string takes about 2.5 times as long (interim finding 5). Playwright
-  enables the Runtime domain on every page, so a site that times this can see a Playwright client.
-  agent-browser's own commands never enable it. The design does not hide it.
-- ab-v16.2 also measured that agent-browser's `--disable-background-timer-throttling` flag lets a
-  hidden tab run 50 ms timers (plain Chrome: 1000 ms). The agent-mode unit does not pass that flag
-  (stage 1's flags), and agent mode keeps it so.
+  shows nothing either way. The Chrome comparison (section 3) measured a mark that does work: while
+  the Runtime domain is on, `console.debug` of a 2 MB string takes 41.6 to 49.5 ms against 19.6 to
+  31.9 ms before. Its advice is never to enable the Runtime domain. agent-browser's own commands
+  never enable it, and they keep that rule through the endpoint. But Playwright enables the Runtime
+  domain on every page and cannot work without it, so a site that times this can see a Playwright
+  client. That is the cost of Playwright compatibility; the design does not hide it.
+- The comparison also measured that agent-browser's three background flags
+  (`--disable-background-timer-throttling` with `--disable-renderer-backgrounding` and
+  `--disable-backgrounding-occluded-windows`) let a hidden tab run 50 ms timers (plain Chrome: about
+  1000 ms). The agent-mode unit does not pass them (stage 1's flags), and agent mode keeps it so.
+  On the Mac an agent window behind the operator's windows can then show no focus and, without the
+  last flag, `visibilityState` hidden while it gets input (not measured: the comparison's Mac
+  check 9).
+- agent-browser's `outline` writes a `data-agent-browser-idx` attribute into the page's DOM, which a
+  page script can see (the comparison, section 3). A Playwright client writes no such attribute.
 - **Fixed in the model:** the navigation header (row 4: a DNR `modifyHeaders` rule with
   `initiatorDomains` = the agent package's own ID sets `Sec-Fetch-Site: none` for the navigations
   the extension starts and for no other navigation; measured: `Page.navigate` then sends `none` +
@@ -359,9 +370,9 @@ first page is the baseline: a tab with no debugger and no client.
 - **Different from a person, by the client's choice:** `fill` without key events (row 5), and
   Playwright's `__playwright__*` globals for init scripts, bindings and tracing snapshots (rows 25 and
   27, Q3).
-- The identity of the browser after a send (the same OS, the same Chrome build as the operator's)
-  and the machine's own tells (WebGL, timezone, fonts; agentwatch design §5.9) are the subject of
-  ab-v16.2.
+- The identity of the browser after a send is the comparison's subject (section 9 here). A send
+  carries no machine: on taylor a site sees Linux, no WebGL, Linux fonts, 32 CPUs and taylor's IP
+  address, whatever the channel.
 
 ## 8. The allowlist and the tab scope with a raw CDP client (task item 3)
 
@@ -408,62 +419,90 @@ the operator's choice; it is not a wall against a hostile process of the same us
 
 ## 9. Which Chrome is the agent Chrome
 
-This section takes the result of the Chrome comparison (ab-v16.2,
-`docs/research/2026-11-03-chrome-vs-chrome-beta.md`). **The final report is not merged yet**; this PR
-merges only after the comparison PR (manager's decision). Its interim findings on the board
-(2026-11-03, measured on taylor, Linux, Google Chrome stable 156.0.8078.79 and Chrome Beta 158):
+The Chrome comparison (ab-v16.2, `docs/research/2026-11-03-chrome-vs-chrome-beta.md`, merged in
+b320d09; measured on taylor with Google Chrome stable 156.0.8078.79, Chrome Beta 158.0.8127.2 and
+Chromium 156) decides: **Google Chrome stable at the operator's version, on the same kind of machine
+as the operator's Chrome. Not Chrome Beta.**
 
-- Forming recommendation: **Google Chrome stable** at the operator's version, on the operator's kind
-  of machine; not Beta.
-- Branded Chrome, stable and Beta, ignores `--load-extension`, also on Linux. Only Chromium loads it.
-- A manual "Load unpacked" with developer mode on stays installed across relaunches and an update
-  156 to 158; turning developer mode off disables it at once. No warning bar at start on Linux.
-- Chrome's external extensions file installs a packed CRX in stable and Beta with no developer mode
-  and no prompt: `<id>.json` with `external_crx` and `external_version`, in the `extensions` folder
-  next to the Chrome binary. For a Chrome that agentwatch keeps in its own folder this needs no root.
-  `chrome.debugger` with the silent flag works from it.
-- `--silent-debugger-extension-api` works in both channels.
+- Beta is a different browser to a site: another major version in the User-Agent, the client hints
+  and `navigator.userAgentData`, another GREASE brand, and web features that stable lacks or has
+  (its section 2.1). Stable at the same version sends the operator's own identity, also the JA4 TLS
+  and HTTP/2 fingerprints (inferred from its measurements; its Mac check 5 confirms it).
+- The extension works the same in both channels: both ignore `--load-extension`, both install the
+  agent package from Chrome's external extensions file with no developer mode and no prompt, both
+  keep an extension that "Load unpacked" installed with developer mode on, and both drive a tab
+  through `chrome.debugger` with `--silent-debugger-extension-api` with no banner and
+  `navigator.webdriver` false (its sections 3 and 5).
+- "Same OS" must mean the same kind of machine: a send carries cookies and page storage, not the
+  machine. Only an agent browser on the operator's Mac, or on a Mac like it, can match the
+  operator's Chrome.
+- Its open questions for the operator (where the agent browser runs, how the agent package gets in,
+  a second instance of `Google Chrome.app` on the Mac, the three background flags) are its own; this
+  design does not repeat them. Section 10 follows its recommendation for each OS.
 
-The facts this design adds: nothing in the browser model depends on the channel (it reads the product
-and the user agent from the running browser), and the extension path needs a Chrome that honours the
-silent flag and loads the agent package in one of the ways of section 10.
+Nothing in the browser model depends on the channel: it reads the product and the user agent from
+the running browser.
 
 ## 10. Linux and macOS (task item 4)
 
 **Linux (taylor first).** The stage-1 unit stays: the daemon starts a private Xvfb (`-nolisten tcp`,
 an auth file) and the agent Chrome with `--silent-debugger-extension-api`, no remote-debugging flag
-and no port. How the agent package gets in depends on section 9:
+and no port. The agent Chrome becomes Google Chrome stable (section 9), and the agent package gets in
+through Chrome's external extensions file, as the comparison recommends (its sections 5 and 9):
 
-- Chromium (today): `--load-extension=<agent package>` at each start (stage 1).
-- Branded Chrome (the comparison's forming recommendation): agentwatch keeps a Chrome build in its
-  own tools folder and writes the external extensions file next to its binary (ab-v16.2 interim
-  finding 2). A packed CRX needs a signing key; stage 1 never wrote the agent package's private key,
-  so the CRX gets a new key and a new agent-mode ID, and the pins and the native host's
+- agentwatch keeps a Google Chrome stable build in its own tools folder (unpacked from Google's
+  `.deb`, no system install) and writes `<id>.json` (`external_crx`, `external_version`) into the
+  `extensions` folder next to its binary. That needs no root and installs the agent package with no
+  developer mode and no prompt (measured by the comparison). The file applies to every profile of
+  that Chrome build; only the agent profile uses this build.
+- agentwatch never writes the system folders (`/opt/google/chrome/extensions`,
+  `/usr/share/google-chrome/extensions/`): on a box with a system Chrome they would install the agent
+  package into a person's own profile there too.
+- A Chrome that agentwatch unpacks gets no automatic update. agentwatch fetches each new stable
+  `.deb` and restarts the agent Chrome on it (stage 4).
+- The CRX: Chrome packs it itself (`--pack-extension`), and its ID comes from its signing key.
+  Stage 1 never wrote the agent package's private key, so the CRX gets a new key and a new agent-mode
+  ID. agentwatch keeps the new key (0600) to keep that ID, and the pins and the native host's
   `allowed_origins` move to it.
+- Chromium keeps the stage-1 `--load-extension` start, for a box where the operator chooses Chromium.
 
 The relay starts with the unit and stops with it. The fail-closed rule of stage 1 extends to the
 endpoint: while the extension has not confirmed the operator's list, the endpoint refuses
 connections. No prompt exists at any step. agentwatch design §5.13 item 1 (the xdotool version gate)
 is not needed on this path.
 
-**macOS.** The agent Chrome is the branded Chrome that section 9 names, on its own profile, started
-with `open -n -g` (it never takes the operator's focus). Branded Chrome refuses `--load-extension`,
-so the operator loads the agent package once per agent profile: chrome://extensions, developer mode
-on, Load unpacked. Whether Chrome's external extensions file works on the Mac is not measured. Its
-per-user folder (`~/Library/Application Support/Google/Chrome/External Extensions/`) reaches every
-Chrome profile of that user, the operator's own Chrome too, so agentwatch must never write there: it
-would put the agent package, with `debugger`, into the operator's Chrome. Then:
+**macOS.** The agent Chrome is a second instance of the operator's own `Google Chrome.app` (section 9),
+on its own profile, started with `open -n -g` (it never takes the operator's focus). The comparison
+names its costs: the Dock icon, Cmd-Tab and `open -a "Google Chrome"` can bring the agent's window
+forward, and agentwatch must restart the agent Chrome when the app's version changes (its section 7;
+whether this is acceptable is its open question 3).
+Branded Chrome refuses `--load-extension`, and on the Mac the external extensions file accepts only a
+Chrome Web Store item and asks for one confirmation (Google's documentation; the comparison's Mac
+check 3). Its folders (`~/Library/Application Support/Google/Chrome/External Extensions/` and
+`/Library/...`) reach every Chrome profile of that user, the operator's own Chrome too, so agentwatch
+never writes there: it would put the agent package, with `debugger`, into the operator's Chrome. So
+the agent package gets in one of three ways, as the comparison recommends:
+
+- "Load unpacked" by the operator, once per agent profile, with developer mode on (developer mode
+  must stay on). This is the default until the operator chooses one of the others.
+- An unlisted Chrome Web Store item: one "Add to Chrome" click per agent profile, updates from the
+  store.
+- An enterprise policy (`ExtensionInstallForcelist`), which on the Mac needs MDM.
+
+Then:
 
 - **No approval click.** `chrome.debugger.attach` needs no approval (measured on Linux; on the Mac the
-  silent flag and the native host location passed Mac checks 2 and 3).
-- **#9 (a sleep ends the approval) ends for agentwatch:** there is no approval to lose. Open: Mac
-  check 4, whether `chrome.debugger` and the native port come back after a sleep with no prompt. If
+  silent flag and the native host location passed the agentwatch design's Mac checks 2 and 3 of
+  2026-11-01).
+- **#9 (a sleep ends the approval) ends for agentwatch:** there is no approval to lose. Open: the
+  agentwatch design's Mac check 4, whether `chrome.debugger` and the native port come back after a sleep with no prompt. If
   Chrome detaches the debugger at a sleep, the model sends each client `Target.detachedFromTarget`,
   attaches again after the wake (no prompt), and clients reconnect. A client loses its open page
   objects, not the tabs.
 - **#3 (which window asks) ends for agentwatch:** no window asks.
-- Open: Mac check 1, whether the manual load survives `quit` and `launch` on the Mac (ab-v16.2
-  measured that it does on Linux), and whether Chrome shows a developer-mode warning at start.
+- Open: whether the manual load survives `quit` and `launch` on the Mac and whether Chrome shows a
+  developer-mode warning at start (the comparison measured both on Linux: it survives, no warning;
+  its Mac check 2).
 - The notice of agentwatch design §5.8 still names the consumer, the profile and the box, for the
   cases where a person must act (a sign-in, a Chrome that does not start).
 
@@ -522,8 +561,8 @@ the tab and tells the client, and runs the popup cases many times in its live te
 | 1. Contracts | chrome-extension (`docs/protocol.md`) | C10: the bridge (the fixed call list, the events, the deadline, parts). The C4 change: a second channel for the bridge, never queued behind an import, parts that name their channel. C11: the endpoint path, the scope, one connection per tab, the refusal texts. The agentwatch side reads the same file | — |
 | 2. Two packages | chrome-extension | `sender/` becomes `operator/`, `receiver/` becomes `agent/`; the bridge in `agent/`; the DNR navigation-header rule and the frame rule; the attach of a new tab in `tabs.onCreated` (not of the restore tab or an operator tab; one module owns every attach) and the hold of its first request; manifest tests (the operator package has no control permission); bridge unit tests with the fake chrome; the native host's parent check (with stage 4) | 1 |
 | 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie (per Q4), permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install, popups many times; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
-| 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; the way the agent package gets in (section 10, after ab-v16.2); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
-| 5. The Mac | agentwatch, chrome-extension | Mac checks 1 and 4 with the operator; the manual-load guide; the Mac launch path | 4 |
+| 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; Google Chrome stable in the tools folder with the external extensions file, the CRX key and the version updates (section 10); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
+| 5. The Mac | agentwatch, chrome-extension | The agentwatch design's Mac checks 1 and 4 with the operator and the comparison's Mac checks (2, 4, 6 and 9 touch agent mode); the manual-load guide; the second `Google Chrome.app` instance; the Mac launch path | 4 |
 | 6. Consumers (their choice) | vedlo, marketdata-update | Move from the CDP proxy to the endpoint at a pin bump | 3 |
 
 Stages 2 and 3 can run at the same time after stage 1. Each stage is a branch and a pull request
@@ -540,8 +579,9 @@ manager.
   `receiver/` to `agent/`), and the receiver gains the bridge, the navigation-header rule and the
   frame rule.
 - **Contract C4** (the native link) gains a second channel for the bridge (section 4.2).
-- **§5.15 loading:** with branded Chrome on Linux the agent package comes from the external
-  extensions file, not from `--load-extension`, and its ID changes (section 10).
+- **§5.15 loading and the Chromium of §3:** the agent Chrome becomes Google Chrome stable (the Chrome
+  comparison). On Linux the agent package comes from the external extensions file of a Chrome build
+  in agentwatch's tools folder, not from `--load-extension`, and its ID changes (section 10).
 - O1 to O19 stay as they are.
 
 ## 14. Open questions for the operator (task item 7)
@@ -616,4 +656,4 @@ run 19, and its control run). It ran in a private Xvfb with an auth file, a thro
 sites on 127.0.0.1 only. The probe joins the extension and the relay with a loopback WebSocket; the
 design uses the native link. Rows marked D or C in section 5 are not measured by a client. Two fresh
 reviewers read the draft and the probe; this version takes their findings (the PR description lists
-them). The interim findings of ab-v16.2 are cited as such; its final report decides section 9.
+them). Sections 9 and 10 follow the Chrome comparison's final report (merged in b320d09).
