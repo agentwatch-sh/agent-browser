@@ -356,9 +356,11 @@ The Mac ran these checks on 2026-11-03, on the operator's Mac (macOS 27), with t
 present for each step that needs a person (board task ab-b84.7). The browsers were Google Chrome
 156.0.8078.80 and Google Chrome Beta 158.0.8127.2 from `/Applications`. The operator's own Chrome,
 which was already running, was 156.0.8078.74. The probe ran at agent-browser 21ac31a with two local
-fixes that are not in this repository yet: without them, `--serve` stops with an error at a
-person's certificate warning, and on macOS the "Load unpacked" folder dialog ends after the 60 s
-CDP limit. The answer to each check follows its question. Limits of the Mac run:
+fixes: without them, `--serve` stops with an error at a person's certificate warning, and on macOS
+the "Load unpacked" folder dialog ends after the 60 s CDP limit. PR #26 (board task ab-v16.10)
+fixed these two probe defects and the three in the limits below (developer mode, `summary.json`
+and the `--serve` hang). The results in this section come from the run before that fix. The answer
+to each check follows its question. Limits of the Mac run:
 
 - No screenshots: the session that ran the probe had no Screen Recording permission. So a prompt or
   a bar on the Mac is known only from what the operator saw and said.
