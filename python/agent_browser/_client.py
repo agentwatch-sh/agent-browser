@@ -105,6 +105,9 @@ class AgentBrowser:
     a method reaches the tabs outside the scope. The CLI checks the name (1 to 64 letters, digits,
     ".", "_" or "-", starting with a letter or a digit) and raises UsageError for any other; a
     tab_scope that is not a string raises ValueError here, before any call.
+
+    An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
+    current folder. A method's empty path goes to the CLI, which raises UsageError.
     """
 
     def __init__(

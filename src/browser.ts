@@ -463,6 +463,11 @@ export function keyFields(key: string, code: string, keyCode: number, modifiers 
   return { key, code, windowsVirtualKeyCode: keyCode, ...(/^F\d+$/.test(code) ? {} : { nativeVirtualKeyCode: keyCode }), modifiers };
 }
 
+/** An empty path is a usage error, before any CDP call: "" would be the current folder (fetchToFile wrote "./.part"). */
+function notEmpty(path: string, method: string): void {
+  if (path === "") throw new UsageError(`${method}: the path is empty`);
+}
+
 /** An exact page size for a screenshot or a recording: CSS pixels and a device pixel ratio. */
 export type Viewport = { width: number; height: number; scale: number };
 
@@ -684,6 +689,7 @@ export class Tab {
 
   /** Put local files into an <input type=file>. */
   async setFiles(selector: string, files: string[]): Promise<void> {
+    if (files.some((f) => f === "")) throw new UsageError("setFiles: a file path is empty");
     await this.assertAllowed();
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
@@ -698,6 +704,7 @@ export class Tab {
    * never hides the shot's own error.
    */
   async screenshot(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number } = {}): Promise<string> {
+    notEmpty(path, "screenshot");
     await this.assertAllowed();
     if (!opts.viewport) return this.capture(path, !!opts.fullPage);
     const { width, height, scale } = opts.viewport;
@@ -741,6 +748,7 @@ export class Tab {
    * The URL must be allowlisted too: it is fetched with the profile's cookies.
    */
   async fetchToFile(url: string, path: string, chunkBytes = 8 * 1024 * 1024): Promise<{ bytes: number; contentType: string }> {
+    notEmpty(path, "fetchToFile");
     assertAllowedUrl(url, this.browser.allow);
     await this.assertAllowed();
     const key = `__agent_browser_${Math.random().toString(36).slice(2)}`;
@@ -778,6 +786,7 @@ export class Tab {
    * The URL must be allowlisted too (add the CDN's host): it is loaded with the profile's cookies.
    */
   async download(url: string, path: string): Promise<{ bytes: number; status: number }> {
+    notEmpty(path, "download");
     assertAllowedUrl(url, this.browser.allow);
     await this.assertAllowed();
     const { frameTree } = await this.send("Page.getFrameTree");
@@ -810,6 +819,7 @@ export class Tab {
    * this call and then restored to Chrome's default.
    */
   async expectDownload(action: () => Promise<unknown>, dir: string, timeoutMs = 120_000): Promise<Download> {
+    notEmpty(dir, "expectDownload");
     const conn = this.browser.conn;
     mkdirSync(dir, { recursive: true });
     await conn.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: dir, eventsEnabled: true });
