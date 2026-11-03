@@ -143,11 +143,13 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   ("Continue where you left off", which agent-browser asks for) keeps the restored window's old name,
   so a launch of such a profile logs one line that asks you to name the window once in Chrome
   ("Name window…" in the tab strip's menu, or the Window menu on macOS) with that exact name. A
-  restored window keeps its name at each restart. (Measured on Chromium 156 on Linux; the macOS look
-  is not measured yet.) While a command waits for the prompt, its notice names the Chrome pid and the
-  profile, and the window too when there is evidence for its name: agent-browser started that Chrome
-  with the name, and the profile does not restore its session. Chrome shows the prompt over the
-  profile's last active window, so with a second window open the prompt can be on the other one.
+  restored window keeps its name at each restart. (Measured on Chromium 156 on Linux, and on macOS
+  on 2026-11-03 with Chrome Beta 158: there the name shows in the Dock menu and the Window menu, and
+  a restored window keeps its old name, as on Linux.) While a command waits for the prompt, its
+  notice names the Chrome pid and the profile, and the window too when there is evidence for its
+  name: agent-browser started that Chrome with the name, and the profile does not restore its
+  session. Chrome shows the prompt over the profile's last active window, so with a second window
+  open the prompt can be on the other one.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -753,6 +755,14 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   its argument guard, its analysis and its flow with a fake Chrome. Before start 1 it compares the
   monitor's front app with `lsappinfo front`, and it stops when they differ. Compile the monitor with
   `swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o /tmp/abfs-monitor`.
+- `test/live/function-keys/` (Linux, in a private Xvfb; macOS only with `--on-my-screen`, because
+  its windows reach the person's screen and take the keyboard focus; see the head of `check.ts`): the
+  function-key check of #7. Its own Chrome, on a throwaway profile, with one local page, gets each key
+  three ways (as before #7, through `record`'s press step, through `press`), and the check records
+  what the page saw and what Chrome did. Not part of `npm test`.
+- `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
+  the start guard, the trials and Chrome switches of each platform, the "before" key events and the
+  failure rules.
 - `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
   `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
   (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
