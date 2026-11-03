@@ -2,7 +2,7 @@
 // Space or pointer. It drives ONE about:blank tab of its own in a running, approved agent browser (no
 // site, no other tab, no Chrome start, no quit), and logs when each command starts and ends, while
 // monitor.swift logs the frontmost app and the pointer. analyse.py then names any command that changed
-// either. Not part of `npm test`.
+// either. Not part of `npm test`. The Chrome start itself has its own check: start.ts (ab-b84.11).
 //
 //   swiftc -O test/live/takeover/monitor.swift -o <dir>/monitor && (<dir>/monitor 60 > <dir>/monitor.jsonl &)
 //   node test/live/takeover/check.ts --state-dir DIR --allowlist FILE --out-dir <dir>
