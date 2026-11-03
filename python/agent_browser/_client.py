@@ -66,6 +66,15 @@ def _strings(value: object) -> bool:
     return isinstance(value, AnySequence) and not isinstance(value, (str, bytes)) and all(isinstance(a, str) for a in value)
 
 
+def _path(name: str, value: Optional[PathLike]) -> Optional[Path]:
+    """A path argument as a Path. An empty one is a ValueError: Path("") is ".", the current folder."""
+    if value is None:
+        return None
+    if os.fspath(value) == "":
+        raise ValueError(f"{name} is an empty path: give a path, or leave it out")
+    return Path(value)
+
+
 def _argv_list(name: str, value: Optional[Sequence[str]]) -> Optional[List[str]]:
     """A command for the CLI to run: a non-empty argv list, never a shell string."""
     if value is None:
@@ -96,6 +105,9 @@ class AgentBrowser:
     a method reaches the tabs outside the scope. The CLI checks the name (1 to 64 letters, digits,
     ".", "_" or "-", starting with a letter or a digit) and raises UsageError for any other; a
     tab_scope that is not a string raises ValueError here, before any call.
+
+    An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
+    current folder. A method's empty path goes to the CLI, which raises UsageError.
     """
 
     def __init__(
@@ -135,15 +147,18 @@ class AgentBrowser:
             raise ValueError("chrome_args must be a sequence of strings (one Chrome flag each, not one shell string)")
         if tab_scope is not None and not isinstance(tab_scope, str):
             raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
-        self.state_dir = Path(state_dir)
-        self.allowlist = Path(allowlist) if allowlist is not None else None
-        self.profile = Path(profile) if profile is not None else None
-        self.socket = Path(socket) if socket is not None else None
+        state = _path("state_dir", state_dir)
+        if state is None:
+            raise ValueError("state_dir is required: this consumer's own state folder")
+        self.state_dir = state
+        self.allowlist = _path("allowlist", allowlist)
+        self.profile = _path("profile", profile)
+        self.socket = _path("socket", socket)
         self.mode: Literal["agent", "personal"] = mode
-        self.chrome_bin = Path(chrome_bin) if chrome_bin is not None else None
+        self.chrome_bin = _path("chrome_bin", chrome_bin)
         self.chrome_args: Optional[List[str]] = list(chrome_args) if chrome_args is not None else None
         self.endpoint = endpoint
-        self.personal_user_data_dir = Path(personal_user_data_dir) if personal_user_data_dir is not None else None
+        self.personal_user_data_dir = _path("personal_user_data_dir", personal_user_data_dir)
         self.no_launch = no_launch
         self.no_prompt = no_prompt
         self.notify_command = notify_argv
@@ -153,7 +168,7 @@ class AgentBrowser:
         self.command_name = command_name
         self.tab_scope = tab_scope
         self.node = node
-        self.package_dir = Path(package_dir) if package_dir is not None else None
+        self.package_dir = _path("package_dir", package_dir)
         self.timeout = timeout
         self.env: Optional[Dict[str, str]] = dict(env) if env is not None else None
         self._node_checked: Optional[str] = None

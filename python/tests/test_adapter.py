@@ -366,6 +366,22 @@ class NodeAndOutputTest(unittest.TestCase):
             AgentBrowser(self.consumer.state_dir, package_dir=self.folder).commands()
 
 
+class EmptyPathTest(unittest.TestCase):
+    """An empty path argument is refused before any call: Path("") would be ".", the current folder."""
+
+    def test_an_empty_path_argument_is_a_value_error_before_any_call(self) -> None:
+        with mock.patch("agent_browser._client.subprocess.run") as run:
+            for name in ("allowlist", "profile", "socket", "chrome_bin", "personal_user_data_dir", "package_dir"):
+                with self.assertRaises(ValueError, msg=name) as caught:
+                    AgentBrowser("state", **{name: ""})
+                self.assertIn(f"{name} is an empty path", str(caught.exception))
+            with self.assertRaises(ValueError) as caught:
+                AgentBrowser("")
+            self.assertIn("state_dir is an empty path", str(caught.exception))
+            AgentBrowser("state", profile=Path("."))  # an explicit current folder stays allowed
+        run.assert_not_called()
+
+
 class PathsTest(unittest.TestCase):
     """README, Paths: the adapter passes its paths to the CLI as they are, in the caller's current folder."""
 

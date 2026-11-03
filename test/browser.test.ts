@@ -4,11 +4,11 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { parseKey, sendKey } from "../src/record.ts";
-import { NotAllowedError, PinRequiredError } from "../src/errors.ts";
+import { NotAllowedError, PinRequiredError, UsageError } from "../src/errors.ts";
 import { resolveOptions } from "../src/options.ts";
 import { proxyInfo, stopProxy } from "../src/proxy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
@@ -111,6 +111,20 @@ test("a function key goes to the page only: without nativeVirtualKeyCode, so Chr
     assert.deepEqual(fields(f), [["keyDown", 0, 112 + i, undefined], ["keyUp", 0, 112 + i, undefined], ["rawKeyDown", 8, 112 + i, undefined], ["keyUp", 8, 112 + i, undefined]], f);
   assert.deepEqual(fields("Enter"), [["keyDown", 0, 13, 13], ["keyUp", 0, 13, 13]], "other keys keep their native key code");
   assert.deepEqual(fields("ArrowDown"), [["rawKeyDown", 8, 40, 40], ["keyUp", 8, 40, 40]]);
+  await tab.close();
+});
+
+test("a Tab method with an empty path is a usage error before any CDP call, never the current folder (ab-b84.9)", async () => {
+  const tab = await browser.open(base);
+  const calls = fake.callsFor(tab.targetId).length;
+  for (const [what, run] of [
+    ["screenshot", () => tab.screenshot("")], ["fetchToFile", () => tab.fetchToFile(base + "/", "")], ["download", () => tab.download(base + "/", "")],
+    ["expectDownload", () => tab.expectDownload(async () => {}, "")], ["setFiles", () => tab.setFiles("#i", ["/tmp/a.txt", ""])],
+  ] as [string, () => Promise<unknown>][]) {
+    await assert.rejects(run(), (e: Error) => e instanceof UsageError && /empty/.test(e.message), what);
+  }
+  assert.equal(fake.callsFor(tab.targetId).length, calls, "no CDP call reached the tab");
+  assert.equal(existsSync(".part"), false, "fetchToFile and download wrote no ./.part");
   await tab.close();
 });
 

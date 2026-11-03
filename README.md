@@ -92,13 +92,16 @@ flags (`--state-dir`, `--allowlist`, `--profile`, `--socket`, `--chrome-bin`,
 `--personal-user-data-dir`) also take a relative path, and the CLI resolves it from its current
 folder. The path of `shot`, `fetch` and `download`, and `record`'s `--out`, `--script` and `--setup`,
 resolve from the current folder in the CLI and in the library alike. `--ffmpeg` is the exception: it
-must be absolute. `Tab.setFiles` and `Tab.expectDownload` give their paths to Chrome as they are, so
-give them absolute paths. The Python adapter passes its paths to the CLI as they are, and runs the
-CLI in the caller's current folder. Neither the CLI nor the adapter expands `~`: the shell does so
-only at the start of a word (`--state-dir ~/s`, not `--state-dir=~/s`), and Python's `Path("~/s")` keeps it. The 103-byte
-limit of the socket path applies to the resolved path. Give the state folder as an absolute path: a
-relative one names another folder, so another profile with other logins, when the current folder
-changes.
+must be absolute. An empty path is a usage error, never the current folder: in the Node options, the
+CLI flags, the command paths and the `Tab` methods that take a path. In the Python constructor an
+empty string raises `ValueError`; a `Path("")` is already `Path(".")`, the current folder, so the
+adapter cannot refuse it. `Tab.setFiles` and `Tab.expectDownload` give their paths to Chrome as they
+are, so give them absolute paths. The Python adapter passes its paths to the CLI as they are, and runs
+the CLI in the caller's current folder. Neither the CLI nor the adapter expands `~`: the shell does so
+only at the start of a word (`--state-dir ~/s`, not `--state-dir=~/s`), and Python's `Path("~/s")`
+keeps it. The 103-byte limit of the socket path applies to the resolved path. Give the state folder as
+an absolute path: a relative one names another folder, so another profile with other logins, when the
+current folder changes.
 
 Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
 is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.
@@ -609,7 +612,7 @@ adapter how to run the CLI.
 `"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
 of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
 sends `chrome_args`, `notify_command` and `approve_command` to the CLI as one JSON array each, and
-raises `ValueError` for a value of the wrong type.
+raises `ValueError` for a value of the wrong type and for an empty path argument (`""`).
 
 One method for each CLI command, with the same options (snake_case), each returning a frozen
 dataclass:
