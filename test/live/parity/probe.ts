@@ -19,8 +19,10 @@
 // --serve starts only the probe site and records what a browser that a person opens there shows,
 // for example the operator's own Chrome (with its own field trials): http://probe.localhost:PORT/
 // and https://probe.localhost:PORT+1/ (a certificate warning; Advanced, then Proceed). It writes
-// DIR/LABEL/site.json and tls.json for compare.ts. The page reads only properties of the browser and
-// the machine, and sends them only to the probe server on 127.0.0.1.
+// DIR/LABEL/site.json and tls.json for compare.ts, and a LABEL column in DIR/summary.json that a full
+// run into the same folder keeps. Ctrl+C ends it, also while the browser keeps its connections open.
+// The page reads only properties of the browser and the machine, and sends them only to the probe
+// server on 127.0.0.1.
 //
 // The runs (each on a fresh profile unless it says otherwise):
 //   site          the plain agent flags: the page fingerprint, then a real click and typing (Linux)
@@ -57,6 +59,7 @@ import { createHash, createPublicKey, randomBytes, X509Certificate } from "node:
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AGENT_ARGS } from "../../../src/agent.ts";
+import { readPrefs, writeSummary } from "./files.ts";
 import { ProbeServer } from "./server.ts";
 
 const HERE = new URL(".", import.meta.url).pathname;
@@ -216,17 +219,8 @@ function extensionId(pem: string): string {
   return [...createHash("sha256").update(der).digest("hex").slice(0, 32)].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
 }
 
-// The probe extension's entries: the unpacked copies by their folder, the packed one by its ID.
+// The packed probe extension's ID, for readPrefs (the unpacked copies go by their folder).
 const OUR_IDS = new Set<string>();
-function readPrefs(profile: string) {
-  const read = (f: string) => { try { return JSON.parse(readFileSync(join(profile, "Default", f), "utf8")); } catch { return undefined; } };
-  const prefs = read("Preferences"), secure = read("Secure Preferences");
-  const settings = { ...(prefs?.extensions?.settings ?? {}), ...(secure?.extensions?.settings ?? {}) };
-  const ours = Object.fromEntries(Object.entries(settings).filter(([id, v]: [string, any]) => OUR_IDS.has(id) || (typeof v?.path === "string" && v.path.includes("parity-ext"))).map(([id, v]: [string, any]) => [id, {
-    location: v.location, state: v.state, disable_reasons: v.disable_reasons, creation_flags: v.creation_flags, from_webstore: v.from_webstore, path: v.path,
-  }]));
-  return { developerMode: prefs?.extensions?.ui?.developer_mode, ours };
-}
 
 function versionOf(bin: string): string {
   try { return execFileSync(bin, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch (e) { return `unknown: ${e}`; }
@@ -338,7 +332,7 @@ async function main() {
         } finally {
           await quit(chrome);
         }
-        out.prefs = readPrefs(profile);
+        out.prefs = readPrefs(profile, OUR_IDS);
         out.ms = Date.now() - started;
         out.records = server.records.filter((r) => r.run === server.run);
         writeFileSync(join(dir, `${name}.json`), JSON.stringify(out, null, 1));
@@ -413,7 +407,7 @@ async function main() {
     }
   } finally {
     summary.blockedEgress = server.records.filter((r) => r.kind === "blocked-egress").map((r) => ({ run: r.run, ...(r.data as object) }));
-    writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 1));
+    writeSummary(join(OUT, "summary.json"), summary);
     display.stop();
     await server.stop();
   }
@@ -438,17 +432,20 @@ async function extensionsPage(server: ProbeServer, display: Display, label: stri
     mark("extensions-page", { targetId });
     const att = await chrome.cdp!.send("Target.attachToTarget", { targetId, flatten: true });
     const sessionId = att.result?.sessionId;
-    const ev = async (expression: string) => (await chrome.cdp!.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, 60_000, sessionId)).result?.result?.value;
+    const ev = async (expression: string, ms = 60_000) => (await chrome.cdp!.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, ms, sessionId)).result?.result?.value;
     await sleep(2000);
     const want = action === "install";
     mark(`developer-mode-${want ? "on" : "off"}`, await ev(`chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode: ${want}}).then(() => 'ok', (e) => String(e))`));
     await sleep(1500);
     out.shots.devmode = screenshot(display, join(dir, `${name}-devmode.png`));
     if (want) {
-      const loaded = ev(`chrome.developerPrivate.loadUnpacked({failQuietly: false, populateError: true}).then((r) => JSON.stringify(r ?? null), (e) => 'error: ' + e)`);
+      // The wait for the folder dialog after the steps below: xdotool on Linux, a person on macOS. The
+      // CDP limit of loadUnpacked counts from here, before those steps, so it outlasts that wait.
+      const dialogMs = LINUX ? 10_000 : 180_000;
+      const loaded = ev(`chrome.developerPrivate.loadUnpacked({failQuietly: false, populateError: true}).then((r) => JSON.stringify(r ?? null), (e) => 'error: ' + e)`, Math.max(60_000, dialogMs + 10_000));
       if (!LINUX) {
         // macOS: a person answers the folder dialog, as in a real "Load unpacked".
-        log(`${server.run}: in Chrome's folder dialog, pick this folder and click Select (3 minutes): ${ext}`);
+        log(`${server.run}: in Chrome's folder dialog, pick this folder and click Select (${dialogMs / 60_000} minutes): ${ext}`);
       }
       await sleep(3000);
       out.shots.dialog = screenshot(display, join(dir, `${name}-dialog.png`));
@@ -481,7 +478,7 @@ async function extensionsPage(server: ProbeServer, display: Display, label: stri
         }
         out.shots.afterOpen = screenshot(display, join(dir, `${name}-after-open.png`));
       }
-      mark("loadUnpacked", await Promise.race([loaded, sleep(LINUX ? 10_000 : 180_000).then(() => "no answer in time")]));
+      mark("loadUnpacked", await Promise.race([loaded, sleep(dialogMs).then(() => "no answer in time")]));
       out.extAlive = !!(await server.waitFor("ext-alive", 10_000));
       mark("ext-alive", out.extAlive);
       out.shots.done = screenshot(display, join(dir, `${name}-done.png`));
@@ -489,7 +486,7 @@ async function extensionsPage(server: ProbeServer, display: Display, label: stri
   } finally {
     await quit(chrome);
   }
-  out.prefs = readPrefs(profile);
+  out.prefs = readPrefs(profile, OUR_IDS);
   out.records = server.records.filter((r) => r.run === server.run);
   writeFileSync(join(dir, `${name}.json`), JSON.stringify(out, null, 1));
   log(`${server.run}: done, extension ${out.extAlive ? "loaded" : "not loaded"}, developer mode ${out.prefs.developerMode}`);

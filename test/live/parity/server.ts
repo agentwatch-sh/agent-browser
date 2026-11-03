@@ -34,6 +34,7 @@ export class ProbeServer extends EventEmitter {
   private waiters: ((cmd: unknown) => void)[] = [];
   private nextId = 1;
   private servers: Server[] = [];
+  private conns = new Set<Socket>();   // the open connections of all three servers
   private h2Conn = new Map<number, unknown>();
   private connSeq = 0;
   readonly port: number;
@@ -86,13 +87,17 @@ export class ProbeServer extends EventEmitter {
     const proxy = createNetServer((sock) => this.proxyConnection(sock));
     for (const [srv, port] of [[http, this.port], [tlsRaw, this.port + 1], [proxy, this.port + 2]] as const) {
       await new Promise<void>((resolve, reject) => { srv.once("error", reject); srv.listen(port, "127.0.0.1", () => resolve()); });
+      srv.on("connection", (c: Socket) => { this.conns.add(c); c.once("close", () => this.conns.delete(c)); });
       this.servers.push(srv);
     }
   }
 
+  /** Close the servers. A browser that a person opened (--serve) keeps its connections open: end them. */
   async stop() {
-    for (const s of this.servers) { (s as any).closeAllConnections?.(); s.close(); }
+    const closed = this.servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve())));
+    for (const c of this.conns) c.destroy();
     for (const w of this.waiters) w(undefined);
+    await Promise.all(closed);
   }
 
   private handle(req: Req, res: Res, proto: string) {
@@ -188,6 +193,9 @@ export class ProbeServer extends EventEmitter {
           if (start) { done = true; this.h2Conn.set(conn, start); this.recordFor(run, "h2-start", { conn, alpn: tls.alpnProtocol, start }); }
         } catch (e) { done = true; this.recordFor(run, "h2-start", { conn, alpn: tls.alpnProtocol, error: String(e) }); }
       });
+      // replay() passes the TLSSocket's errors on, for example the alert that ends the handshake at a
+      // certificate warning: without a listener here, Node throws.
+      tapped.on("error", () => {});
       (tapped as any).__probeConn = conn;
       tls.once("secure", () => {
         if (tls.alpnProtocol === "h2") h2.emit("connection", tapped);
