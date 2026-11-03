@@ -10,7 +10,7 @@ import { redact } from "../src/outline.ts";
 import { resolveOptions } from "../src/options.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { stopProxy } from "../src/proxy.ts";
-import { findFfmpeg } from "../src/record.ts";
+import { findFfmpeg, planRecording } from "../src/record.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { BIN, cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -34,6 +34,8 @@ test("the CLI takes a relative path flag from its current folder; a Node option 
       "personal-user-data-dir": "ud" }, () => {});
     assert.deepEqual([o.stateDir, o.allowlistFile, o.profileDir, o.socketPath, o.chromeBin, o.personalUserDataDir],
       ["st", "allow.json", "p", "s.sock", "bin/chrome", "ud"].map((p) => join(here, p)));
+    // record's paths resolve from the current folder too, in the CLI and in the library: the missing script is named there.
+    assert.throws(() => planRecording({ out: "c.mp4", script: "nope.json" }, []), (e: Error) => e.message.includes(join(here, "nope.json")));
   } finally {
     process.chdir(before);
     own.remove();

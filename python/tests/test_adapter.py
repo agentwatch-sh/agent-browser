@@ -366,5 +366,25 @@ class NodeAndOutputTest(unittest.TestCase):
             AgentBrowser(self.consumer.state_dir, package_dir=self.folder).commands()
 
 
+class PathsTest(unittest.TestCase):
+    """README, Paths: the adapter passes its paths to the CLI as they are, in the caller's current folder."""
+
+    def test_relative_paths_reach_the_cli_unchanged_and_the_cli_runs_in_the_current_folder(self) -> None:
+        calls: List[Any] = []
+
+        def fake_run(argv: List[str], **kwargs: Any) -> "subprocess.CompletedProcess[Any]":
+            if argv[1:] == ["--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="v26.12.0\n", stderr="")
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout=b'{"ok":true,"command":"tabs","tabs":[],"window":null}\n', stderr=b"")
+
+        with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
+            AgentBrowser("state", "allow.json", profile="p", socket="s.sock", no_launch=True).tabs()
+        [(argv, kwargs)] = calls
+        for flag, value in (("--state-dir", "state"), ("--allowlist", "allow.json"), ("--profile", "p"), ("--socket", "s.sock")):
+            self.assertEqual(argv[argv.index(flag) + 1], value, flag)
+        self.assertNotIn("cwd", kwargs, "the CLI runs in the caller's current folder, so a relative path means the same there")
+
+
 if __name__ == "__main__":
     unittest.main()
