@@ -20,5 +20,6 @@ for t, kind, x in timeline:
     if "front" in x:
         tag = "  <== THE AGENT CHROME" if chrome_pid and x["front"] == chrome_pid else ""
         print(f"{t:.2f}  FRONT -> {x['name']} (pid {x['front']}) during: {current}{tag}")
-    else:
+    elif "pointer" in x:
         print(f"{t:.2f}  pointer {x['pointer']} during: {current}")
+    # {"alive": true} is the monitor's heartbeat: no change.
