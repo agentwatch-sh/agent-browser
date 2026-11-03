@@ -1,0 +1,633 @@
+{
+  "started": "2026-11-03T16:22:16.043Z",
+  "info": {
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "fullVersion": "156.0.8078.73",
+    "id": "hbifjmhaipjnpobdcomdgegidnjojecm"
+  },
+  "page": [
+    {
+      "label": "Target.getTargetInfo",
+      "method": "Target.getTargetInfo",
+      "ok": true,
+      "ms": 1,
+      "note": [
+        "page",
+        "773930D62B44F1C6981E42A1E81E47D0"
+      ]
+    },
+    {
+      "label": "Browser.getVersion",
+      "method": "Browser.getVersion",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.getVersion' wasn't found\"}"
+    },
+    {
+      "label": "Browser.getWindowForTarget",
+      "method": "Browser.getWindowForTarget",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.getWindowForTarget' wasn't found\"}"
+    },
+    {
+      "label": "Browser.getWindowBounds",
+      "method": "Browser.getWindowBounds",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.getWindowBounds' wasn't found\"}"
+    },
+    {
+      "label": "Browser.setDownloadBehavior",
+      "method": "Browser.setDownloadBehavior",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.setDownloadBehavior' wasn't found\"}"
+    },
+    {
+      "label": "Browser.grantPermissions",
+      "method": "Browser.grantPermissions",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.grantPermissions' wasn't found\"}"
+    },
+    {
+      "label": "Browser.resetPermissions",
+      "method": "Browser.resetPermissions",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.resetPermissions' wasn't found\"}"
+    },
+    {
+      "label": "Browser.getHistograms",
+      "method": "Browser.getHistograms",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Browser.getHistograms' wasn't found\"}"
+    },
+    {
+      "label": "Target.getTargets",
+      "method": "Target.getTargets",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.setDiscoverTargets",
+      "method": "Target.setDiscoverTargets",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.createTarget",
+      "method": "Target.createTarget",
+      "ok": true,
+      "ms": 23.1
+    },
+    {
+      "label": "Target.attachToTarget",
+      "method": "Target.attachToTarget",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.attachToBrowserTarget",
+      "method": "Target.attachToBrowserTarget",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.createBrowserContext",
+      "method": "Target.createBrowserContext",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.getBrowserContexts",
+      "method": "Target.getBrowserContexts",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.activateTarget",
+      "method": "Target.activateTarget",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Not allowed\"}"
+    },
+    {
+      "label": "Target.setAutoAttach (page session)",
+      "method": "Target.setAutoAttach",
+      "ok": true,
+      "ms": 1.4
+    },
+    {
+      "label": "Storage.getCookies",
+      "method": "Storage.getCookies",
+      "ok": true,
+      "ms": 1,
+      "note": [
+        1,
+        "c.localhost",
+        null
+      ]
+    },
+    {
+      "label": "Storage.setCookies",
+      "method": "Storage.setCookies",
+      "ok": true,
+      "ms": 0.9
+    },
+    {
+      "label": "Storage.getUsageAndQuota",
+      "method": "Storage.getUsageAndQuota",
+      "ok": true,
+      "ms": 1.1
+    },
+    {
+      "label": "Network.enable",
+      "method": "Network.enable",
+      "ok": true,
+      "ms": 1.1
+    },
+    {
+      "label": "Network.getAllCookies",
+      "method": "Network.getAllCookies",
+      "ok": true,
+      "ms": 0.7
+    },
+    {
+      "label": "Network.getCookies",
+      "method": "Network.getCookies",
+      "ok": true,
+      "ms": 0.7
+    },
+    {
+      "label": "Network.setCookie",
+      "method": "Network.setCookie",
+      "ok": true,
+      "ms": 1
+    },
+    {
+      "label": "Network.setExtraHTTPHeaders",
+      "method": "Network.setExtraHTTPHeaders",
+      "ok": true,
+      "ms": 1
+    },
+    {
+      "label": "Network.emulateNetworkConditions",
+      "method": "Network.emulateNetworkConditions",
+      "ok": true,
+      "ms": 0.9
+    },
+    {
+      "label": "Network.setBypassServiceWorker",
+      "method": "Network.setBypassServiceWorker",
+      "ok": true,
+      "ms": 0.8
+    },
+    {
+      "label": "Network.setCacheDisabled",
+      "method": "Network.setCacheDisabled",
+      "ok": true,
+      "ms": 0.6
+    },
+    {
+      "label": "Page.enable",
+      "method": "Page.enable",
+      "ok": true,
+      "ms": 0.9
+    },
+    {
+      "label": "Page.getFrameTree",
+      "method": "Page.getFrameTree",
+      "ok": true,
+      "ms": 3.1
+    },
+    {
+      "label": "Page.setLifecycleEventsEnabled",
+      "method": "Page.setLifecycleEventsEnabled",
+      "ok": true,
+      "ms": 2.3
+    },
+    {
+      "label": "Page.addScriptToEvaluateOnNewDocument",
+      "method": "Page.addScriptToEvaluateOnNewDocument",
+      "ok": true,
+      "ms": 0.8
+    },
+    {
+      "label": "Page.createIsolatedWorld",
+      "method": "Page.createIsolatedWorld",
+      "ok": true,
+      "ms": 3
+    },
+    {
+      "label": "Page.setBypassCSP",
+      "method": "Page.setBypassCSP",
+      "ok": true,
+      "ms": 0.8
+    },
+    {
+      "label": "Page.setInterceptFileChooserDialog",
+      "method": "Page.setInterceptFileChooserDialog",
+      "ok": true,
+      "ms": 0.9
+    },
+    {
+      "label": "Page.setInterceptFileChooserDialog off",
+      "method": "Page.setInterceptFileChooserDialog",
+      "ok": true,
+      "ms": 1
+    },
+    {
+      "label": "Page.setDownloadBehavior",
+      "method": "Page.setDownloadBehavior",
+      "ok": false,
+      "error": "{\"code\":-32000,\"message\":\"Cannot not access browser-level commands\"}"
+    },
+    {
+      "label": "Page.getLayoutMetrics",
+      "method": "Page.getLayoutMetrics",
+      "ok": true,
+      "ms": 1.3
+    },
+    {
+      "label": "Page.captureScreenshot",
+      "method": "Page.captureScreenshot",
+      "ok": true,
+      "ms": 59.9
+    },
+    {
+      "label": "Page.printToPDF",
+      "method": "Page.printToPDF",
+      "ok": true,
+      "ms": 38.2
+    },
+    {
+      "label": "Page.startScreencast",
+      "method": "Page.startScreencast",
+      "ok": true,
+      "ms": 1
+    },
+    {
+      "label": "Page.stopScreencast",
+      "method": "Page.stopScreencast",
+      "ok": true,
+      "ms": 0.4
+    },
+    {
+      "label": "Page.getNavigationHistory",
+      "method": "Page.getNavigationHistory",
+      "ok": true,
+      "ms": 0.4
+    },
+    {
+      "label": "Page.bringToFront",
+      "method": "Page.bringToFront",
+      "ok": true,
+      "ms": 10.2
+    },
+    {
+      "label": "Runtime.enable",
+      "method": "Runtime.enable",
+      "ok": true,
+      "ms": 9.1
+    },
+    {
+      "label": "Runtime.evaluate",
+      "method": "Runtime.evaluate",
+      "ok": true,
+      "ms": 1.5
+    },
+    {
+      "label": "Runtime.addBinding",
+      "method": "Runtime.addBinding",
+      "ok": true,
+      "ms": 2.3
+    },
+    {
+      "label": "Runtime.runIfWaitingForDebugger",
+      "method": "Runtime.runIfWaitingForDebugger",
+      "ok": true,
+      "ms": 1.2
+    },
+    {
+      "label": "DOM.enable",
+      "method": "DOM.enable",
+      "ok": true,
+      "ms": 2.9
+    },
+    {
+      "label": "DOM.getDocument",
+      "method": "DOM.getDocument",
+      "ok": true,
+      "ms": 1.2
+    },
+    {
+      "label": "DOM.querySelector",
+      "method": "DOM.querySelector",
+      "ok": true,
+      "ms": 2.7
+    },
+    {
+      "label": "DOM.setFileInputFiles",
+      "method": "DOM.setFileInputFiles",
+      "ok": true,
+      "ms": 5.3
+    },
+    {
+      "label": "CSS.enable",
+      "method": "CSS.enable",
+      "ok": true,
+      "ms": 7
+    },
+    {
+      "label": "Overlay.enable",
+      "method": "Overlay.enable",
+      "ok": true,
+      "ms": 0.8
+    },
+    {
+      "label": "Accessibility.getFullAXTree",
+      "method": "Accessibility.getFullAXTree",
+      "ok": true,
+      "ms": 11.6
+    },
+    {
+      "label": "Input.dispatchMouseEvent",
+      "method": "Input.dispatchMouseEvent",
+      "ok": true,
+      "ms": 5
+    },
+    {
+      "label": "Input.dispatchKeyEvent",
+      "method": "Input.dispatchKeyEvent",
+      "ok": true,
+      "ms": 1.6
+    },
+    {
+      "label": "Input.dispatchKeyEvent keyUp",
+      "method": "Input.dispatchKeyEvent",
+      "ok": true,
+      "ms": 0.8
+    },
+    {
+      "label": "Input.insertText",
+      "method": "Input.insertText",
+      "ok": true,
+      "ms": 0.7
+    },
+    {
+      "label": "Emulation.setDeviceMetricsOverride",
+      "method": "Emulation.setDeviceMetricsOverride",
+      "ok": true,
+      "ms": 2.6
+    },
+    {
+      "label": "Emulation.clearDeviceMetricsOverride",
+      "method": "Emulation.clearDeviceMetricsOverride",
+      "ok": true,
+      "ms": 1.2
+    },
+    {
+      "label": "Emulation.setFocusEmulationEnabled",
+      "method": "Emulation.setFocusEmulationEnabled",
+      "ok": true,
+      "ms": 0.7
+    },
+    {
+      "label": "Emulation.setFocusEmulationEnabled off",
+      "method": "Emulation.setFocusEmulationEnabled",
+      "ok": true,
+      "ms": 0.8
+    },
+    {
+      "label": "Emulation.setGeolocationOverride",
+      "method": "Emulation.setGeolocationOverride",
+      "ok": true,
+      "ms": 0.4
+    },
+    {
+      "label": "Emulation.clearGeolocationOverride",
+      "method": "Emulation.clearGeolocationOverride",
+      "ok": true,
+      "ms": 0.3
+    },
+    {
+      "label": "Emulation.setTimezoneOverride",
+      "method": "Emulation.setTimezoneOverride",
+      "ok": true,
+      "ms": 1.9
+    },
+    {
+      "label": "Emulation.setTimezoneOverride reset",
+      "method": "Emulation.setTimezoneOverride",
+      "ok": true,
+      "ms": 3.1
+    },
+    {
+      "label": "Emulation.setEmulatedMedia",
+      "method": "Emulation.setEmulatedMedia",
+      "ok": true,
+      "ms": 1
+    },
+    {
+      "label": "Fetch.enable",
+      "method": "Fetch.enable",
+      "ok": true,
+      "ms": 1.7
+    },
+    {
+      "label": "Fetch.disable",
+      "method": "Fetch.disable",
+      "ok": true,
+      "ms": 1.5
+    },
+    {
+      "label": "Security.setIgnoreCertificateErrors",
+      "method": "Security.setIgnoreCertificateErrors",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Security.setIgnoreCertificateErrors' wasn't found\"}"
+    },
+    {
+      "label": "Log.enable",
+      "method": "Log.enable",
+      "ok": true,
+      "ms": 0.6
+    },
+    {
+      "label": "Debugger.enable",
+      "method": "Debugger.enable",
+      "ok": true,
+      "ms": 3
+    },
+    {
+      "label": "Debugger.disable",
+      "method": "Debugger.disable",
+      "ok": true,
+      "ms": 0.7
+    },
+    {
+      "label": "Profiler.enable",
+      "method": "Profiler.enable",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Profiler.enable' wasn't found\"}"
+    },
+    {
+      "label": "HeapProfiler.collectGarbage",
+      "method": "HeapProfiler.collectGarbage",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'HeapProfiler.collectGarbage' wasn't found\"}"
+    },
+    {
+      "label": "ServiceWorker.enable",
+      "method": "ServiceWorker.enable",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'ServiceWorker.enable' wasn't found\"}"
+    },
+    {
+      "label": "ServiceWorker.disable",
+      "method": "ServiceWorker.disable",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'ServiceWorker.disable' wasn't found\"}"
+    },
+    {
+      "label": "Tracing.start",
+      "method": "Tracing.start",
+      "ok": true,
+      "ms": 16.9
+    },
+    {
+      "label": "Tracing.end",
+      "method": "Tracing.end",
+      "ok": true,
+      "ms": 0.6
+    },
+    {
+      "label": "SystemInfo.getInfo",
+      "method": "SystemInfo.getInfo",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'SystemInfo.getInfo' wasn't found\"}"
+    },
+    {
+      "label": "Extensions.loadUnpacked",
+      "method": "Extensions.loadUnpacked",
+      "ok": false,
+      "error": "{\"code\":-32601,\"message\":\"'Extensions.loadUnpacked' wasn't found\"}"
+    },
+    {
+      "label": "Network.clearBrowserCookies",
+      "method": "Network.clearBrowserCookies",
+      "ok": true,
+      "ms": 1.5
+    },
+    {
+      "label": "Page.navigate off-list b.localhost",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 24.5,
+      "note": [
+        "net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "label": "history after the off-list navigate",
+      "method": "Page.getNavigationHistory",
+      "ok": true,
+      "ms": 1,
+      "note": [
+        1,
+        [
+          {
+            "id": 14,
+            "title": "probe a",
+            "transitionType": "link",
+            "url": "http://a.localhost:8781/",
+            "userTypedURL": "http://a.localhost:8781/"
+          },
+          {
+            "id": 20,
+            "title": "b.localhost",
+            "transitionType": "typed",
+            "url": "http://b.localhost:8781/",
+            "userTypedURL": ""
+          }
+        ]
+      ]
+    },
+    {
+      "label": "Page.navigate (plain), for the headers",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 17.2
+    },
+    {
+      "label": "Page.navigate transitionType typed",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 18.3
+    },
+    {
+      "label": "Page.navigate transitionType address_bar",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 16.4
+    },
+    {
+      "label": "Page.navigate transitionType auto_bookmark",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 17.9
+    },
+    {
+      "label": "location.href with a user gesture",
+      "method": "Runtime.evaluate",
+      "ok": true,
+      "ms": 2.7
+    },
+    {
+      "label": "Page.navigate file://",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 18.1,
+      "note": [
+        "net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "label": "what the file:// tab shows",
+      "method": "Runtime.evaluate",
+      "ok": true,
+      "ms": 2.3,
+      "note": [
+        "chrome-error: 115 characters"
+      ]
+    },
+    {
+      "label": "Page.navigate chrome://version",
+      "method": "Page.navigate",
+      "ok": false,
+      "error": "Detached while handling command."
+    }
+  ],
+  "dnrHeader": [
+    {
+      "label": "Page.navigate with a DNR rule that sets sec-fetch-site",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 23.4
+    }
+  ],
+  "dnrInitiator": [
+    {
+      "label": "Page.navigate, rule limited to the extension's initiator",
+      "method": "Page.navigate",
+      "ok": true,
+      "ms": 16.8
+    },
+    {
+      "label": "a page script navigates, same rule",
+      "method": "Runtime.evaluate",
+      "ok": true,
+      "ms": 2.3
+    }
+  ],
+  "targetTypes": [
+    "worker",
+    "page",
+    "other"
+  ],
+  "chromePage": "Cannot access a chrome:// URL"
+}

@@ -1,0 +1,295 @@
+{
+  "endpoint": "ws+unix:///run/user/1001/ab-v16-probe-981548.sock:/devtools/browser/<scope>",
+  "results": [
+    {
+      "case": "connectOverCDP",
+      "ok": true,
+      "ms": 47,
+      "detail": {
+        "version": "156.0.8078.73",
+        "contexts": 1
+      }
+    },
+    {
+      "case": "context.newPage (Target.createTarget)",
+      "ok": true,
+      "ms": 55,
+      "detail": {
+        "pages": 1
+      }
+    },
+    {
+      "case": "page.goto allowlisted page",
+      "ok": true,
+      "ms": 103,
+      "detail": {
+        "status": 200,
+        "title": "probe a"
+      }
+    },
+    {
+      "case": "navigator.webdriver (page.evaluate)",
+      "ok": true,
+      "ms": 10,
+      "detail": false
+    },
+    {
+      "case": "locator.fill + click + read text",
+      "ok": true,
+      "ms": 137,
+      "detail": "Hello, Ada"
+    },
+    {
+      "case": "keyboard.type + press",
+      "ok": true,
+      "ms": 104,
+      "detail": "Grace"
+    },
+    {
+      "case": "hover",
+      "ok": true,
+      "ms": 59,
+      "detail": "hovered"
+    },
+    {
+      "case": "selectOption",
+      "ok": true,
+      "ms": 20,
+      "detail": "y"
+    },
+    {
+      "case": "ariaSnapshot (the MCP's page read)",
+      "ok": true,
+      "ms": 25,
+      "detail": "23 lines"
+    },
+    {
+      "case": "screenshot",
+      "ok": true,
+      "ms": 94,
+      "detail": "23819 bytes"
+    },
+    {
+      "case": "cross-site frame: click and read (c.localhost)",
+      "ok": true,
+      "ms": 169,
+      "detail": "frame clicked"
+    },
+    {
+      "case": "dialog (confirm) accept",
+      "ok": true,
+      "ms": 65,
+      "detail": "true"
+    },
+    {
+      "case": "page.route (network interception, fulfill)",
+      "ok": true,
+      "ms": 85,
+      "detail": "mocked"
+    },
+    {
+      "case": "setInputFiles (file path)",
+      "ok": true,
+      "ms": 24,
+      "detail": "upload.txt:18"
+    },
+    {
+      "case": "setInputFiles (buffer)",
+      "ok": true,
+      "ms": 19,
+      "detail": "buf.txt:13"
+    },
+    {
+      "case": "download",
+      "ok": true,
+      "ms": 68,
+      "detail": {
+        "name": "probe.txt",
+        "body": "probe download body"
+      }
+    },
+    {
+      "case": "popup (window.open)",
+      "ok": true,
+      "ms": 167,
+      "detail": {
+        "url": "http://a.localhost:8781/popup?via=open",
+        "text": "Popup open"
+      }
+    },
+    {
+      "case": "popup (target=_blank link)",
+      "ok": true,
+      "ms": 140,
+      "detail": {
+        "url": "http://a.localhost:8781/popup?via=blank"
+      }
+    },
+    {
+      "case": "context.addInitScript, then a new page",
+      "ok": true,
+      "ms": 167,
+      "detail": "number"
+    },
+    {
+      "case": "init script in a popup (late attach)",
+      "ok": true,
+      "ms": 124,
+      "detail": "number"
+    },
+    {
+      "case": "page.exposeFunction",
+      "ok": true,
+      "ms": 144,
+      "detail": 42
+    },
+    {
+      "case": "context.cookies + addCookies (allowlisted)",
+      "ok": true,
+      "ms": 6,
+      "detail": [
+        "pw"
+      ]
+    },
+    {
+      "case": "context.addCookies (off-list domain)",
+      "expect": "refused",
+      "ok": true,
+      "ms": 2,
+      "error": "browserContext.addCookies: Protocol error (Storage.setCookies): Not allowed: b.localhost is not on the allowlist"
+    },
+    {
+      "case": "setViewportSize (Emulation)",
+      "ok": true,
+      "ms": 10,
+      "detail": [
+        900,
+        700
+      ]
+    },
+    {
+      "case": "page.goto off-list host (DNR)",
+      "expect": "refused",
+      "ok": true,
+      "ms": 95,
+      "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/"
+    },
+    {
+      "case": "after a blocked goto, the same page goes on",
+      "ok": true,
+      "ms": 219,
+      "detail": {
+        "url": "http://a.localhost:8781/m",
+        "title": "probe m"
+      }
+    },
+    {
+      "case": "an off-list link click stays blocked (DNR)",
+      "ok": true,
+      "ms": 1374,
+      "detail": {
+        "url": "chrome-error://chromewebdata/",
+        "title": "b.localhost",
+        "bRequests": "see site-log"
+      }
+    },
+    {
+      "case": "an off-list popup is blocked (DNR)",
+      "ok": true,
+      "ms": 1251,
+      "detail": {
+        "url": "chrome-error://chromewebdata/",
+        "title": "b.localhost"
+      }
+    },
+    {
+      "case": "page.route fulfill of an off-list document (does Fetch come before DNR?)",
+      "expect": "refused",
+      "ok": true,
+      "ms": 126,
+      "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/x"
+    },
+    {
+      "case": "context.grantPermissions geolocation (chrome.contentSettings)",
+      "ok": true,
+      "ms": 143,
+      "detail": "granted"
+    },
+    {
+      "case": "context.grantPermissions clipboard-read",
+      "expect": "refused",
+      "ok": true,
+      "ms": 16,
+      "error": "browserContext.grantPermissions: Protocol error (Browser.grantPermissions): Not available in the agent browser: the permission clipboardReadWrite"
+    },
+    {
+      "case": "context.clearPermissions",
+      "ok": true,
+      "ms": 137,
+      "detail": "prompt"
+    },
+    {
+      "case": "CDPSession on a page (newCDPSession)",
+      "ok": true,
+      "ms": 23,
+      "detail": 42
+    },
+    {
+      "case": "context.tracing start/stop",
+      "ok": true,
+      "ms": 164,
+      "detail": "34153 bytes"
+    },
+    {
+      "case": "page.pdf",
+      "ok": true,
+      "ms": 28,
+      "detail": "5527 bytes"
+    },
+    {
+      "case": "browser.newContext (an isolated context)",
+      "expect": "refused",
+      "ok": true,
+      "ms": 3,
+      "error": "browser.newContext: Protocol error (Target.createBrowserContext): Not available in the agent browser: a new browser context (Target.createBrowserContext). Use the default context: browser.contexts()[0]."
+    },
+    {
+      "case": "browser.newBrowserCDPSession",
+      "ok": true,
+      "ms": 2,
+      "detail": "Chrome/156.0.8078.73"
+    },
+    {
+      "case": "context.serviceWorkers()",
+      "ok": true,
+      "ms": 0,
+      "detail": "0 (the relay reports none)"
+    },
+    {
+      "case": "site report (trusted click on #report)",
+      "ok": true,
+      "ms": 176,
+      "detail": "sent"
+    },
+    {
+      "case": "round trip: 20 x page.evaluate",
+      "ok": true,
+      "ms": 74,
+      "detail": "4 ms each"
+    },
+    {
+      "case": "page.close",
+      "ok": true,
+      "ms": 26,
+      "detail": {
+        "pages": 0
+      }
+    },
+    {
+      "case": "browser.close (ends this connection only)",
+      "ok": true,
+      "ms": 8,
+      "detail": "closed"
+    }
+  ]
+}

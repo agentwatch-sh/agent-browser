@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "agentwatch agent mode (probe)",
+  "version": "0.0.1",
+  "description": "Probe only: a thin chrome.* bridge for the two-modes design probe. Never load it in a person's Chrome.",
+  "minimum_chrome_version": "125",
+  "permissions": ["debugger", "tabs", "webNavigation", "declarativeNetRequest", "cookies", "downloads", "contentSettings"],
+  "host_permissions": ["<all_urls>"],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "allowlist", "enabled": true, "path": "rules.json" }]
+  },
+  "background": { "service_worker": "sw.js", "type": "module" }
+}

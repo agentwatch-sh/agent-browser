@@ -1,0 +1,4 @@
+[
+  { "id": 1, "priority": 1, "action": { "type": "block" }, "condition": { "resourceTypes": ["main_frame"] } },
+  { "id": 2, "priority": 2, "action": { "type": "allow" }, "condition": { "requestDomains": ["a.localhost"], "resourceTypes": ["main_frame"] } }
+]

@@ -1,0 +1,716 @@
+{
+  "cdpMethodCounts": {
+    "Browser.getVersion": 5,
+    "Target.setAutoAttach": 42,
+    "Browser.setDownloadBehavior": 2,
+    "Target.getTargetInfo": 3,
+    "Target.createTarget": 20,
+    "Page.enable": 74,
+    "Page.getFrameTree": 39,
+    "Log.enable": 39,
+    "Page.setLifecycleEventsEnabled": 39,
+    "Runtime.enable": 39,
+    "Page.addScriptToEvaluateOnNewDocument": 137,
+    "Network.enable": 39,
+    "Emulation.setFocusEmulationEnabled": 26,
+    "Emulation.setEmulatedMedia": 36,
+    "Runtime.runIfWaitingForDebugger": 41,
+    "Page.createIsolatedWorld": 39,
+    "Page.navigate": 26,
+    "Runtime.evaluate": 71,
+    "Runtime.callFunctionOn": 506,
+    "Runtime.releaseObject": 144,
+    "Input.insertText": 3,
+    "DOM.scrollIntoViewIfNeeded": 29,
+    "DOM.getContentQuads": 27,
+    "Input.dispatchMouseEvent": 77,
+    "Input.dispatchKeyEvent": 28,
+    "Page.getLayoutMetrics": 3,
+    "Page.captureScreenshot": 3,
+    "Runtime.getProperties": 8,
+    "DOM.describeNode": 16,
+    "DOM.getFrameOwner": 8,
+    "DOM.resolveNode": 16,
+    "DOM.getBoxModel": 4,
+    "Page.handleJavaScriptDialog": 2,
+    "Network.setCacheDisabled": 10,
+    "Fetch.enable": 6,
+    "Fetch.fulfillRequest": 2,
+    "Fetch.disable": 4,
+    "Target.closeTarget": 26,
+    "Runtime.addBinding": 28,
+    "Page.reload": 2,
+    "Storage.setCookies": 4,
+    "Storage.getCookies": 2,
+    "Emulation.setDeviceMetricsOverride": 2,
+    "Browser.grantPermissions": 6,
+    "Browser.resetPermissions": 2,
+    "Target.attachToBrowserTarget": 4,
+    "Target.attachToTarget": 2,
+    "Target.detachFromTarget": 2,
+    "Page.startScreencast": 2,
+    "Page.screencastFrameAck": 4,
+    "Network.getResponseBody": 4,
+    "Page.stopScreencast": 2,
+    "Page.printToPDF": 2,
+    "IO.read": 4,
+    "IO.close": 2,
+    "Target.createBrowserContext": 2,
+    "Page.setInterceptFileChooserDialog": 6
+  },
+  "events": [
+    {
+      "at": "2026-11-03T16:22:11.005Z",
+      "t": "listen",
+      "sock": "/run/user/1001/ab-v16-probe-981548.sock"
+    },
+    {
+      "at": "2026-11-03T16:22:11.005Z",
+      "t": "listen",
+      "port": 8790
+    },
+    {
+      "at": "2026-11-03T16:22:12.452Z",
+      "t": "ext-hello",
+      "info": {
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+        "fullVersion": "156.0.8078.73",
+        "id": "hbifjmhaipjnpobdcomdgegidnjojecm"
+      }
+    },
+    {
+      "at": "2026-11-03T16:22:12.995Z",
+      "t": "tab-created",
+      "tab": 1913005025,
+      "opener": null,
+      "scope": null,
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:16.160Z",
+      "t": "tab-created",
+      "tab": 1913005026,
+      "opener": null,
+      "scope": null,
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:18.207Z",
+      "t": "tab-created",
+      "tab": 1913005027,
+      "opener": 1913005026,
+      "scope": null,
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:18.812Z",
+      "t": "nav-error",
+      "tabId": 1913005026,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:21.406Z",
+      "t": "nav-error",
+      "tabId": 1913005026,
+      "host": "",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:21.888Z",
+      "t": "debugger-detach",
+      "tab": 1913005026,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:25.320Z",
+      "t": "tab-created",
+      "tab": 1913005028,
+      "opener": null,
+      "scope": null,
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:25.853Z",
+      "t": "tab-created",
+      "tab": 1913005030,
+      "opener": null,
+      "scope": null,
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:27.234Z",
+      "t": "client-open",
+      "c": 1,
+      "scope": "pw-tcp",
+      "via": "tcp"
+    },
+    {
+      "at": "2026-11-03T16:22:27.284Z",
+      "t": "tab-created",
+      "tab": 1913005033,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:28.310Z",
+      "t": "nav-error",
+      "tabId": 1913005033,
+      "host": "a.localhost:8781",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "at": "2026-11-03T16:22:28.430Z",
+      "t": "tab-created",
+      "tab": 1913005034,
+      "opener": 1913005033,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:28.534Z",
+      "t": "debugger-detach",
+      "tab": 1913005034,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:28.629Z",
+      "t": "tab-created",
+      "tab": 1913005036,
+      "opener": 1913005033,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:28.679Z",
+      "t": "debugger-detach",
+      "tab": 1913005036,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:28.727Z",
+      "t": "tab-created",
+      "tab": 1913005038,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:28.823Z",
+      "t": "debugger-detach",
+      "tab": 1913005038,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:28.873Z",
+      "t": "tab-created",
+      "tab": 1913005040,
+      "opener": 1913005033,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:28.937Z",
+      "t": "debugger-detach",
+      "tab": 1913005040,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:29.133Z",
+      "t": "tab-created",
+      "tab": 1913005042,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:29.194Z",
+      "t": "nav-error",
+      "tabId": 1913005042,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:29.196Z",
+      "t": "debugger-detach",
+      "tab": 1913005042,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:29.240Z",
+      "t": "tab-created",
+      "tab": 1913005044,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:29.286Z",
+      "t": "nav-error",
+      "tabId": 1913005044,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:29.413Z",
+      "t": "debugger-detach",
+      "tab": 1913005044,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:29.455Z",
+      "t": "tab-created",
+      "tab": 1913005046,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:29.707Z",
+      "t": "nav-error",
+      "tabId": 1913005046,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:30.749Z",
+      "t": "debugger-detach",
+      "tab": 1913005046,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:30.800Z",
+      "t": "tab-created",
+      "tab": 1913005048,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:31.045Z",
+      "t": "tab-created",
+      "tab": 1913005049,
+      "opener": 1913005048,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:31.101Z",
+      "t": "nav-error",
+      "tabId": 1913005049,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:31.956Z",
+      "t": "debugger-detach",
+      "tab": 1913005049,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:31.975Z",
+      "t": "debugger-detach",
+      "tab": 1913005048,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:32.018Z",
+      "t": "tab-created",
+      "tab": 1913005052,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:32.078Z",
+      "t": "nav-error",
+      "tabId": 1913005052,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:32.080Z",
+      "t": "debugger-detach",
+      "tab": 1913005052,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:32.122Z",
+      "t": "tab-created",
+      "tab": 1913005054,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:32.222Z",
+      "t": "debugger-detach",
+      "tab": 1913005054,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:32.283Z",
+      "t": "tab-created",
+      "tab": 1913005056,
+      "opener": null,
+      "scope": "pw-tcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:32.375Z",
+      "t": "debugger-detach",
+      "tab": 1913005056,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:32.878Z",
+      "t": "debugger-detach",
+      "tab": 1913005033,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:32.887Z",
+      "t": "client-close",
+      "c": 1
+    },
+    {
+      "at": "2026-11-03T16:22:33.487Z",
+      "t": "client-open",
+      "c": 2,
+      "scope": "pw-unix",
+      "via": "unix"
+    },
+    {
+      "at": "2026-11-03T16:22:33.537Z",
+      "t": "tab-created",
+      "tab": 1913005059,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:34.525Z",
+      "t": "nav-error",
+      "tabId": 1913005059,
+      "host": "a.localhost:8781",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "at": "2026-11-03T16:22:34.592Z",
+      "t": "tab-created",
+      "tab": 1913005060,
+      "opener": 1913005059,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:34.707Z",
+      "t": "debugger-detach",
+      "tab": 1913005060,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:34.801Z",
+      "t": "tab-created",
+      "tab": 1913005062,
+      "opener": 1913005059,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:34.835Z",
+      "t": "nav-error",
+      "tabId": 1913005062,
+      "host": "a.localhost:8781",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "at": "2026-11-03T16:22:34.847Z",
+      "t": "debugger-detach",
+      "tab": 1913005062,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:34.899Z",
+      "t": "tab-created",
+      "tab": 1913005064,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:35.013Z",
+      "t": "debugger-detach",
+      "tab": 1913005064,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:35.073Z",
+      "t": "tab-created",
+      "tab": 1913005066,
+      "opener": 1913005059,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:35.139Z",
+      "t": "debugger-detach",
+      "tab": 1913005066,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:35.338Z",
+      "t": "tab-created",
+      "tab": 1913005068,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:35.394Z",
+      "t": "nav-error",
+      "tabId": 1913005068,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:35.396Z",
+      "t": "debugger-detach",
+      "tab": 1913005068,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:35.445Z",
+      "t": "tab-created",
+      "tab": 1913005070,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:35.489Z",
+      "t": "nav-error",
+      "tabId": 1913005070,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:35.613Z",
+      "t": "debugger-detach",
+      "tab": 1913005070,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:35.662Z",
+      "t": "tab-created",
+      "tab": 1913005072,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:35.934Z",
+      "t": "nav-error",
+      "tabId": 1913005072,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:36.988Z",
+      "t": "debugger-detach",
+      "tab": 1913005072,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:37.030Z",
+      "t": "tab-created",
+      "tab": 1913005074,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:37.265Z",
+      "t": "tab-created",
+      "tab": 1913005075,
+      "opener": 1913005074,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:37.333Z",
+      "t": "nav-error",
+      "tabId": 1913005075,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:38.203Z",
+      "t": "debugger-detach",
+      "tab": 1913005075,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:38.237Z",
+      "t": "debugger-detach",
+      "tab": 1913005074,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:38.299Z",
+      "t": "tab-created",
+      "tab": 1913005078,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:38.363Z",
+      "t": "nav-error",
+      "tabId": 1913005078,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:38.365Z",
+      "t": "debugger-detach",
+      "tab": 1913005078,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:38.408Z",
+      "t": "tab-created",
+      "tab": 1913005080,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:38.508Z",
+      "t": "debugger-detach",
+      "tab": 1913005080,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:38.568Z",
+      "t": "tab-created",
+      "tab": 1913005082,
+      "opener": null,
+      "scope": "pw-unix",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:38.661Z",
+      "t": "debugger-detach",
+      "tab": 1913005082,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:39.156Z",
+      "t": "debugger-detach",
+      "tab": 1913005059,
+      "reason": "target_closed",
+      "sessions": 0
+    },
+    {
+      "at": "2026-11-03T16:22:39.163Z",
+      "t": "client-close",
+      "c": 2
+    },
+    {
+      "at": "2026-11-03T16:22:39.917Z",
+      "t": "client-open",
+      "c": 3,
+      "scope": "mcp",
+      "via": "unix"
+    },
+    {
+      "at": "2026-11-03T16:22:39.982Z",
+      "t": "tab-created",
+      "tab": 1913005085,
+      "opener": null,
+      "scope": "mcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:41.217Z",
+      "t": "tab-created",
+      "tab": 1913005086,
+      "opener": null,
+      "scope": "mcp",
+      "eager": null,
+      "known": false
+    },
+    {
+      "at": "2026-11-03T16:22:41.285Z",
+      "t": "nav-error",
+      "tabId": 1913005086,
+      "host": "b.localhost:8781",
+      "error": "net::ERR_BLOCKED_BY_CLIENT"
+    },
+    {
+      "at": "2026-11-03T16:22:41.301Z",
+      "t": "client-close",
+      "c": 3
+    }
+  ]
+}

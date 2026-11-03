@@ -1,0 +1,65 @@
+{
+  "tools": 25,
+  "results": [
+    {
+      "tool": "browser_navigate",
+      "ms": 392,
+      "isError": false,
+      "saw": "page title: probe a"
+    },
+    {
+      "tool": "browser_snapshot",
+      "ms": 35,
+      "isError": false,
+      "saw": "34 lines"
+    },
+    {
+      "tool": "browser_type",
+      "ms": 103,
+      "isError": false,
+      "saw": "ref e4"
+    },
+    {
+      "tool": "browser_click",
+      "ms": 629,
+      "isError": false,
+      "saw": "ref e5"
+    },
+    {
+      "tool": "browser_snapshot",
+      "ms": 29,
+      "isError": false,
+      "saw": "status shows: Hello, MCP"
+    },
+    {
+      "tool": "browser_take_screenshot",
+      "ms": 86,
+      "isError": false,
+      "saw": "text,image"
+    },
+    {
+      "tool": "browser_tabs",
+      "ms": 9,
+      "isError": false,
+      "saw": "- 0: (current) [probe a](http://a.localhost:8781/)"
+    },
+    {
+      "tool": "browser_tabs",
+      "ms": 76,
+      "isError": false,
+      "saw": "### Result | - 0: [probe a](http://a.localhost:8781/)"
+    },
+    {
+      "tool": "browser_navigate",
+      "ms": 23,
+      "isError": true,
+      "saw": "### Error Error: browserBackend.callTool: net::ERR_BLOCKED_BY_CLIENT at http://b.localhost:8781/ Call log: \u001b[2m - navigating to \"http://b.localhost:8781/\", waiting until \"domcontentloaded\"\u001b[22m "
+    },
+    {
+      "tool": "browser_close",
+      "ms": 38,
+      "isError": false,
+      "saw": "### Result\nNo open tabs. Navigate to a URL to create one.\n### Ran Playwright code\n```js\nawait page.close()\n```"
+    }
+  ]
+}
