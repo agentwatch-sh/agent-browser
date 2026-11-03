@@ -712,6 +712,13 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
   (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
   is restored.
+- `test/live/parity/` (Linux or macOS; see the head of `probe.ts`): the parity probe of
+  `docs/research/2026-11-03-chrome-vs-chrome-beta.md`. It runs Chrome stable, Chrome Beta or
+  Chromium on throwaway profiles against a local `probe.localhost` site that records what a site
+  sees, and a stand-in extension that drives the tab through `chrome.debugger`. A local proxy
+  refuses all other traffic. Not part of `npm test`.
+- `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
+  specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
 - `test/package.test.ts`: the dependency rule, the exports, an install under `node_modules`, no
   consumer paths, no CI workflow.
 - `python/tests/test_adapter.py`: the adapter against the real CLI; the argv of each option; missing or
