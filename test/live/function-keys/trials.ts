@@ -7,7 +7,8 @@ import type { KeyEvent } from "../../../src/record.ts";
 
 export type Way = "before" | "record" | "press";
 export type Trial = { way: Way; spec: string };
-export type Result = { way: Way; spec: string; focused: boolean; reachedPage: boolean; effects: string[]; sendError?: string };
+/** notMeasured (macOS): why the trial proves nothing. fullScreenNotLeft (macOS): the run stops after it. */
+export type Result = { way: Way; spec: string; focused: boolean; reachedPage: boolean; effects: string[]; sendError?: string; notMeasured?: string; fullScreenNotLeft?: boolean };
 /** linux: a private Xvfb. darwin: the person's own screen; `front` brings each trial window to the front. */
 export type Mode = { platform: "linux"; chrome: string; display: number } | { platform: "darwin"; chrome: string; front: boolean; fullScreen: boolean };
 export type Flags = { onMyScreen?: boolean; background?: boolean; fullScreen?: boolean; chrome?: string; display?: string };
@@ -97,11 +98,36 @@ export function chromeArgs(mode: Mode, profile: string): string[] {
   ];
 }
 
+/** The pid in the output of `lsappinfo info -only pid <ASN>` (macOS), for example `"pid"=48285`. */
+export function lsappinfoPid(out: string): number | undefined {
+  const m = /"pid"\s*=\s*(\d+)/.exec(out);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * macOS: why a trial measured nothing, or undefined. Chrome runs a shortcut only in its key window,
+ * and document.hasFocus() does not show that, so the check's Chrome must be the front app before and
+ * after the key, and a record or press key without an effect must be followed by a before-way Meta+L
+ * that moves the focus to the address bar (control: a page blur, so the window was key).
+ */
+export function notMeasured(t: { way: Way; effects: string[]; chromePid: number; frontBefore?: number; frontAfter?: number; control?: boolean }): string | undefined {
+  if (t.frontBefore !== t.chromePid) return `Chrome was not the front app before the key (front app pid ${t.frontBefore ?? "unknown"}, Chrome ${t.chromePid})`;
+  if (t.frontAfter !== t.chromePid) return `Chrome was not the front app after the key (front app pid ${t.frontAfter ?? "unknown"}, Chrome ${t.chromePid})`;
+  if (t.way !== "before" && !t.effects.length && t.control !== true) return "the Meta+L control showed no page blur, so the window was not key";
+  return undefined;
+}
+
+/** A full screen that the check could not leave stops the run, after its window is closed. */
+export function stopsRun(r: Result): boolean {
+  return !!r.fullScreenNotLeft;
+}
+
 /**
  * Exit 1 for each: a record or press key with an effect outside the page, or that never reached it
  * (Shift+F10 aside: record refuses it); on Linux a record Shift+F10 without the context menu (Blink
  * opens it on Windows and Linux only: WebFrameWidgetImpl::HandleKeyEvent has no Shift+F10 on macOS);
- * a required before control without an effect; a page without focus before its key.
+ * a required before control without an effect; a page without focus before its key; on macOS a trial
+ * not measured, and a full screen not left.
  */
 export function failures(results: Result[], mode: Mode): string[] {
   const of = (way: Way) => results.filter((r) => r.way === way);
@@ -111,5 +137,7 @@ export function failures(results: Result[], mode: Mode): string[] {
     ...(mode.platform === "linux" ? of("record").filter((r) => r.spec === "Shift+F10" && !r.effects.includes("contextmenu")).map(() => "record Shift+F10: no context menu (record refuses it for that)") : []),
     ...of("before").filter((r) => required.includes(r.spec) && !r.effects.length).map((r) => `before ${r.spec}: no effect, so the check cannot see Chrome's shortcuts`),
     ...results.filter((r) => !r.focused).map((r) => `${r.way} ${r.spec}: the page had no focus before the key`),
+    ...results.filter((r) => r.notMeasured).map((r) => `${r.way} ${r.spec}: not measured: ${r.notMeasured}`),
+    ...results.filter((r) => r.fullScreenNotLeft).map((r) => `${r.way} ${r.spec}: full screen not left in 10 s`),
   ];
 }

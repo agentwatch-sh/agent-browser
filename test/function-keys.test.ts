@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseKey } from "../src/record.ts";
-import { beforeFields, chromeArgs, failures, MAC_KEY_CODES, requiredControls, startMode, trialTable, type Mode, type Result } from "./live/function-keys/trials.ts";
+import { beforeFields, chromeArgs, failures, lsappinfoPid, MAC_KEY_CODES, notMeasured, requiredControls, startMode, stopsRun, trialTable, type Mode, type Result } from "./live/function-keys/trials.ts";
 
 const MODS = ["", "Shift+", "Control+", "Alt+", "Meta+", "Control+Shift+", "Alt+Shift+", "Control+Alt+"];
 const F = Array.from({ length: 12 }, (_, i) => `F${i + 1}`);
@@ -88,8 +88,11 @@ test("before fields on macOS: the Mac key code and the characters that Chrome's 
   for (const x of trialTable({ ...mac, fullScreen: true } as Mode).filter((t) => t.way === "before")) {
     assert.ok(beforeFields(parseKey(x.spec), "darwin").nativeVirtualKeyCode > 0, x.spec);
   }
-  assert.deepEqual(Object.fromEntries(F.map((k) => [k, MAC_KEY_CODES[k]])),
-    { F1: 0x7a, F2: 0x78, F3: 0x63, F4: 0x76, F5: 0x60, F6: 0x61, F7: 0x62, F8: 0x64, F9: 0x65, F10: 0x6d, F11: 0x67, F12: 0x6f });
+  // The whole table: Carbon's kVK_* codes (Chromium ui/events/keycodes/keyboard_code_conversion_mac.mm).
+  assert.deepEqual(MAC_KEY_CODES, {
+    F1: 0x7a, F2: 0x78, F3: 0x63, F4: 0x76, F5: 0x60, F6: 0x61, F7: 0x62, F8: 0x64, F9: 0x65, F10: 0x6d, F11: 0x67, F12: 0x6f,
+    KeyF: 0x03, KeyI: 0x22, KeyL: 0x25, KeyR: 0x0f, KeyT: 0x11, KeyW: 0x0d,
+  });
 });
 
 test("Chrome switches: Linux unchanged; macOS has a mock keychain and no X11 switches", () => {
@@ -124,4 +127,34 @@ test("failures on macOS: the Cmd controls must show an effect; Shift+F10 opens n
   assert.deepEqual(failures([ok("before", "Meta+R"), ...base.slice(1), ok("record", "F11", { effects: ["window normal -> fullscreen, left at once"] })], mac), [
     "record F11: window normal -> fullscreen, left at once", "before Meta+R: no effect, so the check cannot see Chrome's shortcuts",
   ]);
+});
+
+test("lsappinfoPid: the pid of `lsappinfo info -only pid <ASN>`, else undefined", () => {
+  assert.equal(lsappinfoPid('"pid"=48285\n'), 48285);
+  assert.equal(lsappinfoPid('"pid" = 7'), 7);
+  assert.equal(lsappinfoPid(""), undefined);
+  assert.equal(lsappinfoPid("[ NULL ]"), undefined);
+});
+
+test("notMeasured (macOS): Chrome must be the front app before and after the key, and Meta+L must prove the window was key", () => {
+  const m = { chromePid: 500, frontBefore: 500, frontAfter: 500 };
+  assert.equal(notMeasured({ ...m, way: "record", effects: [], control: true }), undefined);
+  assert.equal(notMeasured({ ...m, way: "press", effects: [], control: true }), undefined);
+  assert.equal(notMeasured({ ...m, way: "before", effects: [] }), undefined, "a before trial has no control");
+  assert.equal(notMeasured({ ...m, way: "record", effects: ["reload"] }), undefined, "an effect is measured (and a failure)");
+  assert.match(notMeasured({ ...m, frontBefore: 77, way: "before", effects: ["reload"] }) ?? "", /^Chrome was not the front app before the key \(front app pid 77, Chrome 500\)$/);
+  assert.match(notMeasured({ ...m, frontBefore: undefined, way: "record", effects: [], control: true }) ?? "", /^Chrome was not the front app before the key \(front app pid unknown, Chrome 500\)$/);
+  assert.match(notMeasured({ ...m, frontAfter: 77, way: "press", effects: [], control: true }) ?? "", /^Chrome was not the front app after the key/);
+  assert.match(notMeasured({ ...m, way: "record", effects: [], control: false }) ?? "", /Meta\+L control showed no page blur/);
+  assert.match(notMeasured({ ...m, way: "record", effects: [] }) ?? "", /Meta\+L control/, "a record or press trial without an effect needs the control");
+});
+
+test("failures: a trial not measured, and a full screen not left (which also stops the run)", () => {
+  const nm = ok("record", "F5", { notMeasured: "Chrome was not the front app before the key (front app pid 77)" });
+  assert.deepEqual(failures([nm], mac), ["record F5: not measured: Chrome was not the front app before the key (front app pid 77)"]);
+  const stuck = ok("before", "Meta+Control+F", { effects: ["window normal -> fullscreen, not left in 10 s"], fullScreenNotLeft: true });
+  assert.deepEqual(failures([stuck], { ...mac, fullScreen: true } as Mode), ["before Meta+Control+F: full screen not left in 10 s"]);
+  assert.equal(stopsRun(stuck), true);
+  assert.equal(stopsRun(ok("before", "Meta+Control+F", { effects: ["window normal -> fullscreen, left in 900 ms"] })), false);
+  assert.equal(stopsRun(nm), false);
 });
