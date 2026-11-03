@@ -111,11 +111,14 @@ test("usage errors are JSON documents with code usage and exit status 2", async 
     [["status", "--state-dir", c.stateDir, "--notify-command", "agentwatch inbox", "--json"], /JSON array/],
   ];
   for (const [args, message] of cases) {
-    const r = await cli(args);
+    // The CLI takes a relative --state-dir from the current folder. Run in the consumer's short temp
+    // folder, not the checkout: in a deep checkout <state-dir>/chrome-proxy.sock passes 103 bytes, and
+    // the socket-length refusal comes before the mode refusal (#15).
+    const r = await cli(args, { cwd: c.dir });
     assert.equal(r.status, 2, args.join(" "));
     assert.equal(r.json.ok, false);
     assert.equal(r.json.error.code, "usage");
-    assert.match(r.json.error.message, message);
+    assert.match(r.json.error.message, message, args.join(" "));
   }
   const help = await cli(["--help", "--json"]);
   assert.equal(help.json.command, "help");
