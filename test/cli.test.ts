@@ -16,6 +16,28 @@ import { BIN, cli, consumer, fixtureServer, flags, site, type CliRun, type Consu
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, mail: FakePage;
 
+test("an empty path is a usage error, never the current folder: every path flag, shot's path and record's scripts (ab-b84.9)", async () => {
+  for (const flag of ["allowlist", "profile", "socket", "chrome-bin", "personal-user-data-dir"])
+    assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-empty", [flag]: "" }, () => {}), new RegExp(`^UsageError: --${flag} is empty`), flag);
+  assert.throws(() => optionsFromFlags({ "state-dir": "" }, () => {}), /--state-dir is required/);
+  for (const what of ["script", "setup"])
+    assert.throws(() => planRecording({ out: "/tmp/ab-empty/c.mp4", [what]: "" }, []), new RegExp(`^UsageError: --${what} is empty`), what);
+  assert.throws(() => planRecording({ out: "" }, []), /--out is required/);
+  assert.throws(() => findFfmpeg(""), /--ffmpeg must be an absolute path/);
+  const own = consumer();
+  try {
+    // Through the real CLI, in a temp folder: refused before any browser call (not by --no-launch's
+    // "not running"), with the usage code and exit status 2.
+    for (const [args, why] of [[["tabs", "--profile", ""], /--profile is empty/], [["shot", "work", ""], /path is empty/],
+      [["fetch", "work", "https://x.example/", ""], /path is required/], [["record", "work", "--out", "c.mp4", "--script", ""], /--script is empty/]] as [string[], RegExp][]) {
+      const r = await cli([...args, "--state-dir", own.stateDir, "--allowlist", own.allowlist, "--no-launch", "--json"], { cwd: own.dir });
+      assert.equal(r.status, 2, `${args.join(" ")}: ${r.stdout}`);
+      assert.equal(r.json?.error?.code, "usage", args.join(" "));
+      assert.match(r.json.error.message, why, args.join(" "));
+    }
+  } finally { own.remove(); }
+});
+
 test("--chrome-args parses a JSON array into chromeArgs; a non-array or bad JSON is a usage error", () => {
   const opts = optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '["--enable-unsafe-swiftshader","--lang=en-US"]' }, () => {});
   assert.deepEqual(opts.chromeArgs, ["--enable-unsafe-swiftshader", "--lang=en-US"]);

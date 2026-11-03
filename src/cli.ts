@@ -86,7 +86,13 @@ type Values = Record<string, string | boolean | undefined>;
 /** The consumer's settings from the global flags. Relative paths are taken from the current folder. */
 export function optionsFromFlags(v: Values, log: (line: string) => void): Settings {
   const str = (k: string) => (typeof v[k] === "string" ? v[k] as string : undefined);
-  const abs = (k: string) => (str(k) === undefined ? undefined : resolve(str(k)!));
+  // An empty path is a usage error, as in the library: resolve("") would be the current folder (a
+  // checkout, for example), and --profile "" would make it Chrome's user-data-dir.
+  const abs = (k: string) => {
+    const value = str(k);
+    if (value === "") throw new UsageError(`--${k} is empty: give a path, or leave the flag out`);
+    return value === undefined ? undefined : resolve(value);
+  };
   if (!str("state-dir")) throw new UsageError("--state-dir is required: this consumer's own state folder");
   let notify: BrowserOptions["notify"];
   if (str("notify-command")) {

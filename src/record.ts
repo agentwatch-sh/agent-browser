@@ -1314,6 +1314,7 @@ export function planRecording(p: { out: string; script?: string; setup?: string;
   const same = (a: string, b: string) => a === b || (existsSync(a) && existsSync(b) && realpathSync(a) === realpathSync(b));
   const read = (file: string | undefined, what: string): { path: string | null; steps: Step[] } => {
     if (file === undefined) return { path: null, steps: [] };
+    if (file === "") throw new UsageError(`--${what === "step" ? "script" : "setup"} is empty: give the ${what} script's path, or leave the flag out`);
     const path = resolve(file);
     if (same(path, provenance) || same(path, out))
       throw new UsageError(`the provenance JSON (${provenance}) and the MP4 go beside each other and must not replace the ${what} script; name the output differently`);

@@ -350,6 +350,7 @@ export const commands = {
   },
 
   async shot(o: BrowserOptions | Settings, p: { tab: string; path?: string; full?: boolean; size?: string; scale?: number; anyScope?: boolean }): Promise<ShotResult> {
+    if (p.path === "") throw new UsageError("the shot's path is empty: give a file path, or leave it out (default <state-dir>/shots/)");
     const size = p.size === undefined ? undefined : parseSize(p.size);
     const scale = p.scale === undefined ? undefined : checkScale(p.scale);
     return onTab(o, p, async (tab, info, b) => {
