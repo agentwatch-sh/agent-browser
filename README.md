@@ -774,6 +774,12 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   refuses all other traffic. Not part of `npm test`.
 - `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
   specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
+- `test/parity-server.test.ts`: the probe's server against Node's own clients: a TLS client that ends
+  the handshake with alert 46 (a person's certificate warning), and `stop()` while a browser keeps its
+  connections open. The TLS tests need openssl on `PATH` (skipped without it).
+- `test/parity-files.test.ts`: the probe's files: developer mode and the probe extension in a
+  profile's preference files on Linux and macOS, `summary.json` across a `--serve` run and a full
+  run, and the note of `compare.ts` for a column from another run.
 - `test/package.test.ts`: the dependency rule, the exports, an install under `node_modules`, no
   consumer paths, no CI workflow.
 - `python/tests/test_adapter.py`: the adapter against the real CLI; the argv of each option; missing or
