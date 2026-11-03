@@ -121,7 +121,7 @@ const REFUSED_SWITCHES: readonly { name: RegExp; why: string }[] = [
 ];
 
 /** The normalized switch name of one Chrome argv element (see above), or undefined if Chrome reads it as no switch. */
-function chromeSwitchName(arg: string): string | undefined {
+export function chromeSwitchName(arg: string): string | undefined {
   const trimmed = arg.trim();
   if (!/^[-/]/.test(trimmed)) return undefined;
   return trimmed.replace(/^[-/]+/, "").split("=")[0].toLowerCase();
@@ -193,6 +193,18 @@ export function seedRemoteDebugging(profileDir: string, file = join(profileDir, 
   return true;
 }
 
+/**
+ * The agent Chrome's window name (Chrome's --window-name, the name that "Name window" gives: the
+ * window's title): the consumer's command name and its state folder, so a person who must answer an
+ * "Allow remote debugging?" prompt can tell which agent browser asks (#3). Chrome gives it only to a
+ * window that it makes new at its start. A profile that restores its last session keeps the restored
+ * window's old name and ignores the switch; a restored window that has the name keeps it (both
+ * measured on Chromium 156 on Linux).
+ */
+export function agentWindowName(s: Settings): string {
+  return `${s.commandName}: ${s.stateDir}`;
+}
+
 export type SpawnLike = (bin: string, args: string[], opts: { detached: boolean; stdio: "ignore" }) => { pid?: number; exitCode: number | null; unref(): void };
 
 /** The app bundle of a macOS Chrome binary (".../X.app/Contents/MacOS/X" -> ".../X.app"), or undefined. */
@@ -232,8 +244,12 @@ export async function launchAgentChrome(
     if (s.noLaunch) {
       throw new UsageError(`the agent browser is not running (profile ${profile}); start it once with \`${s.commandName} launch\` (it asks the operator for one remote-debugging approval), then re-run`);
     }
-    if (restoresOnStartup(profile) === false) {
+    const restores = restoresOnStartup(profile);
+    if (restores === false) {
       s.log(`agent browser: logins that use session cookies are lost on quit; set "Continue where you left off" in chrome://settings/onStartup`);
+    }
+    if (restores === true) {
+      s.log(`agent browser: this profile restores its last session, so Chrome keeps the restored window's name and does not name it; if the window has no name yet, name it once in Chrome ("Name window…" in the tab strip's menu, or the Window menu on macOS): ${JSON.stringify(agentWindowName(s))}`);
     }
     rmSync(join(profile, "DevToolsActivePort"), { force: true });
     seedRemoteDebugging(profile); // come up with remote debugging on; no chrome://inspect click needed
@@ -241,8 +257,8 @@ export async function launchAgentChrome(
     if (bin === CHROME_STABLE_BIN && !s.chromeBin) {
       s.log(`agent browser: running from Google Chrome, so while it is open the Dock's Chrome icon brings it forward instead of your own profile; install Google Chrome Beta (brew install --cask google-chrome@beta) to keep them apart`);
     }
-    // Exactly the elements checked above, plus the one profile switch agent-browser sets itself.
-    const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, ...extraArgs, ...urls];
+    // Exactly the elements checked above, plus agent-browser's own profile switch and window name.
+    const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, `--window-name=${agentWindowName(s)}`, ...extraArgs, ...urls];
     const bundle = opts.background && (deps.platform ?? process.platform) === "darwin" ? appBundle(bin) : undefined;
     const run = deps.spawn ?? (spawn as unknown as SpawnLike);
     viaOpen = !!bundle;
