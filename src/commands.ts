@@ -188,7 +188,7 @@ async function stopProxyAndWait(s: Settings): Promise<boolean> {
 // ---------- the operations ----------
 
 export const commands = {
-  /** `hooks.hidden`: for a measurement only (ab-b84.11; see launchAgentChrome). Off by default; the CLI never sets it. */
+  /** `hooks.hidden` (@internal): for a measurement only (ab-b84.11; see launchAgentChrome). Off by default; the CLI never sets it. */
   async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");

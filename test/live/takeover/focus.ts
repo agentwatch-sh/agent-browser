@@ -35,6 +35,15 @@ export const USAGE = `usage: node test/live/takeover/start.ts --on-my-screen --c
 variants (--variant; none opens a debugging WebSocket):
 ${VARIANTS.map((v) => `  ${v.name} (${v.kind}): ${v.summary}`).join("\n")}`;
 
+/**
+ * How launches.log names a start: the text between each new line's timestamp and its " by=" (for
+ * example "chrome=via-open-g-j", or "chrome=4242 hidden=ignored" when the hook did not apply), joined
+ * with "; "; null when the start logged no line.
+ */
+export function startedAs(lines: string[]): string | null {
+  return lines.map((l) => l.split(" by=")[0].split(" ").slice(1).join(" ")).join("; ") || null;
+}
+
 /** The logs that a run writes into --out-dir; a folder that holds one of them belongs to an earlier run. */
 export const RUN_LOGS = ["marks.jsonl", "results.jsonl", "monitor.jsonl"];
 
@@ -58,6 +67,35 @@ export function variantLaunch(v: Variant, p: { node: string; cli: string; launch
 /** One request of giveback.swift: the new Chrome `took` the front, and the helper asked macOS to activate `gaveBackTo`. */
 export type GiveBackRequest = { t: number; took: number; name: string; gaveBackTo: number; sent: boolean };
 export type GiveBackLog = { before: FrontApp | null; requests: GiveBackRequest[]; bad: number[] };
+
+const app = (a: FrontApp) => `${a.name}, pid ${a.pid}`;
+
+/**
+ * Before a give-back start: the helper activates the app that it names, so it must be the front app
+ * that the monitor and lsappinfo name. Null when the three agree, else why no Chrome may start.
+ */
+export function givebackReady(before: FrontApp, monitorPid: number | undefined, lsappinfoPid: number | undefined): string | null {
+  const pid = (p: number | undefined) => (p === undefined ? "none" : `pid ${p}`);
+  if (monitorPid !== before.pid) return `the give-back helper's front app (${app(before)}) is not the monitor's (${pid(monitorPid)})`;
+  if (lsappinfoPid !== before.pid) return `the give-back helper's front app (${app(before)}) is not lsappinfo's (${pid(lsappinfoPid)})`;
+  return null;
+}
+
+/**
+ * The problems of a give-back start `n` (none for another variant, `giveBack` null): the helper named no
+ * front app, its front app is not the app in front before the start (frontBefore of the analysis), or
+ * its log has a bad line.
+ */
+export function giveBackProblems(n: number, giveBack: GiveBackLog | null, frontBefore: FrontApp | null): string[] {
+  if (!giveBack) return [];
+  const problems: string[] = [];
+  if (!giveBack.before) problems.push(`the give-back helper named no front app in start ${n}`);
+  else if (giveBack.before.pid !== frontBefore?.pid)
+    problems.push(`the give-back helper's front app (${app(giveBack.before)}) is not the app in front before start ${n} (${frontBefore ? app(frontBefore) : "none"})`);
+  const { bad } = giveBack;
+  if (bad.length) problems.push(`giveback-${n}.jsonl line${bad.length > 1 ? "s" : ""} ${bad.join(", ")} ${bad.length > 1 ? "are" : "is"} no helper line`);
+  return problems;
+}
 
 /**
  * giveback.swift's output: its first line names the app in front at its start ({"before": pid, "name"}),

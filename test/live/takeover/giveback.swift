@@ -3,7 +3,7 @@
 // app at BUNDLE_PATH (one that did not run at the helper's start: the agent Chrome that the check starts)
 // becomes the frontmost app, it asks macOS to activate the recorded app again
 // (NSRunningApplication.activate(options: [])), and it logs one JSON line per request:
-//   {"t": ..., "before": pid, "name": ...}                                       first line: the app in front
+//   {"t": ..., "before": pid, "name": ...}                                       first line: it watches now
 //   {"t": ..., "took": pid, "name": ..., "gaveBackTo": pid, "sent": true|false}   a request
 // "sent" is AppKit's answer: the request was sent, not that macOS granted it. On macOS 14 and later
 // (cooperative activation) macOS can refuse it, because the helper is never the active app; the monitor
@@ -30,8 +30,6 @@ func inBundle(_ app: NSRunningApplication) -> Bool { app.bundleURL?.standardized
 guard let before = NSWorkspace.shared.frontmostApplication else { die("no frontmost app", 1) }
 // The instances of the bundle that run now (for example the operator's own Google Chrome) are never the new one.
 let old = Set(NSWorkspace.shared.runningApplications.filter(inBundle).map { $0.processIdentifier })
-print("{\"t\": \(now()), \"before\": \(before.processIdentifier), \"name\": \(quoted(before.localizedName ?? "?"))}")
-fflush(stdout)
 
 var lastPid: Int32 = before.processIdentifier
 /// One request each time a new instance of the bundle becomes the front app.
@@ -51,4 +49,7 @@ Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
   check(NSWorkspace.shared.frontmostApplication)
   if Date().timeIntervalSince(started) > seconds { exit(0) }
 }
+// The first line comes after the observer and the timer are set up: from now on the helper watches.
+print("{\"t\": \(now()), \"before\": \(before.processIdentifier), \"name\": \(quoted(before.localizedName ?? "?"))}")
+fflush(stdout)
 RunLoop.main.run()

@@ -150,9 +150,14 @@ test("hidden (measurement only, ab-b84.11): a background start on macOS goes thr
   assert.match(hidden.logged, / chrome=via-open-g-j /, "launches.log names the hidden start");
   const today = await start({ background: true }, "darwin");
   assert.deepEqual(today.args, ["-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args", ...chrome], "off by default");
-  assert.match(today.logged, / chrome=via-open-g /);
-  assert.deepEqual(await start({ hidden: true }, "darwin").then(({ bin, args }) => ({ bin, args })), { bin: CHROME_BETA_BIN, args: chrome }, "a foreground start (launch --login) stays as it is");
-  assert.deepEqual(await start({ background: true, hidden: true }, "linux").then(({ bin, args }) => ({ bin, args })), { bin: CHROME_BETA_BIN, args: chrome }, "off macOS there is no open(1)");
+  assert.match(today.logged, / chrome=via-open-g by=/);
+  const foreground = await start({ hidden: true }, "darwin");
+  assert.deepEqual({ bin: foreground.bin, args: foreground.args }, { bin: CHROME_BETA_BIN, args: chrome }, "a foreground start (launch --login) stays as it is");
+  assert.match(foreground.logged, / chrome=78 hidden=ignored by=/, "launches.log says that the hook did not apply");
+  const linux = await start({ background: true, hidden: true }, "linux");
+  assert.deepEqual({ bin: linux.bin, args: linux.args }, { bin: CHROME_BETA_BIN, args: chrome }, "off macOS there is no open(1)");
+  assert.match(linux.logged, / chrome=78 hidden=ignored by=/);
+  assert.doesNotMatch((await start({}, "linux")).logged, /hidden/, "without the hook, launches.log is as before");
 });
 
 test("chromeArgs: extra Chrome flags reach the spawn (between --user-data-dir and the urls), and a --remote-debugging flag among them is refused before any spawn", async () => {

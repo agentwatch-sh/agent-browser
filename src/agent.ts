@@ -220,9 +220,10 @@ export function appBundle(bin: string): string | undefined {
  * once the operator has remote debugging turned on in it. It outlives this process by design.
  * With `background` on macOS it starts through `open -n -g`: a new instance that does not activate,
  * so the operator's frontmost app and Space stay as they are (a sign-in, `launch --login`, starts in
- * the foreground instead). `hidden` is for a measurement only (ab-b84.11: test/live/takeover/start.ts
- * --variant hidden): such a start goes through `open -n -g -j`, so Launch Services starts the app
- * hidden. It is off by default, the CLI never sets it, and it changes nothing for another start.
+ * the foreground instead). `hidden` (@internal) is for a measurement only (ab-b84.11:
+ * test/live/takeover/start.ts --variant hidden): such a start goes through `open -n -g -j`, so Launch
+ * Services starts the app hidden. It is off by default and the CLI never sets it. It changes no other
+ * start; launches.log then says "hidden=ignored".
  */
 export async function launchAgentChrome(
   s: Settings,
@@ -274,7 +275,7 @@ export async function launchAgentChrome(
     // Who started each Chrome: a flood of launches is traceable to the command and folder behind it.
     try {
       appendFileSync(statePath(s, "launches.log"),
-        `${new Date().toISOString()} chrome=${viaOpen ? (hidden ? "via-open-g-j" : "via-open-g") : child.pid ?? "?"} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
+        `${new Date().toISOString()} chrome=${viaOpen ? (hidden ? "via-open-g-j" : "via-open-g") : child.pid ?? "?"}${opts.hidden && !hidden ? " hidden=ignored" : ""} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
     } catch { /* logging never blocks a launch */ }
   }
   const deadline = Date.now() + (opts.timeoutMs ?? 30_000);

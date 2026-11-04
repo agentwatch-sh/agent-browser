@@ -807,8 +807,10 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   same monitor and analysis: `launch` (today's `open -n -g`, the default), `hidden` (`open -n -g -j`,
   through `launch` with a measurement hook that the CLI never sets) and `give-back` (today's start, while
   `giveback.swift`, given with `--giveback`, asks macOS to activate the app that was in front again;
-  a guard, not a fix). No variant opens a debugging WebSocket. Each result has `awayMs`: how long the
-  front was away from the app in front before the start.
+  a guard, not a fix; no Chrome starts unless the helper names the front app that the monitor and
+  `lsappinfo` name). No variant opens a debugging WebSocket. Each result has `awayMs`: how long the
+  front was away from the app in front before the start. A failed launch ends the run (exit 1), so
+  that a run stays short.
 - `test/live/function-keys/` (Linux, in a private Xvfb; macOS only with `--on-my-screen`, because
   its windows reach the person's screen and take the keyboard focus; see the head of `check.ts`): the
   function-key check of #7. Its own Chrome, on a throwaway profile, with one local page, gets each key
