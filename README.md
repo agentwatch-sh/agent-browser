@@ -162,6 +162,20 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   name: agent-browser started that Chrome with the name, and the profile does not restore its
   session. Chrome shows the prompt over the profile's last active window, so with a second window
   open the prompt can be on the other one.
+- **Every agent browser on the machine:** `agent-browser chromes` lists each agent-browser Chrome of
+  this user: its pid, profile, state folder, window name, the consumer's command name, and whether
+  an approved proxy of that state folder is up. It needs no `--state-dir`. It is read-only: it reads
+  the process table (this user's rows only) and this user's own state-folder and profile files. It
+  never connects to a Chrome, so it raises no "Allow remote debugging?" prompt, and it signals no
+  process. An agent Chrome is a Chrome main process (the Chrome or Chromium binary, on a
+  `--user-data-dir`, with no `--type=`) that carries agent-browser's launch flags in front of that
+  profile, or whose profile an agent-browser proxy of this user drives. A process that only names
+  a profile in its arguments is not one. The state folder and the command name come from the
+  window name of agent-browser's launch; for a Chrome that has none (started before window names,
+  or by hand), from its proxy, else the state folder is the profile's parent when that folder holds
+  a `launches.log`. The window name is given only when the profile does not restore its session. A
+  proxy is up when the pid in the state folder's `chrome-proxy.json` (written once Chrome accepted
+  the connection) is a live agent-browser proxy of that state folder and profile.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -504,7 +518,8 @@ result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)
 `press(o, { tab, key })`, `text(o, { tab, selector })`, `eval(o, { tab, expression })`,
 `shot(o, { tab, path, full, size, scale })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
 `close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`,
-`record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `commands()`.
+`record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `chromes()`
+(no options: every agent-browser Chrome of this user), `commands()`.
 Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `COMMAND_SPECS` describes them (names, parameters, CLI usage).
 
@@ -533,6 +548,7 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 
 **Lower level:** `launchAgentChrome`, `agentEndpoint`, `agentChromePid`, `agentChromeBin`,
 `findAgentPid`, `parsePs`, `processTree` (a Chrome's process tree, for example to record its audio),
+`listAgentChromes` (what `chromes` lists), `parseUserPs`, `chromeMainProfile`, `isChromeBinary`,
 `restoresOnStartup`, `startProxy`, `stopProxy`, `proxyInfo`, `browserTarget`, `localBrowserStatus`,
 `notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `recordTab`,
 `planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`, `pointAt`, `fittsMs`, `seededRandom`,
@@ -550,6 +566,8 @@ agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
               [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME]
 ```
+
+`chromes` and `commands` need no `--state-dir`.
 
 `--any-scope` goes on `tabs`, `window` and every command that takes a `<tab>`; under a tab scope,
 `window pin` and `window unpin` need it. See **Tab scopes**.
@@ -604,6 +622,7 @@ opened under a tab scope.
 | `close <tab>` | `tab` |
 | `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds` (at most 3600), `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers; nothing after the tab leaves the allowlist) |
 | `record <tab> --out clip.mp4 [--script S] [--setup S] [--size WxH] [--fps N] [--scale N] [--no-cursor] [--settle MS] [--seed N] [--ffmpeg PATH]` | `tab`, `path`, `provenance` (the JSON beside the MP4), `width`, `height`, `scale`, `fps`, `videoWidth`, `videoHeight`, `frames` (screencast frames kept), `seconds`, `maxFrameGapMs`, `steps` int, `events` (see **Recording**), `warnings` string[] |
+| `chromes` | `chromes`: one entry for each agent-browser Chrome of this user on the machine, by pid: `{pid, profileDir, stateDir: string\|null, windowName: string\|null, commandName: string\|null, proxy: {pid, upstream}\|null}` (`proxy` is the state folder's approved proxy when it is up; see **Every agent browser on the machine**). Read-only; no `--state-dir`. |
 | `commands` | `commands`: the command list (`name`, `summary`, `usage`, `params`) |
 
 `fetch` and `download` act through an allowlisted tab and send the profile's cookies, so their URL
@@ -658,6 +677,7 @@ dataclass:
 | `close(tab)` | `CloseResult(tab)` |
 | `net(tab, seconds=None, match=None, max=None)` | `NetResult(tab, seconds, entries: list[NetHttp \| NetWs])` |
 | `record(tab, out, script=None, setup=None, size=None, fps=None, scale=None, no_cursor=False, settle=None, seed=None, ffmpeg=None)` | `RecordResult(tab, path, provenance, width, height, scale, fps, video_width, video_height, frames, seconds, max_frame_gap_ms, steps, events: list[RecordEvent(step, kind, start, end, press, keys, first, last)], warnings)` |
+| `chromes()` | `ChromesResult(chromes: list[AgentChrome(pid, profile_dir, state_dir, window_name, command_name, proxy: ProxyInfo \| None)])`: every agent-browser Chrome of this user, not only this consumer's |
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
 Each method that takes a `tab`, and `window`, also takes `any_scope=False` as its last argument (see
@@ -746,6 +766,11 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   ported from vedlo.
 - `test/allowlist.test.ts`: matching, the file, and no built-in denylist.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
+- `test/chromes.test.ts`: `chromes` on crafted `ps` rows of Linux (procps) and macOS (BSD ps): other
+  users' rows, Chrome's helpers, the crashpad handler, `open` and processes that only name a profile
+  are skipped; a state folder with and without an approved proxy, a stale pid file, a restoring
+  profile, and another user's files (never read). Through the CLI with a stand-in `ps`, it proves
+  that the listing connects to nothing and signals nothing.
 - `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
   lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it
@@ -829,6 +854,7 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 | `src/commands.ts` | the operations, `COMMAND_SPECS`, result types |
 | `src/cli.ts` | argument parsing, JSON and human output |
 | `src/agent.ts` | the agent Chrome: binary, launch, endpoint check, pid lookup, process tree |
+| `src/chromes.ts` | `chromes`: every agent-browser Chrome of this user, from the process table |
 | `src/proxy.ts` | the multiplexing CDP proxy |
 | `src/diagnostics.ts` | proxy attempt log, local status, notify hook |
 | `src/allowlist.ts` | the allowlist: entry checks and host matching |

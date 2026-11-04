@@ -6,6 +6,7 @@
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import type { AgentChrome } from "./chromes.ts";
 import { commands, COMMAND_SPECS, type CommandName, type CommandSpec } from "./commands.ts";
 import { errorCode, UsageError } from "./errors.ts";
 import { resolveOptions, type BrowserOptions, type Settings } from "./options.ts";
@@ -61,6 +62,9 @@ through this consumer's proxy socket. Read pages with outline or text before any
 
 Commands:
 ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
+
+chromes and commands need no --state-dir. chromes lists every agent-browser Chrome of this user
+from the process table and the state folders' files; it connects to none and signals none.
 
 <tab> is a name given to 'open --name', a target-id prefix, or a URL substring (allowlisted tabs only).
 With --tab-scope NAME, open records each new tab under that scope, <tab> resolves only among the
@@ -206,6 +210,14 @@ export function human(r: any): string {
     case "download": return lines([`${r.path}  ${r.bytes} bytes  HTTP ${r.status}`]);
     case "close": return lines([`closed ${r.tab.id}`]);
     case "net": return ""; // streamed as it happened
+    case "chromes":
+      if (!r.chromes.length) return "no agent-browser Chrome of this user is running\n";
+      return lines(r.chromes.flatMap((c: AgentChrome) => [
+        `pid ${c.pid}  ${c.commandName ?? "command name unknown"}  ${c.proxy ? `approved proxy up (pid ${c.proxy.pid})` : "no approved proxy"}`,
+        `  state folder  ${c.stateDir ?? "unknown"}`,
+        `  profile       ${c.profileDir}`,
+        `  window        ${c.windowName === null ? "name unknown" : JSON.stringify(c.windowName)}`,
+      ]));
     case "commands": return USAGE + "\n";
     default: return JSON.stringify(r) + "\n";
   }
@@ -240,10 +252,11 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     const params = await paramsFor(spec, rest, values, io.stdin);
     let result: unknown;
     if (name === "commands") result = await commands.commands();
+    else if (name === "chromes") result = await commands.chromes();
     else {
       const options = optionsFromFlags(values, log);
       const hooks = name === "net" && !json ? { onEntry: (e: NetEntry) => { io.stdout.write(JSON.stringify(e) + "\n"); } } : undefined;
-      result = await (commands[name as Exclude<CommandName, "commands">] as (o: Settings, p: unknown, h?: unknown) => Promise<unknown>)(options, params, hooks);
+      result = await (commands[name as Exclude<CommandName, "commands" | "chromes">] as (o: Settings, p: unknown, h?: unknown) => Promise<unknown>)(options, params, hooks);
     }
     await write(io.stdout, json ? JSON.stringify(result) + "\n" : human(result));
     return 0;

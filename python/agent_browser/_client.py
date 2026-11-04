@@ -18,7 +18,7 @@ from typing import Callable, Dict, List, Literal, Mapping, Optional, Sequence, T
 
 from ._errors import ERRORS_BY_CODE, CLIError, NodeNotFoundError, NodeVersionError, PackageNotFoundError, ProtocolError
 from ._results import (
-    ClickResult, CloseResult, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, GotoResult, HoverResult,
+    ChromesResult, ClickResult, CloseResult, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, GotoResult, HoverResult,
     LaunchResult, NetResult, OpenResult, OutlineResult, PressResult, QuitResult, RecordResult, ShotResult, StatusResult, StopResult,
     TabsResult, TextResult, TypeResult, WindowResult,
 )
@@ -419,6 +419,10 @@ class AgentBrowser:
         if seed is not None:
             args += ["--seed", str(int(seed))]
         return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT)
+
+    def chromes(self) -> ChromesResult:
+        """Every agent-browser Chrome of this user on the machine (not only this consumer's): read-only, it connects to none."""
+        return self._run("chromes", [], ChromesResult.from_json, global_flags=False)
 
     def commands(self) -> CommandsResult:
         """Every CLI command with its parameters (the CLI's own description of itself)."""
