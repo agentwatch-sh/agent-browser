@@ -99,7 +99,7 @@ it. So the design keeps one product and one source tree, and builds two packages
 | Today's folder | `sender/` | `receiver/` |
 | New folder | `operator/` | `agent/` |
 | Name in Chrome | agentwatch — operator mode | agentwatch — agent mode (agent browser only) |
-| Extension ID | `bpfkgknpndlpkcffmaaelkfcbpackiip` (kept) | `dofdpnfachcncepdoondkeodcbnhipdc` (kept for an unpacked load; a packed CRX gets a new ID, section 10) |
+| Extension ID | `bpfkgknpndlpkcffmaaelkfcbpackiip` (kept) | `ifhfjdmdbgbnmllffiadajepajbcdnai` (new in ab-v16.18: the unpacked folder and the packed CRX share it; the old `dofdpnfachcncepdoondkeodcbnhipdc` is retired, section 10) |
 | Who installs it | The operator, once, in their own Chrome (Load unpacked from the Browser pane's download; a Web Store listing is a later choice) | The daemon (section 10), or on the Mac the operator once per agent profile |
 | Permissions | `cookies`, `activeTab`, `scripting`, `storage`, optional host permissions | `debugger`, `tabs`, `webNavigation`, `declarativeNetRequest`, `cookies`, `scripting`, `nativeMessaging`, `browsingData`, `downloads`, `contentSettings`, `<all_urls>` |
 
@@ -596,10 +596,12 @@ step. The details (the comparison's sections 5 and 9):
   package into a person's own profile there too.
 - A Chrome that agentwatch unpacks gets no automatic update. agentwatch fetches each new stable
   `.deb` and restarts the agent Chrome on it (stage 4).
-- The CRX: Chrome packs it itself (`--pack-extension`), and its ID comes from its signing key.
-  Stage 1 never wrote the agent package's private key, so the CRX gets a new key and a new agent-mode
-  ID. agentwatch keeps the new key (0600) to keep that ID, and the pins and the native host's
-  `allowed_origins` move to it.
+- The CRX: a Node script packs it (`scripts/pack-agent.mjs` in chrome-extension, `npm run
+  pack:agent`), and its ID comes from its signing key. Stage 1 never wrote the agent package's
+  private key, so the package got a new key and a new agent-mode ID, `ifhfjdmdbgbnmllffiadajepajbcdnai`
+  (ab-v16.18). The public key is the `key` of the package's manifest, so the unpacked folder and the
+  CRX have the same ID. agentwatch keeps the private key (0600) to keep that ID, and the pins and the
+  native host's `allowed_origins` move to it.
 - Chromium keeps the stage-1 `--load-extension` start, for a box where the operator chooses Chromium.
 
 The relay starts with the unit and stops with it. The fail-closed rule of stage 1 extends to the
