@@ -16,10 +16,10 @@ import { UsageError } from "./errors.ts";
 import { isChromeForTesting, statePath, type Settings } from "./options.ts";
 
 /**
- * Chrome Beta installs as its own app (com.google.Chrome.beta), so while the agent browser runs,
- * the Dock icon, Cmd-Tab and `open -a "Google Chrome"` still start the operator's own Chrome.
- * From the same Google Chrome.app, macOS would bring the agent browser forward instead. Stable is
- * the fallback when Beta isn't installed; the chromeBin option overrides both. The keychain item
+ * Chrome Beta installs as its own app (com.google.Chrome.beta). A second instance of Google Chrome.app
+ * (measured 2026-11-03) also runs with its own profile, its own Dock icon and its own Cmd-Tab entry,
+ * so the operator's own Chrome and the agent browser stay apart either way. Stable is the fallback
+ * when Beta isn't installed; the chromeBin option overrides both. The keychain item
  * that encrypts cookies is shared by Google's channels, so a profile moves between them signed in
  * (macOS asks once to let Beta use "Chrome Safe Storage").
  */
@@ -261,7 +261,7 @@ export async function launchAgentChrome(
     seedRemoteDebugging(profile); // come up with remote debugging on; no chrome://inspect click needed
     const bin = agentChromeBin(s, deps.exists);
     if (bin === CHROME_STABLE_BIN && !s.chromeBin) {
-      s.log(`agent browser: running from Google Chrome, so while it is open the Dock's Chrome icon brings it forward instead of your own profile; install Google Chrome Beta (brew install --cask google-chrome@beta) to keep them apart`);
+      s.log(`agent browser: a second Google Chrome runs for the agent browser, with its own profile; its icon in the Dock and its entry in Cmd-Tab are the agent's, and your own profile is untouched`);
     }
     // Exactly the elements checked above, plus agent-browser's own profile switch and window name.
     const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, `--window-name=${agentWindowName(s)}`, ...extraArgs, ...urls];
