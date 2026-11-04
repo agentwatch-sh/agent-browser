@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import WebSocket from "ws";
 import { CDPConnection } from "../src/cdp.ts";
 import { startRelay, type Relay } from "../src/relay/endpoint.ts";
+import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 
 export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string };
 /** A test's answer: a value is the data, { error } a bridge error text, undefined the default answer. */
@@ -148,4 +149,78 @@ export function raw(url: string, headers: Record<string, string> = {}): Promise<
     });
     ws.once("error", () => {});
   });
+}
+
+/**
+ * Back the fake receiver with the fake Chrome of fake-chrome.ts, so that agent-browser's own commands run through the
+ * relay with real answers: the tabs are the fake Chrome's pages, and each debugger op is a CDP call on one connection
+ * of its own, as chrome.debugger is. Returns a function that ends that connection.
+ */
+export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Promise<() => void> {
+  const ws = new WebSocket(chrome.ws, { perMessageDeflate: false });
+  await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
+  const pending = new Map<number, (m: any) => void>(), ids = new Map<string, number>(), targets = new Map<number, string>();
+  const sessions = new Map<number, string>(), tabOfSession = new Map<string, number>();
+  let next = 1;
+  const send = (method: string, params: object = {}, sessionId?: string) => new Promise<any>((resolve) => {
+    const id = next++;
+    pending.set(id, resolve);
+    ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+  ws.on("message", (raw) => {
+    const m = JSON.parse(String(raw));
+    if (m.id !== undefined) { pending.get(m.id)?.(m); pending.delete(m.id); return; }
+    const tabId = m.sessionId ? tabOfSession.get(m.sessionId) : undefined;
+    if (tabId !== undefined) fake.emit("debugger.onEvent", { source: { tabId }, method: m.method, params: m.params ?? {} });
+  });
+  const idOf = (targetId: string) => {
+    let id = ids.get(targetId);
+    if (id === undefined) { ids.set(targetId, (id = 100 + ids.size)); targets.set(id, targetId); }
+    return id;
+  };
+  const tab = (p: FakePage) => ({ id: idOf(p.targetId), windowId: p.windowId, index: 0, active: true, url: p.url, title: p.title, status: "complete" });
+  const page = (id: number) => {
+    const p = chrome.pages.get(targets.get(id) ?? "");
+    if (!p) throw new Error(`No tab with id: ${id}.`);
+    return p;
+  };
+  fake.op = async ({ op, args }) => {
+    switch (op) {
+      case "tabs.create": {
+        const t = tab(chrome.pages.get((await send("Target.createTarget", { url: args[0].url })).result.targetId)!);
+        fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
+        return t;
+      }
+      case "tabs.get": case "tabs.update": return tab(page(args[0]));
+      case "tabs.query": return [...chrome.pages.values()].filter((p) => args[0].windowId === undefined || p.windowId === args[0].windowId).map(tab);
+      case "tabs.remove":
+        page(args[0]);
+        await send("Target.closeTarget", { targetId: targets.get(args[0]) });
+        fake.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } });
+        return null;
+      case "debugger.getTargets": return [...chrome.pages.values()].map((p) => ({ id: p.targetId, tabId: idOf(p.targetId), type: "page", url: p.url, title: p.title, attached: sessions.has(idOf(p.targetId)) }));
+      case "debugger.attach": {
+        page(args[0]);
+        if (sessions.has(args[0])) return { already: true };
+        const { sessionId } = (await send("Target.attachToTarget", { targetId: targets.get(args[0]), flatten: true })).result;
+        sessions.set(args[0], sessionId); tabOfSession.set(sessionId, args[0]);
+        return { already: false };
+      }
+      case "debugger.detach": {
+        const sid = sessions.get(args[0]);
+        if (sid) { sessions.delete(args[0]); tabOfSession.delete(sid); await send("Target.detachFromTarget", { sessionId: sid }); }
+        return null;
+      }
+      case "debugger.sendCommand": {
+        const [target, method, params] = args;
+        const sid = target.sessionId ?? sessions.get(target.tabId);
+        if (!sid) return { error: "not attached" };
+        const r = await send(method, params ?? {}, sid);
+        // chrome.debugger gives a CDP error as its JSON text.
+        return r.error ? { error: JSON.stringify(r.error) } : r.result;
+      }
+    }
+    return undefined;
+  };
+  return () => ws.close();
 }

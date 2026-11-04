@@ -192,6 +192,7 @@ export const commands = {
   async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
+    if (s.cdpUrl) throw new UsageError("launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
@@ -216,6 +217,7 @@ export const commands = {
   async quit(o: BrowserOptions | Settings): Promise<QuitResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("quit is for the agent browser; it never closes the operator's Chrome");
+    if (s.cdpUrl) throw new UsageError("quit: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
     const proxyStopped = await stopProxyAndWait(s);
     // Signal the process rather than connect: a new debugging connection would prompt.
     const pid = agentChromePid(s);

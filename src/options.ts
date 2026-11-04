@@ -46,6 +46,12 @@ export type BrowserOptions = {
   chromeArgs?: string[];
   /** A known upstream endpoint (ws://127.0.0.1:<port>/devtools/browser/<id>). The connection still goes through the proxy. */
   endpoint?: string;
+  /**
+   * Agent mode's CDP endpoint (agentwatch's relay: ws+unix://<socket>:/devtools/browser/<scope>, from `agentwatch
+   * browser endpoint`). Each connection goes to it in place of the proxy socket: no proxy starts, no Chrome is
+   * launched, and launch and quit refuse, because that agent browser belongs to agentwatch. Agent mode only.
+   */
+  cdpUrl?: string;
   /** Personal mode: the operator's Chrome user-data folder, where Chrome writes DevToolsActivePort. */
   personalUserDataDir?: string;
   /** Never start Chrome: a missing agent browser is an error that names the launch command. */
@@ -86,6 +92,7 @@ export type Settings = {
   chromeBin?: string;
   chromeArgs?: string[];
   endpoint?: string;
+  cdpUrl?: string;
   personalUserDataDir?: string;
   noLaunch: boolean;
   noPrompt: boolean;
@@ -179,6 +186,11 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     if (isChromeForTesting(o.chromeBin)) throw new UsageError("chromeBin: the agent browser never runs from Chrome for Testing; use Google Chrome or Chrome Beta");
   }
   if (o.endpoint !== undefined && !/^wss?:\/\//.test(o.endpoint)) throw new UsageError(`endpoint must be a ws:// URL: ${o.endpoint}`);
+  if (o.cdpUrl !== undefined) {
+    if (!/^(wss?|ws\+unix):\/\//.test(o.cdpUrl)) throw new UsageError(`cdpUrl must be a ws://, wss:// or ws+unix:// URL: ${o.cdpUrl}`);
+    if (mode !== "agent") throw new UsageError("cdpUrl is for the agent browser (agent mode's endpoint), not for personal mode");
+    if (o.endpoint !== undefined) throw new UsageError("cdpUrl or endpoint, not both: cdpUrl replaces the proxy, endpoint feeds it");
+  }
   if (o.notify !== undefined && typeof o.notify !== "function") {
     const cmd = (o.notify as { command?: unknown }).command;
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every((a) => typeof a === "string") || !cmd[0])
@@ -205,6 +217,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     chromeBin: o.chromeBin,
     chromeArgs: o.chromeArgs,
     endpoint: o.endpoint,
+    cdpUrl: o.cdpUrl,
     personalUserDataDir: o.personalUserDataDir === undefined ? undefined : absolute("personalUserDataDir", o.personalUserDataDir),
     noLaunch: !!o.noLaunch,
     noPrompt: !!o.noPrompt,
