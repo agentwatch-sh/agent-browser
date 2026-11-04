@@ -10,11 +10,17 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { analyseStarts, exitCode, livenessProblem, lsappinfoPid, parseMonitorLog, startArgs, type Mark } from "./live/takeover/focus.ts";
+import {
+  analyseStarts, exitCode, giveBackProblems, givebackReady, livenessProblem, lsappinfoPid, parseGiveBack, parseMonitorLog, startArgs, startedAs, USAGE, VARIANTS, variantLaunch,
+  type GiveBackLog, type Mark, type Variant,
+} from "./live/takeover/focus.ts";
+import { INSPECT_URL, launchAgentChrome } from "../src/agent.ts";
+import { resolveOptions } from "../src/options.ts";
 import { ROOT } from "./helpers.ts";
 
 const run = promisify(execFile);
 const START = join(ROOT, "test", "live", "takeover", "start.ts");
+const LAUNCH_HIDDEN = join(ROOT, "test", "live", "takeover", "launch-hidden.ts");
 const BETA = "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta";
 const STABLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const MONITOR = "/tmp/abfs-monitor/monitor";
@@ -57,7 +63,7 @@ test("the start check needs the compiled monitor and an output folder", () => {
 test("--starts is 3 by default and a whole number from 1 to 20; --after-ms is 10 s by default; a fresh profile per start by default", () => {
   const r = startArgs(full, mac);
   assert.ok(r.ok);
-  assert.deepEqual(r.options, { chromeBin: BETA, starts: 3, monitor: MONITOR, outDir: "/tmp/abfs-out", afterMs: 10_000, keepState: false, sameProfile: false });
+  assert.deepEqual(r.options, { chromeBin: BETA, starts: 3, monitor: MONITOR, outDir: "/tmp/abfs-out", afterMs: 10_000, keepState: false, sameProfile: false, variant: "launch" });
   const five = startArgs([...full, "--starts", "5", "--after-ms", "4000", "--keep-state", "--same-profile"], mac);
   assert.ok(five.ok);
   assert.equal(five.options.starts, 5);
@@ -74,6 +80,114 @@ test("the start check refuses an --out-dir that holds the logs of a run, so a se
     assert.match(message, new RegExp(`--out-dir already holds the logs of a run \\(${name.replace(".", "\\.")}\\)`), name);
     assert.doesNotMatch(message, /\n/, "one line");
   }
+});
+
+const variant = (name: string): Variant => VARIANTS.find((v) => v.name === name)!;
+
+test("the variant table: today's start and the two acceptable candidates; each changes one thing and says what; the usage names each", () => {
+  assert.deepEqual(VARIANTS.map((v) => [v.name, v.kind, v.hidden ?? false, v.giveBack ?? false]), [
+    ["launch", "today", false, false], ["hidden", "candidate", true, false], ["give-back", "candidate", false, true]]);
+  for (const v of VARIANTS) assert.ok(USAGE.includes(`  ${v.name} (${v.kind}): ${v.summary}`), v.name);
+  assert.match(USAGE, /none opens a debugging WebSocket/);
+});
+
+test("--variant: launch (today's start) by default; an unknown variant is refused with the list", () => {
+  for (const name of ["launch", "hidden"]) {
+    const r = startArgs([...full, "--variant", name], mac);
+    assert.ok(r.ok, name);
+    assert.equal(r.options.variant, name);
+    assert.equal("giveback" in r.options, false);
+  }
+  assert.match(refused([...full, "--variant", "fast"]), /^--variant must be one of launch, hidden, give-back, not "fast"$/);
+  assert.match(refused([...full, "--variant", "no-startup-window"]), /--variant must be one of/, "not a candidate: with no window, Chrome denies every debugging connection");
+  assert.match(refused([...full, "--variant", ""]), /--variant must be one of/);
+});
+
+test("--variant give-back needs the compiled give-back helper (--giveback); --giveback with another variant is refused", () => {
+  const GIVEBACK = "/tmp/abfs-giveback";
+  const env = { ...mac, exists: (p: string) => mac.exists(p) || p === GIVEBACK };
+  assert.match(refused([...full, "--variant", "give-back"], env), /--giveback is required for --variant give-back/);
+  assert.match(refused([...full, "--variant", "give-back", "--giveback", "/tmp/nope"], env), /--giveback: no such file: \/tmp\/nope/);
+  assert.match(refused([...full, "--giveback", GIVEBACK], env), /--giveback is only for --variant give-back/);
+  const r = startArgs([...full, "--variant", "give-back", "--giveback", GIVEBACK], env);
+  assert.ok(r.ok);
+  assert.equal(r.options.variant, "give-back");
+  assert.equal(r.options.giveback, GIVEBACK);
+});
+
+test("each variant's start command: the CLI's launch as an agent session runs it, or for hidden the launcher that runs the same launch with its hook", () => {
+  const p = { node: "/usr/local/bin/node", cli: "/r/bin/agent-browser.js", launcher: "/r/test/live/takeover/launch-hidden.ts", stateDir: "/tmp/abfs-1-AbC123", chromeBin: BETA };
+  const cli = [p.node, p.cli, "launch", "--state-dir", p.stateDir, "--chrome-bin", BETA, "--json"];
+  assert.deepEqual(variantLaunch(variant("launch"), p), cli);
+  assert.deepEqual(variantLaunch(variant("give-back"), p), cli, "the guard runs beside the start; the start itself is today's");
+  assert.deepEqual(variantLaunch(variant("hidden"), p), [p.node, p.launcher, "--state-dir", p.stateDir, "--chrome-bin", BETA]);
+});
+
+test("each variant starts the agent Chrome as src/agent.ts does, changed only by its candidate (a macOS start with a fake spawn)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "abfs-test-"));
+  try {
+    const startOf = async (v: Variant) => {
+      const s = resolveOptions({ stateDir: join(dir, v.name), chromeBin: BETA, log: () => {} });
+      const calls: { bin: string; args: string[] }[] = [];
+      let probes = 0;
+      // What `launch` (no --login) gives launchAgentChrome, with the variant's hook.
+      await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true, hidden: v.hidden }, {
+        endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9/devtools/browser/x", pid: () => undefined, platform: "darwin", exists: () => true,
+        spawn: (bin, args) => { calls.push({ bin, args }); return { pid: 1, exitCode: 0, unref() {} }; },
+      });
+      assert.equal(calls.length, 1, v.name);
+      return { bin: calls[0].bin, args: calls[0].args.map((a) => a.replaceAll(s.stateDir, "<state>")) };
+    };
+    const today = await startOf(variant("launch"));
+    assert.deepEqual([today.bin, ...today.args.slice(0, 5)], ["/usr/bin/open", "-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args"]);
+    assert.equal(today.args.at(-1), INSPECT_URL);
+    for (const v of VARIANTS.filter((x) => x.name !== "launch")) {
+      const want = [...today.args];
+      if (v.hidden) want.splice(2, 0, "-j");
+      assert.deepEqual(await startOf(v), { bin: today.bin, args: want }, v.name);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the give-back helper's log: the app in front at its start, then one line per request; a cut last line is no error", () => {
+  const log = parseGiveBack([
+    '{"t": 10.0, "before": 500, "name": "TextEdit"}',
+    '{"t": 11.0, "took": 701, "name": "Google Chrome Beta", "gaveBackTo": 500, "sent": true}',
+    '{"t": 11.5, "took": 701, "name": "Google Chrome Beta", "gaveBackTo": 500, "sent": fal',
+  ].join("\n"));
+  assert.deepEqual(log, { before: { pid: 500, name: "TextEdit" }, requests: [{ t: 11, took: 701, name: "Google Chrome Beta", gaveBackTo: 500, sent: true }], bad: [] });
+  const odd = parseGiveBack('{"t": 1, "what": 2}\n{"t": 2, "before": 5, "name": "X"}\n{"t": 3, "took": 6, "name": "Y", "gaveBackTo": 5, "sent": "yes"}\n');
+  assert.deepEqual(odd.bad, [1, 3]);
+  assert.deepEqual(odd.before, { pid: 5, name: "X" });
+  assert.deepEqual(parseGiveBack(""), { before: null, requests: [], bad: [] });
+});
+
+test("the give-back helper must name the app that the monitor and lsappinfo name in front, or the check starts no Chrome", () => {
+  const textEdit = { pid: 500, name: "TextEdit" };
+  assert.equal(givebackReady(textEdit, 500, 500), null);
+  assert.equal(givebackReady(textEdit, 600, 500), "the give-back helper's front app (TextEdit, pid 500) is not the monitor's (pid 600)");
+  assert.equal(givebackReady(textEdit, 500, 600), "the give-back helper's front app (TextEdit, pid 500) is not lsappinfo's (pid 600)");
+  assert.equal(givebackReady(textEdit, undefined, 500), "the give-back helper's front app (TextEdit, pid 500) is not the monitor's (none)");
+  assert.equal(givebackReady(textEdit, 500, undefined), "the give-back helper's front app (TextEdit, pid 500) is not lsappinfo's (none)");
+});
+
+test("a give-back start is a problem when the helper's front app is not the app in front before the start, or when its log has a bad line", () => {
+  const log = (before: GiveBackLog["before"], bad: number[] = []): GiveBackLog => ({ before, requests: [], bad });
+  const textEdit = { pid: 500, name: "TextEdit" };
+  assert.deepEqual(giveBackProblems(1, null, textEdit), [], "another variant: no helper");
+  assert.deepEqual(giveBackProblems(1, log(textEdit), textEdit), []);
+  assert.deepEqual(giveBackProblems(2, log(textEdit), { pid: 600, name: "Finder" }), ["the give-back helper's front app (TextEdit, pid 500) is not the app in front before start 2 (Finder, pid 600)"]);
+  assert.deepEqual(giveBackProblems(2, log(textEdit), null), ["the give-back helper's front app (TextEdit, pid 500) is not the app in front before start 2 (none)"]);
+  assert.deepEqual(giveBackProblems(1, log(null), textEdit), ["the give-back helper named no front app in start 1"]);
+  assert.deepEqual(giveBackProblems(3, log(textEdit, [2, 4]), textEdit), ["giveback-3.jsonl lines 2, 4 are no helper line"]);
+  assert.deepEqual(giveBackProblems(3, log(textEdit, [2]), textEdit), ["giveback-3.jsonl line 2 is no helper line"]);
+});
+
+test("startedAs: how launches.log names a start (its chrome= form, and a hook that did not apply)", () => {
+  assert.equal(startedAs(["2026-11-04T10:00:00.000Z chrome=via-open-g-j by=12 cwd=/a by=b cmd=launch --json"]), "chrome=via-open-g-j");
+  assert.equal(startedAs(["2026-11-04T10:00:00.000Z chrome=4242 hidden=ignored by=12 cwd=/a cmd=x"]), "chrome=4242 hidden=ignored");
+  assert.equal(startedAs(["t1 chrome=via-open-g by=1 cwd=/ cmd=", "t2 chrome=7 by=1 cwd=/ cmd="]), "chrome=via-open-g; chrome=7", "a start that launched twice");
+  assert.equal(startedAs([]), null);
 });
 
 test("the start check refuses an unknown flag or a stray argument", () => {
@@ -129,13 +243,27 @@ test("the analysis names the start that changed the frontmost app, when, and to 
   ]);
   const r = analyseStarts(log, marks, pids);
   assert.deepEqual(r.map((x) => [x.start, x.changed]), [[1, false], [2, true], [3, false]]);
-  assert.deepEqual(r[0], { start: 1, frontBefore: { pid: 500, name: "TextEdit" }, changed: false, changes: [], quitChanges: [], quitCounted: false, pointerMoves: 0, launchSeen: false, problem: null });
+  assert.deepEqual(r[0], { start: 1, frontBefore: { pid: 500, name: "TextEdit" }, changed: false, changes: [], quitChanges: [], quitCounted: false, awayMs: 0, pointerMoves: 0, launchSeen: false, problem: null });
+  assert.equal(r[1].awayMs, 1900, "TextEdit was back 1.9 s after Chrome took the front");
   assert.deepEqual(r[1].changes, [
     { t: 33.2, afterStartMs: 3200, phase: "after", pid: 702, name: "Google Chrome Beta", agentChrome: true },
     { t: 35.1, afterStartMs: 5100, phase: "after", pid: 500, name: "TextEdit", agentChrome: false },
   ]);
   assert.equal(r[1].pointerMoves, 1, "the pointer moved: the change back can be the person's click");
   assert.equal(exitCode(r), 1);
+});
+
+test("awayMs: how long the front app was not the app in front before, in the launch and after phases (not in the quit)", () => {
+  const r = analyseStarts(monitorLog([
+    '{"t": 5.0, "front": 500, "name": "TextEdit"}',
+    '{"t": 11.0, "front": 701, "name": "Google Chrome Beta"}',
+    '{"t": 11.4, "front": 500, "name": "TextEdit"}',
+    '{"t": 33.0, "front": 702, "name": "Google Chrome Beta"}',
+    '{"t": 34.0, "front": 600, "name": "Finder"}',
+    '{"t": 42.5, "front": 500, "name": "TextEdit"}',
+  ]), marks, pids, { monitorEnd: 70 });
+  assert.deepEqual(r.map((x) => x.awayMs), [400, 9000, 0], "start 1: given back after 0.4 s; start 2: away from +3 s to the quit at +12 s, through another app");
+  assert.equal(analyseStarts(monitorLog(['{"t": 25.0, "front": 500, "name": "TextEdit"}']), marks, pids)[0].awayMs, null, "no app in front before the start");
 });
 
 test("a change while the launch command runs is in the launch phase; another app (a system prompt) counts too", () => {
@@ -283,8 +411,24 @@ process.on("SIGTERM", () => process.exit(0));
 if (process.argv[2] === "front") console.log("ASN:0x0-0x1:");
 else if (process.argv[2] === "info") console.log('"pid"=' + (process.env.ABFS_FAKE_FRONT_PID || 111));
 `);
-  // A stand-in for the Chrome main process: it listens, writes DevToolsActivePort and records a
-  // SIGTERM (ABFS_FAKE_IGNORE_TERM: and stays alive; ABFS_FAKE_EXIT_MS: it ends by itself after that time). It starts a decoy that shares the state folder's
+  // A stand-in for giveback.swift: it records its argv, prints the app in front (TextEdit, pid 111, or
+  // ABFS_FAKE_GIVEBACK_BEFORE) and one request, and stays until SIGTERM (which it records) or its time
+  // limit. ABFS_FAKE_GIVEBACK_SILENT: it prints nothing.
+  const giveback = join(dir, "giveback");
+  writeFileSync(giveback, `#!${process.execPath}
+const { writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const out = process.env.ABFS_FAKE_OUT;
+const line = (o) => process.stdout.write(JSON.stringify({ t: Number((Date.now() / 1000).toFixed(3)), ...o }) + "\\n");
+writeFileSync(join(out, "giveback-" + process.pid + ".json"), JSON.stringify(process.argv.slice(2)));
+const before = Number(process.env.ABFS_FAKE_GIVEBACK_BEFORE || 111);
+if (!process.env.ABFS_FAKE_GIVEBACK_SILENT) { line({ before, name: "TextEdit" }); line({ took: 999, name: "X", gaveBackTo: before, sent: true }); }
+process.on("SIGTERM", () => { writeFileSync(join(out, "giveback-sigterm-" + process.pid), ""); process.exit(0); });
+setTimeout(() => process.exit(0), Number(process.argv[3]) * 1000);
+`);
+  // A stand-in for the Chrome main process: it records its argv, listens, writes DevToolsActivePort and records a
+  // SIGTERM (ABFS_FAKE_IGNORE_TERM: and stays alive; ABFS_FAKE_EXIT_MS: it ends by itself after that time;
+  // ABFS_FAKE_NO_DEBUG: it ends at once, so the launch fails). It starts a decoy that shares the state folder's
   // name as a prefix but lies outside it ("<state folder>-x/profile"), and with ABFS_FAKE_HELPER a
   // "--type=renderer" helper on its own profile that outlives it. Decoy and helper record a SIGTERM
   // and stay alive.
@@ -303,20 +447,23 @@ const out = process.env.ABFS_FAKE_OUT;
 const keep = (script, args) => { const c = spawn(process.execPath, ["-e", script, "--", out, ...args], { detached: true, stdio: "ignore" }); c.unref(); return c.pid; };
 const decoy = keep(${JSON.stringify(stay("decoy"))}, ["--user-data-dir=" + dirname(profile) + "-x/profile"]);
 const helper = process.env.ABFS_FAKE_HELPER ? keep(${JSON.stringify(stay("helper"))}, ["--type=renderer", "--user-data-dir=" + profile]) : null;
-writeFileSync(join(out, "fake-" + process.pid + ".json"), JSON.stringify({ pid: process.pid, decoy, helper, profile }));
+writeFileSync(join(out, "fake-" + process.pid + ".json"), JSON.stringify({ pid: process.pid, decoy, helper, profile, argv: process.argv.slice(2) }));
+if (process.env.ABFS_FAKE_NO_DEBUG) process.exit(0);
 process.on("SIGTERM", () => { writeFileSync(join(out, "sigterm-" + process.pid), ""); if (!process.env.ABFS_FAKE_IGNORE_TERM) process.exit(0); });
 if (process.env.ABFS_FAKE_EXIT_MS) setTimeout(() => process.exit(0), Number(process.env.ABFS_FAKE_EXIT_MS));
 const srv = createServer((s) => s.destroy());
 srv.listen(0, "127.0.0.1", () => writeFileSync(join(profile, "DevToolsActivePort"), srv.address().port + "\\n/devtools/browser/fake\\n"));
 `);
-  for (const f of [monitor, lsappinfo, bin]) chmodSync(f, 0o755);
+  for (const f of [monitor, lsappinfo, giveback, bin]) chmodSync(f, 0o755);
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   const commandOf = (pid: number) => { try { return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }); } catch { return ""; } };
-  type Started = { pid: number; decoy: number; helper: number | null; profile: string };
+  type Started = { pid: number; decoy: number; helper: number | null; profile: string; argv: string[] };
   const started = () => readdirSync(out).filter((f) => /^fake-\d+\.json$/.test(f)).map((f) => JSON.parse(readFileSync(join(out, f), "utf8")) as Started);
-  const test = { lsappinfo, beforeMs: 1500, quitWaitMs: 1500, killWaitMs: 1500 };
+  const test = { lsappinfo, beforeMs: 1500, quitWaitMs: 1500, killWaitMs: 1500, givebackWaitMs: 1500 };
+  /** The give-back stand-ins that ran: their pid and argv. */
+  const givebacks = () => readdirSync(out).flatMap((f) => { const m = /^giveback-(\d+)\.json$/.exec(f); return m ? [{ pid: Number(m[1]), argv: JSON.parse(readFileSync(join(out, f), "utf8")) as string[] }] : []; });
   return {
-    dir, preload, monitor, out, bin, alive, started,
+    dir, preload, monitor, giveback, out, bin, alive, started, givebacks,
     check: (args: string[], env: Record<string, string> = {}, overrides: Record<string, unknown> = {}) =>
       run(process.execPath, ["--import", preload, START, ...args], { env: { ...process.env, ABFS_FAKE_OUT: out, ABFS_TEST: JSON.stringify({ ...test, ...overrides }), ...env }, timeout: 120_000 })
         .then((r) => ({ code: 0, ...r }), (e) => ({ code: e.code as number, stdout: e.stdout as string, stderr: e.stderr as string })),
@@ -339,6 +486,9 @@ srv.listen(0, "127.0.0.1", () => writeFileSync(join(profile, "DevToolsActivePort
     cleanup: () => {
       for (const f of started()) {
         for (const pid of [f.pid, f.decoy, f.helper]) if (pid && alive(pid) && commandOf(pid).includes(dir)) process.kill(pid, "SIGKILL");
+      }
+      for (const g of givebacks()) if (alive(g.pid) && commandOf(g.pid).includes(dir)) process.kill(g.pid, "SIGKILL");
+      for (const f of started()) {
         const stateDir = dirname(f.profile);
         if (/^\/tmp\/abfs-(\d+|s)-[A-Za-z0-9]{6}$/.test(stateDir) && existsSync(stateDir)) rmSync(stateDir, { recursive: true });
       }
@@ -365,6 +515,9 @@ test("the start check, run here, refuses and starts nothing (exit 2), and makes 
     assert.match(relative.stderr, /--chrome-bin must be an absolute path/);
     assert.equal(existsSync(outDir), false, "a refused run writes nothing");
     assert.deepEqual(f.started(), [], "and starts nothing");
+    const launcher = await run(process.execPath, [LAUNCH_HIDDEN, "--state-dir", "relative"]).then(() => 0, (e) => e);
+    assert.equal(launcher.code, 2, "the hidden variant's launcher needs absolute paths, as the CLI does");
+    assert.match(launcher.stderr, /usage: node test\/live\/takeover\/launch-hidden\.ts/);
   } finally { f.cleanup(); }
 });
 
@@ -538,4 +691,141 @@ test("Ctrl-C to the process group just after a launch began: the check keeps tha
     f.cleanup();
     if (left && /^\/tmp\/abfs-1-[A-Za-z0-9]{6}$/.test(left) && existsSync(left)) rmSync(left, { recursive: true }); // this test's own run made it
   }
+});
+
+test("--variant hidden starts the agent Chrome as --variant launch does, except the hook: launch-hidden.ts passes it to launchAgentChrome", onLinux, async () => {
+  const f = fakes();
+  try {
+    const runOf = async (name: string) => {
+      const outDir = join(f.dir, name);
+      const before = new Set(f.started().map((x) => x.pid));
+      const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "1", "--after-ms", "1000", "--variant", name]);
+      assert.equal(r.code, 1, r.stderr);
+      const [result] = jsonl(join(outDir, "results.jsonl"));
+      const fake = f.started().find((x) => !before.has(x.pid))!;
+      assert.equal(result.chromePid, fake.pid);
+      assert.equal(fake.profile, join(result.stateDir, "profile"));
+      assert.deepEqual(result.quit, { code: 0, ended: true, killed: false });
+      assert.equal(existsSync(result.stateDir), false);
+      return { result, argv: fake.argv.map((a) => a.replaceAll(result.stateDir, "<state>")) };
+    };
+    const today = await runOf("launch"), hidden = await runOf("hidden");
+    assert.equal(hidden.result.variant, "hidden");
+    assert.equal(hidden.result.launch.code, 0, "the launcher printed launch's JSON document and exited 0");
+    assert.equal(hidden.result.launch.started, true);
+    assert.deepEqual(hidden.argv, today.argv, "the same Chrome argv: on Linux the hook (open's -j) has nothing to change");
+    assert.match(today.result.startedAs, /^chrome=\d+$/);
+    assert.match(hidden.result.startedAs, /^chrome=\d+ hidden=ignored$/, "the hook reached launchAgentChrome, which logs that it did not apply");
+    assert.match(today.result.problem, /the start did not go through open -n -g \(launches\.log\)/);
+    assert.match(hidden.result.problem, /the start did not go through open -n -g -j \(launches\.log\)/);
+  } finally { f.cleanup(); }
+});
+
+test("--variant give-back: the helper runs from before each launch to its quit, gets the app bundle, and its log reaches the results", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "2", "--after-ms", "1000", "--variant", "give-back", "--giveback", f.giveback]);
+    assert.equal(r.code, 1, r.stderr);
+    const results = jsonl(join(outDir, "results.jsonl"));
+    assert.equal(results.length, 2);
+    for (const x of results) {
+      assert.equal(x.variant, "give-back");
+      assert.deepEqual(x.giveBack.before, { pid: 111, name: "TextEdit" });
+      assert.deepEqual(x.giveBack.requests.map((q: { took: number; sent: boolean }) => [q.took, q.sent]), [[999, true]]);
+    }
+    const helpers = f.givebacks();
+    assert.equal(helpers.length, 2, "one helper per start");
+    for (const g of helpers) {
+      assert.equal(g.argv[0], join(f.dir, "X.app"), "the bundle of --chrome-bin");
+      assert.match(g.argv[1], /^\d+$/, "a time limit, so that a helper left behind ends by itself");
+      assert.ok(Number(g.argv[1]) >= Math.ceil((60_000 + 1000) / 1000), "at least the launch timeout and --after-ms");
+      assert.ok(existsSync(join(f.out, `giveback-sigterm-${g.pid}`)), "the check ended the helper");
+      assert.equal(f.alive(g.pid), false);
+    }
+    const marks = jsonl(join(outDir, "marks.jsonl")).map((m) => m.what);
+    for (const n of [1, 2]) {
+      assert.ok(marks.indexOf(`giveback ready ${n}`) >= 0 && marks.indexOf(`giveback ready ${n}`) < marks.indexOf(`start launch ${n}`), "the helper saw the front app before the launch");
+      assert.ok(marks.indexOf(`giveback stopped ${n}`) < marks.indexOf(`start quit ${n}`), "and it stops before the quit");
+    }
+    assert.equal(JSON.parse(readFileSync(join(outDir, "summary.json"), "utf8")).variant, "give-back");
+  } finally { f.cleanup(); }
+});
+
+test("--variant give-back: a helper that names no front app ends the check before it starts a Chrome", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--variant", "give-back", "--giveback", f.giveback], { ABFS_FAKE_GIVEBACK_SILENT: "1" });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /the give-back helper named no front app within 1\.5 s: no start 1/);
+    assert.deepEqual(f.started(), [], "no Chrome started");
+    assert.deepEqual(jsonl(join(outDir, "results.jsonl")), []);
+    const [g] = f.givebacks();
+    assert.ok(existsSync(join(f.out, `giveback-sigterm-${g.pid}`)), "the check ended the helper");
+    assert.doesNotMatch(r.stderr, /left in place|deleted \/tmp\/abfs-/, "it made no state folder for that start");
+  } finally { f.cleanup(); }
+});
+
+test("--variant give-back: a helper whose front app is not the monitor's and lsappinfo's starts no Chrome", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--variant", "give-back", "--giveback", f.giveback], { ABFS_FAKE_GIVEBACK_BEFORE: "222" });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /the give-back helper's front app \(TextEdit, pid 222\) is not the monitor's \(pid 111\): no start 1/);
+    assert.deepEqual(f.started(), [], "no Chrome started");
+    assert.deepEqual(jsonl(join(outDir, "results.jsonl")), []);
+    const [g] = f.givebacks();
+    assert.ok(existsSync(join(f.out, `giveback-sigterm-${g.pid}`)), "the check ended the helper");
+  } finally { f.cleanup(); }
+});
+
+test("Ctrl-C with --variant give-back: the check ends its helper as well as its Chrome", onLinux, async () => {
+  const f = fakes();
+  try {
+    const r = await f.interrupt(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--starts", "1", "--after-ms", "3000", "--variant", "give-back", "--giveback", f.giveback], join(f.dir, "results"), /"end launch 1"/);
+    assert.equal(r.code, 130);
+    const [g] = f.givebacks();
+    assert.ok(g, "the helper ran");
+    for (let i = 0; i < 50 && f.alive(g.pid); i++) await new Promise((res) => setTimeout(res, 100));
+    assert.ok(existsSync(join(f.out, `giveback-sigterm-${g.pid}`)), "the helper got SIGTERM");
+    assert.equal(f.alive(g.pid), false, "and it ended");
+    const [fake] = f.started();
+    assert.match(r.stderr, new RegExp(`left in place \\(its Chrome, pid ${fake.pid}, got SIGTERM\\)`));
+  } finally { f.cleanup(); }
+});
+
+test("a failed launch is a problem, and the check starts no more Chrome, so that a run stays short", onLinux, async () => {
+  const f = fakes();
+  try {
+    const outDir = join(f.dir, "results");
+    const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", outDir, "--starts", "3", "--after-ms", "5000"], { ABFS_FAKE_NO_DEBUG: "1" });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /launch 1 failed: no more starts/);
+    const results = jsonl(join(outDir, "results.jsonl"));
+    assert.equal(results.length, 1);
+    assert.match(results[0].problem, /launch failed \(exit 1\)/);
+    assert.equal(f.started().length, 1, "one Chrome only");
+    const marks = jsonl(join(outDir, "marks.jsonl"));
+    const failed = marks.find((m) => m.what === "fail launch 1")!.t, quit = marks.find((m) => m.what === "start quit 1")!.t;
+    assert.ok(quit - failed < 2, "no --after-ms wait after a failed launch");
+    assert.equal(existsSync(results[0].stateDir), false);
+  } finally { f.cleanup(); }
+});
+
+test("analyse.py puts the give-back helper's lines into the timeline", () => {
+  const dir = mkdtempSync(join(tmpdir(), "abfs-test-"));
+  try {
+    writeFileSync(join(dir, "marks.jsonl"), ['{"t": 10, "what": "start launch 1"}', '{"t": 12, "what": "end launch 1", "detail": {"started": true}}', '{"t": 20, "what": "start quit 1"}'].join("\n") + "\n");
+    writeFileSync(join(dir, "monitor.jsonl"), ['{"t": 5.0, "front": 500, "name": "TextEdit"}', '{"t": 11.0, "front": 701, "name": "Google Chrome Beta"}', '{"t": 11.2, "front": 500, "name": "TextEdit"}'].join("\n") + "\n");
+    writeFileSync(join(dir, "giveback-1.jsonl"), ['{"t": 9.5, "before": 500, "name": "TextEdit"}', '{"t": 11.05, "took": 701, "name": "Google Chrome Beta", "gaveBackTo": 500, "sent": true}'].join("\n") + "\n");
+    const out = execFileSync("python3", ["-I", join(ROOT, "test", "live", "takeover", "analyse.py"), dir, "701"], { encoding: "utf8" });
+    const lines = out.split("\n");
+    const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
+    assert.ok(at(/^9\.50  give-back helper: in front at its start: TextEdit \(pid 500\)$/) >= 0, out);
+    assert.ok(at(/^11\.05  GIVE BACK: Google Chrome Beta \(pid 701\) took the front; asked macOS to activate pid 500 \(sent: true\) during: launch 1$/) >= 0, out);
+    assert.ok(at(/FRONT -> Google Chrome Beta \(pid 701\)/) < at(/GIVE BACK/), "in time order");
+    assert.ok(at(/GIVE BACK/) < at(/FRONT -> TextEdit \(pid 500\) during: launch 1/), out);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

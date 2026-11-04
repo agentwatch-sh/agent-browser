@@ -220,11 +220,14 @@ export function appBundle(bin: string): string | undefined {
  * once the operator has remote debugging turned on in it. It outlives this process by design.
  * With `background` on macOS it starts through `open -n -g`: a new instance that does not activate,
  * so the operator's frontmost app and Space stay as they are (a sign-in, `launch --login`, starts in
- * the foreground instead).
+ * the foreground instead). `hidden` (@internal) is for a measurement only (ab-b84.11:
+ * test/live/takeover/start.ts --variant hidden): such a start goes through `open -n -g -j`, so Launch
+ * Services starts the app hidden. It is off by default and the CLI never sets it. It changes no other
+ * start; launches.log then says "hidden=ignored".
  */
 export async function launchAgentChrome(
   s: Settings,
-  opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void; background?: boolean } = {},
+  opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void; background?: boolean; hidden?: boolean } = {},
   deps: { endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean; platform?: NodeJS.Platform } = {},
 ): Promise<string> {
   const extraArgs = [...(opts.extraArgs ?? []), ...(s.chromeArgs ?? [])];
@@ -265,13 +268,14 @@ export async function launchAgentChrome(
     const bundle = opts.background && (deps.platform ?? process.platform) === "darwin" ? appBundle(bin) : undefined;
     const run = deps.spawn ?? (spawn as unknown as SpawnLike);
     viaOpen = !!bundle;
-    child = bundle ? run("/usr/bin/open", ["-n", "-g", "-a", bundle, "--args", ...args], { detached: true, stdio: "ignore" })
+    const hidden = viaOpen && !!opts.hidden;
+    child = bundle ? run("/usr/bin/open", ["-n", "-g", ...(hidden ? ["-j"] : []), "-a", bundle, "--args", ...args], { detached: true, stdio: "ignore" })
       : run(bin, args, { detached: true, stdio: "ignore" });
     child.unref();
     // Who started each Chrome: a flood of launches is traceable to the command and folder behind it.
     try {
       appendFileSync(statePath(s, "launches.log"),
-        `${new Date().toISOString()} chrome=${viaOpen ? "via-open-g" : child.pid ?? "?"} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
+        `${new Date().toISOString()} chrome=${viaOpen ? (hidden ? "via-open-g-j" : "via-open-g") : child.pid ?? "?"}${opts.hidden && !hidden ? " hidden=ignored" : ""} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
     } catch { /* logging never blocks a launch */ }
   }
   const deadline = Date.now() + (opts.timeoutMs ?? 30_000);

@@ -1,8 +1,9 @@
 """Merge the monitor log and the command marks: which command or start changed the frontmost app or the pointer?
+With start.ts --variant give-back, the helper's lines (giveback-N.jsonl) go into the timeline too.
 
   python3 -I analyse.py DIR [CHROME_PID ...]    (each agent Chrome pid, for example one per start)
 """
-import json, sys
+import glob, json, sys
 
 
 def jsonl(path):
@@ -24,7 +25,8 @@ d = sys.argv[1]
 chrome_pids = {int(p) for p in sys.argv[2:]}
 events = jsonl(f"{d}/monitor.jsonl")
 marks = jsonl(f"{d}/marks.jsonl")
-timeline = sorted([(m["t"], "mark", m) for m in marks] + [(e["t"], "mon", e) for e in events], key=lambda x: x[0])
+helper = [g for path in sorted(glob.glob(f"{glob.escape(d)}/giveback-*.jsonl")) for g in jsonl(path)]
+timeline = sorted([(m["t"], "mark", m) for m in marks] + [(e["t"], "mon", e) for e in events] + [(g["t"], "giveback", g) for g in helper], key=lambda x: x[0])
 current = "(before the check)"
 for t, kind, x in timeline:
     if kind == "mark":
@@ -37,6 +39,12 @@ for t, kind, x in timeline:
             print(f"{t:.2f}  log: {x.get('detail')}")
         elif x["what"] == "liveness":
             print(f"{t:.2f}  liveness: {x.get('detail')}")
+        continue
+    if kind == "giveback":
+        if "before" in x:
+            print(f"{t:.2f}  give-back helper: in front at its start: {x['name']} (pid {x['before']})")
+        elif "took" in x:
+            print(f"{t:.2f}  GIVE BACK: {x['name']} (pid {x['took']}) took the front; asked macOS to activate pid {x['gaveBackTo']} (sent: {json.dumps(x['sent'])}) during: {current}")
         continue
     if "front" in x:
         tag = "  <== AN AGENT CHROME" if x["front"] in chrome_pids else ""

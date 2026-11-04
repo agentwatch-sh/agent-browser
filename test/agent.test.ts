@@ -130,6 +130,36 @@ test("a background launch on macOS starts a new instance through `open -n -g` (n
   assert.equal(appBundle("/usr/bin/chromium"), undefined);
 });
 
+test("hidden (measurement only, ab-b84.11): a background start on macOS goes through `open -n -g -j`; off by default, never for a foreground start or off macOS", async () => {
+  const launchesLog = join(s.stateDir, "launches.log");
+  const start = async (opts: { background?: boolean; hidden?: boolean }, platform: NodeJS.Platform) => {
+    const calls: { bin: string; args: string[] }[] = [];
+    let probes = 0;
+    await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], ...opts }, {
+      endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/hidden",
+      pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform,
+      spawn: (bin, args) => { calls.push({ bin, args }); return { pid: 78, exitCode: bin === "/usr/bin/open" ? 0 : null, unref() {} }; },
+    });
+    assert.equal(calls.length, 1);
+    return { ...calls[0], logged: readFileSync(launchesLog, "utf8").trim().split("\n").at(-1)! };
+  };
+  const chrome = [...AGENT_ARGS, `--user-data-dir=${s.profileDir}`, `--window-name=${agentWindowName(s)}`, INSPECT_URL];
+  const hidden = await start({ background: true, hidden: true }, "darwin");
+  assert.equal(hidden.bin, "/usr/bin/open");
+  assert.deepEqual(hidden.args, ["-n", "-g", "-j", "-a", "/Applications/Google Chrome Beta.app", "--args", ...chrome], "only -j is new; Chrome's own argv is the same");
+  assert.match(hidden.logged, / chrome=via-open-g-j /, "launches.log names the hidden start");
+  const today = await start({ background: true }, "darwin");
+  assert.deepEqual(today.args, ["-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args", ...chrome], "off by default");
+  assert.match(today.logged, / chrome=via-open-g by=/);
+  const foreground = await start({ hidden: true }, "darwin");
+  assert.deepEqual({ bin: foreground.bin, args: foreground.args }, { bin: CHROME_BETA_BIN, args: chrome }, "a foreground start (launch --login) stays as it is");
+  assert.match(foreground.logged, / chrome=78 hidden=ignored by=/, "launches.log says that the hook did not apply");
+  const linux = await start({ background: true, hidden: true }, "linux");
+  assert.deepEqual({ bin: linux.bin, args: linux.args }, { bin: CHROME_BETA_BIN, args: chrome }, "off macOS there is no open(1)");
+  assert.match(linux.logged, / chrome=78 hidden=ignored by=/);
+  assert.doesNotMatch((await start({}, "linux")).logged, /hidden/, "without the hook, launches.log is as before");
+});
+
 test("chromeArgs: extra Chrome flags reach the spawn (between --user-data-dir and the urls), and a --remote-debugging flag among them is refused before any spawn", async () => {
   const calls: { bin: string; args: string[] }[] = [];
   let probes = 0;
