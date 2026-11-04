@@ -376,7 +376,7 @@ checked before the tab is touched: the steps, the paths and ffmpeg.
 | `{"click": target, "duration": ms}` | move the cursor to the target, dwell 80-150 ms, press, 60-90 ms, release (the ripple shows at the press) |
 | `{"hover": target, "duration": ms}` | move only |
 | `{"type": "text", "into": target, "delay": ms}` | optional click into `target`, then one key event with text per character (`\n` is Enter, `\t` is Tab), each `delay` x 0.6-1.4 ms (default 55). A canvas app such as Sheets reads these key events, so its formula autocomplete shows as a person sees it. A character with no US-keyboard key is inserted as text. |
-| `{"press": key, "repeat": n, "delay": ms}` | a key or a chord: `Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, the arrows, `Home`, `End`, `PageUp`, `PageDown`, `F1` to `F12`, one character, or chords such as `Shift+ArrowDown`, `Meta+A`, `Meta+C`, `Control+Home`, `Shift+F11`. A function key goes to the page only: Chrome never runs it as its own shortcut (F5 reload, F11 full screen, F12 DevTools; live check: `test/live/function-keys/`). The page's own controls still act on it: F4 opens a focused `<select>` or date field. `Shift+F10` is refused: on Windows and Linux it opens Chrome's context menu. `delay` (default 150) follows each press. |
+| `{"press": key, "repeat": n, "delay": ms}` | a key or a chord: `Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, the arrows, `Home`, `End`, `PageUp`, `PageDown`, `F1` to `F12`, one character, or chords such as `Shift+ArrowDown`, `Meta+A`, `Meta+C`, `Control+Home`, `Shift+F11`. A function key goes to the page only: Chrome never runs it as its own shortcut (F5 reload, F11 full screen, F12 DevTools; live check: `test/live/function-keys/`, measured on Linux with Chromium 156 on 2026-11-03, and on macOS with Chrome Beta 158 and Google Chrome 156 on 2026-11-04). The page's own controls still act on it: F4 opens a focused `<select>` or date field. `Shift+F10` is refused: on Windows and Linux it opens Chrome's context menu. `delay` (default 150) follows each press. |
 | `{"scroll": px, "duration": ms, "at": target}` | a mouse wheel with an eased total of `px`, at the cursor, or first move the cursor to `at` (a point in the Sheets grid, for example): it scrolls what is under the cursor, the page or an inner pane. The wheel follows the clock, so the step keeps its duration. When nothing under the cursor moved, the take gets a warning that names the step. |
 | `{"scroll": selector, "duration": ms}` | smooth `scrollIntoView` to the centre |
 | `{"highlight": target-or-box, "duration": ms}` | a ring around an element or `{"x", "y", "width", "height"}`, dimming the rest (default 1600 ms) |
@@ -806,7 +806,13 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   its windows reach the person's screen and take the keyboard focus; see the head of `check.ts`): the
   function-key check of #7. Its own Chrome, on a throwaway profile, with one local page, gets each key
   three ways (as before #7, through `record`'s press step, through `press`), and the check records
-  what the page saw and what Chrome did. Not part of `npm test`.
+  what the page saw and what Chrome did. Not part of `npm test`. Measured on macOS on 2026-11-04
+  (`--on-my-screen`, Chrome Beta 158.0.8127.2 and Google Chrome 156.0.8078.81, 209 trials each,
+  exit 0): every `record` and `press` key reached the page, and none had an effect outside the page.
+  The before keys showed Chrome's shortcuts: F7 and Meta+L (the focus left the page), F12 and
+  Meta+Alt+I (DevTools), Meta+R (reload), Meta+W (the window closed) and Meta+T (a new tab). A
+  `--background` run (Chrome Beta) exited 1, as expected: its `record` and `press` trials were not
+  measured. The head of `check.ts` gives these results and the Linux results of 2026-11-03.
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.

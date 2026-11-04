@@ -58,8 +58,14 @@
 // help tab), F3, Shift+F3, F6, Shift+F6, F7, F10 (the focus left the page), Control+F4, Alt+F4 (the
 // tab and its window closed), F5, Shift+F5, Control+F5 (reload), Shift+F10 (contextmenu), F11 (full
 // screen), F12 (DevTools), Control+L, Control+T and Control+W. record: only Shift+F10 (contextmenu).
-// press: none. Every record and press key reached the page. macOS (209 trials, 210 with --full-screen):
-// not measured yet.
+// press: none. Every record and press key reached the page.
+// Measured 2026-11-04 on macOS (--on-my-screen; Chrome Beta 158.0.8127.2 and Google Chrome
+// 156.0.8078.81, the same results in both; 209 trials each, exit 0): before: F7, Meta+L (the focus
+// left the page), F12, Meta+Alt+I (DevTools), Meta+R (reload), Meta+W (the window closed), Meta+T (a
+// new tab). Every before trial without an effect had the Meta+L control blur (beforeUnproven empty).
+// record: none (Shift+F10 opened no context menu). press: none. Every record and press key reached
+// the page. A --background run (Chrome Beta) exited 1, as expected: its record and press trials were
+// not measured. --full-screen (210 trials): not measured yet.
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
