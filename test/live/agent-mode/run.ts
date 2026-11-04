@@ -192,7 +192,10 @@ async function playwrightCases(pw: any) {
   if (!browser) return;
   const onPage = async (fn: (p: any) => Promise<unknown>) => { const p = await context.newPage(); try { return await fn(p); } finally { await p.close().catch(() => {}); } };
   await step(G, "context.newPage (Target.createTarget)", async () => { page = await context.newPage(); return context.pages().length; }, { want: (d) => d === 1 });
-  await step(G, "page.goto an allowlisted page", async () => { const r = await page.goto(A + "/"); return { status: r.status(), title: await page.title() }; }, { want: (d) => d.status === 200 && d.title === "probe a" });
+  await step(G, "page.goto an allowlisted page", async () => {
+    const r = await page.goto(A + "/");
+    return { status: r.status(), title: await page.title(), history: await page.evaluate(() => history.length) };
+  }, { want: (d) => d.status === 200 && d.title === "probe a" });
   await step(G, "response.body()", async () => { const r = await page.goto(A + "/m"); const b = (await r.body()).toString(); await page.goto(A + "/"); return b.includes("<p id='m'>m</p>"); }, { want: (d) => d === true });
   await step(G, "navigator.webdriver", () => page.evaluate(() => navigator.webdriver), { want: (d) => d === false });
   await step(G, "locator.fill + click + read text", async () => { await page.locator("#name").fill("Ada"); await page.locator("#go").click(); return page.locator("#out").textContent(); }, { want: (d) => d === "Hello, Ada" });
@@ -402,9 +405,10 @@ async function tabSwitchCase(WebSocket: any) {
 
 async function createWithUrlCases(WebSocket: any) {
   const G = "createTarget with a URL";
-  // What the client sees, against a direct create of Chrome: the same page, one history entry and no referrer. One
-  // difference: Target.attachedToTarget names about:blank, where the tab is at the attach (a direct create names its URL).
-  await step(G, "a raw client's Target.createTarget({url}) opens that page, as a direct create would", async () => {
+  // What the client sees, against a direct create of Chrome: the same page, no referrer, the URL in Target.getTargets.
+  // Two differences (C10 opens the tab at about:blank): Target.attachedToTarget names about:blank, where the tab is at
+  // the attach, and history.length is 2, because the about:blank entry stays (a direct create gives 1; measured).
+  await step(G, "a raw client's Target.createTarget({url}) opens that page (with the about:blank entry in its history)", async () => {
     const c = await rawClient(WebSocket, "rawurl");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     const want = `${A}/m?direct`;
@@ -417,7 +421,7 @@ async function createWithUrlCases(WebSocket: any) {
     await c.send("Target.closeTarget", { targetId });
     c.close();
     return { at, ...page, listed, attachedUrl: params.targetInfo.url };
-  }, { want: (d) => d.at === `complete ${A}/m?direct` && d.history === 1 && d.referrer === "" && d.listed === `${A}/m?direct` && d.attachedUrl === "about:blank" });
+  }, { want: (d) => d.at === `complete ${A}/m?direct` && d.history === 2 && d.referrer === "" && d.listed === `${A}/m?direct` && d.attachedUrl === "about:blank" });
   await step(G, "its first request reaches the client's Fetch interception (the hold)", async () => {
     const c = await rawClient(WebSocket, "rawhold");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
