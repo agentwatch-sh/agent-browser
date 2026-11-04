@@ -192,15 +192,19 @@ async function stopProxyAndWait(s: Settings): Promise<boolean> {
 // ---------- the operations ----------
 
 export const commands = {
-  /** `hooks.hidden` (@internal): for a measurement only (ab-b84.11; see launchAgentChrome). Off by default; the CLI never sets it. */
-  async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean } = {}): Promise<LaunchResult> {
+  /**
+   * `hooks` (@internal), for a measurement only (ab-b84.11, test/live/takeover/start.ts; see launchAgentChrome): `hidden`
+   * starts through `open -n -g -j`, and `giveBack: false` turns the give-back guard off. The CLI never sets them.
+   */
+  async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean; giveBack?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
-      background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
       hidden: hooks.hidden,
+      giveBack: hooks.giveBack,
+      background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
       urls: [INSPECT_URL, ...urls],
       timeoutMs: 10 * 60_000,
       onWaiting: () => s.log(`waiting for remote debugging: turn it on in ${INSPECT_URL} (Ctrl-C to stop waiting)`),

@@ -13,6 +13,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { connect } from "node:net";
 import { join } from "node:path";
 import { UsageError } from "./errors.ts";
+import { GIVE_BACK_GRACE_MS, giveBackToken, startGiveBack, type GiveBack } from "./giveback.ts";
 import { isChromeForTesting, statePath, type Settings } from "./options.ts";
 
 /**
@@ -224,17 +225,29 @@ export function appBundle(bin: string): string | undefined {
 /**
  * Start the agent Chrome (unless it is already running); resolves with its browser endpoint
  * once the operator has remote debugging turned on in it. It outlives this process by design.
- * With `background` on macOS it starts through `open -n -g`: a new instance that does not activate,
- * so the operator's frontmost app and Space stay as they are (a sign-in, `launch --login`, starts in
- * the foreground instead). `hidden` (@internal) is for a measurement only (ab-b84.11:
- * test/live/takeover/start.ts --variant hidden): such a start goes through `open -n -g -j`, so Launch
- * Services starts the app hidden. It is off by default and the CLI never sets it. It changes no other
- * start; launches.log then says "hidden=ignored".
+ * With `background` on macOS it starts through `open -n -g`: a new instance that Launch Services does
+ * not activate (a sign-in, `launch --login`, starts in the foreground instead). Chrome still activates
+ * itself when it shows its first window (ab-b84.11: 12 of 12 starts took the front on 2026-11-04), so
+ * such a start also runs the give-back guard (src/giveback.ts): before `open` it records the app in
+ * front, and when the new Chrome takes the front from that app, it asks macOS to activate that app
+ * again. The front can then be away for a moment (under about 0.1 s, measured with the same AppKit
+ * call on 2026-11-04). The guard watches until GIVE_BACK_GRACE_MS after the endpoint is up (a late
+ * first window, or a second take at the end of a session restore), then the start ends it, so it never
+ * acts on what follows, such as Chrome's approval prompt; a failed start ends it at once. The guard
+ * never fails a start: launches.log says how it went. `giveBack: false` turns it off
+ * (AgentBrowser.connect, whose start leaves the agent Chrome in front for Chrome's approval prompt, and
+ * the comparison variants of test/live/takeover/start.ts). `hidden` (@internal) is for a measurement
+ * only (ab-b84.11: test/live/takeover/start.ts --variant hidden): such a start goes through
+ * `open -n -g -j`, so Launch Services starts the app hidden. It is off by default and the CLI never
+ * sets it. It changes no other start; launches.log then says "hidden=ignored".
  */
 export async function launchAgentChrome(
   s: Settings,
-  opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void; background?: boolean; hidden?: boolean } = {},
-  deps: { endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean; platform?: NodeJS.Platform } = {},
+  opts: { urls?: string[]; extraArgs?: string[]; timeoutMs?: number; onWaiting?: () => void; background?: boolean; hidden?: boolean; giveBack?: boolean } = {},
+  deps: {
+    endpoint?: () => Promise<string | undefined>; pid?: () => number | undefined; spawn?: SpawnLike; exists?: (p: string) => boolean; platform?: NodeJS.Platform;
+    giveBack?: (bundle: string) => Promise<GiveBack>;
+  } = {},
 ): Promise<string> {
   const extraArgs = [...(opts.extraArgs ?? []), ...(s.chromeArgs ?? [])];
   const urls = opts.urls?.length ? opts.urls : [INSPECT_URL];
@@ -247,7 +260,7 @@ export async function launchAgentChrome(
   if (running) return running;
   const profile = agentProfileDir(s);
   const existingPid = (deps.pid ?? (() => agentChromePid(s)))();
-  let child: ReturnType<SpawnLike> | undefined, viaOpen = false;
+  let child: ReturnType<SpawnLike> | undefined, viaOpen = false, guard: GiveBack | undefined;
   if (existingPid) {
     s.log(`agent browser already running (pid ${existingPid}; profile ${profile}); turn on remote debugging in ${INSPECT_URL}`);
   } else {
@@ -275,33 +288,44 @@ export async function launchAgentChrome(
     const run = deps.spawn ?? (spawn as unknown as SpawnLike);
     viaOpen = !!bundle;
     const hidden = viaOpen && !!opts.hidden;
+    // The give-back guard records the app in front before `open` runs; it never fails the start.
+    if (bundle && opts.giveBack !== false) {
+      const startGuard = deps.giveBack ?? ((b: string) => startGiveBack(b, statePath(s, "launches.log")));
+      guard = await startGuard(bundle).catch((): GiveBack => ({ state: "failed", finish: async () => {} }));
+    }
     child = bundle ? run("/usr/bin/open", ["-n", "-g", ...(hidden ? ["-j"] : []), "-a", bundle, "--args", ...args], { detached: true, stdio: "ignore" })
       : run(bin, args, { detached: true, stdio: "ignore" });
     child.unref();
     // Who started each Chrome: a flood of launches is traceable to the command and folder behind it.
     try {
       appendFileSync(statePath(s, "launches.log"),
-        `${new Date().toISOString()} chrome=${viaOpen ? (hidden ? "via-open-g-j" : "via-open-g") : child.pid ?? "?"}${opts.hidden && !hidden ? " hidden=ignored" : ""} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
+        `${new Date().toISOString()} chrome=${viaOpen ? `${hidden ? "via-open-g-j" : "via-open-g"} ${giveBackToken(guard)}` : child.pid ?? "?"}${opts.hidden && !hidden ? " hidden=ignored" : ""} by=${process.pid} cwd=${process.cwd()} cmd=${process.argv.slice(1).join(" ")}\n`);
     } catch { /* logging never blocks a launch */ }
   }
-  const deadline = Date.now() + (opts.timeoutMs ?? 30_000);
-  // The toggle persists in the profile, so debugging usually comes up by itself within seconds.
-  const waitingAt = Date.now() + 5_000;
-  let told = false;
-  while (Date.now() < deadline) {
-    const ws = await endpoint();
-    if (ws) return ws;
-    if (!told && Date.now() > waitingAt) { told = true; opts.onWaiting?.(); }
-    // `open` exits at once with 0 when it has started Chrome; a direct child that exits handed off instead.
-    if (child && child.exitCode !== null && !(viaOpen && child.exitCode === 0)) {
-      // Chrome hands the launch to an instance already running on this profile and exits.
-      throw new Error(`the agent browser is open but remote debugging is off: turn it on in ${INSPECT_URL}
+  let ws: string | undefined;
+  try {
+    const deadline = Date.now() + (opts.timeoutMs ?? 30_000);
+    // The toggle persists in the profile, so debugging usually comes up by itself within seconds.
+    const waitingAt = Date.now() + 5_000;
+    let told = false;
+    while (Date.now() < deadline) {
+      ws = await endpoint();
+      if (ws) return ws;
+      if (!told && Date.now() > waitingAt) { told = true; opts.onWaiting?.(); }
+      // `open` exits at once with 0 when it has started Chrome; a direct child that exits handed off instead.
+      if (child && child.exitCode !== null && !(viaOpen && child.exitCode === 0)) {
+        // Chrome hands the launch to an instance already running on this profile and exits.
+        throw new Error(`the agent browser is open but remote debugging is off: turn it on in ${INSPECT_URL}
 (Profile: ${profile})`);
+      }
+      await new Promise((r) => setTimeout(r, 200));
     }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error(`agent Chrome is not reachable. In the agent browser, open ${INSPECT_URL},
+    throw new Error(`agent Chrome is not reachable. In the agent browser, open ${INSPECT_URL},
 turn remote debugging on, and approve Chrome's prompt when the tooling connects. Profile: ${profile}`);
+  } finally {
+    // The guard ends with the start: after the grace (a late first window, a session restore's second take), or at once after a failure.
+    await guard?.finish(ws ? GIVE_BACK_GRACE_MS : 0);
+  }
 }
 
 /** pid of the agent browser's main Chrome process, if it is running. */

@@ -12,6 +12,7 @@ import {
   assertSafeChromeArgs, appBundle, findAgentPid, launchAgentChrome, parsePs, processTree, restoresOnStartup, seedRemoteDebugging, type SpawnLike,
 } from "../src/agent.ts";
 import { AgentBrowser, endpointCandidates } from "../src/browser.ts";
+import { GIVE_BACK_GRACE_MS, type GiveBack } from "../src/giveback.ts";
 import { UsageError } from "../src/errors.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type Settings } from "../src/options.ts";
 
@@ -27,6 +28,16 @@ after(() => rmSync(tmp, { recursive: true, force: true }));
 /** A spawn that records its call and starts nothing. */
 function fakeSpawn(calls: { bin: string; args: string[] }[], exitCode: number | null = null): SpawnLike {
   return (bin, args) => { calls.push({ bin, args }); return { pid: 4242, exitCode, unref() {} }; };
+}
+
+/** A stand-in for the give-back guard (src/giveback.ts) of a macOS start: it starts nothing; it records its bundle and each finish. */
+function fakeGuard(state: GiveBack["state"] = "on") {
+  const seen: { bundle?: string; finished: number[] } = { finished: [] };
+  const start = async (bundle: string): Promise<GiveBack> => {
+    seen.bundle = bundle;
+    return { state, ...(state === "on" ? { front: { pid: 500, bundle: "com.apple.Terminal" }, readyMs: 120, pid: 9001 } : {}), finish: async (ms) => { seen.finished.push(ms); } };
+  };
+  return { seen, start };
 }
 
 test("each consumer's profile, socket and state live in its own state folder; nothing defaults to a consumer path", () => {
@@ -140,6 +151,7 @@ test("a background launch on macOS starts a new instance through `open -n -g` (n
   const ws = await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
     endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/bg",
     pid: () => undefined, spawn: (bin, args) => { calls.push({ bin, args }); return { pid: 77, exitCode: 0, unref() {} }; }, exists: (p) => p === CHROME_BETA_BIN, platform: "darwin",
+    giveBack: fakeGuard().start,
   });
   assert.match(ws, /bg$/, "open's exit 0 is not a hand-off");
   assert.equal(calls[0].bin, "/usr/bin/open");
@@ -161,7 +173,7 @@ test("hidden (measurement only, ab-b84.11): a background start on macOS goes thr
     let probes = 0;
     await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], ...opts }, {
       endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/hidden",
-      pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform,
+      pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform, giveBack: fakeGuard().start,
       spawn: (bin, args) => { calls.push({ bin, args }); return { pid: 78, exitCode: bin === "/usr/bin/open" ? 0 : null, unref() {} }; },
     });
     assert.equal(calls.length, 1);
@@ -171,10 +183,10 @@ test("hidden (measurement only, ab-b84.11): a background start on macOS goes thr
   const hidden = await start({ background: true, hidden: true }, "darwin");
   assert.equal(hidden.bin, "/usr/bin/open");
   assert.deepEqual(hidden.args, ["-n", "-g", "-j", "-a", "/Applications/Google Chrome Beta.app", "--args", ...chrome], "only -j is new; Chrome's own argv is the same");
-  assert.match(hidden.logged, / chrome=via-open-g-j /, "launches.log names the hidden start");
+  assert.match(hidden.logged, / chrome=via-open-g-j give-back=on /, "launches.log names the hidden start");
   const today = await start({ background: true }, "darwin");
   assert.deepEqual(today.args, ["-n", "-g", "-a", "/Applications/Google Chrome Beta.app", "--args", ...chrome], "off by default");
-  assert.match(today.logged, / chrome=via-open-g by=/);
+  assert.match(today.logged, / chrome=via-open-g give-back=on /);
   const foreground = await start({ hidden: true }, "darwin");
   assert.deepEqual({ bin: foreground.bin, args: foreground.args }, { bin: CHROME_BETA_BIN, args: chrome }, "a foreground start (launch --login) stays as it is");
   assert.match(foreground.logged, / chrome=78 hidden=ignored by=/, "launches.log says that the hook did not apply");
@@ -182,6 +194,87 @@ test("hidden (measurement only, ab-b84.11): a background start on macOS goes thr
   assert.deepEqual({ bin: linux.bin, args: linux.args }, { bin: CHROME_BETA_BIN, args: chrome }, "off macOS there is no open(1)");
   assert.match(linux.logged, / chrome=78 hidden=ignored by=/);
   assert.doesNotMatch((await start({}, "linux")).logged, /hidden/, "without the hook, launches.log is as before");
+});
+
+test("give-back (ab-b84.11): a background start on macOS records the app in front before `open` runs, names it in launches.log, and ends the guard once the endpoint is up", async () => {
+  const launchesLog = join(s.stateDir, "launches.log");
+  const order: string[] = [];
+  const guard = fakeGuard();
+  let probes = 0;
+  const ws = await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
+    endpoint: async () => { order.push("probe"); return ++probes < 3 ? undefined : "ws://127.0.0.1:9222/devtools/browser/gb"; },
+    pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform: "darwin",
+    giveBack: async (bundle) => { order.push("guard"); return guard.start(bundle); },
+    spawn: (bin) => { order.push(bin); return { pid: 79, exitCode: 0, unref() {} }; },
+  });
+  assert.match(ws, /gb$/);
+  assert.deepEqual(order, ["probe", "guard", "/usr/bin/open", "probe", "probe"], "the guard is ready before open runs");
+  assert.equal(guard.seen.bundle, "/Applications/Google Chrome Beta.app");
+  assert.deepEqual(guard.seen.finished, [GIVE_BACK_GRACE_MS], "once the endpoint is up, the start waits at most the grace for the guard, then ends it");
+  assert.match(readFileSync(launchesLog, "utf8").trim().split("\n").at(-1)!, / chrome=via-open-g give-back=on front=500\/com\.apple\.Terminal ready-ms=120 by=\d+ /);
+});
+
+test("give-back: a guard that is not ready, failed, or found no app in front never stops the start; launches.log says why", async () => {
+  const launchesLog = join(s.stateDir, "launches.log");
+  for (const state of ["not-ready", "failed", "no-front"] as const) {
+    const calls: { bin: string; args: string[] }[] = [];
+    let probes = 0;
+    const ws = await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
+      endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/x", pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform: "darwin",
+      giveBack: fakeGuard(state).start, spawn: (bin, args) => { calls.push({ bin, args }); return { pid: 80, exitCode: 0, unref() {} }; },
+    });
+    assert.match(ws, /x$/, state);
+    assert.equal(calls[0].bin, "/usr/bin/open", state);
+    assert.match(readFileSync(launchesLog, "utf8").trim().split("\n").at(-1)!, new RegExp(` chrome=via-open-g give-back=${state} by=`), state);
+  }
+  const throwing = await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
+    endpoint: (() => { let n = 0; return async () => ++n < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/y"; })(), pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform: "darwin",
+    giveBack: async () => { throw new Error("no guard"); }, spawn: () => ({ pid: 81, exitCode: 0, unref() {} }),
+  });
+  assert.match(throwing, /y$/, "even a guard that throws never stops the start");
+  assert.match(readFileSync(launchesLog, "utf8").trim().split("\n").at(-1)!, / chrome=via-open-g give-back=failed by=/);
+});
+
+test("give-back: a failed start ends the guard at once, so it never acts while the operator turns on remote debugging", async () => {
+  const guard = fakeGuard();
+  await assert.rejects(launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], background: true }, {
+    endpoint: async () => undefined, pid: () => undefined, exists: (p) => p === CHROME_BETA_BIN, platform: "darwin",
+    giveBack: guard.start, spawn: () => ({ pid: 82, exitCode: 1, unref() {} }),
+  }), /remote debugging is off/);
+  assert.deepEqual(guard.seen.finished, [0]);
+});
+
+test("the start that AgentBrowser.connect makes has no give-back: Chrome's approval prompt follows it and must stay in front until the operator answers it", async () => {
+  const own = resolveOptions({ stateDir: join(tmp, "connect-start"), allow: ["example.org"], log: () => {} });
+  const seen: unknown[] = [];
+  await assert.rejects(AgentBrowser.connect(own, { launch: async (_s, opts) => { seen.push(opts); throw new Error("no Chrome here"); } }), /no Chrome here/);
+  assert.deepEqual(seen, [{ background: true, giveBack: false }]);
+});
+
+test("give-back runs only for a background start through open(1): giveBack false turns it off, and a foreground start, a start off macOS or a running Chrome has none", async () => {
+  const launchesLog = join(s.stateDir, "launches.log");
+  const startWith = async (opts: { background?: boolean; giveBack?: boolean }, deps: { platform?: NodeJS.Platform; pid?: () => number | undefined } = {}) => {
+    const guard = fakeGuard();
+    let probes = 0;
+    await launchAgentChrome(s, { timeoutMs: 2_000, urls: [INSPECT_URL], ...opts }, {
+      endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/z", pid: deps.pid ?? (() => undefined), exists: (p) => p === CHROME_BETA_BIN,
+      platform: deps.platform ?? "darwin", giveBack: guard.start, spawn: (bin) => ({ pid: 83, exitCode: bin === "/usr/bin/open" ? 0 : null, unref() {} }),
+    });
+    return { guard: guard.seen.bundle, logged: readFileSync(launchesLog, "utf8").trim().split("\n").at(-1)! };
+  };
+  const off = await startWith({ background: true, giveBack: false });
+  assert.equal(off.guard, undefined, "the measurement hook turns it off");
+  assert.match(off.logged, / chrome=via-open-g give-back=off by=/);
+  const login = await startWith({ giveBack: true });
+  assert.equal(login.guard, undefined, "a sign-in (launch --login) starts in front, where the operator signs in");
+  assert.match(login.logged, / chrome=83 by=/);
+  const linux = await startWith({ background: true }, { platform: "linux" });
+  assert.equal(linux.guard, undefined);
+  assert.match(linux.logged, / chrome=83 by=/);
+  const before = readFileSync(launchesLog, "utf8");
+  const running = await startWith({ background: true }, { pid: () => 4242 });
+  assert.equal(running.guard, undefined, "no start, no guard");
+  assert.equal(readFileSync(launchesLog, "utf8"), before);
 });
 
 test("chromeArgs: extra Chrome flags reach the spawn (between --user-data-dir and the urls), and a --remote-debugging flag among them is refused before any spawn", async () => {
