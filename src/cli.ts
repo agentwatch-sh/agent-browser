@@ -12,6 +12,7 @@ import { errorCode, UsageError } from "./errors.ts";
 import { resolveOptions, type BrowserOptions, type Settings } from "./options.ts";
 import { outlineText, type NetEntry } from "./outline.ts";
 import { runProxy } from "./proxy.ts";
+import { startRelay } from "./relay/endpoint.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
 
@@ -244,6 +245,13 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       const timeout = typeof values["timeout-ms"] === "string" ? Number(values["timeout-ms"]) : undefined;
       await runProxy(optionsFromFlags(values, log), rest[0], { attempt: values.attempt as string | undefined, timeoutMs: timeout });
       return "serve";
+    }
+    if (name === "relay") {
+      // Agent mode's CDP endpoint. Its standard output is the bridge to the daemon, so it prints nothing else there.
+      if (typeof values.socket !== "string" || !values.socket || rest.length) throw new UsageError("usage: agent-browser relay --socket PATH (started by the agentwatch daemon, not by hand)");
+      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log });
+      await relay.closed;
+      return 0;
     }
     const spec = COMMAND_SPECS.find((c) => c.name === name);
     if (!spec) throw new UsageError(`unknown command "${name}"; see agent-browser --help`);

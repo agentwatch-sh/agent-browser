@@ -1,0 +1,151 @@
+// A fake agent-mode extension behind a fake daemon, for the relay's tests. It reads the relay's bridge requests
+// (contract C10) from the relay's standard output, answers them as the receiver would from a few tabs, and writes
+// the receiver's events and the daemon's lines to the relay's standard input. It records every request, so a test
+// can prove which calls reached "Chrome" and which never did. It starts no browser.
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { PassThrough } from "node:stream";
+import WebSocket from "ws";
+import { CDPConnection } from "../src/cdp.ts";
+import { startRelay, type Relay } from "../src/relay/endpoint.ts";
+
+export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string };
+/** A test's answer: a value is the data, { error } a bridge error text, undefined the default answer. */
+type Override = (req: { op: string; args: any[] }) => any;
+
+export const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/1.0.0.0 Safari/537.36";
+
+export class FakeReceiver {
+  readonly input = new PassThrough();
+  readonly output = new PassThrough();
+  readonly requests: { op: string; args: any[]; id: string; wait: number }[] = [];
+  readonly tabs = new Map<number, FakeTab>();
+  readonly attached = new Set<number>();
+  readonly downloads: any[] = [];
+  attachNew = false;
+  private nextTab = 7;
+  /** A test's answer to a CDP command, or to any op. */
+  command: (target: any, method: string, params: any) => any = () => undefined;
+  op: Override = () => undefined;
+  info: unknown = { bridge: 1, version: "0.2.0", id: "abcdefghijklmnopabcdefghijklmnop", userAgent: UA, fullVersion: "1.0.0.0" };
+
+  constructor() {
+    createInterface({ input: this.output }).on("line", (line) => { void this.handle(JSON.parse(line)); });
+  }
+
+  line(msg: object): void { if (!this.input.writableEnded) this.input.write(`${JSON.stringify(msg)}\n`); }
+  emit(ev: string, fields: object): void { this.line({ t: "ev", ch: "bridge", ev, ...fields }); }
+  sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
+
+  /** A new tab, announced as the receiver does: with the eager attach on, it is attached and held. */
+  newTab(url: string, opener?: FakeTab, windowId = 1): FakeTab {
+    const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, ...(opener ? { openerId: opener.targetId } : {}) };
+    this.tabs.set(tab.id, tab);
+    if (this.attachNew) this.attached.add(tab.id);
+    this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
+    return tab;
+  }
+
+  /** Chrome swaps a tab for another one (a prerendered page): the new tab keeps the old one's opener. */
+  replace(old: FakeTab): FakeTab {
+    const tab = { ...old, id: this.nextTab++, targetId: `T${this.nextTab - 1}` };
+    this.tabs.delete(old.id); this.attached.delete(old.id); this.tabs.set(tab.id, tab);
+    this.emit("tabs.onReplaced", { addedTabId: tab.id, removedTabId: old.id });
+    return tab;
+  }
+
+  chromeTab(t: FakeTab) { return { id: t.id, windowId: t.windowId, index: 0, active: true, url: t.url, title: t.title, status: "complete" }; }
+
+  private async handle(req: { id: string; op: string; args: any[]; wait: number }): Promise<void> {
+    this.requests.push(req);
+    let data: any;
+    try { data = await this.answer(req.op, req.args); } catch (e) { return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: (e as Error).message }); }
+    if (data && typeof data === "object" && typeof data.error === "string") return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: data.error });
+    this.line({ t: "res", ch: "bridge", id: req.id, ok: true, data: data ?? null });
+  }
+
+  private async answer(op: string, args: any[]): Promise<any> {
+    const custom = await this.op({ op, args });
+    if (custom !== undefined) return custom;
+    const tab = (id: number) => { const t = this.tabs.get(id); if (!t) throw new Error(`No tab with id: ${id}.`); return t; };
+    switch (op) {
+      case "bridge.info": return this.info;
+      case "bridge.attachNew": this.attachNew = args[0]; return null;
+      case "debugger.attach": { tab(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
+      case "debugger.detach": this.attached.delete(args[0]); return null;
+      case "debugger.getTargets": return [...this.tabs.values()].map((t) => ({ id: t.targetId, tabId: t.id, type: "page", title: t.title, url: t.url, attached: this.attached.has(t.id) }));
+      case "debugger.sendCommand": {
+        const [target, method, params] = args;
+        if (!this.attached.has(target.tabId)) return { error: "not attached" };
+        const r = await this.command(target, method, params);
+        if (r !== undefined) return r;
+        const t = tab(target.tabId);
+        if (method === "Target.getTargetInfo") return { targetInfo: { targetId: t.targetId, type: "page", title: t.title, url: t.url, attached: true, browserContextId: "C1D2", ...(t.openerId ? { openerId: t.openerId } : {}) } };
+        return {};
+      }
+      case "tabs.create": return this.chromeTab(this.newTab(args[0].url));
+      case "windows.create": { const t = this.newTab(args[0].url, undefined, 2); return { id: 2, state: "normal", tabs: [this.chromeTab(t)] }; }
+      case "tabs.get": return this.chromeTab(tab(args[0]));
+      case "tabs.query": return [...this.tabs.values()].filter((t) => args[0].windowId === undefined || t.windowId === args[0].windowId).map((t) => this.chromeTab(t));
+      case "tabs.update": return this.chromeTab(tab(args[0]));
+      case "tabs.remove": tab(args[0]); this.tabs.delete(args[0]); this.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } }); return null;
+      case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: false };
+      case "windows.update": return { id: args[0], state: "normal" };
+      case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url));
+      default: return null; // tabs.update, downloads.cancel, contentSettings.*, bridge.release
+    }
+  }
+}
+
+export type Harness = { fake: FakeReceiver; relay: Relay; socket: string; logs: string[]; url: (scope: string) => string;
+  connect: (scope?: string) => Promise<CDPConnection>; ready: () => Promise<void>; close: () => Promise<void> };
+
+export async function until<T>(fn: () => T, what = "the condition", ms = 5000): Promise<NonNullable<T>> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = fn();
+    if (v) return v as NonNullable<T>;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+/** A relay of its own on a short temp socket path, with the fake behind it. */
+export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number } = {}): Promise<Harness> {
+  const dir = mkdtempSync(join(tmpdir(), "ab-relay-"));
+  const socket = join(dir, "cdp.sock"), fake = new FakeReceiver(), logs: string[] = [], conns: CDPConnection[] = [];
+  const relay = await startRelay({ socket, input: fake.input, output: fake.output, log: (l) => logs.push(l), ...opts });
+  const url = (scope: string) => `ws+unix://${socket}:/devtools/browser/${scope}`;
+  return {
+    fake, relay, socket, logs, url,
+    connect: async (scope = "s1") => { const c = await CDPConnection.connect(url(scope)); conns.push(c); return c; },
+    ready: async () => {
+      fake.line({ t: "link", up: true, version: "0.2.0" });
+      fake.line({ t: "allowlist", domains: ["a.example"] });
+      await until(() => relay.model.notReady() === null, "the relay to be ready");
+    },
+    close: async () => {
+      for (const c of conns) await c.close();
+      fake.input.end();
+      await relay.closed;
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+/** A raw WebSocket to the endpoint: its close code and reason, or the HTTP answer that refused it. */
+export function raw(url: string, headers: Record<string, string> = {}): Promise<{ ws?: WebSocket; status?: number; body?: string; closed: Promise<[number, string]> }> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(url, { headers });
+    const closed = new Promise<[number, string]>((r) => ws.once("close", (code, reason) => r([code, String(reason)])));
+    ws.once("open", () => resolve({ ws, closed }));
+    ws.once("unexpected-response", (_req, res) => {
+      let body = "";
+      res.on("data", (d) => (body += d)).on("end", () => resolve({ status: res.statusCode, body, closed }));
+    });
+    ws.once("error", () => {});
+  });
+}
