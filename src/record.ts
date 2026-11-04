@@ -1140,15 +1140,17 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   const marks: Mark[] = [];
   try {
     // No Page.bringToFront: it activates Chrome, and macOS then moves the operator to the agent
-    // browser's Space. Focus emulation instead, for the run only: Chrome sends no screencast frame of a
-    // background tab's hidden page (0 frames in 3 s on Chromium 156), and focus emulation makes the page
-    // "visible", so a site sees one visibilitychange to "visible" when the run starts and one back to
-    // "hidden" when it ends (ab-v16.15). A hidden capture in flight (Tab.whileDrawn) keeps the page
-    // hidden, but it halves Chrome's frames (90 in 3 s, not 180) and makes them uneven. A covered,
-    // minimized or hidden window sends 57-60 fps (measured 2026-10-30, with the focus emulation that
-    // every command then had).
-    await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-    focused = true;
+    // browser's Space. Focus emulation instead: Chrome sends no screencast frame of a background tab's
+    // hidden page (0 frames in 3 s on Chromium 156), and focus emulation makes the page "visible" and
+    // draw. The attach turns it on; with hiddenDrive the attach does not (ab-v16.15), so the run turns it
+    // on here and off after the screencast: a site sees one visibilitychange to "visible" when the run
+    // starts and one back to "hidden" when it ends. A hidden capture in flight (Tab.whileDrawn) keeps the
+    // page hidden, but it halves Chrome's frames (90 in 3 s, not 180) and makes them uneven. A covered,
+    // minimized or hidden window sends 57-60 fps (measured 2026-10-30, with focus emulation on).
+    if (s.hiddenDrive) {
+      focused = true; // before the send: a send that fails half-way is still undone
+      await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    }
     await tab.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
     emulated = true;
     await driver.ensureOverlay();

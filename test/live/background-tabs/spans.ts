@@ -41,17 +41,17 @@ export type Measured = {
 };
 
 /**
- * Why the run failed, or nothing. Every command must work. Unless `reportOnly` (a run before the fix,
- * for its spans): a command on a hidden tab leaves the page hidden (no visible time and no
- * visibilitychange), except `record`, whose span is reported; and a hidden page draws no frame after
- * a command.
+ * Why the run failed, or nothing. Every command must work. With `hiddenDrive` (agent-browser's option of
+ * that name) also: a command on a hidden tab leaves the page hidden (no visible time and no
+ * visibilitychange), except `record`, whose span is reported; and a hidden page draws no frame after a
+ * command. In the default mode the page is visible while a command is attached: the spans are reported.
  */
-export function failures(run: readonly Measured[], reportOnly: boolean): string[] {
+export function failures(run: readonly Measured[], hiddenDrive: boolean): string[] {
   const out: string[] = [];
   for (const m of run) {
     const where = `${m.command} on tab ${m.tab} (front: ${m.front})`;
     if (!m.ok) out.push(`${where}: ${m.detail ?? "failed"}`);
-    if (reportOnly || m.front === m.tab) continue;
+    if (!hiddenDrive || m.front === m.tab) continue;
     if (!m.command.startsWith("record") && (m.visibleMs > 0 || m.visibilityChanges > 0))
       out.push(`${where}: the hidden page reported "visible" for ${m.visibleMs} ms (${m.visibilityChanges} visibilitychange events)`);
     if (m.framesAfter > 0) out.push(`${where}: the hidden page drew ${m.framesAfter} frames in the second after the command`);

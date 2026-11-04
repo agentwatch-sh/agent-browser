@@ -1,13 +1,17 @@
-// A command on a background tab keeps the page hidden (ab-v16.15): the CDP calls that each command
-// sends to a tab that is not in front, against the fake Chrome's model of one (FakePage.background:
-// hidden, no frames, input dropped before the first frame, mouse moves held, captures that wait), and
-// the pure parts of the live check (test/live/background-tabs/spans.ts).
+// The CDP calls that each command sends to a background tab (ab-v16.15), in both modes, against the
+// fake Chrome's model of a tab that is not in front (FakePage.background: hidden, no frames, input
+// dropped before the first frame, mouse moves held, captures that wait), and the pure parts of the live
+// check (test/live/background-tabs/spans.ts).
+//   default        focus emulation while a command is attached: the page is visible for the command
+//   hiddenDrive    no focus emulation; input and shots under Tab.whileDrawn: the page stays hidden
+// Each hidden-mode command gets a new tab whose page never drew a frame, so no earlier command drew it.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
+import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
@@ -17,9 +21,14 @@ import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
+const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" };
+const HOLD = { format: "jpeg", quality: 1, optimizeForSpeed: true };
 
 let fx: Fixture, fake: FakeChrome, c: Consumer;
+/** The default mode. */
 const o = () => c.options({ endpoint: fake.ws });
+/** The hidden drive. */
+const h = () => c.options({ endpoint: fake.ws, hiddenDrive: true });
 
 before(async () => {
   fx = await fixtureServer();
@@ -35,13 +44,20 @@ after(async () => {
   c?.remove();
 });
 
-/** A new background tab whose page never drew a frame (agent-browser's `open` makes a background tab). */
-async function backgroundTab(name: string): Promise<FakePage> {
-  const r = await commands.open(o(), { url: fx.base + "/", name });
+let tabs = 0;
+/**
+ * A new background tab (agent-browser's `open` makes a background tab), opened in the mode `mode`. With
+ * the hidden drive its page never drew a frame; in the default mode the open's focus emulation can let
+ * it draw.
+ */
+async function backgroundTab(path = "/", mode = h): Promise<{ name: string; page: FakePage }> {
+  const name = `t${++tabs}`;
+  const r = await commands.open(mode(), { url: fx.base + path, name });
   const page = fake.pages.get(r.tab.targetId)!;
   assert.equal(page.visibilityState, "hidden");
-  assert.equal(page.drew, false, "a page that loaded in a background tab drew no frame");
-  return page;
+  if (mode === h) assert.equal(page.drew, false, "a page that loaded in a background tab drew no frame");
+  page.visibilityChanges.length = 0; // the open's own attach
+  return { name, page };
 }
 
 /** The CDP calls that `fn` sent to the page, and how long it took. */
@@ -52,148 +68,248 @@ async function callsOf(page: FakePage, fn: () => Promise<unknown>): Promise<{ ca
 }
 const methodsOf = (calls: Call[]) => calls.map((x) => x.method);
 const captures = (calls: Call[]) => calls.filter((x) => x.method === "Page.captureScreenshot");
+const focusCalls = (calls: Call[]) => calls.filter((x) => x.method === "Emulation.setFocusEmulationEnabled").map((x) => x.params.enabled);
 
 /** The page never reported "visible", no focus emulation was sent, and no capture is left in flight. */
 function stayedHidden(page: FakePage, calls: Call[]) {
   assert.deepEqual(page.visibilityChanges, [], "no visibilitychange: the page stayed hidden");
-  assert.ok(!methodsOf(calls).includes("Emulation.setFocusEmulationEnabled"), "no focus emulation (it makes the page visible)");
+  assert.deepEqual(focusCalls(calls), [], "no focus emulation (it makes the page visible)");
   assert.deepEqual(page.heldCaptures, [], "every capture ended: Chrome no longer draws the hidden page");
+  assert.deepEqual(page.dropped, [], "no input was dropped");
 }
 
-test("a command attaches with Page.enable only: no focus emulation, which makes a background tab's page visible", async () => {
-  const page = await backgroundTab("attach");
-  const { calls } = await callsOf(page, () => commands.eval(o(), { tab: "attach", expression: "document.title" }));
-  const attach = methodsOf(calls).indexOf("Target.attachToTarget");
-  assert.deepEqual(methodsOf(calls).slice(attach, attach + 2), ["Target.attachToTarget", "Page.enable"]);
-  stayedHidden(page, calls);
-  await commands.close(o(), { tab: "attach" });
+/** No mouse move waited for Blink's 5 s fallback, and the input reached the page. */
+function fast(ms: number) { assert.ok(ms < 2000, `${ms} ms`); }
+
+// ---------- the default mode ----------
+
+test("default: attach sends Page.enable and focus emulation, as before: the page is visible while the command is attached", async () => {
+  const { name, page } = await backgroundTab("/", o);
+  const { calls } = await callsOf(page, () => commands.eval(o(), { tab: name, expression: "document.visibilityState" }));
+  const m = methodsOf(calls), attach = m.indexOf("Target.attachToTarget");
+  assert.deepEqual(m.slice(attach, attach + 3), ["Target.attachToTarget", "Page.enable", "Emulation.setFocusEmulationEnabled"]);
+  assert.deepEqual(focusCalls(calls), [true]);
+  assert.deepEqual(page.visibilityChanges, ["visible", "hidden"], "visible for the command, hidden after the detach");
+  assert.deepEqual(captures(calls), []);
+  await commands.close(o(), { tab: name });
 });
 
-test("eval, text, outline and goto on a background tab draw nothing: no capture, and the page stays hidden", async () => {
-  const page = await backgroundTab("reads");
+test("default: click, type and shot on a new background tab work with no hidden capture", async () => {
+  const { name, page } = await backgroundTab("/", o);
   const { calls } = await callsOf(page, async () => {
-    assert.equal((await commands.eval(o(), { tab: "reads", expression: "document.visibilityState" })).value, "hidden");
-    assert.match((await commands.text(o(), { tab: "reads" })).text, /Fixture page/);
-    assert.ok((await commands.outline(o(), { tab: "reads" })).elements.length > 0);
-    await commands.goto(o(), { tab: "reads", url: fx.base + "/next" });
+    await commands.click(o(), { tab: name, target: "#b" });
+    await commands.type(o(), { tab: name, text: "abc", into: "#i" });
+    await commands.text(o(), { tab: name });
+    await commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`) });
   });
+  assert.equal(page.title, "clicked");
+  assert.equal(page.select("#i")[0].value, "abc");
+  assert.deepEqual(captures(calls).map((x) => x.params), [{ format: "png" }], "only the shot's own capture");
+  assert.deepEqual(page.dropped, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("default: record keeps the attach's focus emulation and turns none on or off itself", needsFfmpeg, async () => {
+  const { name, page } = await backgroundTab("/", o);
+  const script = join(c.dir, `${name}-steps.json`);
+  writeFileSync(script, JSON.stringify([{ wait: 200 }]));
+  const { calls } = await callsOf(page, () => commands.record(o(), { tab: name, out: join(c.dir, `${name}.mp4`), script, size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG }));
+  assert.deepEqual(focusCalls(calls), [true], "the attach's only");
+  await commands.close(o(), { tab: name });
+});
+
+// ---------- the hidden drive ----------
+
+test("hiddenDrive: --hidden-drive sets it; it is off by default", () => {
+  assert.equal(optionsFromFlags({ "state-dir": c.stateDir, "hidden-drive": true }, () => {}).hiddenDrive, true);
+  assert.equal(optionsFromFlags({ "state-dir": c.stateDir }, () => {}).hiddenDrive, false);
+  assert.equal(resolveOptions(c.options()).hiddenDrive, false);
+});
+
+test("hiddenDrive: attach sends Page.enable only; eval, text, outline and goto draw nothing and the page stays hidden", async () => {
+  const { name, page } = await backgroundTab();
+  const { calls } = await callsOf(page, async () => {
+    assert.equal((await commands.eval(h(), { tab: name, expression: "document.visibilityState" })).value, "hidden");
+    assert.match((await commands.text(h(), { tab: name })).text, /Fixture page/);
+    assert.ok((await commands.outline(h(), { tab: name })).elements.length > 0);
+    await commands.goto(h(), { tab: name, url: fx.base + "/next" });
+  });
+  const m = methodsOf(calls), attach = m.indexOf("Target.attachToTarget");
+  assert.deepEqual(m.slice(attach, attach + 2), ["Target.attachToTarget", "Page.enable"]);
+  assert.notEqual(m[attach + 2], "Emulation.setFocusEmulationEnabled");
   assert.deepEqual(captures(calls), []);
   stayedHidden(page, calls);
-  await commands.close(o(), { tab: "reads" });
+  await commands.close(h(), { tab: name });
 });
 
 test("the fake drops a press on a background page that never drew a frame, as Chrome does", async () => {
-  const page = await backgroundTab("model");
-  const b = await AgentBrowser.connect(o());
+  const { name, page } = await backgroundTab();
+  const b = await AgentBrowser.connect(h());
   try {
-    const tab = await b.find("model");
+    const tab = await b.find(name);
     await tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 70, y: 22, button: "left", clickCount: 1 });
     assert.deepEqual(page.dropped, ["mousePressed"]);
   } finally { await b.disconnect(); }
-  await commands.close(o(), { tab: "model" });
+  await commands.close(h(), { tab: name });
 });
 
-test("click on a background tab: a hidden capture keeps Chrome drawing the page, so the click arrives at once, and the page stays hidden", async () => {
-  const page = await backgroundTab("click");
-  const { calls, ms } = await callsOf(page, () => commands.click(o(), { tab: "click", target: "#b" }));
+test("hiddenDrive: click on a new background tab: a hidden capture keeps Chrome drawing it, the click arrives at once, the page stays hidden", async () => {
+  const { name, page } = await backgroundTab();
+  const { calls, ms } = await callsOf(page, () => commands.click(h(), { tab: name, target: "#b" }));
   assert.equal(page.title, "clicked", "the trusted click reached a page that had never drawn");
-  assert.deepEqual(page.dropped, []);
-  assert.ok(ms < 2000, `no mouse move waited for Blink's 5 s fallback: ${ms} ms`);
+  fast(ms);
   const shots = captures(calls);
   assert.ok(shots.length >= 2, "a capture holds the page drawing, and a last one ends it");
-  for (const x of shots) assert.deepEqual(x.params, { format: "jpeg", quality: 1, optimizeForSpeed: true }, "a cheap capture with no clip");
+  for (const x of shots) assert.deepEqual(x.params, HOLD, "a cheap capture with no clip");
   const m = methodsOf(calls);
   assert.ok(m.indexOf("Page.captureScreenshot") < m.indexOf("Input.dispatchMouseEvent"), "the page draws before the first input event");
   assert.ok(m.lastIndexOf("Page.captureScreenshot") > m.lastIndexOf("Input.dispatchMouseEvent"), "the last capture comes after the input");
   stayedHidden(page, calls);
-  await commands.close(o(), { tab: "click" });
+  await commands.close(h(), { tab: name });
 });
 
-test("click --text, hover, type and press on a background tab arrive at once, and the page stays hidden", async () => {
-  const page = await backgroundTab("input");
-  const { calls, ms } = await callsOf(page, async () => {
-    await commands.hover(o(), { tab: "input", target: "#b" });
-    assert.equal(page.hovered?.id, "b");
-    await commands.type(o(), { tab: "input", text: "abc", into: "#i" });
-    assert.equal(page.select("#i")[0].value, "abc");
-    await commands.press(o(), { tab: "input", key: "Enter" });
-    assert.ok(page.keyEvents.some((k) => k.key === "Enter" && k.type === "keyDown"));
-    await commands.click(o(), { tab: "input", text: "Go" });
-    assert.equal(page.title, "clicked");
-  });
-  assert.ok(ms < 4000, `no mouse move waited for Blink's 5 s fallback: ${ms} ms`);
-  assert.deepEqual(page.dropped, []);
+test("hiddenDrive: click --text on a new background tab", async () => {
+  const { name, page } = await backgroundTab();
+  const { calls, ms } = await callsOf(page, () => commands.click(h(), { tab: name, text: "Go" }));
+  assert.equal(page.title, "clicked");
+  fast(ms);
   stayedHidden(page, calls);
-  await commands.close(o(), { tab: "input" });
+  await commands.close(h(), { tab: name });
 });
 
-test("shot of a background tab: one hidden capture first, and the shot's own capture ends it; the page stays hidden", async () => {
-  const page = await backgroundTab("shot");
-  await commands.text(o(), { tab: "shot" }); // the read-first rule
-  const path = join(c.dir, "hidden.png");
-  const { calls } = await callsOf(page, () => commands.shot(o(), { tab: "shot", path }));
+test("hiddenDrive: hover on a new background tab: the move is not held for 5 s", async () => {
+  const { name, page } = await backgroundTab();
+  const { calls, ms } = await callsOf(page, () => commands.hover(h(), { tab: name, target: "#b" }));
+  assert.equal(page.hovered?.id, "b");
+  fast(ms);
+  stayedHidden(page, calls);
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: press as the first command on a new background tab", async () => {
+  const { name, page } = await backgroundTab();
+  const { calls, ms } = await callsOf(page, () => commands.press(h(), { tab: name, key: "Enter" }));
+  assert.deepEqual(page.keyEvents.map((k) => [k.type, k.key]), [["keyDown", "Enter"], ["keyUp", "Enter"]]);
+  fast(ms);
+  stayedHidden(page, calls);
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: type into a field as the first command on a new background tab", async () => {
+  const { name, page } = await backgroundTab();
+  const { calls, ms } = await callsOf(page, () => commands.type(h(), { tab: name, text: "abc", into: "#i" }));
+  assert.equal(page.select("#i")[0].value, "abc");
+  fast(ms);
+  stayedHidden(page, calls);
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: type into an app's own editor (key events only) as the first command on a new background tab", async () => {
+  const { name, page } = await backgroundTab("/editor");
+  const { calls, ms } = await callsOf(page, () => commands.type(h(), { tab: name, text: "xy\t", into: "#cell" }));
+  assert.deepEqual(page.keyEvents.filter((k) => k.type !== "keyUp").map((k) => k.key), ["x", "y", "Tab"], "every key reached the page");
+  assert.deepEqual(page.cells, ["xy"]);
+  fast(ms);
+  stayedHidden(page, calls);
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: Tab.clickAt (the library's click at a point) on a new background tab", async () => {
+  const { name, page } = await backgroundTab();
+  const b = await AgentBrowser.connect(h());
+  let r: { calls: Call[]; ms: number };
+  try {
+    const tab = await b.find(name);
+    r = await callsOf(page, () => tab.clickAt(70, 22)); // the centre of #b, the first row
+  } finally { await b.disconnect(); }
+  assert.equal(page.title, "clicked");
+  fast(r.ms);
+  assert.ok(captures(r.calls).length >= 2);
+  stayedHidden(page, r.calls);
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: on a page that draws by itself each capture ends after a frame, so a new one is sent each time (repeat)", async () => {
+  // Without a new capture, Chrome would stop drawing the page after the first one, and the hover's
+  // mouse move would wait for Blink's 5 s fallback.
+  const { name, page } = await backgroundTab();
+  page.drawsByItself = true;
+  const { calls, ms } = await callsOf(page, () => commands.hover(h(), { tab: name, target: "#b" }));
+  assert.equal(page.hovered?.id, "b");
+  fast(ms);
+  assert.ok(captures(calls).length >= 3, `${captures(calls).length} captures: each one that ended was followed by a new one`);
+  stayedHidden(page, calls);
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: shot of a new background tab: one hidden capture first, and the shot's own capture ends it", async () => {
+  const { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name }); // the read-first rule
+  const path = join(c.dir, `${name}.png`);
+  const { calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path }));
   assert.ok(existsSync(path));
-  const shots = captures(calls);
-  assert.deepEqual(shots.map((x) => x.params), [{ format: "jpeg", quality: 1, optimizeForSpeed: true }, { format: "png" }]);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
   stayedHidden(page, calls);
-  await commands.close(o(), { tab: "shot" });
+  await commands.close(h(), { tab: name });
 });
 
-test("shot --size and --full of a background tab: no capture is sent while the device emulation is changed, but the shot's own", async () => {
+test("hiddenDrive: shot --size and --full of a new background tab: no capture is sent while the device emulation is changed, but the shot's own", async () => {
   // A capture remembers the emulation that it found and restores it when it ends: one sent while the
   // size override is set would set it again after the shot cleared it.
-  const page = await backgroundTab("sized");
-  await commands.text(o(), { tab: "sized" });
-  let { calls } = await callsOf(page, () => commands.shot(o(), { tab: "sized", path: join(c.dir, "sized.png"), size: "800x600" }));
-  let m = methodsOf(calls);
+  let { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  let { calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
+  const m = methodsOf(calls);
   const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
   assert.ok(m.indexOf("Page.captureScreenshot") < set, "the hidden capture comes before the override");
   assert.equal(captures(calls.slice(set, clear)).length, 1, "while the override is set, only the shot's own capture");
   assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
   assert.equal(page.metrics, undefined);
   stayedHidden(page, calls);
+  await commands.close(h(), { tab: name });
 
-  ({ calls } = await callsOf(page, () => commands.shot(o(), { tab: "sized", path: join(c.dir, "full.png"), full: true })));
-  m = methodsOf(calls);
+  ({ name, page } = await backgroundTab());
+  await commands.text(h(), { tab: name });
+  ({ calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`), full: true })));
   const full = captures(calls).filter((x) => x.params.clip);
   assert.equal(full.length, 1);
   assert.equal(full[0].params.captureBeyondViewport, true);
   assert.equal(calls.indexOf(full[0]), calls.indexOf(captures(calls).at(-1)!), "the full-page capture is the last one");
-  assert.deepEqual(captures(calls).slice(0, -1).map((x) => x.params), [{ format: "jpeg", quality: 1, optimizeForSpeed: true }]);
+  assert.deepEqual(captures(calls).slice(0, -1).map((x) => x.params), [HOLD]);
   stayedHidden(page, calls);
-  await commands.close(o(), { tab: "sized" });
+  await commands.close(h(), { tab: name });
 });
 
-test("a tab in front draws by itself: click sends no capture, and shot only its own", async () => {
-  const page = await backgroundTab("front");
+test("hiddenDrive: a tab in front draws by itself: click sends no capture, and shot only its own", async () => {
+  const { name, page } = await backgroundTab();
   page.background = false;
   page.update();
   page.visibilityChanges.length = 0;
-  await commands.text(o(), { tab: "front" });
-  let { calls } = await callsOf(page, () => commands.click(o(), { tab: "front", target: "#b" }));
+  await commands.text(h(), { tab: name });
+  let { calls } = await callsOf(page, () => commands.click(h(), { tab: name, target: "#b" }));
   assert.equal(page.title, "clicked");
   assert.deepEqual(captures(calls), []);
-  ({ calls } = await callsOf(page, () => commands.shot(o(), { tab: "front", path: join(c.dir, "front.png") })));
+  ({ calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`) })));
   assert.deepEqual(captures(calls).map((x) => x.params), [{ format: "png" }]);
   assert.deepEqual(page.visibilityChanges, []);
-  await commands.close(o(), { tab: "front" });
+  await commands.close(h(), { tab: name });
 });
 
-test("record on a background tab: Chrome sends no screencast frame of a hidden page, so focus emulation is on for the run only", { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" }, async () => {
-  const page = await backgroundTab("rec");
-  const script = join(c.dir, "rec-hidden-steps.json");
+test("hiddenDrive: record turns focus emulation on for its run only: Chrome sends no screencast frame of a hidden page", needsFfmpeg, async () => {
+  const { name, page } = await backgroundTab();
+  const script = join(c.dir, `${name}-steps.json`);
   writeFileSync(script, JSON.stringify([{ wait: 300 }]));
   const { calls } = await callsOf(page, async () => {
-    const r = await commands.record(o(), { tab: "rec", out: join(c.dir, "rec-hidden.mp4"), script, size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG });
+    const r = await commands.record(h(), { tab: name, out: join(c.dir, `${name}.mp4`), script, size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG });
     assert.ok(r.frames >= 2, `${r.frames} frames`);
   });
-  const m = methodsOf(calls), focus = calls.filter((x) => x.method === "Emulation.setFocusEmulationEnabled").map((x) => x.params.enabled);
-  assert.deepEqual(focus, [true, false]);
+  const m = methodsOf(calls);
+  assert.deepEqual(focusCalls(calls), [true, false]);
   const on = m.indexOf("Emulation.setFocusEmulationEnabled"), off = m.lastIndexOf("Emulation.setFocusEmulationEnabled");
   assert.ok(on < m.indexOf("Emulation.setDeviceMetricsOverride") && off > m.indexOf("Page.stopScreencast"), "on before the run, off after the screencast stops");
   assert.deepEqual(page.visibilityChanges, ["visible", "hidden"], "visible for the run, then hidden again");
   assert.deepEqual(page.heldCaptures, []);
-  await commands.close(o(), { tab: "rec" });
+  await commands.close(h(), { tab: name });
 });
 
 // ---------- the live check's pure parts ----------
@@ -211,11 +327,11 @@ test("visibleSpans and visibleMs: the page's visible spans in a window, an open 
   assert.deepEqual(visibleSpans([ev(0, "a", "load", "visible")], "a", 10, 20), [{ from: 0, to: null }], "a page that loaded visible");
 });
 
-test("failures: every command must work; a hidden tab's page stays hidden and draws nothing after a command, except a record's span; --report-only checks the results only", () => {
+test("failures: every command must work; with the hidden drive a hidden tab's page stays hidden and draws nothing after a command, except a record's span", () => {
   const m = (x: Partial<Measured>): Measured => ({ command: "click", tab: "a", front: "x", ms: 10, ok: true, visibleMs: 0, visibilityChanges: 0, focusEvents: [], framesAfter: 0, ...x });
-  assert.deepEqual(failures([m({}), m({ command: "record", visibleMs: 3000, visibilityChanges: 2 }), m({ front: "a", visibleMs: 50, framesAfter: 60 })], false), []);
-  assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2 })], false), [`click on tab a (front: x): the hidden page reported "visible" for 12 ms (2 visibilitychange events)`]);
-  assert.deepEqual(failures([m({ framesAfter: 3 })], false), ["click on tab a (front: x): the hidden page drew 3 frames in the second after the command"]);
-  assert.deepEqual(failures([m({ ok: false, detail: "no click", visibleMs: 12 })], true), ["click on tab a (front: x): no click"]);
-  assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2, framesAfter: 1 })], true), []);
+  assert.deepEqual(failures([m({}), m({ command: "record", visibleMs: 3000, visibilityChanges: 2 }), m({ front: "a", visibleMs: 50, framesAfter: 60 })], true), []);
+  assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2 })], true), [`click on tab a (front: x): the hidden page reported "visible" for 12 ms (2 visibilitychange events)`]);
+  assert.deepEqual(failures([m({ framesAfter: 3 })], true), ["click on tab a (front: x): the hidden page drew 3 frames in the second after the command"]);
+  assert.deepEqual(failures([m({ ok: false, detail: "no click", visibleMs: 12 })], false), ["click on tab a (front: x): no click"], "the default mode: the results only");
+  assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2, framesAfter: 1 })], false), []);
 });

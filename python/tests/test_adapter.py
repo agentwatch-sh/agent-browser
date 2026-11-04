@@ -280,7 +280,7 @@ class OptionArgvTest(unittest.TestCase):
 
     def test_no_new_flag_by_default(self) -> None:
         argv = self.argv()
-        for flag in ("--approve", "--approve-command", "--chrome-args"):
+        for flag in ("--approve", "--approve-command", "--chrome-args", "--hidden-drive"):
             self.assertNotIn(flag, argv)
         self.assertEqual(argv[-1], "--json")
 
@@ -300,6 +300,10 @@ class OptionArgvTest(unittest.TestCase):
         self.assertEqual(json.loads(self.value(self.argv(approve_command=("/opt/approve.sh",)), "--approve-command")), ["/opt/approve.sh"])
         self.assertIn("--approve-command", self.argv(approve=False, approve_command=["/opt/approve.sh"]))
 
+    def test_hidden_drive(self) -> None:
+        self.assertEqual(self.argv(hidden_drive=True).count("--hidden-drive"), 1, "a flag with no value")
+        self.assertNotIn("--hidden-drive", self.argv(hidden_drive=False))
+
     def test_chrome_args(self) -> None:
         flags = ["--enable-unsafe-swiftshader", "--lang=en-US", "--window-name=a b"]
         argv = self.argv(chrome_args=flags)
@@ -315,6 +319,7 @@ class OptionArgvTest(unittest.TestCase):
             {"approve_command": {"/opt/approve.sh"}}, {"approve": "xdotool", "approve_command": ["/opt/approve.sh"]},
             {"approve": True, "approve_command": ["/opt/approve.sh"]},
             {"chrome_args": "--lang=en-US"}, {"chrome_args": ["--lang=en-US", None]}, {"chrome_args": b"--lang=en-US"}, {"chrome_args": 3},
+            {"hidden_drive": "yes"}, {"hidden_drive": 1},
         ]
         with mock.patch("agent_browser._client.subprocess.run") as run:
             for options in bad:

@@ -406,10 +406,12 @@ export class AgentBrowser {
     await tab.send("Page.enable");
     // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
     // a page can tell the Runtime domain is enabled, and we never need its events.
-    // No Emulation.setFocusEmulationEnabled: it makes a background tab's page "visible" (a visible
-    // capture in Chromium's emulation_handler.cc) for as long as the session is attached, and a site
-    // sees each command as a visibilitychange to "visible" and back (ab-v16.15). Input and shots in a
-    // background tab run under Tab.whileDrawn instead, which keeps the page "hidden".
+    // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
+    // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
+    // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
+    // visibilitychange to "visible" and back. With hiddenDrive there is none (ab-v16.15): input and
+    // shots in a background tab run under Tab.whileDrawn, which keeps the page "hidden".
+    if (!this.settings.hiddenDrive) await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     this.sessions.set(targetId, tab);
     return tab;
   }
@@ -496,23 +498,29 @@ export class Tab {
   }
 
   /**
-   * Run `fn` while Chrome draws this tab's page, and keep the page "hidden" (ab-v16.15). The caller checks
-   * the allowlist first (assertAllowed): a page off it never gets a capture. Chrome draws no frame of a
-   * tab that is not in front. There a page that never drew one (it loaded in the background) drops each
-   * click and key (Blink drops input until a page's first commit), a mouse move waits for the next frame
-   * (up to 5 s, Blink's fallback timer), and a shot waits for a frame that never comes. A
-   * Page.captureScreenshot in flight makes Chrome draw the tab and leaves the page hidden (a hidden
-   * capture, stay_hidden in Chromium's page_handler.cc): the page sees no visibilitychange. Sent while
-   * Chrome draws nothing, a capture waits; Chrome ends it, with every earlier one, when a later capture
-   * ends. So one capture is in flight while `fn` runs, and a last one ends them all: after it, Chrome
-   * draws nothing again. A tab in front draws anyway: there `fn` runs as it is. Measured on taylor with
-   * Chromium 156 (test/live/background-tabs/visibility.ts; README, **Launch flags and background tabs**).
+   * With hiddenDrive, run `fn` while Chrome draws this tab's page, and keep the page "hidden"
+   * (ab-v16.15). Without it, or for a tab in front, `fn` runs as it is: focus emulation (attach) or the
+   * tab itself makes Chrome draw. Chrome draws no frame of a tab that is not in front. There a page that
+   * never drew one (it loaded in the background) drops each click and key (Blink drops input until a
+   * page's first commit), a mouse move waits for the next frame (up to 5 s, Blink's fallback timer), and
+   * a shot waits for a frame that never comes. A Page.captureScreenshot in flight makes Chrome draw the
+   * tab and leaves the page hidden (a hidden capture, stay_hidden in Chromium's page_handler.cc): the
+   * page sees no visibilitychange. Sent while Chrome draws nothing, a capture waits; Chrome ends it, with
+   * every earlier one, when a later capture ends. So one capture is in flight while `fn` runs, and a
+   * last one ends them all: after it, Chrome draws nothing again. Measured on taylor with Chromium 156
+   * (test/live/background-tabs/visibility.ts; README, **Launch flags and background tabs**).
+   *
+   * The allowlist is checked before the first capture: a page off it gets none. When `fn` itself takes
+   * the tab off the list (a click on a link), the last captures still reach the new page; their
+   * pictures are dropped, as every hold capture's is.
    *
    * `repeat` sends a new capture each time one ends (on a page that draws by itself, each one ends after
    * a frame): for input. Without it only the first one: for a shot, whose own capture can change the
    * device emulation (a clip, a size); a capture sent during that change would set it again when it ends.
    */
   private async whileDrawn<T>(fn: () => Promise<T>, opts: { repeat?: boolean } = {}): Promise<T> {
+    if (!this.browser.settings.hiddenDrive) return fn();
+    await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return fn();
     let done = false, inFlight = 0;
     // The cheapest capture, with no clip (a clip resizes the page for the capture). Its picture is not used.
@@ -543,7 +551,7 @@ export class Tab {
           if (!late) break;
           last = capture(5_000);
         }
-        await last;
+        if (!(await last)) this.browser.settings.log(`agent-browser: the last hidden capture of tab ${this.targetId.slice(0, 8)} did not end in 5 s; Chrome can keep drawing that background tab until its next capture`);
       }
     }
   }
@@ -642,21 +650,19 @@ export class Tab {
     }, { args: [selector], timeoutMs, what: selector });
   }
 
-  /** Move the mouse over an element (opens hover menus). In a background tab, under whileDrawn. */
+  /** Move the mouse over an element (opens hover menus). Under whileDrawn. */
   async hover(selector: string): Promise<void> {
-    await this.assertAllowed(); // before any capture: never one of a page off the allowlist
     await this.whileDrawn(async () => {
       const pt = await this.centerOf(selector);
       await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
     }, { repeat: true });
   }
 
-  /** Trusted click at the centre of the first element matching a CSS selector. In a background tab, under whileDrawn. */
+  /** Trusted click at the centre of the first element matching a CSS selector. Under whileDrawn. */
   async click(selector: string): Promise<void> {
-    await this.assertAllowed(); // before any capture: never one of a page off the allowlist
     await this.whileDrawn(async () => {
       const pt = await this.centerOf(selector);
-      await this.clickAt(pt.x, pt.y);
+      await this.clickAtNow(pt.x, pt.y);
     }, { repeat: true });
   }
 
@@ -674,7 +680,7 @@ export class Tab {
     return pt;
   }
 
-  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). In a background tab, under whileDrawn. */
+  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). Under whileDrawn. */
   async clickText(text: string, opts: { within?: string } = {}): Promise<void> {
     await this.assertAllowed();
     await this.whileDrawn(() => this.clickTextNow(text, opts), { repeat: true });
@@ -696,10 +702,15 @@ export class Tab {
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     }, text, opts.within ?? null);
     if (!pt) throw new Error(`no visible element with text "${text}"`);
-    await this.clickAt(pt.x, pt.y);
+    await this.clickAtNow(pt.x, pt.y);
   }
 
+  /** Trusted click at a point of the viewport (CSS pixels). Under whileDrawn. */
   async clickAt(x: number, y: number): Promise<void> {
+    await this.whileDrawn(() => this.clickAtNow(x, y), { repeat: true });
+  }
+
+  private async clickAtNow(x: number, y: number): Promise<void> {
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
@@ -713,7 +724,7 @@ export class Tab {
    * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
    * A tab or a newline moves on (in a spreadsheet, to the next cell or row), after which the field is
    * another one: only the text before the first of them is checked, and the rest goes as key events
-   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. In a background tab, under whileDrawn.
+   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. Under whileDrawn.
    */
   async type(text: string, selector?: string): Promise<void> {
     await this.assertAllowed();
@@ -751,7 +762,7 @@ export class Tab {
     for (const ch of rest) await typeChar(this, ch);
   }
 
-  /** In a background tab, under whileDrawn. */
+  /** Under whileDrawn. */
   async press(key: keyof typeof KEYS | string): Promise<void> {
     const k = KEYS[key];
     if (!k) throw new UsageError(`unsupported key ${key}; known: ${Object.keys(KEYS).join(", ")}`);
@@ -777,8 +788,8 @@ export class Tab {
    * A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort.
    * With a viewport, the page is laid out at exactly that size for the shot (so the PNG is
    * width x scale by height x scale), and the override is cleared afterwards. A failure to clear it
-   * never hides the shot's own error. In a background tab, under whileDrawn: its one capture comes before
-   * the override, and the shot's own capture ends it.
+   * never hides the shot's own error. Under whileDrawn: with hiddenDrive, in a background tab, its one
+   * capture comes before the override, and the shot's own capture ends it.
    */
   async screenshot(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number } = {}): Promise<string> {
     notEmpty(path, "screenshot");

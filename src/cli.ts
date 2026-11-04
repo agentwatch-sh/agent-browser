@@ -36,6 +36,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "proxy-idle-ms": { type: "string", description: "the proxy exits after this long with no clients (default 12 h)" },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
+  "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured)" },
 };
 
 /** Flags of the internal `proxy` command, which startProxy runs in the background. */
@@ -129,7 +130,8 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"),
     personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
-    proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"), log,
+    proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"),
+    hiddenDrive: !!v["hidden-drive"], log,
   });
 }
 

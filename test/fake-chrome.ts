@@ -271,6 +271,8 @@ export class FakePage {
   background = false;
   /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
   drew = true;
+  /** The page changes by itself (a caret, an animation): a capture sent while Chrome draws nothing still ends after a frame. */
+  drawsByItself = false;
   /** document.visibilityState after each change, in order. */
   visibilityChanges: string[] = [];
   /** The presses, releases and keys that the page dropped because it never drew a frame. */
@@ -331,7 +333,7 @@ export class FakePage {
 
   /** A capture of a background page (see `background`); its result is `data`. */
   capture<T>(data: T): Promise<T> {
-    const n = this.nextCapture++, drawing = this.drawing;
+    const n = this.nextCapture++, drawing = this.drawing || this.drawsByItself;
     return new Promise((resolve) => {
       this.heldCaptures.push({ n, end: () => resolve(data) });
       this.update();
@@ -347,9 +349,13 @@ export class FakePage {
   }
 
   private heldMoves: (() => void)[] = [];
-  /** A mouse move on a background page that Chrome does not draw waits for the next frame, a press or a key (which sends it at once), or 5 s (Blink's rAF fallback). */
+  /**
+   * A mouse move on a background page waits for its next frame: at once when Chrome draws the page and
+   * it drew one already; else when a frame comes, a press or a key comes (which sends it at once), or
+   * after 5 s (Blink's rAF fallback).
+   */
   moveWait(fallbackMs: number): Promise<void> {
-    if (!this.background || this.drawing) return Promise.resolve();
+    if (!this.background || (this.drawing && this.drew)) return Promise.resolve();
     return new Promise((r) => { this.heldMoves.push(r); this.atFrame(r); this.later(fallbackMs, r); });
   }
   flushMoves() { for (const r of this.heldMoves.splice(0)) r(); }

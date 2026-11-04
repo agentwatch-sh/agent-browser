@@ -1,13 +1,16 @@
-// The live hidden-tab check (Linux, ab-v16.15): a command on a background tab keeps the page hidden.
-// Not part of `npm test`; its pure parts (spans.ts) are, in test/hidden-tab.test.ts.
+// The live hidden-tab check (Linux, ab-v16.15): what a command on a background tab shows a site, in
+// agent-browser's two modes. Not part of `npm test`; its pure parts (spans.ts) are, in
+// test/hidden-tab.test.ts.
 //
-//   node test/live/background-tabs/visibility.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 97] [--report-only]
+//   node test/live/background-tabs/visibility.ts --out-dir DIR [--hidden-drive] [--chrome /usr/bin/chromium] [--display 97]
 //
-// Like check.ts beside it (ab-v16.13), it goes through agent-browser's own launch (launchAgentChrome,
-// the proxy, approve: "xdotool") in a private Xvfb that it starts (with -auth), on a new state folder
-// and profile (DIR/run-XXXXXX), with one local page server (probe.localhost) and no network. It ends
-// only its own children and the agent Chrome on its own profile: it never quits, kills or connects to a
-// Chrome that it did not start.
+// Without --hidden-drive the check runs agent-browser's default mode (focus emulation while a command
+// is attached: the page is visible for the command); with it, the hiddenDrive option (the page stays
+// hidden). Like check.ts beside it (ab-v16.13), it goes through agent-browser's own launch
+// (launchAgentChrome, the proxy, approve: "xdotool") in a private Xvfb that it starts (with -auth), on
+// a new state folder and profile (DIR/run-XXXXXX), with one local page server (probe.localhost) and no
+// network. It ends only its own children and the agent Chrome on its own profile: it never quits,
+// kills or connects to a Chrome that it did not start.
 //
 // Each probe page reports its events to the check's server with navigator.sendBeacon, out of band: a
 // visibilitychange, focus and blur (with document.visibilityState and document.hasFocus()), each trusted
@@ -23,22 +26,23 @@
 // Each command must work (its effect is in the page's log or in the shot's pixels). For each one the
 // summary gives the page's visible time while it ran, its visibilitychange events, its focus and blur
 // events, and the frames that a hidden page drew in the second after it (from 0.3 s to 1.3 s).
-//   exit 0  every command worked; a command on a hidden tab left the page hidden (no visible time and no
-//           visibilitychange), except record (its span is reported); a hidden page drew no frame after
-//           a command. --report-only (a run of the code before the fix, for its spans) checks only that
-//           every command worked.
+//   exit 0  every command worked. With --hidden-drive also: a command on a hidden tab left the page
+//           hidden (no visible time and no visibilitychange), except record (its span is reported), and
+//           a hidden page drew no frame after a command.
 //   exit 1  a failure in the summary, or an error with a stack trace and no summary.
 //   exit 2  nothing was driven: a usage error, not Linux, a display in use, Xvfb did not start, or
 //           agent-browser could not start its Chrome or connect to it.
 //
 // Measured 2026-11-04 on taylor (Chromium 156.0.8078.79, Debian 13, the launch flags of ab-v16.13).
-// Before ab-v16.15 (main at 143a556, --report-only, exit 1): the hidden page was visible for each
-// command, with two visibilitychange events, and got a focus and a blur: eval 9 ms, text 13, outline
-// 14, type 17, press 13, hover 1028, click 1025 (34 and 21 in tabs c and b), shot 4092, shot --size
-// 3136, shot --full 493, open 46, goto 33, record 4964; the shot of the new tab c failed after 30 s,
-// visible all that time. After it (4 runs, exit 0): no visible time and no visibilitychange for any
-// command but record (4.6 s, two events), no frame after a command, 18 to 140 ms per command (0.9 s for
-// shot --size); the shot of tab c took 0.1 s. In front, as before.
+// The default mode, 2 runs (main at 143a556, and this check's tip), exit 1 both: the hidden page was
+// visible for each command, with two visibilitychange events, and got a focus and a blur: eval 9 ms,
+// text 13 to 14, outline 14 to 16, type 17, press 11 to 13, hover 1015 to 1028, click 1021 to 1025 (17
+// to 34 in tabs c and b), shot 3082 to 4092, shot --size 2594 to 3136, shot --full 249 to 493, open 21
+// to 46, goto 33 to 40, record 4964 to 4989. In both runs the shot of the new tab c failed after 30 s,
+// visible all that time (the exit 1). With --hidden-drive, 6 runs (5 of them of a version in which it
+// was the default), exit 0: no visible time and no visibilitychange for any command but record (4.6 s,
+// two events), no frame after a command, 18 to 140 ms per command (0.9 s for shot --size); the shot of
+// tab c took 0.1 s. In front, as before.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -55,15 +59,15 @@ import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg, pngPixels } from "../../../src/record.ts";
 import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./spans.ts";
 
-const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "report-only": { type: "boolean" } } });
+const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "hidden-drive": { type: "boolean" } } });
 /** A start that the check refuses: one line, exit 2. The exit handler ends the check's own children. */
 function refuse(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(2);
 }
-if (!values["out-dir"]) refuse("usage: node test/live/background-tabs/visibility.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 97] [--report-only]");
+if (!values["out-dir"]) refuse("usage: node test/live/background-tabs/visibility.ts --out-dir DIR [--hidden-drive] [--chrome /usr/bin/chromium] [--display 97]");
 if (process.platform !== "linux") refuse(`the hidden-tab check runs on Linux only, in a private Xvfb, so that no window reaches a person's screen (this is ${process.platform})`);
-const DISPLAY = Number(values.display ?? 97), CHROME = values.chrome ?? "/usr/bin/chromium", reportOnly = !!values["report-only"];
+const DISPLAY = Number(values.display ?? 97), CHROME = values.chrome ?? "/usr/bin/chromium", hiddenDrive = !!values["hidden-drive"];
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse(`--display is a whole display number: ${values.display}`);
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
@@ -81,7 +85,7 @@ writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.allo
 const sock = join(RUN, "chrome-proxy.sock");
 const o: BrowserOptions = {
   stateDir: RUN, socketPath: Buffer.byteLength(sock) <= MAX_SOCKET_PATH_BYTES ? sock : join(mkdtempSync(join(tmpdir(), "ab-vis-")), "proxy.sock"),
-  allow: ["probe.localhost"], chromeBin: CHROME, approve: "xdotool", proxyIdleMs: 120_000, commandName: "hidden-tab check",
+  allow: ["probe.localhost"], chromeBin: CHROME, approve: "xdotool", proxyIdleMs: 120_000, commandName: "hidden-tab check", hiddenDrive,
   chromeArgs: ["--ozone-platform=x11", "--password-store=basic", "--disable-background-networking", "--disable-component-update", "--disable-sync",
     "--disable-default-apps", "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE probe.localhost", "--proxy-server=http://127.0.0.1:9",
     "--proxy-bypass-list=probe.localhost", "--window-position=0,0", "--window-size=1100,700"],
@@ -247,9 +251,9 @@ await sleep(1000);
 await click("a");
 await shot("a", "a-front");
 
-const failed = failures(run, reportOnly);
+const failed = failures(run, hiddenDrive);
 const summary = {
-  ok: failed.length === 0, chrome: product, flags: AGENT_ARGS, reportOnly, ffmpeg: !!ffmpeg,
+  ok: failed.length === 0, chrome: product, flags: AGENT_ARGS, hiddenDrive, ffmpeg: !!ffmpeg,
   commands: run.map((m) => ({ command: m.command, tab: m.tab, front: m.front, ok: m.ok, ms: m.ms, visibleMs: m.visibleMs, visibilityChanges: m.visibilityChanges, focusEvents: m.focusEvents, framesAfter: m.framesAfter, ...(m.detail ? { detail: m.detail } : {}) })),
   failures: failed, run: RUN,
 };
