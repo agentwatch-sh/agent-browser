@@ -255,6 +255,9 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
     open:
     1. Start an agent Chrome on a second instance of Google Chrome.app:
        `S=$(mktemp -d /tmp/ab-front.XXXXXX)/state; node bin/agent-browser.js launch --state-dir "$S" --chrome-bin "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --json`.
+       Then `ls -l "$S/profile/SingletonLock"` must point at `<host>-<pid>`, with the pid that
+       `node bin/agent-browser.js chromes` gives: `front` finds the Chrome by this link (Chromium's
+       POSIX lock, not yet seen on this Mac).
     2. Click your terminal.
     3. Run this one line:
        `lsappinfo info -only pid "$(lsappinfo front)"; node bin/agent-browser.js front --state-dir "$S" --json; echo "exit $?"; lsappinfo info -only pid "$(lsappinfo front)"`.
