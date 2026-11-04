@@ -16,10 +16,10 @@ import { UsageError } from "./errors.ts";
 import { isChromeForTesting, statePath, type Settings } from "./options.ts";
 
 /**
- * Chrome Beta installs as its own app (com.google.Chrome.beta), so while the agent browser runs,
- * the Dock icon, Cmd-Tab and `open -a "Google Chrome"` still start the operator's own Chrome.
- * From the same Google Chrome.app, macOS would bring the agent browser forward instead. Stable is
- * the fallback when Beta isn't installed; the chromeBin option overrides both. The keychain item
+ * Chrome Beta installs as its own app (com.google.Chrome.beta). A second instance of Google Chrome.app
+ * (measured 2026-11-03) also runs with its own profile, its own Dock icon and its own Cmd-Tab entry,
+ * so the operator's own Chrome and the agent browser stay apart in both cases. Stable is the fallback
+ * when Beta isn't installed; the chromeBin option overrides both. The keychain item
  * that encrypts cookies is shared by Google's channels, so a profile moves between them signed in
  * (macOS asks once to let Beta use "Chrome Safe Storage").
  */
@@ -76,13 +76,19 @@ export async function agentEndpoint(s: Settings, deps: {
 
 export const INSPECT_URL = "chrome://inspect/#remote-debugging";
 
+// No timer flag (--disable-background-timer-throttling, --disable-renderer-backgrounding; dropped in
+// ab-v16.13): a site can measure its timers in a hidden tab, and with those flags they ran at full
+// rate there, unlike in the operator's Chrome. A hidden tab's timers now slow down as in plain Chrome,
+// and agent-browser still switches tabs and drives a tab that is not in front
+// (test/live/background-tabs/check.ts).
 export const AGENT_ARGS: readonly string[] = [
   "--no-first-run",
   "--no-default-browser-check",
-  // The agent window usually sits behind the operator's windows; keep it rendering at full speed.
+  // The agent window usually sits behind the operator's windows. Without this flag macOS marks a
+  // covered window's page hidden (no animation frames, slow timers) while the agent's clicks and
+  // typing still reach it, so a site sees input on a hidden page (docs/research/
+  // 2026-11-03-chrome-vs-chrome-beta.md, section 8, check 9). With it the page stays visible.
   "--disable-backgrounding-occluded-windows",
-  "--disable-renderer-backgrounding",
-  "--disable-background-timer-throttling",
 ];
 
 // The Chrome switches a caller's flags (chromeArgs, extraArgs, urls) may never carry, by class:
@@ -261,7 +267,7 @@ export async function launchAgentChrome(
     seedRemoteDebugging(profile); // come up with remote debugging on; no chrome://inspect click needed
     const bin = agentChromeBin(s, deps.exists);
     if (bin === CHROME_STABLE_BIN && !s.chromeBin) {
-      s.log(`agent browser: running from Google Chrome, so while it is open the Dock's Chrome icon brings it forward instead of your own profile; install Google Chrome Beta (brew install --cask google-chrome@beta) to keep them apart`);
+      s.log(`agent browser: a Google Chrome runs for the agent browser, with its own profile; while your own Chrome is also open, its icon in the Dock and its entry in Cmd-Tab are separate from yours, and your own profile is untouched`);
     }
     // Exactly the elements checked above, plus agent-browser's own profile switch and window name.
     const args = [...AGENT_ARGS, `--user-data-dir=${profile}`, `--window-name=${agentWindowName(s)}`, ...extraArgs, ...urls];
