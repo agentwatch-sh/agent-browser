@@ -256,6 +256,27 @@ test("a download reaches the client's folder under its guid; cancel and a danger
   } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("the release of a held tab follows the client's runIfWaitingForDebugger at once, not its answer", async () => {
+  // Measured live (2026-11-04): Chrome answers no command of a tab whose first request the hold keeps, so a release
+  // that waited for this answer would wait for the receiver's own end of the hold (HOLD_MAX_MS).
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const opener = await page(h, c, true);
+    let answer!: () => void;
+    const held = new Promise<void>((r) => (answer = r));
+    h.fake.command = async (_t, method) => { if (method === "Runtime.runIfWaitingForDebugger") { await held; return {}; } return undefined; };
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    const popup = h.fake.newTab("https://a.example/popup", opener.tab);
+    const ev = await attached;
+    const run = c.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
+    await until(() => h.fake.sent("bridge.release").some((r) => r.args[0] === popup.id), "the release while the answer waits");
+    answer();
+    await run;
+  } finally { await h.close(); }
+});
+
 test("Target.createTarget with a URL opens the tab at about:blank, then navigates it after the hold (C10)", async () => {
   const h = await harness();
   try {

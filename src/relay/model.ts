@@ -223,16 +223,19 @@ export class Model {
       let r = hidesCookies(method) ? hideCookies(result) : result;
       if (r?.targetInfo) r = { ...r, targetInfo: { ...r.targetInfo, browserContextId: DEFAULT_CONTEXT } };
       answer({ result: r ?? {} });
-      // The client's page is set up: the receiver may let the held tab's first request go, and a new tab gets its URL.
-      if (method === "Runtime.runIfWaitingForDebugger" && !child) {
-        if (tab.held) this.release(tab);
-        if (tab.navigateTo) void this.navigate(tab);
-      }
     }, (e) => {
       answer({ error: cdpError(method, e) });
       // A command that does not wait for a promise and timed out still runs in Chrome: a detach ends it (C10).
       if (isTimeout(e) && !awaitsPromise(method, params)) void this.reattach(tab);
     });
+    // The client's page is set up when it sends Runtime.runIfWaitingForDebugger, as with Chrome's own
+    // waitForDebuggerOnStart: the receiver lets the held first request go, and a new tab gets its URL. Both come
+    // behind the client's setup calls (one tab, in order). Not after this command's answer: measured live
+    // (2026-11-04), Chrome answers no command of a tab whose first request the hold keeps, until the hold ends.
+    if (method === "Runtime.runIfWaitingForDebugger" && !child) {
+      if (tab.held) this.release(tab);
+      if (tab.navigateTo) void this.navigate(tab);
+    }
   }
 
   // ------------------------------------------------------------------ tabs and sessions
