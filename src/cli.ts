@@ -67,6 +67,8 @@ ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
 
 chromes and commands need no --state-dir. chromes lists every agent-browser Chrome of this user
 from the process table and the state folders' files; it connects to none and signals none.
+front (macOS) brings this consumer's agent browser to the front, so that a person finds its "Allow
+remote debugging?" prompt. It takes the operator's focus: a person runs it, never an agent on its own.
 
 <tab> is a name given to 'open --name', a target-id prefix, or a URL substring (allowlisted tabs only).
 With --tab-scope NAME, open records each new tab under that scope, <tab> resolves only among the
@@ -220,6 +222,10 @@ export function human(r: any): string {
         `  profile       ${c.profileDir}`,
         `  window        ${c.windowName === null ? "name unknown" : JSON.stringify(c.windowName)}`,
       ]));
+    case "front":
+      return lines([`the agent browser (pid ${r.chromePid}) is in front: ${r.windowName === null ? "window name unknown" : `window ${JSON.stringify(r.windowName)}`}`,
+        `  profile ${r.profileDir}`,
+        "  if no window shows, it is minimized: click it in the Dock (or click the agent browser's Chrome icon there)"]);
     case "commands": return USAGE + "\n";
     default: return JSON.stringify(r) + "\n";
   }

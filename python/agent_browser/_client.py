@@ -18,8 +18,8 @@ from typing import Callable, Dict, List, Literal, Mapping, Optional, Sequence, T
 
 from ._errors import ERRORS_BY_CODE, CLIError, NodeNotFoundError, NodeVersionError, PackageNotFoundError, ProtocolError
 from ._results import (
-    ChromesResult, ClickResult, CloseResult, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, GotoResult, HoverResult,
-    LaunchResult, NetResult, OpenResult, OutlineResult, PressResult, QuitResult, RecordResult, ShotResult, StatusResult, StopResult,
+    ChromesResult, ClickResult, CloseResult, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, FrontResult, GotoResult,
+    HoverResult, LaunchResult, NetResult, OpenResult, OutlineResult, PressResult, QuitResult, RecordResult, ShotResult, StatusResult, StopResult,
     TabsResult, TextResult, TypeResult, WindowResult,
 )
 
@@ -428,6 +428,14 @@ class AgentBrowser:
     def chromes(self) -> ChromesResult:
         """Every agent-browser Chrome of this user on the machine (not only this consumer's): read-only, it connects to none."""
         return self._run("chromes", [], ChromesResult.from_json, global_flags=False)
+
+    def front(self) -> FrontResult:
+        """macOS: bring this consumer's agent browser to the front, so that a person finds its "Allow remote debugging?" prompt.
+
+        It takes the operator's focus: only a person asks for it, never an agent on its own. It never
+        connects to a Chrome. Off macOS it raises UsageError.
+        """
+        return self._run("front", [], FrontResult.from_json)
 
     def commands(self) -> CommandsResult:
         """Every CLI command with its parameters (the CLI's own description of itself)."""

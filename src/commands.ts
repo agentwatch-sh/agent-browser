@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab } from "./browser.ts";
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
 import { listAgentChromes, type AgentChrome } from "./chromes.ts";
+import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
 import { isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
@@ -93,6 +94,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
       p("seed", "number", false, "--seed", "the seed of the cursor paths, aim points and typing pace; the same seed moves the same way; default 1"),
       p("ffmpeg", "string", false, "--ffmpeg", "the ffmpeg binary (absolute path); default ffmpeg on PATH"), ANY_SCOPE] },
   { name: "chromes", summary: "Every agent-browser Chrome of this user on the machine: pid, profile, state folder, window, proxy (read-only; no --state-dir)", usage: "chromes", params: [] },
+  { name: "front", summary: "macOS: bring the agent browser to the front, to answer its prompt (for a person only: it takes the focus)", usage: "front", params: [] },
   { name: "commands", summary: "This list, as JSON", usage: "commands", params: [] },
 ];
 
@@ -134,6 +136,8 @@ export type RecordResult = Ok<"record", {
 }>;
 /** Every agent-browser Chrome of this user, by pid (see AgentChrome). */
 export type ChromesResult = Ok<"chromes", { chromes: AgentChrome[] }>;
+/** The agent Chrome that front brought to the front, and the request that did it (see bringToFront). */
+export type FrontResult = Ok<"front", { chromePid: number; profileDir: string; stateDir: string | null; windowName: string | null; via: FrontHow }>;
 export type CommandsResult = Ok<"commands", { commands: CommandSpec[] }>;
 
 /** The longest `net` capture, in seconds. */
@@ -188,16 +192,20 @@ async function stopProxyAndWait(s: Settings): Promise<boolean> {
 // ---------- the operations ----------
 
 export const commands = {
-  /** `hooks.hidden` (@internal): for a measurement only (ab-b84.11; see launchAgentChrome). Off by default; the CLI never sets it. */
-  async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean } = {}): Promise<LaunchResult> {
+  /**
+   * `hooks` (@internal), for a measurement only (ab-b84.11, test/live/takeover/start.ts; see launchAgentChrome): `hidden`
+   * starts through `open -n -g -j`, and `giveBack: false` turns the give-back guard off. The CLI never sets them.
+   */
+  async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean; giveBack?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
     if (s.cdpUrl) throw new UsageError("launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
-      background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
       hidden: hooks.hidden,
+      giveBack: hooks.giveBack,
+      background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
       urls: [INSPECT_URL, ...urls],
       timeoutMs: 10 * 60_000,
       onWaiting: () => s.log(`waiting for remote debugging: turn it on in ${INSPECT_URL} (Ctrl-C to stop waiting)`),
@@ -430,6 +438,15 @@ export const commands = {
   /** Needs no consumer: it reads the process table and this user's state folders, and never connects to a Chrome or signals one. */
   async chromes(): Promise<ChromesResult> {
     return { ok: true, command: "chromes", chromes: listAgentChromes() };
+  },
+
+  /**
+   * For a person only: it takes the operator's focus, so no other command calls it. It never connects
+   * to a Chrome or signals one, and it acts only on the agent Chrome on this consumer's profile (front.ts).
+   */
+  async front(o: BrowserOptions | Settings): Promise<FrontResult> {
+    const { chrome, via } = await bringToFront(resolveOptions(o));
+    return { ok: true, command: "front", chromePid: chrome.pid, profileDir: chrome.profileDir, stateDir: chrome.stateDir, windowName: chrome.windowName, via };
   },
 
   async commands(): Promise<CommandsResult> {

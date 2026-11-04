@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -14,8 +15,9 @@ from typing import Any, Dict, List
 from unittest import mock
 
 from agent_browser import (
-    AgentBrowser, AgentChrome, ApprovalNeededError, ChromesResult, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError, NotAllowedError,
-    PackageNotFoundError, PinRequiredError, ProtocolError, ProxyInfo, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef, UsageError,
+    AgentBrowser, AgentChrome, ApprovalNeededError, ChromesResult, ClickResult, CLIError, FrontResult, NetHttp, NodeNotFoundError, NodeVersionError,
+    NotAllowedError, PackageNotFoundError, PinRequiredError, ProtocolError, ProxyInfo, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef,
+    UsageError,
 )
 
 from .support import FakeChrome, Consumer, ROOT, stand_in_node
@@ -455,6 +457,37 @@ class ChromesTest(unittest.TestCase):
             node = stand_in_node(self.folder, "node-chromes", "v26.0.0", output)
             with self.assertRaises(ProtocolError, msg=output):
                 AgentBrowser(self.consumer.state_dir, node=str(node)).chromes()
+
+
+class FrontTest(unittest.TestCase):
+    """`front()`: refused off macOS through the real CLI; its typed result from a stand-in node (nothing is activated)."""
+
+    def setUp(self) -> None:
+        self.consumer = Consumer()
+        self.folder = self.consumer.dir
+
+    def tearDown(self) -> None:
+        self.consumer.remove()
+
+    @unittest.skipIf(sys.platform == "darwin", "on macOS the real CLI would bring a window forward")
+    def test_front_is_refused_off_macos_with_a_usage_error(self) -> None:
+        with self.assertRaises(UsageError) as caught:
+            AgentBrowser(self.consumer.state_dir).front()
+        self.assertIn("front brings a window forward on macOS only", str(caught.exception))
+
+    def test_front_returns_typed_fields_and_checks_the_shape(self) -> None:
+        good = ('{"ok": true, "command": "front", "chromePid": 4100, "profileDir": "/s/profile", "stateDir": "/s", '
+                '"windowName": "agent-browser: /s", "via": "activate-from"}')
+        node = stand_in_node(self.folder, "node-front", "v26.0.0", good)
+        self.assertEqual(AgentBrowser(self.consumer.state_dir, node=str(node)).front(),
+                         FrontResult(chrome_pid=4100, profile_dir="/s/profile", state_dir="/s", window_name="agent-browser: /s", via="activate-from"))
+        for i, output in enumerate([
+            '{"ok": true, "command": "front", "chromePid": 4100, "profileDir": "/s/profile", "stateDir": null, "windowName": null, "via": "open"}',
+            '{"ok": true, "command": "front", "chromePid": "4100", "profileDir": "/s/profile", "stateDir": null, "windowName": null, "via": "activate"}',
+        ]):
+            node = stand_in_node(self.folder, f"node-front-{i}", "v26.0.0", output)
+            with self.assertRaises(ProtocolError, msg=output):
+                AgentBrowser(self.consumer.state_dir, node=str(node)).front()
 
 
 if __name__ == "__main__":
