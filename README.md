@@ -1004,7 +1004,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-commands.test.ts`: agent mode's relay
   (`agent-browser relay`, contracts C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake
   receiver and daemon (`test/fake-bridge.ts`): the policy against the contracts' vectors (copied in
-  `test/vectors/chrome-extension-5021038/`), the model through real CDP clients on the socket, and
+  `test/vectors/chrome-extension-ffaf794/`), the model through real CDP clients on the socket, and
   agent-browser's own commands over the endpoint (`--cdp-url`) with the fake Chrome behind the fake
   receiver.
 - `test/live/agent-mode/` (Linux, in a private Xvfb; see the head of `run.ts`): agent mode live. A

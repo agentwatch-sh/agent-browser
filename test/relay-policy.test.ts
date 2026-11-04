@@ -1,5 +1,5 @@
 // The relay's policy and its side of the bridge, checked against the shared vectors of contracts C10 and C11. The
-// vectors are copies of agentwatch-sh/chrome-extension test/vectors/{bridge,endpoint}.json at commit 5021038 (main,
+// vectors are copies of agentwatch-sh/chrome-extension test/vectors/{bridge,endpoint}.json at commit ffaf794 (main,
 // the merge of PR #5); the folder name names that commit. Copy them again when the contracts change.
 
 import { test } from "node:test";

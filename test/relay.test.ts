@@ -1,5 +1,5 @@
 // The relay (agent mode's CDP endpoint) end to end: real CDP clients on its Unix socket, and the fake receiver of
-// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension 5021038).
+// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension ffaf794).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
