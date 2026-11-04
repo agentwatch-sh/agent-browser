@@ -81,8 +81,15 @@ export function chromeMainProfile(command: string): string | undefined {
   return switchValues(command, "user-data-dir").at(-1) || undefined;
 }
 
-/** agent-browser's own launch flags, as ps shows them in front of the profile (launchAgentChrome). */
-const LAUNCH = ` ${AGENT_ARGS.join(" ")} --user-data-dir=`;
+/**
+ * agent-browser's own launch flags, as ps shows them in front of the profile (launchAgentChrome): today's,
+ * and those of agent-browser 0.2.9 and before, which also had the two timer flags (dropped in ab-v16.13).
+ * An agent Chrome that an earlier version started keeps its flags until it quits.
+ */
+const LAUNCHES = [
+  AGENT_ARGS,
+  ["--no-first-run", "--no-default-browser-check", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding", "--disable-background-timer-throttling"],
+].map((args) => ` ${args.join(" ")} --user-data-dir=`);
 
 /** The command name and state folder in agent-browser's own window name (agentWindowName), which its launch puts right after the profile. */
 function launchWindowName(command: string, profile: string): { commandName: string; stateDir: string } | undefined {
@@ -177,7 +184,7 @@ export function listAgentChromes(deps: { ps?: () => string; uid?: number; stat?:
     const profileDir = chromeMainProfile(command);
     if (profileDir === undefined) continue;
     const drivers = proxies.filter((p) => p.profileDir === profileDir && p.mode === "agent" && p.stateDir);
-    if (!command.includes(`${LAUNCH}${profileDir}`) && !drivers.length) continue;
+    if (!LAUNCHES.some((flags) => command.includes(`${flags}${profileDir}`)) && !drivers.length) continue;
     const launch = launchWindowName(command, profileDir);
     const driver = drivers.find((p) => approvedProxy(stat, p.stateDir!, profileDir, proxies, uid)) ?? drivers[0];
     const stateDir = launch?.stateDir ?? driver?.stateDir ?? launchedFrom(stat, profileDir, uid) ?? null;

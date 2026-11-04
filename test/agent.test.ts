@@ -110,6 +110,20 @@ test("a launch starts a regular Chrome on the consumer's profile, never with a d
   assert.equal(localState.devtools.remote_debugging["user-enabled"], true, "launch seeds remote debugging so no chrome://inspect click is needed");
 });
 
+test("the agent Chrome starts without the two timer flags, so a hidden tab's timers run as in the operator's Chrome, and keeps a window behind others visible (ab-v16.13)", async () => {
+  assert.deepEqual(AGENT_ARGS, ["--no-first-run", "--no-default-browser-check", "--disable-backgrounding-occluded-windows"]);
+  const calls: { bin: string; args: string[] }[] = [];
+  let probes = 0;
+  const own = resolveOptions({ ...s, stateDir: join(tmp, "timers") });
+  await launchAgentChrome(own, { timeoutMs: 2_000, urls: [INSPECT_URL] }, {
+    endpoint: async () => ++probes < 2 ? undefined : "ws://127.0.0.1:9222/devtools/browser/timers",
+    pid: () => undefined, spawn: fakeSpawn(calls), exists: (p) => p === CHROME_BETA_BIN,
+  });
+  const switches = calls[0].args.map((a) => a.replace(/=.*/, ""));
+  for (const timer of ["--disable-background-timer-throttling", "--disable-renderer-backgrounding"]) assert.ok(!switches.includes(timer), `${timer} is gone from the launch`);
+  assert.ok(switches.includes("--disable-backgrounding-occluded-windows"), "a window behind the operator's windows stays visible, so it never gets input while hidden");
+});
+
 test("a background launch on macOS starts a new instance through `open -n -g` (no activation); the flags are the same", async () => {
   const calls: { bin: string; args: string[] }[] = [];
   let probes = 0;

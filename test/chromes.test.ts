@@ -211,6 +211,22 @@ test("the binary, the profile and the launch flags: `timeout` in front of a macO
   ]);
 });
 
+test("an agent Chrome that agent-browser 0.2.9 or before started, with the two timer flags, is still listed until it quits (ab-v16.13)", () => {
+  const T = folder("timers-t"), U = folder("timers-u");
+  const before = "--no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
+  assert.notEqual(before, SIG, "today's launch has no timer flag");
+  const ps = [
+    linux(UID, 100, `/opt/google/chrome/chrome ${before} --user-data-dir=${T}/profile --window-name=agent-browser: ${T} ${INSPECT}`),
+    mac(UID, 110, `${CHROME_BETA_BIN} ${before} --user-data-dir=${U}/profile --window-name=vedlo browser: ${U} ${INSPECT}`),
+    // Only the two flags, without the rest of that launch, are no evidence.
+    linux(UID, 120, `/opt/google/chrome/chrome --disable-renderer-backgrounding --disable-background-timer-throttling --user-data-dir=${tmp}/x/profile ${INSPECT}`),
+  ].join("\n");
+  assert.deepEqual(listAgentChromes({ ps: () => ps, uid: UID }), [
+    { pid: 100, profileDir: `${T}/profile`, stateDir: T, windowName: `agent-browser: ${T}`, commandName: "agent-browser", proxy: null },
+    { pid: 110, profileDir: `${U}/profile`, stateDir: U, windowName: `vedlo browser: ${U}`, commandName: "vedlo browser", proxy: null },
+  ]);
+});
+
 test("a file of another user inside this user's folders is not read: a pid file, either preference file of the profile, a launches.log", () => {
   const files = (pid: number, extra: Record<string, string | object> = {}) => ({ "chrome-proxy.json": { pid, upstream: `ws://127.0.0.1:9/devtools/browser/${pid}` }, ...extra });
   const T = folder("foreign-t", files(810)), X = folder("foreign-x", files(860));
