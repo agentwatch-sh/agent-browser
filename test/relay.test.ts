@@ -256,6 +256,47 @@ test("a download reaches the client's folder under its guid; cancel and a danger
   } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("Target.createTarget with a URL opens the tab at about:blank, then navigates it after the hold (C10)", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const ops = (from: number) => h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? r.args[1] : r.op));
+    // A client that waits for each new target: the navigation comes after its runIfWaitingForDebugger, behind the release.
+    const waiting = await h.connect("s1");
+    await waiting.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    let from = h.fake.requests.length;
+    const attached = waiting.waitForEvent("Target.attachedToTarget");
+    await waiting.send("Target.createTarget", { url: "https://a.example/x" });
+    const ev = await attached;
+    assert.deepEqual(h.fake.sent("tabs.create").at(-1)!.args, [{ url: "about:blank", active: true }]);
+    assert.ok(ev.waitingForDebugger);
+    assert.ok(!ops(from).includes("Page.navigate"), "no navigation before the client is ready");
+    from = h.fake.requests.length;
+    await waiting.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
+    await until(() => ops(from).includes("Page.navigate"), "the navigation");
+    assert.deepEqual(ops(from), ["Runtime.runIfWaitingForDebugger", "bridge.release", "Page.navigate"]);
+    assert.deepEqual(h.fake.requests.at(-1)!.args, [{ tabId: h.fake.requests.at(-1)!.args[0].tabId }, "Page.navigate", { url: "https://a.example/x" }]);
+    // A client that does not wait: the release, then the navigation, at once.
+    const plain = await h.connect("s2");
+    await plain.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    from = h.fake.requests.length;
+    await plain.send("Target.createTarget", { url: "https://a.example/y" });
+    await until(() => ops(from).includes("Page.navigate"), "the navigation");
+    assert.ok(ops(from).indexOf("bridge.release") < ops(from).indexOf("Page.navigate"));
+    // A client with no auto-attach (agent-browser's open): the navigation, then the tab carries no debugger.
+    const raw = await h.connect("s3");
+    from = h.fake.requests.length;
+    const { targetId } = await raw.send("Target.createTarget", { url: "https://a.example/z", background: true });
+    const after = ops(from);
+    assert.ok(after.indexOf("Page.navigate") < after.lastIndexOf("debugger.detach"), after.join(" "));
+    assert.ok((await raw.send("Target.attachToTarget", { targetId, flatten: true })).sessionId);
+    // about:blank or no URL: nothing to navigate.
+    from = h.fake.requests.length;
+    await raw.send("Target.createTarget", {});
+    assert.ok(!ops(from).includes("Page.navigate"));
+  } finally { await h.close(); }
+});
+
 test("a connection that leaves while Target.createTarget or Target.attachToTarget runs keeps no tab and no session", async () => {
   const h = await harness();
   try {

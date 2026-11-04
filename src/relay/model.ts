@@ -38,6 +38,8 @@ export type Socket = { send(text: string): void; close(code: number, reason: str
 type Tab = {
   id: number; targetId: string | null; scope: string | null; opener: number | null; owner: Conn | null;
   sessions: Set<string>; attached: boolean; attaching: Promise<void> | null; held: boolean; claimed: boolean; autoPending: Promise<string | null> | null;
+  /** The client's URL of a tab that Target.createTarget opened at about:blank, until the model navigates it. */
+  navigateTo: string | null;
 };
 type Session = { tabId: number; parent?: string; auto: boolean };
 type Download = { conn: Conn; url: string; name: string; item?: number };
@@ -221,8 +223,11 @@ export class Model {
       let r = hidesCookies(method) ? hideCookies(result) : result;
       if (r?.targetInfo) r = { ...r, targetInfo: { ...r.targetInfo, browserContextId: DEFAULT_CONTEXT } };
       answer({ result: r ?? {} });
-      // The client's page is set up: the receiver may let the held tab's first request go.
-      if (method === "Runtime.runIfWaitingForDebugger" && !child && tab.held) this.release(tab);
+      // The client's page is set up: the receiver may let the held tab's first request go, and a new tab gets its URL.
+      if (method === "Runtime.runIfWaitingForDebugger" && !child) {
+        if (tab.held) this.release(tab);
+        if (tab.navigateTo) void this.navigate(tab);
+      }
     }, (e) => {
       answer({ error: cdpError(method, e) });
       // A command that does not wait for a promise and timed out still runs in Chrome: a detach ends it (C10).
@@ -234,7 +239,7 @@ export class Model {
 
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
-    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null }));
+    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null }));
     return tab;
   }
 
@@ -282,6 +287,17 @@ export class Model {
       throw e;
     }).finally(() => { tab.attaching = null; });
     return tab.attaching;
+  }
+
+  /** The client's URL of a tab that Target.createTarget opened at about:blank (C10), after the hold. */
+  private async navigate(tab: Tab): Promise<void> {
+    const url = tab.navigateTo;
+    tab.navigateTo = null;
+    if (!url) return;
+    try {
+      await this.ensureAttached(tab);
+      await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.navigate", { url }]);
+    } catch (e) { this.log(`relay: the navigation of new tab ${tab.id} failed: ${(e as Error).message}`); }
   }
 
   private release(tab: Tab): void {
@@ -674,12 +690,15 @@ export class Model {
     "Target.getBrowserContexts": async () => ({ browserContextIds: [] }),
     "Target.createTarget": async (c, p) => {
       if (p.browserContextId && p.browserContextId !== DEFAULT_CONTEXT) throw new Error(TEXT.noContext);
-      const url = p.url || "about:blank";
+      // C10: Chrome starts the first request of a tabs.create URL before the receiver can hold the tab. So the tab opens
+      // at about:blank and gets the client's URL after the hold, as Playwright's newPage and goto do.
+      const url = p.url && p.url !== "about:blank" ? String(p.url) : null;
       const flight = (async () => {
-        const created = p.newWindow ? (await this.bridge.call("windows.create", [{ url, focused: false }])).tabs[0] : await this.bridge.call("tabs.create", [{ url, active: !p.background }]);
+        const created = p.newWindow ? (await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }])).tabs[0]
+          : await this.bridge.call("tabs.create", [{ url: "about:blank", active: !p.background }]);
         const tab = this.tabOf(created.id);
         // The tab joins the scope also when its creator left meanwhile; then it is free for the scope.
-        tab.scope = c.scope; tab.claimed = true;
+        tab.scope = c.scope; tab.claimed = true; tab.navigateTo = url;
         if (this.conns.has(c)) tab.owner = c;
         tab.targetId ??= await this.targetIdOf(tab.id);
         return tab;
@@ -690,9 +709,17 @@ export class Model {
       if (!this.conns.has(c)) return this.abandon(c, tab);
       for (const o of this.conns) if (o.discover && o.scope === c.scope) o.event(undefined, "Target.targetCreated", { targetInfo: await this.targetInfo(tab) });
       if (!this.conns.has(c)) return this.abandon(c, tab);
-      // The creator owns the new tab; Playwright expects Target.attachedToTarget before this answer.
-      if (c.autoAttach) await this.autoAttach(c, tab, c.waitOnStart && tab.held);
-      else if (tab.attached) { this.release(tab); await this.detach(tab); }
+      // The creator owns the new tab; Playwright expects Target.attachedToTarget before this answer. A client that waits
+      // for the target gets the URL after its runIfWaitingForDebugger (forward), any other client at once.
+      if (c.autoAttach) {
+        const waiting = c.waitOnStart && tab.held;
+        await this.autoAttach(c, tab, waiting);
+        if (!waiting) void this.navigate(tab);
+      } else {
+        if (tab.held) this.release(tab);
+        await this.navigate(tab);
+        if (tab.attached && !tab.sessions.size) await this.detach(tab);
+      }
       return { targetId: tab.targetId };
     },
     "Target.closeTarget": async (c, p) => {
