@@ -761,7 +761,7 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 
 ```python
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
-             chrome_args=None, endpoint=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
+             chrome_args=None, endpoint=None, cdp_url=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
              notify_command=None, approve=None, approve_command=None, proxy_idle_ms=None, command_name=None,
              tab_scope=None, node="node", package_dir=None, timeout=120.0, env=None)
 ```

@@ -55,6 +55,17 @@ export class CDPConnection {
         clearTimeout(timer);
         reject(new Error(`could not connect to ${url}: ${err.message}`));
       });
+      // An HTTP answer in place of the upgrade (agent mode's endpoint: 503 with C11's text): its body is the reason.
+      ws.once("unexpected-response", (req, res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (d: string) => { if (body.length < 4096) body += d; });
+        res.on("end", () => {
+          clearTimeout(timer);
+          req.destroy();
+          reject(new Error(`could not connect to ${url}: HTTP ${res.statusCode}${body.trim() ? `: ${body.trim()}` : ""}`));
+        });
+      });
     });
   }
 

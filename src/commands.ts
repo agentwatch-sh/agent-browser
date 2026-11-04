@@ -242,13 +242,14 @@ export const commands = {
     try { b = await AgentBrowser.connect(s, { existingOnly: true }); }
     catch (e) {
       if (e instanceof AgentBrowserError && e.code === "usage") throw e;
-      const detail = await localBrowserStatus(s);
-      return { ...base, connected: false, detail, product: null, proxy: null, profileDir: s.mode === "agent" ? s.profileDir : null,
+      // Agent mode's endpoint has no local Chrome or proxy of this consumer to look at: its own answer is the detail.
+      const detail = s.cdpUrl ? (e as Error).message : await localBrowserStatus(s);
+      return { ...base, connected: false, detail, product: null, proxy: null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
         allowedTabs: null, otherTabs: null, window: null, notification: p.notify ? await notifyBrowserStatus(s, detail) : null };
     }
     try {
       const pages = await b.allowedPages({ anyScope: true }); // the whole browser's count, also with a tab scope
-      return { ...base, connected: true, detail: null, product: b.product, proxy: proxyInfo(s) ?? null, profileDir: s.mode === "agent" ? s.profileDir : null,
+      return { ...base, connected: true, detail: null, product: b.product, proxy: proxyInfo(s) ?? null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
         allowedTabs: pages.length, otherTabs: await b.otherPageCount(), window: b.pinnedWindow() ?? null, notification: null };
     } finally { await b.disconnect(); }
   },
@@ -445,7 +446,9 @@ export const commands = {
    * to a Chrome or signals one, and it acts only on the agent Chrome on this consumer's profile (front.ts).
    */
   async front(o: BrowserOptions | Settings): Promise<FrontResult> {
-    const { chrome, via } = await bringToFront(resolveOptions(o));
+    const s = resolveOptions(o);
+    if (s.cdpUrl) throw new UsageError("front: the agent browser behind cdpUrl belongs to agentwatch; agent-browser does not bring it to the front");
+    const { chrome, via } = await bringToFront(s);
     return { ok: true, command: "front", chromePid: chrome.pid, profileDir: chrome.profileDir, stateDir: chrome.stateDir, windowName: chrome.windowName, via };
   },
 
