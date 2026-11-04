@@ -33,7 +33,8 @@ design changes a part of it; none changes an operator decision.
   saw (15 of 15), and 14 of 14 cases on several connections and scopes, over the Unix socket. No
   prompt appears (sections 5 and 4.4). The probe ran before the operator's answers. With the
   answers on the page marks (refuse them) and the sign-ins (no cookie calls), five of the 49
-  Playwright cases and one of the 14 concurrency cases now get a refusal (section 5).
+  Playwright cases and one of the 14 concurrency cases now get a refusal. Outside the probe,
+  `page.clock`, `context.request`, `page.request` and `storageState()` fail too (section 5).
 - **No prompt on any path that agentwatch uses.** Every feature that agentwatch offers goes through
   the extension. The few features that only Chrome's "Allow remote debugging?" connection gives (a
   new isolated context, service-worker targets, JS coverage, a few browser-wide domains) give a clear
@@ -50,9 +51,10 @@ design changes a part of it; none changes an operator decision.
   off-list host got no request in any run. The browser model adds a permission filter, one
   connection per tab, and the tab scope (section 8). **No cookie calls:** the operator chose "No
   cookies by default" (ab-jzg Q4 and the follow-up item ab-8mf). The endpoint refuses every cookie
-  call, so programs that read or set cookies through Playwright fail. The browser still uses its
-  cookies, so the sent sign-ins work on the sites. A later cookie grant can add cookie calls if a
-  use case needs them.
+  call, so programs that read or set cookies through Playwright fail. The relay also masks the
+  cookie headers in the events that it passes on (section 8). The browser still uses its cookies,
+  so the sent sign-ins work on the sites. A later cookie grant can add cookie calls if a use case
+  needs them.
 - **Which Chrome:** Google Chrome stable at the operator's version, on the operator's kind of
   machine, not Beta (the Chrome comparison, ab-v16.2). The operator's answer to ab-vsm Q1: taylor
   runs most browser work, and the Mac runs the agent browser only for a new site, a Cloudflare box
@@ -377,6 +379,13 @@ and now fails: `context.storageState() in a context that showed no off-list fram
 The other 42 Playwright cases, the other 13 concurrency cases and the 15 MCP cases
 (`results/mcp.json`) use none of these features. In the MCP run the site saw no new global.
 
+Outside the probe, more Playwright features fail under the two answers (read in playwright-core
+1.64.1, not run):
+
+- `page.clock`: it puts a script in the page's main world (row 25).
+- `context.request` and `page.request`: they read and write the context's cookies (row 22).
+- `context.storageState()`: its first call reads the cookies (row 23), in any context.
+
 ## 6. How the two paths work together
 
 - **When the approval path is needed at all.** Only for rows 32 to 39: an isolated context, video
@@ -493,9 +502,16 @@ network stack before any CDP interception:
   the relay's code. Such a grant can reuse the probe's filter, measured for `context.addCookies`:
   allowlisted domains only, an off-list domain refused, `clearBrowserCookies` for allowlisted
   cookies only.
-- Not covered by the answer: the network events and the `Fetch` interception that the model passes
-  on also carry `Cookie` and `Set-Cookie` header values, also of httpOnly cookies (for example
-  `Network.requestWillBeSentExtraInfo`). Whether the model blanks them is a question for stage 3.
+- Cookie headers. The network events and the `Fetch` interception that the model passes on also
+  carry `Cookie` and `Set-Cookie` header values, also of httpOnly cookies. The lead decided this
+  under the operator's "No cookies by default" (the lead's reading of the answer, comment on
+  ab-v16.6; the operator can reverse it):
+  - The relay replaces the values of the `Cookie` and `Set-Cookie` headers with a fixed marker in
+    the `Network.*` events (`requestWillBeSent`, `requestWillBeSentExtraInfo`, `responseReceived`,
+    `responseReceivedExtraInfo`) and in `Fetch.requestPaused`.
+  - The relay refuses a `Cookie` header from a client (in `Fetch.continueRequest` and
+    `Network.setExtraHTTPHeaders`) with the cookie refusal.
+  - The browser still sends and stores its cookies, so the sites work as before.
 - Permissions: only for allowlisted origins (row 24).
 - `Extensions.*` and `Target.exposeDevToolsProtocol` are refused on every session.
 - The model never attaches a client to a tab outside its scope, to a tab that another connection
@@ -716,7 +732,7 @@ the tab and tells the client, and runs the popup cases many times in its live te
 | --- | --- | --- | --- |
 | 1. Contracts | chrome-extension (`docs/protocol.md`) | C10: the bridge (the fixed call list, the events, the deadline, parts). The C4 change: a second channel for the bridge, never queued behind an import, parts that name their channel. C11: the endpoint path, the scope, one connection per tab, the refusal texts. The agentwatch side reads the same file | — |
 | 2. Two packages | chrome-extension | `sender/` becomes `operator/`, `receiver/` becomes `agent/`; the bridge in `agent/`; the DNR navigation-header rule and the frame rule; the attach of a new tab in `tabs.onCreated` (not of the restore tab or an operator tab; one module owns every attach) and the hold of its first request; manifest tests (the operator package has no control permission); bridge unit tests with the fake chrome; the native host's parent check (with stage 4) | 1 |
-| 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie policy (no cookie calls by default, the operator's answer to ab-8mf, with a note in the code for a later cookie grant), the refusal of the page-mark calls (ab-jzg Q3, section 4.3), the permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install (with the refusals of section 5), popups many times, and the operator's timer condition: a client switches tabs and drives a tab that is not in front; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
+| 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie policy (no cookie calls by default, the operator's answer to ab-8mf, with a note in the code for a later cookie grant; the cookie headers masked in the events and refused from a client, section 8), the refusal of the page-mark calls (ab-jzg Q3, section 4.3), the permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install (with the refusals of section 5), popups many times, and the operator's timer condition: a client switches tabs and drives a tab that is not in front; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
 | 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; Google Chrome stable in the tools folder with the external extensions file, the CRX key and the version updates (section 10; the operator's answers to ab-vsm Q1 and ab-32m); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
 | 5. The Mac | agentwatch, chrome-extension | The agentwatch design's Mac check 4 with the operator (sleep and wake); the comparison's Mac checks are done (2026-11-03, its section 8; checks 2, 3, 4, 6 and 9 touch agent mode), and its check 2 answers the open part of the agentwatch design's Mac check 1 (the manual load stays across a relaunch); the Mac's install (the choice waits for this stage; the manual-load guide until then); the second instance of the operator's own `Google Chrome.app` with its own profile (the operator's answer to ab-9hj); the Mac launch path, with `--disable-backgrounding-occluded-windows` and a start that keeps the operator's focus (ab-b84.11) | 4 |
 | 6. Consumers (their choice) | vedlo, marketdata-update | Move from the CDP proxy to the endpoint at a pin bump | 3 |
@@ -801,8 +817,10 @@ session. O9 kept the allowlist because of the risk to the signed-in profile.
   sign-in secrets. The operator's answer to ab-8mf (2026-11-04): "No cookies by default. Make a note
   in the code to add a cookie grant in the future if we run into a use-case that needs cookie
   access." So the endpoint offers no cookie calls (section 8; rows 22 and 23), and stage 3 puts the
-  note in the relay's code. One more Playwright case and one concurrency case of the probe now get
-  a refusal (section 5).
+  note in the relay's code. Under this answer the lead also decided that the relay masks the
+  `Cookie` and `Set-Cookie` values in the events that it passes on, and refuses a `Cookie` header
+  from a client (section 8; the lead's reading, which the operator can reverse). One more
+  Playwright case and one concurrency case of the probe now get a refusal (section 5).
 
 ## 15. Calls made by the designer (not the operator's)
 
