@@ -8,6 +8,8 @@
 // For `record` it also screencasts (real JPEG frames, acknowledged one at a time), emulates a device
 // size, and gives page code the DOM calls the recording overlay uses. Like Google Sheets, it refuses
 // innerHTML (Trusted Types), a <style> element and an inline style attribute (a strict style-src).
+// With `backgroundTabs` on, a tab that agent-browser opens is not in front, as in Chrome: its page is
+// hidden and Chrome draws it only in some cases (see FakePage.background).
 
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -258,6 +260,32 @@ export class FakePage {
   /** The page's dedicated workers (by URL); a session's Target.setAutoAttach attaches them. */
   workers: string[] = [];
   bodies = new Map<string, { body: Buffer; mime: string }>();
+  /**
+   * The tab is not in front (ab-v16.15): its page reports "hidden", and Chrome draws no frame of it,
+   * except while focus emulation is on (which makes the page "visible") or a capture is in flight (a
+   * hidden capture: the page stays "hidden"). As measured on Chromium 156: a page that never drew a
+   * frame drops each press, release and key (Input.insertText still arrives); a mouse move waits for
+   * the next frame, at most 5 s; a capture sent while the page draws nothing waits until a later
+   * capture ends (Chrome ends every earlier pending capture with a later one).
+   */
+  background = false;
+  /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
+  drew = true;
+  /** The page changes by itself (a caret, an animation): a capture sent while Chrome draws nothing still ends after a frame. */
+  drawsByItself = false;
+  /** document.visibilityState after each change, in order. */
+  visibilityChanges: string[] = [];
+  /** The presses, releases and keys that the page dropped because it never drew a frame. */
+  dropped: string[] = [];
+  /** The sessions with focus emulation on. */
+  readonly focusEmulated = new Set<string>();
+  /** The captures in flight on a background page, by their order: each one ends with a later one. */
+  heldCaptures: { n: number; end: () => void }[] = [];
+  private nextCapture = 1;
+  private frameWaiters: (() => void)[] = [];
+  private frameDue = false;
+  private closed = false;
+  private shownAs: "visible" | "hidden" = "visible";
   private context: vm.Context = vm.createContext({});
   private isolatedContexts = new Map<number, vm.Context>();
   private nextContextId = 1000;
@@ -275,10 +303,77 @@ export class FakePage {
     return this.elements.filter(match);
   }
 
+  get visibilityState(): "visible" | "hidden" { return !this.background || this.focusEmulated.size > 0 ? "visible" : "hidden"; }
+  /** Chrome draws the page: it is visible, or a capture is in flight. */
+  get drawing(): boolean { return this.visibilityState === "visible" || this.heldCaptures.length > 0; }
+
+  /** After a change of focus emulation or of the captures in flight: log a visibility change, and draw the frames that wait. */
+  update() {
+    const v = this.visibilityState;
+    if (v !== this.shownAs) { this.shownAs = v; this.visibilityChanges.push(v); }
+    this.scheduleFrame();
+  }
+
+  /** Run `fn` at the page's next frame: 16 ms from now while Chrome draws the page, else when it starts to. */
+  atFrame(fn: () => void) {
+    this.frameWaiters.push(fn);
+    this.scheduleFrame();
+  }
+
+  /** One frame at a time, 16 ms apart, while Chrome draws the page. */
+  private scheduleFrame() {
+    if (this.frameDue || !this.drawing) return;
+    this.frameDue = true;
+    this.later(16, () => {
+      this.frameDue = false;
+      this.drew = true;
+      for (const fn of this.frameWaiters.splice(0)) fn();
+    });
+  }
+
+  /** A capture of a background page (see `background`); its result is `data`. */
+  capture<T>(data: T): Promise<T> {
+    const n = this.nextCapture++, drawing = this.drawing || this.drawsByItself;
+    return new Promise((resolve) => {
+      this.heldCaptures.push({ n, end: () => resolve(data) });
+      this.update();
+      // Sent while Chrome draws the page: it ends after a frame, and every earlier capture with it.
+      if (drawing) this.later(16, () => {
+        this.drew = true;
+        const ended = this.heldCaptures.filter((c) => c.n <= n);
+        this.heldCaptures = this.heldCaptures.filter((c) => c.n > n);
+        for (const c of ended) c.end();
+        this.update();
+      });
+    });
+  }
+
+  private heldMoves: (() => void)[] = [];
+  /**
+   * A mouse move on a background page waits for its next frame: at once when Chrome draws the page and
+   * it drew one already; else when a frame comes, a press or a key comes (which sends it at once), or
+   * after 5 s (Blink's rAF fallback).
+   */
+  moveWait(fallbackMs: number): Promise<void> {
+    if (!this.background || (this.drawing && this.drew)) return Promise.resolve();
+    return new Promise((r) => { this.heldMoves.push(r); this.atFrame(r); this.later(fallbackMs, r); });
+  }
+  flushMoves() { for (const r of this.heldMoves.splice(0)) r(); }
+
+  /** Background tab: a page that never drew a frame drops a press, a release or a key. */
+  drops(what: string): boolean {
+    if (!this.background || this.drew) return false;
+    this.dropped.push(what);
+    return true;
+  }
+
   /** Load a URL: a fixture page for http://127.0.0.1, an empty page for anything else (the fake never leaves this machine). */
   load(url: string) {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    this.frameDue = false;
+    this.frameWaiters = []; // a new document never runs the old one's animation frames
+    this.flushMoves();
     this.url = url;
     let spec: PageSpec | undefined;
     if (url !== "about:blank") { try { spec = this.fake.site(new URL(url)); } catch { spec = undefined; } }
@@ -292,15 +387,26 @@ export class FakePage {
     });
     this.isolatedContexts.clear(); // a navigation destroys every isolated world
     this.context = this.newContext();
+    this.drew = !this.background; // a new page in a background tab has drawn no frame yet
+    this.shownAs = this.visibilityState; // a new page starts in its tab's state: no visibilitychange
+    this.update();
     spec?.onload?.(this);
   }
 
-  later(ms: number, fn: () => void) {
+  later(ms: number, fn: () => void): NodeJS.Timeout | undefined {
+    if (this.closed) return undefined; // a closed page runs nothing again
     const t = setTimeout(() => { this.timers.delete(t); fn(); }, ms);
     this.timers.add(t);
+    return t;
   }
 
-  close() { for (const t of this.timers) clearTimeout(t); this.timers.clear(); }
+  cancel(t: NodeJS.Timeout | undefined) {
+    if (t === undefined) return;
+    clearTimeout(t);
+    this.timers.delete(t);
+  }
+
+  close() { this.closed = true; for (const t of this.timers) clearTimeout(t); this.timers.clear(); }
 
   /** A new isolated world: its own global scope, the same shared DOM. */
   createIsolatedWorld(): number {
@@ -322,6 +428,7 @@ export class FakePage {
       querySelector: (s: string) => page.select(s)[0] ?? null,
       querySelectorAll: (s: string) => page.select(s),
       get activeElement() { return page.focused ?? body; },
+      get visibilityState() { return page.visibilityState; },
       createElement: (tag: string) => {
         if (tag.toLowerCase() === "style") throw new Error("fake CSP: a <style> element is refused (style-src)");
         return new FakeNode(page, tag);
@@ -333,7 +440,7 @@ export class FakePage {
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
       get innerWidth() { return page.metrics?.width ?? 1280; },
       get innerHeight() { return page.metrics?.height ?? 800; },
-      requestAnimationFrame: (fn: (t: number) => void) => page.later(16, () => fn(performance.now())),
+      requestAnimationFrame: (fn: (t: number) => void) => page.atFrame(() => fn(performance.now())),
       performance: { now: () => performance.now() },
       getComputedStyle: (el: FakeElement) => ({ visibility: el.hidden ? "hidden" : "visible", display: el.hidden ? "none" : "block" }),
       HTMLElement: FakeElement,
@@ -342,6 +449,7 @@ export class FakePage {
       fetch: (input: string, init?: { method?: string; body?: string }) => page.fetch(String(input), init),
       btoa, atob, Blob,
       setTimeout: (fn: () => void, ms: number) => page.later(ms, fn),
+      clearTimeout: (t: NodeJS.Timeout | undefined) => page.cancel(t),
       console: { log: (...args: unknown[]) => page.fake.console(page, args) },
       open: (url: string) => { page.fake.openFrom(page, url ?? "about:blank"); return null; },
     };
@@ -427,6 +535,10 @@ export class FakeChrome {
   readonly failOnce = new Map<string, string>();
   /** Screencast frames sent and acknowledged, over every session. */
   frames = { sent: 0, acked: 0 };
+  /** Target.createTarget with background: true (and no new window) opens a background tab, as in Chrome (see FakePage.background). Off: every page is in front. */
+  backgroundTabs = false;
+  /** How long a mouse move on a background page that Chrome does not draw waits at most (Blink's rAF fallback timer). */
+  moveFallbackMs = 5000;
   ws = "";
 
   private constructor(site: Site) { this.site = site; }
@@ -443,7 +555,11 @@ export class FakeChrome {
       client.on("message", (raw) => { void fake.onMessage(client, JSON.parse(String(raw))); });
       client.on("close", () => {
         fake.clients.delete(client);
-        for (const [id, s] of fake.sessions) if (s.client === client) { fake.stopCast(s); fake.sessions.delete(id); }
+        for (const [id, s] of fake.sessions) if (s.client === client) {
+          fake.stopCast(s);
+          fake.sessions.delete(id);
+          if (s.page.focusEmulated.delete(id)) s.page.update();
+        }
       });
     });
     return fake;
@@ -541,6 +657,7 @@ export class FakeChrome {
       const failure = this.failOnce.get(msg.method);
       if (failure !== undefined) { this.failOnce.delete(msg.method); return fail(failure); }
       const result = session ? await this.onSession(session, msg.method, params) : await this.onBrowser(client, msg.method, params);
+      if (msg.sessionId && !this.sessions.has(msg.sessionId)) return; // detached meanwhile: Chrome sends no reply
       if (result === undefined) return fail(`'${msg.method}' wasn't found`, -32601);
       reply(result);
     } catch (e) { fail((e as Error).message); }
@@ -560,6 +677,7 @@ export class FakeChrome {
       case "Target.createTarget": {
         const windowId = params.newWindow ? ++this.nextWindow : this.currentWindow;
         const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), windowId);
+        page.background = this.backgroundTabs && !!params.background && !params.newWindow;
         this.pages.set(page.targetId, page);
         page.load(params.url ?? "about:blank");
         return { targetId: page.targetId };
@@ -576,6 +694,7 @@ export class FakeChrome {
         if (!s) throw new Error("No session with given id found");
         this.stopCast(s);
         this.sessions.delete(s.id);
+        if (s.page.focusEmulated.delete(s.id)) s.page.update();
         this.broadcast("Target.detachedFromTarget", { sessionId: s.id, targetId: s.page.targetId });
         return {};
       }
@@ -612,7 +731,7 @@ export class FakeChrome {
   private startCast(s: Session, params: { maxWidth?: number; maxHeight?: number }) {
     this.stopCast(s);
     const cast: Cast = { maxWidth: params.maxWidth ?? 1e9, maxHeight: params.maxHeight ?? 1e9, waiting: false, sent: 0, acked: 0, timer: setInterval(() => {
-      if (cast.waiting) return;
+      if (cast.waiting || !s.page.drawing) return;
       const m = cast.sent > 0 ? s.page.metrics : undefined;
       let w = m ? Math.round(m.width * m.deviceScaleFactor) : 1280, h = m ? Math.round(m.height * m.deviceScaleFactor) : 800;
       const k = Math.min(1, cast.maxWidth / w, cast.maxHeight / h);
@@ -641,7 +760,11 @@ export class FakeChrome {
   private async onSession(s: Session, method: string, params: any): Promise<object | undefined> {
     const page = s.page;
     switch (method) {
-      case "Page.enable": case "Emulation.setFocusEmulationEnabled": case "Fetch.disable": case "Network.disable": case "Page.bringToFront":
+      case "Emulation.setFocusEmulationEnabled":
+        if (params.enabled) page.focusEmulated.add(s.id); else page.focusEmulated.delete(s.id);
+        page.update();
+        return {};
+      case "Page.enable": case "Fetch.disable": case "Network.disable": case "Page.bringToFront":
       case "Runtime.runIfWaitingForDebugger": return {};
       case "Target.setAutoAttach":
         // Like Chrome: each of the page's workers is attached through this session, announced on it.
@@ -674,6 +797,8 @@ export class FakeChrome {
           if (page.hit(params.x, params.y)?.hasAttribute("data-scrolls")) page.paint++;
           return {};
         }
+        if (params.type === "mouseMoved") await page.moveWait(this.moveFallbackMs);
+        else { page.flushMoves(); if (page.drops(params.type)) return {}; }
         const el = page.hit(params.x, params.y);
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }
         if (params.type === "mousePressed" && el && el.value !== undefined) page.focused = el; // a press focuses a text field, as in Chrome
@@ -686,6 +811,8 @@ export class FakeChrome {
         page.typeInto(params.text);
         return {};
       case "Input.dispatchKeyEvent":
+        page.flushMoves();
+        if (page.drops(`${params.type} ${params.key}`)) return {};
         page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, keyCode: params.windowsVirtualKeyCode,
           native: params.nativeVirtualKeyCode, text: params.text, commands: params.commands });
         if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }
@@ -709,12 +836,14 @@ export class FakeChrome {
         return {};
       }
       case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.metrics?.width ?? 1280, height: 2400 }, cssVisualViewport: { pageX: 0, pageY: 0 } };
-      case "Page.captureScreenshot":
-        if (!params.clip) return { data: PNG_1x1 };
-        { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
+      case "Page.captureScreenshot": {
+        let data = PNG_1x1;
+        if (params.clip) { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
           const k = page.metrics?.deviceScaleFactor ?? 1, v = page.paint % 256;
-          return { data: rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64") };
+          data = rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64");
         }
+        return page.visibilityState === "hidden" ? page.capture({ data }) : { data };
+      }
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
         const b = page.bodies.get(params.requestId);

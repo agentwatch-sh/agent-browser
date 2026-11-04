@@ -106,6 +106,12 @@ class AgentBrowser:
     ".", "_" or "-", starting with a letter or a digit) and raises UsageError for any other; a
     tab_scope that is not a string raises ValueError here, before any call.
 
+    `hidden_drive=True` (`--hidden-drive`) keeps a background tab's page hidden while a command drives
+    it: no focus emulation, and click, hover, type, press and shot keep Chrome drawing the hidden page
+    with a hidden capture. By default a command turns on focus emulation, so the page is visible for the
+    command's length. See the README, "A command on a background tab: two modes". Measured on Linux
+    only. A hidden_drive that is not a bool raises ValueError here, before any call.
+
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
     current folder. A method's empty path goes to the CLI, which raises UsageError.
     """
@@ -131,6 +137,7 @@ class AgentBrowser:
         proxy_idle_ms: Optional[int] = None,
         command_name: Optional[str] = None,
         tab_scope: Optional[str] = None,
+        hidden_drive: bool = False,
         node: str = "node",
         package_dir: Optional[PathLike] = None,
         timeout: float = DEFAULT_TIMEOUT,
@@ -148,6 +155,8 @@ class AgentBrowser:
             raise ValueError("chrome_args must be a sequence of strings (one Chrome flag each, not one shell string)")
         if tab_scope is not None and not isinstance(tab_scope, str):
             raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
+        if not isinstance(hidden_drive, bool):
+            raise ValueError(f"hidden_drive must be True or False, not {hidden_drive!r}")
         state = _path("state_dir", state_dir)
         if state is None:
             raise ValueError("state_dir is required: this consumer's own state folder")
@@ -170,6 +179,7 @@ class AgentBrowser:
         self.proxy_idle_ms = proxy_idle_ms
         self.command_name = command_name
         self.tab_scope = tab_scope
+        self.hidden_drive = hidden_drive
         self.node = node
         self.package_dir = _path("package_dir", package_dir)
         self.timeout = timeout
@@ -242,6 +252,8 @@ class AgentBrowser:
             flags += ["--command-name", self.command_name]
         if self.tab_scope is not None:
             flags += ["--tab-scope", self.tab_scope]
+        if self.hidden_drive:
+            flags.append("--hidden-drive")
         return flags
 
     def _run(self, command: str, args: Sequence[str], parse: Callable[[Mapping[str, object]], R], *, stdin: Optional[str] = None,

@@ -1134,14 +1134,23 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));
   });
   const limit = setTimeout(() => driver.fail(new AgentBrowserError("error", `a recording is at most ${MAX_RECORD_SECONDS} s; nothing was written`)), MAX_RECORD_SECONDS * 1000);
-  let emulated = false, casting = false;
+  let focused = false, emulated = false, casting = false;
   let startedAt = "", endedAt = "", tEnd = 0, runError: unknown;
   let final = { url, title: "" };
   const marks: Mark[] = [];
   try {
     // No Page.bringToFront: it activates Chrome, and macOS then moves the operator to the agent
-    // browser's Space. It is not needed: with the agent launch flags a background tab, a covered,
-    // minimized or hidden window all send 57-60 fps while the screencast runs (measured 2026-10-30).
+    // browser's Space. Focus emulation instead: Chrome sends no screencast frame of a background tab's
+    // hidden page (0 frames in 3 s on Chromium 156), and focus emulation makes the page "visible" and
+    // draw. The attach turns it on; with hiddenDrive the attach does not (ab-v16.15), so the run turns it
+    // on here and off after the screencast: a site sees one visibilitychange to "visible" when the run
+    // starts and one back to "hidden" when it ends. A hidden capture in flight (Tab.whileDrawn) keeps the
+    // page hidden, but it halves Chrome's frames (90 in 3 s, not 180) and makes them uneven. A covered,
+    // minimized or hidden window sends 57-60 fps (measured 2026-10-30, with focus emulation on).
+    if (s.hiddenDrive) {
+      focused = true; // before the send: a send that fails half-way is still undone
+      await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    }
     await tab.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
     emulated = true;
     await driver.ensureOverlay();
@@ -1179,6 +1188,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   const offList = runError instanceof NotAllowedError;
   const cleanupErrors = await runCleanup([
     ["stop the screencast", casting && (() => tab.send("Page.stopScreencast"))],
+    ["stop the focus emulation", focused && (() => tab.send("Emulation.setFocusEmulationEnabled", { enabled: false }))],
     // Never run code in a page off the allowlist: its document is new, so no overlay is left in it anyway.
     ["remove the overlay", !offList && (() => tab.evaluate(overlayRemove))],
     ["clear the device metrics override", emulated && (() => tab.send("Emulation.clearDeviceMetricsOverride"))],

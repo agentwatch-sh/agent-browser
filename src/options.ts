@@ -78,6 +78,15 @@ export type BrowserOptions = {
    * security boundary. Default: no scope, every tab is visible. See TAB_SCOPE_RE for the name.
    */
   tabScope?: string;
+  /**
+   * Drive a background tab and keep its page hidden (ab-v16.15; README, **A command on a background tab:
+   * two modes**). Default off: a command turns on focus emulation while it is attached, so a background tab's
+   * page is visible (and draws) for the length of each command. On: no focus emulation; click, hover,
+   * type, press, clickAt and shot keep Chrome drawing the hidden page with a hidden capture
+   * (Tab.whileDrawn), and the page stays hidden. Between those commands, and during open, goto, text,
+   * outline, eval and waitFor, a background page draws nothing. Measured on Linux only.
+   */
+  hiddenDrive?: boolean;
   /** Progress and warning lines. Default: standard error. */
   log?: (line: string) => void;
 };
@@ -101,6 +110,7 @@ export type Settings = {
   proxyIdleMs: number;
   commandName: string;
   tabScope?: string;
+  hiddenDrive: boolean;
   log: (line: string) => void;
 };
 
@@ -240,6 +250,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     proxyIdleMs,
     commandName: o.commandName ?? "agent-browser",
     tabScope: o.tabScope,
+    hiddenDrive: !!o.hiddenDrive,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
   };
 }
