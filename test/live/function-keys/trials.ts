@@ -105,16 +105,8 @@ export function chromeArgs(mode: Mode, profile: string): string[] {
   ];
 }
 
-/** The pid in the output of `lsappinfo info -only pid <ASN>` (macOS), `"pid"=48285`, or of a full `lsappinfo info`, `pid = 48285`. */
-export function lsappinfoPid(out: string): number | undefined {
-  const m = /(?<![A-Za-z])"?pid"?\s*=\s*(\d+)/.exec(out);
-  return m ? Number(m[1]) : undefined;
-}
-
-/** One ASN, as `lsappinfo front` prints it, for example `ASN:0x0-0x14dd4dc:`: only that goes to `lsappinfo info`. */
-export function isAsn(s: string): boolean {
-  return /^ASN:0x[0-9a-f]+-0x[0-9a-f]+:$/i.test(s);
-}
+// The front app's pid from lsappinfo: the same parsers as agent-browser's own `front` (src/front.ts).
+export { isAsn, lsappinfoPid } from "../../../src/front.ts";
 
 /** macOS: a full screen has ended only at a real window state, or when its target is confirmed closed ("gone" alone can be a CDP timeout). */
 export function fullScreenEnded(state: string, targetClosed: boolean): boolean {
