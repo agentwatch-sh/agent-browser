@@ -20,11 +20,13 @@
 //
 // The page logs its 50 ms interval timer, its animation frames, its trusted clicks and its visibility
 // changes into the DOM, where agent-browser's commands read them. A tab's visibility comes from that log
-// at a time when no command is attached: a background tab's page is visible for the length of each
-// agent-browser command, from its attach to its detach, and hidden again after it. In the logs of the
-// runs on taylor that was 5 to 40 ms for eval, text, type and most clicks, about 1 s for some first
-// clicks in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. The summary gives these
-// spans ("visibleMs") and the state during a command ("during"), as information. agent-browser opens
+// at a time when no command is attached. Before ab-v16.15 a background tab's page was visible for the
+// length of each agent-browser command, from its attach to its detach, and hidden again after it: in
+// the logs of the runs on taylor 5 to 40 ms for eval, text, type and most clicks, about 1 s for some
+// first clicks in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. Now it stays hidden
+// during a command, and only a recording makes it visible, for its run (visibility.ts beside this file
+// measures that per command). The summary gives these spans ("visibleMs") and the state during a
+// command ("during"), as information. agent-browser opens
 // tabs a and b in the background (the chrome://inspect tab of the launch stays in front), and the check
 // drives each tab by its name with the library's commands (`commands.click`, `type`, `eval`, `text`,
 // `shot`, as the CLI runs them):
@@ -60,7 +62,10 @@
 // frames). A visible tab: 50 ms (120 ticks, about 360 frames) in both. A shot of a hidden tab took 0.7
 // to 3.1 s in both (0.1 s in front); a recording of a hidden tab got 60 fps in both. In the earlier
 // version, whose shot step read only the box, 1 of 30 shots of a hidden tab without --before lacked
-// everything below y=256 (0 of 25 with --before: too few to compare).
+// everything below y=256 (0 of 25 with --before: too few to compare). After ab-v16.15 (one run without
+// --before, exit 0): each drive of a hidden tab read "hidden" during its commands, with no visible span;
+// a shot of a hidden tab took 0.14 to 0.19 s; the 3 s recording of hidden tab b got 60 fps, with one
+// visible span of 4.6 s.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";

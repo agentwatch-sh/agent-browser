@@ -406,8 +406,10 @@ export class AgentBrowser {
     await tab.send("Page.enable");
     // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
     // a page can tell the Runtime domain is enabled, and we never need its events.
-    // Lets pages in unfocused windows / background tabs still accept trusted input.
-    await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    // No Emulation.setFocusEmulationEnabled: it makes a background tab's page "visible" (a visible
+    // capture in Chromium's emulation_handler.cc) for as long as the session is attached, and a site
+    // sees each command as a visibilitychange to "visible" and back (ab-v16.15). Input and shots in a
+    // background tab run under Tab.whileDrawn instead, which keeps the page "hidden".
     this.sessions.set(targetId, tab);
     return tab;
   }
@@ -491,6 +493,59 @@ export class Tab {
 
   send<T = any>(method: string, params: object = {}, timeoutMs?: number): Promise<T> {
     return this.browser.conn.send<T>(method, params, this.sessionId, timeoutMs);
+  }
+
+  /**
+   * Run `fn` while Chrome draws this tab's page, and keep the page "hidden" (ab-v16.15). The caller checks
+   * the allowlist first (assertAllowed): a page off it never gets a capture. Chrome draws no frame of a
+   * tab that is not in front. There a page that never drew one (it loaded in the background) drops each
+   * click and key (Blink drops input until a page's first commit), a mouse move waits for the next frame
+   * (up to 5 s, Blink's fallback timer), and a shot waits for a frame that never comes. A
+   * Page.captureScreenshot in flight makes Chrome draw the tab and leaves the page hidden (a hidden
+   * capture, stay_hidden in Chromium's page_handler.cc): the page sees no visibilitychange. Sent while
+   * Chrome draws nothing, a capture waits; Chrome ends it, with every earlier one, when a later capture
+   * ends. So one capture is in flight while `fn` runs, and a last one ends them all: after it, Chrome
+   * draws nothing again. A tab in front draws anyway: there `fn` runs as it is. Measured on taylor with
+   * Chromium 156 (test/live/background-tabs/visibility.ts; README, **Launch flags and background tabs**).
+   *
+   * `repeat` sends a new capture each time one ends (on a page that draws by itself, each one ends after
+   * a frame): for input. Without it only the first one: for a shot, whose own capture can change the
+   * device emulation (a clip, a size); a capture sent during that change would set it again when it ends.
+   */
+  private async whileDrawn<T>(fn: () => Promise<T>, opts: { repeat?: boolean } = {}): Promise<T> {
+    if (await this.evaluate(() => document.visibilityState) !== "hidden") return fn();
+    let done = false, inFlight = 0;
+    // The cheapest capture, with no clip (a clip resizes the page for the capture). Its picture is not used.
+    const capture = (timeoutMs: number) => {
+      inFlight++;
+      return this.send("Page.captureScreenshot", { format: "jpeg", quality: 1, optimizeForSpeed: true }, timeoutMs)
+        .then(() => true, () => false).finally(() => { inFlight--; });
+    };
+    void (async () => { while (await capture(10 * 60_000) && opts.repeat && !done); })();
+    try {
+      // Two frames: the first one ends Blink's input suppression, the second one comes after its commit.
+      await this.evaluate(() => new Promise((r) => {
+        const t = setTimeout(r, 2000);
+        requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r(true); }));
+      }));
+      return await fn();
+    } finally {
+      done = true;
+      if (inFlight) {
+        // The last capture ends after the next frame (45 to 100 ms on taylor), and every earlier one with
+        // it. When it waits too (the earlier ones ended just before it was sent, on a page that draws
+        // nothing new), it holds the page drawing, so one more ends it: at most three more.
+        let last = capture(5_000);
+        for (let more = 0; more < 3; more++) {
+          let timer: NodeJS.Timeout | undefined;
+          const late = await Promise.race([last.then(() => false), new Promise<boolean>((r) => { timer = setTimeout(() => r(true), 250); })]);
+          clearTimeout(timer);
+          if (!late) break;
+          last = capture(5_000);
+        }
+        await last;
+      }
+    }
   }
 
   async url(): Promise<string> {
@@ -587,16 +642,22 @@ export class Tab {
     }, { args: [selector], timeoutMs, what: selector });
   }
 
-  /** Move the mouse over an element (opens hover menus). */
+  /** Move the mouse over an element (opens hover menus). In a background tab, under whileDrawn. */
   async hover(selector: string): Promise<void> {
-    const pt = await this.centerOf(selector);
-    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
+    await this.assertAllowed(); // before any capture: never one of a page off the allowlist
+    await this.whileDrawn(async () => {
+      const pt = await this.centerOf(selector);
+      await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
+    }, { repeat: true });
   }
 
-  /** Trusted click at the centre of the first element matching a CSS selector. */
+  /** Trusted click at the centre of the first element matching a CSS selector. In a background tab, under whileDrawn. */
   async click(selector: string): Promise<void> {
-    const pt = await this.centerOf(selector);
-    await this.clickAt(pt.x, pt.y);
+    await this.assertAllowed(); // before any capture: never one of a page off the allowlist
+    await this.whileDrawn(async () => {
+      const pt = await this.centerOf(selector);
+      await this.clickAt(pt.x, pt.y);
+    }, { repeat: true });
   }
 
   private async centerOf(selector: string): Promise<{ x: number; y: number }> {
@@ -613,9 +674,13 @@ export class Tab {
     return pt;
   }
 
-  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). */
+  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). In a background tab, under whileDrawn. */
   async clickText(text: string, opts: { within?: string } = {}): Promise<void> {
     await this.assertAllowed();
+    await this.whileDrawn(() => this.clickTextNow(text, opts), { repeat: true });
+  }
+
+  private async clickTextNow(text: string, opts: { within?: string }): Promise<void> {
     const pt = await this.evaluate((t: string, within: string | null) => {
       const root = within ? document.querySelector(within) : document.body;
       if (!root) return null;
@@ -648,10 +713,14 @@ export class Tab {
    * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
    * A tab or a newline moves on (in a spreadsheet, to the next cell or row), after which the field is
    * another one: only the text before the first of them is checked, and the rest goes as key events
-   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells.
+   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. In a background tab, under whileDrawn.
    */
   async type(text: string, selector?: string): Promise<void> {
     await this.assertAllowed();
+    await this.whileDrawn(() => this.typeNow(text, selector), { repeat: true });
+  }
+
+  private async typeNow(text: string, selector?: string): Promise<void> {
     if (selector) {
       const ok = await this.evaluate((s: string) => {
         const el = document.querySelector(s) as HTMLElement | null;
@@ -682,13 +751,16 @@ export class Tab {
     for (const ch of rest) await typeChar(this, ch);
   }
 
+  /** In a background tab, under whileDrawn. */
   async press(key: keyof typeof KEYS | string): Promise<void> {
     const k = KEYS[key];
     if (!k) throw new UsageError(`unsupported key ${key}; known: ${Object.keys(KEYS).join(", ")}`);
     await this.assertAllowed();
     const base = keyFields(key, k.code, k.keyCode);
-    await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: k.text });
-    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await this.whileDrawn(async () => {
+      await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: k.text });
+      await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    }, { repeat: true });
   }
 
   /** Put local files into an <input type=file>. */
@@ -705,11 +777,16 @@ export class Tab {
    * A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort.
    * With a viewport, the page is laid out at exactly that size for the shot (so the PNG is
    * width x scale by height x scale), and the override is cleared afterwards. A failure to clear it
-   * never hides the shot's own error.
+   * never hides the shot's own error. In a background tab, under whileDrawn: its one capture comes before
+   * the override, and the shot's own capture ends it.
    */
   async screenshot(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number } = {}): Promise<string> {
     notEmpty(path, "screenshot");
     await this.assertAllowed();
+    return this.whileDrawn(() => this.screenshotNow(path, opts));
+  }
+
+  private async screenshotNow(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number }): Promise<string> {
     if (!opts.viewport) return this.capture(path, !!opts.fullPage);
     const { width, height, scale } = opts.viewport;
     await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });

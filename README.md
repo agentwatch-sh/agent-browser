@@ -155,18 +155,39 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   Chrome: a 50 ms timer ticks once a second, and the page gets no animation frames. After about 5
   minutes in the background, Chrome's intensive wake-up throttling can slow chained timers in a hidden
   tab to one wake-up a minute (from Chrome's documentation; not measured here). agent-browser still
-  drives the tab. The page is visible for the length of each command, from its attach to its detach,
-  and hidden again after it; a site sees a `visibilitychange` to `visible` and back to `hidden`. In the
-  check's logs on taylor that was 5 to 40 ms for eval, text, type and most clicks, up to about 1 s for
-  the first click in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. A caller that
-  needs the old timers can pass the two flags in `chromeArgs` (`--chrome-args`). Measured on Linux
-  only (taylor, 2026-11-04, Chromium 156, Xvfb, `test/live/background-tabs/`): click, type, eval,
-  text, shot and record worked in a background tab, also after the front tab changed, with the one
-  flag and with all three. A hidden tab's 50 ms timer had a median of 1000 ms (6 ticks in 6 s); with
-  the two timer flags, 50 ms (120 ticks). A shot of a background tab took 0.2 to 3.1 s with either set
-  (0.1 s in front). 1 of 30 shots of a background tab with the one flag showed only the top 256 px of
-  the page (0 of 25 with all three; too few to compare); the check now fails on such a shot. On macOS
-  none of this is measured again (see **Measured** under **Recording**).
+  drives the tab, and the page stays hidden (ab-v16.15). Before, each command turned on focus emulation
+  (`Emulation.setFocusEmulationEnabled`) when it attached, and that makes the page `visible` until the
+  detach: a site saw a `visibilitychange` to `visible` and back for each command, and a `focus` and a
+  `blur` (on taylor, 9 to 17 ms for eval, text, outline, type and press, about 1 s for a hover or a
+  first click, 0.5 to 4.1 s for a shot, 5 s for a 3 s recording). Now only `record` turns it on.
+  Chrome draws no frame of a background tab: there a page that never drew one (it loaded in the
+  background) drops clicks and keys, a mouse move waits up to 5 s for a frame, and a shot can wait for
+  ever (a shot of a new background tab failed after 30 s before, with focus emulation too). So for
+  `click`, `hover`, `type`, `press` and `shot` in a background tab, agent-browser keeps one
+  `Page.captureScreenshot` in flight (`Tab.whileDrawn`): while it waits, Chrome draws the tab and the
+  page stays `hidden` (a hidden capture). A last capture ends them all, and after it Chrome draws
+  nothing again. A tab in front needs none. What a site can still see in a background tab: (1)
+  `record` makes the page `visible` for its run, with one `visibilitychange` to `visible` at the start
+  and one to `hidden` at the end: 4.6 s for a 3 s script (its pre-roll and the layout pause included).
+  Chrome sends no screencast frame of a hidden page, and with a hidden capture in flight it sends half
+  of them (90 in 3 s, not 180), unevenly. (2) While an input command or a shot runs (0.1 s; 0.9 s for
+  `shot --size`, with its 0.5 s settle), the hidden page draws frames and runs
+  `requestAnimationFrame`, as a tab that is shared or captured does; it reports `hidden` all the time.
+  (3) The page gets trusted input while it is `hidden`, which a person cannot do. Chrome's input
+  focuses the page: one `focus` event, then `document.hasFocus()` is `true`, and no `blur` follows
+  until the operator changes tabs. Without focus emulation no CDP call takes the focus back. A caller
+  that needs the old timers can pass the two flags in `chromeArgs` (`--chrome-args`).
+  Measured on Linux only (taylor, 2026-11-04, Chromium 156, Xvfb, `test/live/background-tabs/`):
+  click, type, eval, text, shot and record worked in a background tab, also after the front tab
+  changed, with the one flag and with all three. A hidden tab's 50 ms timer had a median of 1000 ms
+  (6 ticks in 6 s); with the two timer flags, 50 ms (120 ticks). With focus emulation a shot of a
+  background tab took 0.2 to 3.1 s with either set (0.1 s in front), and 1 of 30 such shots with the
+  one flag showed only the top 256 px of the page (0 of 25 with all three; too few to compare); the
+  check now fails on such a shot. In 3 runs of `visibility.ts` after ab-v16.15, eval, text, outline,
+  hover, click, type, press, shot, `shot --size`, `shot --full`, open and goto in a background tab
+  (also in a new tab and after a goto) had no visible time and no `visibilitychange`, and the page
+  drew no frame in the second after; each took 20 to 130 ms (0.9 s for `shot --size`). On macOS none
+  of this is measured again (see **Measured** under **Recording**).
 - **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
   headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
@@ -455,7 +476,10 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   `Page.bringToFront`, which activates Chrome. The agent browser can stay minimized, hidden (Cmd-H),
   covered or on another Space during a take (see **Measured**). Only a Chrome start, its one
   "Allow remote debugging?" prompt and a sign-in (`launch --login`) need the window. Start the agent
-  browser, click Allow, then hide it: takes run in the background.
+  browser, click Allow, then hide it: takes run in the background. For its run, `record` turns on
+  focus emulation (`Emulation.setFocusEmulationEnabled`), and turns it off when the screencast stops:
+  Chrome sends no screencast frame of a background tab's hidden page. So in a background tab the page
+  reports `visible` for the run, and a site can see that (see **Launch flags and background tabs**).
 - **Allowlist.** Only an allowlisted tab; a `goto` off the list is refused before the run. When the
   tab's main frame navigates off the list, the run stops at once, writes no MP4 and no JSON, and runs
   no code in the off-list page (the screencast is stopped and the size override cleared).
@@ -502,7 +526,8 @@ background tab may now get about 28 fps with gaps of 0.63 s, as in the "no flags
 (taylor, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of a background tab got 60 fps with the one
 flag and with all three; the check that drives background tabs ran on Linux only. On macOS the
 screencast kept a minimized window and a hidden app painting at 55 to 60 fps also without the flags,
-and a covered window at 47 fps; a background tab without the flags painted at 28 fps.
+and a covered window at 47 fps; a background tab without the flags painted at 28 fps. In all these
+measurements focus emulation was on, as `record` still does it.
 So the operator can work in another window during a recording, and `record` does not bring the
 tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space). A recording at 1920x1080 and
 `--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
@@ -872,6 +897,24 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   (`test/live/background-tabs/rules.ts`): the start guard, the Chrome switches, the timer statistics,
   the visibility log, the shot's pixels (a full picture, and one drawn only above y=256) and the
   failure rules.
+- `test/live/background-tabs/visibility.ts` (`node test/live/background-tabs/visibility.ts --out-dir DIR
+  [--report-only]`; Linux only, in a private Xvfb, through agent-browser's own launch as `check.ts`;
+  see its head): a command on a background tab keeps the page hidden. Each probe page reports its
+  `visibilitychange`, `focus`, `blur`, input and animation frames to the check's server with
+  `navigator.sendBeacon`, so the log needs no CDP call. The check runs eval, text, outline, hover,
+  click, type, press, shot, `shot --size` and `shot --full` in a background tab, a click and a shot in
+  a new background tab, a goto then input, a record, and a click and a shot in front. Each command must
+  work; in a background tab the page must have no visible time and no `visibilitychange` (a record's
+  span is reported), and no frame in the second after the command. `--report-only` checks only the
+  results: for a run of the code before ab-v16.15, for its spans. Not part of `npm test`. Measured on
+  taylor on 2026-11-04; see **Launch flags and background tabs**.
+- `test/hidden-tab.test.ts`: the CDP calls that each command sends to a background tab, against the
+  fake Chrome's model of one (`FakePage.background`: the page is hidden, Chrome draws no frame of it,
+  a page that never drew drops a press or a key, a mouse move waits for a frame, a capture sent while
+  Chrome draws nothing waits for a later one). No command but `record` sends focus emulation; click,
+  hover, type and press work on a page that never drew; every capture ends; a shot sends no capture
+  while it changes the device emulation; `record` turns focus emulation on for its run only. Also the
+  pure parts of `visibility.ts` (`spans.ts`).
 - `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
   `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
   (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
