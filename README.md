@@ -186,7 +186,7 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   check now fails on such a shot. In 4 runs of `visibility.ts` after ab-v16.15, eval, text, outline,
   hover, click, type, press, shot, `shot --size`, `shot --full`, open and goto in a background tab
   (also in a new tab and after a goto) had no visible time and no `visibilitychange`, and the page
-  drew no frame in the second after; each took 20 to 140 ms (0.9 s for `shot --size`). On macOS none
+  drew no frame in the second after; each took 18 to 140 ms (0.9 s for `shot --size`). On macOS none
   of this is measured again (see **Measured** under **Recording**).
 - **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
