@@ -866,7 +866,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
   concurrency cases run against it, with the C11 refusals, the tab switch of the timer answer (ab-vsm
   Q4) and agent-browser's commands with `--cdp-url`. `CHROME_EXTENSION=<a detached worktree of
-  chrome-extension> npm run test:live:agent`. Not part of `npm test`.
+  chrome-extension at main b82c65d or later> npm run test:live:agent`. Not part of `npm test`.
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.

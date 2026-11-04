@@ -10,12 +10,12 @@
 //
 // Environment: CHROME_EXTENSION (required: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
-// DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), AB_V16_17=1 once the
-// agent package holds chrome-extension ab-v16.17 (the eager attach and the hold of new tabs, and the DNR frame
-// rule): until then the popup cases and the off-list frame under an off-list page are pending. CASES (default all:
-// playwright,marks,switch,create,concurrency,mcp,agent-browser) runs some groups only. It uses port 8781 (the probe's site) and *.localhost hosts only. It never drives or stops a Chrome that
-// it did not start, opens no debugging port, and no prompt can appear. It prints one line per case and writes
-// <RUN>/results.json; it exits 1 when a case that is not pending fails. It deletes nothing.
+// DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), CASES (default all:
+// playwright,marks,switch,create,concurrency,mcp,agent-browser) runs some groups only. The agent package must be
+// chrome-extension main b82c65d or later: the popup cases, the hold of a new tab and the off-list frame need its
+// eager attach, its hold and its DNR frame rule (ab-v16.17). It uses port 8781 (the probe's site) and *.localhost
+// hosts only. It never drives or stops a Chrome that it did not start, opens no debugging port, and no prompt can
+// appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. It deletes nothing.
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -39,10 +39,7 @@ if (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !existsSync(join(EX
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
-const EAGER = process.env.AB_V16_17 === "1";
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser").split(",");
-const PENDING_POPUP = EAGER ? undefined : "needs the eager attach and the hold of new tabs (chrome-extension ab-v16.17, in progress)";
-const PENDING_FRAME = EAGER ? undefined : "needs the DNR frame rule of the agent package (chrome-extension ab-v16.17, in progress)";
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 const RELAY_SOCK = join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 const url = (scope: string) => `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`;
@@ -50,13 +47,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const COOKIES = /Not available in the agent browser: cookies \(/;
 const BLOCKED = /ERR_BLOCKED_BY_CLIENT/;
 
-type Result = { group: string; case: string; status: "pass" | "fail" | "pending"; ms: number; detail?: unknown; error?: string; why?: string };
+type Result = { group: string; case: string; status: "pass" | "fail"; ms: number; detail?: unknown; error?: string; why?: string };
 const results: Result[] = [];
 const say = (r: Result) => console.log(`${r.status.padEnd(7)} ${r.group}: ${r.case} (${r.ms} ms)${r.why ? ` [${r.why}]` : ""}: ${r.error ?? JSON.stringify(r.detail ?? null)}`.slice(0, 400));
 function record(r: Result) { results.push(r); say(r); }
 
-/** One case: it passes when its value is the wanted one, or, for a refusal, when the error matches. A pending case never fails the run. */
-async function step(group: string, name: string, fn: () => Promise<unknown>, o: { want?: (d: any) => boolean; refused?: RegExp; pending?: string; ms?: number } = {}) {
+/** One case: it passes when its value is the wanted one, or, for a refusal, when the error matches. */
+async function step(group: string, name: string, fn: () => Promise<unknown>, o: { want?: (d: any) => boolean; refused?: RegExp; ms?: number } = {}) {
   const t0 = Date.now();
   let detail: unknown, error: string | undefined;
   try {
@@ -65,8 +62,8 @@ async function step(group: string, name: string, fn: () => Promise<unknown>, o: 
     detail = await Promise.race([fn(), limit]).finally(() => clearTimeout(timer));
   } catch (e) { error = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300); }
   const ok = o.refused ? error !== undefined && o.refused.test(error) : error === undefined && (!o.want || o.want(detail));
-  record({ group, case: name, status: o.pending ? "pending" : ok ? "pass" : "fail", ms: Date.now() - t0, ...(error === undefined ? { detail } : { error }),
-    ...(o.pending ? { why: `${o.pending}; it ${ok ? "passed" : "failed"} in this run` } : !ok && error === undefined ? { why: "value not as expected" } : {}) });
+  record({ group, case: name, status: ok ? "pass" : "fail", ms: Date.now() - t0, ...(error === undefined ? { detail } : { error }),
+    ...(!ok && error === undefined ? { why: "value not as expected" } : {}) });
 }
 
 const children: ChildProcess[] = [];
@@ -94,7 +91,7 @@ if (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N
 if (!(await portFree(8781))) throw new Error("port 8781 is taken (the probe's site needs it)");
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
 const env = { run: RUN, extension: { dir: EXT, commit: git(EXT, "rev-parse", "HEAD") }, agentBrowser: git(ROOT, "rev-parse", "HEAD"),
-  chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim(), abV16_17: EAGER };
+  chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim() };
 console.log(`run ${RUN}\n${JSON.stringify(env)}`);
 
 // The scratch install: this checkout as a package, and the clients that the probe used.
@@ -143,7 +140,7 @@ try {
   if (CASES.includes("switch")) await tabSwitchCase(createRequire(join(INSTALL, "package.json"))("ws"));
   if (CASES.includes("create")) await createWithUrlCases(createRequire(join(INSTALL, "package.json"))("ws"));
   if (CASES.includes("concurrency")) await probeScript("concurrency", "concurrency.mjs", { RELAY_SOCK, OUT: join(RUN, "concurrency.json") }, (r) =>
-    /popup/.test(r.case) ? { pending: PENDING_POPUP } : /storageState/.test(r.case) ? { refused: COOKIES } : {});
+    /storageState/.test(r.case) ? { refused: COOKIES } : {});
   mkdirSync(join(RUN, "mcp-out"));
   if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
@@ -155,7 +152,7 @@ try {
   if (daemon) writeFileSync(join(RUN, "logs/daemon.log"), [...daemon.log, ...daemon.waiting().map((w) => `still waiting: ${w}`)].join("\n") + "\n");
   const count = (s: Result["status"]) => results.filter((r) => r.status === s).length;
   writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, results }, null, 2) + "\n");
-  console.log(`\n${results.length} cases: ${count("pass")} pass, ${count("fail")} fail, ${count("pending")} pending; ${join(RUN, "results.json")}`);
+  console.log(`\n${results.length} cases: ${count("pass")} pass, ${count("fail")} fail; ${join(RUN, "results.json")}`);
   process.exitCode = count("fail") ? 1 : 0;
 }
 await sleep(500);
@@ -215,14 +212,14 @@ async function playwrightCases(pw: any) {
     const t = await pop.locator("#p").textContent();
     await pop.close();
     return t;
-  }, { want: (d) => d === "Popup open", pending: PENDING_POPUP });
+  }, { want: (d) => d === "Popup open" });
   await step(G, "a popup (target=_blank link)", async () => {
     const [pop] = await Promise.all([page.waitForEvent("popup", { timeout: 8000 }), page.locator("#blank").click()]);
     await pop.waitForLoadState("load");
     const u = pop.url();
     await pop.close();
     return u;
-  }, { want: (d) => d === A + "/popup?via=blank", pending: PENDING_POPUP });
+  }, { want: (d) => d === A + "/popup?via=blank" });
   await step(G, "popups many times (10 x window.open, each closed)", async () => {
     let n = 0;
     for (let i = 0; i < 10; i++) {
@@ -232,7 +229,7 @@ async function playwrightCases(pw: any) {
       await pop.close();
     }
     return n;
-  }, { want: (d) => d === 10, pending: PENDING_POPUP, ms: EAGER ? 60_000 : 20_000 });
+  }, { want: (d) => d === 10, ms: 60_000 });
   await step(G, "an off-list popup is blocked (DNR)", () => onPage(async (p) => {
     await p.goto(A + "/");
     const [pop] = await Promise.all([p.waitForEvent("popup", { timeout: 8000 }), p.locator("#winopenoff").click()]);
@@ -240,7 +237,7 @@ async function playwrightCases(pw: any) {
     const r = { url: pop.url(), title: await pop.title().catch(() => "") };
     await pop.close().catch(() => {});
     return r;
-  }), { want: (d) => d.url.startsWith("chrome-error:") && d.title !== "probe b", pending: PENDING_POPUP });
+  }), { want: (d) => d.url.startsWith("chrome-error:") && d.title !== "probe b" });
   await step(G, "a dedicated worker (page.on worker)", () => onPage(async (p) => {
     const [w] = await Promise.all([p.waitForEvent("worker", { timeout: 10_000 }), p.goto(A + "/worker")]);
     return w.evaluate(() => 6 * 7);
@@ -270,7 +267,7 @@ async function playwrightCases(pw: any) {
     await p.waitForTimeout(1000);
     const f = p.frames().find((x: any) => x.url().includes("c.localhost"));
     return Boolean(f && (await f.locator("#fbtn").count().catch(() => 0)));
-  }), { want: (d) => d === false, pending: PENDING_FRAME });
+  }), { want: (d) => d === false });
   await step(G, "Page.navigate to a data: URL with an off-list frame", () => onPage(async (p) => {
     await p.goto(`data:text/html,<iframe src="http://c.localhost:8781/frame"></iframe>`).catch(() => {});
     await p.waitForTimeout(1000);
@@ -403,7 +400,7 @@ async function createWithUrlCases(WebSocket: any) {
     await c.send("Target.closeTarget", { targetId: (await created).targetId });
     c.close();
     return { waiting: params.waitingForDebugger, first: paused?.params.request.url ?? null };
-  }, { want: (d) => d.waiting === true && d.first === `${A}/m?first`, pending: PENDING_POPUP?.replace("of new tabs", "of a new tab") });
+  }, { want: (d) => d.waiting === true && d.first === `${A}/m?first` });
 }
 
 // ---------------------------------------------------------------- the refused page marks (board ab-jzg Q3)
@@ -434,7 +431,7 @@ async function refusedFeatureCases(pw: any) {
 
 // ---------------------------------------------------------------- the probe's MCP and concurrency scripts
 
-async function probeScript(group: string, script: string, vars: Record<string, string>, expect: (r: any) => { pending?: string; refused?: RegExp }) {
+async function probeScript(group: string, script: string, vars: Record<string, string>, expect: (r: any) => { refused?: RegExp }) {
   const out = vars.OUT;
   const child = start(process.execPath, [join(PROBE, script)], { env: { ...process.env, PW_DIR: INSTALL, ...vars }, log: `${group}.log` });
   const code = await new Promise<number | null>((r) => child.once("exit", r));
@@ -442,8 +439,7 @@ async function probeScript(group: string, script: string, vars: Record<string, s
   for (const r of JSON.parse(readFileSync(out, "utf8")).results) {
     const e = expect(r), name = r.case ?? r.tool;
     const ok = e.refused ? !r.ok && e.refused.test(r.error ?? "") : r.ok;
-    record({ group, case: name, status: e.pending ? "pending" : ok ? "pass" : "fail", ms: r.ms, ...(r.error ? { error: r.error } : { detail: r.detail ?? r.saw }),
-      ...(e.pending ? { why: `${e.pending}; it ${r.ok ? "passed" : "failed"} in this run` } : {}) });
+    record({ group, case: name, status: ok ? "pass" : "fail", ms: r.ms, ...(r.error ? { error: r.error } : { detail: r.detail ?? r.saw }) });
   }
 }
 
