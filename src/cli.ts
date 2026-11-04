@@ -27,6 +27,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "chrome-bin": { type: "string", description: "agent Chrome binary (default Chrome Beta, else Google Chrome)" },
   "chrome-args": { type: "string", description: 'extra Chrome flags, a JSON array e.g. ["--enable-unsafe-swiftshader"]; never --remote-debugging-*, --enable-automation, --headless, --user-data-dir or --profile-directory; no secrets (flags show in ps)' },
   endpoint: { type: "string", description: "a known upstream ws:// endpoint (still used through the proxy)" },
+  "cdp-url": { type: "string", description: "agent mode's endpoint (ws+unix://<socket>:/devtools/browser/<scope>): commands connect to it in place of the proxy; no launch, no proxy" },
   "personal-user-data-dir": { type: "string", description: "personal mode: the operator's Chrome user-data folder" },
   "no-launch": { type: "boolean", description: "never start Chrome; fail with the launch command instead" },
   "no-prompt": { type: "boolean", description: "never open a new connection (a new Allow prompt); with no approved proxy, fail at once (approval_needed)" },
@@ -127,7 +128,7 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
   const idle = str("proxy-idle-ms");
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
-    mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"),
+    mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"), cdpUrl: str("cdp-url"),
     personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"), log,
   });

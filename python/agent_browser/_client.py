@@ -121,6 +121,7 @@ class AgentBrowser:
         chrome_bin: Optional[PathLike] = None,
         chrome_args: Optional[Sequence[str]] = None,
         endpoint: Optional[str] = None,
+        cdp_url: Optional[str] = None,
         personal_user_data_dir: Optional[PathLike] = None,
         no_launch: bool = False,
         no_prompt: bool = False,
@@ -158,6 +159,8 @@ class AgentBrowser:
         self.chrome_bin = _path("chrome_bin", chrome_bin)
         self.chrome_args: Optional[List[str]] = list(chrome_args) if chrome_args is not None else None
         self.endpoint = endpoint
+        # Agent mode's endpoint (agentwatch's relay): the CLI connects to it in place of the proxy socket.
+        self.cdp_url = cdp_url
         self.personal_user_data_dir = _path("personal_user_data_dir", personal_user_data_dir)
         self.no_launch = no_launch
         self.no_prompt = no_prompt
@@ -219,6 +222,8 @@ class AgentBrowser:
             flags += ["--mode", self.mode]
         if self.endpoint is not None:
             flags += ["--endpoint", self.endpoint]
+        if self.cdp_url is not None:
+            flags += ["--cdp-url", self.cdp_url]
         if self.no_launch:
             flags.append("--no-launch")
         if self.no_prompt:

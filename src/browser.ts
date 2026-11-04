@@ -110,6 +110,11 @@ export class AgentBrowser {
     const s = resolveOptions(options);
     const allow = allowlistOf(s);
     assertTestStateIsolated(s);
+    // Agent mode's endpoint: the relay is the one connection; no proxy, no launch, no prompt.
+    if (s.cdpUrl) {
+      try { return await AgentBrowser.over(s.cdpUrl, s, allow); }
+      catch (e) { throw new ChromeUnreachableError(`agent mode's endpoint did not answer (${(e as Error).message})`, { cause: e }); }
+    }
     if (existsSync(s.socketPath) && await socketAlive(s.socketPath)) {
       try { return await AgentBrowser.fromProxy(s, allow); } catch { /* stale or broken proxy */ }
     }
@@ -137,8 +142,10 @@ export class AgentBrowser {
     throw new ChromeUnreachableError(`${chromeHelp(s)}${lastErr ? `\n(${message})` : ""}`, { cause: lastErr });
   }
 
-  private static async fromProxy(s: Settings, allow: string[]): Promise<AgentBrowser> {
-    const conn = await CDPConnection.connect(proxyUrl(s), 5_000);
+  private static fromProxy(s: Settings, allow: string[]): Promise<AgentBrowser> { return AgentBrowser.over(proxyUrl(s), s, allow); }
+
+  private static async over(url: string, s: Settings, allow: string[]): Promise<AgentBrowser> {
+    const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
       return new AgentBrowser(conn, s, allow, v.product);

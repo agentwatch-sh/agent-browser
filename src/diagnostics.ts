@@ -10,6 +10,7 @@ import { statePath, type NotifyHook, type Settings } from "./options.ts";
 
 export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww", "-o", "pid=,command="], { encoding: "utf8", timeout: 2000, maxBuffer: 64 << 20 })): string {
   if (s.mode === "personal") return "personal Chrome: operator's Chrome";
+  if (s.cdpUrl) return `agent mode's endpoint ${s.cdpUrl}`;
   if (s.endpoint) return "agent Chrome: configured endpoint override; browser channel unknown";
   let configured: string;
   try { configured = basename(agentChromeBin(s)); } catch { configured = "unknown"; }

@@ -175,6 +175,13 @@ class AdapterTest(unittest.TestCase):
             personal.stop()
             other.remove()
 
+    def test_cdp_url_goes_to_the_cli_in_place_of_the_proxy(self) -> None:
+        url = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/ab-lead"
+        b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=url)
+        flags = b._global_flags()
+        self.assertEqual(flags[flags.index("--cdp-url") + 1], url)
+        self.assertNotIn("--cdp-url", AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)._global_flags())
+
     def test_cli_failures_raise_typed_errors(self) -> None:
         with self.assertRaises(UsageError) as caught:
             self.browser.net("any-tab", seconds=0)

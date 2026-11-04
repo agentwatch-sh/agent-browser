@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import WebSocket from "ws";
 import { CDPConnection } from "../src/cdp.ts";
 import { startRelay, type Relay } from "../src/relay/endpoint.ts";
+import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 
 export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string };
 /** A test's answer: a value is the data, { error } a bridge error text, undefined the default answer. */
@@ -26,6 +27,10 @@ export class FakeReceiver {
   readonly attached = new Set<number>();
   readonly downloads: any[] = [];
   attachNew = false;
+  /** Above 0: tabs.create in the real receiver's order (chrome-extension agent/attach.js): the answer first, tabs.onCreated
+   *  this many ms later, after the eager attach; a debugger.attach of that tab waits for the event. */
+  lateCreatedMs = 0;
+  private readonly lateCreated = new Map<number, Promise<void>>();
   private nextTab = 7;
   /** A test's answer to a CDP command, or to any op. */
   command: (target: any, method: string, params: any) => any = () => undefined;
@@ -41,11 +46,15 @@ export class FakeReceiver {
   sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
 
   /** A new tab, announced as the receiver does: with the eager attach on, it is attached and held. */
-  newTab(url: string, opener?: FakeTab, windowId = 1): FakeTab {
+  newTab(url: string, opener?: FakeTab, windowId = 1, late = 0): FakeTab {
     const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, ...(opener ? { openerId: opener.targetId } : {}) };
     this.tabs.set(tab.id, tab);
-    if (this.attachNew) this.attached.add(tab.id);
-    this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
+    const announce = () => {
+      if (this.attachNew) this.attached.add(tab.id);
+      this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
+    };
+    if (late) this.lateCreated.set(tab.id, new Promise((r) => setTimeout(() => { announce(); r(); }, late)));
+    else announce();
     return tab;
   }
 
@@ -74,7 +83,7 @@ export class FakeReceiver {
     switch (op) {
       case "bridge.info": return this.info;
       case "bridge.attachNew": this.attachNew = args[0]; return null;
-      case "debugger.attach": { tab(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
+      case "debugger.attach": { tab(args[0]); await this.lateCreated.get(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
       case "debugger.detach": this.attached.delete(args[0]); return null;
       case "debugger.getTargets": return [...this.tabs.values()].map((t) => ({ id: t.targetId, tabId: t.id, type: "page", title: t.title, url: t.url, attached: this.attached.has(t.id) }));
       case "debugger.sendCommand": {
@@ -86,7 +95,7 @@ export class FakeReceiver {
         if (method === "Target.getTargetInfo") return { targetInfo: { targetId: t.targetId, type: "page", title: t.title, url: t.url, attached: true, browserContextId: "C1D2", ...(t.openerId ? { openerId: t.openerId } : {}) } };
         return {};
       }
-      case "tabs.create": return this.chromeTab(this.newTab(args[0].url));
+      case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs));
       case "windows.create": { const t = this.newTab(args[0].url, undefined, 2); return { id: 2, state: "normal", tabs: [this.chromeTab(t)] }; }
       case "tabs.get": return this.chromeTab(tab(args[0]));
       case "tabs.query": return [...this.tabs.values()].filter((t) => args[0].windowId === undefined || t.windowId === args[0].windowId).map((t) => this.chromeTab(t));
@@ -148,4 +157,78 @@ export function raw(url: string, headers: Record<string, string> = {}): Promise<
     });
     ws.once("error", () => {});
   });
+}
+
+/**
+ * Back the fake receiver with the fake Chrome of fake-chrome.ts, so that agent-browser's own commands run through the
+ * relay with real answers: the tabs are the fake Chrome's pages, and each debugger op is a CDP call on one connection
+ * of its own, as chrome.debugger is. Returns a function that ends that connection.
+ */
+export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Promise<() => void> {
+  const ws = new WebSocket(chrome.ws, { perMessageDeflate: false });
+  await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
+  const pending = new Map<number, (m: any) => void>(), ids = new Map<string, number>(), targets = new Map<number, string>();
+  const sessions = new Map<number, string>(), tabOfSession = new Map<string, number>();
+  let next = 1;
+  const send = (method: string, params: object = {}, sessionId?: string) => new Promise<any>((resolve) => {
+    const id = next++;
+    pending.set(id, resolve);
+    ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+  ws.on("message", (raw) => {
+    const m = JSON.parse(String(raw));
+    if (m.id !== undefined) { pending.get(m.id)?.(m); pending.delete(m.id); return; }
+    const tabId = m.sessionId ? tabOfSession.get(m.sessionId) : undefined;
+    if (tabId !== undefined) fake.emit("debugger.onEvent", { source: { tabId }, method: m.method, params: m.params ?? {} });
+  });
+  const idOf = (targetId: string) => {
+    let id = ids.get(targetId);
+    if (id === undefined) { ids.set(targetId, (id = 100 + ids.size)); targets.set(id, targetId); }
+    return id;
+  };
+  const tab = (p: FakePage) => ({ id: idOf(p.targetId), windowId: p.windowId, index: 0, active: true, url: p.url, title: p.title, status: "complete" });
+  const page = (id: number) => {
+    const p = chrome.pages.get(targets.get(id) ?? "");
+    if (!p) throw new Error(`No tab with id: ${id}.`);
+    return p;
+  };
+  fake.op = async ({ op, args }) => {
+    switch (op) {
+      case "tabs.create": {
+        const t = tab(chrome.pages.get((await send("Target.createTarget", { url: args[0].url })).result.targetId)!);
+        fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
+        return t;
+      }
+      case "tabs.get": case "tabs.update": return tab(page(args[0]));
+      case "tabs.query": return [...chrome.pages.values()].filter((p) => args[0].windowId === undefined || p.windowId === args[0].windowId).map(tab);
+      case "tabs.remove":
+        page(args[0]);
+        await send("Target.closeTarget", { targetId: targets.get(args[0]) });
+        fake.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } });
+        return null;
+      case "debugger.getTargets": return [...chrome.pages.values()].map((p) => ({ id: p.targetId, tabId: idOf(p.targetId), type: "page", url: p.url, title: p.title, attached: sessions.has(idOf(p.targetId)) }));
+      case "debugger.attach": {
+        page(args[0]);
+        if (sessions.has(args[0])) return { already: true };
+        const { sessionId } = (await send("Target.attachToTarget", { targetId: targets.get(args[0]), flatten: true })).result;
+        sessions.set(args[0], sessionId); tabOfSession.set(sessionId, args[0]);
+        return { already: false };
+      }
+      case "debugger.detach": {
+        const sid = sessions.get(args[0]);
+        if (sid) { sessions.delete(args[0]); tabOfSession.delete(sid); await send("Target.detachFromTarget", { sessionId: sid }); }
+        return null;
+      }
+      case "debugger.sendCommand": {
+        const [target, method, params] = args;
+        const sid = target.sessionId ?? sessions.get(target.tabId);
+        if (!sid) return { error: "not attached" };
+        const r = await send(method, params ?? {}, sid);
+        // chrome.debugger gives a CDP error as its JSON text.
+        return r.error ? { error: JSON.stringify(r.error) } : r.result;
+      }
+    }
+    return undefined;
+  };
+  return () => ws.close();
 }

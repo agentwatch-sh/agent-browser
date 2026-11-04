@@ -256,6 +256,127 @@ test("a download reaches the client's folder under its guid; cancel and a danger
   } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("the release of a held tab follows the client's runIfWaitingForDebugger at once, not its answer", async () => {
+  // Measured live (2026-11-04): Chrome answers no command of a tab whose first request the hold keeps, so a release
+  // that waited for this answer would wait for the receiver's own end of the hold (HOLD_MAX_MS).
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const opener = await page(h, c, true);
+    let answer!: () => void;
+    const held = new Promise<void>((r) => (answer = r));
+    h.fake.command = async (_t, method) => { if (method === "Runtime.runIfWaitingForDebugger") { await held; return {}; } return undefined; };
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    const popup = h.fake.newTab("https://a.example/popup", opener.tab);
+    const ev = await attached;
+    const run = c.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
+    await until(() => h.fake.sent("bridge.release").some((r) => r.args[0] === popup.id), "the release while the answer waits");
+    answer();
+    await run;
+  } finally { await h.close(); }
+});
+
+test("Target.createTarget with a URL opens the tab at about:blank, then navigates it after the hold (C10)", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const ops = (from: number) => h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? r.args[1] : r.op));
+    // A client that waits for each new target: the navigation comes after its runIfWaitingForDebugger, behind the release.
+    const waiting = await h.connect("s1");
+    await waiting.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    let from = h.fake.requests.length;
+    const attached = waiting.waitForEvent("Target.attachedToTarget");
+    await waiting.send("Target.createTarget", { url: "https://a.example/x" });
+    const ev = await attached;
+    assert.deepEqual(h.fake.sent("tabs.create").at(-1)!.args, [{ url: "about:blank", active: true }]);
+    assert.ok(ev.waitingForDebugger);
+    assert.ok(!ops(from).includes("Page.navigate"), "no navigation before the client is ready");
+    from = h.fake.requests.length;
+    await waiting.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
+    await until(() => ops(from).includes("Page.navigate"), "the navigation");
+    assert.deepEqual(ops(from), ["Runtime.runIfWaitingForDebugger", "bridge.release", "Page.navigate"]);
+    assert.deepEqual(h.fake.requests.at(-1)!.args, [{ tabId: h.fake.requests.at(-1)!.args[0].tabId }, "Page.navigate", { url: "https://a.example/x" }]);
+    // A client that does not wait: the release, then the navigation, at once.
+    const plain = await h.connect("s2");
+    await plain.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    from = h.fake.requests.length;
+    await plain.send("Target.createTarget", { url: "https://a.example/y" });
+    await until(() => ops(from).includes("Page.navigate"), "the navigation");
+    assert.ok(ops(from).indexOf("bridge.release") < ops(from).indexOf("Page.navigate"));
+    // A client with no auto-attach (agent-browser's open): the navigation, then the tab carries no debugger.
+    const raw = await h.connect("s3");
+    from = h.fake.requests.length;
+    const { targetId } = await raw.send("Target.createTarget", { url: "https://a.example/z", background: true });
+    const after = ops(from);
+    assert.ok(after.indexOf("Page.navigate") < after.lastIndexOf("debugger.detach"), after.join(" "));
+    assert.ok((await raw.send("Target.attachToTarget", { targetId, flatten: true })).sessionId);
+    // about:blank or no URL: nothing to navigate.
+    from = h.fake.requests.length;
+    await raw.send("Target.createTarget", {});
+    assert.ok(!ops(from).includes("Page.navigate"));
+  } finally { await h.close(); }
+});
+
+test("with the real receiver's order (tabs.onCreated after the answer), a new tab is still held and navigated after the hold", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    h.fake.lateCreatedMs = 15;
+    const ops = (from: number) => h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? r.args[1] : r.op));
+    const waiting = await h.connect("s1");
+    await waiting.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    let from = h.fake.requests.length;
+    const attached = waiting.waitForEvent("Target.attachedToTarget");
+    await waiting.send("Target.createTarget", { url: "https://a.example/x" });
+    const ev = await attached;
+    await sleep(30);
+    assert.equal(ev.waitingForDebugger, true);
+    assert.ok(!ops(from).includes("Page.navigate") && !ops(from).includes("bridge.release"), ops(from).join(" "));
+    const raw = await h.connect("s2");
+    from = h.fake.requests.length;
+    await raw.send("Target.createTarget", { url: "https://a.example/z" });
+    const after = ops(from);
+    assert.ok(after.includes("bridge.release") && after.indexOf("bridge.release") < after.indexOf("Page.navigate"), after.join(" "));
+  } finally { await h.close(); }
+});
+
+test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its URL then; a later client's navigation is its own", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const a = await h.connect("s1");
+    await a.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    const att = a.waitForEvent("Target.attachedToTarget");
+    await a.send("Target.createTarget", { url: "https://a.example/first" });
+    await att;
+    const navs = () => h.fake.sent("debugger.sendCommand", "Page.navigate").map((r) => r.args[2].url);
+    await a.close();
+    await until(() => navs().includes("https://a.example/first"), "the creator's URL at its leave");
+    const b = await h.connect("s1");
+    const bAtt = b.waitForEvent("Target.attachedToTarget");
+    await b.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    const ev = await bAtt;
+    await b.send("Page.navigate", { url: "https://a.example/mine" }, ev.sessionId);
+    await b.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
+    await sleep(50);
+    assert.deepEqual(navs(), ["https://a.example/first", "https://a.example/mine"]);
+    // A detach after a timeout drops a pending URL too: the client's next session gets no stale navigation.
+    const c = await h.connect("s3");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    const cAtt = c.waitForEvent("Target.attachedToTarget");
+    await c.send("Target.createTarget", { url: "https://a.example/late" });
+    const first = await cAtt;
+    h.fake.command = (_t, method) => (method === "Page.enable" ? { error: "timeout" } : undefined);
+    const again = c.waitForEvent("Target.attachedToTarget");
+    await c.send("Page.enable", {}, first.sessionId).catch(() => {});
+    h.fake.command = () => undefined;
+    await c.send("Runtime.runIfWaitingForDebugger", {}, (await again).sessionId);
+    await sleep(50);
+    assert.ok(!navs().includes("https://a.example/late"));
+  } finally { await h.close(); }
+});
+
 test("a connection that leaves while Target.createTarget or Target.attachToTarget runs keeps no tab and no session", async () => {
   const h = await harness();
   try {

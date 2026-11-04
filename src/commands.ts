@@ -199,6 +199,7 @@ export const commands = {
   async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean; giveBack?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
+    if (s.cdpUrl) throw new UsageError("launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
@@ -224,6 +225,7 @@ export const commands = {
   async quit(o: BrowserOptions | Settings): Promise<QuitResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("quit is for the agent browser; it never closes the operator's Chrome");
+    if (s.cdpUrl) throw new UsageError("quit: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
     const proxyStopped = await stopProxyAndWait(s);
     // Signal the process rather than connect: a new debugging connection would prompt.
     const pid = agentChromePid(s);
@@ -240,13 +242,14 @@ export const commands = {
     try { b = await AgentBrowser.connect(s, { existingOnly: true }); }
     catch (e) {
       if (e instanceof AgentBrowserError && e.code === "usage") throw e;
-      const detail = await localBrowserStatus(s);
-      return { ...base, connected: false, detail, product: null, proxy: null, profileDir: s.mode === "agent" ? s.profileDir : null,
+      // Agent mode's endpoint has no local Chrome or proxy of this consumer to look at: its own answer is the detail.
+      const detail = s.cdpUrl ? (e as Error).message : await localBrowserStatus(s);
+      return { ...base, connected: false, detail, product: null, proxy: null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
         allowedTabs: null, otherTabs: null, window: null, notification: p.notify ? await notifyBrowserStatus(s, detail) : null };
     }
     try {
       const pages = await b.allowedPages({ anyScope: true }); // the whole browser's count, also with a tab scope
-      return { ...base, connected: true, detail: null, product: b.product, proxy: proxyInfo(s) ?? null, profileDir: s.mode === "agent" ? s.profileDir : null,
+      return { ...base, connected: true, detail: null, product: b.product, proxy: proxyInfo(s) ?? null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
         allowedTabs: pages.length, otherTabs: await b.otherPageCount(), window: b.pinnedWindow() ?? null, notification: null };
     } finally { await b.disconnect(); }
   },
@@ -443,7 +446,9 @@ export const commands = {
    * to a Chrome or signals one, and it acts only on the agent Chrome on this consumer's profile (front.ts).
    */
   async front(o: BrowserOptions | Settings): Promise<FrontResult> {
-    const { chrome, via } = await bringToFront(resolveOptions(o));
+    const s = resolveOptions(o);
+    if (s.cdpUrl) throw new UsageError("front: the agent browser behind cdpUrl belongs to agentwatch; agent-browser does not bring it to the front");
+    const { chrome, via } = await bringToFront(s);
     return { ok: true, command: "front", chromePid: chrome.pid, profileDir: chrome.profileDir, stateDir: chrome.stateDir, windowName: chrome.windowName, via };
   },
 

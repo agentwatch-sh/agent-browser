@@ -121,7 +121,9 @@ is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e
 `--headless`, `--user-data-dir` and `--profile-directory` are refused before any spawn, in every dash,
 slash and case form; only the switch name is checked, never its value, so `--user-agent=...` passes; the
 profile comes from `profileDir`; no secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws://` endpoint, still
-used through the proxy), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome), `noPrompt` (never open a new
+used through the proxy), `cdpUrl` (CLI `--cdp-url`, Python `cdp_url`: agent mode's endpoint,
+`ws+unix://<socket>:/devtools/browser/<scope>` from `agentwatch browser endpoint`; each connection goes to it in place of the
+proxy socket, nothing is launched, and `launch` and `quit` refuse; the proxy stays the default), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome), `noPrompt` (never open a new
 connection, so never a new approval prompt: with no approved proxy up, fail at once with `approval_needed`),
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
 `vedlo browser`), `tabScope` (CLI `--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of
@@ -684,7 +686,7 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 ```
 agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
-              [--chrome-args JSON] [--endpoint WS] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
+              [--chrome-args JSON] [--endpoint WS] [--cdp-url URL] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
               [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME]
 ```
@@ -759,7 +761,7 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 
 ```python
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
-             chrome_args=None, endpoint=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
+             chrome_args=None, endpoint=None, cdp_url=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
              notify_command=None, approve=None, approve_command=None, proxy_idle_ms=None, command_name=None,
              tab_scope=None, node="node", package_dir=None, timeout=120.0, env=None)
 ```
@@ -959,6 +961,18 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Meta+R (reload), Meta+W (the window closed) and Meta+T (a new tab). A `--background` run (Chrome
   Beta) exited 1, as expected: its `record` and `press` trials were not measured. The head of
   `check.ts` gives these results and the Linux results of 2026-11-03.
+- `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-commands.test.ts`: agent mode's relay
+  (`agent-browser relay`, contracts C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake
+  receiver and daemon (`test/fake-bridge.ts`): the policy against the contracts' vectors (copied in
+  `test/vectors/chrome-extension-5021038/`), the model through real CDP clients on the socket, and
+  agent-browser's own commands over the endpoint (`--cdp-url`) with the fake Chrome behind the fake
+  receiver.
+- `test/live/agent-mode/` (Linux, in a private Xvfb; see the head of `run.ts`): agent mode live. A
+  Chromium of its own loads chrome-extension's agent package; a stand-in for the daemon's bridge side
+  and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
+  concurrency cases run against it, with the C11 refusals, the tab switch of the timer answer (ab-vsm
+  Q4) and agent-browser's commands with `--cdp-url`. `CHROME_EXTENSION=<a detached worktree of
+  chrome-extension at main b82c65d or later> npm run test:live:agent`. Not part of `npm test`.
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.

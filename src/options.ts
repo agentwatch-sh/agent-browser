@@ -46,6 +46,12 @@ export type BrowserOptions = {
   chromeArgs?: string[];
   /** A known upstream endpoint (ws://127.0.0.1:<port>/devtools/browser/<id>). The connection still goes through the proxy. */
   endpoint?: string;
+  /**
+   * Agent mode's CDP endpoint (agentwatch's relay: ws+unix://<socket>:/devtools/browser/<scope>, from `agentwatch
+   * browser endpoint`). Each connection goes to it in place of the proxy socket: no proxy starts, no Chrome is
+   * launched, and launch and quit refuse, because that agent browser belongs to agentwatch. Agent mode only.
+   */
+  cdpUrl?: string;
   /** Personal mode: the operator's Chrome user-data folder, where Chrome writes DevToolsActivePort. */
   personalUserDataDir?: string;
   /** Never start Chrome: a missing agent browser is an error that names the launch command. */
@@ -86,6 +92,7 @@ export type Settings = {
   chromeBin?: string;
   chromeArgs?: string[];
   endpoint?: string;
+  cdpUrl?: string;
   personalUserDataDir?: string;
   noLaunch: boolean;
   noPrompt: boolean;
@@ -161,13 +168,21 @@ export function isChromeForTesting(bin: string): boolean {
   return /Chrome for Testing/i.test(bin) || /^chrome-headless-shell$/.test(basename(bin));
 }
 
+/**
+ * Agent mode's endpoint (contract C11): ws+unix://<absolute socket path>:/devtools/browser/<scope>. Nothing else: a
+ * loopback ws:// URL would reach a Chrome's own debugging port (a prompt on each command, past noPrompt), and a
+ * wss:// URL would send page data to another host.
+ */
+export const CDP_URL_RE = /^ws\+unix:\/\/(\/[^:]+):\/devtools\/browser\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 /** Validate a consumer's options and fill the defaults. Accepts settings that were already resolved. */
 export function resolveOptions(o: BrowserOptions | Settings): Settings {
   if (!o || typeof o !== "object") throw new UsageError("options are required: at least stateDir");
   const stateDir = absolute("stateDir", o.stateDir);
   const profileDir = o.profileDir === undefined ? join(stateDir, "profile") : absolute("profileDir", o.profileDir);
   const socketPath = o.socketPath === undefined ? join(stateDir, "chrome-proxy.sock") : absolute("socketPath", o.socketPath);
-  const bytes = Buffer.byteLength(socketPath), limit = `a Unix socket path holds at most ${MAX_SOCKET_PATH_BYTES} bytes (the macOS limit)`;
+  const cdp = o.cdpUrl !== undefined;
+  const bytes = cdp ? 0 : Buffer.byteLength(socketPath), limit = `a Unix socket path holds at most ${MAX_SOCKET_PATH_BYTES} bytes (the macOS limit)`;
   if (bytes > MAX_SOCKET_PATH_BYTES && o.socketPath !== undefined)
     throw new UsageError(`socketPath is ${bytes} bytes, and ${limit}: ${socketPath}; ${socketWayOut(stateDir)}`);
   if (bytes > MAX_SOCKET_PATH_BYTES)
@@ -179,6 +194,17 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     if (isChromeForTesting(o.chromeBin)) throw new UsageError("chromeBin: the agent browser never runs from Chrome for Testing; use Google Chrome or Chrome Beta");
   }
   if (o.endpoint !== undefined && !/^wss?:\/\//.test(o.endpoint)) throw new UsageError(`endpoint must be a ws:// URL: ${o.endpoint}`);
+  if (o.cdpUrl !== undefined) {
+    if (typeof o.cdpUrl !== "string" || !CDP_URL_RE.test(o.cdpUrl))
+      throw new UsageError(`cdpUrl must be agent mode's endpoint, ws+unix://<absolute socket path>:/devtools/browser/<scope> (from \`agentwatch browser endpoint\`): ${o.cdpUrl}`);
+    if (mode !== "agent") throw new UsageError("cdpUrl is for the agent browser (agent mode's endpoint), not for personal mode");
+    if (o.endpoint !== undefined) throw new UsageError("cdpUrl or endpoint, not both: cdpUrl replaces the proxy, endpoint feeds it");
+    // The proxy's and the launch's own options mean nothing here (a resolved Settings carries their defaults).
+    const proxyOnly: [string, boolean][] = [["socketPath", o.socketPath !== undefined && o.socketPath !== join(stateDir, "chrome-proxy.sock")],
+      ["approve", o.approve !== undefined && o.approve !== false], ["chromeBin", o.chromeBin !== undefined],
+      ["proxyIdleMs", o.proxyIdleMs !== undefined && o.proxyIdleMs !== DEFAULT_PROXY_IDLE_MS]];
+    for (const [name, given] of proxyOnly) if (given) throw new UsageError(`${name} is for the proxy and the agent Chrome that agent-browser starts; with cdpUrl there is neither`);
+  }
   if (o.notify !== undefined && typeof o.notify !== "function") {
     const cmd = (o.notify as { command?: unknown }).command;
     if (!Array.isArray(cmd) || !cmd.length || !cmd.every((a) => typeof a === "string") || !cmd[0])
@@ -205,6 +231,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     chromeBin: o.chromeBin,
     chromeArgs: o.chromeArgs,
     endpoint: o.endpoint,
+    cdpUrl: o.cdpUrl,
     personalUserDataDir: o.personalUserDataDir === undefined ? undefined : absolute("personalUserDataDir", o.personalUserDataDir),
     noLaunch: !!o.noLaunch,
     noPrompt: !!o.noPrompt,
