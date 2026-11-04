@@ -34,13 +34,13 @@
 //           agent-browser could not start its Chrome or connect to it.
 //
 // Measured 2026-11-04 on taylor (Chromium 156.0.8078.79, Debian 13, the launch flags of ab-v16.13).
-// The default mode, 2 runs (main at 143a556, and this check's tip), exit 1 both: the hidden page was
+// The default mode, 3 runs (main at 143a556, and 2 of ab-v16.15), exit 1 all: the hidden page was
 // visible for each command, with two visibilitychange events, and got a focus and a blur: eval 9 ms,
-// text 13 to 14, outline 14 to 16, type 17, press 11 to 13, hover 1015 to 1028, click 1021 to 1025 (17
-// to 34 in tabs c and b), shot 3082 to 4092, shot --size 2594 to 3136, shot --full 249 to 493, open 21
-// to 46, goto 33 to 40, record 4964 to 4989. In both runs the shot of the new tab c failed after 30 s,
-// visible all that time (the exit 1). With --hidden-drive, 6 runs (5 of them of a version in which it
-// was the default), exit 0: no visible time and no visibilitychange for any command but record (4.6 s,
+// text 13 to 14, outline 14 to 16, type 17 to 19, press 11 to 26, hover 1010 to 1028, click 1021 to
+// 1025 (17 to 34 in tabs c and b), shot 3082 to 4096, shot --size 2594 to 3136, shot --full 249 to 497,
+// open 20 to 46, goto 33 to 40, record 4964 to 5011. In all 3 runs the shot of the new tab c failed
+// after 30 s, visible all that time (the exit 1). With --hidden-drive, 7 runs (5 of them of a version
+// in which it was the default), exit 0: no visible time and no visibilitychange for any command but record (4.6 s,
 // two events), no frame after a command, 18 to 140 ms per command (0.9 s for shot --size); the shot of
 // tab c took 0.1 s. In front, as before.
 

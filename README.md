@@ -173,17 +173,17 @@ tab: two modes**) and `log` (progress lines; default standard error).
   - **Default.** A command turns on focus emulation (`Emulation.setFocusEmulationEnabled`) when it
     attaches. Then the page is `visible`, and Chrome draws it, until the detach. A site sees a
     `visibilitychange` to `visible` and one back for each command, and a `focus` and a `blur`.
-    Measured on taylor in 2 runs of `test/live/background-tabs/visibility.ts` (main before ab-v16.15,
-    and this release): 9 to 17 ms for eval, text, outline, type and press; about 1 s for a hover or
-    the first click in a tab; 3.1 to 4.1 s for a shot, 2.6 to 3.1 s for `shot --size` and 0.25 to
-    0.5 s for `shot --full`; 5 s for a 3 s recording. In both runs a shot of a new background tab failed after 30 s, and the page was
-    visible for those 30 s.
+    Measured on taylor in 3 runs of `test/live/background-tabs/visibility.ts` (main before ab-v16.15,
+    and 2 of this release): 9 to 26 ms for eval, text, outline, type and press; about 1 s for a hover
+    or the first click in a tab; 3.1 to 4.1 s for a shot, 2.6 to 3.1 s for `shot --size` and 0.25 to
+    0.5 s for `shot --full`; 5 s for a 3 s recording. In all 3 runs a shot of a new background tab
+    failed after 30 s, and the page was visible for those 30 s.
   - **`hiddenDrive`** (CLI `--hidden-drive`, Python `hidden_drive=True`; ab-v16.15). No focus
     emulation. For `click`, `hover`, `type`, `press`, `Tab.clickAt` and `shot` in a background tab,
     agent-browser keeps one `Page.captureScreenshot` in flight (`Tab.whileDrawn`): while it waits,
     Chrome draws the tab, and the page stays `hidden` (a hidden capture). A last capture ends them
     all, and after it Chrome draws nothing again. A tab in front needs none. `record` turns focus
-    emulation on for its run only. Measured on taylor in 6 runs: eval, text, outline, hover, click,
+    emulation on for its run only. Measured on taylor in 7 runs: eval, text, outline, hover, click,
     type, press, shot, `shot --size`, `shot --full`, open and goto (also in a new tab and after a
     goto) had no visible time and no `visibilitychange`, and the page drew no frame in the second
     after; each took 18 to 140 ms (0.9 s for `shot --size`, with its 0.5 s settle); a shot of a new
