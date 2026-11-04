@@ -94,28 +94,54 @@ const env = { run: RUN, extension: { dir: EXT, commit: git(EXT, "rev-parse", "HE
   chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim() };
 console.log(`run ${RUN}\n${JSON.stringify(env)}`);
 
-// The scratch install: this checkout as a package, and the clients that the probe used.
 const INSTALL = join(RUN, "install");
-mkdirSync(INSTALL);
-const npm = (args: string[], cwd: string) => execFileSync("npm", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
-const tarball = join(RUN, npm(["pack", "--silent", "--pack-destination", RUN], ROOT).split("\n").pop()!);
-npm(["init", "-y"], INSTALL);
-npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball, "playwright-core@1.64.1", "@playwright/mcp@0.0.84"], INSTALL);
 const RELAY_BIN = join(INSTALL, "node_modules/agent-browser/bin/agent-browser.js");
+let daemon: StandInDaemon | undefined, chromium: ChildProcess | undefined, aborted: string | undefined, cleaning: Promise<void> | undefined;
 
-// The agent package, its native host and the profile.
-cpSync(join(EXT, "agent"), join(RUN, "agent"), { recursive: true });
-const id = extensionId(JSON.parse(readFileSync(join(RUN, "agent/manifest.json"), "utf8")));
-const PROFILE = join(RUN, "profile");
-mkdirSync(join(PROFILE, "NativeMessagingHosts"), { recursive: true });
-const hostSh = join(RUN, "host.sh");
-writeFileSync(hostSh, `#!/bin/sh\nexec /usr/bin/python3 ${join(EXT, "test/live/host.py")} --socket ${DAEMON_SOCK} --log ${join(RUN, "logs/host.log")} "$@"\n`, { mode: 0o700 });
-writeFileSync(join(PROFILE, "NativeMessagingHosts/sh.agentwatch.browser.json"),
-  JSON.stringify({ name: "sh.agentwatch.browser", description: "live test", path: hostSh, type: "stdio", allowed_origins: [`chrome-extension://${id}/`] }));
-writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
+/** A child of this run: SIGTERM, then SIGKILL when it is still there after 3 s. */
+async function stopChild(c: ChildProcess): Promise<void> {
+  if (c.exitCode !== null || c.signalCode !== null) return;
+  const gone = new Promise<boolean>((r) => c.once("exit", () => r(true)));
+  c.kill("SIGTERM");
+  if (await Promise.race([gone, sleep(3000).then(() => false)])) return;
+  c.kill("SIGKILL");
+  await Promise.race([gone, sleep(2000)]);
+}
 
-let daemon: StandInDaemon | undefined, chromium: ChildProcess | undefined;
+/** Stop everything that this run started, once (also at a signal), and write the results. */
+function cleanup(): Promise<void> {
+  return cleaning ??= (async () => {
+    const relayExit = daemon ? await daemon.stop() : null;
+    if (daemon) record({ group: "relay", case: "the relay ends with its standard input and removes its socket", status: relayExit === 0 && !existsSync(RELAY_SOCK) ? "pass" : "fail", ms: 0, detail: { exit: relayExit } });
+    for (const c of [...children].reverse()) await stopChild(c);
+    if (daemon) writeFileSync(join(RUN, "logs/daemon.log"), [...daemon.log, ...daemon.waiting().map((w) => `still waiting: ${w}`)].join("\n") + "\n");
+    const count = (st: Result["status"]) => results.filter((r) => r.status === st).length;
+    writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, ...(aborted ? { aborted } : {}), results }, null, 2) + "\n");
+    console.log(`\n${aborted ? `ABORTED (${aborted}): ` : ""}${results.length} cases: ${count("pass")} pass, ${count("fail")} fail; ${join(RUN, "results.json")}`);
+    process.exitCode = aborted || count("fail") ? 1 : 0;
+  })();
+}
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(sig, () => { aborted ??= `signal ${sig}`; void cleanup().then(() => process.exit(1)); });
+
 try {
+  // The scratch install: this checkout as a package, and the clients that the probe used.
+  mkdirSync(INSTALL);
+  const npm = (args: string[], cwd: string) => execFileSync("npm", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+  const tarball = join(RUN, npm(["pack", "--silent", "--pack-destination", RUN], ROOT).split("\n").pop()!);
+  npm(["init", "-y"], INSTALL);
+  npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball, "playwright-core@1.64.1", "@playwright/mcp@0.0.84"], INSTALL);
+
+  // The agent package, its native host and the profile.
+  cpSync(join(EXT, "agent"), join(RUN, "agent"), { recursive: true });
+  const id = extensionId(JSON.parse(readFileSync(join(RUN, "agent/manifest.json"), "utf8")));
+  const PROFILE = join(RUN, "profile");
+  mkdirSync(join(PROFILE, "NativeMessagingHosts"), { recursive: true });
+  const hostSh = join(RUN, "host.sh");
+  writeFileSync(hostSh, `#!/bin/sh\nexec /usr/bin/python3 ${join(EXT, "test/live/host.py")} --socket ${DAEMON_SOCK} --log ${join(RUN, "logs/host.log")} "$@"\n`, { mode: 0o700 });
+  writeFileSync(join(PROFILE, "NativeMessagingHosts/sh.agentwatch.browser.json"),
+    JSON.stringify({ name: "sh.agentwatch.browser", description: "live test", path: hostSh, type: "stdio", allowed_origins: [`chrome-extension://${id}/`] }));
+  writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
+
   start(process.execPath, [join(PROBE, "site.mjs")], { env: { ...process.env, SITE_LOG: join(RUN, "site-log.jsonl") }, log: "site.log" });
   daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, allowlist: ["a.localhost"],
     relayLog: (l) => appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`) });
@@ -145,15 +171,10 @@ try {
   if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
   record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium.exitCode === null ? "pass" : "fail", ms: 0 });
+} catch (err) {
+  aborted = String((err as Error)?.message ?? err).split("\n")[0];
 } finally {
-  const relayExit = daemon ? await daemon.stop() : null;
-  if (daemon) record({ group: "relay", case: "the relay ends with its standard input and removes its socket", status: relayExit === 0 && !existsSync(RELAY_SOCK) ? "pass" : "fail", ms: 0, detail: { exit: relayExit } });
-  for (const c of children.reverse()) if (c.exitCode === null) c.kill("SIGTERM");
-  if (daemon) writeFileSync(join(RUN, "logs/daemon.log"), [...daemon.log, ...daemon.waiting().map((w) => `still waiting: ${w}`)].join("\n") + "\n");
-  const count = (s: Result["status"]) => results.filter((r) => r.status === s).length;
-  writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, results }, null, 2) + "\n");
-  console.log(`\n${results.length} cases: ${count("pass")} pass, ${count("fail")} fail; ${join(RUN, "results.json")}`);
-  process.exitCode = count("fail") ? 1 : 0;
+  await cleanup();
 }
 await sleep(500);
 process.exit(process.exitCode);
@@ -264,9 +285,13 @@ async function playwrightCases(pw: any) {
   }), { refused: BLOCKED });
   await step(G, "an off-list frame in a page that is not on the list (setContent)", () => onPage(async (p) => {
     await p.setContent(`<iframe id="f" src="http://c.localhost:8781/frame"></iframe>`);
-    await p.waitForTimeout(1000);
-    const f = p.frames().find((x: any) => x.url().includes("c.localhost"));
-    return Boolean(f && (await f.locator("#fbtn").count().catch(() => 0)));
+    // Blocked, not slow: the same frame in an allowlisted page loads in well under a second here; this waits 5 s.
+    for (let i = 0; i < 25; i++) {
+      const f = p.frames().find((x: any) => x.url().includes("c.localhost"));
+      if (f && (await f.locator("#fbtn").count().catch(() => 0))) return true;
+      await p.waitForTimeout(200);
+    }
+    return false;
   }), { want: (d) => d === false });
   await step(G, "Page.navigate to a data: URL with an off-list frame", () => onPage(async (p) => {
     await p.goto(`data:text/html,<iframe src="http://c.localhost:8781/frame"></iframe>`).catch(() => {});
@@ -377,17 +402,22 @@ async function tabSwitchCase(WebSocket: any) {
 
 async function createWithUrlCases(WebSocket: any) {
   const G = "createTarget with a URL";
-  await step(G, "a raw client's Target.createTarget({url}) opens that page", async () => {
+  // What the client sees, against a direct create of Chrome: the same page, one history entry and no referrer. One
+  // difference: Target.attachedToTarget names about:blank, where the tab is at the attach (a direct create names its URL).
+  await step(G, "a raw client's Target.createTarget({url}) opens that page, as a direct create would", async () => {
     const c = await rawClient(WebSocket, "rawurl");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
-    const { targetId } = await c.send("Target.createTarget", { url: A + "/m?direct" });
+    const want = `${A}/m?direct`;
+    const { targetId } = await c.send("Target.createTarget", { url: want });
     const { params } = await c.event("Target.attachedToTarget");
     let at = "";
-    for (let i = 0; i < 50 && (at = await c.value(params.sessionId, "document.readyState + ' ' + location.href")) !== `complete ${A}/m?direct`; i++) await sleep(100);
+    for (let i = 0; i < 50 && (at = await c.value(params.sessionId, "document.readyState + ' ' + location.href")) !== `complete ${want}`; i++) await sleep(100);
+    const page = await c.value(params.sessionId, "({ history: history.length, referrer: document.referrer })");
+    const listed = (await c.send("Target.getTargets")).targetInfos.find((t: any) => t.targetId === targetId)?.url;
     await c.send("Target.closeTarget", { targetId });
     c.close();
-    return at;
-  }, { want: (d) => d === `complete ${A}/m?direct` });
+    return { at, ...page, listed, attachedUrl: params.targetInfo.url };
+  }, { want: (d) => d.at === `complete ${A}/m?direct` && d.history === 1 && d.referrer === "" && d.listed === `${A}/m?direct` && d.attachedUrl === "about:blank" });
   await step(G, "its first request reaches the client's Fetch interception (the hold)", async () => {
     const c = await rawClient(WebSocket, "rawhold");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
@@ -409,22 +439,28 @@ async function createWithUrlCases(WebSocket: any) {
 // records what a later page of that connection does (C11: a later page fails too).
 async function refusedFeatureCases(pw: any) {
   const G = "page marks", MAIN_WORLD = /Not available in the agent browser: (init scripts|bindings) in the page's main world/;
-  const cases: [string, (ctx: any, p: any) => Promise<unknown>][] = [
-    ["context.addInitScript", (ctx) => ctx.addInitScript(() => { (window as any).__probeInit = 1; })],
-    ["context.exposeFunction", (ctx) => ctx.exposeFunction("__probeExposed", (x: number) => x * 2)],
-    ["page.exposeFunction", (_ctx, p) => p.exposeFunction("__probePageExposed", (x: number) => x * 2)],
-    ["tracing with snapshots", (ctx) => ctx.tracing.start({ snapshots: true })],
-    ["page.clock.install", (_ctx, p) => p.clock.install()],
+  // later: what a new page of that connection does after the refusal (measured with Playwright 1.64.1): it works with
+  // no mark, or it fails with the binding refusal (Playwright sends Runtime.addBinding again for each new page).
+  const cases: [string, (ctx: any, p: any) => Promise<unknown>, "works" | "fails"][] = [
+    ["context.addInitScript", (ctx) => ctx.addInitScript(() => { (window as any).__probeInit = 1; }), "works"],
+    ["context.exposeFunction", (ctx) => ctx.exposeFunction("__probeExposed", (x: number) => x * 2), "fails"],
+    ["page.exposeFunction", (_ctx, p) => p.exposeFunction("__probePageExposed", (x: number) => x * 2), "fails"],
+    ["tracing with snapshots", (ctx) => ctx.tracing.start({ snapshots: true }), "works"],
+    ["page.clock.install", (_ctx, p) => p.clock.install(), "works"],
   ];
-  for (const [i, [name, use]] of cases.entries()) {
+  const marks = () => Object.keys(window).filter((k) => k.startsWith("__playwright") || k.startsWith("__probe"));
+  for (const [i, [name, use, later]] of cases.entries()) {
     const browser = await pw.chromium.connectOverCDP(url(`marks${i}`), { timeout: 20_000 });
     const ctx = browser.contexts()[0], p = await ctx.newPage();
     await p.goto(A + "/m");
     await step(G, `${name} is refused`, () => use(ctx, p), { refused: MAIN_WORLD });
-    await step(G, `after ${name}: a new page of that connection`, async () => {
-      const q = await ctx.newPage().then((x: any) => x.goto(A + "/m").then(() => "works"), (e: Error) => e.message.split("\n")[0]);
-      return { page: q, globals: await p.evaluate(() => Object.keys(window).filter((k) => k.startsWith("__playwright") || k.startsWith("__probe"))) };
-    }, { want: (d) => d.globals.length === 0 });
+    await step(G, `after ${name}: a new page of that connection ${later === "works" ? "works, with no mark" : "fails too"}`, async () => {
+      let q: any;
+      try { q = await ctx.newPage(); } catch (e) { return { page: "fails", error: (e as Error).message.split("\n")[0] }; }
+      await q.goto(A + "/m");
+      return { page: "works", title: await q.title(), marks: await q.evaluate(marks), oldPageMarks: await p.evaluate(marks) };
+    }, { want: (d) => later === "works" ? d.page === "works" && d.title === "probe m" && d.marks.length === 0 && d.oldPageMarks.length === 0
+      : d.page === "fails" && MAIN_WORLD.test(d.error) });
     await browser.close().catch(() => {});
   }
 }
@@ -450,7 +486,7 @@ async function agentBrowserCases() {
   writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
   // Not execFileSync: the stand-in daemon runs in this process, and a blocked event loop would hold every bridge message.
   const cli = (...args: string[]) => new Promise<any>((resolve) => {
-    execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("ab-cli"), "--state-dir", state, "--allowlist", allow, "--json"], { encoding: "utf8" }, (e, stdout) => {
+    execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("ab-cli"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
       try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
     });
   });

@@ -134,9 +134,17 @@ export class StandInDaemon {
 
   /** End the relay (its standard input ends) and the socket. */
   async stop(): Promise<number | null> {
-    const exited = new Promise<number | null>((r) => this.relay.once("exit", (code) => r(code)));
+    const exited = new Promise<number | null>((r) => { if (this.relay.exitCode !== null) r(this.relay.exitCode); else this.relay.once("exit", (code) => r(code)); });
+    const within = (ms: number) => Promise.race([exited, new Promise<undefined>((r) => setTimeout(() => r(undefined), ms))]);
     this.relay.stdin!.end();
-    const code = await Promise.race([exited, new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
+    let code = await within(5000);
+    // A relay that does not end with its standard input: SIGTERM, then SIGKILL.
+    if (code === undefined) {
+      this.note("the relay did not exit 5 s after its standard input ended");
+      this.relay.kill("SIGTERM");
+      if ((await within(2000)) === undefined) { this.relay.kill("SIGKILL"); await within(2000); }
+      code = null;
+    }
     this.host?.destroy();
     await new Promise<void>((r) => this.server.close(() => r()));
     return code;
