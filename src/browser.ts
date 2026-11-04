@@ -508,7 +508,7 @@ export class Tab {
    * page sees no visibilitychange. Sent while Chrome draws nothing, a capture waits; Chrome ends it, with
    * every earlier one, when a later capture ends. So one capture is in flight while `fn` runs, and a
    * last one ends them all: after it, Chrome draws nothing again. Measured on taylor with Chromium 156
-   * (test/live/background-tabs/visibility.ts; README, **Launch flags and background tabs**).
+   * (test/live/background-tabs/visibility.ts; README, **A command on a background tab: two modes**).
    *
    * The allowlist is checked before the first capture: a page off it gets none. When `fn` itself takes
    * the tab off the list (a click on a link), the last captures still reach the new page; their

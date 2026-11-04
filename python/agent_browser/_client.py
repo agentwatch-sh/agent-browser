@@ -109,8 +109,8 @@ class AgentBrowser:
     `hidden_drive=True` (`--hidden-drive`) keeps a background tab's page hidden while a command drives
     it: no focus emulation, and click, hover, type, press and shot keep Chrome drawing the hidden page
     with a hidden capture. By default a command turns on focus emulation, so the page is visible for the
-    command's length. See the README, "Launch flags and background tabs". Measured on Linux only. A
-    hidden_drive that is not a bool raises ValueError here, before any call.
+    command's length. See the README, "A command on a background tab: two modes". Measured on Linux
+    only. A hidden_drive that is not a bool raises ValueError here, before any call.
 
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
     current folder. A method's empty path goes to the CLI, which raises UsageError.
