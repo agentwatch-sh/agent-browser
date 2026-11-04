@@ -1,24 +1,89 @@
-// The pure parts of the live start check (start.ts): its argument guard, and the analysis that merges
-// monitor.swift's log with the check's marks and names each start that changed the frontmost app.
-// Unit-tested in test/takeover-start.test.ts; the check itself is not part of `npm test`.
+// The pure parts of the live start check (start.ts): its argument guard, its start variants, and the
+// analysis that merges monitor.swift's log with the check's marks and names each start that changed the
+// frontmost app. Unit-tested in test/takeover-start.test.ts; the check itself is not part of `npm test`.
 
 import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { appBundle } from "../../../src/agent.ts";
 import { isChromeForTesting } from "../../../src/options.ts";
 
-export const USAGE = "usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile] [--keep-state]";
+/**
+ * How one start is made (ab-b84.11, phase 1 of the fix: measure the candidates on the Mac). Each variant
+ * starts the agent Chrome as src/agent.ts does (through the `launch` command), changed only by the one
+ * thing that it names. No variant opens a debugging WebSocket, so Chrome shows no approval prompt:
+ * `launch` probes the port with a plain TCP connect.
+ */
+export type Variant = {
+  name: "launch" | "hidden" | "give-back";
+  /** "today": the start as it is; "candidate": a possible fix that needs no debugging connection and no new macOS permission. */
+  kind: "today" | "candidate";
+  /** What the variant changes (the help text). */
+  summary: string;
+  /** launchAgentChrome's measurement hook: the start goes through `open -n -g -j` (launch-hidden.ts). */
+  hidden?: true;
+  /** giveback.swift runs from before each launch until its quit (--giveback). */
+  giveBack?: true;
+};
+
+export const VARIANTS: readonly Variant[] = [
+  { name: "launch", kind: "today", summary: "agent-browser launch as it is: open -n -g (the default)" },
+  { name: "hidden", kind: "candidate", summary: "open -n -g -j: Launch Services starts Chrome hidden; Chrome's own argv is the same", hidden: true },
+  { name: "give-back", kind: "candidate", summary: "launch as it is, and giveback.swift asks macOS to activate the app that was in front again when the new Chrome takes the front (a guard: a short change stays); needs --giveback", giveBack: true },
+];
+
+export const USAGE = `usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile] [--keep-state] [--variant NAME] [--giveback GIVEBACK_BIN]
+variants (--variant; none opens a debugging WebSocket):
+${VARIANTS.map((v) => `  ${v.name} (${v.kind}): ${v.summary}`).join("\n")}`;
 
 /** The logs that a run writes into --out-dir; a folder that holds one of them belongs to an earlier run. */
 export const RUN_LOGS = ["marks.jsonl", "results.jsonl", "monitor.jsonl"];
 
-export type StartOptions = { chromeBin: string; starts: number; monitor: string; outDir: string; afterMs: number; keepState: boolean; sameProfile: boolean };
+export type StartOptions = {
+  chromeBin: string; starts: number; monitor: string; outDir: string; afterMs: number; keepState: boolean; sameProfile: boolean;
+  variant: Variant["name"];
+  /** The compiled giveback.swift: only with --variant give-back. */
+  giveback?: string;
+};
+
+/**
+ * The child process that makes one start of `v`: the CLI's `launch --json`, as an agent session runs it,
+ * or for `hidden` launch-hidden.ts, which runs the same `launch` command with its measurement hook on.
+ * Both print launch's JSON document.
+ */
+export function variantLaunch(v: Variant, p: { node: string; cli: string; launcher: string; stateDir: string; chromeBin: string }): string[] {
+  if (v.hidden) return [p.node, p.launcher, "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin];
+  return [p.node, p.cli, "launch", "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, "--json"];
+}
+
+/** One request of giveback.swift: the new Chrome `took` the front, and the helper asked macOS to activate `gaveBackTo`. */
+export type GiveBackRequest = { t: number; took: number; name: string; gaveBackTo: number; sent: boolean };
+export type GiveBackLog = { before: FrontApp | null; requests: GiveBackRequest[]; bad: number[] };
+
+/**
+ * giveback.swift's output: its first line names the app in front at its start ({"before": pid, "name"}),
+ * then one line per request. A "{" line that is neither is bad, unless it is the last line (a kill can cut it).
+ */
+export function parseGiveBack(text: string): GiveBackLog {
+  const lines = text.split("\n"), requests: GiveBackRequest[] = [], bad: number[] = [];
+  let before: FrontApp | null = null;
+  lines.forEach((line, i) => {
+    if (!line.startsWith("{")) return;
+    let e: any;
+    try { e = JSON.parse(line); } catch { /* bad, below */ }
+    if (typeof e?.t === "number" && typeof e.before === "number" && typeof e.name === "string") before ??= { pid: e.before, name: e.name };
+    else if (typeof e?.t === "number" && typeof e.took === "number" && typeof e.name === "string" && typeof e.gaveBackTo === "number" && typeof e.sent === "boolean")
+      requests.push({ t: e.t, took: e.took, name: e.name, gaveBackTo: e.gaveBackTo, sent: e.sent });
+    else if (i < lines.length - 1) bad.push(i + 1);
+  });
+  return { before, requests, bad };
+}
 
 /**
  * The check's argv, or why it refuses (exit 2). It starts real Chrome windows on a person's screen,
  * so it runs only with --on-my-screen and only on macOS. --chrome-bin must be the binary inside an
  * app bundle (".../X.app/Contents/MacOS/X"): only then does a background start go through
- * `open -n -g`, the path under test.
+ * `open -n -g`, the path under test. --variant names one of VARIANTS (default "launch");
+ * --giveback, the compiled giveback.swift, goes with --variant give-back only.
  */
 export function startArgs(argv: string[], env: { platform: string; exists: (p: string) => boolean }): { ok: true; options: StartOptions } | { ok: false; message: string } {
   let values: Record<string, string | boolean | undefined>;
@@ -26,6 +91,7 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
     values = parseArgs({ args: argv, strict: true, allowPositionals: false, options: {
       "on-my-screen": { type: "boolean" }, "chrome-bin": { type: "string" }, monitor: { type: "string" }, "out-dir": { type: "string" },
       starts: { type: "string" }, "after-ms": { type: "string" }, "keep-state": { type: "boolean" }, "same-profile": { type: "boolean" },
+      variant: { type: "string" }, giveback: { type: "string" },
     } }).values;
   } catch (e) { return { ok: false, message: (e as Error).message }; }
   const no = (message: string) => ({ ok: false as const, message });
@@ -53,7 +119,16 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   if (typeof starts === "string") return no(starts);
   const afterMs = whole("--after-ms", values["after-ms"], 10_000, 1000, 120_000);
   if (typeof afterMs === "string") return no(afterMs);
-  return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"] } };
+  const name = values.variant ?? "launch";
+  const variant = VARIANTS.find((v) => v.name === name);
+  if (!variant) return no(`--variant must be one of ${VARIANTS.map((v) => v.name).join(", ")}, not ${JSON.stringify(name)}`);
+  const giveback = values.giveback;
+  if (variant.giveBack) {
+    if (typeof giveback !== "string" || !giveback) return no("--giveback is required for --variant give-back: giveback.swift compiled with swiftc (see the head of start.ts)");
+    if (!env.exists(resolve(giveback))) return no(`--giveback: no such file: ${giveback} (compile test/live/takeover/giveback.swift with swiftc first)`);
+  } else if (giveback !== undefined) return no(`--giveback is only for --variant give-back, not --variant ${variant.name}`);
+  return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"],
+    variant: variant.name, ...(variant.giveBack ? { giveback: resolve(giveback as string) } : {}) } };
 }
 
 /**
@@ -121,6 +196,11 @@ export type StartFocus = {
    */
   quitChanges: FrontChange[];
   quitCounted: boolean;
+  /**
+   * How long (ms), from the launch to the quit, the frontmost app was not the app in front before the
+   * start: for give-back, the time that the guard leaves the focus away. Null with no app in front before.
+   */
+  awayMs: number | null;
   /** Whether the monitor logged the launch of this start's own Chrome (information only). */
   launchSeen: boolean;
   /** Pointer moves from the start to the quit: a person moved the mouse, so a change can be their own click. */
@@ -164,6 +244,16 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
       (phase === "quit" ? quitChanges : changes).push(change);
     }
     const quitCounted = quitChanges.length > 0;
+    let awayMs: number | null = null;
+    if (frontBefore && quit !== Infinity) {
+      let away = 0, since: number | undefined;
+      for (const c of changes) {
+        if (c.pid !== frontBefore.pid) since ??= c.t;
+        else if (since !== undefined) { away += c.t - since; since = undefined; }
+      }
+      if (since !== undefined) away += quit - since;
+      awayMs = Math.round(away * 1000);
+    }
     const blind = (pid: number, name: string) => pid === 0 || name === "?";
     const problems: string[] = [];
     if (!frontBefore) problems.push(`the monitor logged no frontmost app before start ${n}`);
@@ -179,7 +269,7 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
       if (gap > MAX_MONITOR_GAP_S) problems.push(`the monitor logged nothing for ${gap.toFixed(1)} s during start ${n} (a hung or stopped monitor)`);
     }
     return {
-      start: n, frontBefore, changed: changes.length > 0 || quitCounted, changes, quitChanges, quitCounted,
+      start: n, frontBefore, changed: changes.length > 0 || quitCounted, changes, quitChanges, quitCounted, awayMs,
       pointerMoves: pointers.filter((e) => e.t > t0 && e.t < quit).length,
       launchSeen: chromePids[n] !== undefined && events.some((e) => "launched" in e && e.launched === chromePids[n] && e.t > t0 && e.t < quitEnd),
       problem: problems.length ? problems.join("; ") : null,
