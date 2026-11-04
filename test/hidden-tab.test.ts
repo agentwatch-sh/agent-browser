@@ -2,22 +2,23 @@
 // fake Chrome's model of a tab that is not in front (FakePage.background: hidden, no frames, input
 // dropped before the first frame, mouse moves held, captures that wait), and the pure parts of the live
 // check (test/live/background-tabs/spans.ts).
-//   default        focus emulation while a command is attached: the page is visible for the command
+//   default        focus emulation while a command is attached: the page is visible for the command;
+//                  a shot under Tab.whileDrawn too (ab-b84.17): alone, its capture would wait for ever
 //   hiddenDrive    no focus emulation; input and shots under Tab.whileDrawn: the page stays hidden
 // Each hidden-mode command gets a new tab whose page never drew a frame, so no earlier command drew it.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
-import { findFfmpeg } from "../src/record.ts";
+import { findFfmpeg, pngPixels } from "../src/record.ts";
 import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./live/background-tabs/spans.ts";
-import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
+import { FakeChrome, SHOT_COLOUR, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
@@ -81,6 +82,12 @@ function stayedHidden(page: FakePage, calls: Call[]) {
 /** No mouse move waited for Blink's 5 s fallback, and the input reached the page. */
 function fast(ms: number) { assert.ok(ms < 2000, `${ms} ms`); }
 
+/** The shot is complete: its bottom row is drawn too (the fake's frame before Chrome drew two frames of the page lacks it). */
+function complete(path: string) {
+  const px = pngPixels(readFileSync(path)), i = px.width * (px.height - 1) * px.channels;
+  assert.deepEqual([px.data[i], px.data[i + 1], px.data[i + 2]], [...SHOT_COLOUR], "a full frame, not only its top row");
+}
+
 // ---------- the default mode ----------
 
 test("default: attach sends Page.enable and focus emulation, as before: the page is visible while the command is attached", async () => {
@@ -94,18 +101,113 @@ test("default: attach sends Page.enable and focus emulation, as before: the page
   await commands.close(o(), { tab: name });
 });
 
-test("default: click, type and shot on a new background tab work with no hidden capture", async () => {
+test("default: click and type on a new background tab send no capture; its shot sends one capture in flight and its own", async () => {
   const { name, page } = await backgroundTab("/", o);
-  const { calls } = await callsOf(page, async () => {
+  let { calls } = await callsOf(page, async () => {
     await commands.click(o(), { tab: name, target: "#b" });
     await commands.type(o(), { tab: name, text: "abc", into: "#i" });
     await commands.text(o(), { tab: name });
-    await commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`) });
   });
   assert.equal(page.title, "clicked");
   assert.equal(page.select("#i")[0].value, "abc");
-  assert.deepEqual(captures(calls).map((x) => x.params), [{ format: "png" }], "only the shot's own capture");
+  assert.deepEqual(captures(calls), [], "focus emulation makes the page draw for input");
   assert.deepEqual(page.dropped, []);
+  const path = join(c.dir, `${name}.png`);
+  let ms: number;
+  ({ calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path })));
+  fast(ms);
+  complete(path);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("the fake holds a lone capture of a background page, also while focus emulation makes the page visible and draw, until a later capture ends it", async () => {
+  // Chrome ends a capture when the frame that it forces is presented, and a frame of a tab that is not
+  // in front is never on screen: on a page that does not change, only a later capture ends it.
+  const { name, page } = await backgroundTab("/", o);
+  const b = await AgentBrowser.connect(o());
+  try {
+    const tab = await b.find(name);
+    assert.equal(page.visibilityState, "visible", "focus emulation (the attach)");
+    let ended = false;
+    const first = tab.send("Page.captureScreenshot", { format: "png" }).then(() => { ended = true; });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(ended, false, "alone, the capture waits");
+    assert.equal(page.heldCaptures.length, 1);
+    await tab.send("Page.captureScreenshot", HOLD);
+    await first;
+    assert.deepEqual(page.heldCaptures, [], "the later capture ended it, and itself");
+  } finally { await b.disconnect(); }
+  await commands.close(o(), { tab: name });
+});
+
+test("default: shot of a new background tab that never drew: a capture in flight, two frames, then the shot's own capture ends it; complete, at once, focus emulation as before", async () => {
+  // As main sent it (its own capture only) the shot waited for ever: 30 s, then an error.
+  const { name, page } = await backgroundTab(); // its page never drew a frame
+  await commands.text(h(), { tab: name }); // the read-first rule, with no frame
+  assert.equal(page.drew, false);
+  const path = join(c.dir, `${name}.png`);
+  const { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path }));
+  fast(ms);
+  complete(path);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  const m = methodsOf(calls), attach = m.indexOf("Target.attachToTarget");
+  assert.deepEqual(m.slice(attach, attach + 3), ["Target.attachToTarget", "Page.enable", "Emulation.setFocusEmulationEnabled"], "the attach, as before");
+  assert.deepEqual(focusCalls(calls), [true]);
+  assert.deepEqual(page.visibilityChanges, ["visible", "hidden"], "visible for the command, as before");
+  assert.deepEqual(page.heldCaptures, [], "every capture ended");
+  await commands.close(o(), { tab: name });
+});
+
+test("default: shot of a background tab that drew at its open (default mode): the same, complete and at once", async () => {
+  const { name, page } = await backgroundTab("/", o);
+  await commands.text(o(), { tab: name });
+  const path = join(c.dir, `${name}.png`);
+  const { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path }));
+  fast(ms);
+  complete(path);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("default: shot --size and --full of a new background tab: the capture in flight comes before the override, and none but the shot's own while it is set", async () => {
+  let { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  let { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
+  assert.ok(ms < 3000, `${ms} ms (with the 0.5 s settle)`);
+  const m = methodsOf(calls);
+  const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+  assert.ok(m.indexOf("Page.captureScreenshot") < set, "the capture in flight comes before the override");
+  assert.equal(captures(calls.slice(set, clear)).length, 1, "while the override is set, only the shot's own capture");
+  assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
+  assert.equal(page.metrics, undefined);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+
+  ({ name, page } = await backgroundTab());
+  await commands.text(h(), { tab: name });
+  ({ calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`), full: true })));
+  fast(ms);
+  const full = captures(calls).filter((x) => x.params.clip);
+  assert.equal(full.length, 1);
+  assert.equal(calls.indexOf(full[0]), calls.indexOf(captures(calls).at(-1)!), "the full-page capture is the last one");
+  assert.deepEqual(captures(calls).slice(0, -1).map((x) => x.params), [HOLD]);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("default: a tab in front: the shot's capture in flight ends after a frame, then its own", async () => {
+  // Focus emulation makes every page "visible", so a shot cannot tell a tab in front from a background one.
+  const { name, page } = await backgroundTab("/", o);
+  page.background = false;
+  page.update();
+  await commands.text(o(), { tab: name });
+  const { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`) }));
+  fast(ms);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  assert.deepEqual(page.heldCaptures, []);
   await commands.close(o(), { tab: name });
 });
 
@@ -242,12 +344,14 @@ test("hiddenDrive: on a page that draws by itself each capture ends after a fram
   await commands.close(h(), { tab: name });
 });
 
-test("hiddenDrive: shot of a new background tab: one hidden capture first, and the shot's own capture ends it", async () => {
+test("hiddenDrive: shot of a new background tab: one hidden capture first, two frames, and the shot's own capture ends it; complete, at once", async () => {
   const { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name }); // the read-first rule
   const path = join(c.dir, `${name}.png`);
-  const { calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path }));
+  const { calls, ms } = await callsOf(page, () => commands.shot(h(), { tab: name, path }));
   assert.ok(existsSync(path));
+  fast(ms);
+  complete(path);
   assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
   stayedHidden(page, calls);
   await commands.close(h(), { tab: name });

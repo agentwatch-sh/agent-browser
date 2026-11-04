@@ -511,16 +511,29 @@ export class Tab {
 
   /**
    * With hiddenDrive, run `fn` while Chrome draws this tab's page, and keep the page "hidden"
-   * (ab-v16.15). Without it, or for a tab in front, `fn` runs as it is: focus emulation (attach) or the
-   * tab itself makes Chrome draw. Chrome draws no frame of a tab that is not in front. There a page that
-   * never drew one (it loaded in the background) drops each click and key (Blink drops input until a
-   * page's first commit), a mouse move waits for the next frame (up to 5 s, Blink's fallback timer), and
-   * a shot waits for a frame that never comes. A Page.captureScreenshot in flight makes Chrome draw the
-   * tab and leaves the page hidden (a hidden capture, stay_hidden in Chromium's page_handler.cc): the
-   * page sees no visibilitychange. Sent while Chrome draws nothing, a capture waits; Chrome ends it, with
-   * every earlier one, when a later capture ends. So one capture is in flight while `fn` runs, and a
-   * last one ends them all: after it, Chrome draws nothing again. Measured on taylor with Chromium 156
-   * (test/live/background-tabs/visibility.ts; README, **A command on a background tab: two modes**).
+   * (ab-v16.15). Without it, or for a tab in front, an input command's `fn` runs as it is: focus
+   * emulation (attach) or the tab itself makes Chrome draw. Chrome draws no frame of a tab that is not
+   * in front. There a page that never drew one (it loaded in the background) drops each click and key
+   * (Blink drops input until a page's first commit), a mouse move waits for the next frame (up to 5 s,
+   * Blink's fallback timer), and a shot waits for a frame that never comes. A Page.captureScreenshot in
+   * flight makes Chrome draw the tab and leaves the page hidden (a hidden capture, stay_hidden in
+   * Chromium's page_handler.cc): the page sees no visibilitychange. Alone, a capture waits; Chrome ends
+   * it, with every earlier one, when a later capture ends. So one capture is in flight while `fn` runs,
+   * and a last one ends them all: after it, Chrome draws nothing again. Measured on taylor with Chromium
+   * 156 (test/live/background-tabs/visibility.ts; README, **A command on a background tab: two modes**).
+   *
+   * A shot (`shot`) runs under it in both modes (ab-b84.17). Chrome ends a capture when the frame that
+   * it forces is presented (RenderWidgetHostImpl::GetSnapshotFromBrowser waits for ForceRedraw), and a
+   * frame of a tab that is not in front is never on screen: it counts only when a later frame replaces
+   * it. A page that changes by itself (a caret, an animation) sends one; on a page that does not change,
+   * only a later capture does. So the default mode's one capture waited for ever on such a page, though
+   * focus emulation makes it "visible" and draw at 60 fps: a shot of a new tab failed after 30 s. With a
+   * capture in flight it ends in 0.1 to 4 s (in that mode the frames of a background tab can come slowly,
+   * more after a click or with a caret); with hiddenDrive in 0.1 s. Focus emulation makes every page
+   * "visible", so in the default mode a shot cannot tell a tab in front from a background one, and always
+   * gets a capture in flight; in front it ends after a frame. And the shot's capture comes two frames
+   * after the first one: a frame drawn just after Chrome starts to draw a page can lack the tiles below
+   * its first row (a shot of only the top 256 px, once in 30 shots of a hidden tab).
    *
    * The allowlist is checked before the first capture: a page off it gets none. When `fn` itself takes
    * the tab off the list (a click on a link), the last captures still reach the new page; their
@@ -530,10 +543,11 @@ export class Tab {
    * a frame): for input. Without it only the first one: for a shot, whose own capture can change the
    * device emulation (a clip, a size); a capture sent during that change would set it again when it ends.
    */
-  private async whileDrawn<T>(fn: () => Promise<T>, opts: { repeat?: boolean } = {}): Promise<T> {
-    if (!this.browser.settings.hiddenDrive) return fn();
+  private async whileDrawn<T>(fn: () => Promise<T>, opts: { repeat?: boolean; shot?: boolean } = {}): Promise<T> {
+    const hidden = this.browser.settings.hiddenDrive;
+    if (!hidden && !opts.shot) return fn();
     await this.assertAllowed();
-    if (await this.evaluate(() => document.visibilityState) !== "hidden") return fn();
+    if (hidden && await this.evaluate(() => document.visibilityState) !== "hidden") return fn();
     let done = false, inFlight = 0;
     // The cheapest capture, with no clip (a clip resizes the page for the capture). Its picture is not used.
     const capture = (timeoutMs: number) => {
@@ -543,7 +557,8 @@ export class Tab {
     };
     void (async () => { while (await capture(10 * 60_000) && opts.repeat && !done); })();
     try {
-      // Two frames: the first one ends Blink's input suppression, the second one comes after its commit.
+      // Two frames: the first one ends Blink's input suppression, the second one comes after its commit
+      // (for a shot: a complete frame, not one drawn just after Chrome started to draw the page).
       await this.evaluate(() => new Promise((r) => {
         const t = setTimeout(r, 2000);
         requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r(true); }));
@@ -563,7 +578,7 @@ export class Tab {
           if (!late) break;
           last = capture(5_000);
         }
-        if (!(await last)) this.browser.settings.log(`agent-browser: the last hidden capture of tab ${this.targetId.slice(0, 8)} did not end in 5 s; Chrome can keep drawing that background tab until its next capture`);
+        if (!(await last)) this.browser.settings.log(`agent-browser: the last ${hidden ? "hidden " : ""}capture of tab ${this.targetId.slice(0, 8)} did not end in 5 s; Chrome can keep drawing that background tab until its next capture`);
       }
     }
   }
@@ -800,13 +815,13 @@ export class Tab {
    * A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort.
    * With a viewport, the page is laid out at exactly that size for the shot (so the PNG is
    * width x scale by height x scale), and the override is cleared afterwards. A failure to clear it
-   * never hides the shot's own error. Under whileDrawn: with hiddenDrive, in a background tab, its one
-   * capture comes before the override, and the shot's own capture ends it.
+   * never hides the shot's own error. Under whileDrawn, in both modes (ab-b84.17): its one capture comes
+   * before the override, and the shot's own capture, two frames later, ends it.
    */
   async screenshot(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number } = {}): Promise<string> {
     notEmpty(path, "screenshot");
     await this.assertAllowed();
-    return this.whileDrawn(() => this.screenshotNow(path, opts));
+    return this.whileDrawn(() => this.screenshotNow(path, opts), { shot: true });
   }
 
   private async screenshotNow(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number }): Promise<string> {

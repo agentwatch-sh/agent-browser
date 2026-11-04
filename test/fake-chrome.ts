@@ -79,6 +79,11 @@ export function rgbaPng(width: number, height: number, pixel: (x: number, y: num
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
+/** A shot of a background page (FakePage.framesDrawn), 2x2 pixels: its top row is SHOT_COLOUR, and its bottom row too, or white when the frame was not fully drawn. */
+export const SHOT_COLOUR: readonly number[] = [0, 128, 255];
+const SHOT_FULL = rgbaPng(2, 2, () => [...SHOT_COLOUR, 255] as [number, number, number, number]).toString("base64");
+const SHOT_TOP_ONLY = rgbaPng(2, 2, (_x, y) => (y === 0 ? [...SHOT_COLOUR, 255] : [255, 255, 255, 255]) as [number, number, number, number]).toString("base64");
+
 const TRUSTED_HTML = "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.";
 
 /** A node that page code creates (the recording overlay): DOM calls only, as a strict page allows. */
@@ -265,8 +270,11 @@ export class FakePage {
    * except while focus emulation is on (which makes the page "visible") or a capture is in flight (a
    * hidden capture: the page stays "hidden"). As measured on Chromium 156: a page that never drew a
    * frame drops each press, release and key (Input.insertText still arrives); a mouse move waits for
-   * the next frame, at most 5 s; a capture sent while the page draws nothing waits until a later
-   * capture ends (Chrome ends every earlier pending capture with a later one).
+   * the next frame, at most 5 s; a capture waits until a later capture ends it (Chrome ends every
+   * earlier pending capture with a later one), also while focus emulation makes the page "visible" and
+   * draw (ab-b84.17): Chrome ends a capture when the frame that it forces is presented, and a frame of
+   * a tab that is not in front is never on screen. A capture's picture lacks everything below the
+   * first row when it was sent before Chrome drew two frames of the page (see `framesDrawn`).
    */
   background = false;
   /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
@@ -281,6 +289,13 @@ export class FakePage {
   readonly focusEmulated = new Set<string>();
   /** The captures in flight on a background page, by their order: each one ends with a later one. */
   heldCaptures: { n: number; end: () => void }[] = [];
+  /**
+   * The frames that Chrome drew of a background page since it last started to draw it (or since its
+   * load). A frame drawn just after that start lacks the tiles below the first row (a shot of only the
+   * top 256 px, seen once in 30 on Chromium 156); from the second one on, the frame is complete.
+   */
+  framesDrawn = 0;
+  private wasDrawing = true;
   private nextCapture = 1;
   private frameWaiters: (() => void)[] = [];
   private frameDue = false;
@@ -311,6 +326,10 @@ export class FakePage {
   update() {
     const v = this.visibilityState;
     if (v !== this.shownAs) { this.shownAs = v; this.visibilityChanges.push(v); }
+    if (this.drawing !== this.wasDrawing) {
+      this.wasDrawing = this.drawing;
+      if (this.drawing) this.framesDrawn = 0;
+    }
     this.scheduleFrame();
   }
 
@@ -327,18 +346,22 @@ export class FakePage {
     this.later(16, () => {
       this.frameDue = false;
       this.drew = true;
+      this.framesDrawn++;
       for (const fn of this.frameWaiters.splice(0)) fn();
     });
   }
 
-  /** A capture of a background page (see `background`); its result is `data`. */
+  /**
+   * A capture of a background page (see `background`); its result is `data`. Alone it waits, also
+   * while the page is "visible" and drawn (focus emulation), unless the page changes by itself.
+   */
   capture<T>(data: T): Promise<T> {
-    const n = this.nextCapture++, drawing = this.drawing || this.drawsByItself;
+    const n = this.nextCapture++, kicks = this.heldCaptures.length > 0 || this.drawsByItself;
     return new Promise((resolve) => {
       this.heldCaptures.push({ n, end: () => resolve(data) });
       this.update();
-      // Sent while Chrome draws the page: it ends after a frame, and every earlier capture with it.
-      if (drawing) this.later(16, () => {
+      // Sent while another capture waits (or on a page that changes by itself): it ends after a frame, and every earlier capture with it.
+      if (kicks) this.later(16, () => {
         this.drew = true;
         const ended = this.heldCaptures.filter((c) => c.n <= n);
         this.heldCaptures = this.heldCaptures.filter((c) => c.n > n);
@@ -388,6 +411,7 @@ export class FakePage {
     this.isolatedContexts.clear(); // a navigation destroys every isolated world
     this.context = this.newContext();
     this.drew = !this.background; // a new page in a background tab has drawn no frame yet
+    this.framesDrawn = 0;
     this.shownAs = this.visibilityState; // a new page starts in its tab's state: no visibilitychange
     this.update();
     spec?.onload?.(this);
@@ -841,8 +865,8 @@ export class FakeChrome {
         if (params.clip) { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
           const k = page.metrics?.deviceScaleFactor ?? 1, v = page.paint % 256;
           data = rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64");
-        }
-        return page.visibilityState === "hidden" ? page.capture({ data }) : { data };
+        } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
+        return page.background ? page.capture({ data }) : { data };
       }
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
