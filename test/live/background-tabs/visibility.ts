@@ -30,6 +30,15 @@
 //   exit 1  a failure in the summary, or an error with a stack trace and no summary.
 //   exit 2  nothing was driven: a usage error, not Linux, a display in use, Xvfb did not start, or
 //           agent-browser could not start its Chrome or connect to it.
+//
+// Measured 2026-11-04 on taylor (Chromium 156.0.8078.79, Debian 13, the launch flags of ab-v16.13).
+// Before ab-v16.15 (main at 143a556, --report-only, exit 1): the hidden page was visible for each
+// command, with two visibilitychange events, and got a focus and a blur: eval 9 ms, text 13, outline
+// 14, type 17, press 13, hover 1028, click 1025 (34 and 21 in tabs c and b), shot 4092, shot --size
+// 3136, shot --full 493, open 46, goto 33, record 4964; the shot of the new tab c failed after 30 s,
+// visible all that time. After it (4 runs, exit 0): no visible time and no visibilitychange for any
+// command but record (4.6 s, two events), no frame after a command, 20 to 140 ms per command (0.9 s for
+// shot --size); the shot of tab c took 0.1 s. In front, as before.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
