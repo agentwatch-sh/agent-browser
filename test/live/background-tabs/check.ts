@@ -20,11 +20,14 @@
 //
 // The page logs its 50 ms interval timer, its animation frames, its trusted clicks and its visibility
 // changes into the DOM, where agent-browser's commands read them. A tab's visibility comes from that log
-// at a time when no command is attached: while a command is attached, a background tab's page reports
-// "visible" (one short visibilitychange to visible and back for each command; the summary's "during"
-// gives it, as information). agent-browser opens tabs a and b in the background (the
-// chrome://inspect tab of the launch stays in front), and the check drives each tab by its name with
-// the library's commands (`commands.click`, `type`, `eval`, `text`, `shot`, as the CLI runs them):
+// at a time when no command is attached: a background tab's page is visible for the length of each
+// agent-browser command, from its attach to its detach, and hidden again after it. In the logs of the
+// runs on taylor that was 5 to 40 ms for eval, text, type and most clicks, about 1 s for some first
+// clicks in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. The summary gives these
+// spans ("visibleMs") and the state during a command ("during"), as information. agent-browser opens
+// tabs a and b in the background (the chrome://inspect tab of the launch stays in front), and the check
+// drives each tab by its name with the library's commands (`commands.click`, `type`, `eval`, `text`,
+// `shot`, as the CLI runs them):
 //   p1  front: chrome://inspect. Both timers over --hidden-ms, hidden. Drive a, then b, both hidden.
 //   p2  front: a. a's timer (visible) and b's (hidden). Drive b (hidden), then a (in front).
 //   p3  front: b. Drive a (hidden).
@@ -35,24 +38,29 @@
 // check's own connection to agent-browser's proxy). Each drive clicks the page's button (a trusted
 // click that changes the page's colour box and its "clicks: N" line), types into its field, evaluates
 // its title, reads its text, and takes a shot whose colour box must show the click, with the button and
-// the "clicks: N" line drawn below it.
-// --before adds the two timer flags back (chromeArgs), to measure the launch of agent-browser 0.2.9.
+// the "clicks: N" line below y=256 in their own colours (rules.ts, shotProblem). 500 ms after each drive
+// the check reads 500 ms of each page's log: the driven tab must be hidden again (unless it is in front)
+// with no animation frame, and the front tab visible with frames.
+// --before adds the two timer flags back (chromeArgs), to measure the launch of release v0.2.9.
 // It prints a JSON summary with "ok", and writes it to DIR/run-XXXXXX/summary.json.
 //   exit 0  every step worked, each page was hidden or visible as its phase expects (right before each
-//           drive, and all through each timer window), both tabs were listed, a visible tab's
-//           timer ran at full rate (median at most 100 ms), and a hidden tab's timer was throttled
-//           (median at least 500 ms; with --before, at most 100 ms). The recordings must not fail.
+//           drive, all through each timer window, and after each drive), a hidden tab drew no animation
+//           frame and a visible one drew some, both tabs were listed, a visible tab's timer ran at full
+//           rate (median at most 100 ms), and a hidden tab's timer was throttled (median at least
+//           500 ms; with --before, at most 100 ms). The recordings must not fail.
 //   exit 1  a failure in the summary, or an error with a stack trace and no summary.
 //   exit 2  nothing was driven, and stderr says why in one line: a usage error, not Linux, a display in
 //           use, Xvfb did not start, or agent-browser could not start its Chrome or connect to it.
 //
-// Measured 2026-11-04 on taylor (Chromium 156.0.8078.79, Debian 13), 4 runs without --before and 4
-// with it, all exit 0: every step worked in every hidden tab, also after the front tab changed. A
-// hidden tab's 50 ms timer: a median of 1000 ms (6 ticks in 6 s, no animation frames); with --before,
-// 50 ms (120 ticks, no animation frames). A visible tab: 50 ms (120 ticks, about 360 frames) in both.
-// A shot of a hidden tab took 0.75 to 3.1 s in both (0.1 s in front); a recording of a hidden tab got
-// 60 fps in both. Before the shot step looked below the first tile row, 1 of 30 shots of a hidden tab
-// without --before lacked everything below y=256 (0 of 25 with --before: too few to compare).
+// Measured 2026-11-04 on taylor (Chromium 156.0.8078.79, Debian 13), on Linux only: 4 runs without
+// --before and 4 with it of an earlier version of the check, and one of each of this version, all
+// exit 0. Every step worked in every hidden tab, also after the front tab changed, and each driven tab
+// was hidden again after its drive, with no animation frame. A hidden tab's 50 ms timer: a median of
+// 1000 ms (6 ticks in 6 s, no animation frames); with --before, 50 ms (120 ticks, no animation
+// frames). A visible tab: 50 ms (120 ticks, about 360 frames) in both. A shot of a hidden tab took 0.7
+// to 3.1 s in both (0.1 s in front); a recording of a hidden tab got 60 fps in both. In the earlier
+// version, whose shot step read only the box, 1 of 30 shots of a hidden tab without --before lacked
+// everything below y=256 (0 of 25 with --before: too few to compare).
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -66,8 +74,11 @@ import { AgentBrowser } from "../../../src/browser.ts";
 import { commands } from "../../../src/commands.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions } from "../../../src/options.ts";
 import { stopProxy } from "../../../src/proxy.ts";
-import { findFfmpeg, pngPixels, type Pixels } from "../../../src/record.ts";
-import { chromeArgs, failures, startMode, TIMER_FLAGS, TIMER_MS, timerStats, visibilityIn, type Drive, type Recording, type Run, type Step, type StepName, type Timer } from "./rules.ts";
+import { findFfmpeg, pngPixels } from "../../../src/record.ts";
+import {
+  BOX_COLOURS, chromeArgs, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, TIMER_MS, timerStats, visibilityIn, visibleSpans,
+  type Drive, type Idle, type Recording, type Run, type Step, type StepName, type Timer,
+} from "./rules.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, before: { type: "boolean" }, "hidden-ms": { type: "string" } } });
 if (!values["out-dir"]) {
@@ -109,7 +120,7 @@ process.on("exit", () => {
   try { const pid = agentChromePid(s); if (pid) process.kill(pid, "SIGTERM"); } catch { /* not started */ }
   for (const c of children.reverse()) c.kill("SIGTERM");
 });
-for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => process.exit(130));
 
 const socket = `/tmp/.X11-unix/X${mode.display}`;
 if (existsSync(socket)) refuse(`display :${mode.display} is in use; pass --display N`);
@@ -129,14 +140,17 @@ delete process.env.XDG_SESSION_TYPE;
 
 // The page logs its timer ticks, animation frames, clicks and visibility changes (Date.now() times) into
 // a hidden element, which agent-browser's isolated world reads: it shares the DOM, not the page's globals.
-const COLOURS = [[200, 0, 0], [0, 160, 0], [0, 0, 200]]; // the box: before any click, after an odd click, after an even one
-const boxColour = (clicks: number) => COLOURS[clicks === 0 ? 0 : clicks % 2 ? 1 : 2];
+// Its parts and colours are LAYOUT's (rules.ts): the button and the status line have colours of their own.
+const placed = (r: { x: number; y: number; width?: number; height?: number }) =>
+  `position:absolute;left:${r.x}px;top:${r.y}px;${r.width ? `width:${r.width}px;height:${r.height}px;` : ""}margin:0`;
+const { box, field: fieldBox, button, status: statusBox } = LAYOUT;
 const PAGE = (name: string) => `<!doctype html><title>tab ${name}</title>
-<style>body{margin:0;font:16px sans-serif}#box{position:fixed;left:0;top:0;width:200px;height:200px;background:rgb(${COLOURS[0]})}
-#f{position:absolute;left:10px;top:220px}#b{position:absolute;left:10px;top:260px;width:120px;height:40px}#status{position:absolute;left:10px;top:310px}</style>
+<style>body{margin:0;font:16px sans-serif}#box{${placed(box)};position:fixed;background:rgb(${BOX_COLOURS[0]})}#f{${placed(fieldBox)}}
+#b{${placed(button)};appearance:none;padding:0;border:0;border-radius:0;background:rgb(${button.colour});color:#000;font:16px sans-serif}
+#status{${placed(statusBox)};line-height:${statusBox.height}px;background:rgb(${statusBox.colour});color:#fff}</style>
 <div id="box"></div><input id="f" autocomplete="off"><button id="b">Click</button><p id="status">clicks: 0</p><pre id="state" hidden></pre>
 <script>
-const ticks = [], frames = [], clicks = [], vis = [[Date.now(), document.visibilityState]], colours = ${JSON.stringify(COLOURS.map((c) => `rgb(${c})`))};
+const ticks = [], frames = [], clicks = [], vis = [[Date.now(), document.visibilityState]], colours = ${JSON.stringify(BOX_COLOURS.map((c) => `rgb(${c})`))};
 const state = document.getElementById("state"), box = document.getElementById("box"), status = document.getElementById("status");
 const write = () => { state.textContent = JSON.stringify({ ticks, frames, clicks, vis }); };
 document.addEventListener("visibilitychange", () => { vis.push([Date.now(), document.visibilityState]); if (vis.length > 1000) vis.shift(); write(); });
@@ -182,7 +196,7 @@ async function toFront(tab: string): Promise<void> {
   await sleep(1000);
 }
 
-const timers: Timer[] = [], drives: Drive[] = [], recordings: Recording[] = [];
+const timers: Timer[] = [], drives: Drive[] = [], idles: Idle[] = [], recordings: Recording[] = [];
 const expect = (tab: string, front: string) => (tab === front ? "visible" : "hidden");
 
 /** Each tab's timer over the next --hidden-ms, with no command in between. */
@@ -236,25 +250,27 @@ async function drive(phase: string, front: string, tab: string): Promise<void> {
   });
   await step("shot", async () => {
     const path = (await commands.shot(o, { tab, path: join(RUN, "shots", `${phase}-${tab}.png`) })).path;
-    const px = pngPixels(readFileSync(path)), { dpr } = await pageState(tab);
-    const at = (Math.round(100 * dpr) * px.width + Math.round(100 * dpr)) * px.channels, got = [px.data[at], px.data[at + 1], px.data[at + 2]], want = boxColour(n);
-    if (!got.every((v, i) => Math.abs(v - want[i]) <= 8)) return `the shot's box is rgb(${got}), expected rgb(${want}) after ${n} clicks`;
-    // The button and the "clicks: N" line, below the first row of 256 px raster tiles: a shot of a
-    // frame that is not fully drawn lacks them (seen once in a hidden tab).
-    const drawn = drawnPixels(px, 0, Math.round(256 * dpr), Math.round(200 * dpr), Math.round(360 * dpr));
-    return drawn >= 1000 * dpr * dpr ? undefined : `the shot has ${drawn} drawn pixels below y=256 (the button and the clicks line), expected at least ${1000 * dpr * dpr}`;
+    return shotProblem(pngPixels(readFileSync(path)), n, (await pageState(tab)).dpr);
   });
-  drives.push({ phase, tab, front, visibility, during, expected: expect(tab, front), steps });
+  const end = Date.now(), logs = await idle(phase, front, tab);
+  drives.push({ phase, tab, front, visibility, during, visibleMs: visibleSpans(logs[tab], t0, end), expected: expect(tab, front), steps });
 }
 
-/** The pixels that are not near white in a box of the picture (from x0, y0 to x1, y1, in its pixels). */
-function drawnPixels(px: Pixels, x0: number, y0: number, x1: number, y1: number): number {
-  let n = 0;
-  for (let y = y0; y < Math.min(y1, px.height); y++) for (let x = x0; x < Math.min(x1, px.width); x++) {
-    const i = (y * px.width + x) * px.channels;
-    if (px.data[i] < 240 || px.data[i + 1] < 240 || px.data[i + 2] < 240) n++;
+/**
+ * The 500 ms that start 500 ms after a drive of tab `driven`, with no command attached: each page's
+ * own visibility and animation frames then. Returns each page's visibility log.
+ */
+async function idle(phase: string, front: string, driven: string): Promise<Record<string, [number, string][]>> {
+  await sleep(500);
+  const from = Date.now();
+  await sleep(500);
+  const to = Date.now(), logs: Record<string, [number, string][]> = {};
+  for (const tab of ["a", "b"]) {
+    const st = await pageState(tab);
+    logs[tab] = st.vis;
+    idles.push({ phase, driven, tab, front, visibility: visibilityIn(st.vis, from, to), expected: expect(tab, front), frames: timerStats(st.ticks, st.frames, from, to).frames });
   }
-  return n;
+  return logs;
 }
 
 /** A 3 s recording of the tab: Chrome's frames for it (information only; a failure is a failure). `visibility` as in drive. */
@@ -266,7 +282,10 @@ async function record(front: string, tab: string, ffmpeg: string | undefined): P
     await sleep(500);
     const t0 = Date.now(), visibility = visibilityIn((await pageState(tab)).vis, t0, t0);
     const r = await commands.record(o, { tab, out: join(RUN, `record-${tab}.mp4`), script, size: "640x360", fps: 30, ffmpeg });
-    recordings.push({ tab, front, visibility, frames: r.frames, seconds: r.seconds, fps: +(r.frames / r.seconds).toFixed(1), maxFrameGapMs: r.maxFrameGapMs });
+    const end = Date.now();
+    await sleep(500);
+    const visibleMs = visibleSpans((await pageState(tab)).vis, t0, end);
+    recordings.push({ tab, front, visibility, visibleMs, frames: r.frames, seconds: r.seconds, fps: +(r.frames / r.seconds).toFixed(1), maxFrameGapMs: r.maxFrameGapMs });
   } catch (e) { recordings.push({ tab, front, error: (e as Error).message.split("\n")[0] }); }
 }
 
@@ -291,19 +310,20 @@ try { ffmpeg = findFfmpeg(); } catch { ffmpeg = undefined; }
 await record("a", "a", ffmpeg);
 await record("a", "b", ffmpeg);
 
-const run: Run = { before: mode.before, tabs: listed, drives, timers, recordings };
+const run: Run = { before: mode.before, tabs: listed, drives, timers, idles, recordings };
 const failed = failures(run);
 const ms = (d: Drive) => Object.fromEntries(d.steps.map((x) => [x.step, x.ms]));
 const summary = {
   ok: failed.length === 0, chrome: product, launch: "agent-browser's own (launchAgentChrome, the proxy, approve: xdotool)", launchMs,
   flags: [...AGENT_ARGS, ...(mode.before ? TIMER_FLAGS : [])], tabs: listed,
   timers: timers.map((t) => ({ phase: t.phase, tab: t.tab, front: t.front, visibility: t.visibility, ...t.stats, windowMs: mode.hiddenMs, askedMs: TIMER_MS })),
-  drives: drives.map((d) => ({ phase: d.phase, tab: d.tab, front: d.front, visibility: d.visibility, during: d.during, ok: d.steps.every((x) => x.ok), ms: ms(d) })),
+  drives: drives.map((d) => ({ phase: d.phase, tab: d.tab, front: d.front, visibility: d.visibility, during: d.during, visibleMs: d.visibleMs, ok: d.steps.every((x) => x.ok), ms: ms(d) })),
+  idles: idles.map((i) => `${i.phase} after ${i.driven}: ${i.tab} ${i.visibility}, ${i.frames} frames`),
   recordings, failures: failed, run: RUN,
 };
 // summary.json also has each step's detail and each page's whole visibility log.
 const visibilityLogs = { a: (await pageState("a")).vis, b: (await pageState("b")).vis };
-writeFileSync(join(RUN, "summary.json"), JSON.stringify({ ...summary, drives, timers, visibilityLogs }, null, 2) + "\n");
+writeFileSync(join(RUN, "summary.json"), JSON.stringify({ ...summary, drives, timers, idles, visibilityLogs }, null, 2) + "\n");
 process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
 await browser.disconnect();
 await commands.quit(o).catch(() => {});

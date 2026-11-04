@@ -1,19 +1,39 @@
 // The pure parts of the live background-tab check (test/live/background-tabs/rules.ts): the start guard,
-// the agent Chrome's extra switches, the timer statistics and the failure rules. The check itself (a real
-// Chromium in a private Xvfb) is not part of `npm test`.
+// the agent Chrome's extra switches, the timer statistics, the shot's pixels and the failure rules. The
+// check itself (a real Chromium in a private Xvfb) is not part of `npm test`.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assertSafeChromeArgs } from "../src/agent.ts";
-import { chromeArgs, failures, startMode, TIMER_FLAGS, timerStats, visibilityIn, type Drive, type Run, type Timer } from "./live/background-tabs/rules.ts";
+import type { Pixels } from "../src/record.ts";
+import { boxColour, chromeArgs, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, timerStats, visibilityIn, visibleSpans, type Drive, type Idle, type Run, type Timer } from "./live/background-tabs/rules.ts";
 
-const stats = (medianMs: number | null) => ({ ticks: 6, medianMs, maxMs: medianMs, frames: 0 });
+const stats = (medianMs: number | null, frames = 0) => ({ ticks: 6, medianMs, maxMs: medianMs, frames });
 const timer = (tab: string, expected: "visible" | "hidden", medianMs: number | null, o: Partial<Timer> = {}): Timer =>
-  ({ phase: "p1", tab, front: "a", visibility: expected, expected, stats: stats(medianMs), ...o });
+  ({ phase: "p1", tab, front: "a", visibility: expected, expected, stats: stats(medianMs, expected === "visible" ? 360 : 0), ...o });
+const idle = (tab: string, expected: "visible" | "hidden", o: Partial<Idle> = {}): Idle =>
+  ({ phase: "p2", driven: "b", tab, front: "a", visibility: expected, expected, frames: expected === "visible" ? 30 : 0, ...o });
 const drive = (tab: string, o: Partial<Drive> = {}): Drive => ({ phase: "p2", tab, front: "a", visibility: "hidden", during: "visible", expected: "hidden",
   steps: (["click", "type", "eval", "text", "shot"] as const).map((step) => ({ step, ok: true, ms: 40 })), ...o });
 const run = (o: Partial<Run> = {}): Run => ({ before: false, tabs: ["a", "b"], drives: [drive("b"), drive("a", { visibility: "visible", expected: "visible" })],
-  timers: [timer("a", "visible", 50), timer("b", "hidden", 1000)], recordings: [{ tab: "b", front: "a", visibility: "hidden", frames: 30, seconds: 3, fps: 10, maxFrameGapMs: 900 }], ...o });
+  timers: [timer("a", "visible", 50), timer("b", "hidden", 1000)], idles: [idle("a", "visible"), idle("b", "hidden")],
+  recordings: [{ tab: "b", front: "a", visibility: "hidden", frames: 30, seconds: 3, fps: 10, maxFrameGapMs: 900 }], ...o });
+
+/**
+ * A shot of the page (CSS px times dpr) after `clicks` clicks: white, with the box, the button and the
+ * status line in their colours. Only the rows above `drawn` (CSS px) are drawn; the rest is `rest`.
+ */
+function picture(clicks: number, o: { dpr?: number; channels?: number; drawn?: number; rest?: number[] } = {}): Pixels {
+  const dpr = o.dpr ?? 1, channels = o.channels ?? 3, width = 400 * dpr, height = 400 * dpr, data = Buffer.alloc(width * height * channels, 255);
+  const fill = (r: { x: number; y: number; width: number; height: number }, c: readonly number[]) => {
+    for (let y = r.y * dpr; y < (r.y + r.height) * dpr; y++) for (let x = r.x * dpr; x < (r.x + r.width) * dpr; x++) for (let ch = 0; ch < Math.min(c.length, channels); ch++) data[(y * width + x) * channels + ch] = c[ch];
+  };
+  fill(LAYOUT.box, boxColour(clicks));
+  fill(LAYOUT.button, LAYOUT.button.colour);
+  fill(LAYOUT.status, LAYOUT.status.colour);
+  if (o.drawn !== undefined) fill({ x: 0, y: o.drawn, width: 400, height: 400 - o.drawn }, o.rest ?? [255, 255, 255, 255]);
+  return { width, height, channels, data };
+}
 
 test("start guard: Linux only, in a private Xvfb; the display and the timer window are checked", () => {
   assert.deepEqual(startMode("linux", {}), { chrome: "/usr/bin/chromium", display: 98, before: false, hiddenMs: 6000 });
@@ -50,6 +70,31 @@ test("visibilityIn: the page's own states from one time to another, in order and
   assert.equal(visibilityIn([[0, "hidden"], [10, "hidden"]], 0, 20), "hidden");
 });
 
+test("visibleSpans: how long each visible span lasted that began in the window, in ms; a span still open at the end is cut there", () => {
+  const log = [[0, "hidden"], [1000, "visible"], [1012, "hidden"], [2000, "visible"], [3010, "hidden"], [4000, "visible"]] as const;
+  assert.deepEqual(visibleSpans(log, 500, 3500), [12, 1010]);
+  assert.deepEqual(visibleSpans(log, 1500, 4500), [1010, 500]);
+  assert.deepEqual(visibleSpans(log, 1005, 1900), [], "a span that began before the window is not counted");
+  assert.deepEqual(visibleSpans([[0, "hidden"]], 0, 100), []);
+});
+
+test("shotProblem: a full picture passes; the wrong box colour, or a picture drawn only above y=256, fails", () => {
+  assert.equal(shotProblem(picture(3), 3), undefined);
+  assert.equal(shotProblem(picture(2, { dpr: 2, channels: 4 }), 2, 2), undefined, "a picture at 2x, with alpha");
+  assert.equal(shotProblem(picture(0), 0), undefined, "no click yet: the first colour");
+  assert.match(shotProblem(picture(2), 3) ?? "", /the box is rgb\(0,0,200\), expected rgb\(0,160,0\) after 3 clicks/);
+  // A frame that is not fully drawn: only the first row of 256 px raster tiles, the rest white, black or transparent.
+  for (const rest of [[255, 255, 255], [0, 0, 0]]) assert.match(shotProblem(picture(3, { drawn: 256, rest }), 3) ?? "", /the button is rgb\(\d+,\d+,\d+\), expected rgb\(255,170,0\)/);
+  assert.match(shotProblem(picture(3, { channels: 4, drawn: 256, rest: [255, 170, 0, 0] }), 3) ?? "", /the button is transparent/, "the right colour, but transparent");
+  assert.match(shotProblem(picture(3, { drawn: 305 }), 3) ?? "", /the status line is rgb\(255,255,255\), expected rgb\(120,0,160\)/);
+  assert.match(shotProblem(picture(3), 3, 2) ?? "", /the box|the button|the status line/, "the wrong pixel ratio reads the wrong pixels");
+});
+
+test("the page's parts below y=256 have colours of their own, not the default grey of a button", () => {
+  assert.ok(LAYOUT.button.y >= 256 && LAYOUT.status.y >= 256, "below the first row of raster tiles");
+  for (const c of [LAYOUT.button.colour, LAYOUT.status.colour]) assert.ok(new Set(c).size > 1, `rgb(${c}) is not a grey, white or black`);
+});
+
 test("failures: a good run has none", () => {
   assert.deepEqual(failures(run()), []);
   assert.deepEqual(failures(run({ before: true, timers: [timer("a", "visible", 50), timer("b", "hidden", 50)] })), []);
@@ -72,4 +117,17 @@ test("failures: a hidden tab's timer at full rate without the timer flags, or sl
   assert.match(failures(run({ timers: [timer("a", "visible", 1000)] })).join(), /expected at most 100 ms \(a visible tab\)/);
   assert.match(failures(run({ timers: [timer("b", "hidden", null)] })).join(), /fewer than two ticks/);
   assert.match(failures(run({ timers: [timer("b", "hidden", 1000, { visibility: "visible" })] })).join(), /the page is visible, expected hidden/);
+});
+
+test("failures: animation frames in a hidden tab's timer window, or none in a visible tab's", () => {
+  assert.deepEqual(failures(run({ timers: [timer("b", "hidden", 1000, { stats: stats(1000, 4) })] })), ["p1: tab b's timer (front: a): 4 animation frames in a hidden tab, expected 0"]);
+  assert.deepEqual(failures(run({ timers: [timer("a", "visible", 50, { stats: stats(50, 0) })] })), ["p1: tab a's timer (front: a): no animation frame in a visible tab"]);
+});
+
+test("failures: in the 500 ms after a drive the driven tab must be hidden again with no frames, and the front tab visible with frames", () => {
+  assert.deepEqual(failures(run({ idles: [idle("b", "hidden", { visibility: "hidden, visible" })] })),
+    ["p2: after the drive of tab b, tab b was hidden, visible, expected hidden (front: a)"]);
+  assert.deepEqual(failures(run({ idles: [idle("b", "hidden", { frames: 3 })] })), ["p2: after the drive of tab b, hidden tab b drew 3 animation frames, expected 0"]);
+  assert.deepEqual(failures(run({ idles: [idle("a", "visible", { frames: 0 })] })), ["p2: after the drive of tab b, visible tab a drew no animation frame"]);
+  assert.deepEqual(failures(run({ idles: [idle("a", "visible", { visibility: "hidden" })] })), ["p2: after the drive of tab b, tab a was hidden, expected visible (front: a)"]);
 });

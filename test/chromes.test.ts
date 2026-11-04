@@ -211,7 +211,7 @@ test("the binary, the profile and the launch flags: `timeout` in front of a macO
   ]);
 });
 
-test("an agent Chrome that agent-browser 0.2.9 or before started, with the two timer flags, is still listed until it quits (ab-v16.13)", () => {
+test("an agent Chrome that release v0.2.9 or a build before this change started, with the two timer flags, is still listed until it quits (ab-v16.13)", () => {
   const T = folder("timers-t"), U = folder("timers-u");
   const before = "--no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
   assert.notEqual(before, SIG, "today's launch has no timer flag");

@@ -147,20 +147,25 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   `--no-default-browser-check` and `--disable-backgrounding-occluded-windows` (`AGENT_ARGS`). The
   last one keeps an agent window behind the operator's windows visible. Without it, macOS marks the
   covered page hidden while the agent's clicks and typing still reach it, and a site can see that
-  (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 9). Since ab-v16.13 there is
-  no timer flag (`--disable-background-timer-throttling`, `--disable-renderer-backgrounding`). With
-  them a hidden tab ran a 50 ms timer at 50 ms, unlike the operator's Chrome, and a site can measure
-  that. Now a tab that is not in front is hidden between commands, as in plain Chrome: a 50 ms timer
-  ticks once a second, and the page gets no animation frames. agent-browser still drives it. While a
-  command is attached, the page reports `visible`: each command gives one short `visibilitychange` to
-  `visible` and back to `hidden`. A caller that needs the old timers can pass the two flags in
-  `chromeArgs` (`--chrome-args`). Measured on taylor (2026-11-04, Chromium 156, Xvfb,
-  `test/live/background-tabs/`): click, type, eval, text, shot and record worked in a background tab,
-  also after the front tab changed, with the one flag and with all three. A hidden tab's 50 ms timer
-  had a median of 1000 ms (6 ticks in 6 s); with the two timer flags, 50 ms (120 ticks). A shot of a
-  background tab took 0.8 to 3.1 s with either set (0.1 s in front). 1 of 30 shots of a background
-  tab with the one flag showed only the top 256 px of the page (0 of 25 with all three; too few to
-  compare); the check now fails on such a shot.
+  (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 9). The launch has no timer
+  flag any more (`--disable-background-timer-throttling`, `--disable-renderer-backgrounding`; release
+  v0.2.9 had both). With them a hidden tab ran a 50 ms timer at 50 ms, unlike the operator's Chrome,
+  and a site can measure that. Now a tab that is not in front is hidden between commands, as in plain
+  Chrome: a 50 ms timer ticks once a second, and the page gets no animation frames. After about 5
+  minutes in the background, Chrome's intensive wake-up throttling can slow chained timers in a hidden
+  tab to one wake-up a minute (from Chrome's documentation; not measured here). agent-browser still
+  drives the tab. The page is visible for the length of each command, from its attach to its detach,
+  and hidden again after it; a site sees a `visibilitychange` to `visible` and back to `hidden`. In the
+  check's logs on taylor that was 5 to 40 ms for eval, text, type and most clicks, up to about 1 s for
+  the first click in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. A caller that
+  needs the old timers can pass the two flags in `chromeArgs` (`--chrome-args`). Measured on Linux
+  only (taylor, 2026-11-04, Chromium 156, Xvfb, `test/live/background-tabs/`): click, type, eval,
+  text, shot and record worked in a background tab, also after the front tab changed, with the one
+  flag and with all three. A hidden tab's 50 ms timer had a median of 1000 ms (6 ticks in 6 s); with
+  the two timer flags, 50 ms (120 ticks). A shot of a background tab took 0.2 to 3.1 s with either set
+  (0.1 s in front). 1 of 30 shots of a background tab with the one flag showed only the top 256 px of
+  the page (0 of 25 with all three; too few to compare); the check now fails on such a shot. On macOS
+  none of this is measured again (see **Measured** under **Recording**).
 - **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
   headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
@@ -188,8 +193,9 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
     connects to a Chrome, so it raises no "Allow remote debugging?" prompt. It signals no process.
   - An agent Chrome is a Chrome main process: the Chrome or Chromium binary, on a `--user-data-dir`,
     with no `--type=`. Also, agent-browser's launch flags are right in front of that profile (today's,
-    or those of agent-browser 0.2.9 and before, with the two timer flags), or an agent-browser proxy
-    of this user drives that profile. A process that only names a profile in its arguments is not one.
+    or those of release v0.2.9 and builds before this change, with the two timer flags), or an
+    agent-browser proxy of this user drives that profile. A process that only names a profile in its
+    arguments is not one.
   - Not listed: a `chromeBin` of another Chromium browser (for example Brave), a Linux Chrome binary
     in a folder whose name has a space, and a macOS app path that holds " -".
   - The state folder and the command name come from the window name of agent-browser's launch. A
@@ -488,11 +494,14 @@ has `press` (the moment of the press), a `press` step has `keys` (each key), a `
 | App hidden (Cmd-H) | 60 fps | 60 fps |
 
 "Agent flags" are the agent browser's launch flags of that day: `--disable-backgrounding-occluded-windows`,
-`--disable-renderer-backgrounding` and `--disable-background-timer-throttling`. Since ab-v16.13 a launch
-sets only the first (see **Launch flags and background tabs**). This table is not measured again on
-macOS with that one flag. On Linux (taylor, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of a
-background tab got 60 fps with the one flag and with all three. The screencast itself keeps a
-minimized or hidden tab painting.
+`--disable-renderer-backgrounding` and `--disable-background-timer-throttling`. After release v0.2.9 the
+two timer flags were dropped, and a launch sets only the first (see **Launch flags and background
+tabs**). This table is not measured again on macOS with that one flag. So on macOS a recording of a
+background tab may now get about 28 fps with gaps of 0.63 s, as in the "no flags" column. On Linux
+(taylor, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of a background tab got 60 fps with the one
+flag and with all three; the check that drives background tabs ran on Linux only. On macOS the
+screencast kept a minimized window and a hidden app painting at 55 to 60 fps also without the flags,
+and a covered window at 47 fps; a background tab without the flags painted at 28 fps.
 So the operator can work in another window during a recording, and `record` does not bring the
 tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space). A recording at 1920x1080 and
 `--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
@@ -839,18 +848,21 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.
 - `test/live/background-tabs/` (`node test/live/background-tabs/check.ts --out-dir DIR [--before]`;
-  Linux only, in a private Xvfb; see the head of `check.ts`): the check of ab-v16.13. It goes through
-  agent-browser's own launch, with the xdotool approver of **Unattended approval**, on a new state
-  folder, with one local page and no network. agent-browser opens two tabs in the background, and
+  Linux only, in a private Xvfb; see the head of `check.ts`): agent-browser still drives background
+  tabs without the two timer flags. It goes through agent-browser's own launch, with the xdotool
+  approver of **Unattended approval**, on a new state folder, with one local page and no network. agent-browser opens two tabs in the background, and
   the check drives each one by its name (click, type, eval, text, shot) while the other tab, or the
   launch's `chrome://inspect` tab, is in front; it switches the front tab and back, and records each
-  tab for 3 s. It measures each tab's 50 ms timer while no command is attached. `--before` adds the
-  two timer flags back. Not part of `npm test`. Measured on taylor on 2026-11-04 (Chromium
-  156.0.8078.79): 4 runs with and 4 without `--before`, all exit 0; see **Launch flags and background
-  tabs** and the head of `check.ts`.
+  tab for 3 s. It measures each tab's 50 ms timer while no command is attached, and after each drive
+  it checks that the driven tab is hidden again (no animation frame) and the front tab visible. A
+  shot must show the page's colour box, button and status line in their own colours. `--before` adds
+  the two timer flags back. Not part of `npm test`. Measured on taylor on 2026-11-04 (Chromium
+  156.0.8078.79), with and without `--before`, all exit 0; see **Launch flags and background tabs**
+  and the head of `check.ts`.
 - `test/background-tabs.test.ts`: the background-tab check's pure parts
   (`test/live/background-tabs/rules.ts`): the start guard, the Chrome switches, the timer statistics,
-  the visibility log and the failure rules.
+  the visibility log, the shot's pixels (a full picture, and one drawn only above y=256) and the
+  failure rules.
 - `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
   `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
   (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab

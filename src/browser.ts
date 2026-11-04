@@ -274,11 +274,13 @@ export class AgentBrowser {
    * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
    * browser it is a background tab in the current window: a foreground tab activates Chrome, which
    * takes the operator's focus and Space (measured 2026-10-30). Between commands that tab is hidden and
-   * its timers slow down as in plain Chrome (the agent browser has no timer flags since ab-v16.13);
-   * click, type, eval, text, shot and record still work in it (test/live/background-tabs/check.ts). In
-   * the operator's Chrome with no pin, it gets a window of its own, opened behind theirs, and that
-   * window is pinned at once: there a background *tab* was throttled and trusted input stalled, while a
-   * separate window renders normally without stealing focus.
+   * its timers slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9);
+   * during each command its page is visible. Click, type, eval, text, shot and record still work in it
+   * (test/live/background-tabs/check.ts; measured on Linux only: on macOS a recording of a background
+   * tab may now get about 28 fps, which is not measured again). In the operator's Chrome with no pin,
+   * it gets a window of its own, opened behind theirs, and that window is pinned at once: there a
+   * background *tab* was throttled and trusted input stalled, while a separate window renders normally
+   * without stealing focus.
    */
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);

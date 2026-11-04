@@ -83,8 +83,8 @@ export function chromeMainProfile(command: string): string | undefined {
 
 /**
  * agent-browser's own launch flags, as ps shows them in front of the profile (launchAgentChrome): today's,
- * and those of agent-browser 0.2.9 and before, which also had the two timer flags (dropped in ab-v16.13).
- * An agent Chrome that an earlier version started keeps its flags until it quits.
+ * and those of release v0.2.9 and builds before this change, which also had the two timer flags. An
+ * agent Chrome that one of them started keeps its flags until it quits.
  */
 const LAUNCHES = [
   AGENT_ARGS,
