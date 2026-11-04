@@ -570,6 +570,27 @@ class ChromesResult:
 
 
 @dataclass(frozen=True)
+class FrontResult:
+    """The agent Chrome that `front` brought to the front (macOS), and the request that did it.
+
+    `via` is "activate" or "activate-from" (the second request, macOS 14 and later, which names the app
+    in front). `state_dir` and `window_name` are None when the evidence does not give them.
+    """
+
+    chrome_pid: int
+    profile_dir: str
+    state_dir: Optional[str]
+    window_name: Optional[str]
+    via: Literal["activate", "activate-from"]
+
+    @classmethod
+    def from_json(cls, d: Mapping[str, object], where: str = "front") -> "FrontResult":
+        via = cast(Literal["activate", "activate-from"], _one_of(d, "via", where, ("activate", "activate-from")))
+        return cls(chrome_pid=_int(d, "chromePid", where), profile_dir=_str(d, "profileDir", where), state_dir=_opt_str(d, "stateDir", where),
+                   window_name=_opt_str(d, "windowName", where), via=via)
+
+
+@dataclass(frozen=True)
 class ParamSpec:
     """A command parameter: `name` is camelCase in JSON; the Python method takes its snake_case form."""
 

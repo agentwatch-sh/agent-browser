@@ -61,7 +61,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
-| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in); input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/cli.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`, on Chrome Beta and Google Chrome: in 12 of 12 starts the new agent Chrome took the front; the fix is open, and `--variant` measures its candidates; the Space is not measured) |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in); input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. `front` (macOS) is the one command that brings the agent window forward: a person runs it to answer Chrome's prompt, and no other command calls it. | `test/record.test.ts`, `test/agent.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`, on Chrome Beta and Google Chrome: in 12 of 12 starts the new agent Chrome took the front; the fix is open, and `--variant` measures its candidates; the Space is not measured) |
 | A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
@@ -229,6 +229,66 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   - A proxy is up when the state folder's `chrome-proxy.json` names a live agent-browser proxy of
     that state folder and profile, with the same upstream. The proxy writes that file only once
     Chrome accepted its connection.
+- **Bringing the asking window to the front (macOS):** `agent-browser front --state-dir DIR` brings
+  this consumer's agent Chrome to the front, so that you find its "Allow remote debugging?" prompt.
+  It takes the operator's focus, so a person runs it. An agent never runs it on its own. On macOS the
+  notice of a command that waits for the prompt names it (`<command name> front`, with "a person
+  runs it; an agent never runs it"). The notice does not name it when the `approve` option answers
+  the prompt, in personal mode, or with an `endpoint` override.
+  - It finds the agent Chrome that holds this consumer's profile: the pid in the profile's
+    `SingletonLock`, which Chrome makes at its start. `chromes` must list that pid as an agent
+    Chrome of this user on this profile: agent-browser started it, or an agent-browser proxy of this
+    user drives it. The lock must not be older than that process. So it refuses every other Chrome:
+    a Chrome on that profile that agent-browser did not start and that no agent-browser proxy of
+    this user drives, another consumer's agent Chrome (also one whose profile `ps` reads short at a
+    " -"), and the operator's own Chrome. It never connects to a Chrome, so it raises no new prompt.
+    It signals no process.
+  - It asks macOS to unhide and activate that one instance by its pid: AppKit's
+    `NSRunningApplication unhide` and `activateWithOptions:` with all the windows of that instance,
+    through `osascript -l JavaScript`. The agent browser can be a second instance of the operator's
+    own Google Chrome.app, with the same bundle id, so `open -a` cannot choose it. A pid can. Before
+    the request, the script checks the pid again, so a pid that another program has now is refused:
+    its executable must be the agent Chrome's binary, and its launch date (from Launch Services) must
+    be within 5 s of the start time that `ps` gives. Apple gives no launch date for an app that did not
+    start through Launch Services (`launch --login` starts Chrome without `open`); then only the
+    executable is checked.
+  - A minimized window stays in the Dock: activation does not bring it back. Then `front` still
+    succeeds, and its text says so: click the window in the Dock, or the agent browser's Chrome icon.
+  - It needs no new permission. The script addresses no app by name and sends no Apple Event. macOS
+    asks for the Automation permission only for an Apple Event to another app (Apple:
+    `NSAppleEventsUsageDescription` is "required if your app uses APIs that send Apple events"). It
+    uses no Accessibility API and no System Events. (The `--approve osascript` way needs
+    Accessibility; `front` does not use it.) Apple's documentation of the activation methods of
+    `NSRunningApplication` names no permission.
+  - macOS 14 and later can refuse the request. There activation is a request, and "only the active
+    app can influence the activation context" (Apple: cooperative activation). `osascript` is not the
+    active app; your terminal is. So `front` reads the front app (`lsappinfo front`) for 1.5 s after
+    the request. If the agent Chrome is not in front, on macOS 14 and later it asks once more with
+    `activateFromApplication:options:`, which names the app in front. That app (your terminal) did
+    not yield its activation, so macOS probably refuses this request too; the Mac check measures it.
+    If the agent Chrome is still not in front, `front` fails (exit 1). The message names the macOS
+    version, the pids, the requests that it sent, and the way by hand: Control-click the Dock icon of
+    the agent's Chrome, and choose the window by its name. `front` stops after 60 s in all.
+  - Linux and other systems: `front` refuses with a usage error before anything runs. On a Linux
+    server the agent browser runs on a display of its own (on taylor, a private Xvfb), and no person
+    watches that display.
+  - Not measured on a Mac yet. The Mac check, in your own terminal, while your own Google Chrome is
+    open:
+    1. Start an agent Chrome on a second instance of Google Chrome.app:
+       `S=$(mktemp -d /tmp/ab-front.XXXXXX)/state; node bin/agent-browser.js launch --state-dir "$S" --chrome-bin "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --json`.
+       Then `ls -l "$S/profile/SingletonLock"` must point at `<host>-<pid>`, with the pid that
+       `node bin/agent-browser.js chromes` gives: `front` finds the Chrome by this link (Chromium's
+       POSIX lock, not yet seen on this Mac).
+    2. Click your terminal.
+    3. Run this one line:
+       `lsappinfo info -only pid "$(lsappinfo front)"; node bin/agent-browser.js front --state-dir "$S" --json; echo "exit $?"; lsappinfo info -only pid "$(lsappinfo front)"`.
+    4. Pass: the first `lsappinfo` names your terminal's pid, `front` exits 0, the second `lsappinfo`
+       names its `chromePid`, the agent window is in front, your own Chrome stays behind, and macOS
+       shows no permission dialog.
+    5. Hidden and minimized: hide the agent Chrome (Cmd-H), click your terminal, and run the line
+       again (pass: the window shows). Minimize the agent window (Cmd-M), click your terminal, and run
+       it again (record whether the window shows; the text names the Dock).
+    6. `node bin/agent-browser.js quit --state-dir "$S" --json`.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -582,7 +642,8 @@ result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)
 `shot(o, { tab, path, full, size, scale })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
 `close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`,
 `record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `chromes()`
-(no options: every agent-browser Chrome of this user), `commands()`.
+(no options: every agent-browser Chrome of this user), `front(o)` (macOS; for a person only: it takes
+the focus), `commands()`.
 Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `COMMAND_SPECS` describes them (names, parameters, CLI usage).
 
@@ -612,6 +673,7 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 **Lower level:** `launchAgentChrome`, `agentEndpoint`, `agentChromePid`, `agentChromeBin`,
 `findAgentPid`, `parsePs`, `processTree` (a Chrome's process tree, for example to record its audio),
 `listAgentChromes` (what `chromes` lists), `parseUserPs`, `chromeMainProfile`, `isChromeBinary`,
+`bringToFront` (what `front` does), `agentChromeFor`, `osascriptFront`, `FRONT_JXA`,
 `restoresOnStartup`, `startProxy`, `stopProxy`, `proxyInfo`, `browserTarget`, `localBrowserStatus`,
 `notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `recordTab`,
 `planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`, `pointAt`, `fittsMs`, `seededRandom`,
@@ -686,6 +748,7 @@ opened under a tab scope.
 | `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds` (at most 3600), `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers; nothing after the tab leaves the allowlist) |
 | `record <tab> --out clip.mp4 [--script S] [--setup S] [--size WxH] [--fps N] [--scale N] [--no-cursor] [--settle MS] [--seed N] [--ffmpeg PATH]` | `tab`, `path`, `provenance` (the JSON beside the MP4), `width`, `height`, `scale`, `fps`, `videoWidth`, `videoHeight`, `frames` (screencast frames kept), `seconds`, `maxFrameGapMs`, `steps` int, `events` (see **Recording**), `warnings` string[] |
 | `chromes` | `chromes`: one entry for each agent-browser Chrome of this user on the machine, by pid: `{pid, profileDir, stateDir: string\|null, windowName: string\|null, commandName: string\|null, proxy: {pid, upstream}\|null}` (`proxy` is the state folder's approved proxy when it is up; see **Every agent browser on the machine**). Read-only; no `--state-dir`. |
+| `front` | `chromePid`, `profileDir`, `stateDir` string\|null, `windowName` string\|null, `via`: `"activate"`\|`"activate-from"` (the request that brought it to the front). macOS only; elsewhere a `usage` error. For a person only, because it takes the focus; see **Bringing the asking window to the front**. |
 | `commands` | `commands`: the command list (`name`, `summary`, `usage`, `params`) |
 
 `fetch` and `download` act through an allowlisted tab and send the profile's cookies, so their URL
@@ -741,6 +804,7 @@ dataclass:
 | `net(tab, seconds=None, match=None, max=None)` | `NetResult(tab, seconds, entries: list[NetHttp \| NetWs])` |
 | `record(tab, out, script=None, setup=None, size=None, fps=None, scale=None, no_cursor=False, settle=None, seed=None, ffmpeg=None)` | `RecordResult(tab, path, provenance, width, height, scale, fps, video_width, video_height, frames, seconds, max_frame_gap_ms, steps, events: list[RecordEvent(step, kind, start, end, press, keys, first, last)], warnings)` |
 | `chromes()` | `ChromesResult(chromes: list[AgentChrome(pid, profile_dir, state_dir, window_name, command_name, proxy: ProxyInfo \| None)])`: every agent-browser Chrome of this user, not only this consumer's |
+| `front()` | `FrontResult(chrome_pid, profile_dir, state_dir, window_name, via)`: macOS only (elsewhere `UsageError`); for a person only |
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
 Each method that takes a `tab`, and `window`, also takes `any_scope=False` as its last argument (see
@@ -837,6 +901,16 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   files (never read). Through the CLI with a stand-in `ps`, it proves that the listing connects to
   nothing and signals nothing: stand-in processes own the profile's debugging port and the proxy
   socket, and log each connection and signal. They end by themselves with the test.
+- `test/front.test.ts`: `front` with crafted macOS `ps` rows, real `SingletonLock` links in the temp
+  folder, and a stand-in for `osascript`, `lsappinfo` and `sw_vers`, so nothing is activated.
+  Covered: the request names only the agent Chrome's pid, never the operator's own Chrome of the same
+  app or another consumer's (also one whose profile `ps` reads short at a " -"); a Chrome that an
+  agent-browser proxy drives; the refusals (no lock, a stale lock, a lock that names no agent Chrome,
+  a pid that another program has now by its executable or its launch date, a pid that this login
+  session has no app for, a Chrome that quit, a reply that cannot be read); the second request on
+  macOS 14 and later only; the failure text with the macOS version; the time limit; personal mode and
+  Linux. The JXA script runs in a stand-in of the ObjC bridge (`node:vm`): the names that it uses, the
+  unhide before the activation, the 5 s launch-date window. Also the CLI on Linux, and the notice.
 - `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
   lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it
@@ -970,6 +1044,7 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 | `src/cli.ts` | argument parsing, JSON and human output |
 | `src/agent.ts` | the agent Chrome: binary, launch, endpoint check, pid lookup, process tree |
 | `src/chromes.ts` | `chromes`: every agent-browser Chrome of this user, from the process table |
+| `src/front.ts` | `front`: bring the agent Chrome to the front by its pid (macOS) |
 | `src/proxy.ts` | the multiplexing CDP proxy |
 | `src/diagnostics.ts` | proxy attempt log, local status, notify hook |
 | `src/allowlist.ts` | the allowlist: entry checks and host matching |
