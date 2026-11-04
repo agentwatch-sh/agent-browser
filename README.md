@@ -108,11 +108,12 @@ macOS limit, kept on every system). A deep state folder, for example an agent se
 macOS, can pass it. Then the command fails with a usage error that gives the length and names the way
 out: `--socket PATH` (library option `socketPath`, Python `socket=`) with a short path in a folder that
 only you can write (mode 0700). The error gives an example path that fits:
-`<dir>/ab-<first 8 hex digits of sha256(stateDir)>.sock`, where `<dir>` is `$XDG_RUNTIME_DIR`, else
-`$TMPDIR`. Each folder is used only when it is this user's and has no group or other write bit, so
-the shared `/tmp` is never the example; with no such folder, the error gives no example. Every caller
-of that state folder must give the same `--socket`, or it starts a second proxy. A `socketPath` that
-you give is used as it is; one longer than 103 bytes is refused with the same way out.
+`<dir>/ab-<first 8 hex digits of the sha256 of the state folder's real path>.sock`, where `<dir>` is
+the real path of `$XDG_RUNTIME_DIR`, else of `$TMPDIR`. Each folder is used only when it is this user's
+and has no group or other write bit, so the shared `/tmp` is never the example; with no such folder,
+the error gives no example. Every caller of that state folder must give the same `--socket`, or it
+starts a second proxy. A `socketPath` that you give is used as it is; one longer than 103 bytes is
+refused with the same way out and example.
 
 Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
 is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.
