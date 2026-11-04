@@ -63,7 +63,7 @@
 // 156.0.8078.81, the same results in both; 209 trials each, exit 0): before: F7, Meta+L (the focus
 // left the page), F12, Meta+Alt+I (DevTools), Meta+R (reload), Meta+W (the window closed), Meta+T (a
 // new tab). Every before trial without an effect had the Meta+L control blur (beforeUnproven empty).
-// record: none (Shift+F10 opened no context menu). press: none. Every record and press key reached
+// record: none (Shift+F10: no contextmenu event). press: none. Every record and press key reached
 // the page. A --background run (Chrome Beta) exited 1, as expected: its record and press trials were
 // not measured. --full-screen (210 trials): not measured yet.
 
