@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -13,8 +14,8 @@ from typing import Any, Dict, List
 from unittest import mock
 
 from agent_browser import (
-    AgentBrowser, ApprovalNeededError, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError, NotAllowedError, PackageNotFoundError,
-    PinRequiredError, ProtocolError, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef, UsageError,
+    AgentBrowser, AgentChrome, ApprovalNeededError, ChromesResult, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError, NotAllowedError,
+    PackageNotFoundError, PinRequiredError, ProtocolError, ProxyInfo, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef, UsageError,
 )
 
 from .support import FakeChrome, Consumer, ROOT, stand_in_node
@@ -400,6 +401,54 @@ class PathsTest(unittest.TestCase):
         for flag, value in (("--state-dir", "state"), ("--allowlist", "allow.json"), ("--profile", "p"), ("--socket", "s.sock")):
             self.assertEqual(argv[argv.index(flag) + 1], value, flag)
         self.assertNotIn("cwd", kwargs, "the CLI runs in the caller's current folder, so a relative path means the same there")
+
+
+class ChromesTest(unittest.TestCase):
+    """`chromes()` through the real CLI, with a stand-in `ps` first on PATH: the CLI reads crafted rows."""
+
+    def setUp(self) -> None:
+        self.consumer = Consumer()
+        self.folder = self.consumer.dir
+
+    def tearDown(self) -> None:
+        self.consumer.remove()
+
+    def test_chromes_lists_the_agent_chromes_of_this_user_with_typed_fields(self) -> None:
+        uid = os.getuid()
+        state = self.folder / "state"
+        (state / "profile").mkdir(parents=True)
+        (state / "chrome-proxy.json").write_text(json.dumps({"pid": 4500, "upstream": "ws://127.0.0.1:9/devtools/browser/p"}))
+        launch = ("--no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-renderer-backgrounding "
+                  "--disable-background-timer-throttling")
+        inspect = "chrome://inspect/#remote-debugging"
+        rows = [
+            f"{uid:5d}  4100 /opt/google/chrome/chrome {launch} --user-data-dir={state}/profile --window-name=vedlo browser: {state} {inspect}",
+            f"{uid:5d}  4101 /opt/google/chrome/chrome --type=renderer --user-data-dir={state}/profile",
+            f"{uid:5d}  4200 /opt/google/chrome/chrome {launch} --user-data-dir={self.folder}/old/profile {inspect}",
+            f"{uid:5d}  4500 /usr/bin/node /opt/agent-browser/bin/agent-browser.js proxy ws://127.0.0.1:9/devtools/browser/p --state-dir {state} "
+            f"--socket {state}/chrome-proxy.sock --profile {state}/profile --mode agent --proxy-idle-ms 1000 --command-name vedlo browser "
+            "--attempt a --timeout-ms 1",
+            f"{uid + 1:5d}  5100 /opt/google/chrome/chrome {launch} --user-data-dir=/home/other/profile {inspect}",
+        ]
+        (self.folder / "ps.txt").write_text("\n".join(rows) + "\n")
+        bin_dir = self.folder / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "ps").write_text(f"#!/bin/sh\ncat '{self.folder / 'ps.txt'}'\n")
+        (bin_dir / "ps").chmod(0o755)
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        result = AgentBrowser(self.consumer.state_dir, env=env).chromes()
+        self.assertIsInstance(result, ChromesResult)
+        self.assertEqual(result.chromes, [
+            AgentChrome(pid=4100, profile_dir=f"{state}/profile", state_dir=str(state), window_name=f"vedlo browser: {state}",
+                        command_name="vedlo browser", proxy=ProxyInfo(pid=4500, upstream="ws://127.0.0.1:9/devtools/browser/p")),
+            AgentChrome(pid=4200, profile_dir=f"{self.folder}/old/profile", state_dir=None, window_name=None, command_name=None, proxy=None),
+        ])
+
+    def test_chromes_checks_the_shape(self) -> None:
+        for output in ['{"ok": true, "command": "chromes", "chromes": [{"pid": "1"}]}', '{"ok": true, "command": "chromes", "chromes": {}}']:
+            node = stand_in_node(self.folder, "node-chromes", "v26.0.0", output)
+            with self.assertRaises(ProtocolError, msg=output):
+                AgentBrowser(self.consumer.state_dir, node=str(node)).chromes()
 
 
 if __name__ == "__main__":

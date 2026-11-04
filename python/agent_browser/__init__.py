@@ -16,8 +16,8 @@ from ._errors import (
     PinRequiredError, ProtocolError, ReadFirstError, TabNotFoundError, UsageError,
 )
 from ._results import (
-    ClickResult, CloseResult, CommandSpec, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, GotoResult,
-    HoverResult, JSONValue, LaunchError, LaunchResult, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
+    AgentChrome, ChromesResult, ClickResult, CloseResult, CommandSpec, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult,
+    GotoResult, HoverResult, JSONValue, LaunchError, LaunchResult, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
     OutlineElement, OutlineResult, ParamSpec, PressResult, ProxyInfo, QuitResult, RecordEvent, RecordResult, ShotResult, StatusResult,
     StopResult, TabRef, TabsResult, TextResult, TypeResult, WindowResult,
 )
@@ -28,8 +28,8 @@ __all__ = [
     "AgentBrowser", "DEFAULT_TIMEOUT", "MIN_NODE_MAJOR", "default_package_dir",
     "AgentBrowserError", "ApprovalNeededError", "ChromeUnreachableError", "CLIError", "NodeNotFoundError", "NodeVersionError", "NotAllowedError",
     "PackageNotFoundError", "PinRequiredError", "ProtocolError", "ReadFirstError", "TabNotFoundError", "UsageError",
-    "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "ConnectResult", "DownloadResult", "EvalResult", "FetchResult",
-    "GotoResult", "HoverResult", "JSONValue", "LaunchError", "LaunchResult", "NetEntry", "NetHttp", "NetResult", "NetWs",
+    "AgentChrome", "ChromesResult", "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "ConnectResult", "DownloadResult", "EvalResult",
+    "FetchResult", "GotoResult", "HoverResult", "JSONValue", "LaunchError", "LaunchResult", "NetEntry", "NetHttp", "NetResult", "NetWs",
     "Notification", "OpenResult", "OutlineElement", "OutlineResult", "ParamSpec", "PressResult", "ProxyInfo", "QuitResult",
     "RecordEvent", "RecordResult", "ShotResult", "StatusResult", "StopResult", "TabRef", "TabsResult", "TextResult", "TypeResult", "WindowResult",
 ]

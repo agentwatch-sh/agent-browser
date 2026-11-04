@@ -192,11 +192,7 @@ class StatusResult:
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "status") -> "StatusResult":
-        proxy_value = _field(d, "proxy", where)
-        proxy = None
-        if proxy_value is not None:
-            p = _obj(proxy_value, f"{where}.proxy")
-            proxy = ProxyInfo(pid=_int(p, "pid", f"{where}.proxy"), upstream=_str(p, "upstream", f"{where}.proxy"))
+        proxy = _opt_proxy(d, where)
         notification_value = _field(d, "notification", where)
         notification = None
         if notification_value is not None:
@@ -530,6 +526,47 @@ class RecordResult:
                    video_width=_int(d, "videoWidth", where), video_height=_int(d, "videoHeight", where), frames=_int(d, "frames", where),
                    seconds=_num(d, "seconds", where), max_frame_gap_ms=_int(d, "maxFrameGapMs", where), steps=_int(d, "steps", where),
                    events=_list(d, "events", where, RecordEvent.from_json), warnings=_list(d, "warnings", where, _string_item))
+
+
+def _opt_proxy(d: Mapping[str, object], where: str) -> Optional[ProxyInfo]:
+    value = _field(d, "proxy", where)
+    if value is None:
+        return None
+    p = _obj(value, f"{where}.proxy")
+    return ProxyInfo(pid=_int(p, "pid", f"{where}.proxy"), upstream=_str(p, "upstream", f"{where}.proxy"))
+
+
+@dataclass(frozen=True)
+class AgentChrome:
+    """One agent-browser Chrome of this user: a field that the evidence does not give is None.
+
+    `proxy` is the state folder's approved proxy, when it is up. `window_name` is set only when the
+    profile does not restore its session (then Chrome keeps the restored window's old name).
+    """
+
+    pid: int
+    profile_dir: str
+    state_dir: Optional[str]
+    window_name: Optional[str]
+    command_name: Optional[str]
+    proxy: Optional[ProxyInfo]
+
+    @classmethod
+    def from_json(cls, value: object, where: str) -> "AgentChrome":
+        d = _obj(value, where)
+        return cls(pid=_int(d, "pid", where), profile_dir=_str(d, "profileDir", where), state_dir=_opt_str(d, "stateDir", where),
+                   window_name=_opt_str(d, "windowName", where), command_name=_opt_str(d, "commandName", where), proxy=_opt_proxy(d, where))
+
+
+@dataclass(frozen=True)
+class ChromesResult:
+    """Every agent-browser Chrome of this user on the machine, by pid."""
+
+    chromes: List[AgentChrome]
+
+    @classmethod
+    def from_json(cls, d: Mapping[str, object], where: str = "chromes") -> "ChromesResult":
+        return cls(chromes=_list(d, "chromes", where, AgentChrome.from_json))
 
 
 @dataclass(frozen=True)

@@ -90,10 +90,10 @@ export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
 
 export type CliRun = { status: number | null; stdout: string; stderr: string; json: any };
 
-/** Run the real CLI (bin/agent-browser.js) in a child process. */
-export function cli(args: string[], opts: { input?: string; cwd?: string } = {}): Promise<CliRun> {
+/** Run the real CLI (bin/agent-browser.js) in a child process; `env` replaces its environment. */
+export function cli(args: string[], opts: { input?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<CliRun> {
   return new Promise((resolve) => {
-    const child = execFile(process.execPath, [BIN_JS, ...args], { cwd: opts.cwd ?? ROOT, encoding: "utf8", maxBuffer: 64 << 20, timeout: 60_000 }, (error, stdout, stderr) => {
+    const child = execFile(process.execPath, [BIN_JS, ...args], { cwd: opts.cwd ?? ROOT, env: opts.env, encoding: "utf8", maxBuffer: 64 << 20, timeout: 60_000 }, (error, stdout, stderr) => {
       let json: unknown;
       try { json = JSON.parse(stdout); } catch { json = undefined; }
       resolve({ status: error ? (typeof error.code === "number" ? error.code : null) : 0, stdout, stderr, json });

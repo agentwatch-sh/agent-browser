@@ -147,6 +147,9 @@ export function assertSafeChromeArgs(args: readonly string[]): void {
 /** @deprecated The old name of assertSafeChromeArgs, which now refuses more than debugging flags. */
 export const assertNoDebuggingFlag = assertSafeChromeArgs;
 
+/** The files of a profile that restoresOnStartup reads, in its order (below the profile). */
+export const STARTUP_PREFERENCES: readonly string[] = ["Default/Secure Preferences", "Default/Preferences"];
+
 /**
  * Whether the profile restores the previous session on startup ("Continue where you left off"),
  * which makes Chrome keep session cookies across quits so site logins survive a restart. It is a
@@ -155,9 +158,9 @@ export const assertNoDebuggingFlag = assertSafeChromeArgs;
  * chrome://settings/onStartup; the launcher only checks and reminds.
  */
 export function restoresOnStartup(profile: string): boolean | undefined {
-  for (const f of ["Secure Preferences", "Preferences"]) {
+  for (const f of STARTUP_PREFERENCES) {
     try {
-      const v = JSON.parse(readFileSync(join(profile, "Default", f), "utf8"))?.session?.restore_on_startup;
+      const v = JSON.parse(readFileSync(join(profile, f), "utf8"))?.session?.restore_on_startup;
       if (v !== undefined) return v === 1;
     } catch { /* missing or new profile */ }
   }
