@@ -31,7 +31,8 @@
     "test": "npm run test:node && npm run test:python",
     "test:node": "node --test --test-concurrency=1 'test/**/*.test.ts'",
     "test:python": "python3 -m unittest discover -s python/tests -t python",
-    "test:live": "node test/live/sheets.ts"
+    "test:live": "node test/live/sheets.ts",
+    "test:live:agent": "node test/live/agent-mode/run.ts"
   },
   "dependencies": {
     "ghost-cursor": "1.4.2",
