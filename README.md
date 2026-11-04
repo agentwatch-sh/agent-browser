@@ -61,7 +61,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
-| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in); input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. `front` (macOS) is the one command that brings the agent window forward: a person runs it to answer Chrome's prompt, and no other command calls it. | `test/record.test.ts`, `test/agent.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`, on Chrome Beta and Google Chrome: in 12 of 12 starts the new agent Chrome took the front; the fix is open, and `--variant` measures its candidates; the Space is not measured) |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; under about 0.1 s, measured with the same AppKit call from a helper; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, and no other command calls it. Input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back waits for its Mac run; the Space is not measured) |
 | A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
@@ -134,7 +134,29 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   `open -n -g`, so Launch Services does not bring Chrome to the front. But Chrome activates itself
   when it shows its first window: Chromium's window `Show()` on macOS calls
   `[NSApp activateIgnoringOtherApps:YES]`, and `test/live/takeover/start.ts` measured it on
-  2026-11-04 (12 of 12 starts took the front). The fix is open. `launch --login` starts it in front,
+  2026-11-04 (12 of 12 starts took the front). So on macOS `launch` can take the front for a moment,
+  and then agent-browser gives it back (`src/giveback.ts`). Before `open`, a small guard records the
+  app in front. It is JavaScript for Automation, run by `/usr/bin/osascript`, and it uses AppKit only:
+  no Apple Event, no System Events, no input, and no new macOS permission. When the new agent Chrome
+  takes the front from that app, the guard asks macOS to activate that app again
+  (`NSRunningApplication.activateWithOptions`). With the same call from a Swift helper, macOS granted
+  3 of 3 requests on 2026-11-04, and the operator's app was back after 83, 43 and 36 ms. Keys typed in
+  that time go to Chrome, and macOS can refuse the request. When a full-screen app is in front, or
+  when Google Chrome Beta is assigned to a desktop of its own, the take can also switch the Space and
+  back, which takes longer than 0.1 s and is not measured. The guard activates only the app that was
+  in front just before the take: when you bring another app to the front while the new Chrome is not
+  in front, that app takes the place of the first one. The guard watches until `launch` ends it, 1 s
+  after Chrome's endpoint is up (its own limit is 15 s), so a second take by the same Chrome (a
+  session restore activates its last window at its end) is given back too. It asks macOS at most 3
+  times in all for one `launch`. It cannot tell your own switch to the new Chrome from Chrome's
+  activation, so in that time it can send you back to your app; after its 3 asks, or once `launch`
+  has ended it, it never does. `launch` waits up to 3 s for the guard to record the app in front, and
+  the guard never makes `launch` fail. `launches.log` says how it went:
+  `give-back=on front=<pid>/<bundle id>` on the Chrome line, then lines such as
+  `give-back took=<pid> from=<pid>`, `give-back back=<pid> after-ms=<n>` and
+  `give-back end=stopped by=launch`. The start that another command makes has no give-back: it
+  leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt
+  shows in front until the operator answers it. `launch --login` starts it in front,
   because the operator signs in there. Tip: only agent
   browsers use Chrome Beta, so assigning Google Chrome Beta to a desktop of its own (Dock, Options,
   Assign To) keeps every agent browser there. This is an agent browser, so it comes up
@@ -867,6 +889,9 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/agent.test.ts`, `test/proxy.test.ts`, `test/diagnostics.test.ts`, `test/tab-intercept.test.ts`:
   ported from vedlo.
 - `test/allowlist.test.ts`: matching, the file, and no built-in denylist.
+- `test/giveback.test.ts`: the give-back guard of a macOS start (`src/giveback.ts`). Its script runs in
+  a `vm` context with a fake AppKit bridge (a scripted front app and clock), and the start of the
+  guard runs a stand-in for `osascript`. No real `osascript` runs, and no app is activated.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
 - `test/chromes.test.ts`: `chromes` on crafted `ps` rows of Linux (procps) and macOS (BSD ps).
   Skipped: other users' rows, Chrome's helpers, the crashpad handler, `open`, `timeout`, other app
@@ -900,21 +925,28 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   while the same monitor logs the frontmost app before, during and after each start; then it quits
   only that Chrome. By default each start gets a fresh state folder of its own, so it measures the
   first start of a profile; with `--same-profile` all starts share one new folder, so starts 2 to N
-  measure the restart of a used profile. It runs only with `--on-my-screen` and opens no debugging
+  measure the restart of a used profile. With `--same-profile --restore`, Chrome also gets
+  `--restore-last-session` (what "Continue where you left off" does), so starts 2 to N restore the
+  session before, and the restore activates its last window at its end: a second take of the front.
+  It runs only with `--on-my-screen` and opens no debugging
   WebSocket (`launch` makes only a TCP probe of the port), so Chrome shows no approval prompt. It
-  exits 1 when a start changed the frontmost app or could not be measured (for example, the monitor
-  stopped). It does not measure the Space. Not part of `npm test`; `test/takeover-start.test.ts` tests
+  exits 1 when a start broke its variant's rule (below) or could not be measured (for example, the
+  monitor stopped). It does not measure the Space. Not part of `npm test`; `test/takeover-start.test.ts` tests
   its argument guard, its variants, its analysis and its flow with a fake Chrome. Before start 1 it
   compares the monitor's front app with `lsappinfo front`, and it stops when they differ. Compile the
   monitor with `swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o /tmp/abfs-monitor`.
-  `--variant` changes one thing of each start, so that one run measures one fix candidate with the
-  same monitor and analysis: `launch` (today's `open -n -g`, the default), `hidden` (`open -n -g -j`,
-  through `launch` with a measurement hook that the CLI never sets) and `give-back` (today's start, while
-  `giveback.swift`, given with `--giveback`, asks macOS to activate the app that was in front again;
-  a guard, not a fix; no Chrome starts unless the helper names the front app that the monitor and
-  `lsappinfo` name). No variant opens a debugging WebSocket. Each result has `awayMs`: how long the
-  front was away from the app in front before the start. A failed launch ends the run (exit 1), so
-  that a run stays short.
+  `--variant` changes one thing of each start, so that one run measures one way to start with the
+  same monitor and analysis: `launch` (the default: `open -n -g` with the built-in give-back), and
+  for comparison, with the built-in give-back off, the two candidates of 2026-11-04: `hidden`
+  (`open -n -g -j`) and `give-back` (`open -n -g`, while `giveback.swift`, given with `--giveback`,
+  asks macOS to activate the app that was in front again; no Chrome starts unless the helper names
+  the front app that the monitor and `lsappinfo` name). The comparison variants run `launch` through
+  `launch-variant.ts`, with measurement hooks that the CLI never sets. No variant opens a debugging
+  WebSocket. Each result has `awayMs`: how long the front was away from the app in front before the
+  start. Under `launch` and `give-back` a start passes when the front came back within 250 ms, went
+  to no other app, and the pointer did not move. Under `hidden` a start passes only when the front
+  never changed. The output folder keeps each start's `launches.log` lines (`launches-N.log`). A
+  failed launch ends the run (exit 1), so that a run stays short.
 - `test/live/function-keys/` (Linux, in a private Xvfb; macOS only with `--on-my-screen`, because
   its windows reach the person's screen and take the keyboard focus; see the head of `check.ts`): the
   function-key check of #7. Its own Chrome, on a throwaway profile, with one local page, gets each key

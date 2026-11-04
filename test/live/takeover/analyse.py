@@ -1,9 +1,10 @@
 """Merge the monitor log and the command marks: which command or start changed the frontmost app or the pointer?
-With start.ts --variant give-back, the helper's lines (giveback-N.jsonl) go into the timeline too.
+With start.ts, the built-in give-back guard's lines (launches-N.log) go into the timeline too, and with
+--variant give-back the helper's lines (giveback-N.jsonl).
 
   python3 -I analyse.py DIR [CHROME_PID ...]    (each agent Chrome pid, for example one per start)
 """
-import glob, json, sys
+import datetime, glob, json, re, sys
 
 
 def jsonl(path):
@@ -26,7 +27,21 @@ chrome_pids = {int(p) for p in sys.argv[2:]}
 events = jsonl(f"{d}/monitor.jsonl")
 marks = jsonl(f"{d}/marks.jsonl")
 helper = [g for path in sorted(glob.glob(f"{glob.escape(d)}/giveback-*.jsonl")) for g in jsonl(path)]
-timeline = sorted([(m["t"], "mark", m) for m in marks] + [(e["t"], "mon", e) for e in events] + [(g["t"], "giveback", g) for g in helper], key=lambda x: x[0])
+
+
+def built_in(path):
+    """The built-in give-back guard's lines of a launches-N.log: "<ISO time> give-back <what>"."""
+    out = []
+    for line in open(path).read().split("\n"):
+        m = re.match(r"^(\S+Z) give-back (.+)$", line)
+        if m:
+            out.append((datetime.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp(), m.group(2)))
+    return out
+
+
+guard = [g for path in sorted(glob.glob(f"{glob.escape(d)}/launches-*.log")) for g in built_in(path)]
+timeline = sorted([(m["t"], "mark", m) for m in marks] + [(e["t"], "mon", e) for e in events] + [(g["t"], "giveback", g) for g in helper]
+                  + [(t, "guard", text) for t, text in guard], key=lambda x: x[0])
 current = "(before the check)"
 for t, kind, x in timeline:
     if kind == "mark":
@@ -39,6 +54,9 @@ for t, kind, x in timeline:
             print(f"{t:.2f}  log: {x.get('detail')}")
         elif x["what"] == "liveness":
             print(f"{t:.2f}  liveness: {x.get('detail')}")
+        continue
+    if kind == "guard":
+        print(f"{t:.2f}  built-in give-back: {x} during: {current}")
         continue
     if kind == "giveback":
         if "before" in x:

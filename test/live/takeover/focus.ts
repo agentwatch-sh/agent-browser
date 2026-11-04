@@ -1,6 +1,7 @@
-// The pure parts of the live start check (start.ts): its argument guard, its start variants, and the
-// analysis that merges monitor.swift's log with the check's marks and names each start that changed the
-// frontmost app. Unit-tested in test/takeover-start.test.ts; the check itself is not part of `npm test`.
+// The pure parts of the live start check (start.ts): its argument guard, its start variants and their pass
+// rules, the analysis that merges monitor.swift's log with the check's marks and names each start that changed
+// the frontmost app, and the reading of each start's launches.log lines. Unit-tested in
+// test/takeover-start.test.ts; the check itself is not part of `npm test`.
 
 import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -8,40 +9,84 @@ import { appBundle } from "../../../src/agent.ts";
 import { isChromeForTesting } from "../../../src/options.ts";
 
 /**
- * How one start is made (ab-b84.11, phase 1 of the fix: measure the candidates on the Mac). Each variant
- * starts the agent Chrome as src/agent.ts does (through the `launch` command), changed only by the one
- * thing that it names. No variant opens a debugging WebSocket, so Chrome shows no approval prompt:
- * `launch` probes the port with a plain TCP connect.
+ * How one start is made (ab-b84.11). `launch` is the start as agent-browser makes it: `open -n -g` with the
+ * built-in give-back guard (src/giveback.ts, phase 2 of the fix). The other variants repeat the candidates
+ * that phase 1 measured on the Mac on 2026-11-04, with the built-in guard off, for comparison. Each starts
+ * the agent Chrome as src/agent.ts does (through the `launch` command), changed only by what it names. No
+ * variant opens a debugging WebSocket, so Chrome shows no approval prompt: `launch` probes the port with a
+ * plain TCP connect.
  */
 export type Variant = {
   name: "launch" | "hidden" | "give-back";
-  /** "today": the start as it is; "candidate": a possible fix that needs no debugging connection and no new macOS permission. */
-  kind: "today" | "candidate";
+  /** "today": the start as agent-browser makes it; "comparison": a phase-1 candidate, with the built-in give-back off. */
+  kind: "today" | "comparison";
   /** What the variant changes (the help text). */
   summary: string;
-  /** launchAgentChrome's measurement hook: the start goes through `open -n -g -j` (launch-hidden.ts). */
-  hidden?: true;
+  /**
+   * launchAgentChrome's measurement hooks, through launch-variant.ts: `hidden` starts through `open -n -g -j`,
+   * and `giveBack: false` turns the built-in give-back off.
+   */
+  hooks?: { hidden?: true; giveBack: false };
   /** giveback.swift runs from before each launch until its quit (--giveback). */
-  giveBack?: true;
+  helper?: true;
+  /**
+   * "unchanged": a start passes only when the front app never changed. "given-back": a start may change it
+   * to its own Chrome for a moment: it passes when the front was away from the app in front before for at
+   * most GIVE_BACK_MAX_AWAY_MS in all, went to no other app, and the pointer did not move (see givenBackProblems).
+   */
+  rule: "unchanged" | "given-back";
 };
 
 export const VARIANTS: readonly Variant[] = [
-  { name: "launch", kind: "today", summary: "agent-browser launch as it is: open -n -g (the default)" },
-  { name: "hidden", kind: "candidate", summary: "open -n -g -j: Launch Services starts Chrome hidden; Chrome's own argv is the same", hidden: true },
-  { name: "give-back", kind: "candidate", summary: "launch as it is, and giveback.swift asks macOS to activate the app that was in front again when the new Chrome takes the front (a guard: a short change stays); needs --giveback", giveBack: true },
+  { name: "launch", kind: "today", rule: "given-back", summary: "agent-browser launch as it is: open -n -g with the built-in give-back (the default)" },
+  { name: "hidden", kind: "comparison", rule: "unchanged", hooks: { hidden: true, giveBack: false }, summary: "open -n -g -j with the built-in give-back off (phase 1 of 2026-11-04: it did not help)" },
+  { name: "give-back", kind: "comparison", rule: "given-back", hooks: { giveBack: false }, helper: true,
+    summary: "open -n -g with the built-in give-back off, while giveback.swift asks macOS to activate the app that was in front again (phase 1's helper); needs --giveback" },
 ];
 
-export const USAGE = `usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile] [--keep-state] [--variant NAME] [--giveback GIVEBACK_BIN]
+export const USAGE = `usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile [--restore]] [--keep-state] [--variant NAME] [--giveback GIVEBACK_BIN]
 variants (--variant; none opens a debugging WebSocket):
 ${VARIANTS.map((v) => `  ${v.name} (${v.kind}): ${v.summary}`).join("\n")}`;
 
+/** The lines of launches.log that src/agent.ts writes for a start of Chrome (not the give-back guard's own lines). */
+const chromeLines = (lines: string[]) => lines.filter((l) => l.split(" ")[1]?.startsWith("chrome="));
+
 /**
- * How launches.log names a start: the text between each new line's timestamp and its " by=" (for
- * example "chrome=via-open-g-j", or "chrome=4242 hidden=ignored" when the hook did not apply), joined
- * with "; "; null when the start logged no line.
+ * How launches.log names a start: the text between each new Chrome line's timestamp and its " by=" (for
+ * example "chrome=via-open-g give-back=on front=500 ready-ms=150", or "chrome=4242 hidden=ignored" when the
+ * hook did not apply), joined with "; "; null when the start logged no such line.
  */
 export function startedAs(lines: string[]): string | null {
-  return lines.map((l) => l.split(" by=")[0].split(" ").slice(1).join(" ")).join("; ") || null;
+  return chromeLines(lines).map((l) => l.split(" by=")[0].split(" ").slice(1).join(" ")).join("; ") || null;
+}
+
+/** The tokens that a start of `v` must have in its launches.log line, and how the problem names that form. */
+export function startForm(v: Variant): { tokens: string[]; text: string } {
+  const open = v.hooks?.hidden ? "open -n -g -j" : "open -n -g";
+  const tokens = [`chrome=${v.hooks?.hidden ? "via-open-g-j" : "via-open-g"}`, v.hooks?.giveBack === false ? "give-back=off" : "give-back=on"];
+  return { tokens, text: `${open} with the built-in give-back ${v.hooks?.giveBack === false ? "off" : "on"}` };
+}
+
+/** Null when a Chrome line of the start's launches.log lines has every token of `v`'s form, else the problem. */
+export function startFormProblem(v: Variant, lines: string[]): string | null {
+  const { tokens, text } = startForm(v);
+  if (chromeLines(lines).some((l) => tokens.every((t) => l.split(" ").includes(t)))) return null;
+  return `the start did not go through ${text} (launches.log: ${startedAs(lines) ?? "no line"})`;
+}
+
+/**
+ * The built-in give-back guard's lines of one start in launches.log ("<ISO time> give-back <what>"): its
+ * lines (without the time), how it ended ("end=<why>", null with no end line; "stopped" when the start ended
+ * it) and, for each take that it gave back, after how many ms the app in front before was back. Null when the
+ * start has no guard line.
+ */
+export type BuiltInGiveBack = { lines: string[]; end: string | null; backAfterMs: number[] };
+export function parseBuiltInGiveBack(lines: string[]): BuiltInGiveBack | null {
+  const own = lines.flatMap((l) => { const m = /^\S+ give-back (.+)$/.exec(l); return m ? [m[1]] : []; });
+  if (!own.length) return null;
+  const end = own.map((l) => /^end=(\S+)/.exec(l)?.[1]).filter((x): x is string => !!x).at(-1) ?? null;
+  const backAfterMs = own.flatMap((l) => { const m = /^back=\d+ after-ms=(\d+)$/.exec(l); return m ? [Number(m[1])] : []; });
+  return { lines: own, end, backAfterMs };
 }
 
 /** The logs that a run writes into --out-dir; a folder that holds one of them belongs to an earlier run. */
@@ -49,19 +94,27 @@ export const RUN_LOGS = ["marks.jsonl", "results.jsonl", "monitor.jsonl"];
 
 export type StartOptions = {
   chromeBin: string; starts: number; monitor: string; outDir: string; afterMs: number; keepState: boolean; sameProfile: boolean;
+  /** --restore (with --same-profile): Chrome starts with --restore-last-session, so starts 2..N restore the session before. */
+  restore: boolean;
   variant: Variant["name"];
   /** The compiled giveback.swift: only with --variant give-back. */
   giveback?: string;
 };
 
+/** The Chrome switch of --restore: Chromium's own way to restore the last session, as "Continue where you left off" does. */
+export const RESTORE_SWITCH = "--restore-last-session";
+
 /**
- * The child process that makes one start of `v`: the CLI's `launch --json`, as an agent session runs it,
- * or for `hidden` launch-hidden.ts, which runs the same `launch` command with its measurement hook on.
- * Both print launch's JSON document.
+ * The child process that makes one start of `v`: the CLI's `launch --json`, as an agent session runs it, or for
+ * a variant with hooks launch-variant.ts, which runs the same `launch` command with them. Both print launch's
+ * JSON document. With `restore`, Chrome also gets RESTORE_SWITCH (the CLI's --chrome-args, the launcher's --restore).
  */
-export function variantLaunch(v: Variant, p: { node: string; cli: string; launcher: string; stateDir: string; chromeBin: string }): string[] {
-  if (v.hidden) return [p.node, p.launcher, "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin];
-  return [p.node, p.cli, "launch", "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, "--json"];
+export function variantLaunch(v: Variant, p: { node: string; cli: string; launcher: string; stateDir: string; chromeBin: string; restore?: boolean }): string[] {
+  if (v.hooks) {
+    return [p.node, p.launcher, "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, ...(v.hooks.hidden ? ["--hidden"] : []), ...(v.hooks.giveBack === false ? ["--no-give-back"] : []),
+      ...(p.restore ? ["--restore"] : [])];
+  }
+  return [p.node, p.cli, "launch", "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, "--json", ...(p.restore ? ["--chrome-args", JSON.stringify([RESTORE_SWITCH])] : [])];
 }
 
 /** One request of giveback.swift: the new Chrome `took` the front, and the helper asked macOS to activate `gaveBackTo`. */
@@ -128,7 +181,7 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   try {
     values = parseArgs({ args: argv, strict: true, allowPositionals: false, options: {
       "on-my-screen": { type: "boolean" }, "chrome-bin": { type: "string" }, monitor: { type: "string" }, "out-dir": { type: "string" },
-      starts: { type: "string" }, "after-ms": { type: "string" }, "keep-state": { type: "boolean" }, "same-profile": { type: "boolean" },
+      starts: { type: "string" }, "after-ms": { type: "string" }, "keep-state": { type: "boolean" }, "same-profile": { type: "boolean" }, restore: { type: "boolean" },
       variant: { type: "string" }, giveback: { type: "string" },
     } }).values;
   } catch (e) { return { ok: false, message: (e as Error).message }; }
@@ -157,16 +210,17 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   if (typeof starts === "string") return no(starts);
   const afterMs = whole("--after-ms", values["after-ms"], 10_000, 1000, 120_000);
   if (typeof afterMs === "string") return no(afterMs);
+  if (values.restore && !values["same-profile"]) return no("--restore needs --same-profile: only a used profile has a session to restore");
   const name = values.variant ?? "launch";
   const variant = VARIANTS.find((v) => v.name === name);
   if (!variant) return no(`--variant must be one of ${VARIANTS.map((v) => v.name).join(", ")}, not ${JSON.stringify(name)}`);
   const giveback = values.giveback;
-  if (variant.giveBack) {
+  if (variant.helper) {
     if (typeof giveback !== "string" || !giveback) return no("--giveback is required for --variant give-back: giveback.swift compiled with swiftc (see the head of start.ts)");
     if (!env.exists(resolve(giveback))) return no(`--giveback: no such file: ${giveback} (compile test/live/takeover/giveback.swift with swiftc first)`);
   } else if (giveback !== undefined) return no(`--giveback is only for --variant give-back, not --variant ${variant.name}`);
-  return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"],
-    variant: variant.name, ...(variant.giveBack ? { giveback: resolve(giveback as string) } : {}) } };
+  return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"], restore: !!values.restore,
+    variant: variant.name, ...(variant.helper ? { giveback: resolve(giveback as string) } : {}) } };
 }
 
 /**
@@ -315,7 +369,32 @@ export function analyseStarts(log: MonitorLog, marks: Mark[], chromePids: Record
   });
 }
 
-/** 0 when every start was measured and none changed the frontmost app; 1 otherwise (a change, a problem, or no start). */
-export function exitCode(results: Pick<StartFocus, "changed" | "problem">[]): 0 | 1 {
-  return results.length && results.every((r) => !r.changed && !r.problem) ? 0 : 1;
+/** The most time (ms) that a start under the "given-back" rule may leave the front away from the app in front before it (phase 1's helper: 36 to 83 ms). */
+export const GIVE_BACK_MAX_AWAY_MS = 250;
+
+/**
+ * Why a start breaks the "given-back" rule (none when the front never changed): the front went to an app that is
+ * neither the app in front before nor this start's own Chrome, it changed while the check quit the Chrome, it was
+ * away for more than GIVE_BACK_MAX_AWAY_MS in all (also when it never came back before the quit), or the pointer
+ * moved, so that the return can be a person's click.
+ */
+export function givenBackProblems(f: Pick<StartFocus, "start" | "frontBefore" | "changes" | "quitChanges" | "awayMs" | "pointerMoves">): string[] {
+  if (!f.changes.length && !f.quitChanges.length) return [];
+  const problems: string[] = [];
+  const at = (c: FrontChange) => `${c.name} (pid ${c.pid}) at +${c.afterStartMs} ms`;
+  for (const c of f.changes) if (!c.agentChrome && c.pid !== f.frontBefore?.pid) problems.push(`the front went to ${at(c)} of start ${f.start}, not to this start's Chrome`);
+  if (f.quitChanges.length) problems.push(`the front changed while the check quit the Chrome of start ${f.start}: ${f.quitChanges.map(at).join(", ")}`);
+  if (f.awayMs !== null && f.awayMs > GIVE_BACK_MAX_AWAY_MS)
+    problems.push(`the front was away from ${f.frontBefore!.name} (pid ${f.frontBefore!.pid}) for ${f.awayMs} ms in start ${f.start}, more than ${GIVE_BACK_MAX_AWAY_MS} ms`);
+  if (f.pointerMoves) problems.push(`the pointer moved during start ${f.start}: the return of the front can be a person's click`);
+  return problems;
+}
+
+/**
+ * 0 when every start was measured and passed `rule`, else 1 (a change, a problem, or no start). Under "unchanged"
+ * a start passes when the front app never changed; under "given-back" when it has no problem (the caller puts
+ * givenBackProblems into it).
+ */
+export function exitCode(results: Pick<StartFocus, "changed" | "problem">[], rule: Variant["rule"] = "unchanged"): 0 | 1 {
+  return results.length && results.every((r) => (rule === "given-back" || !r.changed) && !r.problem) ? 0 : 1;
 }

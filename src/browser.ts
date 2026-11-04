@@ -104,8 +104,9 @@ export class AgentBrowser {
    * first. Otherwise the upstream endpoint is found (the endpoint option; in agent mode the agent
    * Chrome, launched if needed; in personal mode the operator's Chrome), a proxy is started for it,
    * and the connection goes through that proxy. With existingOnly, nothing is launched or started.
+   * `launch` (@internal, tests only) replaces launchAgentChrome.
    */
-  static async connect(options: BrowserOptions | Settings, opts: { existingOnly?: boolean } = {}): Promise<AgentBrowser> {
+  static async connect(options: BrowserOptions | Settings, opts: { existingOnly?: boolean; launch?: typeof launchAgentChrome } = {}): Promise<AgentBrowser> {
     const s = resolveOptions(options);
     const allow = allowlistOf(s);
     assertTestStateIsolated(s);
@@ -115,8 +116,12 @@ export class AgentBrowser {
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
     // Checked before any launch: a new Chrome needs a new approval too.
     if (s.noPrompt) throw new ApprovalNeededError(approvalNeededMessage(s, browserTarget(s)));
+    // No give-back guard for this start: it leaves the agent Chrome in front (its first window takes the front),
+    // so Chrome's approval prompt, which the proxy's connection raises next, shows in front until the operator
+    // answers it (test/agent.test.ts holds this).
+    const start = opts.launch ?? launchAgentChrome;
     const candidates = s.mode === "agent"
-      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await launchAgentChrome(s, { background: true }) }]
+      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await start(s, { background: true, giveBack: false }) }]
       : endpointCandidates(s);
     let lastErr: unknown;
     for (const c of candidates) {
