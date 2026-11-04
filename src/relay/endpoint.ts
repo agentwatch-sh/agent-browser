@@ -18,7 +18,7 @@ export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const NOT_FOUND = "Not found. Connect a CDP client to /devtools/browser/<scope>.";
 export const FROM_PAGE = "A web page cannot connect to the agent browser.";
 
-export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number };
+export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number; downloadWaitMs?: number };
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void> };
 
 /** The answer to a request that gets no connection, or the request's scope. A browser's WebSocket always carries an Origin header. */
@@ -35,7 +35,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   if (await socketAlive(o.socket)) throw new Error(`a relay already serves ${o.socket}`);
   rmSync(o.socket, { force: true });
   const bridge = new Bridge((line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
-  const model = new Model(bridge, o.log);
+  const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
   const http = createServer((req, res) => {

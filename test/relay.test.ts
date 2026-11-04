@@ -4,11 +4,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { CDPConnection } from "../src/cdp.ts";
+import { startRelay } from "../src/relay/endpoint.ts";
 import { harness, raw, UA, until, type Harness } from "./fake-bridge.ts";
 import { BIN_JS } from "./helpers.ts";
 
@@ -26,6 +27,7 @@ async function page(h: Harness, c: CDPConnection, wait = false) {
   return { targetId, sessionId: ev.sessionId as string, info: ev.targetInfo, tab: [...h.fake.tabs.values()].find((t) => t.targetId === targetId)! };
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
 
 test("the endpoint refuses connections until the extension is linked, confirmed the allowlist and knows the bridge", async () => {
@@ -130,6 +132,12 @@ test("each popup goes to its opener's owner, held until its runIfWaitingForDebug
       await until(() => h.fake.sent("bridge.release").some((r) => r.args[0] === popup.id), "the release of the popup");
     }
     assert.equal(toB, 0);
+    // Chrome swaps the last popup for a new tab: the owner keeps it, with the same opener.
+    const last = [...h.fake.tabs.values()].at(-1)!;
+    const swapped = a.waitForEvent("Target.attachedToTarget");
+    const fresh = h.fake.replace(last);
+    assert.deepEqual([(await swapped).targetInfo.targetId, (await swapped).targetInfo.openerId], [fresh.targetId, opener.targetId]);
+    assert.equal(toB, 0);
     const stray = h.fake.newTab("https://a.example/operator");
     await until(() => h.fake.sent("debugger.detach").some((r) => r.args[0] === stray.id), "the detach of a tab in no scope");
     assert.ok(h.fake.sent("bridge.release").some((r) => r.args[0] === stray.id));
@@ -165,10 +173,25 @@ test("the relay hides cookie values, adds the mouse force, and answers an event 
     await h.ready();
     const c = await h.connect();
     const { sessionId, tab } = await page(h, c);
-    const v = endpointV.cookieHide[0];
-    const got = c.waitForEvent(v.method, { sessionId });
-    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: v.method, params: v.in });
-    assert.deepEqual(await got, v.out);
+    // Every vector, as an event of the tab and as one of a child session (a frame); a result too; another domain passes as it is.
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+      targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://c.example/", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    for (const v of endpointV.cookieHide) {
+      for (const source of [{ tabId: tab.id }, { tabId: tab.id, sessionId: "FR1" }]) {
+        const got = c.waitForEvent(v.method, { sessionId: source.sessionId ?? sessionId });
+        h.fake.emit("debugger.onEvent", { source, method: v.method, params: v.in });
+        assert.deepEqual(await got, v.out, `${v.method} ${source.sessionId ?? "tab"}`);
+      }
+    }
+    const asIs = { headers: { Cookie: "sid=s3cr3t" }, headersText: "Cookie: sid=s3cr3t\r\n" };
+    h.fake.command = (_t, method) => (method === "Network.loadNetworkResource" ? { resource: { success: true, headers: { "Set-Cookie": "sid=s3cr3t" } } } : method === "Page.getResourceTree" ? asIs : undefined);
+    assert.deepEqual(await c.send("Network.loadNetworkResource", { frameId: "F", url: "https://a.example/", options: { disableCache: true, includeCredentials: true } }, sessionId),
+      { resource: { success: true, headers: { "Set-Cookie": "(hidden)" } } });
+    assert.deepEqual(await c.send("Page.getResourceTree", {}, sessionId), asIs, "only Network, Fetch and Audits carry cookie values");
+    const other = c.waitForEvent("Runtime.consoleAPICalled", { sessionId });
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Runtime.consoleAPICalled", params: asIs });
+    assert.deepEqual(await other, asIs);
+    h.fake.command = () => undefined;
     await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 5, y: 5, button: "left", clickCount: 1 }, sessionId);
     assert.equal(h.fake.sent("debugger.sendCommand", "Input.dispatchMouseEvent")[0].args[2].force, 0.5);
     h.fake.emit("bridge.tooLarge", { of: "debugger.onEvent", tabId: tab.id, sessionId: "A1B2C3", method: "Fetch.requestPaused", requestId: "interception-job-4.0" });
@@ -233,10 +256,128 @@ test("a download reaches the client's folder under its guid; cancel and a danger
   } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a connection that leaves while Target.createTarget or Target.attachToTarget runs keeps no tab and no session", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    let open!: () => void;
+    const gate = (name: string) => { const g = new Promise<void>((r) => (open = r)); h.fake.op = async ({ op }) => { if (op === name) await g; return undefined; }; };
+    // The createTarget form, with auto-attach on.
+    gate("tabs.create");
+    const a = await raw(h.url("s1"));
+    a.ws!.send(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true } }));
+    await sleep(20);
+    a.ws!.send(JSON.stringify({ id: 2, method: "Target.createTarget", params: { url: "about:blank" } }));
+    await until(() => h.fake.sent("tabs.create").length, "tabs.create");
+    const keep = await h.connect("s1"); // the eager attach stays on, so the new tab comes attached and held
+    a.ws!.close();
+    await a.closed;
+    await sleep(20);
+    open();
+    const tab = await until(() => [...h.fake.tabs.values()][0], "the new tab");
+    await until(() => !h.fake.attached.has(tab.id), "the detach of the left connection's tab");
+    const b = await h.connect("s1");
+    assert.deepEqual((await b.send("Target.getTargets")).targetInfos.map((t: any) => t.attached), [false]);
+    const { sessionId } = await b.send("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
+    assert.ok(sessionId);
+    await b.close();
+    await until(() => !h.fake.attached.has(tab.id), "the detach at b's leave");
+    // The attachToTarget form: the connection leaves while the attach waits.
+    gate("debugger.attach");
+    const c = await raw(h.url("s1"));
+    c.ws!.send(JSON.stringify({ id: 1, method: "Target.attachToTarget", params: { targetId: tab.targetId, flatten: true } }));
+    await until(() => h.fake.sent("debugger.attach").filter((r) => r.args[0] === tab.id).length === 2, "the second attach");
+    c.ws!.close();
+    await c.closed;
+    await sleep(20);
+    open();
+    h.fake.op = () => undefined;
+    await until(() => !h.fake.attached.has(tab.id), "the detach after the late attach");
+    // No dead session stays: the next owner's leave detaches the tab, so its domain state (Fetch) goes.
+    const d = await h.connect("s1");
+    await d.send("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
+    assert.ok(h.fake.attached.has(tab.id));
+    await d.close();
+    await until(() => !h.fake.attached.has(tab.id), "the detach at d's leave");
+    await keep.close();
+  } finally { await h.close(); }
+});
+
+test("a service worker that the page's auto-attach attaches runs on and is detached; no client hears of it", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { tab, sessionId } = await page(h, c, true);
+    let heard = 0;
+    for (const m of ["Target.attachedToTarget", "Target.detachedFromTarget", "Runtime.executionContextCreated"]) c.on(m, () => heard++);
+    const before = h.fake.requests.length;
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Target.attachedToTarget", params: { sessionId: "SW1", waitingForDebugger: true,
+      targetInfo: { targetId: "SWT", type: "service_worker", title: "", url: "https://a.example/sw.js", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id, sessionId: "SW1" }, method: "Runtime.executionContextCreated", params: { context: { id: 1 } } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Target.detachedFromTarget", params: { sessionId: "SW1", targetId: "SWT" } });
+    await until(() => h.fake.requests.length >= before + 2, "the run and the detach of the worker");
+    await sleep(20);
+    assert.deepEqual(h.fake.requests.slice(before).map((r) => r.args), [[{ tabId: tab.id, sessionId: "SW1" }, "Runtime.runIfWaitingForDebugger", {}],
+      [{ tabId: tab.id }, "Target.detachFromTarget", { sessionId: "SW1" }]]);
+    assert.equal(heard, 0);
+    assert.equal(await failure(c.send("Runtime.evaluate", { expression: "1" }, "SW1")), "Session with given id not found.");
+    assert.ok(sessionId);
+  } finally { await h.close(); }
+});
+
+test("Chrome's detach of a tab ends its sessions and frees it; discover clients hear of the scope's tabs only", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const a = await h.connect("s1"), watcher = await h.connect("s1"), stranger = await h.connect("s2");
+    const first = await page(h, a);
+    const created: string[] = [], changed: string[] = [], destroyed: string[] = [];
+    watcher.on("Target.targetCreated", (p: any) => created.push(p.targetInfo.targetId));
+    watcher.on("Target.targetInfoChanged", (p: any) => changed.push(p.targetInfo.url));
+    watcher.on("Target.targetDestroyed", (p: any) => destroyed.push(p.targetId));
+    let strangerHeard = 0;
+    for (const m of ["Target.targetCreated", "Target.targetInfoChanged", "Target.targetDestroyed"]) stranger.on(m, () => strangerHeard++);
+    await watcher.send("Target.setDiscoverTargets", { discover: true });
+    await stranger.send("Target.setDiscoverTargets", { discover: true });
+    const second = await page(h, a);
+    h.fake.emit("tabs.onUpdated", { tabId: second.tab.id, changeInfo: { url: "https://a.example/next" }, tab: { ...h.fake.chromeTab(second.tab), url: "https://a.example/next" } });
+    await a.send("Target.closeTarget", { targetId: second.targetId });
+    await until(() => destroyed.length, "Target.targetDestroyed");
+    assert.deepEqual([created, changed, destroyed, strangerHeard], [[first.targetId, second.targetId], ["https://a.example/next"], [second.targetId], 0]);
+    const detached = a.waitForEvent("Target.detachedFromTarget");
+    h.fake.attached.delete(first.tab.id);
+    h.fake.emit("debugger.onDetach", { source: { tabId: first.tab.id }, reason: "canceled_by_user" });
+    assert.equal((await detached).sessionId, first.sessionId);
+    assert.equal(await failure(a.send("Runtime.evaluate", { expression: "1" }, first.sessionId)), "Session with given id not found.");
+    assert.ok((await watcher.send("Target.attachToTarget", { targetId: first.targetId, flatten: true })).sessionId, "the tab is free for the scope");
+  } finally { await h.close(); }
+});
+
+test("a download that Chrome does not finish in time ends as canceled, never completed with no file", async () => {
+  const h = await harness({ downloadWaitMs: 150 });
+  const dir = mkdtempSync(join(tmpdir(), "ab-dl-"));
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { tab } = await page(h, c);
+    await c.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: dir, eventsEnabled: true });
+    h.fake.downloads.push({ id: 6, url: "https://a.example/slow.bin", filename: "", state: "in_progress" });
+    const ended = c.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === "g6" });
+    const ev = (method: string, params: object) => h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method, params });
+    ev("Page.downloadWillBegin", { frameId: "F1", guid: "g6", url: "https://a.example/slow.bin", suggestedFilename: "slow.bin" });
+    ev("Page.downloadProgress", { guid: "g6", totalBytes: 9, receivedBytes: 9, state: "completed" });
+    assert.equal((await ended).state, "canceled");
+    assert.ok(!existsSync(join(dir, "g6")));
+  } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("each end of a connection has the contract's close code and reason", async () => {
   const h = await harness({ maxRequest: 1000 });
   try {
     await h.ready();
+    assert.equal(statSync(h.socket).mode & 0o777, 0o600);
+    await assert.rejects(startRelay({ socket: `/tmp/${"x".repeat(99)}`, input: h.fake.output, output: h.fake.input, log: () => {} }), /longer than 103 bytes/);
     const closes = endpointV.closes.map((x: any) => [x.code, x.reason]);
     const one = await raw(h.url("s1"));
     one.ws!.send(JSON.stringify({ id: 1, method: "Browser.close" }));
@@ -253,9 +394,16 @@ test("each end of a connection has the contract's close code and reason", async 
     h.fake.line({ t: "link", up: false });
     assert.deepEqual(await kept.closed, closes[2]);
     await h.ready();
+    // A link up with open connections: the new receiver detached every tab, so they close as at a link drop.
+    const open = await raw(h.url("s1"));
+    await h.ready();
+    assert.deepEqual(await open.closed, closes[2]);
     const last = await raw(h.url("s1"));
+    await until(() => h.fake.attachNew, "the eager attach");
     h.fake.input.end();
     assert.deepEqual(await last.closed, closes[3]);
+    // Best effort at the stop: the eager attach goes off (the daemon may already have stopped reading).
+    await until(() => !h.fake.attachNew, "the eager attach off at the stop");
     await h.relay.closed;
     assert.ok(!existsSync(h.socket), "the relay removes its socket when its standard input ends");
   } finally { await h.close(); }

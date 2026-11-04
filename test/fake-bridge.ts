@@ -36,7 +36,7 @@ export class FakeReceiver {
     createInterface({ input: this.output }).on("line", (line) => { void this.handle(JSON.parse(line)); });
   }
 
-  line(msg: object): void { this.input.write(`${JSON.stringify(msg)}\n`); }
+  line(msg: object): void { if (!this.input.writableEnded) this.input.write(`${JSON.stringify(msg)}\n`); }
   emit(ev: string, fields: object): void { this.line({ t: "ev", ch: "bridge", ev, ...fields }); }
   sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
 
@@ -46,6 +46,14 @@ export class FakeReceiver {
     this.tabs.set(tab.id, tab);
     if (this.attachNew) this.attached.add(tab.id);
     this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
+    return tab;
+  }
+
+  /** Chrome swaps a tab for another one (a prerendered page): the new tab keeps the old one's opener. */
+  replace(old: FakeTab): FakeTab {
+    const tab = { ...old, id: this.nextTab++, targetId: `T${this.nextTab - 1}` };
+    this.tabs.delete(old.id); this.attached.delete(old.id); this.tabs.set(tab.id, tab);
+    this.emit("tabs.onReplaced", { addedTabId: tab.id, removedTabId: old.id });
     return tab;
   }
 
@@ -106,10 +114,10 @@ export async function until<T>(fn: () => T, what = "the condition", ms = 5000): 
 }
 
 /** A relay of its own on a short temp socket path, with the fake behind it. */
-export async function harness(opts: { maxRequest?: number } = {}): Promise<Harness> {
+export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "ab-relay-"));
   const socket = join(dir, "cdp.sock"), fake = new FakeReceiver(), logs: string[] = [], conns: CDPConnection[] = [];
-  const relay = await startRelay({ socket, input: fake.input, output: fake.output, log: (l) => logs.push(l), maxRequest: opts.maxRequest });
+  const relay = await startRelay({ socket, input: fake.input, output: fake.output, log: (l) => logs.push(l), ...opts });
   const url = (scope: string) => `ws+unix://${socket}:/devtools/browser/${scope}`;
   return {
     fake, relay, socket, logs, url,

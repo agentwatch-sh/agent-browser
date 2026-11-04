@@ -69,6 +69,8 @@ export class Model {
   private readonly tabs = new Map<number, Tab>();
   /** Chrome's child sessions (frames and workers of a tab) -> the tab. */
   private readonly children = new Map<string, number>();
+  /** The child sessions of targets that the model never reports (service workers) -> the tab: their events go to nobody. */
+  private readonly hidden = new Map<string, number>();
   private readonly conns = new Set<Conn>();
   private readonly downloads = new Map<string, Download>();
   /** Target.createTarget calls in flight: a new tab waits for them, so that only its creator takes a tab that it opened. */
@@ -81,8 +83,12 @@ export class Model {
   private allowlist: string[] | null = null;
   private cleared = false;
   private settings: Promise<unknown> = Promise.resolve();
+  /** How long a finished download may take to show up complete in chrome.downloads. */
+  private readonly downloadWaitMs: number;
 
-  constructor(bridge: Bridge, log: (line: string) => void) { this.bridge = bridge; this.log = log; }
+  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number } = {}) {
+    this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
+  }
 
   /** Why a new connection is refused (C11's 503 texts), or null when the endpoint is ready. */
   notReady(): string | null {
@@ -135,7 +141,7 @@ export class Model {
   }
 
   private reset(): void {
-    this.tabs.clear(); this.children.clear(); this.downloads.clear();
+    this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear();
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null;
   }
 
@@ -146,7 +152,12 @@ export class Model {
   }
 
   /** The relay stops: every connection closes. */
-  stop(): void { this.closeAll(CLOSE.stopped); }
+  stop(): void {
+    // Best effort: the daemon may stop reading at the same time. Stage 4 (the daemon) must turn the eager attach off
+    // itself when a relay ends without a link change, else a new relay finds it on.
+    if (this.linkUp && this.conns.size) this.bridge.call("bridge.attachNew", [false]).catch(() => {});
+    this.closeAll(CLOSE.stopped);
+  }
 
   private async endScope(scope: string): Promise<void> {
     for (const c of [...this.conns]) if (c.scope === scope) { c.socket.close(...CLOSE.scopeEnded); await this.close(c); }
@@ -278,8 +289,19 @@ export class Model {
     this.bridge.call("bridge.release", [tab.id]).catch(() => {});
   }
 
+  private forgetChildren(tab: Tab): void {
+    for (const map of [this.children, this.hidden]) for (const [sid, t] of map) if (t === tab.id) map.delete(sid);
+  }
+
+  /** `c` left while a call for `tab` waited: it keeps no session and no ownership, and a tab with no session carries no debugger. */
+  private async abandon(c: Conn, tab: Tab): Promise<never> {
+    if (tab.owner === c) tab.owner = null;
+    if (!tab.owner && !tab.sessions.size) await this.detach(tab);
+    throw new Error("The connection closed");
+  }
+
   private async detach(tab: Tab): Promise<void> {
-    for (const [sid, t] of this.children) if (t === tab.id) this.children.delete(sid);
+    this.forgetChildren(tab);
     tab.held = false;
     if (!tab.attached) return;
     tab.attached = false;
@@ -288,6 +310,7 @@ export class Model {
 
   /** A new session of `c` on `tab`. `parent` is the session that gets Target.attachedToTarget: the root (undefined) or another session. */
   private async newSession(c: Conn, tab: Tab, parent: string | undefined, waiting: boolean, auto: boolean): Promise<string> {
+    if (!this.conns.has(c)) return this.abandon(c, tab);
     if (tab.owner && tab.owner !== c) throw new Error(TEXT.inUse);
     tab.owner = c;
     try { await this.ensureAttached(tab); } catch (e) {
@@ -296,6 +319,8 @@ export class Model {
     }
     const sessionId = newSessionId();
     const info = await this.targetInfo(tab);
+    // The connection can leave during either wait: then it gets no session.
+    if (!this.conns.has(c)) return this.abandon(c, tab);
     tab.sessions.add(sessionId);
     c.sessions.set(sessionId, { tabId: tab.id, parent, auto });
     c.event(parent, "Target.attachedToTarget", { sessionId, targetInfo: { ...info, attached: true }, waitingForDebugger: waiting });
@@ -321,7 +346,7 @@ export class Model {
       owner?.event(s?.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
     }
     tab.sessions.clear();
-    for (const [sid, t] of this.children) if (t === tab.id) this.children.delete(sid);
+    this.forgetChildren(tab);
   }
 
   private async endSession(c: Conn, sid: string, notify = true): Promise<void> {
@@ -349,7 +374,7 @@ export class Model {
   private async announce(tab: Tab): Promise<void> {
     const scoped = [...this.conns].filter((c) => c.scope === tab.scope);
     for (const c of scoped) if (c.discover) c.event(undefined, "Target.targetCreated", { targetInfo: await this.targetInfo(tab) });
-    const heir = tab.opener !== null ? this.tabs.get(tab.opener)?.owner ?? null : null;
+    const heir = tab.owner ?? (tab.opener !== null ? this.tabs.get(tab.opener)?.owner ?? null : null);
     if (heir) tab.owner = heir;
     for (const c of heir ? [heir] : scoped) {
       if (!c.autoAttach || (tab.owner && tab.owner !== c)) continue;
@@ -382,9 +407,11 @@ export class Model {
       case "tabs.onReplaced": {
         const old = this.tabs.get(ev.removedTabId);
         if (!old?.scope) return;
+        const owner = old.owner && this.conns.has(old.owner) ? old.owner : null;
         this.removed(old.id);
+        // The new tab takes the old one's place: its scope, its owner and its opener.
         const tab = this.tabOf(ev.addedTabId);
-        tab.scope = old.scope;
+        tab.scope = old.scope; tab.owner = owner; tab.opener = old.opener; tab.claimed = true;
         void this.targetIdOf(tab.id).then((t) => { tab.targetId = t; return this.announce(tab); }).catch(() => {});
         return;
       }
@@ -405,11 +432,15 @@ export class Model {
   private onCdpEvent(source: { tabId?: number; sessionId?: string }, method: string, params: any): void {
     const tab = this.tabs.get(source.tabId!);
     const owner = tab?.owner;
-    if (!tab || !owner) return;
+    if (!tab || !owner || (source.sessionId && this.hidden.has(source.sessionId))) return;
     if (method === "Target.attachedToTarget" || method === "Target.targetCreated" || method === "Target.targetInfoChanged") {
-      if (HIDDEN_TYPES.has(params.targetInfo?.type)) return;
+      if (HIDDEN_TYPES.has(params.targetInfo?.type)) {
+        if (method === "Target.attachedToTarget") this.hide(tab, source, params);
+        return;
+      }
       if (method === "Target.attachedToTarget") this.children.set(params.sessionId, tab.id);
     }
+    if (method === "Target.detachedFromTarget" && this.hidden.delete(params.sessionId)) return;
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);
     let p = hidesCookies(method) ? hideCookies(params) : params;
@@ -417,6 +448,18 @@ export class Model {
     // An event of a child session (a frame or a worker) goes to the owner once; an event of the tab to each of its sessions.
     if (source.sessionId) owner.event(source.sessionId, method, p);
     else for (const sid of tab.sessions) owner.event(sid, method, p);
+  }
+
+  /**
+   * A target that the model never reports, which Chrome attached through a page's auto-attach (a service worker of the
+   * page: Playwright sets waitForDebuggerOnStart on each page). It must not stay paused or attached: the model lets it
+   * run, detaches it from its parent session, and drops its events.
+   */
+  private hide(tab: Tab, source: { sessionId?: string }, p: any): void {
+    this.hidden.set(p.sessionId, tab.id);
+    const parent = source.sessionId ? { tabId: tab.id, sessionId: source.sessionId } : { tabId: tab.id };
+    if (p.waitingForDebugger) this.bridge.call("debugger.sendCommand", [{ tabId: tab.id, sessionId: p.sessionId }, "Runtime.runIfWaitingForDebugger", {}]).catch(() => {});
+    this.bridge.call("debugger.sendCommand", [parent, "Target.detachFromTarget", { sessionId: p.sessionId }]).catch(() => {});
   }
 
   private async onCreated(ev: any): Promise<void> {
@@ -465,27 +508,29 @@ export class Model {
     }
     const d = this.downloads.get(p.guid);
     if (!d) return;
-    if (p.state === "completed") { void this.finish(p.guid, d, p).catch((e) => this.log(`relay: download copy failed (${e.code ?? "error"})`)); return; }
+    if (p.state === "completed") { void this.finish(p.guid, d, p); return; }
     if (p.state === "canceled") this.downloads.delete(p.guid);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", p);
   }
 
+  /** A finished download: the client hears "completed" only when its file is in its folder, else "canceled". */
   private async finish(guid: string, d: Download, p: any): Promise<void> {
     const behavior = d.conn.download?.behavior, dir = d.conn.download?.path;
-    if (dir && (behavior === "allowAndName" || behavior === "allow")) {
-      for (let i = 0; i < 50; i++) {
+    let done = !(dir && (behavior === "allowAndName" || behavior === "allow"));
+    try {
+      for (const end = Date.now() + this.downloadWaitMs; !done && Date.now() < end; await sleep(100)) {
         const query = d.item !== undefined ? { id: d.item } : { url: d.url, orderBy: ["-startTime"], limit: 1 };
         const [item] = await this.bridge.call<any[]>("downloads.search", [query]);
         if (item?.state === "complete" && item.filename) {
           // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
-          await copyFile(item.filename, join(dir, basename(behavior === "allowAndName" ? guid : d.name)));
-          break;
+          await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
+          done = true;
         }
-        await sleep(100);
       }
-    }
+    } catch (e) { this.log(`relay: download copy failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
+    if (!done) this.log("relay: a download did not reach the client's folder; it is reported as canceled");
     this.downloads.delete(guid);
-    if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", p);
+    if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", done ? p : { ...p, state: "canceled" });
   }
 
   private onDownloadItem(item: any): void {
@@ -633,14 +678,18 @@ export class Model {
       const flight = (async () => {
         const created = p.newWindow ? (await this.bridge.call("windows.create", [{ url, focused: false }])).tabs[0] : await this.bridge.call("tabs.create", [{ url, active: !p.background }]);
         const tab = this.tabOf(created.id);
-        tab.scope = c.scope; tab.owner = c; tab.claimed = true;
+        // The tab joins the scope also when its creator left meanwhile; then it is free for the scope.
+        tab.scope = c.scope; tab.claimed = true;
+        if (this.conns.has(c)) tab.owner = c;
         tab.targetId ??= await this.targetIdOf(tab.id);
         return tab;
       })();
       this.creating.add(flight);
       let tab: Tab;
       try { tab = await flight; } finally { this.creating.delete(flight); }
+      if (!this.conns.has(c)) return this.abandon(c, tab);
       for (const o of this.conns) if (o.discover && o.scope === c.scope) o.event(undefined, "Target.targetCreated", { targetInfo: await this.targetInfo(tab) });
+      if (!this.conns.has(c)) return this.abandon(c, tab);
       // The creator owns the new tab; Playwright expects Target.attachedToTarget before this answer.
       if (c.autoAttach) await this.autoAttach(c, tab, c.waitOnStart && tab.held);
       else if (tab.attached) { this.release(tab); await this.detach(tab); }
