@@ -27,6 +27,10 @@ export class FakeReceiver {
   readonly attached = new Set<number>();
   readonly downloads: any[] = [];
   attachNew = false;
+  /** Above 0: tabs.create in the real receiver's order (chrome-extension agent/attach.js): the answer first, tabs.onCreated
+   *  this many ms later, after the eager attach; a debugger.attach of that tab waits for the event. */
+  lateCreatedMs = 0;
+  private readonly lateCreated = new Map<number, Promise<void>>();
   private nextTab = 7;
   /** A test's answer to a CDP command, or to any op. */
   command: (target: any, method: string, params: any) => any = () => undefined;
@@ -42,11 +46,15 @@ export class FakeReceiver {
   sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
 
   /** A new tab, announced as the receiver does: with the eager attach on, it is attached and held. */
-  newTab(url: string, opener?: FakeTab, windowId = 1): FakeTab {
+  newTab(url: string, opener?: FakeTab, windowId = 1, late = 0): FakeTab {
     const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, ...(opener ? { openerId: opener.targetId } : {}) };
     this.tabs.set(tab.id, tab);
-    if (this.attachNew) this.attached.add(tab.id);
-    this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
+    const announce = () => {
+      if (this.attachNew) this.attached.add(tab.id);
+      this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
+    };
+    if (late) this.lateCreated.set(tab.id, new Promise((r) => setTimeout(() => { announce(); r(); }, late)));
+    else announce();
     return tab;
   }
 
@@ -75,7 +83,7 @@ export class FakeReceiver {
     switch (op) {
       case "bridge.info": return this.info;
       case "bridge.attachNew": this.attachNew = args[0]; return null;
-      case "debugger.attach": { tab(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
+      case "debugger.attach": { tab(args[0]); await this.lateCreated.get(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
       case "debugger.detach": this.attached.delete(args[0]); return null;
       case "debugger.getTargets": return [...this.tabs.values()].map((t) => ({ id: t.targetId, tabId: t.id, type: "page", title: t.title, url: t.url, attached: this.attached.has(t.id) }));
       case "debugger.sendCommand": {
@@ -87,7 +95,7 @@ export class FakeReceiver {
         if (method === "Target.getTargetInfo") return { targetInfo: { targetId: t.targetId, type: "page", title: t.title, url: t.url, attached: true, browserContextId: "C1D2", ...(t.openerId ? { openerId: t.openerId } : {}) } };
         return {};
       }
-      case "tabs.create": return this.chromeTab(this.newTab(args[0].url));
+      case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs));
       case "windows.create": { const t = this.newTab(args[0].url, undefined, 2); return { id: 2, state: "normal", tabs: [this.chromeTab(t)] }; }
       case "tabs.get": return this.chromeTab(tab(args[0]));
       case "tabs.query": return [...this.tabs.values()].filter((t) => args[0].windowId === undefined || t.windowId === args[0].windowId).map((t) => this.chromeTab(t));

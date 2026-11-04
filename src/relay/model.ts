@@ -18,6 +18,8 @@ const CONTENT_TYPES = ["location", "notifications", "camera", "microphone", "cli
 /** Targets that the model never reports: so context.serviceWorkers() is empty. */
 const HIDDEN_TYPES = new Set(["service_worker", "shared_worker", "browser"]);
 /** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
+/** How long Target.createTarget waits for its tab's tabs.onCreated, which brings the tab's hold (C10 does not order it before the answer). */
+const CREATED_WAIT_MS = 2000;
 const SAFE_DANGER = new Set(["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe", "asyncScanning", "asyncLocalPasswordScanning"]);
 
 export const CLOSE = {
@@ -40,6 +42,8 @@ type Tab = {
   sessions: Set<string>; attached: boolean; attaching: Promise<void> | null; held: boolean; claimed: boolean; autoPending: Promise<string | null> | null;
   /** The client's URL of a tab that Target.createTarget opened at about:blank, until the model navigates it. */
   navigateTo: string | null;
+  /** Its tabs.onCreated came (with attached and held). */
+  seen: boolean;
 };
 type Session = { tabId: number; parent?: string; auto: boolean };
 type Download = { conn: Conn; url: string; name: string; item?: number };
@@ -77,6 +81,7 @@ export class Model {
   private readonly downloads = new Map<string, Download>();
   /** Target.createTarget calls in flight: a new tab waits for them, so that only its creator takes a tab that it opened. */
   private readonly creating = new Set<Promise<unknown>>();
+  private readonly seenWaiters = new Map<number, () => void>();
   private nextConn = 1;
   private link = 0; // the generation of the link: an answer from before a link change changes nothing
   private linkUp = false;
@@ -242,7 +247,7 @@ export class Model {
 
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
-    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null }));
+    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false }));
     return tab;
   }
 
@@ -315,8 +320,26 @@ export class Model {
   /** `c` left while a call for `tab` waited: it keeps no session and no ownership, and a tab with no session carries no debugger. */
   private async abandon(c: Conn, tab: Tab): Promise<never> {
     if (tab.owner === c) tab.owner = null;
-    if (!tab.owner && !tab.sessions.size) await this.detach(tab);
+    if (!tab.owner && !tab.sessions.size) await this.leave(tab);
     throw new Error("The connection closed");
+  }
+
+  /** The last session of a tab went: a pending client URL still comes, as with a direct create, then the tab carries no debugger. */
+  private async leave(tab: Tab): Promise<void> {
+    if (tab.navigateTo) {
+      if (tab.held) this.release(tab);
+      await this.navigate(tab);
+    }
+    await this.detach(tab);
+  }
+
+  /** The tab's tabs.onCreated, which brings its hold: the real receiver sends it after its eager attach, after the tabs.create answer. */
+  private seenEvent(tab: Tab): Promise<void> {
+    if (tab.seen) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.seenWaiters.delete(tab.id); resolve(); }, CREATED_WAIT_MS);
+      this.seenWaiters.set(tab.id, () => { clearTimeout(timer); this.seenWaiters.delete(tab.id); resolve(); });
+    });
   }
 
   private async detach(tab: Tab): Promise<void> {
@@ -365,6 +388,7 @@ export class Model {
       owner?.event(s?.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
     }
     tab.sessions.clear();
+    tab.navigateTo = null;
     this.forgetChildren(tab);
   }
 
@@ -376,7 +400,7 @@ export class Model {
     if (!tab) return;
     tab.sessions.delete(sid);
     if (notify) c.event(s.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
-    if (!tab.sessions.size) { tab.owner = null; await this.detach(tab); }
+    if (!tab.sessions.size) { tab.owner = null; await this.leave(tab); }
   }
 
   /** After a timeout (C10): detach the tab, which ends the command in Chrome; it keeps its scope and owner, and an auto-attach owner gets it again. */
@@ -484,7 +508,8 @@ export class Model {
   private async onCreated(ev: any): Promise<void> {
     const link = this.link;
     const tab = this.tabOf(ev.tab.id);
-    tab.attached = !!ev.attached; tab.held = !!ev.held;
+    tab.attached = !!ev.attached; tab.held = !!ev.held; tab.seen = true;
+    this.seenWaiters.get(tab.id)?.();
     if (this.creating.size) await Promise.allSettled([...this.creating]);
     if (tab.claimed || link !== this.link) return;
     // The opener comes from Chrome's own target info: chrome.tabs' openerTabId named the active tab instead of the
@@ -703,6 +728,7 @@ export class Model {
         // The tab joins the scope also when its creator left meanwhile; then it is free for the scope.
         tab.scope = c.scope; tab.claimed = true; tab.navigateTo = url;
         if (this.conns.has(c)) tab.owner = c;
+        await this.seenEvent(tab);
         tab.targetId ??= await this.targetIdOf(tab.id);
         return tab;
       })();
