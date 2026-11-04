@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab } from "./browser.ts";
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
 import { listAgentChromes, type AgentChrome } from "./chromes.ts";
+import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
 import { isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
@@ -93,6 +94,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
       p("seed", "number", false, "--seed", "the seed of the cursor paths, aim points and typing pace; the same seed moves the same way; default 1"),
       p("ffmpeg", "string", false, "--ffmpeg", "the ffmpeg binary (absolute path); default ffmpeg on PATH"), ANY_SCOPE] },
   { name: "chromes", summary: "Every agent-browser Chrome of this user on the machine: pid, profile, state folder, window, proxy (read-only; no --state-dir)", usage: "chromes", params: [] },
+  { name: "front", summary: "macOS: bring the agent browser to the front, to answer its prompt (for a person only: it takes the focus)", usage: "front", params: [] },
   { name: "commands", summary: "This list, as JSON", usage: "commands", params: [] },
 ];
 
@@ -134,6 +136,8 @@ export type RecordResult = Ok<"record", {
 }>;
 /** Every agent-browser Chrome of this user, by pid (see AgentChrome). */
 export type ChromesResult = Ok<"chromes", { chromes: AgentChrome[] }>;
+/** The agent Chrome that front brought to the front, and the request that did it (see bringToFront). */
+export type FrontResult = Ok<"front", { chromePid: number; profileDir: string; stateDir: string | null; windowName: string | null; via: FrontHow }>;
 export type CommandsResult = Ok<"commands", { commands: CommandSpec[] }>;
 
 /** The longest `net` capture, in seconds. */
@@ -428,6 +432,15 @@ export const commands = {
   /** Needs no consumer: it reads the process table and this user's state folders, and never connects to a Chrome or signals one. */
   async chromes(): Promise<ChromesResult> {
     return { ok: true, command: "chromes", chromes: listAgentChromes() };
+  },
+
+  /**
+   * For a person only: it takes the operator's focus, so no other command calls it. It never connects
+   * to a Chrome or signals one, and it acts only on the agent Chrome on this consumer's profile (front.ts).
+   */
+  async front(o: BrowserOptions | Settings): Promise<FrontResult> {
+    const { chrome, via } = await bringToFront(resolveOptions(o));
+    return { ok: true, command: "front", chromePid: chrome.pid, profileDir: chrome.profileDir, stateDir: chrome.stateDir, windowName: chrome.windowName, via };
   },
 
   async commands(): Promise<CommandsResult> {

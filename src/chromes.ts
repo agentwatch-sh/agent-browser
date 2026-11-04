@@ -27,6 +27,9 @@ export type AgentChrome = {
 
 export type UserProcess = { uid: number; pid: number; command: string };
 
+/** This machine's process table, every user's rows, as parseUserPs reads it. */
+export const readUserPs = (): string => execFileSync("ps", ["axww", "-o", "uid=,pid=,command="], { encoding: "utf8", maxBuffer: 64 << 20 });
+
 /** Rows of `ps axww -o uid=,pid=,command=`: procps (Linux) and BSD ps (macOS) differ only in the column widths. */
 export function parseUserPs(ps: string): UserProcess[] {
   return ps.split("\n").flatMap((line) => {
@@ -176,7 +179,7 @@ function restoresSession(stat: StatLike, profile: string, uid: number): boolean 
  */
 export function listAgentChromes(deps: { ps?: () => string; uid?: number; stat?: StatLike } = {}): AgentChrome[] {
   const uid = deps.uid ?? process.getuid!(), stat = deps.stat ?? statPath;
-  const ps = deps.ps ?? (() => execFileSync("ps", ["axww", "-o", "uid=,pid=,command="], { encoding: "utf8", maxBuffer: 64 << 20 }));
+  const ps = deps.ps ?? readUserPs;
   const rows = parseUserPs(ps()).filter((r) => r.uid === uid);
   const proxies = rows.flatMap((r) => proxyRow(r) ?? []);
   const chromes: AgentChrome[] = [];

@@ -17,7 +17,7 @@ from ._errors import (
 )
 from ._results import (
     AgentChrome, ChromesResult, ClickResult, CloseResult, CommandSpec, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult,
-    GotoResult, HoverResult, JSONValue, LaunchError, LaunchResult, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
+    FrontResult, GotoResult, HoverResult, JSONValue, LaunchError, LaunchResult, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
     OutlineElement, OutlineResult, ParamSpec, PressResult, ProxyInfo, QuitResult, RecordEvent, RecordResult, ShotResult, StatusResult,
     StopResult, TabRef, TabsResult, TextResult, TypeResult, WindowResult,
 )
@@ -29,7 +29,7 @@ __all__ = [
     "AgentBrowserError", "ApprovalNeededError", "ChromeUnreachableError", "CLIError", "NodeNotFoundError", "NodeVersionError", "NotAllowedError",
     "PackageNotFoundError", "PinRequiredError", "ProtocolError", "ReadFirstError", "TabNotFoundError", "UsageError",
     "AgentChrome", "ChromesResult", "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "ConnectResult", "DownloadResult", "EvalResult",
-    "FetchResult", "GotoResult", "HoverResult", "JSONValue", "LaunchError", "LaunchResult", "NetEntry", "NetHttp", "NetResult", "NetWs",
+    "FetchResult", "FrontResult", "GotoResult", "HoverResult", "JSONValue", "LaunchError", "LaunchResult", "NetEntry", "NetHttp", "NetResult", "NetWs",
     "Notification", "OpenResult", "OutlineElement", "OutlineResult", "ParamSpec", "PressResult", "ProxyInfo", "QuitResult",
     "RecordEvent", "RecordResult", "ShotResult", "StatusResult", "StopResult", "TabRef", "TabsResult", "TextResult", "TypeResult", "WindowResult",
 ]

@@ -102,10 +102,15 @@ function endedClause(s: Settings): string {
   return `; the last approved connection ended at ${end.at} (${end.why}${sleep})`;
 }
 
-/** What a caller sees as a new connection starts: a person must answer Chrome's prompt, and where. */
-export function promptNotice(s: Settings, target: string, timeoutMs: number): string {
+/**
+ * What a caller sees as a new connection starts: a person must answer Chrome's prompt, and where. On
+ * macOS, when a person answers it, the notice names `front`, which a person runs (it takes the focus).
+ */
+export function promptNotice(s: Settings, target: string, timeoutMs: number, platform: NodeJS.Platform = process.platform): string {
   const who = s.approve ? "the approve option answers" : "a person clicks Allow on";
-  return `${s.commandName}: no approved connection${endedClause(s)}. Opening a new one to ${promptPlace(s, target)}: Chrome holds it until ${who} its "Allow remote debugging?" prompt in that browser's window (waiting ${Math.round(timeoutMs / 1000)} s)`;
+  const front = platform === "darwin" && s.mode === "agent" && !s.endpoint && !s.approve
+    ? `; a person at the Mac can bring that window to the front with \`${s.commandName} front\`` : "";
+  return `${s.commandName}: no approved connection${endedClause(s)}. Opening a new one to ${promptPlace(s, target)}: Chrome holds it until ${who} its "Allow remote debugging?" prompt in that browser's window (waiting ${Math.round(timeoutMs / 1000)} s)${front}`;
 }
 
 /** Why noPrompt refused to connect, and what a person does about it. */
