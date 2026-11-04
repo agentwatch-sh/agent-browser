@@ -418,8 +418,7 @@ class ChromesTest(unittest.TestCase):
         state = self.folder / "state"
         (state / "profile").mkdir(parents=True)
         (state / "chrome-proxy.json").write_text(json.dumps({"pid": 4500, "upstream": "ws://127.0.0.1:9/devtools/browser/p"}))
-        launch = ("--no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-renderer-backgrounding "
-                  "--disable-background-timer-throttling")
+        launch = "--no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows"
         inspect = "chrome://inspect/#remote-debugging"
         rows = [
             f"{uid:5d}  4100 /opt/google/chrome/chrome {launch} --user-data-dir={state}/profile --window-name=vedlo browser: {state} {inspect}",

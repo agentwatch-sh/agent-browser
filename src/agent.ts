@@ -76,13 +76,19 @@ export async function agentEndpoint(s: Settings, deps: {
 
 export const INSPECT_URL = "chrome://inspect/#remote-debugging";
 
+// No timer flag (--disable-background-timer-throttling, --disable-renderer-backgrounding; dropped in
+// ab-v16.13): a site can measure its timers in a hidden tab, and with those flags they ran at full
+// rate there, unlike in the operator's Chrome. A hidden tab's timers now slow down as in plain Chrome,
+// and agent-browser still switches tabs and drives a tab that is not in front
+// (test/live/background-tabs/check.ts).
 export const AGENT_ARGS: readonly string[] = [
   "--no-first-run",
   "--no-default-browser-check",
-  // The agent window usually sits behind the operator's windows; keep it rendering at full speed.
+  // The agent window usually sits behind the operator's windows. Without this flag macOS marks a
+  // covered window's page hidden (no animation frames, slow timers) while the agent's clicks and
+  // typing still reach it, so a site sees input on a hidden page (docs/research/
+  // 2026-11-03-chrome-vs-chrome-beta.md, section 8, check 9). With it the page stays visible.
   "--disable-backgrounding-occluded-windows",
-  "--disable-renderer-backgrounding",
-  "--disable-background-timer-throttling",
 ];
 
 // The Chrome switches a caller's flags (chromeArgs, extraArgs, urls) may never carry, by class:
