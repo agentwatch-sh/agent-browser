@@ -222,7 +222,8 @@ export function human(r: any): string {
       ]));
     case "front":
       return lines([`the agent browser (pid ${r.chromePid}) is in front: ${r.windowName === null ? "window name unknown" : `window ${JSON.stringify(r.windowName)}`}`,
-        `  profile ${r.profileDir}`]);
+        `  profile ${r.profileDir}`,
+        "  if no window shows, it is minimized: click it in the Dock (or click the agent browser's Chrome icon there)"]);
     case "commands": return USAGE + "\n";
     default: return JSON.stringify(r) + "\n";
   }

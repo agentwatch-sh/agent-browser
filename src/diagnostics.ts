@@ -109,7 +109,7 @@ function endedClause(s: Settings): string {
 export function promptNotice(s: Settings, target: string, timeoutMs: number, platform: NodeJS.Platform = process.platform): string {
   const who = s.approve ? "the approve option answers" : "a person clicks Allow on";
   const front = platform === "darwin" && s.mode === "agent" && !s.endpoint && !s.approve
-    ? `; a person at the Mac can bring that window to the front with \`${s.commandName} front\`` : "";
+    ? `; a person at the Mac can bring that window to the front with \`${s.commandName} front\` (a person runs it; an agent never runs it: it takes the operator's focus)` : "";
   return `${s.commandName}: no approved connection${endedClause(s)}. Opening a new one to ${promptPlace(s, target)}: Chrome holds it until ${who} its "Allow remote debugging?" prompt in that browser's window (waiting ${Math.round(timeoutMs / 1000)} s)${front}`;
 }
 

@@ -573,8 +573,8 @@ class ChromesResult:
 class FrontResult:
     """The agent Chrome that `front` brought to the front (macOS), and the request that did it.
 
-    `via` is "activate" or "activate-from" (the second request, with the app in front as the one that
-    hands over). `state_dir` and `window_name` are None when the evidence does not give them.
+    `via` is "activate" or "activate-from" (the second request, macOS 14 and later, which names the app
+    in front). `state_dir` and `window_name` are None when the evidence does not give them.
     """
 
     chrome_pid: int

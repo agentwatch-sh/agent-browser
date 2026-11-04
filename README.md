@@ -211,17 +211,28 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
 - **Bringing the asking window to the front (macOS):** `agent-browser front --state-dir DIR` brings
   this consumer's agent Chrome to the front, so that you find its "Allow remote debugging?" prompt.
   It takes the operator's focus, so a person runs it. An agent never runs it on its own. On macOS the
-  notice of a command that waits for the prompt names it (`<command name> front`), unless the
-  `approve` option answers the prompt.
-  - It finds the agent Chrome on this consumer's profile as `chromes` does, and uses its pid. It
-    refuses every other Chrome: a Chrome on that profile that agent-browser did not start, another
-    consumer's agent Chrome, and the operator's own Chrome. It never connects to a Chrome, so it
-    raises no new prompt. It signals no process.
-  - It asks macOS to activate that one instance by its pid: AppKit's
-    `NSRunningApplication activateWithOptions:` with all the windows of that instance, through
-    `osascript -l JavaScript`. The agent browser can be a second instance of the operator's own
-    Google Chrome.app, with the same bundle id, so `open -a` cannot choose it. A pid can. Before the
-    request, the script checks that the pid's executable is still the agent Chrome's binary.
+  notice of a command that waits for the prompt names it (`<command name> front`, with "a person
+  runs it; an agent never runs it"). The notice does not name it when the `approve` option answers
+  the prompt, in personal mode, or with an `endpoint` override.
+  - It finds the agent Chrome that holds this consumer's profile: the pid in the profile's
+    `SingletonLock`, which Chrome makes at its start. `chromes` must list that pid as an agent
+    Chrome of this user on this profile: agent-browser started it, or an agent-browser proxy of this
+    user drives it. The lock must not be older than that process. So it refuses every other Chrome:
+    a Chrome on that profile that agent-browser did not start and that no agent-browser proxy of
+    this user drives, another consumer's agent Chrome (also one whose profile `ps` reads short at a
+    " -"), and the operator's own Chrome. It never connects to a Chrome, so it raises no new prompt.
+    It signals no process.
+  - It asks macOS to unhide and activate that one instance by its pid: AppKit's
+    `NSRunningApplication unhide` and `activateWithOptions:` with all the windows of that instance,
+    through `osascript -l JavaScript`. The agent browser can be a second instance of the operator's
+    own Google Chrome.app, with the same bundle id, so `open -a` cannot choose it. A pid can. Before
+    the request, the script checks the pid again, so a pid that another program has now is refused:
+    its executable must be the agent Chrome's binary, and its launch date (from Launch Services) must
+    be within 5 s of the start time that `ps` gives. Apple gives no launch date for an app that did not
+    start through Launch Services (`launch --login` starts Chrome without `open`); then only the
+    executable is checked.
+  - A minimized window stays in the Dock: activation does not bring it back. Then `front` still
+    succeeds, and its text says so: click the window in the Dock, or the agent browser's Chrome icon.
   - It needs no new permission. The script addresses no app by name and sends no Apple Event. macOS
     asks for the Automation permission only for an Apple Event to another app (Apple:
     `NSAppleEventsUsageDescription` is "required if your app uses APIs that send Apple events"). It
@@ -231,20 +242,29 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   - macOS 14 and later can refuse the request. There activation is a request, and "only the active
     app can influence the activation context" (Apple: cooperative activation). `osascript` is not the
     active app; your terminal is. So `front` reads the front app (`lsappinfo front`) for 1.5 s after
-    the request. If the agent Chrome is not in front, it asks once more with
-    `activateFromApplication:options:`, with the app in front as the app that hands over. If the
-    agent Chrome is still not in front, `front` fails (exit 1). The message names the pids, the
-    requests that it sent, and the way by hand: Control-click the Dock icon of the agent's Chrome,
-    and choose the window by its name.
+    the request. If the agent Chrome is not in front, on macOS 14 and later it asks once more with
+    `activateFromApplication:options:`, which names the app in front. That app (your terminal) did
+    not yield its activation, so macOS probably refuses this request too; the Mac check measures it.
+    If the agent Chrome is still not in front, `front` fails (exit 1). The message names the macOS
+    version, the pids, the requests that it sent, and the way by hand: Control-click the Dock icon of
+    the agent's Chrome, and choose the window by its name. `front` stops after 60 s in all.
   - Linux and other systems: `front` refuses with a usage error before anything runs. On a Linux
     server the agent browser runs on a display of its own (on taylor, a private Xvfb), and no person
     watches that display.
-  - Not measured on a Mac yet. The Mac check: while your own Google Chrome is open, start an agent
-    Chrome on a second instance of Google Chrome.app
-    (`node bin/agent-browser.js launch --state-dir DIR --chrome-bin "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`).
-    Click your terminal. Then run `node bin/agent-browser.js front --state-dir DIR --json` there.
-    Pass: exit 0, the agent window is in front, `lsappinfo info -only pid "$(lsappinfo front)"` gives
-    its `chromePid`, your own Chrome stays behind, and macOS shows no permission dialog.
+  - Not measured on a Mac yet. The Mac check, in your own terminal, while your own Google Chrome is
+    open:
+    1. Start an agent Chrome on a second instance of Google Chrome.app:
+       `S=$(mktemp -d /tmp/ab-front.XXXXXX)/state; node bin/agent-browser.js launch --state-dir "$S" --chrome-bin "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --json`.
+    2. Click your terminal.
+    3. Run this one line:
+       `lsappinfo info -only pid "$(lsappinfo front)"; node bin/agent-browser.js front --state-dir "$S" --json; echo "exit $?"; lsappinfo info -only pid "$(lsappinfo front)"`.
+    4. Pass: the first `lsappinfo` names your terminal's pid, `front` exits 0, the second `lsappinfo`
+       names its `chromePid`, the agent window is in front, your own Chrome stays behind, and macOS
+       shows no permission dialog.
+    5. Hidden and minimized: hide the agent Chrome (Cmd-H), click your terminal, and run the line
+       again (pass: the window shows). Minimize the agent window (Cmd-M), click your terminal, and run
+       it again (record whether the window shows; the text names the Dock).
+    6. `node bin/agent-browser.js quit --state-dir "$S" --json`.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -853,12 +873,16 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   files (never read). Through the CLI with a stand-in `ps`, it proves that the listing connects to
   nothing and signals nothing: stand-in processes own the profile's debugging port and the proxy
   socket, and log each connection and signal. They end by themselves with the test.
-- `test/front.test.ts`: `front` with crafted macOS `ps` rows and a stand-in for `osascript` and
-  `lsappinfo`, so nothing is activated. Covered: the request names only the agent Chrome's pid,
-  never the operator's own Chrome of the same app or another consumer's; a refusal when no agent
-  Chrome runs on the profile; a pid that is another app now, a Chrome that quit, and a reply that
-  cannot be read; the second request when macOS refuses the first; personal mode and Linux. The JXA
-  script runs in a stand-in of the ObjC bridge (`node:vm`). Also the CLI on Linux, and the notice.
+- `test/front.test.ts`: `front` with crafted macOS `ps` rows, real `SingletonLock` links in the temp
+  folder, and a stand-in for `osascript`, `lsappinfo` and `sw_vers`, so nothing is activated.
+  Covered: the request names only the agent Chrome's pid, never the operator's own Chrome of the same
+  app or another consumer's (also one whose profile `ps` reads short at a " -"); a Chrome that an
+  agent-browser proxy drives; the refusals (no lock, a stale lock, a lock that names no agent Chrome,
+  a pid that another program has now by its executable or its launch date, a pid that this login
+  session has no app for, a Chrome that quit, a reply that cannot be read); the second request on
+  macOS 14 and later only; the failure text with the macOS version; the time limit; personal mode and
+  Linux. The JXA script runs in a stand-in of the ObjC bridge (`node:vm`): the names that it uses, the
+  unhide before the activation, the 5 s launch-date window. Also the CLI on Linux, and the notice.
 - `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
   lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it
