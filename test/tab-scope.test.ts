@@ -51,7 +51,7 @@ test("a tab scope is one plain word: 1 to 64 letters, digits, '.', '_' or '-', s
   assert.equal(resolveOptions({ stateDir: c.stateDir }).tabScope, undefined, "no scope by default");
   for (const bad of ["", " ", "a b", "-a", ".a", "_a", "a/b", "../a", "a:b", 'a"b', "a\nb", "a\u0000", "naïve", "x".repeat(65), 5, null])
     assert.throws(() => resolveOptions({ stateDir: c.stateDir, tabScope: bad as string }), UsageError, JSON.stringify(bad));
-  const r = await cli(["tabs", "--tab-scope", "two words", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--json"]);
+  const r = await cli(["tabs", "--tab-scope", "two words", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--no-launch", "--json"]);
   assert.equal(r.status, 2);
   assert.deepEqual(r.json.error, { code: "usage", message: 'tabScope must be 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or a digit, not "two words"' });
   const help = await cli(["--help"]);
