@@ -89,7 +89,7 @@ test("a launch from Google Chrome says the facts: a second Chrome for the agent 
     endpoint: async () => undefined, pid: () => undefined, spawn: fakeSpawn([]), exists: () => false,
   }).catch(() => {});
   const note = lines.filter((l) => /Google Chrome/.test(l));
-  assert.deepEqual(note, ["agent browser: a second Google Chrome runs for the agent browser, with its own profile; its icon in the Dock and its entry in Cmd-Tab are the agent's, and your own profile is untouched"]);
+  assert.deepEqual(note, ["agent browser: a Google Chrome runs for the agent browser, with its own profile; while your own Chrome is also open, its icon in the Dock and its entry in Cmd-Tab are separate from yours, and your own profile is untouched"]);
   assert.ok(!lines.some((l) => /brings it forward|google-chrome@beta/.test(l)), "no claim that the Dock icon brings the agent window forward, no advice to install Beta");
 });
 
