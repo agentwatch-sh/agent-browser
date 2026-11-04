@@ -5,6 +5,13 @@ Date: 2026-11-03. Status: **DRAFT for the operator's review.** Author: taylor se
 Evidence: the probe in [2026-11-03-two-modes-probe/](2026-11-03-two-modes-probe/README.md), run on
 taylor with Debian Chromium 156.0.8078.73, Playwright 1.64.1 and Playwright MCP 0.0.84.
 
+Updated on 2026-11-04 (board task ab-v16.14). This version holds the operator's answers of
+2026-11-04 to the design's questions (ab-jzg, section 14), to the Chrome comparison's questions
+(ab-vsm, section 9) and to the follow-up items ab-32m, ab-8mf and ab-9hj. It also holds the Mac
+facts of 2026-11-03 (the comparison's Mac checks) and of 2026-11-04 (the focus result of board task
+ab-b84.11). No question of the operator from these items stays open. The choice of the Mac's
+install waits for the Mac stage (ab-v16.8).
+
 This design builds on the agentwatch design `docs/superpowers/specs/2026-10-31-agent-browser-design.md`
 (agentwatch main) and keeps its operator decisions O1 to O19. Section 13 names the places where this
 design changes a part of it; none changes an operator decision.
@@ -24,33 +31,39 @@ design changes a part of it; none changes an operator decision.
 - **Measured on taylor:** 49 of 49 Playwright cases (six of them are refusals that the design wants)
   over a Unix socket and over loopback TCP; 13 Playwright MCP calls and two checks of what the site
   saw (15 of 15), and 14 of 14 cases on several connections and scopes, over the Unix socket. No
-  prompt appears (sections 5 and 4.4).
+  prompt appears (sections 5 and 4.4). The probe ran before the operator's answers. With the
+  answers on the page marks (refuse them) and the sign-ins (no cookie calls), five of the 49
+  Playwright cases and one of the 14 concurrency cases now get a refusal (section 5).
 - **No prompt on any path that agentwatch uses.** Every feature that agentwatch offers goes through
   the extension. The few features that only Chrome's "Allow remote debugging?" connection gives (a
   new isolated context, service-worker targets, JS coverage, a few browser-wide domains) give a clear
-  error in agent mode (section 6). Open question ab-jzg Q2 asks whether to offer them at all;
-  pending the operator's answer, this design uses the recommendation (never).
+  error in agent mode (section 6). The operator chose "Never" for that path (ab-jzg Q2).
 - **What a site can see:** no `navigator.webdriver`, no banner, no resize, and no new page globals
   for normal use. The probe found four marks. Two are fixed in the model: the navigation header
   `Sec-Fetch-Site` and the pointer pressure of a click. `fill` types with no key events (the skill
-  tells agents how to type). Playwright's own globals for init scripts, bindings and tracing are open
-  question ab-jzg Q3; pending the operator's answer, this design uses the recommendation (allow them,
-  with the skill's advice). The Chrome comparison measured a timing
-  mark of Playwright's Runtime domain, which this design does not hide (section 7).
+  tells agents how to type). Playwright's own globals for init scripts, bindings and tracing
+  snapshots never reach a page: the operator chose "Refuse them" (ab-jzg Q3), so the model refuses
+  those calls, and a program that uses them gets a clear error. The Chrome comparison measured a
+  timing mark of Playwright's Runtime domain, which this design does not hide (section 7).
 - **The allowlist holds for any CDP client:** DNR blocks every off-list top-level navigation in
   Chrome, and a new DNR rule blocks every frame of a tab whose top-level page is not on the list. The
-  off-list host got no request in any run. The browser model adds a cookie and permission filter,
-  one connection per tab, and the tab scope (section 8). ab-jzg Q4 asks who may read and remove the
-  sent sign-ins; pending the operator's answer, this design uses the recommendation (hide the httpOnly
-  values).
+  off-list host got no request in any run. The browser model adds a permission filter, one
+  connection per tab, and the tab scope (section 8). **No cookie calls:** the operator chose "No
+  cookies by default" (ab-jzg Q4 and the follow-up item ab-8mf). The endpoint refuses every cookie
+  call, so programs that read or set cookies through Playwright fail. The browser still uses its
+  cookies, so the sent sign-ins work on the sites. A later cookie grant can add cookie calls if a
+  use case needs them.
 - **Which Chrome:** Google Chrome stable at the operator's version, on the operator's kind of
-  machine, not Beta (the Chrome comparison, ab-v16.2). On Linux the agent package installs with no
-  prompt through Chrome's external extensions file; on the Mac it needs one "Load unpacked" per agent
-  profile, a store item or an MDM policy (sections 9 and 10). Where the agent browser runs and how
-  the agent package gets in are pending the operator's answers to ab-vsm Q1 and Q2; this design uses
-  the comparison's recommendations until then.
-- **Build:** six stages over three repos (section 12). Four open questions (section 14), on the board
-  as ab-jzg.
+  machine, not Beta (the Chrome comparison, ab-v16.2). The operator's answer to ab-vsm Q1: taylor
+  runs most browser work, and the Mac runs the agent browser only for a new site, a Cloudflare box
+  and other difficult sites. On taylor the agent package installs with no prompt through the
+  external extensions file of agentwatch's own Chrome copy (the operator's answer to ab-32m). On the
+  Mac that file gives no working extension from a local CRX (measured), so the Mac needs one "Load
+  unpacked" per agent profile, a store item or an MDM policy; that choice waits for the Mac stage.
+  On the Mac the agent Chrome is the operator's own `Google Chrome.app`, started a second time with
+  its own profile (the operator's answer to ab-9hj). Sections 9 and 10.
+- **Build:** six stages over three repos (section 12). The operator answered the design's four
+  questions on 2026-11-04 (section 14, ab-jzg; the sign-ins through ab-8mf).
 
 ## 2. The operator's words and the measure
 
@@ -195,19 +208,37 @@ these itself:
 | `Target.createTarget` | `chrome.tabs.create` (or `chrome.windows.create` for `newWindow`); the tab joins the scope and belongs to its creator; the attach event goes out before the answer, as Playwright needs |
 | `Target.closeTarget`, `activateTarget` | `chrome.tabs.remove`, `chrome.tabs.update` |
 | `Target.attachToTarget`, `detachFromTarget`, `attachToBrowserTarget` | Sessions of the model (section 4.4) |
-| `Target.getBrowserContexts`, `createBrowserContext` | No contexts; a new context is refused (ab-jzg Q1) |
+| `Target.getBrowserContexts`, `createBrowserContext` | No contexts; a new context is refused with a clear error (ab-jzg Q1: the operator chose "Refuse it with a clear error") |
 | `Browser.setDownloadBehavior`, `cancelDownload` and the download events | Section 4.5 |
 | `Browser.grantPermissions`, `resetPermissions` | `chrome.contentSettings` for geolocation, notifications, camera, microphone and the clipboard, for allowlisted origins only; a grant with no origin covers the allowlisted domains; other permissions are refused. The model records each connection's grants and rebuilds a type from the remaining ones when a connection resets or leaves. Content settings act on the whole profile, so one connection's grant also applies to another connection's pages (the rebuild ran with one connection only) |
 | `Browser.getWindowForTarget`, `getWindowBounds`, `setWindowBounds` | `chrome.windows` (also when they arrive on a page session) |
-| `Storage.*` and the Network cookie calls | `chrome.cookies`, for allowlisted domains only (section 8; ab-jzg Q4) |
+| `Storage.*` and the Network cookie calls | Refused: no cookie calls by default (the operator's answer to ab-8mf; section 8) |
 | `Browser.close` | Ends that client's connection only; the agent browser keeps running (measured with a raw client). Playwright's own `browser.close()` sends no `Browser.close`: it closes its connection |
 | Any other root call | "Not available in the agent browser: <method>" |
 
 Every other call on a page session goes to `chrome.debugger.sendCommand({tabId, sessionId?})`.
 Frames and workers of a tab are flat child sessions of its attachment (measured with a cross-site
-frame and a dedicated worker). One change on the way: a mouse press with no `force` gets
-`force: 0.5`, because a CDP press reports pointer pressure 0 where a real mouse reports 0.5
-(the Chrome comparison, section 3; measured here: the page sees 0.5).
+frame and a dedicated worker). Two changes on the way:
+
+- A mouse press with no `force` gets `force: 0.5`, because a CDP press reports pointer pressure 0
+  where a real mouse reports 0.5 (the Chrome comparison, section 3; measured here: the page sees
+  0.5).
+- The model refuses the calls that put a name on the page's own `window` (ab-jzg Q3: the operator
+  chose "Refuse them"): `Page.addScriptToEvaluateOnNewDocument` unless its `worldName` names an
+  isolated world (with no `worldName` the script runs in the page's main world), and
+  `Runtime.addBinding` unless its `executionContextName` names an isolated world (with no name the
+  binding goes on the page's main world too). The answer is a clear error that names the call, in
+  the form of section 6 (contract C11 fixes the text). So `addInitScript`, `exposeFunction`,
+  `exposeBinding` and tracing snapshots fail at once, and no `__playwright__*` name reaches a
+  page. The rule must let Playwright's own setup pass: for each
+  frame, Playwright sends `Page.addScriptToEvaluateOnNewDocument` with an empty source and the
+  `worldName` of its utility world, which a page cannot see. A refusal of every
+  `Page.addScriptToEvaluateOnNewDocument` would break every Playwright connection (read in
+  playwright-core 1.64.1, not run). The same rule also refuses other Playwright features that put
+  a script in the main world, for example `page.clock` (read, not run). One more effect to test in
+  stage 3: after a refused `exposeFunction` or `exposeBinding`, Playwright still marks its binding
+  as needed and sends `Runtime.addBinding` again for each new page of the context, so a new page of
+  that connection can then fail too (read, not run).
 
 ### 4.4 Several clients at the same time
 
@@ -266,9 +297,11 @@ hop than the probe's WebSocket; stage 3's live test measures it.
 
 Path: **1** = through the extension (`chrome.debugger` and `chrome.*`, no approval). **2** = only
 through Chrome's own CDP connection, which needs the "Allow remote debugging?" approval. **3** = not
-possible. Prompts: what the operator or Chrome must answer for that feature. A path-2 feature would
-bring "Allow remote debugging?" at each new connection; agent mode does not offer path 2 (section 6),
-so those rows say "not offered". Evidence: **P** a Playwright case and **MCP** an MCP call
+possible. **refused** = possible through the extension, but the model refuses it by the operator's
+choice. Prompts: what the operator or Chrome must answer for that feature. A path-2 feature would
+bring "Allow remote debugging?" at each new connection; agent mode does not offer path 2 (section 6;
+the operator chose "Never", ab-jzg Q2), so those rows say "not offered". Evidence: **P** a
+Playwright case and **MCP** an MCP call
 (`results/pw-*.json`, `results/mcp.json`), **K** a concurrency case (`results/concurrency.json`),
 **M** a matrix row (`results/matrix.json`), **S** the site's own report or the server's request log
 (`results/site-log.compact.jsonl`), **D** documentation or source reading only, **C** the probe
@@ -297,17 +330,17 @@ relay's code, not run by a client.
 | 19 | File upload by path: `setInputFiles(path)`, MCP `browser_file_upload` | `DOM.setFileInputFiles` | 1 | Sent (it works from an unpacked extension) | None | Nothing | P, M |
 | 20 | File upload by buffer | Playwright's page script | 1 | Sent | None | Nothing | P |
 | 21 | Downloads: `waitForEvent("download")`, `download.path()`, `cancel()` | `Browser.setDownloadBehavior`, `Browser.download*`, `cancelDownload` | 1 | Section 4.5 | None for one download (measured); a second automatic download would ask, unless the model's content setting allows it (not measured); a dangerous file waits for a person | Nothing | P, M (refused to the extension), C |
-| 22 | Cookies: `context.cookies`, `addCookies`, `clearCookies` | `Storage.*`, `Network` cookie calls | 1 | `chrome.cookies`, allowlisted domains only; who may read and remove the sent sign-ins is ab-jzg Q4 | None | Nothing | P (an off-list cookie refused), M |
-| 23 | Storage state: `context.storageState()` | rows 6 and 22, and one page per frame origin | 1, with a limit | Playwright opens a page for each origin that a frame of the context showed; DNR blocks an off-list frame origin, so the call fails after such a page (measured). In a context that showed no off-list frame it works (measured) | None | Nothing | P, K |
+| 22 | Cookies: `context.cookies`, `addCookies`, `clearCookies`; also `context.request` and `page.request`, which read and write the context's cookies | `Storage.*`, `Network` cookie calls | refused | Refused with a clear error: no cookie calls by default (the operator's answer to ab-8mf; section 8). Before the answer the probe's relay served them through `chrome.cookies`, for allowlisted domains only | None | Nothing | P, M (served, before the answer); the refusal and `context.request`: D |
+| 23 | Storage state: `context.storageState()` | rows 6 and 22, and one page per frame origin | refused | Its first call reads the cookies (row 22), so it fails. Before the answer: Playwright opens a page for each origin that a frame of the context showed; DNR blocks an off-list frame origin, so the call failed after such a page, and in a context that showed no off-list frame it worked (measured) | None | Nothing | P, K (before the answer); the refusal: D |
 | 24 | Permissions: `grantPermissions`, `clearPermissions` | `Browser.grantPermissions` | 1 for geolocation, notifications, camera, microphone and the clipboard; 2 for MIDI, sensors, background sync, payment handler, storage access, local fonts, wake lock and local network access | `chrome.contentSettings` (profile-wide; section 4.3) | None | The permission state, by intent | P for geolocation ("granted", then "prompt"), the clipboard with no origin ("granted") and MIDI (refused); C for notifications, camera and microphone; M |
-| 25 | Init scripts and bindings: `addInitScript`, `exposeFunction`, `exposeBinding` | `Page.addScriptToEvaluateOnNewDocument`, `Runtime.addBinding` | 1 | Sent | None | **Yes**: Playwright puts `__playwright__binding__` and `__playwright__binding__controller__` on the page's `window` (and the script's own globals). Playwright's own mark, on any transport (ab-jzg Q3) | P, S |
+| 25 | Init scripts and bindings: `addInitScript`, `exposeFunction`, `exposeBinding` | `Page.addScriptToEvaluateOnNewDocument` and `Runtime.addBinding` in the main world | refused | Refused with a clear error (ab-jzg Q3: the operator chose "Refuse them"; section 4.3). Playwright's own utility-world script passes | None | Nothing, because the call is refused. Measured before the answer, when the probe sent the calls: Playwright put `__playwright__binding__` and `__playwright__binding__controller__` on the page's `window` (and the script's own globals). Playwright's own mark, on any transport | P, S (sent, before the answer); the refusal: D |
 | 26 | Emulation: geolocation, timezone, locale, media, offline, extra headers | `Emulation.*`, `Network.emulateNetworkConditions`, `Network.setExtraHTTPHeaders` | 1 | Sent | None | The emulated values, by intent | M |
-| 27 | Tracing: `context.tracing` with screenshots and snapshots | `Page.startScreencast`, `Runtime` | 1 | Sent | None | **Yes**, while it records snapshots: a `__playwright_snapshot_streamer_<id>` global (ab-jzg Q3) | P, S |
+| 27 | Tracing: `context.tracing` with screenshots and snapshots | `Page.startScreencast`, `Runtime`; snapshots add a main-world init script | 1 for screenshots with no snapshots; refused with snapshots | Screenshots: sent. Snapshots: refused, because their init script is (row 25; ab-jzg Q3) | None | Nothing with the refusal. Measured before the answer, with snapshots: a `__playwright_snapshot_streamer_<id>` global | P, S (with snapshots, before the answer); screenshots only and the refusal: D |
 | 28 | PDF: `page.pdf` | `Page.printToPDF` | 1 | Sent | None | Nothing | P, M |
 | 29 | Raw CDP: `context.newCDPSession`, `browser.newBrowserCDPSession` | `Target.attachToBrowserTarget` | 1 for page domains and the model's browser set; 2 for other browser domains | A model session | None | Nothing | P, K |
 | 30 | Target discovery as Puppeteer and agent-browser use it | `Target.getTargets`, `setDiscoverTargets`, `attachToTarget` | 1 | The model | None | Nothing | K, M (refused to the extension), C for `setDiscoverTargets` |
 | 31 | `browser.close()` | none from Playwright; `Browser.close` from a raw client | 1 | Playwright closes its connection; a raw `Browser.close` ends only its own connection | None | Nothing | P, K |
-| 32 | An isolated context: `browser.newContext()`, MCP `--isolated` or a tab's `isolatedContext` | `Target.createBrowserContext` | 2 | Refused with a clear error (ab-jzg Q1) | Not offered | — | P (refused), M |
+| 32 | An isolated context: `browser.newContext()`, MCP `--isolated` or a tab's `isolatedContext` | `Target.createBrowserContext` | 2 | Refused with a clear error (ab-jzg Q1: the operator chose this) | Not offered | — | P (refused), M |
 | 33 | Video: `recordVideo` | needs a new context | 2 | Refused (the screencast of row 27 works) | Not offered | — | D, M |
 | 34 | Service workers: `context.serviceWorkers()`, `on("serviceworker")` | browser-level worker targets | 2 | The model reports none | Not offered | — | P (none), D |
 | 35 | `ignoreHTTPSErrors` | `Security.setIgnoreCertificateErrors` | 2 | Refused ("wasn't found") | Not offered | — | M |
@@ -318,6 +351,31 @@ relay's code, not run by a client.
 | 40 | Any off-list top-level page: `goto`, link click, `window.open`, `route.fulfill`, `file://` | DNR | guard | Blocked in Chrome: `net::ERR_BLOCKED_BY_CLIENT`; the tab shows Chrome's blocked page and stays usable | None | The off-list site sees nothing (no request in any run) | P, MCP, M, S |
 | 41 | An off-list frame in a tab whose top page is not on the list (`setContent`, `about:blank`) | DNR | guard | Blocked by a DNR rule (`sub_frame`, `excludedTopDomains` = the list); frames of an allowlisted page still load from any host (O11) | None | Nothing | P, with a control run without the rule (the frame loads) |
 | 42 | `Page.navigate` to a `data:` URL | | — | The tab stays on `about:blank` (measured with and without the frame rule; the cause was not checked) | None | — | P |
+
+**The probe's cases after the operator's answers.** The probe ran before the operator's answers,
+and its relay served every call. The refusal of the page marks (rows 25 and 27, ab-jzg Q3) and of
+the cookie calls (rows 22 and 23, ab-8mf) changes these cases. The probe's results stay as they
+were measured.
+
+Five of the 49 Playwright cases (`pw-probe.mjs`, `results/pw-tcp.json` and `results/pw-unix.json`)
+worked and now fail with the model's refusal, over both transports:
+
+- `context.addInitScript, then a new page` (`addInitScript`).
+- `init script in a popup (late attach)`. It calls nothing itself, but it reads the global of the
+  init script of the case before it. Its measure, whether the model attaches a popup before its
+  first script, needs another form in stage 3's live test, one that puts no name on the page.
+- `page.exposeFunction` (`exposeFunction`).
+- `context.tracing start/stop` (it records snapshots: `snapshots: true`).
+- `context.cookies + addCookies (allowlisted)` (cookie calls).
+
+Two more Playwright cases expected a refusal and still get one, but for another reason:
+`context.addCookies (off-list domain)` (now the cookie refusal, not "not on the allowlist") and
+`context.storageState() after a page with an off-list frame` (now the cookie refusal at its first
+call, not the blocked frame). One of the 14 concurrency cases (`results/concurrency.json`) worked
+and now fails: `context.storageState() in a context that showed no off-list frame`.
+
+The other 42 Playwright cases, the other 13 concurrency cases and the 15 MCP cases
+(`results/mcp.json`) use none of these features. In the MCP run the site saw no new global.
 
 ## 6. How the two paths work together
 
@@ -332,13 +390,15 @@ relay's code, not run by a client.
   path costs what the extension path removes: Chrome then listens on a loopback TCP port (9222,
   measured on 2026-11-01) that every local user can reach; each new connection raises "Allow remote
   debugging?"; on Linux xdotool answers it blind and needs a version gate; on the Mac a person must
-  click after each sleep (#9) and find the right window (#3). The design recommends that agentwatch
-  never opens it (ab-jzg Q2). vedlo and marketdata-update keep agent-browser's CDP proxy (the approval path)
-  until they choose to move.
-- **What an agent sees.** One endpoint. Rows 1 to 31 work (row 23 with its limit). A path-2 feature fails at once with a
-  clear message, for example "Not available in the agent browser: a new browser context
-  (Target.createBrowserContext). Use the default context: browser.contexts()[0]." No prompt, no
-  window and no banner appears, and the agent never waits for a person.
+  click after each sleep (#9) and find the right window (#3). The operator chose that agentwatch
+  never opens it (ab-jzg Q2: "Never"). vedlo and marketdata-update keep agent-browser's CDP proxy
+  (the approval path) until they choose to move.
+- **What an agent sees.** One endpoint. Rows 1 to 31 work, except the refused calls of rows 22
+  and 23 (the cookie calls, ab-8mf) and of rows 25 and 27 (the page marks, ab-jzg Q3). A path-2
+  feature or a refused call fails at once with a clear message, for example "Not available in the
+  agent browser: a new browser context (Target.createBrowserContext). Use the default context:
+  browser.contexts()[0]." No prompt, no window and no banner appears, and the agent never waits for
+  a person.
 
 ## 7. What a site can see (the operator's top goal)
 
@@ -363,26 +423,43 @@ first page is the baseline: a tab with no debugger and no client.
 - The comparison also measured that agent-browser's three background flags
   (`--disable-background-timer-throttling` with `--disable-renderer-backgrounding` and
   `--disable-backgrounding-occluded-windows`) let a hidden tab run 50 ms timers (plain Chrome: about
-  1000 ms). The agent-mode unit does not pass them (stage 1's flags), and agent mode keeps it so
-  (pending the operator's answer to ab-vsm Q4; this design uses the recommendation, no flags, until
-  then).
-  On the Mac an agent window behind the operator's windows can then show no focus and, without the
-  last flag, `visibilityState` hidden while it gets input (not measured: the comparison's Mac
-  check 9).
+  1000 ms). The operator's answer to ab-vsm Q4 (2026-11-04): "As long as the agentbrowser can swap
+  tabs i'm OK with dropping timers." So agent-browser drops the two timer flags,
+  `--disable-background-timer-throttling` and `--disable-renderer-backgrounding`, and keeps
+  `--disable-backgrounding-occluded-windows` (board task ab-v16.13). The operator's condition is
+  part of that task: a test shows that agent-browser still switches tabs and still drives a tab
+  that is not in front. The last flag is not a timer flag for a hidden tab: it keeps an agent
+  window behind other windows visible. Keeping it is the lead's reading of the answer; the operator
+  can reverse it.
+- Agent mode follows the same rule. The agent-mode unit on taylor passes none of the three flags
+  (stage 1's flags), and agent mode passes no timer flag. The Mac stage starts the agent Chrome
+  with `--disable-backgrounding-occluded-windows`, for the reason below. The operator's condition
+  holds for agent mode too: stage 3's live test checks that a client switches tabs and drives a tab
+  that is not in front.
+- Focus and visibility on the Mac (measured: the comparison's Mac check 9). For an agent window
+  behind the operator's windows, `document.hasFocus()` is false while idle and true after CDP
+  input. With `--disable-backgrounding-occluded-windows` the page stays `visible` at full rate.
+  Without it the page is hidden (`visibilityState` hidden, no animation frames, slow timers) while
+  CDP clicks and typing still work, so a site can see input on a hidden page.
 - agent-browser's `outline` writes a `data-agent-browser-idx` attribute into the page's DOM, which a
   page script can see (the comparison, section 3). A Playwright client writes no such attribute.
 - **Fixed in the model:** the navigation header (row 4: a DNR `modifyHeaders` rule with
   `initiatorDomains` = the agent package's own ID sets `Sec-Fetch-Site: none` for the navigations
   the extension starts and for no other navigation; measured: `Page.navigate` then sends `none` +
   `?1`, a page script's navigation keeps `same-origin`) and the pointer pressure (row 5).
-- **Different from a person, by the client's choice:** `fill` without key events (row 5), and
-  Playwright's `__playwright__*` globals for init scripts, bindings and tracing snapshots (rows 25 and
-  27). They are ab-jzg Q3; pending the operator's answer, this design uses the recommendation (allow
-  them, with the skill's advice).
+- **Different from a person, by the client's choice:** `fill` without key events (row 5).
+- **Refused by the operator's choice:** Playwright's `__playwright__*` globals for init scripts,
+  bindings and tracing snapshots (rows 25 and 27) never reach a page. The operator chose "Refuse
+  them" (ab-jzg Q3), not the design's recommendation. So a program that uses these features gets a
+  clear error (section 4.3).
 - The identity of the browser after a send is the comparison's subject (section 9 here). A send
   carries no machine: on taylor a site sees Linux, no WebGL, Linux fonts, 32 CPUs and taylor's IP
-  address, whatever the channel. Where the agent browser runs is pending the operator's answer to
-  ab-vsm Q1.
+  address, whatever the channel. The operator's answer to ab-vsm Q1 (2026-11-04): "I prefer most
+  browser actions to happen on taylor. i'll use my mac only in very limited cases... i.e. when we're
+  just starting to use a website. or if i need to click a cloudflare box, or things like that. for
+  difficult sites." So on taylor, the default agent browser, a site that compares the machine can
+  tell the agent browser from the operator's Chrome. The Mac runs the agent browser for a new site,
+  a Cloudflare box and other difficult sites.
 
 ## 8. The allowlist and the tab scope with a raw CDP client (task item 3)
 
@@ -405,11 +482,20 @@ network stack before any CDP interception:
 **What the browser model adds.**
 
 - Cookies: `Storage.getCookies` on a tab session returns the cookies of other sites too (measured: a
-  `c.localhost` cookie, from a page of `a.localhost`). So the model answers every cookie call itself
-  and filters to allowlisted domains: `Storage.*` on any session, `Network.getAllCookies` and
-  `Network.getCookies` (results filtered), `Network.setCookie(s)` and `deleteCookies` (an off-list
-  domain refused), `Network.clearBrowserCookies` (allowlisted cookies only). Measured for
-  `context.addCookies`. Who may read and remove the sent sign-ins is ab-jzg Q4.
+  `c.localhost` cookie, from a page of `a.localhost`). So the model answers every cookie call itself:
+  `Storage.*` on any session, `Network.getAllCookies`, `Network.getCookies`,
+  `Network.setCookie(s)`, `deleteCookies` and `Network.clearBrowserCookies`. **The operator chose
+  "No cookies by default"** (ab-jzg Q4 and the follow-up item ab-8mf, section 14). So the model
+  refuses every one of these calls with a clear error. Programs that read or set cookies through
+  the endpoint fail (rows 22 and 23). The browser still sends its cookies to the sites, so the sent
+  sign-ins work. The operator's words: "Make a note in the code to add a cookie grant in the future
+  if we run into a use-case that needs cookie access." So stage 3 puts that note at the refusal in
+  the relay's code. Such a grant can reuse the probe's filter, measured for `context.addCookies`:
+  allowlisted domains only, an off-list domain refused, `clearBrowserCookies` for allowlisted
+  cookies only.
+- Not covered by the answer: the network events and the `Fetch` interception that the model passes
+  on also carry `Cookie` and `Set-Cookie` header values, also of httpOnly cookies (for example
+  `Network.requestWillBeSentExtraInfo`). Whether the model blanks them is a question for stage 3.
 - Permissions: only for allowlisted origins (row 24).
 - `Extensions.*` and `Target.exposeDevToolsProtocol` are refused on every session.
 - The model never attaches a client to a tab outside its scope, to a tab that another connection
@@ -437,20 +523,37 @@ as the operator's Chrome. Not Chrome Beta.**
 - Beta is a different browser to a site: another major version in the User-Agent, the client hints
   and `navigator.userAgentData`, another GREASE brand, and web features that stable lacks or has
   (its section 2.1). Stable at the same version sends the operator's own identity, also the JA4 TLS
-  and HTTP/2 fingerprints (inferred from its measurements; its Mac check 5 confirms it).
-- The extension works the same in both channels: both ignore `--load-extension`, both install the
-  agent package from Chrome's external extensions file with no developer mode and no prompt, both
-  keep an extension that "Load unpacked" installed with developer mode on, and both drive a tab
-  through `chrome.debugger` with `--silent-debugger-extension-api` with no banner and
-  `navigator.webdriver` false (its sections 3 and 5).
+  and HTTP/2 fingerprints. Measured on the operator's Mac (its Mac check 5): the operator's Chrome
+  and a new profile of the same app sent the same User-Agent, client hints, JA4 and HTTP/2
+  fingerprints. The patch version differed, because the operator's running Chrome waited for
+  "Relaunch to update".
+- The extension works the same in both channels: both ignore `--load-extension`; on Linux both
+  install the agent package from Chrome's external extensions file with no developer mode and no
+  prompt; on the Mac both install a local CRX from that file and disable it at once (reason 256,
+  not from the Chrome Web Store); both keep an extension that "Load unpacked" installed with
+  developer mode on, also across a relaunch on the Mac; and both drive a tab through
+  `chrome.debugger` with `--silent-debugger-extension-api` with no banner and
+  `navigator.webdriver` false (its sections 3, 5 and 8).
 - "Same OS" must mean the same kind of machine: a send carries cookies and page storage, not the
   machine. Only an agent browser on the operator's Mac, or on a Mac like it, can match the
-  operator's Chrome. Where the agent browser runs is pending the operator's answer to ab-vsm Q1;
-  this design builds taylor first (Linux) and the Mac second, as the agentwatch design does.
-- Its open questions for the operator are on the board as ab-vsm: Q1 where the agent browser runs,
-  Q2 how the agent package gets in, Q3 a second instance of `Google Chrome.app` on the Mac, Q4 the
-  three background flags. This design does not repeat them. Until the operator answers, section 10
-  uses the comparison's recommendation for each.
+  operator's Chrome. The operator's answer to ab-vsm Q1: taylor runs most browser work, and the Mac
+  runs the agent browser only for a new site, a Cloudflare box and other difficult sites (section
+  7). So taylor is the default agent browser, and this design builds taylor first (Linux) and the
+  Mac second, as the agentwatch design does.
+- The operator answered the comparison's four questions (ab-vsm) on 2026-11-04:
+  - Q1, where the agent browser runs: taylor by default, the Mac for difficult sites (above).
+  - Q2, how the agent package gets in: "I'm not sure yet." The follow-up item ab-32m asked about
+    taylor only, and the operator chose "Yes, the external extensions file" (section 10). The Mac's
+    install waits for the Mac stage.
+  - Q3, a second instance of `Google Chrome.app` on the Mac: "I'm not sure yet. Do we get two icons
+    and two tabs? Or one icon and 1 tab? I.e. the same window as my windows?" The Mac run answers
+    the question: two Dock icons, two Cmd-Tab entries, and the agent's windows stay separate from
+    the operator's windows. In ab-32m the operator asked: "is it the same binary with a totally
+    separate chrome profile or two binaries?" The follow-up item ab-9hj gave the two choices, and
+    the operator chose "The same binary: my Google Chrome, with its own profile" (section 10).
+  - Q4, the three background flags: "As long as the agentbrowser can swap tabs i'm OK with dropping
+    timers." agent-browser drops the two timer flags and keeps the occluded-windows flag (section 7,
+    board task ab-v16.13).
 
 Nothing in the browser model depends on the channel: it reads the product and the user agent from
 the running browser.
@@ -459,9 +562,12 @@ the running browser.
 
 **Linux (taylor first).** The stage-1 unit stays: the daemon starts a private Xvfb (`-nolisten tcp`,
 an auth file) and the agent Chrome with `--silent-debugger-extension-api`, no remote-debugging flag
-and no port. The agent Chrome becomes Google Chrome stable (section 9), and the agent package gets in
-through Chrome's external extensions file, as the comparison recommends (its sections 5 and 9;
-pending the operator's answer to ab-vsm Q2; this design uses the recommendation until then):
+and no port. taylor is the default agent browser (the operator's answer to ab-vsm Q1, section 9).
+The agent Chrome becomes Google Chrome stable (section 9), and the agent package gets in through
+Chrome's external extensions file. The operator chose this in the follow-up item ab-32m (2026-11-04:
+"Yes, the external extensions file"): agentwatch keeps its own Google Chrome copy, only that copy
+reads the file, and the system's Chrome on taylor stays as it is. No prompt, no click and no root
+step. The details (the comparison's sections 5 and 9):
 
 - agentwatch keeps a Google Chrome stable build in its own tools folder (unpacked from Google's
   `.deb`, no system install) and writes `<id>.json` (`external_crx`, `external_version`) into the
@@ -484,25 +590,57 @@ endpoint: while the extension has not confirmed the operator's list, the endpoin
 connections. No prompt exists at any step. agentwatch design §5.13 item 1 (the xdotool version gate)
 is not needed on this path.
 
-**macOS.** The agent Chrome is a second instance of the operator's own `Google Chrome.app` (section 9),
-on its own profile, started with `open -n -g` (it never takes the operator's focus). The comparison
-names its costs: the Dock icon, Cmd-Tab and `open -a "Google Chrome"` can bring the agent's window
-forward, and agentwatch must restart the agent Chrome when the app's version changes (its section 7;
-pending the operator's answer to ab-vsm Q3; this design uses the recommendation, the second
-instance, until then).
-Branded Chrome refuses `--load-extension`, and on the Mac the external extensions file accepts only a
-Chrome Web Store item and asks for one confirmation (Google's documentation; the comparison's Mac
-check 3). Its folders (`~/Library/Application Support/Google/Chrome/External Extensions/` and
-`/Library/...`) reach every Chrome profile of that user, the operator's own Chrome too, so agentwatch
-never writes there: it would put the agent package, with `debugger`, into the operator's Chrome. So
-the agent package gets in one of three ways, as the comparison recommends (pending the operator's
-answer to ab-vsm Q2; this design uses the recommendation, "Load unpacked", until then):
+**macOS.** The Mac runs the agent browser only for a new site, a Cloudflare box and other
+difficult sites (the operator's answer to ab-vsm Q1, section 9). The agent Chrome is the operator's
+own `Google Chrome.app`, the same binary, started a second time with its own profile
+(`--user-data-dir`). The operator chose this in the follow-up item ab-9hj (2026-11-04: "The same
+binary: my Google Chrome, with its own profile"). A site then sees the operator's browser and
+version. The agent's profile is separate from the operator's profile, sign-ins and windows.
+What the Mac showed (the comparison's Mac checks 6 and 9, 2026-11-03, and board task ab-b84.11,
+2026-11-04):
+
+- **Two Dock icons and two Cmd-Tab entries.** The second instance shows its own Dock icon and its
+  own Cmd-Tab entry, and Cmd-Tab goes between the two. The agent's windows stay separate from the
+  operator's windows. `open -a "Google Chrome"`: not measured.
+- **The version.** A new agent instance starts at the version on disk. While the operator's
+  running Chrome waits for "Relaunch to update", the agent instance is ahead of it. So agentwatch
+  must restart the agent Chrome when the operator's Chrome changes version (the comparison's
+  section 7).
+- **The focus.** agent-browser starts the agent Chrome with `open -n -g`, but that does not keep the
+  operator's focus: on 2026-11-04 the new agent Chrome became the frontmost app at its first window
+  in 12 of 12 starts (board task ab-b84.11, which works on a fix). The Mac stage needs a start that
+  keeps the operator's focus.
+- **Behind the operator's windows** the agent page stays `visible` only with
+  `--disable-backgrounding-occluded-windows` (section 7). The Mac stage starts the agent Chrome with
+  it.
+
+Branded Chrome refuses `--load-extension`. On the Mac the external extensions file gives no
+working extension from a local CRX: with `<user-data-dir>/External Extensions/<id>.json` and a
+local `external_crx`, Chrome installed the extension and disabled it at once with reason 256
+(`DISABLE_NOT_VERIFIED`: not from the Chrome Web Store), at the first start and after relaunches,
+in stable and Beta (the comparison's Mac check 3). Whether Chrome shows a dialog or a notice for it
+is not measured. Google's documentation names a Web Store update URL there and one confirmation.
+
+Which folders a file reaches: Chrome reads the per-user folder at
+`<user-data-dir>/External Extensions/` (Chromium's `DIR_USER_EXTERNAL_EXTENSIONS`). So a file in
+the agent profile's own folder never reaches the operator's Chrome. The folder in Google's
+documentation, `~/Library/Application Support/Google/Chrome/External Extensions/`, is the one of
+the default user data folder, that is the operator's own Chrome. The all-users folder
+(`/Library/Application Support/Google/Chrome/External Extensions/`) does not follow
+`--user-data-dir`, so it reaches the operator's Chrome too (not measured). agentwatch never writes
+these two default folders: a file there would put the agent package, with `debugger`, into the
+operator's Chrome.
+
+So on the Mac the agent package gets in one of three ways. The choice waits for the Mac stage
+(ab-v16.8); the follow-up item ab-32m asked about taylor only. Until then this design uses "Load
+unpacked":
 
 - "Load unpacked" by the operator, once per agent profile, with developer mode on (developer mode
-  must stay on). This is the default until the operator chooses one of the others.
+  must stay on). It stays across a relaunch on the Mac (below). Not measured: whether a real
+  Chrome update keeps it.
 - An unlisted Chrome Web Store item: one "Add to Chrome" click per agent profile, updates from the
-  store.
-- An enterprise policy (`ExtensionInstallForcelist`), which on the Mac needs MDM.
+  store (not measured).
+- An enterprise policy (`ExtensionInstallForcelist`), which on the Mac needs MDM (not measured).
 
 Then:
 
@@ -515,9 +653,9 @@ Then:
   attaches again after the wake (no prompt), and clients reconnect. A client loses its open page
   objects, not the tabs.
 - **#3 (which window asks) ends for agentwatch:** no window asks.
-- Open: whether the manual load survives `quit` and `launch` on the Mac and whether Chrome shows a
-  developer-mode warning at start (the comparison measured both on Linux: it survives, no warning;
-  its Mac check 2).
+- **The manual load stays.** On the Mac a "Load unpacked" extension stayed across a relaunch in
+  stable and Beta (the comparison's Mac check 2, 2026-11-03), as on Linux. A developer-mode warning
+  at start is not measured on the Mac (no screenshots); the operator reported none.
 - The notice of agentwatch design §5.8 still names the consumer, the profile and the box, for the
   cases where a person must act (a sign-in, a Chrome that does not start).
 
@@ -529,7 +667,8 @@ approves this design.
 
 **A measured limit: popups.** The model attaches a popup just after Chrome creates it, not before its
 first script as Chrome's own auto-attach (`waitForDebuggerOnStart`) does. Playwright's init script
-still ran in the popup in every passing run. But in 2 of 21 runs a popup case hung: the popup's
+still ran in the popup in every passing run (in the probe, before the operator refused init scripts;
+section 5). But in 2 of 21 runs a popup case hung: the popup's
 `waitForLoadState` or `evaluate` got no answer. The cause is not found; the suspected cause is a race
 between the popup's load and Playwright's setup of its session. The build (stage 2 and 3) makes the
 extension attach a new tab of an attached scope at once in its `tabs.onCreated` handler, holds the
@@ -565,9 +704,11 @@ the tab and tells the client, and runs the popup cases many times in its live te
 - **The skill** (`agentwatch-browser`) tells agents: get the endpoint from `agentwatch browser
   endpoint`; use `browser.contexts()[0]`; never call `browser.newContext()`; wait for the error page
   after a blocked `goto`; type with `keyboard.type`, `pressSequentially` or the MCP's `slowly: true`
-  on a site that checks for automation; avoid `addInitScript`, `exposeFunction` and tracing snapshots
-  there too (unless the answer to ab-jzg Q3 says otherwise); `storageState()` fails after a page with an off-list frame;
-  the allowlist is the operator's.
+  on a site that checks for automation; the endpoint refuses `addInitScript`, `exposeFunction`,
+  `exposeBinding` and tracing snapshots (ab-jzg Q3), and a trace with screenshots and no snapshots
+  still works (playwright-core 1.64.1, read, not run); the endpoint refuses the cookie calls, so
+  `context.cookies()`, `addCookies()`, `clearCookies()`, `storageState()` and `context.request`
+  fail (ab-8mf); the allowlist is the operator's.
 
 ## 12. Build stages, in order (task item 6)
 
@@ -575,9 +716,9 @@ the tab and tells the client, and runs the popup cases many times in its live te
 | --- | --- | --- | --- |
 | 1. Contracts | chrome-extension (`docs/protocol.md`) | C10: the bridge (the fixed call list, the events, the deadline, parts). The C4 change: a second channel for the bridge, never queued behind an import, parts that name their channel. C11: the endpoint path, the scope, one connection per tab, the refusal texts. The agentwatch side reads the same file | — |
 | 2. Two packages | chrome-extension | `sender/` becomes `operator/`, `receiver/` becomes `agent/`; the bridge in `agent/`; the DNR navigation-header rule and the frame rule; the attach of a new tab in `tabs.onCreated` (not of the restore tab or an operator tab; one module owns every attach) and the hold of its first request; manifest tests (the operator package has no control permission); bridge unit tests with the fake chrome; the native host's parent check (with stage 4) | 1 |
-| 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie policy (pending the operator's answer to ab-jzg Q4; this design uses the recommendation until then), the permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install, popups many times; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
-| 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; Google Chrome stable in the tools folder with the external extensions file, the CRX key and the version updates (section 10; pending the operator's answers to ab-vsm Q1 and Q2; this design uses the recommendations until then); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
-| 5. The Mac | agentwatch, chrome-extension | The agentwatch design's Mac checks 1 and 4 with the operator and the comparison's Mac checks (2, 4, 6 and 9 touch agent mode); the manual-load guide (pending ab-vsm Q2); the second `Google Chrome.app` instance (pending ab-vsm Q3); the Mac launch path; this design uses the comparison's recommendations until the operator answers | 4 |
+| 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie policy (no cookie calls by default, the operator's answer to ab-8mf, with a note in the code for a later cookie grant), the refusal of the page-mark calls (ab-jzg Q3, section 4.3), the permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install (with the refusals of section 5), popups many times, and the operator's timer condition: a client switches tabs and drives a tab that is not in front; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
+| 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; Google Chrome stable in the tools folder with the external extensions file, the CRX key and the version updates (section 10; the operator's answers to ab-vsm Q1 and ab-32m); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
+| 5. The Mac | agentwatch, chrome-extension | The agentwatch design's Mac check 4 with the operator (sleep and wake); the comparison's Mac checks are done (2026-11-03, its section 8; checks 2, 3, 4, 6 and 9 touch agent mode), and its check 2 answers the open part of the agentwatch design's Mac check 1 (the manual load stays across a relaunch); the Mac's install (the choice waits for this stage; the manual-load guide until then); the second instance of the operator's own `Google Chrome.app` with its own profile (the operator's answer to ab-9hj); the Mac launch path, with `--disable-backgrounding-occluded-windows` and a start that keeps the operator's focus (ab-b84.11) | 4 |
 | 6. Consumers (their choice) | vedlo, marketdata-update | Move from the CDP proxy to the endpoint at a pin bump | 3 |
 
 Stages 2 and 3 can run at the same time after stage 1. Each stage is a branch and a pull request
@@ -599,10 +740,12 @@ manager.
   in agentwatch's tools folder, not from `--load-extension`, and its ID changes (section 10).
 - O1 to O19 stay as they are.
 
-## 14. Open questions for the operator (task item 7)
+## 14. Questions for the operator, and the answers (task item 7)
 
-On the board as ab-jzg. Until the operator answers, this design uses each recommendation. The Chrome
-comparison's own questions are ab-vsm (section 9).
+On the board as ab-jzg. The operator answered all four on 2026-11-04 (confirmed). Q1 and Q2 took
+the recommendation, Q3 did not, and Q4 was decided through the follow-up item ab-8mf. Each answer
+follows its question; the rest of the design applies it. The Chrome comparison's own questions are
+ab-vsm (section 9).
 
 **Q1. What does `browser.newContext()` do in agent mode?** Many programs that expect Playwright call
 it. Chrome refuses a new context to an extension.
@@ -613,6 +756,7 @@ it. Chrome refuses a new context to an extension.
   limit `context.close()` to the program's own tabs and `clearCookies()` to the allowlist.
 - c. A real new context through the approval path (see Q2).
 - No answer: a.
+- **Answer (2026-11-04): a**, "Refuse it with a clear error".
 
 **Q2. Does agentwatch ever open Chrome's approval path (rows 32 to 39)?**
 - **a. Never (recommended).** No prompt and no port. Those features give a clear error.
@@ -620,6 +764,7 @@ it. Chrome refuses a new context to an extension.
   loopback port opens to every local user while it runs.
 - c. As an opt-in that a person approves with a click, each time.
 - No answer: a.
+- **Answer (2026-11-04): a**, "Never".
 
 **Q3. Playwright features that a site can see** (`addInitScript`, `exposeFunction`, `exposeBinding`
 and tracing snapshots put `__playwright__*` names on the page's `window`; rows 25 and 27).
@@ -628,6 +773,9 @@ and tracing snapshots put `__playwright__*` names on the page's `window`; rows 2
 - b. The model refuses them. No such mark ever reaches a page, but programs that use them fail.
 - c. Allow them only on sites that the operator marks in the Browser pane.
 - No answer: a.
+- **Answer (2026-11-04): b**, "Refuse them" (not the recommendation). The model refuses the
+  main-world init scripts and bindings (section 4.3; rows 25 and 27). Four of the probe's
+  Playwright cases now get a refusal (section 5).
 
 **Q4. Who may read and remove the sent sign-ins through the endpoint?** Through Playwright's cookie
 calls (`context.cookies()`, `storageState()`), any agent session can read the cookie values of every
@@ -647,6 +795,14 @@ session. O9 kept the allowlist because of the risk to the signed-in profile.
   read or set cookies fail.
 - With any answer the limit of section 8 stays: a hostile process of the same OS user can read the
   profile directly. No answer: b.
+- **Answer: c, by default.** On ab-jzg (2026-11-04) the operator asked: "I'm not sure about this. This is to
+  prevent agents from making a mistake?" The follow-up item ab-8mf answered: yes, it prevents a
+  mistake (one clear-cookies call logs every agent session out), and it also prevents a leak of the
+  sign-in secrets. The operator's answer to ab-8mf (2026-11-04): "No cookies by default. Make a note
+  in the code to add a cookie grant in the future if we run into a use-case that needs cookie
+  access." So the endpoint offers no cookie calls (section 8; rows 22 and 23), and stage 3 puts the
+  note in the relay's code. One more Playwright case and one concurrency case of the probe now get
+  a refusal (section 5).
 
 ## 15. Calls made by the designer (not the operator's)
 
@@ -656,8 +812,8 @@ session. O9 kept the allowlist because of the risk to the signed-in profile.
   the bridge over the native link on a second channel (section 4.2).
 - One connection per tab; the popup's owner from Chrome's `openerId` (section 4.4).
 - `Browser.close` from a client ends its connection only (section 4.3).
-- Cookies and permissions through the model, for allowlisted domains and origins only; permissions
-  per connection (sections 4.3, 8).
+- Permissions through the model, for allowlisted origins only, per connection (sections 4.3, 8).
+  The cookie calls are refused by the operator's choice (ab-8mf), not by the designer.
 - The DNR navigation-header rule, the DNR frame rule and the mouse `force` (sections 7, 8).
 - A Unix socket only for now; the scope is the session's name in the endpoint path; every session of
   the OS user may connect; `browser.control: false` turns the endpoint off; a session's scope tabs
@@ -674,4 +830,8 @@ run 19, and its control run). It ran in a private Xvfb with an auth file, a thro
 sites on 127.0.0.1 only. The probe joins the extension and the relay with a loopback WebSocket; the
 design uses the native link. Rows marked D or C in section 5 are not measured by a client. Two fresh
 reviewers read the draft and the probe; this version takes their findings (the PR description lists
-them). Sections 9 and 10 follow the Chrome comparison's final report (merged in b320d09).
+them). Sections 9 and 10 follow the Chrome comparison's final report (merged in b320d09) and its
+Mac checks of 2026-11-03 (its section 8, board task ab-v16.11). The focus result of 2026-11-04 is on
+board task ab-b84.11. The operator's answers are on the board items ab-vsm, ab-jzg, ab-32m, ab-8mf
+and ab-9hj (2026-11-04). The notes "read, not run" on Playwright's own calls come from
+playwright-core 1.64.1, the version of the probe.

@@ -1,7 +1,8 @@
 # Chrome stable or Chrome Beta as the agent browser
 
 Board task ab-v16.2, goal ab-v16. Measured on taylor (Linux) on 2026-11-03. The Mac checks
-(section 8) ran on the operator's Mac on the same day; board task ab-v16.11 added their results. The
+(section 8) ran on the operator's Mac on the same day; board task ab-v16.11 added their results.
+Board task ab-v16.14 added the operator's answers of 2026-11-04 (section 10). The
 probe is in [`test/live/parity/`](../../test/live/parity/), and its tables for taylor are in
 [the appendix](#appendix-the-probes-tables).
 
@@ -557,21 +558,64 @@ And, for either channel:
   and 72 ms in Beta (on Linux 50 ms), and the operator's own Chrome at 998 ms. One of them,
   `--disable-backgrounding-occluded-windows`, keeps an agent window behind the operator's window
   visible; without it the page is hidden while it gets the agent's input (section 8, check 9).
+  The operator's answer (section 10, question 4): drop the two timer flags,
+  `--disable-background-timer-throttling` and `--disable-renderer-backgrounding`, as long as
+  agent-browser can still switch tabs. Keep `--disable-backgrounding-occluded-windows` (board task
+  ab-v16.13).
 
-## 10. Open questions for the operator
+## 10. The operator's questions and answers
+
+The four questions went to the operator as board item ab-vsm. The operator answered on 2026-11-04
+(confirmed). Two answers were "I'm not sure yet". The follow-up item ab-32m asked those two again,
+and the follow-up item ab-9hj took the operator's new question in ab-32m. The operator answered both
+items on 2026-11-04 (confirmed). No question of this report stays open. The Mac's install waits for the Mac stage of agent mode (board task ab-v16.8). The two-modes
+design (`docs/superpowers/specs/2026-11-03-two-modes-playwright-design.md`, sections 7, 9 and 10)
+applies the answers.
 
 1. Where does the agent browser run when a site must not tell it from your Chrome: on your Mac (or a
    Mac like it), or on a box such as taylor? On a Linux box a site sees Linux, no GPU and another IP
    address, in either channel.
+
+   **Answer:** "I prefer most browser actions to happen on taylor. i'll use my mac only in very
+   limited cases... i.e. when we're just starting to use a website. or if i need to click a
+   cloudflare box, or things like that. for difficult sites." So taylor is the default agent
+   browser. The Mac runs the agent browser only for a new site, a Cloudflare box and other difficult
+   sites.
 2. How does the receiver get into the agent's Chrome? (a) On Linux, the external extensions file:
    no prompt; with a system Chrome it needs one root step, and it then installs the receiver into
    every profile of that Chrome on the box. (b) "Load unpacked" by you, once per agent
    profile, with developer mode on (both OSes). (c) An enterprise policy: root on Linux, MDM on the
    Mac. (d) An unlisted Chrome Web Store item: one click per profile, or on the Mac the external
    file plus one confirmation.
+
+   **Answer:** "I'm not sure yet." The follow-up item ab-32m asked about taylor only: may
+   agentwatch put the extension into the agent's Chrome through the external extensions file of its
+   own Chrome copy? The operator chose "Yes, the external extensions file". agentwatch keeps its own
+   Google Chrome copy in its tools folder, and only that copy reads the file. The system's Chrome on
+   taylor stays as it is. No prompt, no click and no root step. On the Mac the external extensions
+   file gives no working receiver from a local CRX (section 8, check 3), so the Mac's install stays
+   a choice for the Mac stage.
 3. On the Mac, is a second instance of your own `Google Chrome.app` acceptable (the Dock and Cmd-Tab
    behaviour in section 7)? Beta avoids that, at the cost of a different identity.
+
+   **Answer:** "I'm not sure yet. Do we get two icons and two tabs? Or one icon and 1 tab? I.e. the
+   same window as my windows?" The Mac run answers the question: two Dock icons and two Cmd-Tab
+   entries, and the agent's windows stay separate from the operator's windows (section 8, check 6).
+   In the follow-up item ab-32m the operator asked: "is it the same binary with a totally separate
+   chrome profile or two binaries?" Either way the agent browser has its own separate profile: a
+   second instance of `Google Chrome.app` is the same binary, and Chrome Beta is a second binary.
+   In the follow-up item ab-9hj the operator chose "The same binary: my Google Chrome, with its own
+   profile". So on the Mac the agent browser is the operator's own `Google Chrome.app`, started a
+   second time with its own profile, and a site sees the operator's browser and version.
 4. Drop agent-browser's three background flags (no timer signal, but slow hidden tabs), or keep them?
+
+   **Answer:** "As long as the agentbrowser can swap tabs i'm OK with dropping timers." So
+   agent-browser drops the two timer flags, `--disable-background-timer-throttling` and
+   `--disable-renderer-backgrounding`. It keeps `--disable-backgrounding-occluded-windows`, because
+   without it an agent page behind the operator's windows is hidden while it gets the agent's input
+   (section 8, check 9). Keeping that flag is the lead's reading of the answer; the operator can
+   reverse it. Board task ab-v16.13 makes the change, with a test that agent-browser still switches
+   tabs and still drives a tab that is not in front.
 
 ## Appendix: the probe's tables
 
