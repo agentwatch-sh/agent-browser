@@ -115,8 +115,11 @@ export class AgentBrowser {
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
     // Checked before any launch: a new Chrome needs a new approval too.
     if (s.noPrompt) throw new ApprovalNeededError(approvalNeededMessage(s, browserTarget(s)));
+    // No give-back guard for this start: the proxy's connection that follows raises Chrome's approval prompt,
+    // which brings the agent Chrome forward by design (a person must answer it), so a give-back would only add a
+    // second change of the front app.
     const candidates = s.mode === "agent"
-      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await launchAgentChrome(s, { background: true }) }]
+      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await launchAgentChrome(s, { background: true, giveBack: false }) }]
       : endpointCandidates(s);
     let lastErr: unknown;
     for (const c of candidates) {

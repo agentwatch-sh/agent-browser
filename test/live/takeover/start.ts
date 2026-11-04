@@ -21,22 +21,28 @@
 //                   next start would be a crash restart, not a clean one.
 // The check deletes each state folder that it made once no process names it (--keep-state keeps them).
 //
-// --variant NAME (focus.ts VARIANTS; measured on 2026-11-04 with "launch": 12 of 12 starts took the
-// front) changes one thing of the start, so that one Mac run measures one fix candidate with the same
-// monitor and analysis. Each variant starts the agent Chrome as src/agent.ts does:
-//   launch     today's start, `open -n -g` (the default).
-//   hidden     `open -n -g -j` (Launch Services starts Chrome hidden): launch-hidden.ts runs the same
-//              `launch` command with launchAgentChrome's measurement hook `hidden` on.
-//   give-back  today's start, while giveback.swift (--giveback, compiled like the monitor) asks macOS
-//              to activate the app that was in front again when the new Chrome takes the front (on
-//              the Mac that is the app in front then, for example the operator's own Chrome: an
-//              activation only, never a quit, a kill, a connection or input). A guard, not a fix: a
-//              short change stays, and macOS can refuse the request. It starts before each launch and
-//              ends when the quit begins. The check starts no Chrome unless the helper names, within
-//              5 s, the front app that the monitor and lsappinfo name; a start whose helper named
-//              another app than the app in front before it is a problem.
-// A start is a problem, never a pass, when launches.log does not name the variant's open(1) form. A
-// failed launch is a problem, and the check then starts no more Chrome, so that a run stays short.
+// --variant NAME (focus.ts VARIANTS) changes one thing of the start, so that one Mac run measures one way to
+// start with the same monitor and analysis. Each variant starts the agent Chrome as src/agent.ts does:
+//   launch     the start as agent-browser makes it (the default): `open -n -g` with the built-in give-back
+//              guard (src/giveback.ts): before `open` it records the app in front, and when the new Chrome
+//              takes the front from it, it asks macOS to activate that app again. A start passes when the
+//              front came back within 250 ms (focus.ts GIVE_BACK_MAX_AWAY_MS), went to no other app, and
+//              the pointer did not move (the "given-back" rule).
+//   hidden     (comparison) `open -n -g -j`, the built-in give-back off: launch-variant.ts runs the same
+//              `launch` command with launchAgentChrome's measurement hooks. Measured 2026-11-04: it did
+//              not help. A start passes only when the front never changed (the "unchanged" rule).
+//   give-back  (comparison) `open -n -g`, the built-in give-back off (launch-variant.ts), while
+//              giveback.swift (--giveback, compiled like the monitor), phase 1's helper, asks macOS to
+//              activate the app that was in front again when the new Chrome takes the front (on the Mac
+//              that is the app in front then, for example the operator's own Chrome: an activation only,
+//              never a quit, a kill, a connection or input). It starts before each launch and ends when the
+//              quit begins. The check starts no Chrome unless the helper names, within 5 s, the front app
+//              that the monitor and lsappinfo name; a start whose helper named another app than the app in
+//              front before it is a problem. The "given-back" rule, as for launch.
+// Measured on 2026-11-04 with open -n -g alone: 12 of 12 starts took the front; with giveback.swift the
+// front was back after 83, 43 and 36 ms (3 starts). A start is a problem, never a pass, when launches.log
+// does not name the variant's form (its open(1) form, and whether the built-in give-back was on). A failed
+// launch is a problem, and the check then starts no more Chrome, so that a run stays short.
 //
 // Every variant runs only `launch` and `quit`: `launch` probes the debugging port with a plain TCP connect,
 // so the check opens no debugging WebSocket and Chrome shows no "Allow remote debugging?" prompt. It does
@@ -46,7 +52,7 @@
 // object that replaces the lsappinfo binary and shortens the waits).
 //
 //   swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o /tmp/abfs-monitor
-//   swiftc -swift-version 5 -O test/live/takeover/giveback.swift -o /tmp/abfs-giveback   (give-back only)
+//   swiftc -swift-version 5 -O test/live/takeover/giveback.swift -o /tmp/abfs-giveback   (--variant give-back only)
 //   node test/live/takeover/start.ts --on-my-screen --monitor /tmp/abfs-monitor --out-dir <dir> \
 //     --chrome-bin "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" [--starts 3] [--after-ms 10000] [--same-profile] \
 //     [--variant launch|hidden|give-back] [--giveback /tmp/abfs-giveback]
@@ -62,9 +68,10 @@
 // <dir>/results.jsonl (one JSON line per start: the variant, the app in front before, each change, when,
 // in which phase, whether the new front app is this start's own Chrome, and awayMs, how long the front
 // was away from the app in front before; every change from the quit to the next start counts too),
-// <dir>/giveback-<n>.jsonl (give-back only: the helper's log of start n) and <dir>/summary.json, and
-// prints the summary. Exit 0: every start was measured and none changed the frontmost app; 1: a start
-// changed it, or a start could not be measured; 2: a usage error; 130: stopped with Ctrl-C (the check
+// <dir>/giveback-<n>.jsonl (give-back only: the helper's log of start n), <dir>/launches-<n>.log (the
+// lines of launches.log that start n wrote, with the built-in guard's lines) and <dir>/summary.json, and
+// prints the summary. Exit 0: every start was measured and passed its variant's rule; 1: a start broke
+// it, or a start could not be measured; 2: a usage error; 130: stopped with Ctrl-C (the check
 // sends SIGTERM to its own Chromes and its helper, deletes a folder of its own that no process names and
 // that no start is using, and names on stderr each folder that it leaves). A start whose Chrome ended
 // before the quit is a problem: it may have shown no window.
@@ -76,8 +83,9 @@ import { fileURLToPath } from "node:url";
 import { agentChromePid, appBundle } from "../../../src/agent.ts";
 import { resolveOptions } from "../../../src/options.ts";
 import {
-  analyseStarts, exitCode, giveBackProblems, givebackReady, livenessProblem, lsappinfoPid, parseGiveBack, parseMonitorLog, startArgs, startedAs, USAGE, VARIANTS, variantLaunch,
-  type GiveBackLog, type Mark,
+  analyseStarts, exitCode, GIVE_BACK_MAX_AWAY_MS, giveBackProblems, givebackReady, givenBackProblems, livenessProblem, lsappinfoPid, parseBuiltInGiveBack, parseGiveBack, parseMonitorLog,
+  startArgs, startedAs, startForm, startFormProblem, USAGE, VARIANTS, variantLaunch,
+  type BuiltInGiveBack, type GiveBackLog, type Mark,
 } from "./focus.ts";
 
 const parsed = startArgs(process.argv.slice(2), { platform: process.platform, exists: existsSync });
@@ -92,7 +100,7 @@ if (process.env.ABFS_TEST) {
   try { testing = JSON.parse(process.env.ABFS_TEST); } catch { process.stderr.write("ABFS_TEST (tests only) must be a JSON object\n"); process.exit(2); }
 }
 const BIN_JS = fileURLToPath(new URL("../../../bin/agent-browser.js", import.meta.url));
-const LAUNCH_HIDDEN_JS = fileURLToPath(new URL("./launch-hidden.ts", import.meta.url));
+const LAUNCH_VARIANT_JS = fileURLToPath(new URL("./launch-variant.ts", import.meta.url));
 const LSAPPINFO = testing.lsappinfo ?? "/usr/bin/lsappinfo";
 const LAUNCH_TIMEOUT_MS = 60_000, QUIT_TIMEOUT_MS = 30_000, GAP_MS = 3000;
 const BEFORE_MS = testing.beforeMs ?? 3000, QUIT_WAIT_MS = testing.quitWaitMs ?? 15_000, KILL_WAIT_MS = testing.killWaitMs ?? 5000;
@@ -133,7 +141,7 @@ function lsappinfoFront(): number | undefined {
 }
 
 /**
- * A child that prints one JSON document (the agent-browser CLI as an agent session runs it, or the hidden
+ * A child that prints one JSON document (the agent-browser CLI as an agent session runs it, or a comparison
  * variant's launcher); each stderr line becomes a "log" mark when it arrives.
  */
 function child(argv: string[], timeoutMs: number): Promise<{ code: number | null; doc: any; ms: number }> {
@@ -231,7 +239,7 @@ try { chromeVersion = execFileSync("plutil", ["-extract", "CFBundleShortVersionS
 catch { /* the version is informative only */ }
 
 // The monitor's own time limit covers the longest run, so a monitor left behind ends by itself.
-const perStartMs = LAUNCH_TIMEOUT_MS + o.afterMs + QUIT_TIMEOUT_MS + QUIT_WAIT_MS + KILL_WAIT_MS + GAP_MS + (variant.giveBack ? GIVEBACK_WAIT_MS + 5000 : 0);
+const perStartMs = LAUNCH_TIMEOUT_MS + o.afterMs + QUIT_TIMEOUT_MS + QUIT_WAIT_MS + KILL_WAIT_MS + GAP_MS + (variant.helper ? GIVEBACK_WAIT_MS + 5000 : 0);
 let monitorEnd: number | undefined;
 monitor = spawn(o.monitor, [String(Math.ceil((BEFORE_MS + o.starts * perStartMs) / 1000) + 30)], { stdio: ["ignore", openSync(MONITOR_LOG, "w"), "inherit"] });
 monitor.on("error", (e) => { process.stderr.write(`the monitor did not start: ${e.message}\n`); process.exit(1); });
@@ -251,22 +259,24 @@ for (let i = 0; i < 3 && liveness; i++) {
 mark("liveness", liveness ?? "ok");
 
 type Run = {
-  start: number; variant: string; stateDir: string; profile: "fresh" | "used"; chromePid: number | null; viaOpenG: boolean;
-  /** How launches.log names the start, for example "chrome=via-open-g-j" (see focus.ts startedAs). */
+  start: number; variant: string; stateDir: string; profile: "fresh" | "used"; chromePid: number | null;
+  /** Whether launches.log names the variant's open(1) form ("chrome=via-open-g" or "chrome=via-open-g-j"). */
+  viaOpenG: boolean;
+  /** How launches.log names the start, for example "chrome=via-open-g give-back=on front=500 ready-ms=150" (see focus.ts startedAs). */
   startedAs: string | null;
   launch: { code: number | null; ms: number; started: boolean | null }; quit: { code: number | null; ended: boolean; killed: boolean }; stateDeleted: boolean;
   /** --variant give-back: the helper's log of this start (the app in front at its start, and each request). */
   giveBack: GiveBackLog | null;
+  /** The built-in give-back guard's lines of this start in launches.log, and how it ended (null: no guard line). */
+  builtInGiveBack: BuiltInGiveBack | null;
   problem: string | null;
 };
-// The open(1) form that launches.log must name for this variant's start.
-const OPEN_FORM = variant.hidden ? { log: "via-open-g-j", text: "open -n -g -j" } : { log: "via-open-g", text: "open -n -g" };
 const runs: Run[] = [];
 const shared = o.sameProfile && !liveness ? { stateDir: mkdtempSync("/tmp/abfs-s-"), ended: true } : undefined;
 if (shared) made.push(shared);
 for (let n = 1; n <= o.starts && !liveness; n++) {
   if (monitorEnd !== undefined) { process.stderr.write(`the monitor stopped: no start ${n}\n`); break; }
-  const notReady = variant.giveBack ? await startHelper(n) : null;
+  const notReady = variant.helper ? await startHelper(n) : null;
   if (notReady) {
     process.stderr.write(`${notReady}: no start ${n}\n`);
     await stopHelper(n);
@@ -280,7 +290,7 @@ for (let n = 1; n <= o.starts && !liveness; n++) {
   const logged = launchLines(stateDir).length;
   inProgress = stateDir;
   mark(`start launch ${n}`, { stateDir });
-  const launch = await child(variantLaunch(variant, { node: process.execPath, cli: BIN_JS, launcher: LAUNCH_HIDDEN_JS, stateDir, chromeBin: o.chromeBin }), LAUNCH_TIMEOUT_MS);
+  const launch = await child(variantLaunch(variant, { node: process.execPath, cli: BIN_JS, launcher: LAUNCH_VARIANT_JS, stateDir, chromeBin: o.chromeBin }), LAUNCH_TIMEOUT_MS);
   const launched = launch.code === 0 && launch.doc?.ok === true;
   mark(`${launched ? "end" : "fail"} launch ${n}`, launched ? { started: launch.doc.started, ms: launch.ms } : { code: launch.code, error: launch.doc?.error ?? null });
   const chromePid = ownPid(stateDir) ?? null;
@@ -303,18 +313,20 @@ for (let n = 1; n <= o.starts && !liveness; n++) {
   mark(`${ended ? "end" : "fail"} quit ${n}`, { code: quit.code, closed: quit.doc?.closed ?? null, killed });
 
   const lines = launchLines(stateDir).slice(logged);
-  const viaOpenG = lines.some((l) => l.split(" ").includes(`chrome=${OPEN_FORM.log}`));
+  writeFileSync(join(o.outDir, `launches-${n}.log`), lines.map((l) => `${l}\n`).join("")); // the state folder goes; analyse.py reads these
+  const viaOpenG = lines.some((l) => l.split(" ").includes(startForm(variant).tokens[0]));
   const problems = [
     !launched && `launch failed (exit ${launch.code}): ${launch.doc?.error?.message ?? "no result"}`,
     launched && chromePid === null && `no Chrome main process ran on ${profile} after the launch`,
     launched && chromePid !== null && quit.doc?.closed !== true && "Chrome ended by itself before the quit (quit found no Chrome): the start may have shown no window",
-    !viaOpenG && `the start did not go through ${OPEN_FORM.text} (launches.log)`,
+    startFormProblem(variant, lines),
     !ended && `Chrome on ${profile} did not end; its state folder is left in place`,
   ].filter((p): p is string => !!p);
   let stateDeleted = false;
   if (!shared && ended && !o.keepState) { rmSync(stateDir, { recursive: true }); stateDeleted = true; }
   runs.push({ start: n, variant: variant.name, stateDir, profile: shared && n > 1 ? "used" : "fresh", chromePid, viaOpenG, startedAs: startedAs(lines),
-    launch: { code: launch.code, ms: launch.ms, started: launch.doc?.started ?? null }, quit: { code: quit.code, ended, killed }, stateDeleted, giveBack, problem: problems.join("; ") || null });
+    launch: { code: launch.code, ms: launch.ms, started: launch.doc?.started ?? null }, quit: { code: quit.code, ended, killed }, stateDeleted, giveBack,
+    builtInGiveBack: parseBuiltInGiveBack(lines), problem: problems.join("; ") || null });
   if (!ended) { process.stderr.write(`a process still names ${stateDir}: no more starts\n`); break; }
   if (!launched && n < o.starts) { process.stderr.write(`launch ${n} failed: no more starts\n`); break; }
   if (killed && shared && n < o.starts) { process.stderr.write("--same-profile: after a SIGKILL the next start would be a crash restart, not a clean one: no more starts\n"); break; }
@@ -336,14 +348,18 @@ const marks: Mark[] = readFileSync(MARKS, "utf8").split("\n").filter(Boolean).ma
 const focus = analyseStarts(parseMonitorLog(readFileSync(MONITOR_LOG, "utf8")), marks, Object.fromEntries(runs.map((r) => [r.start, r.chromePid ?? undefined])), { monitorEnd });
 const results = runs.map((r) => {
   const f = focus.find((x) => x.start === r.start)!;
-  return { ...r, chromeBin: o.chromeBin, chromeVersion, ...f, problem: [r.problem, f.problem, ...giveBackProblems(r.start, r.giveBack, f.frontBefore)].filter(Boolean).join("; ") || null };
+  const rule = variant.rule === "given-back" ? givenBackProblems(f) : [];
+  return { ...r, chromeBin: o.chromeBin, chromeVersion, ...f, problem: [r.problem, f.problem, ...giveBackProblems(r.start, r.giveBack, f.frontBefore), ...rule].filter(Boolean).join("; ") || null };
 });
 for (const r of results) appendFileSync(RESULTS, JSON.stringify(r) + "\n");
-const code = liveness || results.length < o.starts ? 1 : exitCode(results);
+const code = liveness || results.length < o.starts ? 1 : exitCode(results, variant.rule);
 const summary = {
-  ok: code === 0, variant: variant.name, chromeBin: o.chromeBin, chromeVersion, mode: o.sameProfile ? "same-profile" : "fresh-profile", starts: o.starts, measured: results.length, afterMs: o.afterMs,
+  ok: code === 0, variant: variant.name, rule: variant.rule, ...(variant.rule === "given-back" ? { maxAwayMs: GIVE_BACK_MAX_AWAY_MS } : {}),
+  chromeBin: o.chromeBin, chromeVersion, mode: o.sameProfile ? "same-profile" : "fresh-profile", starts: o.starts, measured: results.length, afterMs: o.afterMs,
   liveness,
   frontBefore: results.map((r) => r.frontBefore?.name ?? null),
+  awayMs: results.map((r) => r.awayMs),
+  builtInGiveBack: results.map((r) => r.builtInGiveBack?.end ?? null),
   changed: results.filter((r) => r.changed).map((r) => ({ start: r.start, awayMs: r.awayMs, to: [...r.changes, ...r.quitChanges]
     .map((c) => `${c.name} (pid ${c.pid}${c.agentChrome ? ", this start's Chrome" : ""}) at +${c.afterStartMs} ms, ${c.phase}`) })),
   problems: results.filter((r) => r.problem).map((r) => ({ start: r.start, problem: r.problem })),

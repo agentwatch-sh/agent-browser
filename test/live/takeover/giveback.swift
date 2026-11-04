@@ -1,5 +1,6 @@
-// The give-back helper of the live start check (start.ts --variant give-back, ab-b84.11): a guard, not
-// a fix. At its start it records the frontmost app. Then, for SECONDS, each time a new instance of the
+// The give-back helper of the live start check (start.ts --variant give-back, ab-b84.11): phase 1's guard,
+// kept to compare with the built-in give-back of src/giveback.ts (the same AppKit call, from JavaScript for
+// Automation). At its start it records the frontmost app. Then, for SECONDS, each time a new instance of the
 // app at BUNDLE_PATH (one that did not run at the helper's start: the agent Chrome that the check starts)
 // becomes the frontmost app, it asks macOS to activate the recorded app again
 // (NSRunningApplication.activate(options: [])), and it logs one JSON line per request:
@@ -26,17 +27,18 @@ func die(_ message: String, _ code: Int32) -> Never {
 let args = CommandLine.arguments
 guard args.count == 3, let seconds = Double(args[2]), seconds > 0 else { die("usage: giveback BUNDLE_PATH SECONDS", 2) }
 let bundle = URL(fileURLWithPath: args[1]).standardizedFileURL.path
-func inBundle(_ app: NSRunningApplication) -> Bool { app.bundleURL?.standardizedFileURL.path == bundle }
 guard let before = NSWorkspace.shared.frontmostApplication else { die("no frontmost app", 1) }
 // The instances of the bundle that run now (for example the operator's own Google Chrome) are never the new one.
-let old = Set(NSWorkspace.shared.runningApplications.filter(inBundle).map { $0.processIdentifier })
+// The bundle test is written inline, not as a top-level function: swiftc warned that such a function must be
+// @Sendable (an error in Swift 6 mode).
+let old = Set(NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.standardizedFileURL.path == bundle }.map { $0.processIdentifier })
 
 var lastPid: Int32 = before.processIdentifier
 /// One request each time a new instance of the bundle becomes the front app.
 func check(_ app: NSRunningApplication?) {
   guard let app = app, app.processIdentifier != lastPid else { return }
   lastPid = app.processIdentifier
-  guard inBundle(app), !old.contains(app.processIdentifier) else { return }
+  guard app.bundleURL?.standardizedFileURL.path == bundle, !old.contains(app.processIdentifier) else { return }
   let sent = before.activate(options: [])
   print("{\"t\": \(now()), \"took\": \(app.processIdentifier), \"name\": \(quoted(app.localizedName ?? "?")), \"gaveBackTo\": \(before.processIdentifier), \"sent\": \(sent)}")
   fflush(stdout)

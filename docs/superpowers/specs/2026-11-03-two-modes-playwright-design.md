@@ -623,10 +623,14 @@ What the Mac showed (the comparison's Mac checks 6 and 9, 2026-11-03, and board 
   running Chrome waits for "Relaunch to update", the agent instance is ahead of it. So agentwatch
   must restart the agent Chrome when the operator's Chrome changes version (the comparison's
   section 7).
-- **The focus.** agent-browser starts the agent Chrome with `open -n -g`, but that does not keep the
-  operator's focus: on 2026-11-04 the new agent Chrome became the frontmost app at its first window
-  in 12 of 12 starts (board task ab-b84.11, which works on a fix). The Mac stage needs a start that
-  keeps the operator's focus.
+- **The focus.** agent-browser starts the agent Chrome with `open -n -g`, but that alone does not
+  keep the operator's focus: on 2026-11-04 the new agent Chrome became the frontmost app at its first
+  window in 12 of 12 starts. So a start on macOS now gives the front back (board task ab-b84.11,
+  `src/giveback.ts`): before the start it records the app in front, and when the new Chrome takes the
+  front from that app, it asks macOS to activate that app again (AppKit only, no Apple Event). With
+  the same call from a helper, the operator's app was back after 36 to 83 ms (3 starts on
+  2026-11-04). So a start can still take the front for under about 0.1 s. The Mac stage needs the
+  measurement of the built-in give-back.
 - **Behind the operator's windows** the agent page stays `visible` only with
   `--disable-backgrounding-occluded-windows` (section 7). The Mac stage starts the agent Chrome with
   it.
