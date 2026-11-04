@@ -80,7 +80,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 | State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
-| Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes. |
+| Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
 | Notify hook | `notify` (callback or `{ command }`) | `--notify-command '["prog","arg","{message}"]'` | `notify_command=["prog", ...]` | Used only by `status --notify`. An argv list, never a shell string. The message goes on stdin, and `{message}` in an argument is replaced with it. Example for agentwatch: `["agentwatch", "session", "inbox", "--text", "{message}"]`. |
 | Approve dialog | `approve` (`true`/`"osascript"`/`"xdotool"`/`{ command }`) | `--approve auto\|osascript\|xdotool` or `--approve-command '[...]'` | `approve=True` / `approve="xdotool"` / `approve_command=[...]` | Unattended only. Answers Chrome's per-connection "Allow remote debugging?" dialog once per proxy. Default off (the operator clicks). See **Unattended approval**. |
 | Node | | | `node` (default `node` on PATH) | Node 26 or later. |
@@ -102,6 +102,17 @@ only at the start of a word (`--state-dir ~/s`, not `--state-dir=~/s`), and Pyth
 keeps it. The 103-byte limit of the socket path applies to the resolved path. Give the state folder as
 an absolute path: a relative one names another folder, so another profile with other logins, when the
 current folder changes.
+
+**A long state folder.** The default socket `<stateDir>/chrome-proxy.sock` must fit in 103 bytes (the
+macOS limit, kept on every system). A deep state folder, for example an agent session's scratchpad on
+macOS, can pass it. Then the command fails with a usage error that gives the length and names the way
+out: `--socket PATH` (library option `socketPath`, Python `socket=`) with a short path in a folder that
+only you can write (mode 0700). The error gives an example path that fits:
+`<dir>/ab-<first 8 hex digits of sha256(stateDir)>.sock`, where `<dir>` is `$XDG_RUNTIME_DIR`, else
+`$TMPDIR`. Each folder is used only when it is this user's and has no group or other write bit, so
+the shared `/tmp` is never the example; with no such folder, the error gives no example. Every caller
+of that state folder must give the same `--socket`, or it starts a second proxy. A `socketPath` that
+you give is used as it is; one longer than 103 bytes is refused with the same way out.
 
 Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
 is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.

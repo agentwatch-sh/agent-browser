@@ -20,7 +20,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "state-dir": { type: "string", description: "this consumer's own state folder (required)" },
   allowlist: { type: "string", description: 'JSON file {"allow": ["example.com", ...]}; read, never written' },
   profile: { type: "string", description: "agent Chrome profile (default <state-dir>/profile)" },
-  socket: { type: "string", description: "proxy socket (default <state-dir>/chrome-proxy.sock)" },
+  socket: { type: "string", description: "proxy socket (default <state-dir>/chrome-proxy.sock); at most 103 bytes, so a long state dir needs a short one" },
   mode: { type: "string", description: "agent (default) or personal (the operator's Chrome; only when asked)" },
   "chrome-bin": { type: "string", description: "agent Chrome binary (default Chrome Beta, else Google Chrome)" },
   "chrome-args": { type: "string", description: 'extra Chrome flags, a JSON array e.g. ["--enable-unsafe-swiftshader"]; never --remote-debugging-*, --enable-automation, --headless, --user-data-dir or --profile-directory; no secrets (flags show in ps)' },

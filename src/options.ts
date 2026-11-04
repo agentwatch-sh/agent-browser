@@ -2,7 +2,8 @@
 // own cookies and logins), its own proxy socket and its own allowlist. Nothing in this package names
 // a consumer's path: a missing stateDir is an error, never a guess.
 
-import { mkdirSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { UsageError } from "./errors.ts";
@@ -31,7 +32,7 @@ export type BrowserOptions = {
   stateDir: string;
   /** The agent Chrome's profile: its cookies and logins. Default `<stateDir>/profile`. */
   profileDir?: string;
-  /** The proxy's Unix socket (mode 0600). Default `<stateDir>/chrome-proxy.sock`. At most 103 bytes. */
+  /** The proxy's Unix socket (mode 0600). Default `<stateDir>/chrome-proxy.sock`. At most 103 bytes: for a long stateDir, give a short path in a folder that only this user can write. */
   socketPath?: string;
   /** JSON file `{ "allow": ["example.com", ...] }`. The package reads it and never writes it. */
   allowlistFile?: string;
@@ -102,6 +103,27 @@ export const DEFAULT_PROXY_IDLE_MS = 12 * 60 * 60 * 1000;
 export const MAX_SOCKET_PATH_BYTES = 103;
 
 /**
+ * An example --socket path for a long state folder's refusal: `<dir>/ab-<first 8 hex of sha256(stateDir)>.sock`
+ * in the first of `dirs` ($XDG_RUNTIME_DIR, then $TMPDIR) that is a folder of this user's with no group
+ * or other write bit, when the path fits in MAX_SOCKET_PATH_BYTES. Never the shared /tmp. Undefined
+ * when no folder passes. Only a message names it: nothing is made.
+ */
+export function socketPathExample(stateDir: string, dirs: (string | undefined)[] = [process.env.XDG_RUNTIME_DIR, process.env.TMPDIR],
+  uid = process.getuid?.()): string | undefined {
+  const name = `ab-${createHash("sha256").update(stateDir).digest("hex").slice(0, 8)}.sock`;
+  for (const d of dirs) {
+    if (!d || !isAbsolute(d) || uid === undefined) continue;
+    const st = (() => { try { return statSync(d); } catch { return undefined; } })();
+    const path = join(resolve(d), name);
+    if (st?.isDirectory() && st.uid === uid && (st.mode & 0o022) === 0 && Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES) return path;
+  }
+  return undefined;
+}
+
+/** The way out of a socket path that is too long: the CLI flag and the library option, in a private folder. */
+const SOCKET_WAY_OUT = "give --socket PATH (library option socketPath) with a short path in a folder that only you can write (mode 0700)";
+
+/**
  * A tab scope name: 1 to 64 characters, letters, digits, ".", "_" and "-", the first a letter or a
  * digit. The name goes into tab-scopes.json, error messages and the CLI's text output, so it is one
  * plain word: no space, quote, slash, colon or control character, and it never looks like a flag.
@@ -126,8 +148,14 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
   const stateDir = absolute("stateDir", o.stateDir);
   const profileDir = o.profileDir === undefined ? join(stateDir, "profile") : absolute("profileDir", o.profileDir);
   const socketPath = o.socketPath === undefined ? join(stateDir, "chrome-proxy.sock") : absolute("socketPath", o.socketPath);
-  if (Buffer.byteLength(socketPath) > MAX_SOCKET_PATH_BYTES)
-    throw new UsageError(`socketPath is ${Buffer.byteLength(socketPath)} bytes; a Unix socket path holds at most ${MAX_SOCKET_PATH_BYTES}: ${socketPath}`);
+  const bytes = Buffer.byteLength(socketPath), limit = `a Unix socket path holds at most ${MAX_SOCKET_PATH_BYTES} (the macOS limit)`;
+  if (bytes > MAX_SOCKET_PATH_BYTES && o.socketPath !== undefined)
+    throw new UsageError(`socketPath is ${bytes} bytes, and ${limit}: ${socketPath}; ${SOCKET_WAY_OUT}`);
+  if (bytes > MAX_SOCKET_PATH_BYTES) {
+    const example = socketPathExample(stateDir);
+    throw new UsageError(`the default proxy socket ${socketPath} is ${bytes} bytes, and ${limit}: ${SOCKET_WAY_OUT}`
+      + `${example ? `, for example --socket ${example}` : ""}; every caller of this state folder must give the same --socket`);
+  }
   const mode = o.mode ?? "agent";
   if (mode !== "agent" && mode !== "personal") throw new UsageError(`mode must be "agent" or "personal", not ${JSON.stringify(mode)}`);
   if (o.chromeBin !== undefined) {
