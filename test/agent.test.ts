@@ -83,6 +83,16 @@ test("a launch of a profile that restores its session asks, once, to name the wi
   assert.deepEqual(lines.filter((l) => /Name window/.test(l)), [], "no hint without a start of Chrome");
 });
 
+test("a launch from Google Chrome says the facts: a second Chrome for the agent browser, its own profile, its own Dock icon and Cmd-Tab entry (ab-b84.16)", async () => {
+  lines.length = 0;
+  await launchAgentChrome(s, { timeoutMs: 2_000 }, {
+    endpoint: async () => undefined, pid: () => undefined, spawn: fakeSpawn([]), exists: () => false,
+  }).catch(() => {});
+  const note = lines.filter((l) => /Google Chrome/.test(l));
+  assert.deepEqual(note, ["agent browser: a Google Chrome runs for the agent browser, with its own profile; while your own Chrome is also open, its icon in the Dock and its entry in Cmd-Tab are separate from yours, and your own profile is untouched"]);
+  assert.ok(!lines.some((l) => /brings it forward|google-chrome@beta/.test(l)), "no claim that the Dock icon brings the agent window forward, no advice to install Beta");
+});
+
 test("noLaunch: no running agent browser fails with the consumer's launch command instead of starting one", async () => {
   const named = resolveOptions({ ...s, noLaunch: true, commandName: "vedlo browser" });
   await assert.rejects(launchAgentChrome(named, { timeoutMs: 1_000 }, {
