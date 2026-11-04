@@ -5,8 +5,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN, agentWindowName, launchAgentChrome } from "../src/agent.ts";
@@ -166,6 +165,79 @@ test("files of another user are never read: no pid file, no profile preferences,
   ]);
 });
 
+test("the pid file must name this state folder's own proxy: one of another state folder, another profile, personal mode, or another upstream (a later proxy on a reused pid) is not up", () => {
+  const node = "/usr/bin/node", bin = "/opt/agent-browser/bin/agent-browser.js";
+  const elsewhere = join(tmp, "elsewhere");
+  const rows: string[] = [], expected: unknown[] = [];
+  const cases: { name: string; pid: number; proxy: Partial<{ stateDir: string; profile: string; mode: string; upstream: string }>; up: boolean }[] = [
+    { name: "id-state", pid: 710, proxy: { stateDir: elsewhere }, up: false },
+    { name: "id-profile", pid: 720, proxy: { profile: join(elsewhere, "profile") }, up: false },
+    { name: "id-mode", pid: 730, proxy: { mode: "personal" }, up: false },
+    { name: "id-upstream", pid: 740, proxy: { upstream: "ws://127.0.0.1:7/devtools/browser/later" }, up: false },
+    { name: "id-match", pid: 750, proxy: {}, up: true },
+  ];
+  for (const c of cases) {
+    const upstream = `ws://127.0.0.1:7/devtools/browser/${c.name}`;
+    const dir = folder(c.name, { "chrome-proxy.json": { pid: c.pid, upstream } });
+    rows.push(linux(UID, c.pid - 100, `/opt/google/chrome/chrome ${SIG} --user-data-dir=${dir}/profile --window-name=agent-browser: ${dir} ${INSPECT}`));
+    rows.push(linux(UID, c.pid, proxyCommand(node, bin, c.proxy.upstream ?? upstream,
+      { stateDir: c.proxy.stateDir ?? dir, profile: c.proxy.profile ?? `${dir}/profile`, mode: c.proxy.mode, commandName: "agent-browser" })));
+    expected.push({ pid: c.pid - 100, profileDir: `${dir}/profile`, stateDir: dir, windowName: `agent-browser: ${dir}`, commandName: "agent-browser",
+      proxy: c.up ? { pid: c.pid, upstream } : null });
+  }
+  assert.deepEqual(listAgentChromes({ ps: () => rows.join("\n"), uid: UID }), expected);
+});
+
+test("the binary, the profile and the launch flags: `timeout` in front of a macOS Chrome, another app bundle, the last --user-data-dir, the flags right in front of the profile, and a value that ends at a single-dash switch", () => {
+  const P = folder("guard-p"), Q = folder("guard-q"), R1 = folder("guard-r1"), R2 = folder("guard-r2"), S1 = folder("guard-s1"), S2 = folder("guard-s2");
+  const ps = [
+    // " /" in front of the app path: a second argument, so `timeout` itself, not a Chrome.
+    mac(UID, 100, `/opt/homebrew/bin/timeout 600 ${CHROME_BETA_BIN} ${SIG} --user-data-dir=${P}/profile --window-name=agent-browser: ${P} ${INSPECT}`),
+    // Only the Chrome and Chromium app bundles, and only their own binary.
+    mac(UID, 110, `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser ${SIG} --user-data-dir=${P}/profile --window-name=agent-browser: ${P} ${INSPECT}`),
+    mac(UID, 120, `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper ${SIG} --user-data-dir=${P}/profile --window-name=agent-browser: ${P} ${INSPECT}`),
+    // Chromium, with a chromeArgs element in Chrome's single-dash form after the window name.
+    mac(UID, 130, `/Applications/Chromium.app/Contents/MacOS/Chromium ${SIG} --user-data-dir=${Q}/profile --window-name=agent-browser: ${Q} -incognito ${INSPECT}`),
+    // Chrome takes the last --user-data-dir; a proxy of this user drives that profile.
+    linux(UID, 200, `/opt/google/chrome/chrome --user-data-dir=${R1}/profile --user-data-dir=${R2}/profile`),
+    linux(UID, 210, proxyCommand("/usr/bin/node", "/opt/agent-browser/bin/agent-browser.js", "ws://127.0.0.1:8/devtools/browser/r", { stateDir: R2, profile: `${R2}/profile`, commandName: "vedlo browser" })),
+    // agent-browser's flags count only right in front of the profile.
+    linux(UID, 300, `/opt/google/chrome/chrome --user-data-dir=${S1}/profile ${SIG} ${INSPECT}`),
+    linux(UID, 310, `/opt/google/chrome/chrome ${SIG} --lang=en-US --user-data-dir=${S2}/profile ${INSPECT}`),
+  ].join("\n");
+  assert.deepEqual(listAgentChromes({ ps: () => ps, uid: UID }), [
+    { pid: 130, profileDir: `${Q}/profile`, stateDir: Q, windowName: `agent-browser: ${Q}`, commandName: "agent-browser", proxy: null },
+    { pid: 200, profileDir: `${R2}/profile`, stateDir: R2, windowName: null, commandName: "vedlo browser", proxy: null },
+  ]);
+});
+
+test("a file of another user inside this user's folders is not read: a pid file, either preference file of the profile, a launches.log", () => {
+  const files = (pid: number, extra: Record<string, string | object> = {}) => ({ "chrome-proxy.json": { pid, upstream: `ws://127.0.0.1:9/devtools/browser/${pid}` }, ...extra });
+  const T = folder("foreign-t", files(810)), X = folder("foreign-x", files(860));
+  const U = folder("foreign-u", { "profile/Default/Secure Preferences": { session: { restore_on_startup: 4 } } });
+  const V = folder("foreign-v", { "profile/Default/Preferences": { session: { restore_on_startup: 4 } } });
+  const W = folder("foreign-w", { "launches.log": "x\n" });
+  // These paths report another owner; everything else is this user's, as on disk.
+  const foreign = new Set([join(T, "chrome-proxy.json"), join(U, "profile/Default/Secure Preferences"), join(V, "profile/Default/Preferences"), join(W, "launches.log")]);
+  const stat = (path: string) => {
+    const st = statSync(path, { throwIfNoEntry: false });
+    return st && foreign.has(path) ? { uid: OTHER, isFile: () => st.isFile(), isDirectory: () => st.isDirectory() } : st;
+  };
+  const chrome = (pid: number, dir: string, named = true) =>
+    linux(UID, pid, `/opt/google/chrome/chrome ${SIG} --user-data-dir=${dir}/profile${named ? ` --window-name=agent-browser: ${dir}` : ""} ${INSPECT}`);
+  const proxy = (pid: number, dir: string) =>
+    linux(UID, pid, proxyCommand("/usr/bin/node", "/opt/agent-browser/bin/agent-browser.js", `ws://127.0.0.1:9/devtools/browser/${pid}`, { stateDir: dir, profile: `${dir}/profile`, commandName: "agent-browser" }));
+  const ps = [chrome(800, T), proxy(810, T), chrome(820, U), chrome(830, V), chrome(840, W, false), chrome(850, X), proxy(860, X)].join("\n");
+  const entry = (pid: number, dir: string, more: object) => ({ pid, profileDir: `${dir}/profile`, stateDir: dir, windowName: `agent-browser: ${dir}`, commandName: "agent-browser", proxy: null, ...more });
+  assert.deepEqual(listAgentChromes({ ps: () => ps, uid: UID, stat }), [
+    entry(800, T, {}),
+    entry(820, U, { windowName: null }),
+    entry(830, V, { windowName: null }),
+    { pid: 840, profileDir: `${W}/profile`, stateDir: null, windowName: null, commandName: null, proxy: null },
+    entry(850, X, { proxy: { pid: 860, upstream: "ws://127.0.0.1:9/devtools/browser/860" } }),
+  ]);
+});
+
 test("the listing reads the argv that agent-browser itself makes: launchAgentChrome's Chrome and proxyArgs' proxy, in a folder with spaces", async () => {
   const st = resolveOptions({ stateDir: join(tmp, "My Projects", "real launch"), commandName: "vedlo browser", chromeArgs: ["--lang=en-US"], log: () => {} });
   const calls: { bin: string; args: string[] }[] = [];
@@ -186,35 +258,73 @@ test("the listing reads the argv that agent-browser itself makes: launchAgentChr
   ]);
 });
 
-/** A process that only waits and writes down each signal that it gets: it stands in for a Chrome or a proxy. */
-function idle(log: string): ChildProcess {
-  const code = `for (const s of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR2"]) process.on(s, () => require("node:fs").appendFileSync(${JSON.stringify(log)}, s + "\\n"));
-setInterval(() => {}, 60_000);`;
-  return spawn(process.execPath, ["-e", code], { stdio: "ignore" });
+// A stand-in for a Chrome or a proxy: it listens where that one listens (a TCP port on 127.0.0.1, or
+// a Unix socket path), writes down each connection and each signal that it gets, and ends by itself
+// when its stdin pipe closes (the test ends it so, and a test runner that dies closes it too), or
+// after two minutes. It prints {"port"} once it listens, or {"error"} and ends.
+const STAND_IN = `
+const fs = require("node:fs"), net = require("node:net");
+const [log, at] = process.argv.slice(1);
+const note = (what) => fs.appendFileSync(log, process.pid + " " + what + "\\n");
+for (const s of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR2"]) process.on(s, () => note(s));
+const server = net.createServer((c) => { note("connection"); c.destroy(); });
+server.on("error", (e) => { process.stdout.write(JSON.stringify({ error: e.message }) + "\\n"); process.exit(1); });
+server.listen(at === "tcp" ? { port: 0, host: "127.0.0.1" } : { path: at }, () => process.stdout.write(JSON.stringify({ port: server.address().port ?? null }) + "\\n"));
+process.stdin.on("end", () => process.exit(0)).resume();
+setTimeout(() => process.exit(0), 120_000);
+`;
+
+/** Start a stand-in (STAND_IN) that listens at `at` ("tcp" or a socket path); `children` gets it at once, so the caller can end it. */
+function standIn(children: ChildProcess[], log: string, at: string): Promise<number | null> {
+  const child = spawn(process.execPath, ["-e", STAND_IN, log, at], { stdio: ["pipe", "pipe", "ignore"] });
+  children.push(child);
+  return new Promise((resolve, reject) => {
+    let out = "";
+    child.once("error", reject);
+    child.once("exit", (code) => reject(new Error(`the stand-in on ${at} ended (exit ${code}) before it listened: ${out}`)));
+    child.stdout!.on("data", (d) => {
+      out += d;
+      if (!out.includes("\n")) return;
+      const info = JSON.parse(out.split("\n")[0]);
+      if (info.error) reject(new Error(`the stand-in cannot listen on ${at}: ${info.error}`));
+      else resolve(info.port);
+    });
+  });
 }
 
-test("the CLI: `chromes` needs no --state-dir, prints one JSON document or the human list, and connects to nothing and signals nothing", async () => {
-  const M = folder("cli-m");
-  const signals = join(tmp, "signals.log");
-  const chrome = idle(signals), proxy = idle(signals);
-  // A debugging port in the profile and the proxy's socket: a listing that connected to either would show here.
-  let connections = 0;
-  const port = createServer(() => { connections++; }), sock = createServer(() => { connections++; });
-  await new Promise<void>((r) => port.listen(0, "127.0.0.1", () => r()));
-  await new Promise<void>((r) => sock.listen(join(M, "chrome-proxy.sock"), () => r()));
+/** End a stand-in: close its stdin and wait for its exit. */
+function endStandIn(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => { child.once("exit", () => resolve()); child.stdin!.end(); });
+}
+
+test("the CLI: `chromes` needs no --state-dir, prints one JSON document or the human list, and connects to nothing and signals nothing", { timeout: 60_000 }, async () => {
+  const children: ChildProcess[] = [];
   try {
-    const upstream = `ws://127.0.0.1:${(port.address() as { port: number }).port}/devtools/browser/m`;
-    writeFileSync(join(M, "profile", "DevToolsActivePort"), `${(port.address() as { port: number }).port}\n/devtools/browser/m`);
+    const M = folder("cli-m"), log = join(tmp, "stand-ins.log");
+    // The stand-in Chrome owns the debugging port that its profile's DevToolsActivePort names, and the
+    // stand-in proxy owns the state folder's socket, so a listing that probed either (agentEndpoint,
+    // socketAlive) would reach one of them and show in the log.
+    const port = await standIn(children, log, "tcp");
+    await standIn(children, log, join(M, "chrome-proxy.sock"));
+    const [chrome, proxy] = children;
+    const upstream = `ws://127.0.0.1:${port}/devtools/browser/m`;
+    writeFileSync(join(M, "profile", "DevToolsActivePort"), `${port}\n/devtools/browser/m`);
     writeFileSync(join(M, "chrome-proxy.json"), JSON.stringify({ pid: proxy.pid, upstream }));
+    const rows = (list: [number, number, string][]) => {
+      // `ps ... -o uid=,pid=,command=` gets the uid column; any other call (agentChromePid's) gets pid and command.
+      writeFileSync(join(tmp, "ps-uid.txt"), list.map(([uid, pid, command]) => linux(uid, pid, command)).join("\n") + "\n");
+      writeFileSync(join(tmp, "ps.txt"), list.map(([, pid, command]) => `${String(pid).padStart(7)} ${command}`).join("\n") + "\n");
+    };
+    rows([
+      [0, 1, "/sbin/init"],
+      [UID, chrome.pid!, `/opt/google/chrome/chrome ${SIG} --user-data-dir=${M}/profile --window-name=agent-browser: ${M} ${INSPECT}`],
+      [UID, proxy.pid!, proxyCommand(process.execPath, "/opt/agent-browser/bin/agent-browser.js", upstream, { stateDir: M, profile: `${M}/profile`, commandName: "agent-browser" })],
+    ]);
+    // A stand-in `ps` first on PATH: the CLI reads these rows, not this machine's processes.
     const bin = join(tmp, "bin");
     mkdirSync(bin, { recursive: true });
-    writeFileSync(join(tmp, "ps.txt"), [
-      linux(0, 1, "/sbin/init"),
-      linux(UID, chrome.pid!, `/opt/google/chrome/chrome ${SIG} --user-data-dir=${M}/profile --window-name=agent-browser: ${M} ${INSPECT}`),
-      linux(UID, proxy.pid!, proxyCommand(process.execPath, "/opt/agent-browser/bin/agent-browser.js", upstream, { stateDir: M, profile: `${M}/profile`, commandName: "agent-browser" })),
-    ].join("\n") + "\n");
-    // A stand-in `ps` first on PATH: the CLI reads these rows, not this machine's processes.
-    writeFileSync(join(bin, "ps"), `#!/bin/sh\ncat '${join(tmp, "ps.txt")}'\n`);
+    writeFileSync(join(bin, "ps"), `#!/bin/sh\ncase "$*" in\n  *uid=*) cat '${join(tmp, "ps-uid.txt")}' ;;\n  *) cat '${join(tmp, "ps.txt")}' ;;\nesac\n`);
     chmodSync(join(bin, "ps"), 0o755);
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
 
@@ -233,19 +343,14 @@ test("the CLI: `chromes` needs no --state-dir, prints one JSON document or the h
       "",
     ].join("\n"));
 
-    assert.equal(connections, 0, "no connection to the debugging port or the proxy socket");
-    assert.equal(existsSync(signals), false, "no signal reached the Chrome or the proxy");
+    assert.equal(existsSync(log) ? readFileSync(log, "utf8") : "", "", "no connection and no signal reached the stand-in Chrome or proxy");
     for (const c of [chrome, proxy]) assert.ok(c.exitCode === null && c.signalCode === null, `pid ${c.pid} still runs`);
 
-    writeFileSync(join(tmp, "ps.txt"), linux(0, 1, "/sbin/init") + "\n");
+    rows([[0, 1, "/sbin/init"]]);
     const none = await cli(["chromes"], { env });
     assert.equal(none.stdout, "no agent-browser Chrome of this user is running\n");
     assert.deepEqual((await cli(["chromes", "--json"], { env })).json, { ok: true, command: "chromes", chromes: [] });
   } finally {
-    // They write down SIGTERM and keep running, so only SIGKILL ends them.
-    chrome.kill("SIGKILL");
-    proxy.kill("SIGKILL");
-    port.close();
-    sock.close();
+    await Promise.all(children.map(endStandIn));
   }
 });

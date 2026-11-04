@@ -164,18 +164,25 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   open the prompt can be on the other one.
 - **Every agent browser on the machine:** `agent-browser chromes` lists each agent-browser Chrome of
   this user: its pid, profile, state folder, window name, the consumer's command name, and whether
-  an approved proxy of that state folder is up. It needs no `--state-dir`. It is read-only: it reads
-  the process table (this user's rows only) and this user's own state-folder and profile files. It
-  never connects to a Chrome, so it raises no "Allow remote debugging?" prompt, and it signals no
-  process. An agent Chrome is a Chrome main process (the Chrome or Chromium binary, on a
-  `--user-data-dir`, with no `--type=`) that carries agent-browser's launch flags in front of that
-  profile, or whose profile an agent-browser proxy of this user drives. A process that only names
-  a profile in its arguments is not one. The state folder and the command name come from the
-  window name of agent-browser's launch; for a Chrome that has none (started before window names,
-  or by hand), from its proxy, else the state folder is the profile's parent when that folder holds
-  a `launches.log`. The window name is given only when the profile does not restore its session. A
-  proxy is up when the pid in the state folder's `chrome-proxy.json` (written once Chrome accepted
-  the connection) is a live agent-browser proxy of that state folder and profile.
+  an approved proxy of that state folder is up. It needs no `--state-dir`.
+  - It is read-only. It reads the process table (this user's rows only) and this user's own
+    state-folder and profile files; it checks the owner of each file before it reads it. It never
+    connects to a Chrome, so it raises no "Allow remote debugging?" prompt. It signals no process.
+  - An agent Chrome is a Chrome main process: the Chrome or Chromium binary, on a `--user-data-dir`,
+    with no `--type=`. Also, agent-browser's launch flags are right in front of that profile, or an
+    agent-browser proxy of this user drives that profile. A process that only names a profile in its
+    arguments is not one.
+  - Not listed: a `chromeBin` of another Chromium browser (for example Brave), a Linux Chrome binary
+    in a folder whose name has a space, and a macOS app path that holds " -".
+  - The state folder and the command name come from the window name of agent-browser's launch. A
+    Chrome without one was started before window names, or by hand. For it, they come from its
+    proxy. Without a proxy, the state folder is the profile's parent when that folder holds a
+    `launches.log`. ps joins the arguments with spaces, so a folder whose name holds " -" and a
+    letter is read short there.
+  - The window name is given only when the profile does not restore its session.
+  - A proxy is up when the state folder's `chrome-proxy.json` names a live agent-browser proxy of
+    that state folder and profile, with the same upstream. The proxy writes that file only once
+    Chrome accepted its connection.
 - **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
   listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
   A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
@@ -766,11 +773,14 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   ported from vedlo.
 - `test/allowlist.test.ts`: matching, the file, and no built-in denylist.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
-- `test/chromes.test.ts`: `chromes` on crafted `ps` rows of Linux (procps) and macOS (BSD ps): other
-  users' rows, Chrome's helpers, the crashpad handler, `open` and processes that only name a profile
-  are skipped; a state folder with and without an approved proxy, a stale pid file, a restoring
-  profile, and another user's files (never read). Through the CLI with a stand-in `ps`, it proves
-  that the listing connects to nothing and signals nothing.
+- `test/chromes.test.ts`: `chromes` on crafted `ps` rows of Linux (procps) and macOS (BSD ps).
+  Skipped: other users' rows, Chrome's helpers, the crashpad handler, `open`, `timeout`, other app
+  bundles, and processes that only name a profile. Covered: a state folder with and without an
+  approved proxy, a pid file that names another state folder's, profile's, mode's or upstream's
+  proxy, a stale pid file, a restoring profile, the last `--user-data-dir`, and another user's
+  files (never read). Through the CLI with a stand-in `ps`, it proves that the listing connects to
+  nothing and signals nothing: stand-in processes own the profile's debugging port and the proxy
+  socket, and log each connection and signal. They end by themselves with the test.
 - `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
   lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it

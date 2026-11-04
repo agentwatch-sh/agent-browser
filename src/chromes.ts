@@ -1,12 +1,13 @@
 // Every agent-browser Chrome of this user on the machine (#3): several agent browsers can run at
 // once, and their windows look the same. Read only: the listing reads the process table (this user's
-// rows only) and this user's own state-folder and profile files. It never connects to a Chrome (a new
-// debugging connection raises Chrome's "Allow remote debugging?" prompt) and never signals a process.
+// rows only) and this user's own state-folder and profile files (it checks each one's owner first).
+// It never connects to a Chrome (a new debugging connection raises Chrome's "Allow remote debugging?"
+// prompt) and never signals a process.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { AGENT_ARGS, isBrowserChild, restoresOnStartup } from "./agent.ts";
+import { AGENT_ARGS, isBrowserChild, restoresOnStartup, STARTUP_PREFERENCES } from "./agent.ts";
 
 /** One agent Chrome. A field that the evidence does not give is null. */
 export type AgentChrome = {
@@ -53,11 +54,13 @@ export function isChromeBinary(argv0: string): boolean {
 
 /**
  * The value of the switch whose value starts at `at` in a ps command line. ps joins the argv with
- * spaces, and a folder can hold one, so the value runs to the next switch (" --") or URL (" chrome://",
- * " https://"): the elements that come after a value in agent-browser's own launch.
+ * spaces, and a folder can hold one, so the value runs to the next switch (" --x" or " -x", Chrome
+ * reads both) or URL (" chrome://", " https://"): the elements that come after a value in
+ * agent-browser's own launch. The limit: a folder whose name holds " -" and a letter, or " x://",
+ * is read short at that point.
  */
 function valueAt(command: string, at: number): string {
-  const rest = command.slice(at), end = rest.search(/ (?:--|[a-z][a-z0-9+.-]*:\/\/)/i);
+  const rest = command.slice(at), end = rest.search(/ (?:-[-a-z]|[a-z][a-z0-9+.-]*:\/\/)/i);
   return end < 0 ? rest : rest.slice(0, end);
 }
 
@@ -89,51 +92,73 @@ function launchWindowName(command: string, profile: string): { commandName: stri
   return m ? { commandName: m[1], stateDir: m[2] } : undefined;
 }
 
-type ProxyRow = { pid: number; stateDir?: string; profileDir?: string; mode?: string; commandName?: string };
+type ProxyRow = { pid: number; upstream: string; stateDir?: string; profileDir?: string; mode?: string; commandName?: string };
 
-/** The flags of an agent-browser proxy (proxyArgs in proxy.ts) from its ps command line, or undefined for any other process. */
+/** The upstream and the flags of an agent-browser proxy (proxyArgs in proxy.ts) from its ps command line, or undefined for any other process. */
 function proxyRow(p: UserProcess): ProxyRow | undefined {
-  const at = p.command.search(/\/bin\/agent-browser\.js proxy /);
+  const start = "/bin/agent-browser.js proxy ", at = p.command.indexOf(start);
   if (at < 0) return undefined;
+  const [upstream, ...parts] = p.command.slice(at + start.length).split(" --");
   const flags = new Map<string, string>();
   // The first of each flag: a later one can only be inside a value (an approve command's JSON, which comes later).
-  for (const part of p.command.slice(at).split(" --").slice(1)) {
+  for (const part of parts) {
     const space = part.indexOf(" ");
     const name = space < 0 ? part : part.slice(0, space);
     if (!flags.has(name)) flags.set(name, space < 0 ? "" : part.slice(space + 1));
   }
-  return { pid: p.pid, stateDir: flags.get("state-dir"), profileDir: flags.get("profile"), mode: flags.get("mode"), commandName: flags.get("command-name") };
+  return { pid: p.pid, upstream, stateDir: flags.get("state-dir"), profileDir: flags.get("profile"), mode: flags.get("mode"), commandName: flags.get("command-name") };
 }
 
+/** What the listing needs of a path's stat: its owner and its kind. Undefined when the path is missing. */
+export type StatLike = (path: string) => { uid: number; isFile(): boolean; isDirectory(): boolean } | undefined;
+
+const statPath: StatLike = (path) => statSync(path, { throwIfNoEntry: false });
+
 /** Is `path` a folder or a file of this user (`uid`)? The listing reads no other user's files. */
-function owned(path: string, uid: number, kind: "dir" | "file"): boolean {
+function owned(stat: StatLike, path: string, uid: number, kind: "dir" | "file"): boolean {
   try {
-    const st = statSync(path);
-    return st.uid === uid && (kind === "dir" ? st.isDirectory() : st.isFile());
+    const st = stat(path);
+    return !!st && st.uid === uid && (kind === "dir" ? st.isDirectory() : st.isFile());
   } catch { return false; }
+}
+
+/** Does the path exist? A path that stat cannot reach (another user's folder) counts as there. */
+function present(stat: StatLike, path: string): boolean {
+  try { return stat(path) !== undefined; } catch { return true; }
 }
 
 /**
  * The approved proxy of `stateDir` for the Chrome on `profile`, or null. The proxy writes its pid file
  * (chrome-proxy.json) only once Chrome has accepted its connection, so it is approved and up when the
  * pid in that file is a live agent-browser proxy of this user, of this state folder and profile, in
- * agent mode. A stale file (that pid ended, or now belongs to another process) names no proxy.
+ * agent mode, with the upstream that the file names. A stale file (that pid ended, or now belongs to
+ * another process or to a later proxy) names no proxy.
  */
-function approvedProxy(stateDir: string, profile: string, proxies: ProxyRow[], uid: number): AgentChrome["proxy"] {
+function approvedProxy(stat: StatLike, stateDir: string, profile: string, proxies: ProxyRow[], uid: number): AgentChrome["proxy"] {
   const file = join(stateDir, "chrome-proxy.json");
-  if (!owned(stateDir, uid, "dir") || !owned(file, uid, "file")) return null;
+  if (!owned(stat, stateDir, uid, "dir") || !owned(stat, file, uid, "file")) return null;
   let info: { pid?: unknown; upstream?: unknown };
   try { info = JSON.parse(readFileSync(file, "utf8")) ?? {}; } catch { return null; }
   const { pid, upstream } = info;
   if (typeof pid !== "number" || !Number.isInteger(pid) || typeof upstream !== "string") return null;
   const live = proxies.find((p) => p.pid === pid);
-  return live && live.stateDir === stateDir && live.profileDir === profile && live.mode === "agent" ? { pid, upstream } : null;
+  return live && live.stateDir === stateDir && live.profileDir === profile && live.mode === "agent" && live.upstream === upstream ? { pid, upstream } : null;
 }
 
 /** The state folder of a profile in its default place (`<state folder>/profile`), when agent-browser's launches.log is there. */
-function launchedFrom(profile: string, uid: number): string | undefined {
+function launchedFrom(stat: StatLike, profile: string, uid: number): string | undefined {
   const dir = dirname(profile);
-  return basename(profile) === "profile" && owned(dir, uid, "dir") && owned(join(dir, "launches.log"), uid, "file") ? dir : undefined;
+  return basename(profile) === "profile" && owned(stat, dir, uid, "dir") && owned(stat, join(dir, "launches.log"), uid, "file") ? dir : undefined;
+}
+
+/**
+ * Does the profile restore its session? Undefined when that is not known: the profile or one of the
+ * preference files that restoresOnStartup reads is another user's, so it is not read.
+ */
+function restoresSession(stat: StatLike, profile: string, uid: number): boolean | undefined {
+  if (!owned(stat, profile, uid, "dir")) return undefined;
+  for (const f of STARTUP_PREFERENCES) if (present(stat, join(profile, f)) && !owned(stat, join(profile, f), uid, "file")) return undefined;
+  return restoresOnStartup(profile) === true;
 }
 
 /**
@@ -142,8 +167,8 @@ function launchedFrom(profile: string, uid: number): string | undefined {
  * profile), or one on a profile that an agent-browser proxy of this user drives. Other users' rows
  * are skipped. It reads only the process table and this user's files.
  */
-export function listAgentChromes(deps: { ps?: () => string; uid?: number } = {}): AgentChrome[] {
-  const uid = deps.uid ?? process.getuid!();
+export function listAgentChromes(deps: { ps?: () => string; uid?: number; stat?: StatLike } = {}): AgentChrome[] {
+  const uid = deps.uid ?? process.getuid!(), stat = deps.stat ?? statPath;
   const ps = deps.ps ?? (() => execFileSync("ps", ["axww", "-o", "uid=,pid=,command="], { encoding: "utf8", maxBuffer: 64 << 20 }));
   const rows = parseUserPs(ps()).filter((r) => r.uid === uid);
   const proxies = rows.flatMap((r) => proxyRow(r) ?? []);
@@ -154,14 +179,14 @@ export function listAgentChromes(deps: { ps?: () => string; uid?: number } = {})
     const drivers = proxies.filter((p) => p.profileDir === profileDir && p.mode === "agent" && p.stateDir);
     if (!command.includes(`${LAUNCH}${profileDir}`) && !drivers.length) continue;
     const launch = launchWindowName(command, profileDir);
-    const driver = drivers.find((p) => approvedProxy(p.stateDir!, profileDir, proxies, uid)) ?? drivers[0];
-    const stateDir = launch?.stateDir ?? driver?.stateDir ?? launchedFrom(profileDir, uid) ?? null;
+    const driver = drivers.find((p) => approvedProxy(stat, p.stateDir!, profileDir, proxies, uid)) ?? drivers[0];
+    const stateDir = launch?.stateDir ?? driver?.stateDir ?? launchedFrom(stat, profileDir, uid) ?? null;
     const name = switchValues(command, "window-name").at(-1);
     chromes.push({
       pid, profileDir, stateDir,
-      windowName: name !== undefined && owned(profileDir, uid, "dir") && restoresOnStartup(profileDir) !== true ? name : null,
+      windowName: name !== undefined && restoresSession(stat, profileDir, uid) === false ? name : null,
       commandName: launch?.commandName ?? driver?.commandName ?? null,
-      proxy: stateDir === null ? null : approvedProxy(stateDir, profileDir, proxies, uid),
+      proxy: stateDir === null ? null : approvedProxy(stat, stateDir, profileDir, proxies, uid),
     });
   }
   return chromes.sort((a, b) => a.pid - b.pid);

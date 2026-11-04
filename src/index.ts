@@ -10,7 +10,7 @@ export type {
   TextResult, EvalResult, ShotResult, FetchResult, DownloadResult, CloseResult, NetResult, RecordResult, ChromesResult, CommandsResult,
 } from "./commands.ts";
 export { listAgentChromes, parseUserPs, chromeMainProfile, isChromeBinary } from "./chromes.ts";
-export type { AgentChrome, UserProcess } from "./chromes.ts";
+export type { AgentChrome, StatLike, UserProcess } from "./chromes.ts";
 export { recordTab, planRecording, redactStep, NetworkWatch, pngPixels, samePixels, planMove, pointAt, fittsMs, seededRandom, parseSteps, parseKey, parseSize, findFfmpeg, MAX_RECORD_SECONDS } from "./record.ts";
 export type { Step, StepTarget, IdleWait, StillWait, ChangeWait, Pixels, Point, Box, Leg, RecordPlan, RecordOutcome, RecordEvent } from "./record.ts";
 export { main, USAGE } from "./cli.ts";
