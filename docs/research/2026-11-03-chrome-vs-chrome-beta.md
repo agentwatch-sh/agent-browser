@@ -568,9 +568,10 @@ And, for either channel:
 The four questions went to the operator as board item ab-vsm. The operator answered on 2026-11-04
 (confirmed). Two answers were "I'm not sure yet". The follow-up item ab-32m asked those two again,
 and the follow-up item ab-9hj took the operator's new question in ab-32m. The operator answered both
-items on 2026-11-04 (confirmed). No question of this report stays open. The Mac's install waits for the Mac stage of agent mode (board task ab-v16.8). The two-modes
-design (`docs/superpowers/specs/2026-11-03-two-modes-playwright-design.md`, sections 7, 9 and 10)
-applies the answers.
+items on 2026-11-04 (confirmed). No question of this report stays open. The Mac's install waits
+for the Mac stage of agent mode (board task ab-v16.8). The two-modes design
+(`docs/superpowers/specs/2026-11-03-two-modes-playwright-design.md`, sections 7, 9 and 10) applies
+the answers.
 
 1. Where does the agent browser run when a site must not tell it from your Chrome: on your Mac (or a
    Mac like it), or on a box such as taylor? On a Linux box a site sees Linux, no GPU and another IP

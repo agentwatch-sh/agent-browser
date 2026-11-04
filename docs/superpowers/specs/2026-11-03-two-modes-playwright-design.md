@@ -229,12 +229,13 @@ frame and a dedicated worker). Two changes on the way:
   chose "Refuse them"): `Page.addScriptToEvaluateOnNewDocument` unless its `worldName` names an
   isolated world (with no `worldName` the script runs in the page's main world), and
   `Runtime.addBinding` unless its `executionContextName` names an isolated world (with no name the
-  binding goes on the page's main world too). The answer is a clear error that names the call, in
-  the form of section 6 (contract C11 fixes the text). So `addInitScript`, `exposeFunction`,
-  `exposeBinding` and tracing snapshots fail at once, and no `__playwright__*` name reaches a
-  page. The rule must let Playwright's own setup pass: for each
-  frame, Playwright sends `Page.addScriptToEvaluateOnNewDocument` with an empty source and the
-  `worldName` of its utility world, which a page cannot see. A refusal of every
+  binding goes on the page's main world too). The rule refuses only calls for the page's main
+  world (the lead's reading of the Q3 answer, from the comment on ab-v16.6; the operator can
+  reverse it). The answer is a clear error that names the call, in the form of section 6 (contract
+  C11 fixes the text). So `addInitScript`, `exposeFunction`, `exposeBinding` and tracing snapshots
+  fail at once, and no `__playwright__*` name reaches a page. The rule must let Playwright's own
+  setup pass: for each frame, Playwright sends `Page.addScriptToEvaluateOnNewDocument` with an
+  empty source and the `worldName` of its utility world, which a page cannot see. A refusal of every
   `Page.addScriptToEvaluateOnNewDocument` would break every Playwright connection (read in
   playwright-core 1.64.1, not run). The same rule also refuses other Playwright features that put
   a script in the main world, for example `page.clock` (read, not run). One more effect to test in
@@ -335,7 +336,7 @@ relay's code, not run by a client.
 | 22 | Cookies: `context.cookies`, `addCookies`, `clearCookies`; also `context.request` and `page.request`, which read and write the context's cookies | `Storage.*`, `Network` cookie calls | refused | Refused with a clear error: no cookie calls by default (the operator's answer to ab-8mf; section 8). Before the answer the probe's relay served them through `chrome.cookies`, for allowlisted domains only | None | Nothing | P, M (served, before the answer); the refusal and `context.request`: D |
 | 23 | Storage state: `context.storageState()` | rows 6 and 22, and one page per frame origin | refused | Its first call reads the cookies (row 22), so it fails. Before the answer: Playwright opens a page for each origin that a frame of the context showed; DNR blocks an off-list frame origin, so the call failed after such a page, and in a context that showed no off-list frame it worked (measured) | None | Nothing | P, K (before the answer); the refusal: D |
 | 24 | Permissions: `grantPermissions`, `clearPermissions` | `Browser.grantPermissions` | 1 for geolocation, notifications, camera, microphone and the clipboard; 2 for MIDI, sensors, background sync, payment handler, storage access, local fonts, wake lock and local network access | `chrome.contentSettings` (profile-wide; section 4.3) | None | The permission state, by intent | P for geolocation ("granted", then "prompt"), the clipboard with no origin ("granted") and MIDI (refused); C for notifications, camera and microphone; M |
-| 25 | Init scripts and bindings: `addInitScript`, `exposeFunction`, `exposeBinding` | `Page.addScriptToEvaluateOnNewDocument` and `Runtime.addBinding` in the main world | refused | Refused with a clear error (ab-jzg Q3: the operator chose "Refuse them"; section 4.3). Playwright's own utility-world script passes | None | Nothing, because the call is refused. Measured before the answer, when the probe sent the calls: Playwright put `__playwright__binding__` and `__playwright__binding__controller__` on the page's `window` (and the script's own globals). Playwright's own mark, on any transport | P, S (sent, before the answer); the refusal: D |
+| 25 | Init scripts and bindings: `addInitScript`, `exposeFunction`, `exposeBinding` | `Page.addScriptToEvaluateOnNewDocument` and `Runtime.addBinding` in the main world | refused | Refused with a clear error (ab-jzg Q3: the operator chose "Refuse them"; section 4.3). Only main-world calls are refused, and Playwright's own utility-world script passes (the lead's reading of the Q3 answer, from the comment on ab-v16.6; the operator can reverse it) | None | Nothing, because the call is refused. Measured before the answer, when the probe sent the calls: Playwright put `__playwright__binding__` and `__playwright__binding__controller__` on the page's `window` (and the script's own globals). Playwright's own mark, on any transport | P, S (sent, before the answer); the refusal: D |
 | 26 | Emulation: geolocation, timezone, locale, media, offline, extra headers | `Emulation.*`, `Network.emulateNetworkConditions`, `Network.setExtraHTTPHeaders` | 1 | Sent | None | The emulated values, by intent | M |
 | 27 | Tracing: `context.tracing` with screenshots and snapshots | `Page.startScreencast`, `Runtime`; snapshots add a main-world init script | 1 for screenshots with no snapshots; refused with snapshots | Screenshots: sent. Snapshots: refused, because their init script is (row 25; ab-jzg Q3) | None | Nothing with the refusal. Measured before the answer, with snapshots: a `__playwright_snapshot_streamer_<id>` global | P, S (with snapshots, before the answer); screenshots only and the refusal: D |
 | 28 | PDF: `page.pdf` | `Page.printToPDF` | 1 | Sent | None | Nothing | P, M |
@@ -491,8 +492,8 @@ network stack before any CDP interception:
 **What the browser model adds.**
 
 - Cookies: `Storage.getCookies` on a tab session returns the cookies of other sites too (measured: a
-  `c.localhost` cookie, from a page of `a.localhost`). So the model answers every cookie call itself:
-  `Storage.*` on any session, `Network.getAllCookies`, `Network.getCookies`,
+  `c.localhost` cookie, from a page of `a.localhost`). So the model answers every cookie call
+  itself: `Storage.*` on any session, `Network.getAllCookies`, `Network.getCookies`,
   `Network.setCookie(s)`, `deleteCookies` and `Network.clearBrowserCookies`. **The operator chose
   "No cookies by default"** (ab-jzg Q4 and the follow-up item ab-8mf, section 14). So the model
   refuses every one of these calls with a clear error. Programs that read or set cookies through
@@ -758,6 +759,9 @@ manager.
 
 ## 14. Questions for the operator, and the answers (task item 7)
 
+The options and the 'recommended' and 'No answer' marks below are the questions as asked; the
+Answer line of each question is the decision.
+
 On the board as ab-jzg. The operator answered all four on 2026-11-04 (confirmed). Q1 and Q2 took
 the recommendation, Q3 did not, and Q4 was decided through the follow-up item ab-8mf. Each answer
 follows its question; the rest of the design applies it. The Chrome comparison's own questions are
@@ -790,8 +794,9 @@ and tracing snapshots put `__playwright__*` names on the page's `window`; rows 2
 - c. Allow them only on sites that the operator marks in the Browser pane.
 - No answer: a.
 - **Answer (2026-11-04): b**, "Refuse them" (not the recommendation). The model refuses the
-  main-world init scripts and bindings (section 4.3; rows 25 and 27). Four of the probe's
-  Playwright cases now get a refusal (section 5).
+  main-world init scripts and bindings (section 4.3; rows 25 and 27; the restriction to the main
+  world is the lead's reading of the Q3 answer, from the comment on ab-v16.6; the operator can
+  reverse it). Four of the probe's Playwright cases now get a refusal (section 5).
 
 **Q4. Who may read and remove the sent sign-ins through the endpoint?** Through Playwright's cookie
 calls (`context.cookies()`, `storageState()`), any agent session can read the cookie values of every
@@ -811,8 +816,9 @@ session. O9 kept the allowlist because of the risk to the signed-in profile.
   read or set cookies fail.
 - With any answer the limit of section 8 stays: a hostile process of the same OS user can read the
   profile directly. No answer: b.
-- **Answer: c, by default.** On ab-jzg (2026-11-04) the operator asked: "I'm not sure about this. This is to
-  prevent agents from making a mistake?" The follow-up item ab-8mf answered: yes, it prevents a
+- **Answer (the operator's words on ab-8mf, mapped by the lead to option c):** On ab-jzg
+  (2026-11-04) the operator asked: "I'm not sure about this. This is to prevent agents from making
+  a mistake?" The follow-up item ab-8mf answered: yes, it prevents a
   mistake (one clear-cookies call logs every agent session out), and it also prevents a leak of the
   sign-in secrets. The operator's answer to ab-8mf (2026-11-04): "No cookies by default. Make a note
   in the code to add a cookie grant in the future if we run into a use-case that needs cookie
