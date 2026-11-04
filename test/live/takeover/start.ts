@@ -19,6 +19,10 @@
 //                   (chrome://inspect/#remote-debugging), because "Continue where you left off" is a
 //                   signed setting that the check does not set. After a SIGKILL the check stops: the
 //                   next start would be a crash restart, not a clean one.
+//   --restore       (with --same-profile) each start's Chrome also gets --restore-last-session (Chromium's
+//                   switch for what "Continue where you left off" does), so starts 2..N restore the session
+//                   of the start before, and a restore activates its last window at its end: a second
+//                   take of the front, which the built-in give-back must give back too.
 // The check deletes each state folder that it made once no process names it (--keep-state keeps them).
 //
 // --variant NAME (focus.ts VARIANTS) changes one thing of the start, so that one Mac run measures one way to
@@ -54,7 +58,7 @@
 //   swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o /tmp/abfs-monitor
 //   swiftc -swift-version 5 -O test/live/takeover/giveback.swift -o /tmp/abfs-giveback   (--variant give-back only)
 //   node test/live/takeover/start.ts --on-my-screen --monitor /tmp/abfs-monitor --out-dir <dir> \
-//     --chrome-bin "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" [--starts 3] [--after-ms 10000] [--same-profile] \
+//     --chrome-bin "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" [--starts 3] [--after-ms 10000] [--same-profile [--restore]] \
 //     [--variant launch|hidden|give-back] [--giveback /tmp/abfs-giveback]
 //   python3 -I test/live/takeover/analyse.py <dir> [<Chrome pid> ...]   (the timeline: each front change and the start it fell in)
 //
@@ -290,7 +294,7 @@ for (let n = 1; n <= o.starts && !liveness; n++) {
   const logged = launchLines(stateDir).length;
   inProgress = stateDir;
   mark(`start launch ${n}`, { stateDir });
-  const launch = await child(variantLaunch(variant, { node: process.execPath, cli: BIN_JS, launcher: LAUNCH_VARIANT_JS, stateDir, chromeBin: o.chromeBin }), LAUNCH_TIMEOUT_MS);
+  const launch = await child(variantLaunch(variant, { node: process.execPath, cli: BIN_JS, launcher: LAUNCH_VARIANT_JS, stateDir, chromeBin: o.chromeBin, restore: o.restore }), LAUNCH_TIMEOUT_MS);
   const launched = launch.code === 0 && launch.doc?.ok === true;
   mark(`${launched ? "end" : "fail"} launch ${n}`, launched ? { started: launch.doc.started, ms: launch.ms } : { code: launch.code, error: launch.doc?.error ?? null });
   const chromePid = ownPid(stateDir) ?? null;
@@ -355,7 +359,7 @@ for (const r of results) appendFileSync(RESULTS, JSON.stringify(r) + "\n");
 const code = liveness || results.length < o.starts ? 1 : exitCode(results, variant.rule);
 const summary = {
   ok: code === 0, variant: variant.name, rule: variant.rule, ...(variant.rule === "given-back" ? { maxAwayMs: GIVE_BACK_MAX_AWAY_MS } : {}),
-  chromeBin: o.chromeBin, chromeVersion, mode: o.sameProfile ? "same-profile" : "fresh-profile", starts: o.starts, measured: results.length, afterMs: o.afterMs,
+  chromeBin: o.chromeBin, chromeVersion, mode: o.sameProfile ? "same-profile" : "fresh-profile", restore: o.restore, starts: o.starts, measured: results.length, afterMs: o.afterMs,
   liveness,
   frontBefore: results.map((r) => r.frontBefore?.name ?? null),
   awayMs: results.map((r) => r.awayMs),

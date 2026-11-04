@@ -134,22 +134,29 @@ this scope; see **Tab scopes**) and `log` (progress lines; default standard erro
   `open -n -g`, so Launch Services does not bring Chrome to the front. But Chrome activates itself
   when it shows its first window: Chromium's window `Show()` on macOS calls
   `[NSApp activateIgnoringOtherApps:YES]`, and `test/live/takeover/start.ts` measured it on
-  2026-11-04 (12 of 12 starts took the front). So a start on macOS can take the front for a moment,
+  2026-11-04 (12 of 12 starts took the front). So on macOS `launch` can take the front for a moment,
   and then agent-browser gives it back (`src/giveback.ts`). Before `open`, a small guard records the
   app in front. It is JavaScript for Automation, run by `/usr/bin/osascript`, and it uses AppKit only:
   no Apple Event, no System Events, no input, and no new macOS permission. When the new agent Chrome
   takes the front from that app, the guard asks macOS to activate that app again
   (`NSRunningApplication.activateWithOptions`). With the same call from a Swift helper, macOS granted
   3 of 3 requests on 2026-11-04, and the operator's app was back after 83, 43 and 36 ms. Keys typed in
-  that time go to Chrome, and macOS can refuse the request. The guard acts on the first take of the
-  front only. It activates no app other than the app that was in front, and it stops when another app
-  comes to the front. It ends when the front is back, and the start ends it at the latest 1 s after
-  Chrome's endpoint is up (its own limit is 15 s). A start waits up to 3 s for the guard to record the
-  app in front, and the guard never makes a start fail. `launches.log` says how it went:
+  that time go to Chrome, and macOS can refuse the request. When a full-screen app is in front, or
+  when Google Chrome Beta is assigned to a desktop of its own, the take can also switch the Space and
+  back, which takes longer than 0.1 s and is not measured. The guard activates only the app that was
+  in front just before the take: when you bring another app to the front while the new Chrome is not
+  in front, that app takes the place of the first one. The guard watches until `launch` ends it, 1 s
+  after Chrome's endpoint is up (its own limit is 15 s), so a second take by the same Chrome (a
+  session restore activates its last window at its end) is given back too. It asks macOS at most 3
+  times in all for one `launch`. It cannot tell your own switch to the new Chrome from Chrome's
+  activation, so in that time it can send you back to your app; after its 3 asks, or once `launch`
+  has ended it, it never does. `launch` waits up to 3 s for the guard to record the app in front, and
+  the guard never makes `launch` fail. `launches.log` says how it went:
   `give-back=on front=<pid>/<bundle id>` on the Chrome line, then lines such as
-  `give-back took=<pid> from=<pid>` and `give-back end=given-back`. The start that another command
-  makes has no give-back: Chrome's approval prompt follows it, and that prompt comes forward by design,
-  because a person must answer it. `launch --login` starts it in front,
+  `give-back took=<pid> from=<pid>`, `give-back back=<pid> after-ms=<n>` and
+  `give-back end=stopped by=launch`. The start that another command makes has no give-back: it
+  leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt
+  shows in front until the operator answers it. `launch --login` starts it in front,
   because the operator signs in there. Tip: only agent
   browsers use Chrome Beta, so assigning Google Chrome Beta to a desktop of its own (Dock, Options,
   Assign To) keeps every agent browser there. This is an agent browser, so it comes up
@@ -918,7 +925,10 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   while the same monitor logs the frontmost app before, during and after each start; then it quits
   only that Chrome. By default each start gets a fresh state folder of its own, so it measures the
   first start of a profile; with `--same-profile` all starts share one new folder, so starts 2 to N
-  measure the restart of a used profile. It runs only with `--on-my-screen` and opens no debugging
+  measure the restart of a used profile. With `--same-profile --restore`, Chrome also gets
+  `--restore-last-session` (what "Continue where you left off" does), so starts 2 to N restore the
+  session before, and the restore activates its last window at its end: a second take of the front.
+  It runs only with `--on-my-screen` and opens no debugging
   WebSocket (`launch` makes only a TCP probe of the port), so Chrome shows no approval prompt. It
   exits 1 when a start broke its variant's rule (below) or could not be measured (for example, the
   monitor stopped). It does not measure the Space. Not part of `npm test`; `test/takeover-start.test.ts` tests

@@ -65,7 +65,7 @@ test("the start check needs the compiled monitor and an output folder", () => {
 test("--starts is 3 by default and a whole number from 1 to 20; --after-ms is 10 s by default; a fresh profile per start by default", () => {
   const r = startArgs(full, mac);
   assert.ok(r.ok);
-  assert.deepEqual(r.options, { chromeBin: BETA, starts: 3, monitor: MONITOR, outDir: "/tmp/abfs-out", afterMs: 10_000, keepState: false, sameProfile: false, variant: "launch" });
+  assert.deepEqual(r.options, { chromeBin: BETA, starts: 3, monitor: MONITOR, outDir: "/tmp/abfs-out", afterMs: 10_000, keepState: false, sameProfile: false, restore: false, variant: "launch" });
   const five = startArgs([...full, "--starts", "5", "--after-ms", "4000", "--keep-state", "--same-profile"], mac);
   assert.ok(five.ok);
   assert.equal(five.options.starts, 5);
@@ -74,6 +74,17 @@ test("--starts is 3 by default and a whole number from 1 to 20; --after-ms is 10
   assert.equal(five.options.sameProfile, true);
   for (const n of ["0", "-1", "2.5", "x", "21", ""]) assert.match(refused([...full, "--starts", n]), /--starts/, n);
   for (const ms of ["999", "x", "120001"]) assert.match(refused([...full, "--after-ms", ms]), /--after-ms/, ms);
+});
+
+test("--restore (with --same-profile only): starts 2 to N restore the session of the start before, as \"Continue where you left off\" does", () => {
+  assert.match(refused([...full, "--restore"]), /^--restore needs --same-profile/);
+  const r = startArgs([...full, "--same-profile", "--restore"], mac);
+  assert.ok(r.ok);
+  assert.equal(r.options.restore, true);
+  const p = { node: "/n", cli: "/r/bin/agent-browser.js", launcher: "/r/launch-variant.ts", stateDir: "/tmp/abfs-s-AbC123", chromeBin: BETA, restore: true };
+  assert.deepEqual(variantLaunch(variant("launch"), p), ["/n", "/r/bin/agent-browser.js", "launch", "--state-dir", p.stateDir, "--chrome-bin", BETA, "--json", "--chrome-args", '["--restore-last-session"]']);
+  assert.deepEqual(variantLaunch(variant("give-back"), p), ["/n", "/r/launch-variant.ts", "--state-dir", p.stateDir, "--chrome-bin", BETA, "--no-give-back", "--restore"]);
+  assert.deepEqual(variantLaunch(variant("launch"), { ...p, restore: false }).slice(-1), ["--json"]);
 });
 
 test("the start check refuses an --out-dir that holds the logs of a run, so a second run never deletes them", () => {
@@ -223,9 +234,13 @@ test("the built-in guard's lines of a start: what it did, how it ended, and afte
     "2026-11-04T10:00:00.700Z give-back took=701 from=500",
     "2026-11-04T10:00:00.700Z give-back asked=500 sent=true",
     "2026-11-04T10:00:00.750Z give-back back=500 after-ms=50",
-    "2026-11-04T10:00:00.750Z give-back end=given-back asks=1",
-  ]), { lines: ["took=701 from=500", "asked=500 sent=true", "back=500 after-ms=50", "end=given-back asks=1"], end: "given-back", backAfterMs: 50 });
-  assert.deepEqual(parseBuiltInGiveBack(["t give-back end=bound asks=0", "t give-back end=stopped by=launch"]), { lines: ["end=bound asks=0", "end=stopped by=launch"], end: "stopped", backAfterMs: null });
+    "2026-11-04T10:00:01.300Z give-back took=701 from=500",
+    "2026-11-04T10:00:01.300Z give-back asked=500 sent=true",
+    "2026-11-04T10:00:01.340Z give-back back=500 after-ms=40",
+    "2026-11-04T10:00:02.100Z give-back end=stopped by=launch",
+  ]), { lines: ["took=701 from=500", "asked=500 sent=true", "back=500 after-ms=50", "took=701 from=500", "asked=500 sent=true", "back=500 after-ms=40", "end=stopped by=launch"],
+    end: "stopped", backAfterMs: [50, 40] }, "two takes in one start (a session restore), each given back");
+  assert.deepEqual(parseBuiltInGiveBack(["t give-back end=bound asks=0"]), { lines: ["end=bound asks=0"], end: "bound", backAfterMs: [] });
   assert.equal(parseBuiltInGiveBack(["t chrome=via-open-g give-back=off by=1"]), null);
   assert.equal(parseBuiltInGiveBack([]), null);
 });
@@ -644,6 +659,20 @@ test("a monitor that stops during a start: that start is a problem, and the chec
   } finally { f.cleanup(); }
 });
 
+test("--same-profile --restore: each start's Chrome gets --restore-last-session, through the CLI and through the launcher", onLinux, async () => {
+  const f = fakes();
+  try {
+    for (const v of ["launch", "hidden"]) {
+      const before = new Set(f.started().map((x) => x.pid));
+      const r = await f.check(["--on-my-screen", "--chrome-bin", f.bin, "--monitor", f.monitor, "--out-dir", join(f.dir, v), "--starts", "1", "--after-ms", "1000", "--same-profile", "--restore", "--variant", v]);
+      assert.equal(r.code, 1, r.stderr);
+      const fake = f.started().find((x) => !before.has(x.pid))!;
+      assert.ok(fake.argv.includes("--restore-last-session"), `${v}: ${fake.argv.join(" ")}`);
+      assert.equal(JSON.parse(readFileSync(join(f.dir, v, "summary.json"), "utf8")).restore, true);
+    }
+  } finally { f.cleanup(); }
+});
+
 test("--same-profile: one folder for all starts, so the later starts restart a used profile; the folder goes at the end", onLinux, async () => {
   const f = fakes();
   try {
@@ -894,7 +923,7 @@ test("analyse.py puts the give-back helper's lines and the built-in guard's line
     writeFileSync(join(dir, "giveback-1.jsonl"), ['{"t": 9.5, "before": 500, "name": "TextEdit"}', '{"t": 11.05, "took": 701, "name": "Google Chrome Beta", "gaveBackTo": 500, "sent": true}'].join("\n") + "\n");
     // The built-in guard's lines (launches-1.log): t = 11.06 and 11.25 s after the epoch.
     writeFileSync(join(dir, "launches-1.log"), ["1970-01-01T00:00:10.000Z chrome=via-open-g give-back=on front=500 ready-ms=90 by=1 cwd=/ cmd=launch",
-      "1970-01-01T00:00:11.060Z give-back took=701 from=500", "1970-01-01T00:00:11.250Z give-back end=given-back asks=1"].join("\n") + "\n");
+      "1970-01-01T00:00:11.060Z give-back took=701 from=500", "1970-01-01T00:00:11.250Z give-back back=500 after-ms=190"].join("\n") + "\n");
     const out = execFileSync("python3", ["-I", join(ROOT, "test", "live", "takeover", "analyse.py"), dir, "701"], { encoding: "utf8" });
     const lines = out.split("\n");
     const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
@@ -903,7 +932,7 @@ test("analyse.py puts the give-back helper's lines and the built-in guard's line
     assert.ok(at(/FRONT -> Google Chrome Beta \(pid 701\)/) < at(/GIVE BACK/), "in time order");
     assert.ok(at(/GIVE BACK/) < at(/FRONT -> TextEdit \(pid 500\) during: launch 1/), out);
     assert.ok(at(/^11\.06  built-in give-back: took=701 from=500 during: launch 1$/) > at(/GIVE BACK/), out);
-    assert.ok(at(/^11\.25  built-in give-back: end=given-back asks=1 during: launch 1$/) > at(/FRONT -> TextEdit \(pid 500\) during: launch 1/), out);
+    assert.ok(at(/^11\.25  built-in give-back: back=500 after-ms=190 during: launch 1$/) > at(/FRONT -> TextEdit \(pid 500\) during: launch 1/), out);
     assert.equal(lines.filter((l) => l.includes("chrome=via-open-g")).length, 0, "the Chrome line is no guard line");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

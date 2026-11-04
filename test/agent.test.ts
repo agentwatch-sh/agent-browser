@@ -244,6 +244,13 @@ test("give-back: a failed start ends the guard at once, so it never acts while t
   assert.deepEqual(guard.seen.finished, [0]);
 });
 
+test("the start that AgentBrowser.connect makes has no give-back: Chrome's approval prompt follows it and must stay in front until the operator answers it", async () => {
+  const own = resolveOptions({ stateDir: join(tmp, "connect-start"), allow: ["example.org"], log: () => {} });
+  const seen: unknown[] = [];
+  await assert.rejects(AgentBrowser.connect(own, { launch: async (_s, opts) => { seen.push(opts); throw new Error("no Chrome here"); } }), /no Chrome here/);
+  assert.deepEqual(seen, [{ background: true, giveBack: false }]);
+});
+
 test("give-back runs only for a background start through open(1): giveBack false turns it off, and a foreground start, a start off macOS or a running Chrome has none", async () => {
   const launchesLog = join(s.stateDir, "launches.log");
   const startWith = async (opts: { background?: boolean; giveBack?: boolean }, deps: { platform?: NodeJS.Platform; pid?: () => number | undefined } = {}) => {

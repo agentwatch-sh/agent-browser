@@ -44,7 +44,7 @@ export const VARIANTS: readonly Variant[] = [
     summary: "open -n -g with the built-in give-back off, while giveback.swift asks macOS to activate the app that was in front again (phase 1's helper); needs --giveback" },
 ];
 
-export const USAGE = `usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile] [--keep-state] [--variant NAME] [--giveback GIVEBACK_BIN]
+export const USAGE = `usage: node test/live/takeover/start.ts --on-my-screen --chrome-bin APP_BINARY --monitor MONITOR_BIN --out-dir DIR [--starts 3] [--after-ms 10000] [--same-profile [--restore]] [--keep-state] [--variant NAME] [--giveback GIVEBACK_BIN]
 variants (--variant; none opens a debugging WebSocket):
 ${VARIANTS.map((v) => `  ${v.name} (${v.kind}): ${v.summary}`).join("\n")}`;
 
@@ -76,16 +76,17 @@ export function startFormProblem(v: Variant, lines: string[]): string | null {
 
 /**
  * The built-in give-back guard's lines of one start in launches.log ("<ISO time> give-back <what>"): its
- * lines (without the time), how it ended ("end=<why>", null with no end line) and, when it gave the front
- * back, after how many ms the app in front before was back. Null when the start has no guard line.
+ * lines (without the time), how it ended ("end=<why>", null with no end line; "stopped" when the start ended
+ * it) and, for each take that it gave back, after how many ms the app in front before was back. Null when the
+ * start has no guard line.
  */
-export type BuiltInGiveBack = { lines: string[]; end: string | null; backAfterMs: number | null };
+export type BuiltInGiveBack = { lines: string[]; end: string | null; backAfterMs: number[] };
 export function parseBuiltInGiveBack(lines: string[]): BuiltInGiveBack | null {
   const own = lines.flatMap((l) => { const m = /^\S+ give-back (.+)$/.exec(l); return m ? [m[1]] : []; });
   if (!own.length) return null;
   const end = own.map((l) => /^end=(\S+)/.exec(l)?.[1]).filter((x): x is string => !!x).at(-1) ?? null;
-  const back = own.map((l) => /^back=\d+ after-ms=(\d+)$/.exec(l)?.[1]).find((x) => x !== undefined);
-  return { lines: own, end, backAfterMs: back === undefined ? null : Number(back) };
+  const backAfterMs = own.flatMap((l) => { const m = /^back=\d+ after-ms=(\d+)$/.exec(l); return m ? [Number(m[1])] : []; });
+  return { lines: own, end, backAfterMs };
 }
 
 /** The logs that a run writes into --out-dir; a folder that holds one of them belongs to an earlier run. */
@@ -93,19 +94,27 @@ export const RUN_LOGS = ["marks.jsonl", "results.jsonl", "monitor.jsonl"];
 
 export type StartOptions = {
   chromeBin: string; starts: number; monitor: string; outDir: string; afterMs: number; keepState: boolean; sameProfile: boolean;
+  /** --restore (with --same-profile): Chrome starts with --restore-last-session, so starts 2..N restore the session before. */
+  restore: boolean;
   variant: Variant["name"];
   /** The compiled giveback.swift: only with --variant give-back. */
   giveback?: string;
 };
 
+/** The Chrome switch of --restore: Chromium's own way to restore the last session, as "Continue where you left off" does. */
+export const RESTORE_SWITCH = "--restore-last-session";
+
 /**
  * The child process that makes one start of `v`: the CLI's `launch --json`, as an agent session runs it, or for
  * a variant with hooks launch-variant.ts, which runs the same `launch` command with them. Both print launch's
- * JSON document.
+ * JSON document. With `restore`, Chrome also gets RESTORE_SWITCH (the CLI's --chrome-args, the launcher's --restore).
  */
-export function variantLaunch(v: Variant, p: { node: string; cli: string; launcher: string; stateDir: string; chromeBin: string }): string[] {
-  if (v.hooks) return [p.node, p.launcher, "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, ...(v.hooks.hidden ? ["--hidden"] : []), ...(v.hooks.giveBack === false ? ["--no-give-back"] : [])];
-  return [p.node, p.cli, "launch", "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, "--json"];
+export function variantLaunch(v: Variant, p: { node: string; cli: string; launcher: string; stateDir: string; chromeBin: string; restore?: boolean }): string[] {
+  if (v.hooks) {
+    return [p.node, p.launcher, "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, ...(v.hooks.hidden ? ["--hidden"] : []), ...(v.hooks.giveBack === false ? ["--no-give-back"] : []),
+      ...(p.restore ? ["--restore"] : [])];
+  }
+  return [p.node, p.cli, "launch", "--state-dir", p.stateDir, "--chrome-bin", p.chromeBin, "--json", ...(p.restore ? ["--chrome-args", JSON.stringify([RESTORE_SWITCH])] : [])];
 }
 
 /** One request of giveback.swift: the new Chrome `took` the front, and the helper asked macOS to activate `gaveBackTo`. */
@@ -172,7 +181,7 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   try {
     values = parseArgs({ args: argv, strict: true, allowPositionals: false, options: {
       "on-my-screen": { type: "boolean" }, "chrome-bin": { type: "string" }, monitor: { type: "string" }, "out-dir": { type: "string" },
-      starts: { type: "string" }, "after-ms": { type: "string" }, "keep-state": { type: "boolean" }, "same-profile": { type: "boolean" },
+      starts: { type: "string" }, "after-ms": { type: "string" }, "keep-state": { type: "boolean" }, "same-profile": { type: "boolean" }, restore: { type: "boolean" },
       variant: { type: "string" }, giveback: { type: "string" },
     } }).values;
   } catch (e) { return { ok: false, message: (e as Error).message }; }
@@ -201,6 +210,7 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
   if (typeof starts === "string") return no(starts);
   const afterMs = whole("--after-ms", values["after-ms"], 10_000, 1000, 120_000);
   if (typeof afterMs === "string") return no(afterMs);
+  if (values.restore && !values["same-profile"]) return no("--restore needs --same-profile: only a used profile has a session to restore");
   const name = values.variant ?? "launch";
   const variant = VARIANTS.find((v) => v.name === name);
   if (!variant) return no(`--variant must be one of ${VARIANTS.map((v) => v.name).join(", ")}, not ${JSON.stringify(name)}`);
@@ -209,7 +219,7 @@ export function startArgs(argv: string[], env: { platform: string; exists: (p: s
     if (typeof giveback !== "string" || !giveback) return no("--giveback is required for --variant give-back: giveback.swift compiled with swiftc (see the head of start.ts)");
     if (!env.exists(resolve(giveback))) return no(`--giveback: no such file: ${giveback} (compile test/live/takeover/giveback.swift with swiftc first)`);
   } else if (giveback !== undefined) return no(`--giveback is only for --variant give-back, not --variant ${variant.name}`);
-  return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"],
+  return { ok: true, options: { chromeBin: bin, starts, monitor: resolve(monitor), outDir: resolve(out), afterMs, keepState: !!values["keep-state"], sameProfile: !!values["same-profile"], restore: !!values.restore,
     variant: variant.name, ...(variant.helper ? { giveback: resolve(giveback as string) } : {}) } };
 }
 

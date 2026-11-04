@@ -231,11 +231,12 @@ export function appBundle(bin: string): string | undefined {
  * such a start also runs the give-back guard (src/giveback.ts): before `open` it records the app in
  * front, and when the new Chrome takes the front from that app, it asks macOS to activate that app
  * again. The front can then be away for a moment (under about 0.1 s, measured with the same AppKit
- * call on 2026-11-04). Once the endpoint is up the start waits at most GIVE_BACK_GRACE_MS for the
- * guard, then ends it, so the guard never acts on what follows, such as Chrome's approval prompt; a
- * failed start ends it at once. The guard never fails a start: launches.log says how it went.
- * `giveBack: false` turns it off (AgentBrowser.connect, whose approval prompt must come forward, and
- * the measurement variants of test/live/takeover/start.ts). `hidden` (@internal) is for a measurement
+ * call on 2026-11-04). The guard watches until GIVE_BACK_GRACE_MS after the endpoint is up (a late
+ * first window, or a second take at the end of a session restore), then the start ends it, so it never
+ * acts on what follows, such as Chrome's approval prompt; a failed start ends it at once. The guard
+ * never fails a start: launches.log says how it went. `giveBack: false` turns it off
+ * (AgentBrowser.connect, whose start leaves the agent Chrome in front for Chrome's approval prompt, and
+ * the comparison variants of test/live/takeover/start.ts). `hidden` (@internal) is for a measurement
  * only (ab-b84.11: test/live/takeover/start.ts --variant hidden): such a start goes through
  * `open -n -g -j`, so Launch Services starts the app hidden. It is off by default and the CLI never
  * sets it. It changes no other start; launches.log then says "hidden=ignored".
@@ -322,7 +323,7 @@ export async function launchAgentChrome(
     throw new Error(`agent Chrome is not reachable. In the agent browser, open ${INSPECT_URL},
 turn remote debugging on, and approve Chrome's prompt when the tooling connects. Profile: ${profile}`);
   } finally {
-    // The guard ends with the start: after a grace for a late first window, or at once after a failure.
+    // The guard ends with the start: after the grace (a late first window, a session restore's second take), or at once after a failure.
     await guard?.finish(ws ? GIVE_BACK_GRACE_MS : 0);
   }
 }

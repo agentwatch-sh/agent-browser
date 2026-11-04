@@ -202,7 +202,8 @@ export const commands = {
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
-      ...hooks, // as one object, so that every hook reaches the start (test/takeover-start.test.ts sees `hidden` arrive, through launches.log)
+      hidden: hooks.hidden,
+      giveBack: hooks.giveBack,
       background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
       urls: [INSPECT_URL, ...urls],
       timeoutMs: 10 * 60_000,

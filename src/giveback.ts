@@ -12,8 +12,15 @@
 // /usr/bin/osascript through its Objective-C bridge to AppKit. It sends no Apple Event and no input, uses
 // no System Events, and needs no Accessibility, Automation or Screen Recording grant. The script is a
 // constant: its only inputs are its arguments (the agent's app bundle path, and its time limit as a whole
-// number of ms), never text put into the script. It only ever activates the app that was in front at its
-// start, it acts on the new Chrome's first take of the front only, and it ends on its own.
+// number of ms), never text put into the script. It only ever activates the app that was in front just
+// before the new Chrome took the front: at first the app in front at its start, then any app that the
+// operator (or macOS) brings to the front while the new Chrome is not in front. It watches until the start
+// that made it ends it (src/agent.ts: at the latest GIVE_BACK_GRACE_MS after the endpoint is up), so a
+// second take by the same Chrome (session restore activates its last window at the end of a restore) is
+// given back too; it asks at most 3 times in all for one start, and ends on its own at its time limit.
+// It cannot tell the operator's own switch to the new Chrome from Chrome's own activation: if the operator
+// switches to the new Chrome while the guard watches, the guard sends them back (up to 3 asks in about
+// 750 ms for one take); once the 3 asks of the start are spent, or once the start has ended it, never again.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, closeSync, openSync } from "node:fs";
@@ -26,10 +33,10 @@ export const GIVE_BACK_BOUND_MS = 15_000;
 /** How long a start waits for the guard to record the app in front; then it starts Chrome without a guard. */
 export const GIVE_BACK_READY_MS = 3_000;
 /**
- * Once the agent Chrome's endpoint is up, how long the start waits for the guard to end by itself (the new
- * Chrome took the front at its first window before the endpoint was up in 12 of 12 starts on 2026-11-04),
- * before it ends the guard: so a guard never acts on what follows the start, such as Chrome's approval
- * prompt, which must come forward.
+ * Once the agent Chrome's endpoint is up, how long the guard still watches before the start ends it (the new
+ * Chrome took the front at its first window during the launch phase in 12 of 12 starts on 2026-11-04; a
+ * session restore can activate its last window at the end of the restore): so a guard never acts on what
+ * follows the start, such as Chrome's approval prompt, which must stay in front.
  */
 export const GIVE_BACK_GRACE_MS = 1_000;
 
@@ -37,32 +44,46 @@ export const GIVE_BACK_GRACE_MS = 1_000;
  * The guard (JXA). argv: the agent's app bundle path and the time limit in ms. Once it watches, it prints one
  * JSON line on standard output, {"before": pid, "bundle": id} (pid 0: no app in front, and it ends). Then it
  * polls the front app every 25 ms, spinning the run loop so that AppKit's view of the front app stays
- * current (it sleeps the rest of the 25 ms when the run loop returns at once). When a new instance of the
- * bundle (one that did not run at the guard's start, so never the operator's own Google Chrome) takes the
- * front from the recorded app, it asks macOS to activate the recorded app, again after 250 ms while the
- * new Chrome stays in front, at most 3 times. It ends when the
- * front is back ("given-back"), when another app takes the front ("moved": the operator moved on), when
- * macOS did not give it back ("refused"), when the recorded app quits ("gone"), or at its time limit
- * ("bound"). Each log line goes to standard error (launches.log): "<ISO time> give-back <what>".
+ * current (it sleeps the rest of the 25 ms when the run loop returns at once). The new Chrome is the first
+ * new instance of the bundle (one that did not run at the guard's start, so never the operator's own Google
+ * Chrome) that takes the front. Each time it takes the front from the recorded app, the guard asks macOS to
+ * activate that app, again after 250 ms while the new Chrome stays in front, at most 3 times in all. When
+ * another app comes to the front while the new Chrome is not in front, that app is the recorded app from
+ * then on. The guard ends when the start ends it (SIGTERM), when macOS did not give the front back within
+ * the asks ("refused"), when the new Chrome takes the front with the asks spent ("limit"), when the
+ * recorded app quits during a take ("gone"), or at its time limit ("bound"). Each log line goes to standard
+ * error (launches.log): "<ISO time> give-back <what>".
  */
 export const GIVE_BACK_SCRIPT = String.raw`ObjC.import("AppKit");
 
 const POLL_S = 0.025, RETRY_MS = 250, MAX_ASKS = 3;
 
-// One step of the guard: from its state, the time and the app in front (null: none for a moment; else its
-// pid and whether it is a new instance of the agent's bundle), the next state and what to do.
-function step(st, now, front) {
+// One step of the guard: from its state, the time, the app in front (null: none for a moment; else its pid,
+// and whether it is a new instance of the agent's bundle) and whether the recorded app has quit, the next
+// state and what to do. st.before: the recorded app; st.agent: the new Chrome, once it took the front;
+// st.took: when the take in progress began (null: no take); st.asks: the asks of the whole start.
+function step(st, now, front, beforeGone) {
   if (now - st.startedAt >= st.boundMs) return { st: st, end: "bound" };
+  if (st.took !== null && beforeGone) return { st: st, end: "gone" };
   if (front === null) return { st: st };
   if (front.pid === st.before) {
     if (st.took === null) return { st: st };
-    return { st: st, log: "back=" + st.before + " after-ms=" + (now - st.took), end: "given-back" };
+    return { st: Object.assign({}, st, { took: null }), log: "back=" + st.before + " after-ms=" + (now - st.took) };
   }
-  if (!front.agent) return { st: st, log: "front=" + front.pid, end: "moved" };
-  if (st.took === null) return { st: Object.assign({}, st, { took: now, asks: st.asks + 1, askedAt: now }), log: "took=" + front.pid + " from=" + st.before, ask: true };
-  if (now - st.askedAt < RETRY_MS) return { st: st };
-  if (st.asks >= MAX_ASKS) return { st: st, end: "refused" };
-  return { st: Object.assign({}, st, { asks: st.asks + 1, askedAt: now }), ask: true };
+  if (front.fresh && (st.agent === null || st.agent === front.pid)) {
+    if (st.took === null) {
+      const took = Object.assign({}, st, { agent: front.pid, took: now }), log = "took=" + front.pid + " from=" + st.before;
+      if (st.asks >= MAX_ASKS) return { st: took, log: log, end: "limit" };
+      return { st: Object.assign(took, { asks: st.asks + 1, askedAt: now }), log: log, ask: true };
+    }
+    if (now - st.askedAt < RETRY_MS) return { st: st };
+    if (st.asks >= MAX_ASKS) return { st: st, end: "refused" };
+    return { st: Object.assign({}, st, { asks: st.asks + 1, askedAt: now }), ask: true };
+  }
+  // Another new instance of the bundle (another start beside this one): not this start's Chrome, and never an app to activate.
+  if (front.fresh) return { st: st };
+  // Another app is in front, which the operator (or macOS) chose: from now on it is the app to give the front back to.
+  return { st: Object.assign({}, st, { before: front.pid, took: null }), log: "before=" + front.pid };
 }
 
 function run(argv) {
@@ -80,22 +101,25 @@ function run(argv) {
     const workspace = $.NSWorkspace.sharedWorkspace;
     const apps = workspace.runningApplications, old = [];
     for (let i = 0; i < apps.count; i++) { const a = apps.objectAtIndex(i); if (inBundle(a)) old.push(pidOf(a)); }
-    const before = workspace.frontmostApplication, beforePid = pidOf(before);
+    // The recorded app's own AppKit object: an activation goes to that process, never to a pid that another app took over.
+    let before = workspace.frontmostApplication;
+    const beforePid = pidOf(before);
     write($.NSFileHandle.fileHandleWithStandardOutput, JSON.stringify({ before: beforePid, bundle: beforePid ? text(before.bundleIdentifier) : null }));
     if (!beforePid) { log("end=no-front asks=0"); return; }
-    let st = { before: beforePid, startedAt: Date.now(), boundMs: Number(argv[1]), took: null, asks: 0, askedAt: 0 };
+    let st = { before: beforePid, agent: null, startedAt: Date.now(), boundMs: Number(argv[1]), took: null, asks: 0, askedAt: 0 };
     for (;;) {
       // The run loop delivers AppKit's news of the front app; with no input source it returns at once.
       const spun = Date.now();
       $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(POLL_S));
       const rest = POLL_S - (Date.now() - spun) / 1000;
       if (rest > 0.002) $.NSThread.sleepForTimeInterval(rest);
-      if (before.isTerminated) { log("end=gone asks=" + st.asks); return; }
       const app = workspace.frontmostApplication, pid = pidOf(app);
-      const r = step(st, Date.now(), pid ? { pid: pid, agent: pid !== beforePid && old.indexOf(pid) < 0 && inBundle(app) } : null);
+      const fresh = pid !== 0 && pid !== st.before && old.indexOf(pid) < 0 && inBundle(app);
+      const r = step(st, Date.now(), pid ? { pid: pid, fresh: fresh } : null, !!before.isTerminated);
+      if (r.st.before !== st.before) before = app;
       st = r.st;
       if (r.log) log(r.log);
-      if (r.ask) log("asked=" + beforePid + " sent=" + !!before.activateWithOptions(0));
+      if (r.ask) log("asked=" + st.before + " sent=" + !!before.activateWithOptions(0));
       if (r.end) { log("end=" + r.end + " asks=" + st.asks); return; }
     }
   } catch (e) {
