@@ -80,6 +80,8 @@ function urlRefusal(method: string, p: any): string | null {
   if (method === "Page.navigate" && typeof p.url === "string" && p.url !== "about:blank") {
     const s = schemeOf(p.url);
     if (!["http:", "https:", "data:", "blob:"].includes(s)) return TEXT.scheme(s, method);
+    // A blob: URL passes only with an http(s) inner origin (C11); blob:chrome-extension://, blob:null/ and blob:file:// do not.
+    if (s === "blob:" && !/^blob:https?:\/\//i.test(p.url)) return TEXT.scheme(s, method);
   }
   // A new tab opens only about:blank or an http(s) URL (C10's newTab); a client navigates it to a data: or blob: URL after.
   if (method === "Target.createTarget" && p.url && p.url !== "about:blank") {

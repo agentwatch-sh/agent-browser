@@ -10,7 +10,7 @@ import { SCOPE, NOT_FOUND, FROM_PAGE } from "../src/relay/endpoint.ts";
 import { CLOSE, NOT_READY } from "../src/relay/model.ts";
 import { cdpError, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
 
-const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-5021038/${name}.json`, import.meta.url), "utf8"));
+const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-ffaf794/${name}.json`, import.meta.url), "utf8"));
 const bridgeV = vectors("bridge"), endpointV = vectors("endpoint");
 
 test("the constants, the default context, the marker, the 404, 403 and 503 bodies and the close codes are the contracts'", () => {
@@ -58,7 +58,8 @@ test("a too-large event gets the default action of the bridge vectors", () => {
   const actions = bridgeV.eventVectors.filter((v: any) => v.ev.ev === "bridge.tooLarge").map((v: any) => tooLargeAction(v.ev));
   assert.deepEqual(actions, [null, ["Fetch.continueRequest", { requestId: "interception-job-4.0" }],
     ["Fetch.continueWithAuth", { requestId: "interception-job-5.0", authChallengeResponse: { response: "CancelAuth" } }],
-    ["Page.handleJavaScriptDialog", { accept: false }]]);
+    ["Page.handleJavaScriptDialog", { accept: false }],
+    null, null, null, null]); // tabs.onUpdated, tabs.onCreated, webNavigation and downloads.onCreated: no action
 });
 
 test("a mouse press with no force gets 0.5; a release, a move without buttons and a given force stay", () => {
