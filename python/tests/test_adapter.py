@@ -346,8 +346,8 @@ class OptionArgvTest(unittest.TestCase):
             b.type("a", "x" * 1000)
             b.click("a", "#b")
             # A read of a hidden window page brings its tab in front inside the input lock (Tab.toFront), so it can wait for
-            # another agent's input on its site. That wait is part of the call's timeout, as Tab.waitFor's is: a read that
-            # hangs for another reason fails at the timeout, and a long wait for the lock fails with the lock's own error.
+            # another agent's input. That wait is part of the call's timeout, as Tab.waitFor's is: a read that hangs for
+            # another reason fails at the timeout, and a long wait for the lock fails with the lock's own error.
             reads()
         self.assertGreaterEqual(timeouts["type"], 120 + 600 + 1000 * 0.15)
         self.assertGreaterEqual(timeouts["click"], 120 + 600)

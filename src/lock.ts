@@ -30,7 +30,7 @@ function clearCrashed(path: string): boolean {
  * Run `fn` while this process holds the lock file at `path`: the file is created exclusively and
  * holds this process's pid. Another holder is waited for until `deadline` (epoch ms), then the
  * error names `what`; a free lock is taken also when the deadline has passed (one try). A crashed
- * holder's lock (clearCrashed) is cleared and taken in the same try, also in the try after the deadline
+ * holder's lock (clearCrashed) is cleared, and the lock is tried again after a pause, also after the deadline
  * (review-52 note 4); a live holder's lock is never cleared. `signal` ends the wait (not `fn`) with its
  * reason. The lock is removed only if it is still ours.
  */
@@ -46,8 +46,11 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      // A crashed launcher can leave a lock: take it now (at most 3 times in one call, for a lock that keeps coming back).
-      if (clearCrashed(path) && cleared++ < 3) continue;
+      // A crashed launcher can leave a lock: try again after the usual pause, also when the deadline has passed (at most
+      // 3 times in one call, for a lock that keeps coming back). Not at once: another waiter that read the same dead pid
+      // removes the lock in the same few milliseconds, and a lock taken in that time would be its live lock (review-55:
+      // two holders in 20 of 1500 rounds with 6 waiters when the lock was taken at once).
+      if (clearCrashed(path) && cleared++ < 3) { await new Promise((r) => setTimeout(r, 50)); continue; }
       if (Date.now() >= deadline) break;
       await new Promise((r) => setTimeout(r, 50));
     }

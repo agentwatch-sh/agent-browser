@@ -865,9 +865,13 @@ stays behind that nobody recorded.
   call runs in that tab's page (it opens `about:blank` only, and reads nothing there).
 - The lock can, in theory, be broken twice. When a holder crashes and two waiters see its dead pid
   in the same few milliseconds, the first one clears the lock and takes it, and the second one can
-  then remove that live lock and take its own: for that one change, two holders run at the same time,
-  and one of their changes (a tab's name, scope or read mark, or the pin) can be lost. Each file is
-  still written whole. It needs a crashed holder and two waiters at the same moment.
+  then remove that live lock and take its own: for that one change, two holders run at the same time.
+  For the tab record, one of their changes (a tab's name, scope or read mark, or the pin) can be lost;
+  each file is still written whole. For the input lock (`input.lock`, the same kind of lock), two
+  input commands can overlap: two pages with the focus at the same time. A waiter that clears a
+  crashed holder's lock tries again only after 50 ms (review-55: when it took the lock at once, 6
+  waiters gave two holders in 20 of 1500 rounds), so the second waiter's removal must come more than
+  50 ms after its read of the dead pid. It needs a crashed holder and two waiters at the same moment.
 
 ## Recording (`record`)
 
@@ -1493,7 +1497,10 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   wait; reentrance in one call chain; after two sites typed at once no page holds the focus behind
   another window, and a later page of the first site is its only focused page; the X pointer moves only
   over the window in front; `Tab.waitFor` reads its condition during the wait for the lock (review-52
-  note 3); `withFileLock` takes a crashed holder's lock in its last try (note 4) and stops its wait at a
+  note 3), waits for a tab switch that its timeout interrupts and reads once more, and ends the switch's
+  wait for the page to show when its condition holds (review-55); `withFileLock` takes a crashed
+  holder's lock in its last try (note 4), never in the same few milliseconds as its clear (a second
+  waiter that read the same dead pid never removes its live lock, review-55), and stops its wait at a
   signal.
 - `test/hidden-tab.test.ts`: the CDP calls that each command sends to a background tab in both modes,
   against the fake Chrome's model of one (`FakePage.background`: the page is hidden, Chrome draws no

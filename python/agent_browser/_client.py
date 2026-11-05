@@ -378,7 +378,8 @@ class AgentBrowser:
 
         In agent mode on Linux a read of a hidden window page brings its tab in front inside the input lock, so it can wait
         for another agent's input command, as `text` and `eval` do. That wait is part of the call's timeout (at most all
-        but 30 s of it, at least half of it): a longer wait fails with the lock's own error.
+        but 30 s of it, at least half of it, and never more than `lockWaitMs` of `input_timing`): a longer wait fails
+        with the lock's own error. A `lockWaitMs` of 0 or less, which the CLI refuses, is replaced by 1 ms for a read.
         """
         return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json, lock_wait_ms=self._read_lock_wait_ms())
 
@@ -397,7 +398,8 @@ class AgentBrowser:
         return self._timing("lockWaitMs", LOCK_WAIT_MS) / 1000.0 + chars * (key if self.input_timing else KEY_MS) / 1000.0
 
     def _read_lock_wait_ms(self) -> int:
-        """A read's wait for the input lock (text, outline, eval), inside its timeout (READ_WORK; review-52 note 5)."""
+        """A read's wait for the input lock (text, outline, eval), inside its timeout (READ_WORK; review-52 note 5), in ms.
+        At least 1 ms: a caller's lockWaitMs of 0 or less (the CLI refuses it) is replaced by 1 ms."""
         share = max(self.timeout / 2.0, self.timeout - READ_WORK)
         return max(1, int(min(self._timing("lockWaitMs", LOCK_WAIT_MS), share * 1000.0)))
 

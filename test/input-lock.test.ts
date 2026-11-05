@@ -24,7 +24,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- withFileLock (review-52 note 4) ----------
 
-test("withFileLock: a crashed holder's lock is cleared and taken in the same try, also in the one try after the deadline (review-52 note 4)", async () => {
+test("withFileLock: a crashed holder's lock is cleared and then taken, also in the one try after the deadline (review-52 note 4)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
   try {
     const path = join(dir, "x.lock");
@@ -47,6 +47,26 @@ test("withFileLock: a crashed holder's lock is cleared and taken in the same try
     const t0 = Date.now();
     await assert.rejects(withFileLock(path, Date.now() + 5_000, async () => "no", "the test lock", { signal: stop.signal }));
     assert.ok(Date.now() - t0 < 1_000, `${Date.now() - t0} ms`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("withFileLock: a second waiter that read the same dead pid and removes the lock after the first one cleared it never removes the first one's live lock (review-55)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  try {
+    const path = join(dir, "x.lock");
+    writeFileSync(path, String(spawnSync("true").pid!)); // a crashed holder
+    // The first waiter: it clears the crashed holder's lock and takes the lock; inside, its own lock file must stay.
+    let intact: boolean | undefined;
+    const first = withFileLock(path, Date.now() + 2_000, async () => {
+      await sleep(150);
+      intact = existsSync(path) && readFileSync(path, "utf8") === String(process.pid);
+    }, "the test lock");
+    // The second waiter read the same dead pid before the first one cleared it; its removal comes now (lock.ts,
+    // clearCrashed: the known gap needs that read and this removal on both sides of the first one's take).
+    rmSync(path, { force: true });
+    await first;
+    assert.equal(intact, true, "the first waiter held its own lock file for all of its run");
+    assert.equal(existsSync(path), false, "released");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -212,6 +232,43 @@ test("Tab.waitFor polls during its wait for the lock: a condition that holds end
     assert.ok(Date.now() - t0 < 1200, `one that comes true: ${Date.now() - t0} ms`);
     assert.equal(a1.page.visibilityState, "hidden", "the lock was busy: no tab switch");
   } finally { holder.kill(); await ab.disconnect(); }
+  await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+  await commands.close(linux(), { tab: a1.name });
+});
+
+test("Tab.waitFor: when its timeout comes while the tab switch still runs, it waits for the switch and reads the condition once more (review-55 note 1)", async () => {
+  operatorInFront();
+  const a1 = await windowPage(A1);
+  const popup = fake.openFrom(a1.page, A1); // the page is hidden behind its popup tab
+  const ab = await AgentBrowser.connect(linux());
+  fake.delays.set("Page.bringToFront", 600); // a slow switch: it ends after the timeout
+  try {
+    const tab = await ab.find(a1.name);
+    const t0 = Date.now();
+    assert.equal(await tab.waitFor(() => document.visibilityState === "visible", { timeoutMs: 100, intervalMs: 50 }), true);
+    assert.ok(Date.now() - t0 >= 550, `it waited for the switch: ${Date.now() - t0} ms`);
+  } finally { fake.delays.delete("Page.bringToFront"); await ab.disconnect(); }
+  await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+  await commands.close(linux(), { tab: a1.name });
+});
+
+test("Tab.waitFor: a condition that holds while the switched tab is still hidden ends the switch's wait for the page to show at once (review-55 note 1)", async () => {
+  operatorInFront();
+  const a1 = await windowPage(A1);
+  const popup = fake.openFrom(a1.page, A1);
+  fake.stayBehind.add(a1.page.targetId); // Page.bringToFront leaves it hidden: toFront waits up to 1 s for it to show
+  const lines: string[] = [];
+  const ab = await AgentBrowser.connect(linux({ log: (l) => { lines.push(l); } }));
+  try {
+    const tab = await ab.find(a1.name);
+    a1.page.title = "before";
+    setTimeout(() => { a1.page.title = "later"; }, 200);
+    const t0 = Date.now();
+    assert.equal(await tab.waitFor(() => document.title === "later", { timeoutMs: 3000, intervalMs: 50 }), true);
+    assert.ok(Date.now() - t0 < 600, `it ended with the condition, not 1 s after the switch: ${Date.now() - t0} ms`);
+    assert.ok(fake.calls.some((x) => x.method === "Page.bringToFront" && x.targetId === a1.page.targetId), "the switch was sent");
+    assert.deepEqual(lines.filter((l) => /still hidden/.test(l)), [], "no log line for a wait that the condition ended");
+  } finally { fake.stayBehind.delete(a1.page.targetId); await ab.disconnect(); }
   await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
   await commands.close(linux(), { tab: a1.name });
 });
