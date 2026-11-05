@@ -921,9 +921,10 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   `highlight` step still draws its ring.
 - **The window.** On the Mac `record` never raises a window or switches the operator's Space: it sends no
   `Page.bringToFront`, which activates Chrome. On Linux, on a display of the agent browser's own, a window
-  page that is hidden behind another tab of its window comes in front first (`Tab.toFront`, a tab switch with
-  `Page.bringToFront`; **One window per agent page**): a hidden page sends no screencast frame. The agent browser can stay minimized, hidden (Cmd-H),
-  covered or on another Space during a take (see **Measured**). Only a Chrome start, its one
+  page that is hidden behind another tab of its window comes in front first (`Tab.toFront`, a tab switch
+  with `Page.bringToFront`; **One window per agent page**): a hidden page sends no screencast frame. The
+  agent browser can stay minimized, hidden (Cmd-H), covered or on another Space during a take (see
+  **Measured**). Only a Chrome start, its one
   "Allow remote debugging?" prompt and a sign-in (`launch --login`) need the window. Start the agent
   browser, click Allow, then hide it: takes run in the background. Chrome sends no screencast frame
   of a background tab's hidden page, so `record` needs focus emulation (`Emulation.setFocusEmulationEnabled`).
@@ -984,9 +985,11 @@ background tab may now get about 28 fps with gaps of 0.63 s, as in the "no flags
 flag and with all three; the check that drives background tabs ran on Linux only. On macOS the
 screencast kept a minimized window and a hidden app painting at 55 to 60 fps also without the flags,
 and a covered window at 47 fps; a background tab without the flags painted at 28 fps. In all these
-measurements focus emulation was on, as `record` still does it.
+measurements focus emulation was on, as `record` still has it for a background tab (the Mac, personal
+mode, `open --tab`). A window page on Linux has none: it draws without it (**The window**).
 So the operator can work in another window during a recording, and on the Mac `record` does not bring the
-tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see **The window**). A recording at 1920x1080 and
+tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see
+**The window**). A recording at 1920x1080 and
 `--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
 60 fps recording, has a smooth bell-shaped speed with no repeated or skipped frame.
 
