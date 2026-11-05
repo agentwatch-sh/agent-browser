@@ -66,7 +66,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
-| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On macOS `open` makes background tabs (a foreground tab activated Chrome); on Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on taylor), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**); all of this only where the agent Chrome runs on a display of its own (agentwatch's Xvfb, or a display with no other program's window: `src/display.ts`), else the macOS rule holds there too; on macOS `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; the agent Chrome was in front for 79 and 132 ms in the two Mac checks of 2026-11-05; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. On macOS `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, and no other command calls it. Input is CDP input inside the tab, which never moves the real pointer, except on Linux, where agent-browser moves the X pointer to the end of each input path only on a display that holds the agent browser and no other program's window (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back: `test/live/anti-detect/mac.ts` on 2026-11-05, 2 starts on Chrome Beta 158: the agent Chrome was in front for 79 and 132 ms, then the operator's app was back, and the Space did not change; in that check a site's popup from a page in a window of its own took the front for 5 to 25 ms, and only the check's watcher gave it back: **One window per agent page on the Mac**) |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On macOS `open` makes background tabs (a foreground tab activated Chrome); on Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on taylor), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**); all of this only where the agent Chrome runs on a display of its own (agentwatch's Xvfb, or a display with no other program's window: `src/display.ts`), else the macOS rule holds there too; on macOS `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; the agent Chrome was in front for 79 and 132 ms in the two Mac checks of 2026-11-05; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. On macOS `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, and no other command calls it. Input is CDP input inside the tab, which never moves the real pointer, except on Linux, where agent-browser moves the X pointer to the end of each input path only on a display that holds the agent browser and no other program's window (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back: `test/live/anti-detect/mac.ts` on 2026-11-05, 2 starts on Chrome Beta 158: the agent Chrome was in front for 79 and 132 ms, then the operator's app was back, and the Space did not change; in that check a site's popup from a page in a window of its own took the front until the check's watcher gave it back (5 to 25 ms; with no give-back the length of a take is not measured): **One window per agent page on the Mac**) |
 | A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
@@ -152,20 +152,20 @@ person's input**) and `log` (progress lines; default standard error).
   takes the front from that app, the guard asks macOS to activate that app again
   (`NSRunningApplication.activateWithOptions`). With the same call from a Swift helper, macOS granted
   3 of 3 requests on 2026-11-04, and the operator's app was back after 83, 43 and 36 ms. The guard
-  itself ran in the Mac check of 2026-11-05 (2 starts on Chrome Beta 158; **One window per agent page on
-  the Mac**): the agent Chrome was in front for 79 and 132 ms, and `launches.log` gave
-  `give-back back=<pid> after-ms=121` and `after-ms=159`. Keys typed in
-  that time go to Chrome, and macOS can refuse the request. When a full-screen app is in front, or
-  when Google Chrome Beta is assigned to a desktop of its own, the take can also switch the Space and
-  back, which takes longer than 0.1 s and is not measured. The guard activates only the app that was
-  in front just before the take: when you bring another app to the front while the new Chrome is not
-  in front, that app takes the place of the first one. The guard watches until `launch` ends it, 1 s
-  after Chrome's endpoint is up (its own limit is 15 s), so a second take by the same Chrome (a
-  session restore activates its last window at its end) is given back too. It asks macOS at most 3
-  times in all for one `launch`. It cannot tell your own switch to the new Chrome from Chrome's
-  activation, so in that time it can send you back to your app; after its 3 asks, or once `launch`
-  has ended it, it never does. `launch` waits up to 3 s for the guard to record the app in front, and
-  the guard never makes `launch` fail. `launches.log` says how it went:
+  itself ran in the Mac check of 2026-11-05 (2 starts on Chrome Beta 158; **One window per agent page
+  on the Mac**): the agent Chrome was in front for 79 and 132 ms, and `launches.log` gave
+  `give-back back=<pid> after-ms=121` and `after-ms=159`. So a take can last more than 0.1 s. Keys
+  typed in that time go to Chrome, and macOS can refuse the request. When a full-screen app is in
+  front, or when Google Chrome Beta is assigned to a desktop of its own, the take can also switch the
+  Space and back, which can take longer than these takes and is not measured. The guard activates
+  only the app that was in front just before the take: when you bring another app to the front while
+  the new Chrome is not in front, that app takes the place of the first one. The guard watches
+  until `launch` ends it, 1 s after Chrome's endpoint is up (its own limit is 15 s), so a second take
+  by the same Chrome (a session restore activates its last window at its end) is given back too. It
+  asks macOS at most 3 times in all for one `launch`. It cannot tell your own switch to the new
+  Chrome from Chrome's activation, so in that time it can send you back to your app; after its 3
+  asks, or once `launch` has ended it, it never does. `launch` waits up to 3 s for the guard to
+  record the app in front, and the guard never makes `launch` fail. `launches.log` says how it went:
   `give-back=on front=<pid>/<bundle id>` on the Chrome line, then lines such as
   `give-back took=<pid> from=<pid>`, `give-back back=<pid> after-ms=<n>` and
   `give-back end=stopped by=launch`. The start that another command makes has no give-back: it
@@ -200,10 +200,11 @@ person's input**) and `log` (progress lines; default standard error).
   shots with the one flag showed only the top 256 px of the page (0 of 25 with all three; too few to
   compare); the check now fails on such a shot. Since ab-b84.17 a shot waits for two frames before its
   capture (see the next item): 0 of 88 shots per mode were incomplete in 8 runs of each mode. On macOS
-  (the Mac check of 2026-11-05, Chrome Beta 158, the one flag, the default mode) text, click, type,
-  press, a shot (274 ms) and a 3 s `record` (60 fps) worked in a background tab of a covered window
-  (**One window per agent page on the Mac**; **Measured** under **Recording**). The timers and
-  incomplete shots are not measured on macOS.
+  the Mac check of 2026-11-05 (Chrome Beta 158, the one flag, the default mode) ran `text`, `click`,
+  `type`, `press End`, one `shot` (274 ms) and a 3 s `record` (60 fps) in a background tab whose
+  window was 100% covered, and each one worked (**One window per agent page on the Mac**;
+  **Measured** under **Recording**). A hidden tab's timer rate and the share of incomplete shots are
+  not measured on macOS.
 - **One window per agent page (Linux; ab-v16.26).** In agent mode on Linux, `open` gives each page a
   window of its own (`Target.createTarget` with `newWindow: true, background: true`), and no command
   sends focus emulation to it. This is the design of `docs/research/2026-11-05-anti-detect-drive.md`
@@ -404,24 +405,29 @@ person's input**) and `log` (progress lines; default standard error).
 - **One window per agent page on the Mac: measured, not built (ab-v16.44).** The Mac check
   (`test/live/anti-detect/mac.ts`; see **Tests**) ran on the operator's Mac on 2026-11-05, in Google
   Chrome Beta 158.0.8127.18 as the agent Chrome, on a new profile, with today's start and flags
-  (`open -n -g`, the give-back, `--disable-backgrounding-occluded-windows`; the check adds its
-  debugging port and no network) and nobody at the Mac. The operator's Google Chrome was in front.
-  Run 2 ran every step in 78 s and gave exit 1, the expected result: its only problems were popup
-  takes of the front that came back. Run 1 stopped after 25 s, when the operator used the Mac. Agent
-  mode on the Mac still opens background tabs.
+  (`open -n -g`, the give-back, `--disable-backgrounding-occluded-windows`) and nobody at the Mac.
+  The check adds its own flags (`MEASURE_ARGS`, `test/live/anti-detect/mac.ts` line 309):
+  `--remote-debugging-port=0`, `--disable-background-networking`, `--disable-component-update`,
+  `--disable-sync`, `--disable-default-apps`, `--host-resolver-rules`, `--proxy-server` and
+  `--proxy-bypass-list` (no network but its probe pages), and `--use-mock-keychain`. The operator's
+  Google Chrome was in front. Run 2 ran every step in 78 s and gave exit 1, the expected result: its
+  only problems were popup takes of the front that came back. Run 1 stopped after 25 s, when the
+  operator used the Mac. Agent mode on the Mac still opens background tabs.
   - **Where each new agent window comes.** The start's first window, two windows from
     `Target.createTarget` with `newWindow: true, background: true` (WA and WB), and the window of
     `window.open(url, "", "popup,width=500,height=400")` each came behind the front app's window, 100%
-    covered, on the current Space (CGWindowList order). A `target=_blank` link and `window.open()` with
-    no features opened a tab in the opener's window. A CDP click did not bring its window forward: WA
+    covered, on the current Space (CGWindowList order). The start's first window and the sized popup
+    came directly behind the front window (above 7 of the operator's 8 windows, below 1). WA and WB
+    came behind all 8 of the operator's windows. A CDP click did not bring its window forward: WA
     stayed above WB through every step.
   - **The front app.** The agent Chrome's start made it the front app for 79 ms (run 1) and 132 ms
     (run 2), and agent-browser's give-back gave the front back to the operator's Google Chrome. Each
-    popup step made the agent Chrome the front app for a moment: the `target=_blank` link 25 ms,
-    `window.open()` 9 ms, the sized popup 7 and 5 ms. The check's watcher gave the front back each
-    time; agent-browser's own give-back ends with `launch`. No other step changed the front app, and
-    the agent app was never the active app while agent-browser drove it. The operator's Google Chrome
-    was in front at the start and at the end.
+    popup step made the agent Chrome the front app until the check's watcher gave the front back: the
+    `target=_blank` link after 25 ms, `window.open()` after 9 ms, the sized popup after 7 and 5 ms.
+    These times end at the give-back: they do not say how long Chrome keeps the front. With no
+    give-back the length of a take is not measured, and agent-browser's own give-back ends with
+    `launch`. Keys typed during a take go to the agent Chrome. No other step changed the front app.
+    The operator's Google Chrome was in front at the start and at the end.
   - **The Space.** No step changed it.
   - **Drive and record in a covered window of its own** (no focus emulation, no activation). The page
     stayed `visible` and drew 60 frames a second. `text` took 11 ms, `click` 24 ms, `type` 12 ms,
@@ -439,20 +445,31 @@ person's input**) and `log` (progress lines; default standard error).
     0.5, 5 `keydown` for 5 characters, and 1 pointer jump. The jump is the path's first move: the path
     started at a fixed point of the page, 553 px from the page's last point, because the real pointer
     was not over the page.
+  - **Popups** (from WA, a page in a window of its own). A `target=_blank` link and `window.open()`
+    with no features opened a tab in WA's window. The popup tab was `visible` with no focus (PA got a
+    `blur` at its load). The opener WA went `hidden` (47 ms and 23 ms after the click) and kept the
+    focus, with no `blur`, until the check closed the popup. `window.open(url, "",
+    "popup,width=500,height=400")` opened a window of its own: its page had no focus, and WA stayed
+    `visible` with the focus. That popup asked for 500x400 and got an inner size of 500x399 and an
+    outer size of 500x466. Each popup page had `history.length` 1. On Linux (the research's section 6)
+    the popup tab comes in front with the focus, and the opener gets a `blur`.
   - **The real pointer.** No probe page got an event at its point. The check never moves it.
   - **What an API gives.** The agent Chrome had 3 windows, all on the current Space (CGWindowList), so
     Mission Control can show them, and App Exposé and the Dock menu of its icon can list them. It is a
-    regular app, never active in the run, with a Dock icon and a Cmd-Tab entry of its own
-    (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 6). Cmd-` goes through the
-    windows of the front app only, so in the operator's app it does not reach an agent window (from
-    that check; not seen in this one).
+    regular app with a Dock icon and a Cmd-Tab entry of its own
+    (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 6), and it was not active
+    when the check read it (before the popups). Cmd-` goes through the windows of the front app only,
+    so in the operator's app it does not reach an agent window (from that check; not seen in this
+    one).
   - **Not measured.** Mission Control, App Exposé, the Dock menu and Cmd-` as the operator sees them:
     that needs the check's `--look 60` with the operator at the Mac. Window activation
-    (`Target.activateTarget`, `Page.bringToFront`, the relay's `chrome.windows.update({ focused: true })`):
-    the Mac design never sends it. Google Chrome (stable) as the agent Chrome. The relay and the agent
-    extension (`chrome.windows.create({ focused: false })`): Google Chrome on macOS does not load the
-    extension from the command line. A popup from a background tab, a full-screen app in front, Chrome
-    Beta assigned to a desktop of its own, and a second display.
+    (`Target.activateTarget`, `Page.bringToFront`, the relay's
+    `chrome.windows.update({ focused: true })`): the Mac design never sends it. Google Chrome
+    (stable) as the agent Chrome. The relay and the agent extension
+    (`chrome.windows.create({ focused: false })`): Google Chrome on macOS does not load the extension
+    from the command line. The way back to an opener behind a popup tab with no activation: the check
+    closed each popup with `Target.closeTarget`. A popup from a background tab, a full-screen app in
+    front, Chrome Beta assigned to a desktop of its own, and a second display.
 - **A command on a background tab: two modes** (the Mac, personal mode, and an explicit `open --tab`
   on Linux). Chrome draws no frame of a tab that is not in front,
   and its page reports `hidden`. There a page that never drew a frame (it loaded in the background, or
@@ -1036,21 +1053,21 @@ has `press` (the moment of the press), a `press` step has `keys` (each key), a `
 | Minimized | 60 fps | 55 fps | not measured |
 | App hidden (Cmd-H) | 60 fps | 60 fps | not measured |
 
-"Agent flags" are the agent browser's launch flags of 2026-10-30: `--disable-backgrounding-occluded-windows`,
-`--disable-renderer-backgrounding` and `--disable-background-timer-throttling`. After release v0.2.9 the
-two timer flags were dropped, and a launch sets only the first (see **Launch flags and background
-tabs**). "Today's flag" is that one flag: the Mac check of 2026-11-05 (`test/live/anti-detect/mac.ts`,
-Chrome Beta 158.0.8127.18, its own agent Chrome behind the operator's Google Chrome; **One window per
-agent page on the Mac**) recorded 3 s at 60 fps of a probe page, and each take had 254 frames in
-4.23 s with its settle time. With the one flag a background tab got 60 fps, not the 28 fps of the
-"no flags" column: in this one take the two timer flags were not needed for 60 fps. On Linux (taylor,
-2026-11-04, Chromium 156, Xvfb) a 3 s recording of a background tab got 60 fps with the one flag and
-with all three. On macOS the screencast kept a minimized window and a hidden app painting at 55 to
-60 fps also without the flags, and a covered window at 47 fps; a background tab without the flags
-painted at 28 fps. In all the measurements of 2026-10-30, and in the background tab of 2026-11-05,
-focus emulation was on, as `record` still has it for a background tab (the Mac, personal mode,
-`open --tab`). A window page has none: it draws without it (on Linux, **The window**; on macOS, the
-row of the covered window of its own).
+"Agent flags" are the agent browser's launch flags of 2026-10-30:
+`--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding` and
+`--disable-background-timer-throttling`. After release v0.2.9 the two timer flags were dropped, and a
+launch sets only the first (see **Launch flags and background tabs**). "Today's flag" is that one flag:
+the Mac check of 2026-11-05 (`test/live/anti-detect/mac.ts`, Chrome Beta 158.0.8127.18, its own agent
+Chrome behind the operator's Google Chrome; **One window per agent page on the Mac**) recorded 3 s at
+60 fps of a probe page, and each take had 254 frames in 4.23 s with its settle time. With the one flag
+a background tab got 60 fps, not the 28 fps of the "no flags" column: in this one take the two timer
+flags were not needed for 60 fps. On Linux (taylor, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of
+a background tab got 60 fps with the one flag and with all three. On macOS the screencast kept a
+minimized window and a hidden app painting at 55 to 60 fps also without the flags, and a covered window
+at 47 fps; a background tab without the flags painted at 28 fps. In all the measurements of 2026-10-30,
+and in the background tab of 2026-11-05, focus emulation was on, as `record` still has it for a
+background tab (the Mac, personal mode, `open --tab`). A window page has none: it draws without it (on
+Linux, **The window**; on macOS, the row of the covered window of its own).
 So the operator can work in another window during a recording, and on the Mac `record` does not bring the
 tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see
 **The window**). A recording at 1920x1080 and
