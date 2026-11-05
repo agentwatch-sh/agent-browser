@@ -16,7 +16,9 @@
 // Two probe pages: F (the page in front: the operator's tab, or another agent's) and T (the page that is
 // driven). probe.ts logs every signal of each page with timestamps. The scenarios (see SCENARIOS):
 //   person-front, person-tab, person-window         baselines: no CDP message at all for these pages
-//   default, hidden-drive                           agent-browser's old modes, now behind open --tab (focus emulation on attach / Tab.whileDrawn)
+//   default, hidden-drive                           agent-browser's old modes (focus emulation on attach / Tab.whileDrawn), through
+//                                                   the gate's fallback (display: { own: false }): through cdpUrl every page is a
+//                                                   window page, also with open --tab; activate and emulate-input too
 //   ab-window                                       agent-browser's own open on Linux (ab-v16.26): a window of its own, no focus emulation
 //   design, design-no-x                             the whole design with agent-browser's real commands (ab-v16.26): a window of its own,
 //                                                   activation, a person's input, the input lock; F's window takes the focus after each
@@ -428,7 +430,9 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, false);
+    // The old modes: the gate's fallback (review-45b B1). Through cdpUrl the bridge is agent mode's endpoint, where
+    // every page is a window page, also with open --tab (F8); "not a display of its own" gives today's tab and drive.
+    const o: BrowserOptions = { ...opts(c, false), display: { own: false } };
     await commands.open(o, { url: urlOf(sc.T), tab: true });
     await loaded(sc.T);
     await agentDrive(sc, o, plain);
@@ -437,7 +441,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, true);
+    const o: BrowserOptions = { ...opts(c, true), display: { own: false } }; // the old hidden drive, as in default
     await commands.open(o, { url: urlOf(sc.T), tab: true });
     await loaded(sc.T);
     await agentDrive(sc, o, plain);
@@ -472,7 +476,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, true);
+    const o: BrowserOptions = { ...opts(c, true), display: { own: false } }; // a background tab with the hidden drive, as in default
     const t = (await commands.open(o, { url: urlOf(sc.T), tab: true })).tab.targetId;
     await loaded(sc.T);
     const raw = await CDPConnection.connect(c.cdpUrl);
@@ -489,7 +493,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, true);
+    const o: BrowserOptions = { ...opts(c, true), display: { own: false } }; // a background tab with the hidden drive, as in default
     const t = (await commands.open(o, { url: urlOf(sc.T), tab: true })).tab.targetId;
     await loaded(sc.T);
     const raw = await CDPConnection.connect(c.cdpUrl);

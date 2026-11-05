@@ -846,9 +846,11 @@ export class Tab {
    * A page in a window of its own (drive "window") that is not in front of that window is hidden: the opener behind a
    * site's popup tab, an older tab of a pinned window, a tab that an older agent-browser opened in the background, a
    * sign-in tab of `launch --login`. Chrome draws nothing of it there: input stalls or reaches a hidden page, and a wait
-   * for content that a frame writes, or record, gets nothing (review-45, measured on taylor). So before input, a wait
-   * and record, such a page comes in front of its window, as a person's tab switch does (Page.bringToFront; on Linux it
-   * also activates the window). No tab ever moves to another window. Elsewhere this does nothing.
+   * for content that a frame writes, or record, gets nothing (review-45, measured on taylor). So before input, a wait,
+   * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
+   * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
+   * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
+   * Elsewhere this does nothing.
    */
   async toFront(): Promise<void> {
     if (this.drive !== "window") return;
@@ -1223,9 +1225,10 @@ export class Tab {
     return path;
   }
 
-  /** Visible text of the page (or an element), for agents to read without screenshots. */
+  /** Visible text of the page (or an element), for agents to read without screenshots. A hidden window page comes in front first (toFront). */
   async text(selector?: string): Promise<string> {
     await this.assertAllowed();
+    await this.toFront();
     return this.evaluate((s: string | null) => {
       const el = (s ? document.querySelector(s) : document.body) as HTMLElement | null;
       return el?.innerText ?? "";

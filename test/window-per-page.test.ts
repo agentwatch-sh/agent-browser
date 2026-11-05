@@ -21,8 +21,8 @@ const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; }
 const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" };
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, operator: FakePage;
-/** Agent mode on Linux, through the proxy to the fake. */
-const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", ...extra });
+/** Agent mode on Linux, through the proxy to the fake, on a display of the agent browser's own (the fake is on none: the test says so). */
+const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", display: { own: true }, ...extra });
 const mac = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "darwin", ...extra });
 
 before(async () => {
@@ -324,4 +324,30 @@ test("Linux, a display that is not the agent browser's own: open makes a backgro
   assert.deepEqual(focusCalls(calls), [true]);
   assert.ok(lines.some((l) => /not on a display of its own/.test(l)), lines.join("\n"));
   await commands.close(o, { tab: name });
+});
+
+test("Linux: reads of a hidden opener (text, outline, eval) bring its tab in front first, so an eval that waits for a frame ends (review-45b)", async () => {
+  fake.tabSwitches = true;
+  try {
+    const { name, page } = await opened(linux());
+    const popup = fake.openFrom(page, `${fx.base}/next`);
+    for (const read of [
+      () => commands.text(linux(), { tab: name }),
+      () => commands.outline(linux(), { tab: name }),
+      () => commands.eval(linux(), { tab: name, expression: "new Promise((r) => requestAnimationFrame(() => r('drawn')))" }),
+    ]) {
+      fake.activateTab(popup, "test");
+      assert.equal(page.visibilityState, "hidden");
+      const calls = await callsOf(page, async () => { await read(); });
+      assert.ok(calls.some((x) => x.method === "Page.bringToFront"), "a tab switch first");
+      assert.equal(page.visibilityState, "visible");
+    }
+    const r = await commands.eval(linux(), { tab: name, expression: "new Promise((r) => requestAnimationFrame(() => r('drawn')))" });
+    assert.equal(r.value, "drawn");
+    // A read of a visible window page brings nothing forward.
+    const calls = await callsOf(page, () => commands.text(linux(), { tab: name }));
+    assert.ok(!calls.some((x) => x.method === "Page.bringToFront"));
+    await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+    await commands.close(linux(), { tab: name });
+  } finally { fake.tabSwitches = false; }
 });
