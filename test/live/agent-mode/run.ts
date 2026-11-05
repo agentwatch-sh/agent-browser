@@ -829,9 +829,6 @@ async function windowCases(pw: any) {
 
 // ---------------------------------------------------------------- two scopes with two lists (ab-v16.35)
 
-/** The popup kinds of the per-scope design's probe (section 5.2): each opens /popup?via=<kind> on the page's own host. */
-const POPUP_KINDS = ["open", "signin", "signinawait", "relopener", "noopener", "blank", "formget", "formpost"];
-
 /** A small site for the group `scopes`, on a free port: the same page on a.localhost and b.localhost, with a link and a
  *  popup to the other host, and a button or link for each popup kind. It logs each request's host, method and path. */
 async function popupSite(): Promise<{ port: number; seen: { host: string; method: string; path: string }[]; close: () => void }> {
@@ -896,6 +893,8 @@ async function mcpClient(scope: string, log: string) {
  */
 async function scopeCases(pw: any, WebSocket: any) {
   const G = "scopes", d = daemon!;
+  /** The popup kinds of the per-scope design's probe (section 5.2): each opens /popup?via=<kind> on the page's own host. */
+  const POPUP_KINDS = ["open", "signin", "signinawait", "relopener", "noopener", "blank", "formget", "formpost"];
   const site = await popupSite();
   const SA = `http://a.localhost:${site.port}`, SB = `http://b.localhost:${site.port}`;
   const alive = () => chromium!.exitCode === null && chromium!.signalCode === null;
@@ -924,24 +923,27 @@ async function scopeCases(pw: any, WebSocket: any) {
     // The receiver's block per tab (DNR): a.localhost is on list a, so a block here comes from sc-b's own rules.
     await step(G, "a link of sc-b's page to a.localhost is blocked by the receiver (the tab's own list)", async () => {
       await pB.goto(SB + "/");
+      const from = site.seen.length;
       await pB.locator("#other").click();
       await pB.waitForURL(/^chrome-error:/, { timeout: 5000 }).catch(() => {});
-      const r = { url: pB.url(), aSaw: site.seen.some((x) => x.host === "a.localhost" && x.path === "/") };
+      const r = { url: pB.url(), aSaw: site.seen.slice(from).some((x) => x.host === "a.localhost") };
       await pB.goto(SB + "/");
       return r;
     }, { want: (x) => x.url.startsWith("chrome-error:") && !x.aSaw });
     await step(G, "a link of sc-a's page to b.localhost is blocked by the receiver", async () => {
       await pA.goto(SA + "/");
+      const from = site.seen.length;
       await pA.locator("#other").click();
       await pA.waitForURL(/^chrome-error:/, { timeout: 5000 }).catch(() => {});
-      const r = { url: pA.url(), bSaw: site.seen.some((x) => x.host === "b.localhost" && x.path === "/") };
+      const r = { url: pA.url(), bSaw: site.seen.slice(from).some((x) => x.host === "b.localhost") };
       await pA.goto(SA + "/");
       return r;
     }, { want: (x) => x.url.startsWith("chrome-error:") && !x.bSaw });
     await step(G, "a popup of sc-b's page to a.localhost stays in sc-b and is blocked", async () => {
+      const from = site.seen.length;
       const [pop] = await Promise.all([pB.waitForEvent("popup", { timeout: 8000 }), pB.locator("#otherpop").click()]);
       await pop.waitForTimeout(1000);
-      const r = { url: pop.url(), inB: cB.pages().includes(pop), aSaw: site.seen.some((x) => x.host === "a.localhost" && x.path.includes("otherpop")) };
+      const r = { url: pop.url(), inB: cB.pages().includes(pop), aSaw: site.seen.slice(from).some((x) => x.host === "a.localhost") };
       await pop.close().catch(() => {});
       return r;
     }, { want: (x) => x.url.startsWith("chrome-error:") && x.inB && !x.aSaw });
@@ -1002,12 +1004,15 @@ async function scopeCases(pw: any, WebSocket: any) {
       const b = await cli("ab-b", "goto", "main", SA + "/");
       return { a: String(a.error?.message ?? "no error").slice(0, 160), b: String(b.error?.message ?? "no error").slice(0, 160) };
     }, { want: (x) => OFF_LIST("b.localhost").test(x.a) && OFF_LIST("a.localhost").test(x.b), ms: 60_000 });
-    await step(G, "agent-browser: tabs in each scope lists only that scope's page", async () => {
+    // agent-browser's open makes its tab at about:blank first and then navigates it, so the refused open of b.localhost
+    // leaves that about:blank tab in scope ab-a (agent-browser closes it only when the tab cannot be recorded).
+    await step(G, "agent-browser: tabs in each scope lists only that scope's pages", async () => {
       const a = await cli("ab-a", "tabs"), b = await cli("ab-b", "tabs");
       const hosts = (r: any) => (r.tabs ?? []).map((t: any) => (/^https?:/.test(t.url) ? new URL(t.url).hostname : t.url));
       await cli("ab-a", "close", "main"); await cli("ab-b", "close", "main");
+      for (const t of a.tabs ?? []) if (t.url === "about:blank") await cli("ab-a", "close", t.id);
       return { a: hosts(a), b: hosts(b) };
-    }, { want: (x) => x.a.length === 1 && x.a[0] === "a.localhost" && x.b.length === 1 && x.b[0] === "b.localhost", ms: 60_000 });
+    }, { want: (x) => x.a.filter((h: string) => h !== "about:blank").join() === "a.localhost" && x.b.filter((h: string) => h !== "about:blank").join() === "b.localhost", ms: 60_000 });
 
     // The end of a scope. end_scope (the session ended): its connections close with 1000 and its tabs close.
     await step(G, "end_scope closes the scope's connections and its tabs (a page and its popup); a later client of the scope sees none", async () => {
