@@ -882,13 +882,15 @@ files of the agent browser stay one of each in the state folder:
 
 - The folder name is the scope, with each capital letter written as `+` and its small letter (`Ab-Lead`
   gives `+ab-+lead`). So two scopes that differ only in case get two folders, also on a disk that ignores
-  case (the Mac's), and no two scopes get one folder (a scope holds no `+`). A scope outside the relay's
-  pattern (1 to 64 letters, digits, `.`, `_` or `-`, the first a letter or a digit) is refused before
-  agent-browser makes a folder (`cdpUrl` itself is refused first).
+  case (the Mac's), and no two scopes get one folder (a scope holds no `+`). agent-browser refuses a
+  scope outside the relay's pattern (1 to 64 letters, digits, `.`, `_` or `-`, the first a letter or a
+  digit) before it makes a folder: `cdpUrl` with such a scope is a usage error.
 - With no endpoint scope (the proxy, or `endpoint`: a Chrome that agent-browser reaches itself), the tab
   record stays in the state folder, as before.
 - A record from before this change, in the state folder, is not moved: a record holds only live tabs, so
-  each endpoint scope starts with an empty record. Its tabs stay open; give them a name again with `open`.
+  each endpoint scope starts with an empty record, and the old files stay unused. The old record's tabs
+  stay open: in the new record each one has no name and no tab scope, so under a tab scope only
+  `--any-scope` reaches it.
 - The input lock and the pointer stay one per agent browser (the operator's choice on ab-1bi): the input
   commands of two sessions over two endpoint scopes wait for each other, as on one scope.
 - Inside an endpoint scope's record the tab scope (`tabScope`, `--tab-scope`) still applies. agentwatch
