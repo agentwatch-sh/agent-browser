@@ -1128,7 +1128,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   const offNav = conn.on("Page.frameNavigated", (p: any, sid?: string) => {
     if (sid !== tab.sessionId || p.frame?.parentId || isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) return;
     const host = safeHost(p.frame?.url ?? "");
-    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, s)}; the recording stopped and nothing was written`));
+    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, s, safeHost(url))}; the recording stopped and nothing was written`));
   });
   const offDetach = conn.on("Target.detachedFromTarget", (p: any) => {
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));
