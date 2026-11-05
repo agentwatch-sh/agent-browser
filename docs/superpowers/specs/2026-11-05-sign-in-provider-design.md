@@ -178,12 +178,12 @@ What this means:
   "the receiver" to DNR, not "the site"; the provider's redirect back to the site is "the provider".
 - **The agent's own navigations in agent mode carry the receiver's ID** (`Page.navigate` and `tabs.update`; the
   relay's `Target.createTarget` is an `about:blank` tab and a `Page.navigate`), and the others carry none (a typed
-  URL, `tabs.create`, the browser's own CDP). A site's navigation from a page with a host (a link, a script, a form,
-  a `meta` refresh, a popup, a frame) carries that page's origin. A navigation from a page with no host carries
-  none (review-53: a `data:` page, a sandboxed frame's top navigation, a script in an `about:blank` tab or window
-  that the extension made): DNR then blocks it under every rule with `initiatorDomains`, also the agent's own script
-  in the relay's new `about:blank` page. So DNR can let a site's navigation through by `initiatorDomains` and keep
-  every agent's own navigation out, except the relay's `Page.navigate`, which the relay must refuse itself.
+  URL, `tabs.create`, the browser's own CDP). A site's navigation from a page with a host (a link, a script, a form, a
+  `meta` refresh, a popup, a frame) carries that page's origin. A navigation from a page with no host carries none
+  (review-53: a `data:` page, a sandboxed frame's top navigation, a script in an `about:blank` tab or window that the
+  extension made): DNR then blocks it under every rule with `initiatorDomains`, also the agent's own script in the
+  relay's new `about:blank` page. So DNR can let a site's navigation through by `initiatorDomains` and keep every
+  agent's own navigation out, except the relay's `Page.navigate`, which the relay must refuse itself.
 - **The agent's click on a link and the agent's script in the page are a site's navigation** to DNR and to the relay:
   the same initiator (the page's origin) and the same `frameRequestedNavigation` reasons as the site's own script and
   the site's own link (a person's click was not measured). So no rule can keep the agent from following a link or from
@@ -315,13 +315,12 @@ What a provider flow needs in the agent browser:
   provider entry.
 - **The frame's silent renew** needs both the provider's cookie and a third-party cookie that Chromium sends. The
   agent unit on taylor runs `/usr/bin/chromium` today (agentwatch `daemon/browser/unit.py`, `DEFAULT_CHROME`), which
-  blocks them by default. The unit moves to Google Chrome stable in agentwatch's stage 4 step C; that Chrome's
-  default is not measured yet (aw-lead checks it in step C's live run). Google Chrome stable may allow
-  third-party cookies by default; then the frame's silent renew works there with no change. The receiver has the
-  `contentSettings` permission, so it can allow the provider's cookies in frames under the list's sites only (the
-  `*.` rows). Without that, a site whose script falls back to a
-  top-level redirect still signs in (the redirect chain above); a site that only renews in a frame loses its token
-  when it expires. Choice 2 (section 10).
+  blocks them by default. The unit moves to Google Chrome stable in agentwatch's stage 4 step C; that Chrome's default
+  is not measured yet (aw-lead checks it in step C's live run). Google Chrome stable may allow third-party cookies by
+  default; then the frame's silent renew works there with no change. The receiver has the `contentSettings`
+  permission, so it can allow the provider's cookies in frames under the list's sites only (the `*.` rows). Without
+  that, a site whose script falls back to a top-level redirect still signs in (the redirect chain above); a site that
+  only renews in a frame loses its token when it expires. Choice 2 (section 10).
 - **The risk of a provider's sign-in.** It is the most sensitive cookie on the box: one provider session signs in to
   every site that uses that provider, and the agent browser has one profile for every scope (per-scope design,
   section 10). Option a keeps the top-level redirect back to an off-list site blocked (rule 1), but an allowlisted
