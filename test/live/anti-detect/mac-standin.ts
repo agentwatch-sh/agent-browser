@@ -1,0 +1,61 @@
+// The dry run's stand-in for mac-watch.swift (mac.ts --dry-run, on Linux): the same protocol (JSON lines out,
+// commands in), with no front app other than itself, no Space and a pointer that never moves. Its snaps list the
+// agent Chromium's own X windows (xwininfo's stacking order, top first; xdotool for the pid), so that the window
+// analysis runs on real windows; the private Xvfb has no window of an operator. It lets the dry run drive every
+// phase, analyse the logs and write the summary; it measures nothing of a Mac.
+//
+//   node test/live/anti-detect/mac-standin.ts SECONDS
+//
+// To test the check's stop rules and its analysis, two variables make it log what a Mac can show:
+// MAC_STANDIN_TAKE_MS=N (N ms after its start, the agent Chrome takes the front for 120 ms, and the front comes back)
+// and MAC_STANDIN_POINTER_MS=N (N ms after its start, the pointer moves: a person at the Mac).
+
+import { execFileSync } from "node:child_process";
+import { createInterface } from "node:readline";
+
+const seconds = Number(process.argv[2]);
+if (!Number.isFinite(seconds) || seconds <= 0) { process.stderr.write("usage: mac-standin.ts SECONDS\n"); process.exit(2); }
+const emit = (ev: string, fields: Record<string, unknown> = {}) => process.stdout.write(`${JSON.stringify({ ...fields, t: Date.now(), ev })}\n`);
+const front = { pid: process.pid, name: "dry run (no front app on Linux)", bundle: null, agent: false };
+const state = { locked: false, onConsole: true, asleep: false };
+let agentPid = 0;
+const finish = (why: string) => { emit("end", { why }); process.exit(0); };
+/** The agent's visible top-level X windows, top first: [pid, id, x, y, w, h, 100], as mac-watch.swift's list. */
+function xWindows(): number[][] {
+  if (!agentPid || !process.env.DISPLAY) return [];
+  try {
+    const run = (bin: string, args: string[]) => execFileSync(bin, args, { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    const mine = new Set(run("xdotool", ["search", "--onlyvisible", "--pid", String(agentPid)]).split("\n").filter(Boolean).map(Number));
+    return run("xwininfo", ["-root", "-children"]).split("\n").flatMap((l) => {
+      const m = /^\s+(0x[0-9a-f]+) .*\s(\d+)x(\d+)\+(-?\d+)\+(-?\d+)\s/.exec(l);
+      const id = m ? parseInt(m[1], 16) : 0;
+      return m && mine.has(id) ? [[agentPid, id, Number(m[4]), Number(m[5]), Number(m[2]), Number(m[3]), 100]] : [];
+    });
+  } catch { return []; }
+}
+
+emit("ready", { ...state, front, pointer: [-1000, -1000], space: null, spaceReader: false, displays: [], old: [] });
+emit("windows", { why: "ready", list: [], owners: {} });
+setInterval(() => emit("alive", { ...state, space: null }), 1000);
+const takeAt = Number(process.env.MAC_STANDIN_TAKE_MS ?? 0), pointerAt = Number(process.env.MAC_STANDIN_POINTER_MS ?? 0);
+if (takeAt > 0) setTimeout(() => {
+  emit("front", { pid: agentPid, name: "agent Chrome (stand-in)", bundle: null, agent: true });
+  setTimeout(() => emit("front", front), 120);
+}, takeAt);
+if (pointerAt > 0) setTimeout(() => emit("pointer", { x: 1, y: 2 }), pointerAt);
+setTimeout(() => finish("limit"), seconds * 1000);
+const rl = createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const [verb, rest = ""] = line.trim().split(/ (.*)/s);
+  if (verb === "arm") emit("armed");
+  else if (verb === "disarm") emit("disarmed");
+  else if (verb === "agent") { agentPid = Number(rest) || 0; emit("agent", { pid: agentPid }); }
+  else if (verb === "snap") {
+    const list = xWindows();
+    emit("windows", { why: "snap", label: rest, list, owners: { [agentPid]: "Chromium (dry run)" }, front, space: null,
+      agentAll: list.map(([, n, x, y, w, h]) => ({ n, layer: 0, x, y, w, h, alpha: 1, onscreen: true })), agentApp: { pid: agentPid, policy: 0, hidden: false, active: false } });
+  }
+  else if (verb === "quit") finish("quit");
+  else emit("error", { what: "unknown command", line });
+});
+rl.on("close", () => finish("eof"));
