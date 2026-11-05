@@ -605,7 +605,9 @@ export class Tab {
    *
    * The allowlist is checked before the first capture: a page off it gets none. When `fn` itself takes
    * the tab off the list (a click on a link), the last captures still reach the new page; their
-   * pictures are dropped, as every hold capture's is.
+   * pictures are dropped, as every hold capture's is. A shot checks the allowlist again after its own
+   * capture and writes no file for a tab that left it; when the main frame goes to a new page while
+   * the shot's own capture waits, the shot fails at once (Chrome never ends that capture).
    *
    * `repeat` sends a new capture each time one ends (on a page that draws by itself, each one ends after
    * a frame): for input. Without it only the first one: for a shot, whose own capture can change the
@@ -688,17 +690,26 @@ export class Tab {
       log(`agent-browser: the last ${hidden ? "hidden " : ""}capture of tab ${tab} ${r}; ${left} capture${left > 1 ? "s" : ""} of it stay${left > 1 ? "" : "s"} in flight, and Chrome can keep drawing that background tab until its next capture${resizedFailed ? "; the shot's size override can come back when they end (the next shot --size of the tab clears it)" : ""}`);
     };
     const own: OwnCapture = async (params, resized = false) => {
-      const clip = "clip" in params, rearm: Promise<boolean>[] = [];
+      const clip = "clip" in params, rearm: Promise<true | string>[] = [];
       if ((clip || resized) && !held()) { rearm.push(capture(10 * 60_000)); await framesForShot(); }
+      // When the main frame goes to a new page while the shot's own capture waits, Chrome never ends
+      // that capture (review-41b on taylor, default mode: the shot failed after 30 s, though later
+      // captures ended). So the shot fails at once then.
+      const stop = new AbortController();
+      const navigated = this.browser.conn.waitForEvent<{ frame: { parentId?: string } }>("Page.frameNavigated",
+        { sessionId: this.sessionId, predicate: (p) => !p.frame.parentId, timeoutMs: ownMs + 60_000, signal: stop.signal })
+        .then(() => { throw new Error(`shot: tab ${tab} went to a new page during the shot's capture, and Chrome does not end a capture of the old page; no shot is taken. Read the page again, then take the shot.`); },
+          () => new Promise<never>(() => {}));
       const shot = track(this.send<{ data: string }>("Page.captureScreenshot", params, ownMs));
+      const result = Promise.race([shot, navigated]);
       const kicks: Promise<true | string>[] = [];
-      while (!clip && kicks.length < 3 && await late(shot, lateMs)) {
+      while (!clip && kicks.length < 3 && await late(result, lateMs)) {
         log(`agent-browser shot: the shot's capture of tab ${tab} did not end in ${((kicks.length + 1) * lateMs) / 1000} s; one more capture goes out to end it`);
         kicks.push(capture(10 * 60_000));
       }
       let ok = false;
       try {
-        const r = await shot;
+        const r = await result;
         ok = true;
         return r;
       } catch (e) {
@@ -709,6 +720,7 @@ export class Tab {
             "Chrome ends a capture only after it draws a frame of the tab: a loaded machine, a page that hangs or goes to a new page, or a tab that Chrome no longer draws can stop that. Try the shot again.");
         throw e;
       } finally {
+        stop.abort();
         // Before a size override is cleared: a capture sent while it is set sets it again when it ends.
         // The new first capture ends with the shot's own, just before it; an extra one just after it.
         // After a failure, no last captures here: Chrome drew no frame for the whole timeout, and the
@@ -1000,6 +1012,8 @@ export class Tab {
       params.clip = { x: 0, y: 0, width: cssContentSize.width, height: cssContentSize.height, scale: 1 };
     }
     const { data } = await own(params, resized);
+    // The tab can leave the allowlist while the capture waits (a redirect): then no file is written.
+    await this.assertAllowed();
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, Buffer.from(data, "base64"));
     return path;

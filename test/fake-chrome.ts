@@ -433,10 +433,19 @@ export class FakePage {
     return true;
   }
 
+  /**
+   * The captures that were in flight when the page went to a new document: Chrome never ends them
+   * (review-41b, Chromium 156, default mode: a shot whose page navigated during its own capture failed
+   * after 30 s, though later captures ended).
+   */
+  lostCaptures: { n: number; at: number; end: () => void }[] = [];
+
   /** Load a URL: a fixture page for http://127.0.0.1, an empty page for anything else (the fake never leaves this machine). */
   load(url: string) {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    this.lostCaptures.push(...this.heldCaptures);
+    this.heldCaptures = [];
     this.frameDue = false;
     this.frameWaiters = []; // a new document never runs the old one's animation frames
     this.flushMoves();

@@ -362,6 +362,30 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
+  test(`${label}: shot whose page goes to a new page during its own capture: a clear error at once, not a 30 s wait, and no file`, async () => {
+    // review-41b, Chromium 156, default mode: Chrome never ended that capture, and the shot failed after 30 s.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); };
+    const path = join(c.dir, `${name}.png`), t0 = Date.now();
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot's capture/);
+    page.onCapture = undefined;
+    assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose tab is off the allowlist when its own capture ends: refused, and no file`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.url = "https://off-the-list.example/"; };
+    const path = join(c.dir, `${name}.png`);
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /off-the-list\.example is not on the allowlist/);
+    page.onCapture = undefined;
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name }).catch(() => {});
+  });
+
   test(`${label}: shot --full whose first capture ends during the frame wait: one more first capture and two frames come before the full-page capture`, async () => {
     // No capture may go out while a full-page capture waits: it changes the device emulation, and a
     // capture sent then would set that emulation again when it ends.
