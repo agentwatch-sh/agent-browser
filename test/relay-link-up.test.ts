@@ -221,3 +221,103 @@ test("Target.closeTarget of the browser's only tab opens an about:blank window f
     } finally { await h.close(); }
   }
 });
+
+/**
+ * Chrome's Page.close (Playwright's page.close({ runBeforeUnload: true }) sends it on the page session): it answers
+ * at once, and the tab closes `ms` later (tabs.onRemoved), or never (`ms` null: a beforeunload handler keeps it). A
+ * close that takes the browser's last tab is recorded in `ended`.
+ */
+function modelPageClose(fake: FakeReceiver, ended: number[], ms: number | null): void {
+  fake.command = (target, method) => {
+    if (method !== "Page.close" || target.sessionId) return undefined;
+    if (ms !== null) setTimeout(() => {
+      if (!fake.tabs.has(target.tabId)) return;
+      if (fake.tabs.size === 1) ended.push(target.tabId);
+      fake.tabs.delete(target.tabId); fake.attached.delete(target.tabId);
+      fake.emit("tabs.onRemoved", { tabId: target.tabId, removeInfo: { windowId: 1, isWindowClosing: true } });
+    }, ms);
+    return {};
+  };
+}
+const GUARD_OPS = new Set(["tabs.query", "windows.create", "tabs.remove", "Page.close"]);
+/** The guard's ops from request `from` on, with a page call by its CDP method. */
+const guardOps = (h: Harness, from: number) => h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? r.args[1] : r.op)).filter((op) => GUARD_OPS.has(op));
+
+test("a client's Page.close of the browser's only tab opens an about:blank window first; a failed query sends no Page.close", async () => {
+  const h = await harness();
+  try {
+    const ended: number[] = [];
+    modelPageClose(h.fake, ended, 30);
+    await h.ready();
+    const c = await h.connect("s10");
+    const p = await page(h, c);
+    let from = h.fake.requests.length;
+    assert.deepEqual(await c.send("Page.close", {}, p.sessionId), {});
+    await until(() => !h.fake.tabs.has(p.tab.id), "the close of the tab");
+    assert.deepEqual(guardOps(h, from), ["tabs.query", "windows.create", "Page.close"]);
+    assert.deepEqual(h.fake.sent("windows.create").at(-1)!.args, [{ url: "about:blank", focused: false }]);
+    assert.deepEqual(ended, [], "the close did not take the browser's last tab");
+    assert.deepEqual([...h.fake.tabs.values()].map((t) => t.url), ["about:blank"]);
+
+    // The query fails: the client gets the error, and no Page.close reaches Chrome.
+    const q = await page(h, c);
+    for (const id of [...h.fake.tabs.keys()]) if (id !== q.tab.id) { h.fake.tabs.delete(id); h.fake.emit("tabs.onRemoved", { tabId: id, removeInfo: { windowId: 1, isWindowClosing: true } }); }
+    h.fake.op = ({ op }) => (op === "tabs.query" ? { error: "timeout" } : undefined);
+    from = h.fake.requests.length;
+    assert.equal(await failure(c.send("Page.close", {}, q.sessionId)), "The agent browser did not answer Page.close in 30 s.");
+    assert.deepEqual(guardOps(h, from), ["tabs.query"]);
+    assert.ok(h.fake.tabs.has(q.tab.id));
+  } finally { await h.close(); }
+});
+
+test("Page.close answers before its tab closes, so the next removal waits for the tab's tabs.onRemoved: Page.close and end_scope at once keep a window", async () => {
+  const h = await harness();
+  try {
+    const ended = watchLastTab(h.fake);
+    modelPageClose(h.fake, ended, 150);
+    await h.ready();
+    const a = await h.connect("s11"), b = await h.connect("s12");
+    const pa = await page(h, a), pb = await page(h, b);
+    assert.equal(h.fake.tabs.size, 2, "the two pages are the browser's only tabs");
+    const from = h.fake.requests.length;
+    const closed = a.send("Page.close", {}, pa.sessionId);
+    assert.deepEqual(await closed, {});
+    // The end_scope comes after Page.close answered, while the page's tab is still open.
+    assert.ok(h.fake.tabs.has(pa.tab.id));
+    h.fake.line({ t: "end_scope", scope: "s12" });
+    await until(() => !h.fake.tabs.has(pa.tab.id) && !h.fake.tabs.has(pb.tab.id), "both tabs closed");
+    // Page.close sees two tabs; the end_scope's query comes after the page's tab closed, so it opens the window.
+    assert.deepEqual(guardOps(h, from), ["tabs.query", "Page.close", "tabs.query", "windows.create", "tabs.remove"]);
+    assert.deepEqual(ended, []);
+    assert.deepEqual([...h.fake.tabs.values()].map((t) => t.url), ["about:blank"]);
+  } finally { await h.close(); }
+});
+
+test("a Page.close whose tab stays open (beforeunload) holds the removals at most a short time; a refused Page.close holds none", async () => {
+  const h = await harness();
+  try {
+    const ended = watchLastTab(h.fake);
+    modelPageClose(h.fake, ended, null);
+    await h.ready();
+    const a = await h.connect("s13"), b = await h.connect("s14");
+    const pa = await page(h, a), pb = await page(h, b);
+    const t0 = Date.now();
+    assert.deepEqual(await a.send("Page.close", {}, pa.sessionId), {});
+    h.fake.line({ t: "end_scope", scope: "s14" });
+    await until(() => !h.fake.tabs.has(pb.tab.id), "the end_scope's removal after the limit", 6000);
+    const waited = Date.now() - t0;
+    assert.ok(waited >= 1500 && waited < 5000, `the removal waited ${waited} ms`);
+    assert.ok(h.fake.tabs.has(pa.tab.id), "the page's tab stays open");
+    assert.deepEqual(ended, []);
+
+    // Chrome refuses Page.close: the client gets its error at once, and the next removal does not wait.
+    h.fake.command = (_target, method) => (method === "Page.close" ? { error: JSON.stringify({ code: -32000, message: "refused" }) } : undefined);
+    const c = await h.connect("s15");
+    const pc = await page(h, c);
+    assert.equal(await failure(a.send("Page.close", {}, pa.sessionId)), "refused");
+    const t1 = Date.now();
+    h.fake.line({ t: "end_scope", scope: "s15" });
+    await until(() => !h.fake.tabs.has(pc.tab.id), "the removal after a refused Page.close", 1000);
+    assert.ok(Date.now() - t1 < 1000);
+  } finally { await h.close(); }
+});

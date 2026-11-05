@@ -10,8 +10,8 @@
 // checks that the page shows no background-tab signal. Chromium gets --disable-backgrounding-occluded-windows, as
 // the anti-detect design needs (docs/research/2026-11-05-anti-detect-drive.md, step 3): without it a covered window
 // is hidden and draws nothing. The group `link-up` (ab-v16.40) runs last, because it closes every other tab: after a
-// relay restart with no link change no CDP state of the old client stays on its tab, and neither end_scope nor
-// page.close() of the browser's only tab ends Chromium.
+// relay restart with no link change no CDP state of the old client stays on its tab, and no end_scope,
+// Target.closeTarget or Page.close of the browser's only tabs ends Chromium (also two removals at once).
 //
 //   CHROME_EXTENSION=<a detached worktree of chrome-extension> npm run test:live:agent
 //
@@ -817,8 +817,17 @@ async function linkUpCases(pw: any, WebSocket: any) {
   const siteSaw = (path: string) => readFileSync(join(RUN, "site-log.jsonl"), "utf8").split("\n").some((l) => l.includes(`"path":${JSON.stringify(path)}`));
   const tabOf = async (targetId: string) => (await d.ask("debugger.getTargets")).find((t: any) => t.id === targetId);
   const urls = async () => (await d.ask("tabs.query", [{}])).map((t: any) => t.pendingUrl || t.url);
-  /** Close every tab of the browser but `keep` (the daemon's own bridge requests), so that `keep` is the only one. */
-  const onlyTab = async (keep: number) => { for (const t of await d.ask("tabs.query", [{}])) if (t.id !== keep) await d.ask("tabs.remove", [t.id]).catch(() => {}); await sleep(500); };
+  /** Close every tab of the browser but `keep` (the daemon's own bridge requests), so that they are the only ones. */
+  const onlyTabs = async (keep: number[]) => { for (const t of await d.ask("tabs.query", [{}])) if (!keep.includes(t.id)) await d.ask("tabs.remove", [t.id]).catch(() => {}); await sleep(500); };
+  const onlyTab = (keep: number) => onlyTabs([keep]);
+  /** The browser's tabs and their windows after a case, or null when Chromium ended. */
+  const after = async () => {
+    if (!alive()) return null;
+    const tabs = await d.ask("tabs.query", [{}]);
+    const wins = [];
+    for (const w of new Set(tabs.map((t: any) => t.windowId))) { const x = await d.ask("windows.get", [w]).catch((e: Error) => ({ error: e.message })); wins.push({ id: w, focused: x.focused, type: x.type }); }
+    return { urls: tabs.map((t: any) => t.pendingUrl || t.url), wins };
+  };
   // Today's end_scope ended Chromium within a moment (measured, case F): 5 s is long enough to see it.
   const END_WAIT_MS = 5000;
 
@@ -854,6 +863,25 @@ async function linkUpCases(pw: any, WebSocket: any) {
     }
   }, { want: (x) => x.already === false && x.fetch === "real" && x.siteSaw === true && /Chrome\//.test(x.ua) && x.ua !== "lu-old-client", ms: 30_000 });
 
+  // review-51: the HTTP answers of the endpoint during a restart, a probe every 10 ms (0: no socket yet).
+  await step(G, "a client that connects while the relay restarts gets no connection until the link-up detaches are done", async () => {
+    const c = await rawClient(WebSocket, "lu-hold");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-hold` });
+    await c.event("Target.attachedToTarget");
+    const attachedBefore = (await tabOf(targetId))?.attached;
+    const codes: number[] = [];
+    const t0 = Date.now();
+    const restarting = d.restartRelay();
+    let last = 404;
+    // The old relay answers 404 until it ends; then the new relay's socket answers 0 (none yet) or 503 until it is ready.
+    while (Date.now() - t0 < 30_000 && (last = await status("/devtools/browser/probe")) === 404) await sleep(5);
+    codes.push(last);
+    while (Date.now() - t0 < 30_000 && (last = await status("/devtools/browser/probe")) !== 404) { codes.push(last); await sleep(10); }
+    await restarting;
+    return { attachedBefore, codes: [...new Set(codes)], ready: last, readyMs: Date.now() - t0, attachedAfter: (await tabOf(targetId))?.attached };
+  }, { want: (x) => x.ready === 404 && x.attachedBefore === true && x.attachedAfter === false && x.codes.includes(503), ms: 40_000 });
+
   await step(G, "end_scope of the browser's only tab: Chromium stays up, with one about:blank window in no scope", async () => {
     const c = await rawClient(WebSocket, "lu-last");
     const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-last` });
@@ -881,4 +909,46 @@ async function linkUpCases(pw: any, WebSocket: any) {
       return { before, chromium: chrome(), after: alive() ? await urls() : null, pages: browser.contexts()[0]?.pages().length ?? null };
     } finally { await browser.close().catch(() => {}); }
   }, { want: (x) => x.before.length === 1 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.pages === 0, ms: 40_000 });
+
+  // review-48 X2b, live (review-51): two removals at once of the browser's only two tabs. Without the relay's queue
+  // each query saw two tabs, no window opened, and Chromium ended (exit 0).
+  await step(G, "end_scope of two scopes at once, whose tabs are the browser's only two tabs: Chromium stays up", async () => {
+    const a = await rawClient(WebSocket, "lu-x2a"), b = await rawClient(WebSocket, "lu-x2b");
+    const ta = (await a.send("Target.createTarget", { url: `${A}/m?lu-x2a` })).targetId;
+    const tb = (await b.send("Target.createTarget", { url: `${A}/m?lu-x2b` })).targetId;
+    await onlyTabs([(await tabOf(ta)).tabId, (await tabOf(tb)).tabId]);
+    const before = await urls();
+    d.endScope("lu-x2a"); d.endScope("lu-x2b");
+    const closed = (await Promise.all([a.closed, b.closed])).map((c) => c[0]);
+    await sleep(END_WAIT_MS);
+    return { before, closed, chromium: chrome(), after: await after() };
+  }, { want: (x) => x.before.length === 2 && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank", ms: 40_000 });
+
+  await step(G, "two Target.closeTarget at once (two scopes), of the browser's only two tabs: Chromium stays up", async () => {
+    const a = await rawClient(WebSocket, "lu-x2c"), b = await rawClient(WebSocket, "lu-x2d");
+    const ta = (await a.send("Target.createTarget", { url: `${A}/m?lu-x2c` })).targetId;
+    const tb = (await b.send("Target.createTarget", { url: `${A}/m?lu-x2d` })).targetId;
+    await onlyTabs([(await tabOf(ta)).tabId, (await tabOf(tb)).tabId]);
+    const before = await urls();
+    const res = await Promise.all([a.send("Target.closeTarget", { targetId: ta }), b.send("Target.closeTarget", { targetId: tb })].map((p) => p.then((r: any) => r, (e: Error) => String(e.message))));
+    await sleep(END_WAIT_MS);
+    a.close(); b.close();
+    return { before, res, chromium: chrome(), after: await after() };
+  }, { want: (x) => x.before.length === 2 && x.res.every((r: any) => r?.success === true) && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank", ms: 40_000 });
+
+  // review-51: Playwright's page.close({ runBeforeUnload: true }) sends Page.close on the page session. Last: before
+  // the relay's guard for Page.close (board ab-v16.40, fix A) it ended Chromium (exit 0).
+  await step(G, "Playwright's page.close({ runBeforeUnload: true }) of the browser's only tab (Page.close): Chromium stays up", async () => {
+    const browser = await pw.chromium.connectOverCDP(url("lu-pclose"), { timeout: 20_000 });
+    try {
+      const page = await browser.contexts()[0].newPage();
+      await page.goto(`${A}/m?lu-pclose`);
+      const tab = (await d.ask("tabs.query", [{}])).find((t: any) => (t.pendingUrl || t.url) === `${A}/m?lu-pclose`);
+      await onlyTab(tab.id);
+      const before = await urls();
+      const err = await page.close({ runBeforeUnload: true }).then(() => null, (e: Error) => String(e.message).split("\n")[0]);
+      await sleep(END_WAIT_MS);
+      return { before, err, chromium: chrome(), after: await after(), pages: browser.contexts()[0]?.pages().length ?? null };
+    } finally { await browser.close().catch(() => {}); }
+  }, { want: (x) => x.before.length === 1 && x.err === null && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.pages === 0, ms: 40_000 });
 }

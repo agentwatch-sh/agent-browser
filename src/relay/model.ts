@@ -21,6 +21,8 @@ const HIDDEN_TYPES = new Set(["service_worker", "shared_worker", "browser"]);
 const CREATED_WAIT_MS = 2000;
 /** The longest wait of an input for its page's activation (a bridge op that does not answer): then the input goes anyway. */
 const ACTIVATE_MAX_MS = 2000;
+/** How long the removals wait for a client's Page.close to end in its tab's tabs.onRemoved (Page.close answers first). */
+const PAGE_CLOSE_WAIT_MS = 2000;
 /** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
 const SAFE_DANGER = new Set(["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe", "asyncScanning", "asyncLocalPasswordScanning"]);
 
@@ -86,6 +88,8 @@ export class Model {
   /** Target.createTarget calls in flight: a new tab waits for them, so that only its creator takes a tab that it opened. */
   private readonly creating = new Set<Promise<unknown>>();
   private readonly seenWaiters = new Map<number, () => void>();
+  /** A client's Page.close that waits for its tab's tabs.onRemoved, by tab. */
+  private readonly removedWaiters = new Map<number, () => void>();
   private nextConn = 1;
   private link = 0; // the generation of the link: an answer from before a link change changes nothing
   private linkUp = false;
@@ -216,21 +220,65 @@ export class Model {
   }
 
   /**
-   * C11: the relay never closes the browser's last window. When the tab is the browser's only tab, an about:blank
-   * window (not focused, in no scope) opens first, as C5's closing rule does: measured (board ab-v16.39), an end_scope
-   * that removed the only tab ended Chromium. One query and removal at a time, so two removals cannot each count the
-   * other's tab. A failed query or window keeps the tab (the error goes to the caller).
+   * C11: the relay never closes the browser's last window. Before each removal of a tab (tabs.remove, and a client's
+   * Page.close), when the tab is the browser's only tab, an about:blank window (not focused, in no scope) opens
+   * first, as C5's closing rule does: measured (board ab-v16.39), an end_scope that removed the only tab ended
+   * Chromium. One query and removal at a time (the queue `removals`), so two removals cannot each count the other's
+   * tab (measured, review-48 X2b: two at once ended Chromium). A failed query or window keeps the tab (the error goes
+   * to the caller). A page's own window.close() is outside the relay: Chrome closes that tab itself.
    */
-  private removeTab(id: number): Promise<void> {
-    const run = this.removals.then(async () => {
-      const all = await this.bridge.call<unknown>("tabs.query", [{}]);
-      // An answer that is not a list counts as no other tab: an extra window is better than a browser that ends.
-      const others = Array.isArray(all) && all.some((t) => t?.id !== id);
-      if (!others) await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }]);
-      await this.bridge.call("tabs.remove", [id]);
-    });
+  private async keepLastWindow(id: number): Promise<void> {
+    const all = await this.bridge.call<unknown>("tabs.query", [{}]);
+    // An answer that is not a list counts as no other tab: an extra window is better than a browser that ends.
+    const others = Array.isArray(all) && all.some((t) => t?.id !== id);
+    if (!others) await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }]);
+  }
+
+  /** One step of the removals queue: it starts when the step before it ended. */
+  private queueRemoval(step: () => Promise<void>): Promise<void> {
+    const run = this.removals.then(step);
     this.removals = run.catch(() => {});
     return run;
+  }
+
+  private removeTab(id: number): Promise<void> {
+    // tabs.onRemoved comes before chrome.tabs.remove ends (measured, review-48 X4): the next query sees the tab gone.
+    return this.queueRemoval(async () => {
+      await this.keepLastWindow(id);
+      await this.bridge.call("tabs.remove", [id]);
+    });
+  }
+
+  /**
+   * A client's Page.close on a page session (Playwright's page.close({ runBeforeUnload: true })), in the removals
+   * queue: the guard, then Page.close to Chrome. Page.close answers before its tab closes, so the queue goes on at the
+   * tab's tabs.onRemoved, or after PAGE_CLOSE_WAIT_MS (a beforeunload handler can keep the tab), or at once after an
+   * error. The returned promise ends when Page.close went to the bridge: the tab's later calls go behind it, in order.
+   */
+  private closePage(tab: Tab, params: any, answer: (body: object) => void, before: Promise<void> | null): Promise<void> {
+    let sent!: () => void;
+    const gate = new Promise<void>((r) => { sent = r; });
+    void this.queueRemoval(async () => {
+      try {
+        if (before) await before;
+        try { await this.keepLastWindow(tab.id); } catch (e) { answer({ error: cdpError("Page.close", e) }); return; }
+        const gone = this.whenRemoved(tab.id, PAGE_CLOSE_WAIT_MS);
+        const call = this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.close", params]);
+        sent();
+        const failed = call.then((r) => { answer({ result: r ?? {} }); return false; }, (e) => { answer({ error: cdpError("Page.close", e) }); return true; });
+        await Promise.race([gone, failed.then((f) => (f ? undefined : gone))]);
+      } finally { sent(); }
+    }).catch((e) => this.log(`relay: the Page.close of tab ${tab.id} failed: ${(e as Error).message}`));
+    return gate;
+  }
+
+  /** Ends at the tab's tabs.onRemoved, or after `ms`. */
+  private whenRemoved(tabId: number, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); if (this.removedWaiters.get(tabId) === done) this.removedWaiters.delete(tabId); resolve(); };
+      const timer = setTimeout(done, ms);
+      this.removedWaiters.set(tabId, done);
+    });
   }
 
   // ------------------------------------------------------------------ connections
@@ -285,6 +333,8 @@ export class Model {
   }
 
   private forward(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): void {
+    // C11: a page's Page.close can close the browser's last window, so it goes through the removals queue.
+    if (method === "Page.close" && !child) { this.behind(tab, this.closePage(tab, params, answer, tab.gate)); return; }
     const send = () => this.send(tab, child, method, params, answer);
     if (this.windowPerPage && startsAction(method, params)) {
       // The tab's earlier calls and every earlier activation first; the input goes right behind its own activation.
@@ -549,7 +599,7 @@ export class Model {
         for (const c of this.conns) if (c.discover && c.scope === tab.scope) c.event(undefined, "Target.targetInfoChanged", { targetInfo: this.infoOf(tab, ev.tab) });
         return;
       }
-      case "tabs.onRemoved": return this.removed(ev.tabId);
+      case "tabs.onRemoved": this.removedWaiters.get(ev.tabId)?.(); return this.removed(ev.tabId);
       case "tabs.onReplaced": {
         const old = this.tabs.get(ev.removedTabId);
         if (!old?.scope) return;
