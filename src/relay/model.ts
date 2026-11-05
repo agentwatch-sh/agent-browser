@@ -105,6 +105,8 @@ export class Model {
   readonly windowPerPage: boolean;
   /** The activations of every tab, in order: each one and its input reach the bridge before the next activation reads a window. */
   private activations: Promise<void> = Promise.resolve();
+  /** The removals of tabs, in order: each one's tabs.query sees the end of the removal before it (C11). */
+  private removals: Promise<unknown> = Promise.resolve();
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
@@ -144,14 +146,40 @@ export class Model {
       this.cleared = true;
       void this.queueSettings(async () => { for (const t of CONTENT_TYPES) await this.bridge.call("contentSettings.clear", [t]); });
     }
+    let info: any;
     try {
-      const info = await this.bridge.call("bridge.info");
-      if (link !== this.link) return;
-      if (info && info.bridge >= 1) this.info = info; else this.tooOld = true;
+      info = await this.bridge.call("bridge.info");
     } catch (e) {
       if (link === this.link && (e as Error).message === "unknown op") this.tooOld = true;
       else this.log(`relay: bridge.info failed: ${(e as Error).message}`);
+      return;
     }
+    if (link !== this.link) return;
+    if (!(info && info.bridge >= 1)) { this.tooOld = true; return; }
+    await this.detachEvery(link);
+    // Ready only now (with the allowlist line): no connection meets a tab that still carries an earlier client's state.
+    if (link === this.link) this.info = info;
+  }
+
+  /**
+   * C10, at each link up and so at each relay start: detach every tab that Chrome reports attached, before the relay
+   * admits a connection. A relay that starts with no link change (the daemon restarts a relay that ended) finds the
+   * tabs of the relay before it still attached, with their clients' domain state: measured (board ab-v16.39), the old
+   * client's Fetch pattern still paused a page's request, and its user-agent override stayed. After a link change the
+   * receiver has already detached its bridge tabs, so each detach answers null. The errors are ignored (the restore
+   * tab of a running import answers `not an agent tab`); a failed debugger.getTargets is logged, and the relay goes on.
+   */
+  private async detachEvery(link: number): Promise<void> {
+    let targets: unknown;
+    try { targets = await this.bridge.call("debugger.getTargets"); } catch (e) {
+      this.log(`relay: debugger.getTargets at the link up failed: ${(e as Error).message}`);
+      return;
+    }
+    if (link !== this.link || !Array.isArray(targets)) return;
+    const tabs = new Set<number>();
+    for (const t of targets) if (t?.attached === true && Number.isInteger(t.tabId) && t.tabId >= 0) tabs.add(t.tabId);
+    await Promise.all([...tabs].map((id) => this.bridge.call("debugger.detach", [id]).catch(() => {})));
+    if (tabs.size) this.log(`relay: detached ${tabs.size} tab(s) at the link up`);
   }
 
   private onLinkDown(): void {
@@ -182,7 +210,27 @@ export class Model {
 
   private async endScope(scope: string): Promise<void> {
     for (const c of [...this.conns]) if (c.scope === scope) { c.socket.close(...CLOSE.scopeEnded); await this.close(c); }
-    for (const tab of [...this.tabs.values()]) if (tab.scope === scope) await this.bridge.call("tabs.remove", [tab.id]).catch(() => {});
+    for (const tab of [...this.tabs.values()]) {
+      if (tab.scope === scope) await this.removeTab(tab.id).catch((e) => this.log(`relay: end_scope kept tab ${tab.id}: ${(e as Error).message}`));
+    }
+  }
+
+  /**
+   * C11: the relay never closes the browser's last window. When the tab is the browser's only tab, an about:blank
+   * window (not focused, in no scope) opens first, as C5's closing rule does: measured (board ab-v16.39), an end_scope
+   * that removed the only tab ended Chromium. One query and removal at a time, so two removals cannot each count the
+   * other's tab. A failed query or window keeps the tab (the error goes to the caller).
+   */
+  private removeTab(id: number): Promise<void> {
+    const run = this.removals.then(async () => {
+      const all = await this.bridge.call<unknown>("tabs.query", [{}]);
+      // An answer that is not a list counts as no other tab: an extra window is better than a browser that ends.
+      const others = Array.isArray(all) && all.some((t) => t?.id !== id);
+      if (!others) await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }]);
+      await this.bridge.call("tabs.remove", [id]);
+    });
+    this.removals = run.catch(() => {});
+    return run;
   }
 
   // ------------------------------------------------------------------ connections
@@ -809,7 +857,7 @@ export class Model {
       return { targetId: tab.targetId };
     },
     "Target.closeTarget": async (c, p) => {
-      await this.bridge.call("tabs.remove", [this.scoped(c, p.targetId).id]);
+      await this.removeTab(this.scoped(c, p.targetId).id);
       return { success: true };
     },
     "Target.activateTarget": async (c, p) => {

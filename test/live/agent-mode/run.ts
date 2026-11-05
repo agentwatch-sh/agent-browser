@@ -9,14 +9,16 @@
 // (test/live/anti-detect/probe.ts) with Playwright, with and without noDefaults, and with the Playwright MCP, and
 // checks that the page shows no background-tab signal. Chromium gets --disable-backgrounding-occluded-windows, as
 // the anti-detect design needs (docs/research/2026-11-05-anti-detect-drive.md, step 3): without it a covered window
-// is hidden and draws nothing.
+// is hidden and draws nothing. The group `link-up` (ab-v16.40) runs last, because it closes every other tab: after a
+// relay restart with no link change no CDP state of the old client stays on its tab, and neither end_scope nor
+// page.close() of the browser's only tab ends Chromium.
 //
 //   CHROME_EXTENSION=<a detached worktree of chrome-extension> npm run test:live:agent
 //
 // Environment: CHROME_EXTENSION (required: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
 // DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), CASES (default all:
-// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows) runs some groups only. The agent package must be
+// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,link-up) runs some groups only. The agent package must be
 // chrome-extension main b82c65d or later: the popup cases, the hold of a new tab and the off-list frame need its
 // eager attach, its hold and its DNR frame rule (ab-v16.17). It uses port 8781 (the probe's site) and *.localhost
 // hosts only. It never drives or stops a Chrome that it did not start, opens no debugging port, and no prompt can
@@ -45,7 +47,7 @@ if (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !existsSync(join(EX
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
-const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows").split(",");
+const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,link-up").split(",");
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 const RELAY_SOCK = join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 const url = (scope: string) => `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`;
@@ -178,6 +180,8 @@ try {
   if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
   if (CASES.includes("windows")) await windowCases(pw);
+  // Last: it closes every other tab of the browser.
+  if (CASES.includes("link-up")) await linkUpCases(pw, createRequire(join(INSTALL, "package.json"))("ws"));
   record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium.exitCode === null ? "pass" : "fail", ms: 0 });
 } catch (err) {
   aborted = String((err as Error)?.message ?? err).split("\n")[0];
@@ -388,7 +392,8 @@ async function rawClient(WebSocket: any, scope: string) {
     for (const end = Date.now() + ms; Date.now() < end; await sleep(20)) { const i = events.findIndex((e) => e.method === method); if (i >= 0) return events.splice(i, 1)[0]; }
     throw new Error(`no ${method} in ${ms} ms`);
   };
-  return { send, value, event, close: () => ws.close() };
+  const closed = new Promise<[number, string]>((r) => ws.once("close", (code: number, reason: Buffer) => r([code, String(reason)])));
+  return { send, value, event, closed, close: () => ws.close() };
 }
 
 async function tabSwitchCase(WebSocket: any) {
@@ -793,4 +798,87 @@ async function windowCases(pw: any) {
     server.close();
     writeFileSync(join(RUN, "windows.json"), JSON.stringify({ variants: out, log }, null, 2) + "\n");
   }
+}
+
+// ---------------------------------------------------------------- a relay restart and the browser's last window (ab-v16.40)
+
+/**
+ * Board task ab-v16.40 (C10 "The daemon and the relay", C11 "When a connection ends"); the cases B and F of the
+ * orphan-tabs probe (board ab-v16.39, docs/superpowers/specs/2026-11-05-orphan-agent-tabs-probe/ on its branch). A
+ * relay restart with no link change: the new relay detaches the old client's tab before it admits a connection, so
+ * its Fetch pattern holds no request and its user-agent override is gone. And neither end_scope nor Playwright's
+ * page.close() of the browser's only tab ends Chromium: the relay opens an about:blank window first.
+ */
+async function linkUpCases(pw: any, WebSocket: any) {
+  const G = "link-up";
+  const d = daemon!;
+  const alive = () => chromium!.exitCode === null && chromium!.signalCode === null;
+  const chrome = () => (alive() ? "running" : `exit ${chromium!.exitCode ?? chromium!.signalCode}`);
+  const siteSaw = (path: string) => readFileSync(join(RUN, "site-log.jsonl"), "utf8").split("\n").some((l) => l.includes(`"path":${JSON.stringify(path)}`));
+  const tabOf = async (targetId: string) => (await d.ask("debugger.getTargets")).find((t: any) => t.id === targetId);
+  const urls = async () => (await d.ask("tabs.query", [{}])).map((t: any) => t.pendingUrl || t.url);
+  /** Close every tab of the browser but `keep` (the daemon's own bridge requests), so that `keep` is the only one. */
+  const onlyTab = async (keep: number) => { for (const t of await d.ask("tabs.query", [{}])) if (t.id !== keep) await d.ask("tabs.remove", [t.id]).catch(() => {}); await sleep(500); };
+  // Today's end_scope ended Chromium within a moment (measured, case F): 5 s is long enough to see it.
+  const END_WAIT_MS = 5000;
+
+  let tabId: number | undefined;
+  await step(G, "a relay restart with no link change: the new relay detaches the old client's tab before it admits a connection", async () => {
+    const c = await rawClient(WebSocket, "lu-restart");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-restart` });
+    const { params } = await c.event("Target.attachedToTarget");
+    for (let i = 0; i < 50 && (await c.value(params.sessionId, "document.readyState")) !== "complete"; i++) await sleep(100);
+    await c.send("Fetch.enable", { patterns: [{ urlPattern: "*lu-fetch*" }] }, params.sessionId);
+    await c.send("Emulation.setUserAgentOverride", { userAgent: "lu-old-client" }, params.sessionId);
+    const before = await tabOf(targetId);
+    tabId = before?.tabId;
+    const t0 = Date.now();
+    const oldExit = await d.restartRelay();
+    let ready = 0;
+    while (Date.now() - t0 < 30_000 && (ready = await status("/devtools/browser/probe")) !== 404) await sleep(50);
+    const readyMs = Date.now() - t0;
+    return { tabId, attachedBefore: before?.attached, oldExit, oldClient: await c.closed, ready, readyMs, attachedAfter: (await tabOf(targetId))?.attached };
+  }, { want: (x) => x.attachedBefore === true && x.oldExit === 0 && x.oldClient[0] === 1001 && x.ready === 404 && x.attachedAfter === false, ms: 40_000 });
+
+  await step(G, "after the restart the old client's Fetch pattern holds no request of the page, and its user-agent override is gone", async () => {
+    if (tabId === undefined) throw new Error("no tab from the case before");
+    // The daemon's own attach: a new chrome.debugger session, or the old one when the tab is still a bridge tab.
+    const attach = await d.ask("debugger.attach", [tabId]);
+    try {
+      const r = await d.ask("debugger.sendCommand", [{ tabId }, "Runtime.evaluate", { returnByValue: true, awaitPromise: true,
+        expression: "Promise.race([fetch('/api/data?lu-fetch').then((r) => r.text()), new Promise((r) => setTimeout(() => r('no answer in 5 s'), 5000))]).then((f) => ({ fetch: f, ua: navigator.userAgent }))" }]);
+      return { already: attach.already, ...r.result.value, siteSaw: siteSaw("/api/data?lu-fetch") };
+    } finally {
+      await d.ask("debugger.detach", [tabId]).catch(() => {});
+    }
+  }, { want: (x) => x.already === false && x.fetch === "real" && x.siteSaw === true && /Chrome\//.test(x.ua) && x.ua !== "lu-old-client", ms: 30_000 });
+
+  await step(G, "end_scope of the browser's only tab: Chromium stays up, with one about:blank window in no scope", async () => {
+    const c = await rawClient(WebSocket, "lu-last");
+    const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-last` });
+    await onlyTab((await tabOf(targetId)).tabId);
+    const before = await urls();
+    d.endScope("lu-last");
+    const closed = await c.closed;
+    await sleep(END_WAIT_MS);
+    const after = alive() ? await urls() : null;
+    let seen: number | null = null;
+    if (alive()) { const view = await rawClient(WebSocket, "lu-last"); seen = (await view.send("Target.getTargets")).targetInfos.length; view.close(); }
+    return { before, closed, chromium: chrome(), after, seen };
+  }, { want: (x) => x.before.length === 1 && x.closed[0] === 1000 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.seen === 0, ms: 30_000 });
+
+  await step(G, "Playwright's page.close() of the browser's only tab (Target.closeTarget): Chromium stays up", async () => {
+    const browser = await pw.chromium.connectOverCDP(url("lu-close"), { timeout: 20_000 });
+    try {
+      const page = await browser.contexts()[0].newPage();
+      await page.goto(`${A}/m?lu-close`);
+      const tab = (await d.ask("tabs.query", [{}])).find((t: any) => (t.pendingUrl || t.url) === `${A}/m?lu-close`);
+      await onlyTab(tab.id);
+      const before = await urls();
+      await page.close();
+      await sleep(END_WAIT_MS);
+      return { before, chromium: chrome(), after: alive() ? await urls() : null, pages: browser.contexts()[0]?.pages().length ?? null };
+    } finally { await browser.close().catch(() => {}); }
+  }, { want: (x) => x.before.length === 1 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.pages === 0, ms: 40_000 });
 }
