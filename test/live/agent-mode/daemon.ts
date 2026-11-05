@@ -3,7 +3,8 @@
 // native messages as NDJSON lines (contract C4), and it runs `agent-browser relay` as its child, whose standard input
 // and output carry the bridge (C10). It sends each request to the receiver in C4 parts (PART_BYTES), joins the
 // receiver's result parts, answers `not connected`, `disconnected` and `timeout` itself, and writes the link and
-// allowlist lines. It applies one allowlist (set_allowlist on channel main). It logs ops, ids and sizes only.
+// allowlist lines. It applies one allowlist (set_allowlist on channel main). It logs ops, ids and sizes only. It can
+// restart the relay with no link change, as agentwatch's backoff restart does (board ab-v16.40), and write end_scope.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, rmSync } from "node:fs";
@@ -14,8 +15,10 @@ const PART_BYTES = 700_000;
 const WAIT_SLACK_MS = 2000;
 
 export class StandInDaemon {
-  readonly relay: ChildProcess;
+  relay: ChildProcess;
   private readonly server: Server;
+  private readonly o: { relaySocket: string; relayBin: string; allowlist: string[]; relayLog: (line: string) => void };
+  private version = "";
   private host: Socket | null = null;
   private bridgeUp = false;
   private readonly pending = new Map<string, NodeJS.Timeout>();
@@ -27,17 +30,31 @@ export class StandInDaemon {
   readonly log: string[] = [];
 
   constructor(o: { daemonSocket: string; relaySocket: string; relayBin: string; allowlist: string[]; relayLog: (line: string) => void }) {
+    this.o = o;
     rmSync(o.daemonSocket, { force: true });
     this.server = createServer((sock) => this.onHost(sock, o.allowlist));
     const umask = process.umask(0o077);
     try { this.server.listen(o.daemonSocket, () => chmodSync(o.daemonSocket, 0o600)); } finally { process.umask(umask); }
-    this.relay = spawn(process.execPath, [o.relayBin, "relay", "--socket", o.relaySocket], { stdio: ["pipe", "pipe", "pipe"] });
-    createInterface({ input: this.relay.stdout! }).on("line", (line) => this.fromRelay(line));
-    createInterface({ input: this.relay.stderr! }).on("line", o.relayLog);
+    this.relay = this.spawnRelay();
+  }
+
+  private spawnRelay(): ChildProcess {
+    const relay = spawn(process.execPath, [this.o.relayBin, "relay", "--socket", this.o.relaySocket], { stdio: ["pipe", "pipe", "pipe"] });
+    createInterface({ input: relay.stdout! }).on("line", (line) => this.fromRelay(line));
+    createInterface({ input: relay.stderr! }).on("line", this.o.relayLog);
+    return relay;
   }
 
   private note(text: string): void { this.log.push(`${new Date().toISOString()} ${text}`); }
-  private toRelay(msg: object | string): void { this.relay.stdin!.write(`${typeof msg === "string" ? msg : JSON.stringify(msg)}\n`); }
+  private toRelay(msg: object | string): void {
+    // Not to a relay whose standard input ended (a restart): its late answers have no reader.
+    if (this.relay.stdin?.writable) this.relay.stdin.write(`${typeof msg === "string" ? msg : JSON.stringify(msg)}\n`);
+  }
+
+  private pushAllowlist(allowlist: string[]): void {
+    this.allowlistReq = `m${this.nextMain++}`;
+    this.toReceiver("main", { t: "req", id: this.allowlistReq, op: "set_allowlist", domains: allowlist } as any);
+  }
 
   /** A message to the receiver as C4 parts of its compact UTF-8 JSON. */
   private toReceiver(ch: "main" | "bridge", msg: { id: string }): boolean {
@@ -91,9 +108,9 @@ export class StandInDaemon {
         this.note(`hello v${m.v} ${JSON.stringify(m.channels ?? [])}`);
         if (!Array.isArray(m.channels) || !m.channels.includes("bridge")) return;
         this.bridgeUp = true;
+        this.version = m.version;
         this.toRelay({ t: "link", up: true, version: m.version });
-        this.allowlistReq = `m${this.nextMain++}`;
-        this.toReceiver("main", { t: "req", id: this.allowlistReq, op: "set_allowlist", domains: allowlist } as any);
+        this.pushAllowlist(allowlist);
       } else if (m.t === "res" && m.ch === "bridge" && this.own.has(m.id)) { this.own.get(m.id)!(m); this.own.delete(m.id); }
       else if (m.t === "res" && m.ch === "bridge") this.bridgeRes(line, m.id);
       else if (m.t === "res" && m.id === this.allowlistReq) {
@@ -128,6 +145,27 @@ export class StandInDaemon {
       if (!this.toReceiver("bridge", { t: "req", id, op, args, wait: 30_000 } as any)) reject(new Error("not connected"));
     });
   }
+
+  /**
+   * The relay ends (its standard input ends) and a new one starts, with no link change: agentwatch's backoff restart
+   * of a relay that ended. As the real daemon, it turns the eager attach off, then writes the link-up line and the
+   * list again to the new relay. The receiver sees no link change. Returns the old relay's exit code.
+   */
+  async restartRelay(): Promise<number | null> {
+    const old = this.relay;
+    const exited = new Promise<number | null>((r) => { if (old.exitCode !== null) r(old.exitCode); else old.once("exit", (code) => r(code)); });
+    old.stdin!.end();
+    const code = await Promise.race([exited, new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
+    for (const id of [...this.pending.keys()]) { clearTimeout(this.pending.get(id)); this.pending.delete(id); this.sent.delete(id); }
+    if (this.bridgeUp) await this.ask("bridge.attachNew", [false]).catch(() => {});
+    this.note(`relay restart (old exit ${code})`);
+    this.relay = this.spawnRelay();
+    if (this.bridgeUp) { this.toRelay({ t: "link", up: true, version: this.version }); this.pushAllowlist(this.o.allowlist); }
+    return code;
+  }
+
+  /** The agentwatch session `scope` ended (C10's end_scope line). */
+  endScope(scope: string): void { this.toRelay({ t: "end_scope", scope }); }
 
   /** The requests that still wait for their answer: op and age. */
   waiting(): string[] { return [...this.sent.entries()].map(([id, s]) => `${id} ${s.op} for ${Date.now() - s.at} ms`); }
