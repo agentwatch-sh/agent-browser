@@ -116,6 +116,38 @@ export function refusal(method: string, params: any, onPage: boolean): string | 
   return null;
 }
 
+/** The host of a URL that passed urlRefusal (http:, https:, or blob: with an http(s) inner origin); the URL itself when it does not parse. */
+function hostOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.protocol === "blob:" ? new URL(url.slice("blob:".length)).hostname : u.hostname;
+  } catch { return url; }
+}
+
+/**
+ * Layer 1 of the guard (C11's refusals; the per-scope design, section 6): the host of a call that the connection's
+ * scope's list (`entries`; null: the scope has no list) does not cover, or null. It names a Target.createTarget with
+ * an http(s) `url`, and a Page.navigate of a tab's main frame with an http(s) URL or a blob: URL with an http(s)
+ * inner origin. `mainFrameId` is the tab's own target id on a page session of the tab itself (null: not known yet,
+ * so every navigation there counts as the main frame's), and undefined on any other session: a frame's navigation is
+ * not refused (O11), nor a navigation on a child session (a frame or a worker of the tab). A Page.navigate with no
+ * frameId, or with the frameId of the tab's own target (Playwright's goto sends it), is the main frame's. Other client
+ * actions still navigate as the page does (Runtime.evaluate, input on a link, Page.reload): DNR and the receiver's
+ * guard cover them. Call it after refusal(): the schemes that this does not name are refused there.
+ */
+export function offList(method: string, params: any, entries: readonly string[] | null, mainFrameId: string | null | undefined): string | null {
+  const p = params ?? {};
+  let url: string | undefined;
+  if (method === "Target.createTarget") url = p.url ? String(p.url) : undefined;
+  else if (method === "Page.navigate" && mainFrameId !== undefined && (!p.frameId || mainFrameId === null || p.frameId === mainFrameId)) url = typeof p.url === "string" ? p.url : undefined;
+  if (url === undefined || url === "about:blank") return null;
+  const scheme = schemeOf(url);
+  if (scheme !== "http:" && scheme !== "https:" && !(scheme === "blob:" && /^blob:https?:\/\//i.test(url))) return null;
+  const host = hostOf(url);
+  const covered = !!entries && entries.some((d) => host === d || host.endsWith(`.${d}`));
+  return covered ? null : host;
+}
+
 export type Route = "model" | "chrome" | { refused: string };
 
 /**

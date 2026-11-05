@@ -12,9 +12,9 @@ import { WebSocketServer } from "ws";
 import { socketAlive } from "../proxy.ts";
 import { Bridge, MAX_REQUEST } from "./bridge.ts";
 import { Model } from "./model.ts";
+import { SCOPE } from "./scopes.ts";
 
-/** A scope: every agentwatch session name matches it. */
-export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export { SCOPE };
 export const NOT_FOUND = "Not found. Connect a CDP client to /devtools/browser/<scope>.";
 export const FROM_PAGE = "A web page cannot connect to the agent browser.";
 
@@ -22,12 +22,16 @@ export const FROM_PAGE = "A web page cannot connect to the agent browser.";
 export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean };
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void> };
 
-/** The answer to a request that gets no connection, or the request's scope. A browser's WebSocket always carries an Origin header. */
+/**
+ * The answer to a request that gets no connection, or the request's scope, in C11's order of the checks (without the
+ * peer check): the Origin's 403, the 404, the "not ready" 503s, then the 503 of a scope that the last allowlist line
+ * gives no list. A browser's WebSocket always carries an Origin header.
+ */
 function admit(req: IncomingMessage, model: Model): { scope: string } | [number, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
   const m = /^\/devtools\/browser\/([^/]*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
   if (req.method !== "GET" || !m || !SCOPE.test(m[1])) return [404, NOT_FOUND];
-  const why = model.notReady();
+  const why = model.refuse(m[1]);
   return why ? [503, why] : { scope: m[1] };
 }
 

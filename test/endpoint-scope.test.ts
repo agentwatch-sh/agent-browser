@@ -19,8 +19,8 @@ import { INPUT_LOCK, POINTER_FILE } from "../src/input.ts";
 import { ENDPOINT_SCOPE_RE, ENDPOINT_SCOPES_DIR, endpointScope, recordDir, resolveOptions, scopeFolderName, TAB_SCOPE_RE, type InputTiming } from "../src/options.ts";
 import { SCOPE } from "../src/relay/endpoint.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
-import { backByChrome, harness } from "./fake-bridge.ts";
-import { cli, consumer, fixtureServer, site } from "./helpers.ts";
+import { backByChrome, harness, lineOf } from "./fake-bridge.ts";
+import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
 
 const RECORD_FILES = ["tabs.json", "tab-scopes.json", "reads.json", "window.json", "tab-pages.json"];
 
@@ -127,14 +127,14 @@ test("an endpoint scope's folder name: the scope, a capital letter as + and its 
 const FAST: Partial<InputTiming> = { pressMs: [6, 9], keyMs: [6, 9], holdMs: [1, 2], settleMs: [1, 3], wheelMs: [1, 3], moveScale: 0.05, activateMs: 300 };
 
 test("over the relay, two sessions' commands with one state folder, as agentwatch runs them: each endpoint scope keeps its names, tab scopes and read marks", async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   const end = await backByChrome(h.fake, chrome);
   // agentwatch browser <command>: --cdp-url <the session's URL> --state-dir <one folder> --tab-scope <session>.
   const session = (name: string) => c.options({ cdpUrl: h.url(name), tabScope: name, platform: "linux", inputTiming: FAST,
     display: { own: true, xdotool: false } });
   const A = session("s-a"), B = session("S-B");
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const a = await commands.open(A, { url: `${fx.base}/?a`, name: "main" });
     await commands.text(A, { tab: "main" });
     const b = await commands.open(B, { url: `${fx.base}/?b`, name: "main" });
@@ -162,14 +162,14 @@ test("over the relay, two sessions' commands with one state folder, as agentwatc
 });
 
 test("over the relay, two endpoint scopes share the one input lock: their input never overlaps (ab-1bi)", async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   const end = await backByChrome(h.fake, chrome);
   const session = (name: string, extra: Partial<InputTiming> = {}) => c.options({ cdpUrl: h.url(name), tabScope: name, platform: "linux",
     inputTiming: { ...FAST, ...extra }, display: { own: true, xdotool: false } });
   const lock = join(c.stateDir, INPUT_LOCK);
   const ours = () => { try { return readFileSync(lock, "utf8") === String(process.pid); } catch { return false; } };
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const pages: FakePage[] = [], seen: boolean[][] = [];
     for (const name of ["s-a", "s-b"]) {
       const opened = await commands.open(session(name), { url: fx.base, name: "main" });

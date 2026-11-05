@@ -1,5 +1,5 @@
 // The relay (agent mode's CDP endpoint) end to end: real CDP clients on its Unix socket, and the fake receiver of
-// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension ffaf794).
+// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension c99bebb).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,10 +10,14 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { CDPConnection } from "../src/cdp.ts";
 import { startRelay } from "../src/relay/endpoint.ts";
-import { harness, raw, UA, until, type Harness } from "./fake-bridge.ts";
+import { harness, LINE, raw, UA, until, type Harness } from "./fake-bridge.ts";
 import { BIN_JS } from "./helpers.ts";
 
-const endpointV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-ffaf794/endpoint.json", import.meta.url), "utf8"));
+const endpointV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-c99bebb/endpoint.json", import.meta.url), "utf8"));
+/** The body of an upgrade answer of the vectors, by its id. */
+const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id).body;
+/** A refusal text of the vectors, by its place in their list of templates. */
+const template = (text: string) => endpointV.templates.find((t: string) => t === text);
 
 /** A tab of the connection's own, opened with auto-attach on: its target id, its session and the fake's tab. */
 async function page(h: Harness, c: CDPConnection, wait = false) {
@@ -33,18 +37,18 @@ const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => 
 test("the endpoint refuses connections until the extension is linked, confirmed the allowlist and knows the bridge", async () => {
   const h = await harness();
   try {
-    assert.deepEqual(await raw(h.url("s1")).then((r) => [r.status, r.body]), [503, endpointV.upgradeAnswers[2].body]);
-    h.fake.line({ t: "link", up: true, version: "0.2.0" });
+    assert.deepEqual(await raw(h.url("s1")).then((r) => [r.status, r.body]), [503, answer("notConnected")]);
+    h.fake.line({ t: "link", up: true, version: "0.3.1" });
     await until(() => h.fake.sent("bridge.info").length, "bridge.info");
-    assert.deepEqual(await raw(h.url("s1")).then((r) => [r.status, r.body]), [503, endpointV.upgradeAnswers[3].body]);
+    assert.deepEqual(await raw(h.url("s1")).then((r) => [r.status, r.body]), [503, answer("notConfirmed")]);
     await h.ready();
     // The first link up clears the six content-setting types; the allowlist sets automatic downloads for its domains.
     await until(() => h.fake.sent("contentSettings.set").length, "the automatic-downloads setting");
     assert.deepEqual(h.fake.sent("contentSettings.clear").slice(0, 6).map((r) => r.args[0]), ["location", "notifications", "camera", "microphone", "clipboard", "automaticDownloads"]);
     assert.deepEqual(h.fake.sent("contentSettings.set").map((r) => r.args), [["automaticDownloads", { primaryPattern: "*://*.a.example/*", setting: "allow" }]]);
-    assert.deepEqual(await raw(h.url("s1"), { Origin: "https://a.example" }).then((r) => [r.status, r.body]), [403, endpointV.upgradeAnswers[1].body]);
+    assert.deepEqual(await raw(h.url("s1"), { Origin: "https://a.example" }).then((r) => [r.status, r.body]), [403, answer("fromPage")]);
     for (const path of ["/devtools/browser/.x", "/devtools/browser/a%2Fb", "/json/version", "/devtools/page/T7"]) {
-      assert.deepEqual(await raw(`ws+unix://${h.socket}:${path}`).then((r) => [r.status, r.body]), [404, endpointV.upgradeAnswers[0].body], path);
+      assert.deepEqual(await raw(`ws+unix://${h.socket}:${path}`).then((r) => [r.status, r.body]), [404, answer("notFound")], path);
     }
     const c = await h.connect();
     assert.deepEqual(await c.send("Browser.getVersion"), { protocolVersion: "1.3", product: "Chrome/1.0.0.0", revision: "", userAgent: UA, jsVersion: "" });
@@ -55,36 +59,40 @@ test("the endpoint refuses connections until the extension is linked, confirmed 
     await c.closedPromise;
     const asked = h.fake.sent("bridge.info").length;
     h.fake.line({ t: "link", up: true, version: "0.1.0" });
-    h.fake.line({ t: "allowlist", domains: ["a.example"] });
-    await until(() => h.fake.sent("bridge.info").length > asked && h.relay.model.notReady() === endpointV.upgradeAnswers[4].body, "the too-old answer");
-    assert.deepEqual(await raw(h.url("s1")).then((r) => [r.status, r.body]), [503, endpointV.upgradeAnswers[4].body]);
+    h.fake.line(LINE);
+    await until(() => h.fake.sent("bridge.info").length > asked && h.relay.model.notReady() === answer("tooOld"), "the too-old answer");
+    assert.deepEqual(await raw(h.url("s1")).then((r) => [r.status, r.body]), [503, answer("tooOld")]);
   } finally { await h.close(); }
 });
 
 test("every refusal of the vectors gets its exact text before any bridge request", async () => {
   const h = await harness();
   try {
-    await h.ready();
+    // The scope's list is the vectors' scopeList.
+    await h.ready({ t: "allowlist", lists: { v: endpointV.scopeList }, scopes: { s1: "v" }, default: null });
     const c = await h.connect();
-    const { sessionId } = await page(h, c);
+    const { sessionId, targetId } = await page(h, c);
     await new Promise((r) => setTimeout(r, 20));
+    // The vectors' mainFrameId is the sample tab's own target: here the test tab's.
+    const own = (p: any) => (p?.frameId === endpointV.mainFrameId ? { ...p, frameId: targetId } : p);
     // These need another connection, the bridge's answers or a small MAX_REQUEST: their own tests below.
     const elsewhere = /Another connection|receiver answered|MAX_REQUEST/;
     for (const v of endpointV.refusals.filter((v: any) => !elsewhere.test(v.note ?? ""))) {
       const before = h.fake.requests.length;
       const sid = v.session === "page" ? (/does not hold/.test(v.note ?? "") ? "NOT-A-SESSION" : sessionId) : undefined;
-      assert.equal(await failure(c.send(v.method, v.params, sid)), v.error, `${v.session} ${v.method}`);
+      assert.equal(await failure(c.send(v.method, own(v.params), sid)), v.error, `${v.session} ${v.method} ${JSON.stringify(v.params)}`);
       // Only the window check reads which tabs a window holds.
       assert.deepEqual(h.fake.requests.slice(before).filter((r) => r.op !== "tabs.query"), [], `${v.method} reached the bridge`);
     }
     // Playwright sends Runtime.addBinding again for each new page after a refused exposeFunction: each page refuses it.
     const second = await page(h, c);
-    assert.equal(await failure(c.send("Runtime.addBinding", { name: "__playwright__binding__" }, second.sessionId)), endpointV.templates[11]);
+    assert.equal(await failure(c.send("Runtime.addBinding", { name: "__playwright__binding__" }, second.sessionId)), template(endpointV.refusals.find((v: any) => v.method === "Runtime.addBinding").error));
     // The passes reach Chrome as they are, on the page's own target.
     for (const v of endpointV.passes) {
       const before = h.fake.requests.length;
       await c.send(v.method, v.params, v.session === "page" ? sessionId : undefined);
-      const reached = h.fake.requests.slice(before).find((r) => (r.op === "debugger.sendCommand" && r.args[1] === v.method) || (r.op === "windows.create" && v.method === "Target.createTarget"));
+      const reached = h.fake.requests.slice(before).find((r) => (r.op === "debugger.sendCommand" && r.args[1] === v.method) || (r.op === "windows.create" && v.method === "Target.createTarget")
+        || (r.op === "contentSettings.set" && v.method === "Browser.grantPermissions"));
       assert.ok(reached, `${v.method} did not reach Chrome`);
       if (reached.op === "debugger.sendCommand") assert.deepEqual(reached.args[2], v.params);
     }
@@ -99,7 +107,7 @@ test("a tab belongs to one connection of its scope; another scope never sees it;
     const { targetId, info, tab } = await page(h, a);
     assert.equal(info.browserContextId, "agentwatch-default");
     assert.deepEqual((await b.send("Target.getTargets")).targetInfos.map((t: any) => [t.targetId, t.attached]), [[targetId, true]]);
-    assert.equal(await failure(b.send("Target.attachToTarget", { targetId, flatten: true })), endpointV.templates[15]);
+    assert.equal(await failure(b.send("Target.attachToTarget", { targetId, flatten: true })), template("The tab is in use by another connection of this scope"));
     assert.deepEqual((await other.send("Target.getTargets")).targetInfos, []);
     for (const method of ["Target.attachToTarget", "Target.closeTarget", "Target.activateTarget", "Target.getTargetInfo", "Browser.getWindowForTarget"]) {
       assert.equal(await failure(other.send(method, { targetId })), "No target with given id found", method);
@@ -158,7 +166,7 @@ test("a command that timed out detaches its tab, which returns to its auto-attac
     const fresh = (await again).sessionId;
     assert.notEqual(fresh, sessionId);
     assert.equal(h.fake.sent("debugger.detach").filter((r) => r.args[0] === tab.id).length, 1);
-    assert.equal(await failure(c.send("Runtime.evaluate", { expression: "new Promise(() => {})", awaitPromise: true }, fresh)), endpointV.refusals.at(-1).error);
+    assert.equal(await failure(c.send("Runtime.evaluate", { expression: "new Promise(() => {})", awaitPromise: true }, fresh)), endpointV.refusals.find((v: any) => /answered timeout/.test(v.note ?? "")).error);
     assert.equal(await failure(c.send("Page.captureScreenshot", {}, sessionId)), "Session with given id not found.");
     h.fake.command = (_t, method) => (method === "Page.captureScreenshot" ? { error: "too large" } : undefined);
     assert.equal(await failure(c.send("Page.captureScreenshot", { captureBeyondViewport: true }, fresh)), endpointV.refusals.find((v: any) => /too large/.test(v.note ?? "")).error);
@@ -289,7 +297,7 @@ test("Target.createTarget with a URL opens the tab at about:blank, then navigate
     const attached = waiting.waitForEvent("Target.attachedToTarget");
     await waiting.send("Target.createTarget", { url: "https://a.example/x" });
     const ev = await attached;
-    assert.deepEqual(h.fake.sent("windows.create").at(-1)!.args, [{ url: "about:blank", focused: false }]);
+    assert.deepEqual(h.fake.sent("windows.create").at(-1)!.args, [{ url: "about:blank", focused: false }, "s1"], "the connection's scope is the second arg (C10)");
     assert.ok(ev.waitingForDebugger);
     assert.ok(!ops(from).includes("Page.navigate"), "no navigation before the client is ready");
     from = h.fake.requests.length;
@@ -341,7 +349,7 @@ test("with the real receiver's order (tabs.onCreated after the answer), a new ta
   } finally { await h.close(); }
 });
 
-test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its URL then; a later client's navigation is its own", async () => {
+test("a creator that leaves before its runIfWaitingForDebugger: its tab stays at about:blank (no navigation after its creator left); a later client's navigation is its own", async () => {
   const h = await harness();
   try {
     await h.ready();
@@ -352,7 +360,9 @@ test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its
     await att;
     const navs = () => h.fake.sent("debugger.sendCommand", "Page.navigate").map((r) => r.args[2].url);
     await a.close();
-    await until(() => navs().includes("https://a.example/first"), "the creator's URL at its leave");
+    await until(() => h.fake.sent("debugger.detach").length, "the detach at the creator's leave");
+    await sleep(50);
+    assert.deepEqual(navs(), [], "no navigation for a creator that left (review-58 note 1)");
     const b = await h.connect("s1");
     const bAtt = b.waitForEvent("Target.attachedToTarget");
     await b.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
@@ -360,7 +370,7 @@ test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its
     await b.send("Page.navigate", { url: "https://a.example/mine" }, ev.sessionId);
     await b.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
     await sleep(50);
-    assert.deepEqual(navs(), ["https://a.example/first", "https://a.example/mine"]);
+    assert.deepEqual(navs(), ["https://a.example/mine"]);
     // A detach after a timeout drops a pending URL too: the client's next session gets no stale navigation.
     const c = await h.connect("s3");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });

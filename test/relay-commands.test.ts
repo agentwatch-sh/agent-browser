@@ -11,14 +11,14 @@ import { NOT_READY } from "../src/relay/model.ts";
 import { resolveOptions } from "../src/options.ts";
 import { MODEL_SET } from "../src/relay/policy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
-import { backByChrome, harness } from "./fake-bridge.ts";
-import { cli, consumer, fixtureServer, site } from "./helpers.ts";
+import { backByChrome, harness, lineOf } from "./fake-bridge.ts";
+import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
 
 test("agent-browser's commands work over the endpoint, in its scope, with no proxy and no launch", async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   const end = await backByChrome(h.fake, chrome);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const o = c.options({ cdpUrl: h.url("ab-lead") });
     const opened = await commands.open(o, { url: fx.base, name: "main" });
     assert.equal(opened.tab.name, "main");
@@ -29,7 +29,7 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     // On Linux the page has a window of its own, the relay answers focus emulation itself, and agent-browser's click
     // brings the page's window forward itself (Page.bringToFront, ab-v16.26), so the relay's own window focus before a
     // press (ab-v16.28) finds the window focused and sends none.
-    assert.deepEqual(h.fake.sent("windows.create").map((r) => r.args), [[{ url: "about:blank", focused: false }]]);
+    assert.deepEqual(h.fake.sent("windows.create").map((r) => r.args), [[{ url: "about:blank", focused: false }, "ab-lead"]]);
     assert.deepEqual(h.fake.sent("tabs.create"), []);
     assert.ok(!chrome.calls.some((x) => x.method === "Emulation.setFocusEmulationEnabled"), "focus emulation reached Chrome");
     const win = chrome.pages.get(opened.tab.targetId)!.windowId;
@@ -56,10 +56,10 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
 });
 
 test("open --tab over the endpoint (Linux): the relay opens a window, so agent-browser records no tab page and drives it as a window (review-45 F8)", async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   const end = await backByChrome(h.fake, chrome);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
     const opened = await commands.open(o, { url: fx.base, name: "t", tab: true });
     const page = chrome.pages.get(opened.tab.targetId)!;
@@ -73,11 +73,11 @@ test("open --tab over the endpoint (Linux): the relay opens a window, so agent-b
 });
 
 test("the fake receiver's tabs have the fake Chrome's front state: a tab behind a popup tab is not active, and the relay's input gives it a tab switch (review-45b note 9)", async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   chrome.tabSwitches = true;
   const end = await backByChrome(h.fake, chrome);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
     const opened = await commands.open(o, { url: fx.base, name: "o" });
     const page = chrome.pages.get(opened.tab.targetId)!;

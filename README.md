@@ -773,6 +773,76 @@ serves agent mode's CDP endpoint (contract C11 of chrome-extension's `docs/proto
 Playwright MCP and agent-browser's commands with `--cdp-url`. It drives the agent Chrome through the agent
 extension's bridge (contract C10).
 
+**One allowlist per scope** (board task ab-v16.35, part 2 of the per-scope build; the design:
+`docs/superpowers/specs/2026-11-04-per-scope-allowlist-design.md`, section 8.4, and
+`2026-11-05-orphan-agent-tabs-design.md`, section 8). The scope is the name in the endpoint's path
+(`/devtools/browser/<scope>`), the agentwatch session's name at its launch. Each scope has its own list.
+The relay needs the agent extension of chrome-extension 0.3.1 or later (parts 1a and 1b), and agentwatch's
+daemon must send `set_scopes` (part 3): there is no backward compatibility.
+
+- The allowlist line. After each `set_scopes` that the extension confirms, the daemon writes its object
+  to the relay: `{"t":"allowlist","lists":{...},"scopes":{...},"default":...}`. The relay applies C4's
+  rules to it (`src/relay/scopes.ts`), as the extension applies them to `set_scopes`: a scope's list is
+  the list of its `scopes` entry when it has one (`null`, or a list that is not in `lists`, gives no
+  list, with no fall-back), else the `default` list. An entry that is not a normalized host name (C5)
+  does not apply. An old line (`{"domains": [...]}`) gives no scope a list.
+- Readiness. A connection of a scope whose list the last line does not give gets the 503
+  `The agent browser is not ready: the allowlist has no list for this scope.`, after the other 503s. A
+  scope with an empty list is admitted: it can open `about:blank` only.
+- A scope that loses its list. At each line the relay closes the connections of each scope that has no
+  list any more (1008, `The allowlist has no list for this scope any more`). At a line whose `scopes` and
+  `lists` are objects it also drops each tab of such a scope from its model, so a later session of the
+  same name never sees one (the extension's sweep closes the tab).
+- The relay's own tabs. `Target.createTarget` names the connection's scope as the second arg of
+  `windows.create` (Linux) or `tabs.create` (the Mac). The extension's `no list for this scope` reaches the
+  client as a CDP error (-32000).
+- Other tabs. A popup or a replaced tab joins a scope only when the extension reports it
+  (`bridge.tabScope`); the relay never takes a tab's scope from its opener. A new tab with no report waits
+  500 ms in no scope (attached and held), and is then released and detached; a later report still puts it
+  in its scope, free. The owner of a popup's opener (Chrome's `openerId`) still owns the popup, when both
+  are in one scope.
+- The tabs of before. At each link up (and each relay start) the relay reads the extension's map of the
+  tabs' scopes (`bridge.tabScopes`) and takes those tabs back into their scopes, free, before it admits a
+  connection. So after a link drop or a relay restart a client of the scope sees its pages again
+  (`context.pages()`). Its CDP sessions do not stay. A failed `bridge.info` (its 30 s deadline, say) is
+  tried again, three tries in all; then the relay waits for the next link up.
+- A bridge answer and a line in one read. The extension's answer (`bridge.tabScopes`, `windows.create`,
+  `tabs.create`) and a line that gives the scope no list can come in one read of the relay's standard
+  input; the line then applies first. So before the relay gives a tab the scope of such an answer, it
+  checks the scope again: no tab joins a scope that the last line (whose `scopes` and `lists` are objects)
+  gives no list, or a scope of an `end_scope`. Such a `Target.createTarget` gets `no list for this scope`.
+- A closed connection. A connection that the relay closed (an `end_scope`, a line without its list, a link
+  change) can still send until its close handshake ends: the relay ignores it (no answer, no bridge
+  request). A tab whose creator left before its `Runtime.runIfWaitingForDebugger` stays at `about:blank`:
+  the relay sends no navigation for it. Before the navigation of a new tab the relay checks its URL again
+  against the last line, which can have changed the scope's list during the hold.
+- Layer 1 of the guard. The relay refuses a `Page.navigate` of a tab's main frame and a
+  `Target.createTarget` whose `http:`/`https:` host (or a `blob:` URL's inner host) the scope's list does
+  not cover: `Not allowed: <host> is not on the allowlist`, before any bridge request. A frame's
+  navigation is not refused. Links, redirects, page scripts and popups are the extension's to block (its
+  rules per tab).
+- Grants. `Browser.grantPermissions` with no origin covers the scope's own list; one with an origin needs
+  a host of that list. At each line the relay sets again the grants that each connection's own list still
+  covers, and allows automatic downloads for each entry of every list. A content setting acts on the whole
+  profile: a grant of one scope also applies to another scope's tab on the same host.
+- The end of a scope. From an `end_scope` on, a new connection of that scope gets the no-list 503 until
+  a later line names the scope again (in `scopes`), also over a link change and also when the `default`
+  list would cover it. This is stricter than the contract text of chrome-extension main c99bebb; board
+  task ab-v16.55 adds the matching C11 sentence.
+- A line with `roots`. This relay runs without the peer check, so it applies no list of a line that has a
+  `roots` field (any value), as if no line had come: every open connection closes (1008), and each upgrade
+  gets the 503 `The agent browser is not ready: the allowlist has session roots, but the relay was started
+  without --peer-check.`, until a line without `roots` comes. So a daemon and a relay that disagree fail
+  closed.
+- Closes. The extension keeps the browser's last window for every close (its removal queue). So the
+  relay sends `end_scope`'s `tabs.remove`, `Target.closeTarget` (as `tabs.remove`: the extension's close,
+  with no `beforeunload`) and a client's `Page.close` as they are, with no query, window or queue of its
+  own. A late `end_scope`, whose tab the extension's sweep took out of its scope, gets `not an agent tab`:
+  for the relay that removal is done.
+- Not in this part: the peer check (`--peer-check` and the check of the session roots; board task
+  ab-v16.51). Until then the scope is advisory: any process of the daemon's user can connect with any
+  scope and get that scope's list.
+
 **On Linux, one window per page** (board task ab-v16.28; the anti-detect design of
 `docs/research/2026-11-05-anti-detect-drive.md`, "The answer" steps 1, 2 and 5):
 
@@ -1546,23 +1616,32 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Meta+R (reload), Meta+W (the window closed) and Meta+T (a new tab). A `--background` run (Chrome
   Beta) exited 1, as expected: its `record` and `press` trials were not measured. The head of
   `check.ts` gives these results and the Linux results of 2026-11-03.
-- `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-commands.test.ts`, `test/relay-windows.test.ts`: agent mode's relay
-  (`agent-browser relay`, contracts C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake
-  receiver and daemon (`test/fake-bridge.ts`, which also models windows, their focus and each window's
-  active tab): the policy against the contracts' vectors (copied in
-  `test/vectors/chrome-extension-ffaf794/`), the model through real CDP clients on the socket, one window
-  per page on Linux and the Mac's tabs, and agent-browser's own commands over the endpoint (`--cdp-url`)
-  with the fake Chrome behind the fake receiver.
+- `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-scopes.test.ts`, `test/relay-link-up.test.ts`,
+  `test/relay-commands.test.ts`, `test/relay-windows.test.ts`: agent mode's relay (`agent-browser relay`,
+  contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
+  (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
+  scope): the policy and the allowlist line against the contracts' vectors (copied in
+  `test/vectors/chrome-extension-c99bebb/`; the vectors of the peer check itself wait for board task
+  ab-v16.51), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
+  link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
+  endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver. Over the endpoint the fixture site
+  is `fixture.localhost` (a list entry is never an IP address; the fake Chrome reaches it on 127.0.0.1).
 - `test/live/agent-mode/` (Linux, in a private Xvfb; see the head of `run.ts`): agent mode live. A
   Chromium of its own loads chrome-extension's agent package; a stand-in for the daemon's bridge side
   and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
   concurrency cases run against it, with the C11 refusals, the tab switch of the timer answer (ab-vsm
-  Q4) and agent-browser's commands with `--cdp-url`. Its group `windows` drives the anti-detect probe's
-  page (`test/live/anti-detect/probe.ts`) in its own window with Playwright (with and without
-  `noDefaults`) and the Playwright MCP while another window has the focus, and checks that the page shows
-  no background-tab signal; it also measures two Playwright clients that type at once. Chromium gets
-  `--disable-backgrounding-occluded-windows`. `CHROME_EXTENSION=<a detached worktree of
-  chrome-extension at main b82c65d or later> npm run test:live:agent`. Not part of `npm test`.
+  Q4) and agent-browser's commands with `--cdp-url`. The stand-in daemon sends `set_scopes` (list a,
+  `a.localhost`, as the default; list b, `b.localhost`, for the group `scopes`). Its group `windows`
+  drives the anti-detect probe's page (`test/live/anti-detect/probe.ts`) in its own window with
+  Playwright (with and without `noDefaults`) and the Playwright MCP while another window has the focus,
+  and checks that the page shows no background-tab signal; it also measures two Playwright clients that
+  type at once. Its group `scopes` drives two scopes with two lists through Playwright, the Playwright MCP
+  and agent-browser: each scope's own list loads, the other's is refused or blocked, popups of eight kinds
+  ten times each keep their opener's scope, and `end_scope` and a `set_scopes` without the scope close
+  its tabs and connections while the browser's last window stays. Its group `link-up` checks a relay
+  restart, a session that ends while no relay runs, a link drop, and the closes of the browser's only
+  tabs. Chromium gets `--disable-backgrounding-occluded-windows`. `CHROME_EXTENSION=<a detached worktree
+  of chrome-extension at main c99bebb (0.3.1) or later> npm run test:live:agent`. Not part of `npm test`.
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.

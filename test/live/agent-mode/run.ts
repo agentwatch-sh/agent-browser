@@ -9,20 +9,29 @@
 // (test/live/anti-detect/probe.ts) with Playwright, with and without noDefaults, and with the Playwright MCP, and
 // checks that the page shows no background-tab signal. Chromium gets --disable-backgrounding-occluded-windows, as
 // the anti-detect design needs (docs/research/2026-11-05-anti-detect-drive.md, step 3): without it a covered window
-// is hidden and draws nothing. The group `link-up` (ab-v16.40) runs last, because it closes every other tab: after a
-// relay restart with no link change no CDP state of the old client stays on its tab, and no end_scope,
-// Target.closeTarget or Page.close of the browser's only tabs ends Chromium (also two removals at once).
+// is hidden and draws nothing. Each scope has its own list (the per-scope build, ab-v16.35): the stand-in daemon
+// sends set_scopes with list a (a.localhost) as the default and list b (b.localhost) for the scopes of the group
+// `scopes`, which drives two scopes with two lists through Playwright, the Playwright MCP and agent-browser: each
+// scope's own list loads, the other's is refused by the relay or blocked by the receiver, popups of every kind many
+// times keep their opener's scope, and the end of a scope (end_scope, and a set_scopes without it) closes its tabs and
+// its connections while the browser's last window stays. The group `link-up` (ab-v16.40, ab-v16.35) runs last,
+// because it closes every other tab: after a relay restart with no link change no CDP state of the old client stays on
+// its tab and a client of its scope sees it again, a session that ends while no relay runs loses its tabs, a scope's
+// tabs stay over a link drop, and no end_scope, Target.closeTarget or Page.close of the browser's only tabs ends
+// Chromium (also two removals at once).
 //
 //   CHROME_EXTENSION=<a detached worktree of chrome-extension> npm run test:live:agent
 //
 // Environment: CHROME_EXTENSION (required: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
 // DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), CASES (default all:
-// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,link-up) runs some groups only. The agent package must be
-// chrome-extension main b82c65d or later: the popup cases, the hold of a new tab and the off-list frame need its
-// eager attach, its hold and its DNR frame rule (ab-v16.17). It uses port 8781 (the probe's site) and *.localhost
-// hosts only. It never drives or stops a Chrome that it did not start, opens no debugging port, and no prompt can
-// appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. It deletes nothing.
+// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up) runs some groups only. The agent
+// package must be chrome-extension main c99bebb (0.3.1) or later: the per-scope receiver (parts 1a and 1b: set_scopes,
+// the tab-to-scope map, bridge.tabScope and bridge.tabScopes, the removal queue and its window rule, the retry of a
+// popup). It uses port 8781 (the probe's site), a free port of its own for the popup site of the group `scopes`, and
+// *.localhost hosts only. It never drives or stops a Chrome that it did not start, opens no debugging port, and no
+// prompt can appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. It
+// deletes nothing.
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -47,8 +56,12 @@ if (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !existsSync(join(EX
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
-const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,link-up").split(",");
+const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up").split(",");
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
+/** The relay's refusal of a navigation off the scope's list (C11, layer 1). */
+const OFF_LIST = (host: string) => new RegExp(`Not allowed: ${host.replace(/\./g, "\\.")} is not on the allowlist`);
+/** The stand-in daemon's lists: list a is the default (every scope that `scopes` does not name), list b for the group `scopes`. */
+const SCOPES = { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scopes: { "sc-b": "b", "sc-b2": "b", "ab-b": "b", "mcp-b": "b" } as Record<string, string | null>, default: "a" };
 const RELAY_SOCK = join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 const url = (scope: string) => `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -84,6 +97,11 @@ function start(bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; log
 }
 const portFree = (port: number) => new Promise<boolean>((r) => { const s = connect(port, "127.0.0.1"); s.once("connect", () => { s.destroy(); r(false); }); s.once("error", () => r(true)); });
 const status = (path: string) => new Promise<number>((r) => { get({ socketPath: RELAY_SOCK, path }, (res) => { res.resume(); r(res.statusCode ?? 0); }).once("error", () => r(0)); });
+/** The relay's HTTP answer to a plain request of `path`: its status and body (404 means that the relay would admit the scope). */
+const answerOf = (path: string) => new Promise<[number, string]>((r) => {
+  get({ socketPath: RELAY_SOCK, path }, (res) => { let b = ""; res.setEncoding("utf8"); res.on("data", (d) => (b += d)).on("end", () => r([res.statusCode ?? 0, b])); }).once("error", () => r([0, ""]));
+});
+const NO_LIST = "The agent browser is not ready: the allowlist has no list for this scope.";
 
 /** The extension ID that Chrome derives from the manifest's key. */
 function extensionId(manifest: { key: string }): string {
@@ -152,7 +170,7 @@ try {
   writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
 
   start(process.execPath, [join(PROBE, "site.mjs")], { env: { ...process.env, SITE_LOG: join(RUN, "site-log.jsonl") }, log: "site.log" });
-  daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, allowlist: ["a.localhost"],
+  daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES,
     relayLog: (l) => appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`) });
   // A private display: one MIT-MAGIC-COOKIE-1 entry from randomBytes in a 0600 file; the cookie never enters an argv.
   const field = (b: Buffer) => Buffer.concat([Buffer.from([b.length >> 8, b.length & 255]), b]);
@@ -177,9 +195,12 @@ try {
   if (CASES.includes("concurrency")) await probeScript("concurrency", "concurrency.mjs", { RELAY_SOCK, OUT: join(RUN, "concurrency.json") }, (r) =>
     /storageState/.test(r.case) ? { refused: COOKIES } : {});
   mkdirSync(join(RUN, "mcp-out"));
-  if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
+  // The probe's MCP script expects Chrome's block of an off-list browser_navigate; the relay refuses it now (layer 1).
+  if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") },
+    (r) => (r.expect === "refused" && r.tool === "browser_navigate" ? { refusedSaw: OFF_LIST("b.localhost") } : {}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
   if (CASES.includes("windows")) await windowCases(pw);
+  if (CASES.includes("scopes")) await scopeCases(pw, createRequire(join(INSTALL, "package.json"))("ws"));
   // Last: it closes every other tab of the browser.
   if (CASES.includes("link-up")) await linkUpCases(pw, createRequire(join(INSTALL, "package.json"))("ws"));
   record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium.exitCode === null ? "pass" : "fail", ms: 0 });
@@ -280,7 +301,7 @@ async function playwrightCases(pw: any) {
   }), { want: (d) => d === 42 });
   await step(G, "setViewportSize (Emulation)", async () => { await page.setViewportSize({ width: 900, height: 700 }); return page.evaluate(() => [innerWidth, innerHeight]); },
     { want: (d) => d[0] === 900 && d[1] === 700 });
-  await step(G, "page.goto an off-list host (DNR)", () => onPage(async (p) => { await p.goto(B + "/"); return p.url(); }), { refused: BLOCKED });
+  await step(G, "page.goto an off-list host: the relay refuses it (layer 1)", () => onPage(async (p) => { await p.goto(B + "/"); return p.url(); }), { refused: OFF_LIST("b.localhost") });
   await step(G, "after a blocked goto, the same page goes on", () => onPage(async (p) => {
     await p.goto(B + "/").catch(() => {});
     await p.waitForURL(/^chrome-error:/, { timeout: 3000 }).catch(() => {});
@@ -293,11 +314,11 @@ async function playwrightCases(pw: any) {
     await p.waitForTimeout(1000);
     return { url: p.url(), title: await p.title() };
   }), { want: (d) => d.url.startsWith("chrome-error:") && d.title !== "probe b" });
-  await step(G, "page.route fulfill of an off-list document", () => onPage(async (p) => {
+  await step(G, "page.route fulfill of an off-list document: the relay refuses the goto", () => onPage(async (p) => {
     await p.route(B + "/**", (r: any) => r.fulfill({ body: "<title>fulfilled</title>", contentType: "text/html" }));
     await p.goto(B + "/x");
     return p.title();
-  }), { refused: BLOCKED });
+  }), { refused: OFF_LIST("b.localhost") });
   await step(G, "an off-list frame in a page that is not on the list (setContent)", () => onPage(async (p) => {
     await p.setContent(`<iframe id="f" src="http://c.localhost:8781/frame"></iframe>`);
     // Blocked, not slow: the same frame in an allowlisted page loads in well under a second here; this waits 5 s.
@@ -527,14 +548,15 @@ async function refusedFeatureCases(pw: any) {
 
 // ---------------------------------------------------------------- the probe's MCP and concurrency scripts
 
-async function probeScript(group: string, script: string, vars: Record<string, string>, expect: (r: any) => { refused?: RegExp }) {
+async function probeScript(group: string, script: string, vars: Record<string, string>, expect: (r: any) => { refused?: RegExp; refusedSaw?: RegExp }) {
   const out = vars.OUT;
   const child = start(process.execPath, [join(PROBE, script)], { env: { ...process.env, PW_DIR: INSTALL, ...vars }, log: `${group}.log` });
   const code = await new Promise<number | null>((r) => child.once("exit", r));
   if (!existsSync(out)) { record({ group, case: `${script} ran`, status: "fail", ms: 0, error: `exit ${code}; see ${RUN}/logs/${group}.log` }); return; }
   for (const r of JSON.parse(readFileSync(out, "utf8")).results) {
     const e = expect(r), name = r.case ?? r.tool;
-    const ok = e.refused ? !r.ok && e.refused.test(r.error ?? "") : r.ok;
+    // refusedSaw: a refusal whose text the script shows in `saw` (the MCP probe's rows).
+    const ok = e.refusedSaw ? r.isError === true && e.refusedSaw.test(r.saw ?? "") : e.refused ? !r.ok && e.refused.test(r.error ?? "") : r.ok;
     record({ group, case: name, status: ok ? "pass" : "fail", ms: r.ms, ...(r.error ? { error: r.error } : { detail: r.detail ?? r.saw }) });
   }
 }
@@ -620,8 +642,13 @@ async function windowCases(pw: any) {
   const variant = async (name: string, drive: (T: string, front: () => Promise<void>, stepOf: StepFn) => Promise<void>) => {
     n++;
     const F = `F${n}`, T = `T${n}`, from = daemon!.log.length, t0 = Date.now();
-    const fw = (await daemon!.ask("windows.create", [{ url: pageUrl(F), focused: true }])).id;
+    // F's page: a page of another scope's client (a bridge op opens about:blank only, in a scope, since the per-scope
+    // build), in its own window, which then takes the focus.
+    const fBrowser = await pw.chromium.connectOverCDP(url("win-front"), { timeout: 20_000 });
+    await (await fBrowser.contexts()[0].newPage()).goto(pageUrl(F));
     await loaded(F);
+    const fw = (await daemon!.ask("tabs.get", [await tabIdOf(F)])).windowId as number;
+    await daemon!.ask("windows.update", [fw, { focused: true }]);
     // The operator (or another agent) has the focus in F's window, in front of T's.
     const front = async () => { await daemon!.ask("windows.update", [fw, { focused: true }]); await sleep(500); };
     const steps: any[] = [];
@@ -647,6 +674,7 @@ async function windowCases(pw: any) {
     let t1 = Date.now();
     try { await drive(T, front, stepOf); t1 = Date.now(); }
     finally {
+      await fBrowser.close().catch(() => {});
       for (const tab of [T, F]) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
     }
     const sorted = log.slice().sort((x, y) => x.t - y.t);
@@ -804,14 +832,283 @@ async function windowCases(pw: any) {
   }
 }
 
+// ---------------------------------------------------------------- two scopes with two lists (ab-v16.35)
+
+/** A small site for the group `scopes`, on a free port: the same page on a.localhost and b.localhost, with a link and a
+ *  popup to the other host, and a button or link for each popup kind. It logs each request's host, method and path. */
+async function popupSite(): Promise<{ port: number; seen: { host: string; method: string; path: string }[]; close: () => void }> {
+  const { createServer } = await import("node:http");
+  const seen: { host: string; method: string; path: string }[] = [];
+  let port = 0;
+  const server = createServer((req, res) => {
+    const host = (req.headers.host ?? "").split(":")[0];
+    const u = new URL(req.url ?? "/", `http://${host}`);
+    seen.push({ host, method: req.method ?? "", path: u.pathname + u.search });
+    const other = host === "a.localhost" ? "b.localhost" : "a.localhost";
+    const html = (title: string, body: string) => `<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,"><title>${title}</title></head><body>${body}</body></html>`;
+    req.resume();
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    if (u.pathname === "/popup") return res.end(html(`popup ${host}`, `<h1 id="p">Popup ${u.searchParams.get("via")} ${host}</h1>`));
+    res.end(html(`scope page ${host}`, `<h1>Scope page ${host}</h1>
+<a id="other" href="http://${other}:${port}/">Other list</a>
+<button id="otherpop" onclick="window.open('http://${other}:${port}/popup?via=otherpop')">Other popup</button>
+<button id="open" onclick="window.open('/popup?via=open')">window.open</button>
+<button id="signin" onclick="const w = window.open(''); setTimeout(() => { w.location.href = '/popup?via=signin'; }, 0)">sign-in pattern</button>
+<button id="signinawait" onclick="(async () => { const w = window.open(''); await new Promise((r) => setTimeout(r, 80)); w.location.href = '/popup?via=signinawait'; })()">sign-in pattern after an await</button>
+<a id="relopener" href="/popup?via=relopener" target="_blank" rel="opener">rel=opener</a>
+<button id="noopener" onclick="window.open('/popup?via=noopener', '_blank', 'noopener')">noopener</button>
+<a id="blank" href="/popup?via=blank" target="_blank">target=_blank</a>
+<form action="/popup" method="get" target="_blank"><input type="hidden" name="via" value="formget"><button id="formget">GET form</button></form>
+<form action="/popup?via=formpost" method="post" target="_blank"><input type="hidden" name="x" value="1"><button id="formpost">POST form</button></form>`));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  port = (server.address() as { port: number }).port;
+  return { port, seen, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+/** An MCP client over the Playwright MCP's standard input and output, on the endpoint of `scope`. */
+async function mcpClient(scope: string, log: string) {
+  const child = start(process.execPath, [join(INSTALL, "node_modules/@playwright/mcp/cli.js"), "--output-dir", join(RUN, "mcp-out")],
+    { env: { ...process.env, PLAYWRIGHT_MCP_CDP_ENDPOINT: url(scope) }, log, pipe: true });
+  let buf = "", next = 1;
+  const waiting = new Map<number, (m: any) => void>();
+  child.stdout!.on("data", (d) => {
+    buf += d;
+    for (let i; (i = buf.indexOf("\n")) >= 0;) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; const m = JSON.parse(line); waiting.get(m.id)?.(m); waiting.delete(m.id); }
+  });
+  const rpc = (method: string, params: object) => new Promise<any>((resolve) => { const id = next++; waiting.set(id, resolve); child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); });
+  const text = (r: any) => (r.result?.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
+  await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "ab-v16.35-live", version: "0" } });
+  child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+  /** A tool's text, or its error text after "error: ". */
+  const call = async (name: string, args: object) => {
+    const r = await rpc("tools/call", { name, arguments: args });
+    return r.error || r.result?.isError ? `error: ${r.error?.message ?? text(r)}` : text(r);
+  };
+  return { call, close: () => stopChild(child) };
+}
+
+/**
+ * The per-scope build (board ab-v16.35; the per-scope design, sections 5 to 8): scope sc-a has list a (a.localhost,
+ * the default), scope sc-b list b (b.localhost). Through Playwright, the Playwright MCP and agent-browser over
+ * --cdp-url: each scope's own list loads; the relay refuses the other's (layer 1), and the receiver blocks a link or a
+ * popup to it (DNR, its per-tab rules); each scope sees only its own pages; popups of every kind, ten times each, keep
+ * their opener's scope. Then the end of a scope: end_scope, and a set_scopes that gives the scope no list (the
+ * receiver's sweep), each close the scope's tabs and connections, and the browser's last window stays.
+ */
+async function scopeCases(pw: any, WebSocket: any) {
+  const G = "scopes", d = daemon!;
+  /** The popup kinds of the per-scope design's probe (section 5.2): each opens /popup?via=<kind> on the page's own host. */
+  const POPUP_KINDS = ["open", "signin", "signinawait", "relopener", "noopener", "blank", "formget", "formpost"];
+  const site = await popupSite();
+  const SA = `http://a.localhost:${site.port}`, SB = `http://b.localhost:${site.port}`;
+  const alive = () => chromium!.exitCode === null && chromium!.signalCode === null;
+  const tabIdOfTarget = async (targetId: string) => (await d.ask("debugger.getTargets")).find((t: any) => t.id === targetId)?.tabId as number | undefined;
+  const targetOf = async (context: any, p: any) => (await (await context.newCDPSession(p)).send("Target.getTargetInfo")).targetInfo.targetId as string;
+  const openTabs = async () => (await d.ask("tabs.query", [{}])).map((t: any) => ({ id: t.id as number, url: (t.pendingUrl || t.url) as string }));
+  const bA = await pw.chromium.connectOverCDP(url("sc-a"), { timeout: 20_000 });
+  const bB = await pw.chromium.connectOverCDP(url("sc-b"), { timeout: 20_000 });
+  const cA = bA.contexts()[0], cB = bB.contexts()[0];
+  let pA: any, pB: any;
+  try {
+    await step(G, "each scope's own list loads (Playwright: sc-a on a.localhost, sc-b on b.localhost)", async () => {
+      pA = await cA.newPage(); pB = await cB.newPage();
+      await pA.goto(SA + "/"); await pB.goto(SB + "/");
+      return [await pA.title(), await pB.title()];
+    }, { want: (x) => x[0] === "scope page a.localhost" && x[1] === "scope page b.localhost" });
+    await step(G, "the relay refuses sc-a's goto to b.localhost (layer 1), before Chrome", () => pA.goto(SB + "/"), { refused: OFF_LIST("b.localhost") });
+    await step(G, "the relay refuses sc-b's goto to a.localhost (layer 1), before Chrome", () => pB.goto(SA + "/"), { refused: OFF_LIST("a.localhost") });
+    await step(G, "the relay refuses sc-b's newPage-less Target.createTarget to a.localhost; no tab opens", async () => {
+      const s = await bB.newBrowserCDPSession();
+      const before = (await openTabs()).length;
+      const err = await s.send("Target.createTarget", { url: SA + "/?created" }).then(() => null, (e: Error) => e.message);
+      await sleep(300);
+      return { err, opened: (await openTabs()).length - before };
+    }, { want: (x) => OFF_LIST("a.localhost").test(x.err ?? "") && x.opened === 0 });
+    // The receiver's block per tab (DNR): a.localhost is on list a, so a block here comes from sc-b's own rules.
+    await step(G, "a link of sc-b's page to a.localhost is blocked by the receiver (the tab's own list)", async () => {
+      await pB.goto(SB + "/");
+      const from = site.seen.length;
+      await pB.locator("#other").click();
+      await pB.waitForURL(/^chrome-error:/, { timeout: 5000 }).catch(() => {});
+      const r = { url: pB.url(), aSaw: site.seen.slice(from).some((x) => x.host === "a.localhost") };
+      await pB.goto(SB + "/");
+      return r;
+    }, { want: (x) => x.url.startsWith("chrome-error:") && !x.aSaw });
+    await step(G, "a link of sc-a's page to b.localhost is blocked by the receiver", async () => {
+      await pA.goto(SA + "/");
+      const from = site.seen.length;
+      await pA.locator("#other").click();
+      await pA.waitForURL(/^chrome-error:/, { timeout: 5000 }).catch(() => {});
+      const r = { url: pA.url(), bSaw: site.seen.slice(from).some((x) => x.host === "b.localhost") };
+      await pA.goto(SA + "/");
+      return r;
+    }, { want: (x) => x.url.startsWith("chrome-error:") && !x.bSaw });
+    await step(G, "a popup of sc-b's page to a.localhost stays in sc-b and is blocked", async () => {
+      const from = site.seen.length;
+      const [pop] = await Promise.all([pB.waitForEvent("popup", { timeout: 8000 }), pB.locator("#otherpop").click()]);
+      await pop.waitForTimeout(1000);
+      const r = { url: pop.url(), inB: cB.pages().includes(pop), aSaw: site.seen.slice(from).some((x) => x.host === "a.localhost") };
+      await pop.close().catch(() => {});
+      return r;
+    }, { want: (x) => x.url.startsWith("chrome-error:") && x.inB && !x.aSaw });
+    await step(G, "each scope sees only its own pages", async () => ({
+      a: cA.pages().map((p: any) => new URL(p.url()).hostname), b: cB.pages().map((p: any) => new URL(p.url()).hostname),
+    }), { want: (x) => x.a.length === 1 && x.a[0] === "a.localhost" && x.b.length === 1 && x.b[0] === "b.localhost" });
+
+    // Popups of every kind, ten times each, from each scope's page: each joins its opener's scope (bridge.tabScope) and
+    // loads its host, which only its own scope's list holds. A POST form fails closed when its first request comes
+    // before its rule (the retry reloads a GET only): it must still be in the scope.
+    for (const [scope, p, ctx, other, base] of [["sc-a", () => pA, cA, cB, SA], ["sc-b", () => pB, cB, cA, SB]] as const) {
+      for (const kind of POPUP_KINDS) {
+        await step(G, `${scope}: 10 popups of the kind ${kind} keep the opener's scope`, async () => {
+          let loaded = 0, inScope = 0, otherSaw = 0;
+          const urls: string[] = [];
+          for (let i = 0; i < 10; i++) {
+            const page = p();
+            const [pop] = await Promise.all([page.waitForEvent("popup", { timeout: 8000 }), page.locator(`#${kind}`).click()]);
+            await pop.waitForURL((u: URL) => u.href.includes(`via=${kind}`) || u.protocol === "chrome-error:", { timeout: 8000 }).catch(() => {});
+            await pop.waitForLoadState("load", { timeout: 8000 }).catch(() => {});
+            const title = await pop.title().catch(() => "");
+            if (pop.url().startsWith(`${base}/popup?via=${kind}`) && title === `popup ${new URL(base).hostname}`) loaded++;
+            if (ctx.pages().includes(pop)) inScope++;
+            if (other.pages().some((q: any) => q.url().includes(`via=${kind}`))) otherSaw++;
+            if (urls.length < 3 && !urls.includes(pop.url())) urls.push(pop.url().slice(0, 60));
+            await pop.close().catch(() => {});
+          }
+          return { loaded, inScope, otherSaw, urls };
+        }, { want: (x) => x.inScope === 10 && x.otherSaw === 0 && (kind === "formpost" || x.loaded === 10), ms: 180_000 });
+      }
+    }
+
+    await step(G, "the Playwright MCP in scope mcp-b: b.localhost loads, a.localhost is refused by the relay", async () => {
+      const m = await mcpClient("mcp-b", "mcp-scopes.log");
+      try {
+        const own = await m.call("browser_navigate", { url: SB + "/" });
+        const off = await m.call("browser_navigate", { url: SA + "/" });
+        const tabs = await m.call("browser_tabs", { action: "list" });
+        return { own: own.includes("scope page b.localhost"), off: off.slice(0, 160), aTab: tabs.includes("a.localhost") };
+      } finally { await m.close(); }
+    }, { want: (x) => x.own && OFF_LIST("a.localhost").test(x.off) && !x.aTab, ms: 60_000 });
+
+    // agent-browser over --cdp-url, in two scopes. Its own allowlist holds both hosts, so each refusal is the relay's.
+    const state = join(RUN, "ab-scopes-state"), allow = join(RUN, "allow-both.json");
+    writeFileSync(allow, JSON.stringify({ allow: ["a.localhost", "b.localhost"] }));
+    const cli = (scope: string, ...args: string[]) => new Promise<any>((resolve) => {
+      execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url(scope), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
+        try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
+      });
+    });
+    await step(G, "agent-browser: each scope opens and reads a page of its own list", async () => {
+      const a = await cli("ab-a", "open", SA + "/", "--name", "main"), b = await cli("ab-b", "open", SB + "/", "--name", "main");
+      const ta = await cli("ab-a", "text", "main"), tb = await cli("ab-b", "text", "main");
+      return { a: a.ok !== false, b: b.ok !== false, ta: ta.text?.includes("Scope page a.localhost"), tb: tb.text?.includes("Scope page b.localhost") };
+    }, { want: (x) => x.a && x.b && x.ta && x.tb, ms: 60_000 });
+    await step(G, "agent-browser: the relay refuses scope ab-a's open of b.localhost and ab-b's goto to a.localhost", async () => {
+      const a = await cli("ab-a", "open", SB + "/", "--name", "off");
+      const b = await cli("ab-b", "goto", "main", SA + "/");
+      return { a: String(a.error?.message ?? "no error").slice(0, 160), b: String(b.error?.message ?? "no error").slice(0, 160) };
+    }, { want: (x) => OFF_LIST("b.localhost").test(x.a) && OFF_LIST("a.localhost").test(x.b), ms: 60_000 });
+    // agent-browser's open makes its tab at about:blank first and then navigates it, so the refused open of b.localhost
+    // leaves that about:blank tab in scope ab-a (agent-browser closes it only when the tab cannot be recorded).
+    await step(G, "agent-browser: tabs in each scope lists only that scope's pages", async () => {
+      const a = await cli("ab-a", "tabs"), b = await cli("ab-b", "tabs");
+      const hosts = (r: any) => (r.tabs ?? []).map((t: any) => (/^https?:/.test(t.url) ? new URL(t.url).hostname : t.url));
+      await cli("ab-a", "close", "main"); await cli("ab-b", "close", "main");
+      for (const t of a.tabs ?? []) if (t.url === "about:blank") await cli("ab-a", "close", t.id);
+      return { a: hosts(a), b: hosts(b) };
+    }, { want: (x) => x.a.filter((h: string) => h !== "about:blank").join() === "a.localhost" && x.b.filter((h: string) => h !== "about:blank").join() === "b.localhost", ms: 60_000 });
+
+    // The end of a scope. end_scope (the session ended): its connections close with 1000 and its tabs close.
+    await step(G, "end_scope closes the scope's connections and its tabs (a page and its popup); then the scope gets the no-list 503, and after a line that names it again a client sees no page", async () => {
+      const b = await pw.chromium.connectOverCDP(url("sc-end"), { timeout: 20_000 });
+      const ctx = b.contexts()[0];
+      const page = await ctx.newPage();
+      await page.goto(SA + "/?end");
+      const [pop] = await Promise.all([page.waitForEvent("popup", { timeout: 8000 }), page.locator("#open").click()]);
+      await pop.waitForLoadState("load");
+      const tabs = [await tabIdOfTarget(await targetOf(ctx, page)), await tabIdOfTarget(await targetOf(ctx, pop))];
+      const disconnected = new Promise((r) => b.once("disconnected", r));
+      d.endScope("sc-end");
+      await Promise.race([disconnected, sleep(5000)]);
+      await sleep(1000);
+      const open = (await openTabs()).map((t: any) => t.id);
+      // From the end_scope on the relay refuses the scope, though the default list covers it, until a line names it again.
+      const refused = await answerOf("/devtools/browser/sc-end");
+      await d.setScopes({ ...SCOPES, scopes: { ...SCOPES.scopes, "sc-end": "a" } });
+      const later = await pw.chromium.connectOverCDP(url("sc-end"), { timeout: 20_000 });
+      const seen = later.contexts()[0].pages().length;
+      await later.close();
+      await d.setScopes(SCOPES);
+      return { tabs, closed: tabs.filter((t) => t !== undefined && !open.includes(t)).length, connected: b.isConnected(), refused, seen, chromium: alive() };
+    }, { want: (x) => x.tabs.every((t: unknown) => t !== undefined) && x.closed === 2 && !x.connected && x.refused[0] === 503 && x.refused[1] === NO_LIST && x.seen === 0 && x.chromium, ms: 40_000 });
+
+    // C11: this relay runs without --peer-check, so a line with session roots (a daemon with the peer check on) gives
+    // no list: the relay fails closed until a line without roots comes (ab-lead's decision for PR #58; board ab-v16.51
+    // adds the check itself).
+    await step(G, "a line with roots: the open connection closes with 1008 and each upgrade gets the roots 503, until a line without roots comes", async () => {
+      const c = await rawClient(WebSocket, "sc-roots");
+      d.rawLine({ t: "allowlist", ...SCOPES, roots: { "sc-roots": [{ pid: 4242, start: 1 }] } });
+      const closed = await Promise.race([c.closed, sleep(5000).then(() => null)]);
+      const during = [await answerOf("/devtools/browser/sc-roots"), await answerOf("/devtools/browser/sc-a")];
+      d.rawLine({ t: "allowlist", ...SCOPES });
+      await sleep(300);
+      const after = await answerOf("/devtools/browser/sc-roots");
+      return { closed, during, after };
+    }, { want: (x) => x.closed?.[0] === 1008 && x.closed?.[1] === "The allowlist has no list for this scope any more"
+      && x.during.every((a: [number, string]) => a[0] === 503 && a[1] === "The agent browser is not ready: the allowlist has session roots, but the relay was started without --peer-check.")
+      && x.after[0] === 404, ms: 30_000 });
+
+    // A set_scopes that gives the scope no list (choice 5 b's null): the receiver sweeps its tabs, and the relay closes its
+    // connections with 1008 at the allowlist line; until a line gives it a list again, it gets the no-list 503.
+    await step(G, "a set_scopes with scope sc-b2 null: the receiver's sweep closes its tab, the relay closes its connection with 1008", async () => {
+      const c = await rawClient(WebSocket, "sc-b2");
+      const { targetId } = await c.send("Target.createTarget", { url: SB + "/?b2" });
+      await sleep(500);
+      const tab = await tabIdOfTarget(targetId);
+      const res = await d.setScopes({ ...SCOPES, scopes: { ...SCOPES.scopes, "sc-b2": null } });
+      const closed = await Promise.race([c.closed, sleep(5000).then(() => null)]);
+      await sleep(300);
+      const gone = !(await openTabs()).some((t: any) => t.id === tab);
+      const refused = await status("/devtools/browser/sc-b2");
+      await d.setScopes(SCOPES);
+      return { tab, res, closed, gone, refused };
+    }, { want: (x) => x.tab !== undefined && x.res.ok && x.res.data.closed >= 1 && x.closed?.[0] === 1008 && x.closed?.[1] === "The allowlist has no list for this scope any more" && x.gone && x.refused === 503, ms: 40_000 });
+
+    // Last: the sweep of the browser's only tab. The receiver opens an about:blank tab first (its window rule).
+    await step(G, "the sweep of the browser's only tab keeps Chromium: an about:blank tab stays, in no scope", async () => {
+      await bA.close().catch(() => {}); await bB.close().catch(() => {});
+      const c = await rawClient(WebSocket, "sc-last");
+      const { targetId } = await c.send("Target.createTarget", { url: SA + "/?last" });
+      await sleep(500);
+      const tab = await tabIdOfTarget(targetId);
+      for (const t of await openTabs()) if (t.id !== tab) await d.ask("tabs.remove", [t.id]).catch(() => {});
+      await sleep(500);
+      const before = (await openTabs()).length;
+      const res = await d.setScopes({ ...SCOPES, scopes: { ...SCOPES.scopes, "sc-last": null } });
+      await Promise.race([c.closed, sleep(3000)]);
+      await sleep(2000);
+      const after = alive() ? (await openTabs()).map((t: any) => t.url) : null;
+      await d.setScopes(SCOPES);
+      return { before, res, chromium: alive(), after };
+    }, { want: (x) => x.before === 1 && x.res.ok && x.res.data.closed === 1 && x.chromium && x.after?.length === 1 && x.after[0] === "about:blank", ms: 40_000 });
+  } finally {
+    await bA.close().catch(() => {}); await bB.close().catch(() => {});
+    site.close();
+  }
+}
+
 // ---------------------------------------------------------------- a relay restart and the browser's last window (ab-v16.40)
 
 /**
- * Board task ab-v16.40 (C10 "The daemon and the relay", C11 "When a connection ends"); the cases B and F of the
- * orphan-tabs probe (board ab-v16.39, docs/superpowers/specs/2026-11-05-orphan-agent-tabs-probe/ on its branch). A
- * relay restart with no link change: the new relay detaches the old client's tab before it admits a connection, so
- * its Fetch pattern holds no request and its user-agent override is gone. And neither end_scope nor Playwright's
- * page.close() of the browser's only tab ends Chromium: the relay opens an about:blank window first.
+ * Board tasks ab-v16.40 and ab-v16.35 (C10 "The daemon and the relay" and "Removals and the last window", C11 "When a
+ * connection ends"); the cases B and F of the orphan-tabs probe (board ab-v16.39,
+ * docs/superpowers/specs/2026-11-05-orphan-agent-tabs-probe/). A relay restart with no link change: the new relay
+ * detaches the old client's tab before it admits a connection, so its Fetch pattern holds no request and its
+ * user-agent override is gone; it reads the receiver's map, so a client of the scope sees the tab again. A session
+ * that ends while no relay runs loses its tabs (the receiver's sweep). A scope's tabs stay over a link drop. And
+ * neither end_scope nor Playwright's page.close() of the browser's only tab ends Chromium: the receiver's removal
+ * queue opens an about:blank tab first (its window rule; the relay sends its closes as they are).
  */
 async function linkUpCases(pw: any, WebSocket: any) {
   const G = "link-up";
@@ -835,11 +1132,12 @@ async function linkUpCases(pw: any, WebSocket: any) {
   // Today's end_scope ended Chromium within a moment (measured, case F): 5 s is long enough to see it.
   const END_WAIT_MS = 5000;
 
-  let tabId: number | undefined;
+  let tabId: number | undefined, restartTarget: string | undefined;
   await step(G, "a relay restart with no link change: the new relay detaches the old client's tab before it admits a connection", async () => {
     const c = await rawClient(WebSocket, "lu-restart");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-restart` });
+    restartTarget = targetId;
     const { params } = await c.event("Target.attachedToTarget");
     for (let i = 0; i < 50 && (await c.value(params.sessionId, "document.readyState")) !== "complete"; i++) await sleep(100);
     await c.send("Fetch.enable", { patterns: [{ urlPattern: "*lu-fetch*" }] }, params.sessionId);
@@ -867,6 +1165,16 @@ async function linkUpCases(pw: any, WebSocket: any) {
     }
   }, { want: (x) => x.already === false && x.fetch === "real" && x.siteSaw === true && /Chrome\//.test(x.ua) && x.ua !== "lu-old-client", ms: 30_000 });
 
+  // The orphan-tabs design, sections 8 and 9: the new relay takes the tabs of the receiver's map back into their scopes.
+  await step(G, "after the restart a client of the scope sees its tab again (bridge.tabScopes), free, and drives it", async () => {
+    const c = await rawClient(WebSocket, "lu-restart");
+    const listed = (await c.send("Target.getTargets")).targetInfos.map((t: any) => [t.targetId, t.attached, t.url]);
+    const { sessionId } = await c.send("Target.attachToTarget", { targetId: restartTarget, flatten: true });
+    const href = await c.value(sessionId, "location.href");
+    c.close();
+    return { listed, href };
+  }, { want: (x) => x.listed.length === 1 && x.listed[0][0] === restartTarget && x.listed[0][1] === false && x.href === `${A}/m?lu-restart`, ms: 30_000 });
+
   // review-51: the HTTP answers of the endpoint during a restart, a probe every 10 ms (0: no socket yet).
   await step(G, "a client that connects while the relay restarts gets no connection until the link-up detaches are done", async () => {
     const c = await rawClient(WebSocket, "lu-hold");
@@ -886,7 +1194,45 @@ async function linkUpCases(pw: any, WebSocket: any) {
     return { attachedBefore, codes: [...new Set(codes)], ready: last, readyMs: Date.now() - t0, attachedAfter: (await tabOf(targetId))?.attached };
   }, { want: (x) => x.ready === 404 && x.attachedBefore === true && x.attachedAfter === false && x.codes.includes(503), ms: 40_000 });
 
-  await step(G, "end_scope of the browser's only tab: Chromium stays up, with one about:blank window in no scope", async () => {
+  // The orphan-tabs design, section 9: a session ends while no relay runs; the daemon's set_scopes without it reaches
+  // the receiver, whose sweep closes its tabs. The new relay never sees them.
+  await step(G, "a session that ends while no relay runs: the receiver's sweep closes its tabs, and the new relay admits no client of its scope", async () => {
+    const c = await rawClient(WebSocket, "lu-down");
+    const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-down` });
+    await sleep(500);
+    const tab = (await tabOf(targetId))?.tabId;
+    let res: any;
+    const t0 = Date.now();
+    await d.restartRelay(async () => { res = await d.setScopes({ ...SCOPES, scopes: { ...SCOPES.scopes, "lu-down": null } }); });
+    while (Date.now() - t0 < 30_000 && (await status("/devtools/browser/probe")) !== 404) await sleep(50);
+    const gone = !(await d.ask("tabs.query", [{}])).some((t: any) => t.id === tab);
+    const refused = await status("/devtools/browser/lu-down");
+    await d.setScopes(SCOPES);
+    return { tab, res, oldClient: await c.closed, gone, refused };
+  }, { want: (x) => x.tab !== undefined && x.res?.ok && x.res.data.closed >= 1 && x.oldClient[0] === 1001 && x.gone && x.refused === 503, ms: 40_000 });
+
+  // The orphan-tabs design, section 8: a short link drop keeps the receiver's map and its rules.
+  await step(G, "a link drop: the scope's tab stays open and keeps its list, and a client of the scope that connects again sees it", async () => {
+    const c = await rawClient(WebSocket, "lu-drop");
+    const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-drop` });
+    await sleep(500);
+    d.dropLink();
+    const closed = await Promise.race([c.closed, sleep(5000).then(() => null)]);
+    const t0 = Date.now();
+    await d.linkUp(20_000);
+    while (Date.now() - t0 < 30_000 && (await status("/devtools/browser/probe")) !== 404) await sleep(50);
+    const again = await rawClient(WebSocket, "lu-drop");
+    const listed = (await again.send("Target.getTargets")).targetInfos.map((t: any) => [t.targetId, t.attached]);
+    const { sessionId } = await again.send("Target.attachToTarget", { targetId, flatten: true });
+    // Its list still holds: a navigation of the page itself to its own list loads.
+    await again.value(sessionId, `location.href = ${JSON.stringify(`${A}/m?lu-drop-2`)}`).catch(() => {});
+    let href = "";
+    for (let i = 0; i < 50 && (href = await again.value(sessionId, "location.href").catch(() => "")) !== `${A}/m?lu-drop-2`; i++) await sleep(100);
+    again.close();
+    return { closed, readyMs: Date.now() - t0, listed, href };
+  }, { want: (x) => x.closed?.[0] === 1011 && x.listed.length === 1 && x.listed[0][0] !== undefined && x.listed[0][1] === false && x.href === `${A}/m?lu-drop-2`, ms: 60_000 });
+
+  await step(G, "end_scope of the browser's only tab: Chromium stays up, with one about:blank tab in no scope", async () => {
     const c = await rawClient(WebSocket, "lu-last");
     const { targetId } = await c.send("Target.createTarget", { url: `${A}/m?lu-last` });
     await onlyTab((await tabOf(targetId)).tabId);
@@ -895,10 +1241,10 @@ async function linkUpCases(pw: any, WebSocket: any) {
     const closed = await c.closed;
     await sleep(END_WAIT_MS);
     const after = alive() ? await urls() : null;
-    let seen: number | null = null;
-    if (alive()) { const view = await rawClient(WebSocket, "lu-last"); seen = (await view.send("Target.getTargets")).targetInfos.length; view.close(); }
-    return { before, closed, chromium: chrome(), after, seen };
-  }, { want: (x) => x.before.length === 1 && x.closed[0] === 1000 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.seen === 0, ms: 30_000 });
+    // From the end_scope on the scope gets the no-list 503 (no client sees the about:blank tab, which is in no scope).
+    const refused = await answerOf("/devtools/browser/lu-last");
+    return { before, closed, chromium: chrome(), after, refused };
+  }, { want: (x) => x.before.length === 1 && x.closed[0] === 1000 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.refused[0] === 503 && x.refused[1] === NO_LIST, ms: 30_000 });
 
   await step(G, "Playwright's page.close() of the browser's only tab (Target.closeTarget): Chromium stays up", async () => {
     const browser = await pw.chromium.connectOverCDP(url("lu-close"), { timeout: 20_000 });

@@ -1,7 +1,9 @@
 // A fake agent-mode extension behind a fake daemon, for the relay's tests. It reads the relay's bridge requests
 // (contract C10) from the relay's standard output, answers them as the receiver would from a few tabs, and writes
 // the receiver's events and the daemon's lines to the relay's standard input. It records every request, so a test
-// can prove which calls reached "Chrome" and which never did. It starts no browser.
+// can prove which calls reached "Chrome" and which never did. It starts no browser. Like the receiver of the
+// per-scope build (chrome-extension 0.3.x), it keeps each tab's scope: the scope arg of tabs.create and windows.create,
+// and for a popup its opener's, which it reports with bridge.tabScope before the popup's tabs.onCreated.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +20,10 @@ export type FakeTab = { id: number; windowId: number; url: string; title: string
 type Override = (req: { op: string; args: any[] }) => any;
 
 export const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/1.0.0.0 Safari/537.36";
+/** An allowlist line (C10) whose default list, `entries`, every scope gets. */
+export const lineOf = (entries: string[]) => ({ t: "allowlist", lists: { a: entries }, scopes: {}, default: "a" });
+/** The allowlist line of the tests that need no list of their own: every scope gets the default list, ["a.example"]. */
+export const LINE = lineOf(["a.example"]);
 
 export class FakeReceiver {
   readonly input = new PassThrough();
@@ -25,6 +31,8 @@ export class FakeReceiver {
   readonly requests: { op: string; args: any[]; id: string; wait: number }[] = [];
   readonly tabs = new Map<number, FakeTab>();
   readonly attached = new Set<number>();
+  /** The receiver's tab-to-scope map (C10, each tab's scope): bridge.tabScopes answers it. */
+  readonly scopes = new Map<number, string>();
   readonly downloads: any[] = [];
   attachNew = false;
   /** The window that has the focus (chrome.windows' focused): window 1, the operator's, at the start. */
@@ -49,11 +57,18 @@ export class FakeReceiver {
   emit(ev: string, fields: object): void { this.line({ t: "ev", ch: "bridge", ev, ...fields }); }
   sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
 
-  /** A new tab, announced as the receiver does: with the eager attach on, it is attached and held. It is the active tab of its window. */
-  newTab(url: string, opener?: FakeTab, windowId = 1, late = 0): FakeTab {
+  /**
+   * A new tab, announced as the receiver does: with the eager attach on, it is attached and held. It is the active tab
+   * of its window. A popup of a tab of a scope takes that scope, and the receiver reports it with bridge.tabScope before
+   * the popup's tabs.onCreated (`scope` names another one, or null for none). `own`: a tab of tabs.create or
+   * windows.create, whose scope the relay named, so no bridge.tabScope comes for it.
+   */
+  newTab(url: string, opener?: FakeTab, windowId = 1, late = 0, scope?: string | null, own = false): FakeTab {
     const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, active: true, ...(opener ? { openerId: opener.targetId } : {}) };
     for (const t of this.tabs.values()) if (t.windowId === windowId) t.active = false;
     this.tabs.set(tab.id, tab);
+    const inherited = scope === undefined ? (opener ? this.scopes.get(opener.id) : undefined) : scope ?? undefined;
+    if (inherited) { this.scopes.set(tab.id, inherited); if (!own) this.emit("bridge.tabScope", { tabId: tab.id, scope: inherited }); }
     const announce = () => {
       if (this.attachNew) this.attached.add(tab.id);
       this.emit("tabs.onCreated", { tab: this.chromeTab(tab), attached: this.attachNew, held: this.attachNew });
@@ -63,10 +78,13 @@ export class FakeReceiver {
     return tab;
   }
 
-  /** Chrome swaps a tab for another one (a prerendered page): the new tab keeps the old one's opener. */
+  /** Chrome swaps a tab for another one (a prerendered page): the new tab keeps the old one's opener, and its scope (bridge.tabScope right before tabs.onReplaced). */
   replace(old: FakeTab): FakeTab {
     const tab = { ...old, id: this.nextTab++, targetId: `T${this.nextTab - 1}` };
     this.tabs.delete(old.id); this.attached.delete(old.id); this.tabs.set(tab.id, tab);
+    const scope = this.scopes.get(old.id);
+    this.scopes.delete(old.id);
+    if (scope) { this.scopes.set(tab.id, scope); this.emit("bridge.tabScope", { tabId: tab.id, scope }); }
     this.emit("tabs.onReplaced", { addedTabId: tab.id, removedTabId: old.id });
     return tab;
   }
@@ -87,6 +105,7 @@ export class FakeReceiver {
     const tab = (id: number) => { const t = this.tabs.get(id); if (!t) throw new Error(`No tab with id: ${id}.`); return t; };
     switch (op) {
       case "bridge.info": return this.info;
+      case "bridge.tabScopes": return [...this.scopes].filter(([id]) => this.tabs.has(id)).map(([tabId, scope]) => ({ tabId, scope }));
       case "bridge.attachNew": this.attachNew = args[0]; return null;
       case "debugger.attach": { tab(args[0]); await this.lateCreated.get(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
       case "debugger.detach": this.attached.delete(args[0]); return null;
@@ -100,9 +119,9 @@ export class FakeReceiver {
         if (method === "Target.getTargetInfo") return { targetInfo: { targetId: t.targetId, type: "page", title: t.title, url: t.url, attached: true, browserContextId: "C1D2", ...(t.openerId ? { openerId: t.openerId } : {}) } };
         return {};
       }
-      case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs));
+      case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs, args[1] ?? null, true));
       case "windows.create": {
-        const id = this.nextWindow++, t = this.newTab(args[0].url, undefined, id, this.lateCreatedMs);
+        const id = this.nextWindow++, t = this.newTab(args[0].url, undefined, id, this.lateCreatedMs, args[1] ?? null, true);
         if (args[0].focused !== false) this.focusedWindow = id;
         return { id, state: "normal", focused: this.focusedWindow === id, tabs: [this.chromeTab(t)] };
       }
@@ -113,7 +132,7 @@ export class FakeReceiver {
         if (args[1]?.active) for (const o of this.tabs.values()) if (o.windowId === t.windowId) o.active = o === t;
         return this.chromeTab(t);
       }
-      case "tabs.remove": tab(args[0]); this.tabs.delete(args[0]); this.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } }); return null;
+      case "tabs.remove": tab(args[0]); this.tabs.delete(args[0]); this.scopes.delete(args[0]); this.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } }); return null;
       case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: this.focusedWindow === args[0] };
       case "windows.update": if (args[1]?.focused) this.focusedWindow = args[0]; return { id: args[0], state: "normal", focused: this.focusedWindow === args[0] };
       case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url));
@@ -123,7 +142,7 @@ export class FakeReceiver {
 }
 
 export type Harness = { fake: FakeReceiver; relay: Relay; socket: string; logs: string[]; url: (scope: string) => string;
-  connect: (scope?: string) => Promise<CDPConnection>; ready: () => Promise<void>; close: () => Promise<void> };
+  connect: (scope?: string) => Promise<CDPConnection>; ready: (line?: object) => Promise<void>; close: () => Promise<void> };
 
 export async function until<T>(fn: () => T, what = "the condition", ms = 5000): Promise<NonNullable<T>> {
   const end = Date.now() + ms;
@@ -145,9 +164,9 @@ export async function harness(opts: { maxRequest?: number; downloadWaitMs?: numb
   return {
     fake, relay, socket, logs, url,
     connect: async (scope = "s1") => { const c = await CDPConnection.connect(url(scope)); conns.push(c); return c; },
-    ready: async () => {
-      fake.line({ t: "link", up: true, version: "0.2.0" });
-      fake.line({ t: "allowlist", domains: ["a.example"] });
+    ready: async (line: object = LINE) => {
+      fake.line({ t: "link", up: true, version: "0.3.1" });
+      fake.line(line);
       await until(() => relay.model.notReady() === null, "the relay to be ready");
     },
     close: async () => {
