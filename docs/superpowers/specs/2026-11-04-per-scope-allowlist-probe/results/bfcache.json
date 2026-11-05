@@ -1,0 +1,50 @@
+[
+  {
+    "guard": "none",
+    "backRequestReachedSite": false,
+    "backBlockedByRule1": true,
+    "backError": "net::ERR_BLOCKED_BY_CLIENT",
+    "backCommit": null,
+    "guarded": false
+  },
+  {
+    "guard": "none",
+    "backRequestReachedSite": false,
+    "backBlockedByRule1": true,
+    "backError": "net::ERR_BLOCKED_BY_CLIENT",
+    "backCommit": null,
+    "guarded": false
+  },
+  {
+    "guard": "none",
+    "backRequestReachedSite": false,
+    "backBlockedByRule1": true,
+    "backError": "net::ERR_BLOCKED_BY_CLIENT",
+    "backCommit": null,
+    "guarded": false
+  },
+  {
+    "guard": "commit",
+    "backRequestReachedSite": false,
+    "backBlockedByRule1": true,
+    "backError": "net::ERR_BLOCKED_BY_CLIENT",
+    "backCommit": null,
+    "guarded": false
+  },
+  {
+    "guard": "commit",
+    "backRequestReachedSite": false,
+    "backBlockedByRule1": true,
+    "backError": "net::ERR_BLOCKED_BY_CLIENT",
+    "backCommit": null,
+    "guarded": false
+  },
+  {
+    "guard": "commit",
+    "backRequestReachedSite": false,
+    "backBlockedByRule1": true,
+    "backError": "net::ERR_BLOCKED_BY_CLIENT",
+    "backCommit": null,
+    "guarded": false
+  }
+]

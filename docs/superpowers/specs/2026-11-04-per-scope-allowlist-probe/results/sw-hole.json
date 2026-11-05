@@ -1,0 +1,342 @@
+{
+  "config": {},
+  "summary": {
+    "registered": "ok",
+    "trials": 20,
+    "networkRequest": 0,
+    "rule1Match": 0,
+    "committedInScopeB": 20,
+    "swPageScriptRan": 20,
+    "frameOfSwPageReached": 0,
+    "guarded": 0,
+    "ms": {
+      "commit": [
+        27,
+        28,
+        28,
+        28,
+        28,
+        29,
+        30,
+        30,
+        30,
+        30,
+        30,
+        31,
+        31,
+        31,
+        31,
+        32,
+        32,
+        36,
+        39,
+        43
+      ],
+      "guarded": [],
+      "swpageBeacon": [
+        62,
+        63,
+        64,
+        65,
+        65,
+        66,
+        66,
+        67,
+        67,
+        68,
+        69,
+        69,
+        70,
+        71,
+        75,
+        79,
+        79,
+        84,
+        85,
+        87
+      ]
+    }
+  },
+  "rows": [
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 31,
+        "guarded": null,
+        "swpageBeacon": 67
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 30,
+        "guarded": null,
+        "swpageBeacon": 85
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 28,
+        "guarded": null,
+        "swpageBeacon": 65
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 30,
+        "guarded": null,
+        "swpageBeacon": 79
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 30,
+        "guarded": null,
+        "swpageBeacon": 69
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 30,
+        "guarded": null,
+        "swpageBeacon": 66
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 27,
+        "guarded": null,
+        "swpageBeacon": 68
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 32,
+        "guarded": null,
+        "swpageBeacon": 79
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 28,
+        "guarded": null,
+        "swpageBeacon": 65
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 39,
+        "guarded": null,
+        "swpageBeacon": 87
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 28,
+        "guarded": null,
+        "swpageBeacon": 71
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 31,
+        "guarded": null,
+        "swpageBeacon": 70
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 31,
+        "guarded": null,
+        "swpageBeacon": 62
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 30,
+        "guarded": null,
+        "swpageBeacon": 66
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 28,
+        "guarded": null,
+        "swpageBeacon": 63
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 43,
+        "guarded": null,
+        "swpageBeacon": 75
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 29,
+        "guarded": null,
+        "swpageBeacon": 64
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 32,
+        "guarded": null,
+        "swpageBeacon": 67
+      }
+    },
+    {
+      "how": "client",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 36,
+        "guarded": null,
+        "swpageBeacon": 84
+      }
+    },
+    {
+      "how": "page",
+      "networkRequest": false,
+      "rule1Match": false,
+      "committedInScopeB": true,
+      "swPageScriptRan": true,
+      "frameOfSwPageReached": false,
+      "guarded": false,
+      "ms": {
+        "commit": 31,
+        "guarded": null,
+        "swpageBeacon": 69
+      }
+    }
+  ]
+}

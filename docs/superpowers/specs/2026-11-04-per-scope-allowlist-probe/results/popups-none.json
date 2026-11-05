@@ -1,0 +1,453 @@
+{
+  "config": {
+    "inherit": "none"
+  },
+  "groups": {
+    "open": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 10,
+      "loaded": 0,
+      "retried": 0,
+      "pages": {}
+    },
+    "blank": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 10,
+      "loaded": 0,
+      "retried": 0,
+      "pages": {}
+    }
+  },
+  "rows": [
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767308,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": null,
+        "firstMatch": 27,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767312,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 12,
+        "ruled": null,
+        "firstMatch": 24,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767316,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 13,
+        "ruled": null,
+        "firstMatch": 26,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767320,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": null,
+        "firstMatch": 27,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767324,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 16,
+        "navtarget": 17,
+        "ruled": null,
+        "firstMatch": 26,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767328,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": null,
+        "firstMatch": 28,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767332,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": null,
+        "firstMatch": 26,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767336,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": null,
+        "firstMatch": 25,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767340,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": null,
+        "firstMatch": 25,
+        "request": null
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 443767344,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 18,
+        "navtarget": 18,
+        "ruled": null,
+        "firstMatch": 30,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767348,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 13,
+        "ruled": null,
+        "firstMatch": 21,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767352,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": null,
+        "firstMatch": 23,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767356,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 15,
+        "ruled": null,
+        "firstMatch": 23,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767360,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": null,
+        "firstMatch": 22,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767364,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": null,
+        "firstMatch": 24,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767368,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 13,
+        "ruled": null,
+        "firstMatch": 21,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767372,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": null,
+        "firstMatch": 23,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767376,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 15,
+        "ruled": null,
+        "firstMatch": 25,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767380,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 21,
+        "navtarget": 21,
+        "ruled": null,
+        "firstMatch": 32,
+        "request": null
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 443767384,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 0,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": null,
+        "firstMatch": 25,
+        "request": null
+      }
+    }
+  ]
+}

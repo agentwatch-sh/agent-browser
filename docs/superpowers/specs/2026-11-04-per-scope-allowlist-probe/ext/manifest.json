@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "per-scope allowlist probe",
+  "version": "0.0.1",
+  "description": "Probe only: per-scope DNR session rules, the opener of a popup, the service-worker hole.",
+  "minimum_chrome_version": "145",
+  "permissions": ["tabs", "webNavigation", "declarativeNetRequest", "declarativeNetRequestFeedback", "debugger", "browsingData", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "declarative_net_request": {
+    "rule_resources": [
+      { "id": "block_main_frame", "enabled": true, "path": "rules/block-main-frame.json" },
+      { "id": "block_frames", "enabled": true, "path": "rules/block-frames.json" }
+    ]
+  },
+  "background": { "service_worker": "sw.js" }
+}

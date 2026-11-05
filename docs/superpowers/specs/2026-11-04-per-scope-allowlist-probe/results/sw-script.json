@@ -1,0 +1,29 @@
+{
+  "workerScript": {
+    "seen": [
+      {
+        "tabId": -1,
+        "type": "script",
+        "path": "/sw.js"
+      }
+    ],
+    "registeredWithObserver": "ok",
+    "blockType": "script",
+    "registrationWithBlock": "error:TypeError",
+    "workersWithBlock": {
+      "dedicated": "ok",
+      "shared": "ok"
+    },
+    "workersWithoutBlock": {
+      "dedicated": "ok",
+      "shared": "ok"
+    },
+    "blockedByTheRule": [
+      {
+        "tabId": -1,
+        "type": "script",
+        "path": "/sw.js"
+      }
+    ]
+  }
+}
