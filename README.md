@@ -488,7 +488,9 @@ extension's bridge (contract C10).
   (the research, step 3).
 - The cost: about 32 to 46 MB of memory for each window over a tab, and every page draws at full rate,
   also under another window (the research). Each input that starts an action also reads the page's tab
-  and window through the bridge first (two requests, three or four when the window comes forward).
+  and window through the bridge first: two requests, a median of 16 ms in the live run (`tabs.get` 3 ms,
+  `windows.get` 13 ms), and `windows.update` (29 ms) when the window comes forward. So typing with key
+  events takes about 16 ms more for each character.
 
 Measured on taylor with Chromium 156 and chrome-extension main 7e36332 (`CASES=windows` of
 `test/live/agent-mode/run.ts`, two runs on 2026-11-05): with Playwright's defaults, with `noDefaults` and
