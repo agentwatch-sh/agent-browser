@@ -303,6 +303,42 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
+  test(`${label}: shot when Chrome stops drawing after the two frames: one chain of last captures, not two, and the error gives the shot's true time`, async () => {
+    // review-41b: the shot waited about 42 s, its error said 30 s, and two chains left 13 captures.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    const lines: string[] = [], t0 = Date.now();
+    let err = "";
+    const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => callsOf(page, () => commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`) }).catch((e) => { err = (e as Error).message; })));
+    const ms = Date.now() - t0;
+    page.onCapture = undefined;
+    assert.match(err, /did not end the shot's capture of tab \w+ in 0\.6 s \(also not with 3 more captures\).*; the shot gave up after \d+\.\d s\./);
+    const said = Number(/gave up after (\d+\.\d) s/.exec(err)![1]) * 1000;
+    assert.ok(said > 600 && said <= ms + 100, `the error says ${said} ms; the shot took ${ms} ms`);
+    assert.equal(lines.filter((l) => /the last .*capture of tab \w+ did not end/.test(l)).length, 1, `one chain: ${JSON.stringify(lines)}`);
+    assert.ok(captures(calls).length <= 1 + 1 + 3 + 4, `${captures(calls).length} captures: the first, the own, 3 extra, at most 4 last ones`);
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size when Chrome stops drawing after the two frames: no last captures while the override is set, the override is cleared, and the log says it can come back`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    const lines: string[] = [];
+    const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => callsOf(page, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /the shot gave up after/)));
+    page.onCapture = undefined;
+    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }, HOLD, HOLD, HOLD], "the new first capture, the own one and 3 extra; no last captures before the clear");
+    assert.equal(page.metrics, undefined, "cleared");
+    assert.ok(lines.some((l) => /the shot's size override can come back when its captures end/.test(l)), JSON.stringify(lines));
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name });
+  });
+
   test(`${label}: shot --full whose first capture ends during the frame wait: one more first capture and two frames come before the full-page capture`, async () => {
     // No capture may go out while a full-page capture waits: it changes the device emulation, and a
     // capture sent then would set that emulation again when it ends.
