@@ -331,7 +331,12 @@ class AgentBrowser:
         return self._run("tabs", _scope(any_scope), TabsResult.from_json)
 
     def open(self, url: str, name: Optional[str] = None, tab: bool = False) -> OpenResult:
-        """Open an allowlisted URL; `name` remembers the tab; `tab` (personal mode) uses the pinned window."""
+        """Open an allowlisted URL; `name` remembers the tab.
+
+        In agent mode on Linux the page gets a window of its own. `tab=True` opens a tab rather than a
+        window: in personal mode, in the pinned window; in agent mode on Linux, a background tab that
+        keeps the old modes (focus emulation, or hidden_drive), which a site can detect.
+        """
         return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else [])], OpenResult.from_json)
 
     # Each method that takes a `tab` also takes `any_scope`: True reaches a tab outside this tab scope.

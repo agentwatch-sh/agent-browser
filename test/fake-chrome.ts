@@ -9,7 +9,10 @@
 // size, and gives page code the DOM calls the recording overlay uses. Like Google Sheets, it refuses
 // innerHTML (Trusted Types), a <style> element and an inline style attribute (a strict style-src).
 // With `backgroundTabs` on, a tab that agent-browser opens is not in front, as in Chrome: its page is
-// hidden and Chrome draws it only in some cases (see FakePage.background).
+// hidden and Chrome draws it only in some cases (see FakePage.background). A page in a window of its
+// own (Target.createTarget with newWindow) is the front tab of a window that is not active, as on
+// Linux with --disable-backgrounding-occluded-windows: its page is visible and draws, and it has no
+// focus until a press in it activates its window or an activation does (FakeChrome.focusedWindow).
 
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -300,6 +303,15 @@ export class FakePage {
   /** The sessions with focus emulation on. */
   readonly focusEmulated = new Set<string>();
   /**
+   * Keys reached the page while its window was not the active one: Chrome then gives the page the
+   * focus with no window switch, so two pages report the focus (measured on Chromium 156 on Linux:
+   * window-keys-inactive of test/live/anti-detect/run.ts). It ends when the page's own window is activated.
+   */
+  keyFocus = false;
+  /** The page's focus and blur events (document.hasFocus() changes), in order. */
+  focusEvents: ("focus" | "blur")[] = [];
+  private shownFocus = false;
+  /**
    * The captures in flight on a background page, by their order: each one ends with a later one.
    * `at` is `frames` when it was sent: the frame that it forces is the next one.
    */
@@ -336,6 +348,13 @@ export class FakePage {
   }
 
   get visibilityState(): "visible" | "hidden" { return !this.background || this.focusEmulated.size > 0 ? "visible" : "hidden"; }
+  /** document.hasFocus(): focus emulation, keys into its inactive window (keyFocus), or the front tab of the active window. */
+  get hasFocus(): boolean { return this.focusEmulated.size > 0 || this.keyFocus || (!this.background && this.fake.focusedWindow === this.windowId); }
+  /** After a change of the active window, the tab in front or focus emulation: log a focus or a blur. */
+  updateFocus() {
+    const f = this.hasFocus;
+    if (f !== this.shownFocus) { this.shownFocus = f; this.focusEvents.push(f ? "focus" : "blur"); }
+  }
   /** Chrome draws the page: it is visible, or a capture is in flight. */
   get drawing(): boolean { return this.visibilityState === "visible" || this.heldCaptures.length > 0; }
 
@@ -343,6 +362,7 @@ export class FakePage {
   update() {
     const v = this.visibilityState;
     if (v !== this.shownAs) { this.shownAs = v; this.visibilityChanges.push(v); }
+    this.updateFocus();
     if (this.drawing !== this.wasDrawing) {
       this.wasDrawing = this.drawing;
       if (this.drawing) this.framesDrawn = 0;
@@ -480,6 +500,7 @@ export class FakePage {
     this.drew = !this.background; // a new page in a background tab has drawn no frame yet
     this.framesDrawn = 0;
     this.shownAs = this.visibilityState; // a new page starts in its tab's state: no visibilitychange
+    this.shownFocus = this.hasFocus; // and in its focus: no focus event
     this.update();
     for (const c of late) this.later(50, () => c.end());
     spec?.onload?.(this);
@@ -521,6 +542,7 @@ export class FakePage {
       querySelectorAll: (s: string) => page.select(s),
       get activeElement() { return page.focused ?? body; },
       get visibilityState() { return page.visibilityState; },
+      hasFocus: () => page.hasFocus,
       createElement: (tag: string) => {
         if (tag.toLowerCase() === "style") throw new Error("fake CSP: a <style> element is refused (style-src)");
         return new FakeNode(page, tag);
@@ -622,6 +644,17 @@ export class FakeChrome {
   private clients = new Set<WebSocket>();
   private nextWindow = 1;
   currentWindow = 1;
+  /** The active window: its front tab has the focus. A new window from Target.createTarget with background: true does not take it. */
+  focusedWindow = 1;
+  /** Each change of the active window, in order, and what made it: "activate" (Target.activateTarget), "bringToFront", "press" (Chrome activates the window of a page that gets a press), "open". */
+  readonly windowActivations: { windowId: number; by: string; targetId?: string }[] = [];
+  /**
+   * Tabs share their window as in Chrome: an activation (Target.activateTarget, Page.bringToFront) puts
+   * its tab in front of its window and the window's other tabs behind (background), and a page that a
+   * page opens (window.open, a target=_blank link) comes in front of the opener's window, with the
+   * focus. Off (the default for the older tests): only `background` says which page is behind.
+   */
+  tabSwitches = false;
   connections = 0;
   /** A method named here fails once with this message (a test of error handling). */
   readonly failOnce = new Map<string, string>();
@@ -664,6 +697,22 @@ export class FakeChrome {
     await new Promise<void>((r) => this.wss.close(() => r()));
   }
 
+  /** Make `windowId` the active window: the pages there get the focus (their keyFocus ends), the others a blur. */
+  focusWindow(windowId: number, by: string, targetId?: string) {
+    if (this.focusedWindow === windowId) return;
+    this.focusedWindow = windowId;
+    this.windowActivations.push({ windowId, by, ...(targetId ? { targetId } : {}) });
+    for (const p of this.pages.values()) { if (p.windowId === windowId) p.keyFocus = false; p.updateFocus(); }
+  }
+
+  /** Target.activateTarget and Page.bringToFront: the tab comes in front of its window (tabSwitches), and its window becomes the active one. */
+  activateTab(page: FakePage, by: string) {
+    if (this.tabSwitches) for (const q of this.pages.values()) if (q !== page && q.windowId === page.windowId && !q.background) { q.background = true; q.update(); }
+    if (page.background) { page.background = false; page.update(); }
+    this.focusWindow(page.windowId, by, page.targetId);
+    page.updateFocus();
+  }
+
   /** A tab the test opens "by hand", for example a mail tab no command may touch. */
   addPage(url: string, opts: { newWindow?: boolean } = {}): FakePage {
     const windowId = opts.newWindow ? ++this.nextWindow : this.currentWindow;
@@ -704,10 +753,13 @@ export class FakeChrome {
     setTimeout(() => this.toSessions(page, "Page.loadEventFired", { timestamp: Date.now() / 1000 }), 5);
   }
 
-  openFrom(opener: FakePage, url: string) {
+  /** window.open() or a target=_blank link: a new tab in the opener's window (with tabSwitches, in front and focused). Returns it. */
+  openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);
     page.load(url);
+    if (this.tabSwitches) this.activateTab(page, "open");
+    return page;
   }
 
   async download(page: FakePage, url: string, suggestedFilename: string) {
@@ -772,7 +824,14 @@ export class FakeChrome {
         page.background = this.backgroundTabs && !!params.background && !params.newWindow;
         this.pages.set(page.targetId, page);
         page.load(params.url ?? "about:blank");
+        if (params.newWindow && !params.background) this.focusWindow(windowId, "open", page.targetId); // a new window in front takes the focus
         return { targetId: page.targetId };
+      }
+      case "Target.activateTarget": {
+        const page = this.pages.get(params.targetId);
+        if (!page) throw new Error("No target with given id found");
+        this.activateTab(page, "activate");
+        return {};
       }
       case "Target.attachToTarget": {
         const page = this.pages.get(params.targetId);
@@ -856,7 +915,8 @@ export class FakeChrome {
         if (params.enabled) page.focusEmulated.add(s.id); else page.focusEmulated.delete(s.id);
         page.update();
         return {};
-      case "Page.enable": case "Fetch.disable": case "Network.disable": case "Page.bringToFront":
+      case "Page.bringToFront": this.activateTab(page, "bringToFront"); return {};
+      case "Page.enable": case "Fetch.disable": case "Network.disable":
       case "Runtime.runIfWaitingForDebugger": return {};
       case "Target.setAutoAttach":
         // Like Chrome: each of the page's workers is attached through this session, announced on it.
@@ -896,6 +956,8 @@ export class FakeChrome {
         else { page.flushMoves(); if (page.drops(params.type)) return {}; }
         const el = page.hit(params.x, params.y);
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }
+        // On Linux a press in a page whose window is not the active one makes Chrome activate that window (measured on Chromium 156).
+        if (params.type === "mousePressed") this.focusWindow(page.windowId, "press", page.targetId);
         if (params.type === "mousePressed" && el && el.value !== undefined) page.focused = el; // a press focuses a text field, as in Chrome
         if (params.type === "mouseReleased" && el) await page.activate(el);
         return {};
@@ -903,11 +965,14 @@ export class FakeChrome {
       case "Input.insertText":
         // An app's own editor (data-keys-only, like the Google Sheets cell editor) ignores inserted text.
         if (page.focused?.hasAttribute("data-keys-only")) return {};
+        if (page.windowId !== this.focusedWindow && !page.keyFocus) { page.keyFocus = true; page.updateFocus(); }
         page.typeInto(params.text);
         return {};
       case "Input.dispatchKeyEvent":
         page.flushMoves();
         if (page.drops(`${params.type} ${params.key}`)) return {};
+        // Keys do not activate the window; they give the page the focus all the same (window-keys-inactive).
+        if (page.windowId !== this.focusedWindow && !page.keyFocus) { page.keyFocus = true; page.updateFocus(); }
         page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, keyCode: params.windowsVirtualKeyCode,
           native: params.nativeVirtualKeyCode, text: params.text, commands: params.commands });
         if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }

@@ -89,6 +89,11 @@ export type BrowserOptions = {
   hiddenDrive?: boolean;
   /** Progress and warning lines. Default: standard error. */
   log?: (line: string) => void;
+  /**
+   * @internal The platform whose design applies (default process.platform), for the tests of each
+   * platform's behaviour. On "linux" agent mode gives each page a window of its own (windowPerPage).
+   */
+  platform?: NodeJS.Platform;
 };
 
 export type Settings = {
@@ -112,7 +117,17 @@ export type Settings = {
   tabScope?: string;
   hiddenDrive: boolean;
   log: (line: string) => void;
+  platform: NodeJS.Platform;
 };
+
+/**
+ * Agent mode on Linux (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md): each page that
+ * agent-browser opens gets a window of its own and no focus emulation, as a person's page in a window
+ * that is not in front. An explicit `open --tab` keeps the old modes for its tab (focus emulation while
+ * a command is attached, or hiddenDrive). On the Mac and in personal mode every behaviour stays as it
+ * was (the Mac waits for its own measurement, ab-v16.27).
+ */
+export const windowPerPage = (s: Settings): boolean => s.mode === "agent" && s.platform === "linux";
 
 export const DEFAULT_PROXY_IDLE_MS = 12 * 60 * 60 * 1000;
 
@@ -252,6 +267,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     tabScope: o.tabScope,
     hiddenDrive: !!o.hiddenDrive,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
+    platform: o.platform ?? process.platform,
   };
 }
 

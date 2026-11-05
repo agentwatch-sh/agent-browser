@@ -47,13 +47,14 @@ after(async () => {
 
 let tabs = 0;
 /**
- * A new background tab (agent-browser's `open` makes a background tab), opened in the mode `mode`. With
- * the hidden drive its page never drew a frame; in the default mode the open's focus emulation can let
- * it draw.
+ * A new background tab (`open --tab` makes a background tab; on the Mac a plain `open` does too), opened
+ * in the mode `mode`. With the hidden drive its page never drew a frame; in the default mode the open's
+ * focus emulation can let it draw. On Linux the explicit tab is what keeps these two modes (ab-v16.26):
+ * every other page opens in a window of its own (test/window-per-page.test.ts).
  */
 async function backgroundTab(path = "/", mode = h): Promise<{ name: string; page: FakePage }> {
   const name = `t${++tabs}`;
-  const r = await commands.open(mode(), { url: fx.base + path, name });
+  const r = await commands.open(mode(), { url: fx.base + path, name, tab: true });
   const page = fake.pages.get(r.tab.targetId)!;
   assert.equal(page.visibilityState, "hidden");
   if (mode === h) assert.equal(page.drew, false, "a page that loaded in a background tab drew no frame");

@@ -14,7 +14,7 @@ import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
 import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, type BrowserOptions, type Settings } from "./options.ts";
+import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 
@@ -68,15 +68,28 @@ remote debugging. Approve the connection prompt, then retry. If needed, run
  * to its targetId, as it always has. tab-scopes.json holds each tab opened under a tab scope, by
  * targetId: its scope and its name there (null: no name). So a name belongs to one scope, and two
  * scopes can each have a tab named "main". reads.json holds the read-first marks (targetId -> the URL
- * that outline or text last read there), and window.json the pinned window. Every caller of the state
- * folder writes these four files, so each of them changes only under the record lock (updateRecord).
+ * that outline or text last read there), and window.json the pinned window. tab-pages.json lists the
+ * pages that an explicit `open --tab` opened as a background tab where each page gets a window of its
+ * own (windowPerPage): they keep the old modes (see Tab.drive). Every caller of the state folder
+ * writes these five files, so each of them changes only under the record lock (updateRecord).
  */
 type Registry = Record<string, string>; // tab name -> targetId (tabs with no scope)
 type ScopeRecord = Record<string, { scope: string; name: string | null }>; // targetId -> its scope and its name there
 type Reads = Record<string, string>; // targetId -> the URL that outline or text read
 /** The whole record, as a change under the lock sees it and changes it. */
-type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined };
-const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", RECORD_LOCK = "tabs.lock";
+type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined; tabPages: string[] };
+const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", TAB_PAGES_FILE = "tab-pages.json",
+  RECORD_LOCK = "tabs.lock";
+
+/**
+ * How agent-browser drives a page (ab-v16.26). "window": a page in a window of its own, or a tab that a
+ * site or a pinned window put in front of its window, where each page gets a window of its own
+ * (windowPerPage): no focus emulation, as a person's page. "focus-emulation": the old default, focus
+ * emulation while a command is attached (the Mac, personal mode, and an explicit `open --tab` on
+ * Linux). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn
+ * (the same places, with hiddenDrive).
+ */
+export type Drive = "window" | "focus-emulation" | "hidden";
 
 /** Write JSON to a temporary file and rename it over `path`, so a reader never sees half a file. */
 function writeJsonAtomic(path: string, value: unknown) {
@@ -175,6 +188,12 @@ export class AgentBrowser {
     return out;
   }
 
+  private readTabPages(): string[] {
+    let raw: unknown;
+    try { raw = JSON.parse(readFileSync(statePath(this.settings, TAB_PAGES_FILE), "utf8")); } catch { return []; }
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
+  }
+
   private readMarks(): Reads {
     let raw: unknown;
     try { raw = JSON.parse(readFileSync(statePath(this.settings, READS_FILE), "utf8")); } catch { return {}; }
@@ -185,7 +204,7 @@ export class AgentBrowser {
   }
 
   /**
-   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json) under the state
+   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json) under the state
    * folder's lock (tabs.lock): several processes (CLI calls of different sessions) write it, and a
    * read-modify-write without the lock can lose another's change. The entries of tabs that Chrome no
    * longer has are dropped here, from the names, the scopes and the read marks. The target list is
@@ -195,8 +214,8 @@ export class AgentBrowser {
    */
   private async updateRecord(change: (r: TabRecord) => void): Promise<void> {
     await withFileLock(statePath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
-      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow() };
-      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window };
+      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow(), tabPages: this.readTabPages() };
+      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window, tabPages: JSON.stringify(r.tabPages) };
       change(r);
       const live = await this.conn.send("Target.getTargets", {}, undefined, 5_000)
         .then(({ targetInfos }) => new Set((targetInfos as TargetInfo[]).map((t) => t.targetId)), () => undefined);
@@ -204,10 +223,12 @@ export class AgentBrowser {
         for (const [name, id] of Object.entries(r.registry)) if (!live.has(id)) delete r.registry[name];
         for (const id of Object.keys(r.scopes)) if (!live.has(id)) delete r.scopes[id];
         for (const id of Object.keys(r.reads)) if (!live.has(id)) delete r.reads[id];
+        r.tabPages = r.tabPages.filter((id) => live.has(id));
       }
       if (JSON.stringify(r.registry) !== before.registry) writeJsonAtomic(statePath(this.settings, REGISTRY_FILE), r.registry);
       if (JSON.stringify(r.scopes) !== before.scopes) writeJsonAtomic(statePath(this.settings, SCOPES_FILE), r.scopes);
       if (JSON.stringify(r.reads) !== before.reads) writeJsonAtomic(statePath(this.settings, READS_FILE), r.reads);
+      if (JSON.stringify(r.tabPages) !== before.tabPages) writeJsonAtomic(statePath(this.settings, TAB_PAGES_FILE), r.tabPages);
       if (r.window !== before.window) {
         if (r.window === undefined) rmSync(statePath(this.settings, WINDOW_FILE), { force: true });
         else writeJsonAtomic(statePath(this.settings, WINDOW_FILE), { windowId: r.window });
@@ -284,10 +305,16 @@ export class AgentBrowser {
 
   /**
    * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
-   * browser it is a background tab in the current window: a foreground tab activates Chrome, which
-   * takes the operator's focus and Space (measured 2026-10-30). Between commands that tab is hidden and
-   * its timers slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9);
-   * during each command its page is visible. Click, type, eval, text, shot and record still work in it
+   * browser on Linux (windowPerPage, ab-v16.26) it gets a window of its own (Target.createTarget with
+   * newWindow and background: a new window without the focus), driven with no focus emulation: its
+   * page is visible and draws, as a person's window that is not in front, and it gets the focus only
+   * with the agent's input. An explicit newWindow: false (`open --tab`) opens a background tab there
+   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. On the
+   * Mac the agent browser opens a background tab in the current window, as before: a foreground tab
+   * activates Chrome, which takes the operator's focus and Space (measured 2026-10-30), and a window
+   * of its own is not measured there (ab-v16.27). Between commands that tab is hidden and its timers
+   * slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9); during
+   * each command its page is visible. Click, type, eval, text, shot and record still work in it
    * (test/live/background-tabs/check.ts; measured on Linux only: on macOS a recording of a background
    * tab may now get about 28 fps, which is not measured again). In the operator's Chrome with no pin,
    * it gets a window of its own, opened behind theirs, and that window is pinned at once: there a
@@ -297,13 +324,15 @@ export class AgentBrowser {
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);
     const win = this.pinnedWindow();
-    const agent = this.mode === "agent";
+    const agent = this.mode === "agent", windows = windowPerPage(this.settings);
+    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive).
+    const tabPage = windows && opts.newWindow === false;
     let targetId: string;
     if (win !== undefined) targetId = await this.openInWindow(win);
     else {
       if (!agent && opts.newWindow === false)
         throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
-      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? !agent })).targetId;
+      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? (!agent || windows) })).targetId;
     }
     // The new tab exists from here. When it cannot be recorded (the record lock timed out, say) or
     // attached, it is closed again (best effort), so it never stays as a tab that nobody recorded:
@@ -313,8 +342,9 @@ export class AgentBrowser {
       // Personal mode with no pin: the tab's own new window is pinned at once, in the same change as its record.
       const pin = win === undefined && !agent ? await this.windowOf(targetId) : undefined;
       const scope = this.tabScope, name = opts.name;
-      if (pin !== undefined || scope !== undefined || name) await this.updateRecord((r) => {
+      if (pin !== undefined || scope !== undefined || name || tabPage) await this.updateRecord((r) => {
         if (pin !== undefined) r.window = pin;
+        if (tabPage) r.tabPages.push(targetId);
         if (scope !== undefined) {
           // A name belongs to one tab of the scope: a tab that had it before keeps its place in the scope, without the name.
           if (name) for (const e of Object.values(r.scopes)) if (e.scope === scope && e.name === name) e.name = null;
@@ -414,27 +444,39 @@ export class AgentBrowser {
     if (!isAllowedUrl(info.url, this.allow)) throw new NotAllowedError(info.url);
     if (!(await this.reachable(info))) throw new NotAllowedError(info.url, "refusing: that tab is outside the pinned window");
     const { sessionId } = await this.conn.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab = new Tab(this, targetId, sessionId);
+    const tab = new Tab(this, targetId, sessionId, this.driveOf(targetId));
     await tab.send("Page.enable");
     // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
     // a page can tell the Runtime domain is enabled, and we never need its events.
     // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
     // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
     // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
-    // visibilitychange to "visible" and back. With hiddenDrive there is none (ab-v16.15): input and
-    // shots in a background tab run under Tab.whileDrawn, which keeps the page "hidden".
-    if (!this.settings.hiddenDrive) await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    // visibilitychange to "visible" and back, and a focus that no blur follows. With hiddenDrive there
+    // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn, which keeps
+    // the page "hidden". A page in a window of its own needs none (ab-v16.26): Chrome draws it, and
+    // the agent's input gives it the focus, as a person's does.
+    if (tab.drive === "focus-emulation") await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     this.sessions.set(targetId, tab);
     return tab;
   }
 
-  /** Drop a closed tab: its session, its name, its place in a tab scope and its read mark. Async: the record changes under its lock. */
+  /**
+   * How a page is driven (Drive): where each page gets a window of its own (windowPerPage), "window",
+   * except a tab of an explicit `open --tab`; elsewhere the old modes, by the hiddenDrive option.
+   */
+  driveOf(targetId: string): Drive {
+    if (windowPerPage(this.settings) && !this.readTabPages().includes(targetId)) return "window";
+    return this.settings.hiddenDrive ? "hidden" : "focus-emulation";
+  }
+
+  /** Drop a closed tab: its session, its name, its place in a tab scope, its read mark and its tab-page mark. Async: the record changes under its lock. */
   async forget(targetId: string): Promise<void> {
     this.sessions.delete(targetId);
     await this.updateRecord((r) => {
       for (const [n, id] of Object.entries(r.registry)) if (id === targetId) delete r.registry[n];
       delete r.scopes[targetId];
       delete r.reads[targetId];
+      r.tabPages = r.tabPages.filter((id) => id !== targetId);
     });
   }
 
@@ -528,11 +570,14 @@ export class Tab {
   readonly browser: AgentBrowser;
   readonly targetId: string;
   readonly sessionId: string;
+  /** How this page is driven (AgentBrowser.driveOf): a window of its own, or one of the old modes of a tab. */
+  readonly drive: Drive;
 
-  constructor(browser: AgentBrowser, targetId: string, sessionId: string) {
+  constructor(browser: AgentBrowser, targetId: string, sessionId: string, drive?: Drive) {
     this.browser = browser;
     this.targetId = targetId;
     this.sessionId = sessionId;
+    this.drive = drive ?? browser.driveOf?.(targetId) ?? "focus-emulation";
   }
 
   private isolatedContextId?: number;
@@ -621,7 +666,7 @@ export class Tab {
    */
   private async whileDrawn<T>(fn: (own: OwnCapture) => Promise<T>, opts: { repeat?: boolean; shot?: boolean } = {}): Promise<T> {
     const plain: OwnCapture = (params) => this.send("Page.captureScreenshot", params, Tab.shotTiming.ownMs);
-    const hidden = this.browser.settings.hiddenDrive, log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
+    const hidden = this.drive === "hidden", log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
     if (!hidden && !opts.shot) return fn(plain);
     await this.assertAllowed();
     if (hidden && await this.evaluate(() => document.visibilityState) !== "hidden") return fn(plain);

@@ -199,6 +199,12 @@ export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Prom
         fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
         return t;
       }
+      // A window of its own (agent-browser's open on Linux, ab-v16.26): the fake Chrome's new window, not focused.
+      case "windows.create": {
+        const t = tab(chrome.pages.get((await send("Target.createTarget", { url: args[0].url, newWindow: true, background: args[0].focused === false })).result.targetId)!);
+        fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
+        return { id: t.windowId, state: "normal", focused: args[0].focused !== false, tabs: [t] };
+      }
       case "tabs.get": case "tabs.update": return tab(page(args[0]));
       case "tabs.query": return [...chrome.pages.values()].filter((p) => args[0].windowId === undefined || p.windowId === args[0].windowId).map(tab);
       case "tabs.remove":
