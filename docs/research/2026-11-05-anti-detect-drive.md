@@ -39,8 +39,7 @@ In detail (section 8):
    person's interval in place of `Input.insertText`, a click on a field in place of `el.focus()`, and
    wheel events in place of `scrollIntoView`. In a window that Chrome has shown, CDP input of that
    shape matched the person's input in every input field that the probe records (`window-human-cdp`
-   against `person-window`; section 5 has the one difference, the pointer's position at an
-   activation).
+   against `person-window`), once its path started at the real pointer (section 5).
 5. **The window comes forward for input, on taylor only.** On Linux the agent's press in a window
    makes Chrome activate and raise that window, as a person's click does: the other window's page gets
    a `blur`. Keys do not: typing into a window after another window took the focus gave the page the
@@ -127,8 +126,8 @@ timestamp (section 2):
   `loading=lazy` image 6000 px down the page; every pointer, mouse, key, `beforeinput`, `input`,
   `wheel`, `focusin` and `focusout` event, with `isTrusted`, client and screen coordinates,
   `movementX/Y`, `pressure`, `buttons`, `key`, `code`, `inputType` and `navigator.userActivation`;
-  the geometry at load and at each resize; and a `BroadcastChannel` message between the two pages at
-  each change of state.
+  each scroll (in runs 6 and 7); the geometry at load and at each resize; and a
+  `BroadcastChannel` message between the two pages at each change of state.
 - **The transport.** Chromium runs with `--remote-debugging-pipe` (no debugging port). A small bridge
   in `run.ts` serves the pipe as a WebSocket on a Unix socket in the run folder. It detaches the
   sessions of a client when the client leaves, as agent-browser's proxy and the relay do, so focus
@@ -143,12 +142,13 @@ timestamp (section 2):
   manager raises and focuses a window that the person clicks, the script raises it and gives it the
   keyboard focus with xdotool (`windowraise`, `windowfocus`).
 - **The drive.** Every agent scenario runs the same steps on T: 3 s idle; `text`; `click #b`;
-  `type hello --into #f`; a library session (`Tab.clickAt` on a button whose click asks for a frame,
+  `type hello --into #f`; in runs 6 and 7, `click #far` (a button below the fold); a library
+  session (`Tab.clickAt` on a button whose click asks for a frame,
   then `Tab.waitFor` for the content that only that frame writes, 5 s limit); `press End` (the page
   scrolls to its bottom, to the lazy image and the sentinel); `shot`; `record` of 1 s; 3 s idle. After
   each step the script waits 1.6 s, so that the frames of the second after it are counted. A person's
-  drive has the same steps where a person can do them: bring T to the front, click, type, click the
-  frame button, End, send T back.
+  drive has the same steps where a person can do them: bring T to the front, click, type, scroll with
+  the wheel and click the button below the fold, click the frame button, End, send T back.
 - **What the transport adds.** `--remote-debugging-pipe` sets `navigator.webdriver` to true in every
   page of these runs, also in the person scenarios. agent-browser's real transports do not: the proxy
   uses Chrome's own remote-debugging approval, and agent mode uses `chrome.debugger` through the
@@ -195,7 +195,7 @@ appendix has every value.
 | **5+1. Playwright without focus emulation, every page in a window of its own** (`pw-window-filtered`) | as 1; the input's shape | nothing: click 95 to 123 ms, `waitForFunction` 101 to 106 ms, lazy image 15 to 17 ms, shot 60 to 68 ms | as 1, in the relay |
 | **6a. One window per page, the X focus moved to it, CDP input** (`xfocus-cdp`) | as 1+2; the input's shape | nothing | Linux only |
 | **6b. One window per page, the X focus moved to it, X input** (`xfocus-xinput`) | nothing that the probe records: the same events as `person-window` | nothing (no shot or record in this drive) | Linux only; one pointer for the whole display (a lock); the window must be raised and not covered at the point; the agent maps page points to screen points |
-| **6c. One window per page, `Target.activateTarget`, person-shaped CDP input** (`window-human-cdp`) | the same input as `person-window` (20 moves with movement, a press of 87 to 93 ms, `pressure` 0.5, the right screen offset, 5 `keydown`), and the same window switch. One difference: the activation raises the window under the real X pointer, so the page gets a real pointer event there, and a CDP path that starts elsewhere jumps (195 px in `extra.ts --exp jump`; runs 3 to 5 started the path at a fixed point). The final run starts the path at the real pointer (section 5) | nothing | a click takes about 0.9 s, the field click and 5 characters about 1.8 s |
+| **6c. One window per page, `Target.activateTarget`, person-shaped CDP input** (`window-human-cdp`) | the same input as `person-window` (20 moves with movement, a press of 87 to 93 ms, `pressure` 0.5, the right screen offset, 5 `keydown`), and the same window switch. One difference in runs 3 to 5: the activation raises the window under the real X pointer, so the page gets a real pointer event there, and a CDP path that starts elsewhere jumps (195 px in `extra.ts --exp jump`). The final runs start the path at the real pointer and scroll with the wheel: 0 pointer jumps, 0 scrolls with no wheel or key, 0 field focus with no press, as in the person rows (section 5) | nothing | a click takes about 0.9 s, the field click and 5 characters about 1.8 s |
 | **6c with two agents at once** (`extra.ts --exp two`, `two-noact`): each agent activates its own window (or not) and types | the two pages have the focus at the same time: 11.2 to 12.4 s of 13.8 to 14.8 s (with no activation 11.5 to 11.7 s of 12.4 to 12.5 s) | nothing | — |
 | **6c with two agents and one input lock** (`extra.ts --exp two-lock`) | 0 to 0.2 s of both pages focused (at a switch) | nothing | the work takes 28 to 57 % longer (19.1 to 21.7 s) |
 | **Taylor without the flag, with activation before input and shots** (not run as one scenario) | between commands a covered agent window is `hidden`, as a person's covered window; the activation shows it, as a person's click does. It adds a switch for each shot, and for each read that needs frames | a read or a `waitFor` of content that only a frame writes (rAF, `IntersectionObserver`, lazy load) waits until the next activation; the page's own timers run at 1 tick/s | a switch (a `blur` in another page) for each such step |
@@ -255,7 +255,7 @@ Three more conditions, from the review of PR #43:
   page a real pointer event at the X pointer's position. A CDP path that starts at another point then
   jumps: in `extra.ts --exp jump` the first CDP move had `movementX` -195. The pointer cannot be parked
   outside every window, because production windows fill the screen. So the path starts where the real
-  pointer is. `stepSignals` counts such a jump ("pointer jumps > 100 px"), and the final run's
+  pointer is. `stepSignals` counts such a jump ("pointer jumps > 100 px"), and in runs 6 and 7
   `window-human-cdp` starts its path at the X pointer.
 - **Focus by a click, not by a script.** `type --into` focuses the field with `el.focus()`
   (`src/browser.ts`, line 750): the page gets a `focusin` with no press before it. A person clicks the
@@ -263,7 +263,16 @@ Three more conditions, from the review of PR #43:
 - **Scroll by the wheel, not by a script.** `click` and `clickText` bring the element into view with
   `scrollIntoView` (lines 686 and 712): the page scrolls with no wheel or key event. A person scrolls
   with the wheel (or a key). The probe now has a button below the fold, logs each scroll, and counts
-  "scrolls with no wheel or key" and "field focus with no press" (appendix, third table; final run).
+  "scrolls with no wheel or key" and "field focus with no press" (appendix, third table).
+
+Measured in the final runs:
+
+| | pointer jumps > 100 px | scrolls with no wheel or key | field focus with no press |
+| --- | --- | --- | --- |
+| a person (`person-*`, `xfocus-xinput`) | 0 | 0 | 0 |
+| agent-browser today (`default`, `hidden-drive`, `window*`, `activate`, `emulate-input`, `xfocus-cdp`) | 1 to 4 | 1 to 3 | 1 to 2 |
+| Playwright 1.64.1 (`pw-*`; its drive has no click below the fold) | 0 to 2 | 0 to 2 | 1 |
+| person-shaped CDP input from the real pointer, with the wheel (`window-human-cdp`) | 0 | 0 | 0 |
 
 ## 6. Playwright behind the relay (candidate 5)
 
@@ -458,13 +467,17 @@ each.
 
 ## Appendix: the tables of the final runs
 
-The output of `report.ts` for runs 4 and 5 (2026-11-05, 00:06 to 00:17 and 00:17 to 00:28 UTC), the
-two final runs of the committed script. Where the two runs differ, a cell gives both values with " / "
-between them. The ranges in the text are over runs 3, 4 and 5 (run 3: 2026-11-04 23:51 to
-2026-11-05 00:02 UTC, with the same scenarios but without `window-keys-inactive`, and with the
-`IntersectionObserver` sentinel too high on the page, so it has no observer values). Runs 1 and 2 were
-earlier versions of the script and gave the same results where they measured the same thing; the
-person-window baseline failed in run 1 (a fault of the script, fixed). Each run exited 0.
+The output of `report.ts` for runs 6 and 7 (2026-11-05, 01:02 to 01:13 and 01:13 to 01:25 UTC), the
+two runs of the committed script. Where the two runs differ, a cell gives both values with " / "
+between them. Runs 6 and 7 add the click below the fold, the scroll records and the three new input
+counts, and start `window-human-cdp`'s path at the real pointer; their drive is one step longer, so
+their focus times are a little longer. The ranges in the text are over runs 3, 4 and 5 (2026-11-04
+23:51 to 2026-11-05 00:28 UTC: the same scenarios without that step; run 3 also without
+`window-keys-inactive` and with the `IntersectionObserver` sentinel too high on the page), except
+where the text names runs 6 and 7 or `extra.ts`. Runs 1 and 2 were earlier versions of the script
+and gave the same results where they measured the same thing; the person-window baseline failed in
+run 1 (a fault of the script, fixed). Each run exited 0. The `extra.ts` values come from one run of
+each check on 2026-11-05 (00:59 to 01:02 UTC) and from the review's runs of the same checks.
 
 How to read the tables:
 
@@ -477,6 +490,7 @@ How to read the tables:
 - "End: lazy image" and "End: IntersectionObserver": the time from the start of the End step to the
   image's request and to the observer's callback.
 - "press ms": from `mousedown` to `mouseup`.
+- "pointer jumps > 100 px", "scrolls with no wheel or key", "field focus with no press": section 5.
 
 ### What the driven page T showed
 | scenario | idle | visible ms (text, click, type, library, End, shot, record) | T: vis changes / focus / blur | actions while hidden / unfocused | after: vis, focus, fps, tps | F saw | F and T focused, before record (ms) |
@@ -484,66 +498,65 @@ How to read the tables:
 | person-front | visible 60 fps 20 tps, focus yes | -, all, all, -, all, -, - | 0 / 0 / 0 | 0 / 0 | visible, yes, 60, 20 | nothing | 0 |
 | person-tab | hidden 0 fps 1 tps, focus no | -, all, all, -, all, -, - | 2 / 2 / 1 | 0 / 0 | hidden, no, 0, 1 | blur, visibilitychange:hidden, visibilitychange:visible, focus | 0 |
 | person-window | hidden 0 fps 1 tps, focus no | -, all, all, -, all, -, - | 2 / 1 / 1 | 0 / 0 | hidden, no, 0, 1 | visibilitychange:hidden, blur, visibilitychange:visible, focus | 0 |
-| default | hidden 0 fps 1 tps, focus no | 14, 40, 20, 1035, 14, 30017, 3035 / 13, 24, 16, 1044, 11, 30011, 2939 | 14 / 2 / 1 | 0 / 0 | hidden, yes, 0, 1 | nothing | 41200 |
-| hidden-drive | hidden 0 fps 1 tps, focus no | 0, 0, 0, 0, 0, 0, 2643 / 0, 0, 0, 0, 0, 0, 2649 | 2 / 2 / 0 | 14 / 0 | hidden, yes, 0, 1 | nothing | 10500 |
-| window | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 2 / 0 | 0 / 0 | visible, yes, 60, 20 | blur | 0 |
-| window-no-flag | hidden 0 fps 1 tps, focus no | 0, 266, all, all, all, all, all / 0, 254, all, all, all, all, all | 1 / 2 / 0 | 2 / 0 | visible, yes, 60, 20 | visibilitychange:hidden, visibilitychange:visible, visibilitychange:hidden, blur | 100 / 0 |
-| window-default | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 3 / 1 | 0 / 0 | visible, yes, 60, 20 | blur | 100 / 0 |
-| window-activate | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 6 / 4 | 0 / 0 | visible, yes, 60, 20 | blur, focus, blur, focus, blur, focus, blur, focus | 200 |
-| activate | hidden 0 fps 1 tps, focus no | 0, 71, 48, 341, 52, 0, 2646 / 0, 73, 46, 324, 49, 0, 2651 | 10 / 6 / 4 | 0 / 0 | hidden, yes, 0, 1 | blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus | 0 |
-| emulate-input | hidden 0 fps 1 tps, focus no | 0, 52, 26, 2038, 20, 0, 2690 / 0, 59, 26, 2032, 20, 0, 2646 | 10 / 2 / 0 | 0 / 0 | hidden, yes, 0, 1 | nothing | 16300 / 16200 |
-| pw-default | visible 57 fps 20 tps, focus yes / visible 60 fps 20 tps, focus yes | all, all, all, all, all, all, - | 0 / 0 / 0 | 0 / 0 | visible, yes, 60, 20 | nothing | 40000 / 39900 |
+| default | hidden 0 fps 1 tps, focus no | 15, 23, 18, 1031, 11, 30010, 3050 / 15, 1035, 21, 1037, 16, 30011, 2979 | 16 / 2 / 1 | 0 / 0 | hidden, yes, 0, 1 | nothing | 43200 / 44200 |
+| hidden-drive | hidden 0 fps 1 tps, focus no | 0, 0, 0, 0, 0, 0, 2644 / 0, 0, 0, 0, 0, 0, 2652 | 2 / 2 / 0 | 19 / 0 | hidden, yes, 0, 1 | nothing | 12700 / 12600 |
+| window | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 2 / 0 | 0 / 0 | visible, yes, 60, 20 | blur | 0 / 100 |
+| window-no-flag | hidden 0 fps 1 tps, focus no | 0, 263, all, all, all, all, all / 0, 275, all, all, all, all, all | 1 / 2 / 0 | 2 / 0 | visible, yes, 60, 20 | visibilitychange:hidden, visibilitychange:visible, visibilitychange:hidden, blur | 0 |
+| window-default | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 3 / 1 | 0 / 0 | visible, yes, 60, 20 | blur | 100 |
+| window-activate | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 7 / 5 | 0 / 0 | visible, yes, 60, 20 | blur, focus, blur, focus, blur, focus, blur, focus, blur, focus | 0 |
+| activate | hidden 0 fps 1 tps, focus no | 0, 51, 47, 323, 42, 0, 2658 / 0, 64, 44, 302, 45, 0, 2652 | 12 / 7 / 5 | 0 / 0 | hidden, yes, 0, 1 | blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus / blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, visibilitychange:visible, focus, blur, visibilitychange:hidden, focus, visibilitychange:visible | 0 |
+| emulate-input | hidden 0 fps 1 tps, focus no | 0, 37, 25, 1038, 26, 0, 2642 / 0, 37, 28, 1037, 18, 0, 2644 | 12 / 2 / 0 | 0 / 0 | hidden, yes, 0, 1 | nothing | 17300 / 18300 |
+| pw-default | visible 60 fps 20 tps, focus yes | all, all, all, all, all, all, - | 0 / 0 / 0 | 0 / 0 | visible, yes, 60, 20 | nothing | 39900 / 40300 |
 | pw-no-defaults | hidden 0 fps 1 tps, focus no | 0, 0, 0, 0, 0, 0, - | 0 / 1 / 0 | 4 / 0 | hidden, yes, 0, 1 | blur, visibilitychange:hidden, visibilitychange:visible, focus | 27300 |
-| pw-filtered | hidden 0 fps 1 tps, focus no | 0, 0, 0, 0, 0, 0, - | 0 / 1 / 0 | 4 / 0 | hidden, yes, 0, 1 | blur, visibilitychange:hidden, visibilitychange:visible, focus | 27300 |
+| pw-filtered | hidden 0 fps 1 tps, focus no | 0, 0, 0, 0, 0, 0, - | 0 / 1 / 0 | 4 / 0 | hidden, yes, 0, 1 | blur, visibilitychange:hidden, focus, visibilitychange:visible / blur, visibilitychange:hidden, visibilitychange:visible, focus | 27300 |
 | pw-window-filtered | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, - | 0 / 2 / 0 | 0 / 0 | visible, yes, 60, 20 | blur | 0 |
-| xfocus-cdp | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 6 / 4 | 0 / 0 | visible, yes, 60, 20 | blur, focus, blur, focus, blur, focus, blur, focus | 0 |
+| xfocus-cdp | visible 60 fps 20 tps, focus no | all, all, all, all, all, all, all | 0 / 7 / 5 | 0 / 0 | visible, yes, 60, 20 | blur, focus, blur, focus, blur, focus, blur, focus, blur, focus | 0 |
 | xfocus-xinput | visible 60 fps 20 tps, focus no | -, all, all, -, all, -, - | 0 / 2 / 1 | 0 / 0 | visible, no, 60, 20 | blur, focus | 0 |
-| window-human-cdp | visible 60 fps 20 tps, focus no / visible 59 fps 20 tps, focus no | -, all, all, -, all, -, - | 0 / 2 / 1 | 0 / 0 | visible, no, 60, 20 | blur, focus | 0 |
+| window-human-cdp | visible 60 fps 20 tps, focus no | -, all, all, -, all, -, - | 0 / 2 / 1 | 0 / 0 | visible, no, 60, 20 | blur, focus | 0 |
 | window-keys-inactive | visible 60 fps 20 tps, focus no | -, all, all, -, all, -, - | 0 / 3 / 1 | 0 / 0 | visible, yes, 60, 20 | blur, focus | 8600 |
 
 ### What worked
-| scenario | text | click | type | library (frame content) | End: lazy image | End: IntersectionObserver | shot | record |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| person-front | - | ok 631 ms / ok 618 ms | ok 1047 ms / ok 1064 ms | - | 21 ms | 18 ms / 20 ms | - | - |
-| person-tab | - | ok 664 ms / ok 673 ms | ok 1120 ms / ok 1106 ms | - | 31 ms / 33 ms | 31 ms / 27 ms | - | - |
-| person-window | - | ok 603 ms / ok 630 ms | ok 1045 ms / ok 1066 ms | - | 20 ms | 17 ms / 15 ms | - | - |
-| default | ok 26 ms | ok 48 ms / ok 35 ms | ok 30 ms / ok 27 ms | ok 1045 ms / ok 1053 ms | 2036 ms / 2031 ms | 2034 ms / 2030 ms | FAIL (Page.captureScreenshot: no response after 30000 ms) | ok 3215 ms / ok 3085 ms |
-| hidden-drive | ok 17 ms / ok 16 ms | ok 89 ms / ok 90 ms | ok 98 ms / ok 101 ms | ok 120 ms / ok 114 ms | 51 ms / 52 ms | 51 ms / 52 ms | ok 115 ms / ok 108 ms | ok 3072 ms |
-| window | ok 20 ms / ok 39 ms | ok 55 ms / ok 82 ms | ok 25 ms / ok 38 ms | ok 278 ms / ok 312 ms | 20 ms / 44 ms | 19 ms / 52 ms | ok 56 ms / ok 84 ms | ok 3047 ms / ok 3108 ms |
-| window-no-flag | ok 24 ms / ok 23 ms | ok 129 ms / ok 142 ms | ok 27 ms | ok 293 ms / ok 282 ms | 18 ms / 22 ms | 18 ms / 21 ms | ok 56 ms | ok 3066 ms / ok 3070 ms |
-| window-default | ok 25 ms / ok 23 ms | ok 69 ms / ok 45 ms | ok 23 ms / ok 24 ms | ok 290 ms / ok 287 ms | 18 ms / 17 ms | 34 ms / 17 ms | ok 69 ms / ok 58 ms | ok 3096 ms / ok 3060 ms |
-| window-activate | ok 35 ms / ok 19 ms | ok 185 ms / ok 143 ms | ok 175 ms / ok 129 ms | ok 439 ms / ok 389 ms | 149 ms / 136 ms | 156 ms / 135 ms | ok 97 ms / ok 65 ms | ok 3099 ms / ok 3077 ms |
-| activate | ok 17 ms / ok 19 ms | ok 86 ms / ok 84 ms | ok 59 ms | ok 361 ms / ok 342 ms | 52 ms / 2080 ms | 103 ms / 2079 ms | ok 125 ms / ok 117 ms | ok 3089 ms / ok 3062 ms |
-| emulate-input | ok 19 ms | ok 58 ms / ok 63 ms | ok 31 ms / ok 30 ms | ok 2042 ms / ok 2038 ms | 2040 ms / 2042 ms | 2040 ms / 2041 ms | ok 4188 ms / ok 4106 ms | ok 3207 ms / ok 3066 ms |
-| pw-default | ok 92 ms / ok 54 ms | ok 116 ms / ok 84 ms | ok 50 ms / ok 29 ms | ok 2270 ms | 23 ms / 37 ms | 79 ms / 33 ms | FAIL (page.screenshot: Timeout 8000ms exceeded.) | - |
-| pw-no-defaults | ok 47 ms | FAIL (page.click: Timeout 8000ms exceeded.) | ok 32 ms / ok 19 ms | FAIL (page.click: Timeout 8000ms exceeded.), no frame content | 2025 ms / 2024 ms | 2024 ms / 2023 ms | ok 662 ms / ok 671 ms | - |
-| pw-filtered | ok 55 ms / ok 50 ms | FAIL (page.click: Timeout 8000ms exceeded.) | ok 18 ms / ok 22 ms | FAIL (page.click: Timeout 8000ms exceeded.), no frame content | 2027 ms | 2025 ms / 2026 ms | ok 664 ms / ok 681 ms | - |
-| pw-window-filtered | ok 43 ms / ok 52 ms | ok 123 ms / ok 106 ms | ok 35 ms / ok 20 ms | ok 101 ms | 17 ms / 15 ms | 18 ms / 15 ms | ok 68 ms / ok 60 ms | - |
-| xfocus-cdp | ok 20 ms | ok 668 ms / ok 670 ms | ok 651 ms / ok 654 ms | ok 919 ms / ok 911 ms | 349 ms / 351 ms | 337 ms / 341 ms | ok 62 ms / ok 61 ms | ok 3093 ms / ok 3071 ms |
-| xfocus-xinput | - | ok 651 ms / ok 624 ms | ok 1098 ms / ok 1082 ms | - | 24 ms / 33 ms | 20 ms / 32 ms | - | - |
-| window-human-cdp | - | ok 880 ms / ok 899 ms | ok 1778 ms / ok 1887 ms | - | 18 ms / 28 ms | 17 ms / 29 ms | - | - |
-| window-keys-inactive | - | ok 64 ms / ok 55 ms | ok 27 ms / ok 29 ms | -, no frame content | 16 ms / 31 ms | 16 ms / 31 ms | - | - |
+| scenario | text | click | type | click below the fold | library (frame content) | End: lazy image | End: IntersectionObserver | shot | record |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| person-front | - | ok 613 ms / ok 637 ms | ok 1053 ms / ok 1049 ms | ok 2811 ms / ok 2834 ms | - | 22 ms / 23 ms | 18 ms / 31 ms | - | - |
+| person-tab | - | ok 619 ms / ok 607 ms | ok 1032 ms / ok 1064 ms | ok 2771 ms / ok 2816 ms | - | 23 ms / 21 ms | 22 ms / 17 ms | - | - |
+| person-window | - | ok 607 ms / ok 622 ms | ok 1050 ms / ok 1053 ms | ok 2869 ms / ok 2810 ms | - | 26 ms / 20 ms | 26 ms / 29 ms | - | - |
+| default | ok 26 ms / ok 25 ms | ok 33 ms / ok 1044 ms | ok 26 ms / ok 30 ms | ok 38 ms / ok 32 ms | ok 1040 ms / ok 1047 ms | 2034 ms / 2040 ms | 2033 ms / 2037 ms | FAIL (Page.captureScreenshot: no response after 30000 ms) | ok 3221 ms / ok 3137 ms |
+| hidden-drive | ok 16 ms / ok 17 ms | ok 122 ms / ok 102 ms | ok 122 ms / ok 115 ms | ok 118 ms / ok 116 ms | ok 119 ms / ok 120 ms | 68 ms / 54 ms | 68 ms / 54 ms | ok 109 ms / ok 122 ms | ok 3057 ms / ok 3085 ms |
+| window | ok 21 ms / ok 19 ms | ok 52 ms / ok 53 ms | ok 29 ms / ok 25 ms | ok 39 ms / ok 48 ms | ok 284 ms / ok 312 ms | 19 ms / 30 ms | 35 ms / 39 ms | ok 70 ms / ok 87 ms | ok 3144 ms / ok 3103 ms |
+| window-no-flag | ok 19 ms / ok 26 ms | ok 136 ms / ok 132 ms | ok 26 ms / ok 27 ms | ok 28 ms / ok 51 ms | ok 284 ms / ok 283 ms | 22 ms / 20 ms | 22 ms / 20 ms | ok 61 ms / ok 57 ms | ok 3078 ms / ok 3106 ms |
+| window-default | ok 29 ms / ok 22 ms | ok 47 ms / ok 42 ms | ok 26 ms / ok 27 ms | ok 44 ms / ok 29 ms | ok 286 ms / ok 285 ms | 20 ms | 19 ms / 20 ms | ok 55 ms / ok 59 ms | ok 3061 ms / ok 3202 ms |
+| window-activate | ok 21 ms / ok 20 ms | ok 149 ms / ok 142 ms | ok 130 ms | ok 134 ms / ok 138 ms | ok 384 ms / ok 381 ms | 121 ms / 124 ms | 136 ms / 128 ms | ok 67 ms / ok 71 ms | ok 3111 ms / ok 3076 ms |
+| activate | ok 16 ms / ok 15 ms | ok 66 ms / ok 75 ms | ok 60 ms / ok 56 ms | ok 73 ms / ok 76 ms | ok 336 ms / ok 316 ms | 42 ms / 45 ms | 47 ms / 96 ms | ok 110 ms / ok 105 ms | ok 3128 ms / ok 3068 ms |
+| emulate-input | ok 19 ms / ok 14 ms | ok 42 ms | ok 29 ms / ok 34 ms | ok 1029 ms / ok 1032 ms | ok 1043 ms / ok 1042 ms | 28 ms / 2041 ms | 28 ms / 2040 ms | ok 3111 ms / ok 4107 ms | ok 3039 ms / ok 3053 ms |
+| pw-default | ok 56 ms / ok 59 ms | ok 80 ms | ok 24 ms / ok 22 ms | - | ok 2270 ms / ok 2697 ms | 37 ms / 32 ms | 37 ms / 32 ms | FAIL (page.screenshot: Timeout 8000ms exceeded.) | - |
+| pw-no-defaults | ok 45 ms | FAIL (page.click: Timeout 8000ms exceeded.) | ok 22 ms / ok 19 ms | - | FAIL (page.click: Timeout 8000ms exceeded.), no frame content | 2026 ms / 2025 ms | 2025 ms / 2024 ms | ok 677 ms / ok 671 ms | - |
+| pw-filtered | ok 44 ms / ok 49 ms | FAIL (page.click: Timeout 8000ms exceeded.) | ok 18 ms / ok 23 ms | - | FAIL (page.click: Timeout 8000ms exceeded.), no frame content | 2026 ms / 2028 ms | 2024 ms / 2026 ms | ok 667 ms / ok 670 ms | - |
+| pw-window-filtered | ok 69 ms / ok 46 ms | ok 102 ms / ok 107 ms | ok 19 ms / ok 21 ms | - | ok 190 ms / ok 103 ms | 29 ms / 20 ms | 29 ms / 20 ms | ok 89 ms / ok 68 ms | - |
+| xfocus-cdp | ok 21 ms / ok 19 ms | ok 671 ms / ok 659 ms | ok 658 ms / ok 656 ms | ok 656 ms / ok 661 ms | ok 904 ms / ok 917 ms | 347 ms | 342 ms / 343 ms | ok 64 ms / ok 65 ms | ok 3072 ms / ok 3049 ms |
+| xfocus-xinput | - | ok 605 ms / ok 604 ms | ok 1064 ms / ok 1062 ms | ok 2816 ms / ok 2781 ms | - | 22 ms / 20 ms | 21 ms / 10 ms | - | - |
+| window-human-cdp | - | ok 552 ms / ok 548 ms | ok 1446 ms / ok 1453 ms | ok 2485 ms / ok 2462 ms | - | 7 ms / 6 ms | 7 ms / 5 ms | - | - |
+| window-keys-inactive | - | ok 74 ms / ok 67 ms | ok 25 ms / ok 31 ms | - | -, no frame content | 31 ms / 20 ms | 31 ms / 35 ms | - | - |
 
 ### The input events of the click and the typing
-| scenario | moves before the press (with movement) | screen - client at the press | pressure | press ms | type: keydowns for 5 chars, inputType | untrusted |
-| --- | --- | --- | --- | --- | --- | --- |
-| person-front | 20 (19) | [0,143] | 0.5 | 78 / 77 | 5, insertText | 0 |
-| person-tab | 20 (20) | [0,87] | 0.5 | 80 / 81 | 5, insertText | 0 |
-| person-window | 20 (20) | [0,143] | 0.5 | 75 / 77 | 5, insertText | 0 |
-| default | 1 (0) | [0,0] | 0 | 4 | 0, insertText | 0 |
-| hidden-drive | 1 (0) | [0,0] | 0 | 3 / 4 | 0, insertText | 0 |
-| window | 2 (1) | [0,87] | 0 | 9 / 20 | 0, insertText | 0 |
-| window-no-flag | 2 (1) | [0,87] | 0 | 8 / 14 | 0, insertText | 0 |
-| window-default | 2 (1) | [0,87] | 0 | 6 / 8 | 0, insertText | 0 |
-| window-activate | 2 (1) | [0,87] | 0 | 7 / 4 | 0, insertText | 0 |
-| activate | 2 (1) | [0,87] | 0 | 3 / 5 | 0, insertText | 0 |
-| emulate-input | 1 (0) | [0,0] | 0 | 4 / 5 | 0, insertText | 0 |
-| pw-default | 1 (0) | [0,0] | 0.5 | 0 | 0, insertText | 0 |
-| pw-no-defaults | 0 (0) | null | - | - | 0, insertText | 0 |
-| pw-filtered | 0 (0) | null | - | - | 0, insertText | 0 |
-| pw-window-filtered | 2 (1) | [0,87] | 0.5 | 2 / 3 | 0, insertText | 0 |
-| xfocus-cdp | 2 (1) | [0,87] | 0 | 3 / 4 | 0, insertText | 0 |
-| xfocus-xinput | 20 (20) | [0,87] | 0.5 | 77 | 5, insertText | 0 |
-| window-human-cdp | 20 (20) | [0,87] | 0.5 | 87 / 93 | 5, insertText | 0 |
-| window-keys-inactive | 2 (1) | [0,87] | 0 | 6 / 10 | 0, insertText | 0 |
-
+| scenario | moves before the press (with movement) | screen - client at the press | pressure | press ms | type: keydowns for 5 chars, inputType | untrusted | pointer jumps > 100 px | scrolls with no wheel or key | field focus with no press |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| person-front | 20 (19) | [0,143] | 0.5 | 78 / 76 | 5, insertText | 0 | 0 | 0 | 0 |
+| person-tab | 20 (20) | [0,87] | 0.5 | 78 / 77 | 5, insertText | 0 | 0 | 0 | 0 |
+| person-window | 20 (20) | [0,143] | 0.5 | 75 / 77 | 5, insertText | 0 | 0 | 0 | 0 |
+| default | 1 (0) | [0,0] | 0 | 3 / 4 | 0, insertText | 0 | 1 | 3 | 1 |
+| hidden-drive | 1 (0) | [0,0] | 0 | 4 | 0, insertText | 0 | 1 | 1 | 1 |
+| window | 2 (1) | [0,87] | 0 | 8 / 9 | 0, insertText | 0 | 2 | 1 | 1 |
+| window-no-flag | 2 (1) | [0,87] | 0 | 6 / 7 | 0, insertText | 0 | 2 | 1 | 1 |
+| window-default | 2 (1) | [0,87] | 0 | 8 / 7 | 0, insertText | 0 | 2 | 1 | 1 |
+| window-activate | 2 (1) | [0,87] | 0 | 3 | 0, insertText | 0 | 4 | 1 | 2 |
+| activate | 2 (1) | [0,87] | 0 | 4 | 0, insertText | 0 | 3 | 1 | 2 |
+| emulate-input | 1 (0) | [0,0] | 0 | 2 / 3 | 0, insertText | 0 | 1 | 1 / 3 | 1 |
+| pw-default | 1 (0) | [0,0] | 0.5 | 0 | 0, insertText | 0 | 0 | 0 | 1 |
+| pw-no-defaults | 0 (0) | null | - | - | 0, insertText | 0 | 0 | 2 | 1 |
+| pw-filtered | 0 (0) | null | - | - | 0, insertText | 0 | 0 | 2 | 1 |
+| pw-window-filtered | 2 (1) | [0,87] | 0.5 | 3 | 0, insertText | 0 | 2 | 0 | 1 |
+| xfocus-cdp | 2 (1) | [0,87] | 0 | 4 | 0, insertText | 0 | 4 | 1 | 2 |
+| xfocus-xinput | 20 (20) | [0,87] | 0.5 | 75 / 76 | 5, insertText | 0 | 0 | 0 | 0 |
+| window-human-cdp | 20 (20) | [0,87] | 0.5 | 74 / 73 | 5, insertText | 0 | 0 | 0 | 0 |
+| window-keys-inactive | 2 (1) | [0,87] | 0 | 10 / 11 | 0, insertText | 0 | 1 | 0 | 1 |
