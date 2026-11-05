@@ -1,0 +1,134 @@
+{
+  "part": "cookies",
+  "port": 8463,
+  "env": {
+    "version": "Chrome/156.0.8078.79"
+  },
+  "defaultThirdPartyCookies": {
+    "levelOfControl": "controllable_by_this_extension",
+    "value": false
+  },
+  "setThirdPartyCookiesTrue": {
+    "levelOfControl": "controlled_by_this_extension",
+    "value": true
+  },
+  "setThirdPartyCookiesFalse": {
+    "levelOfControl": "controlled_by_this_extension",
+    "value": false
+  },
+  "cases": [
+    {
+      "case": "Chromium's default settings",
+      "status": "frame error login_required",
+      "frame": [
+        "GET /authorize cookies=- sfs=cross-site"
+      ],
+      "cookies": [
+        {
+          "domain": "tenant.auth0.test",
+          "name": "auth0_session",
+          "sameSite": "no_restriction",
+          "secure": true
+        },
+        {
+          "domain": "site.test",
+          "name": "site_session",
+          "sameSite": "lax",
+          "secure": true
+        }
+      ]
+    },
+    {
+      "case": "contentSettings.cookies: allow, primary the provider, secondary the site",
+      "status": "frame code c3",
+      "frame": [
+        "GET /authorize cookies=auth0_session sfs=cross-site"
+      ],
+      "cookies": [
+        {
+          "domain": "tenant.auth0.test",
+          "name": "auth0_session",
+          "sameSite": "no_restriction",
+          "secure": true
+        },
+        {
+          "domain": "site.test",
+          "name": "site_session",
+          "sameSite": "lax",
+          "secure": true
+        }
+      ]
+    },
+    {
+      "case": "contentSettings.cookies: allow, primary any URL, secondary the site (the site may use third-party cookies)",
+      "status": "frame code c5",
+      "frame": [
+        "GET /authorize cookies=auth0_session sfs=cross-site"
+      ],
+      "cookies": [
+        {
+          "domain": "tenant.auth0.test",
+          "name": "auth0_session",
+          "sameSite": "no_restriction",
+          "secure": true
+        },
+        {
+          "domain": "site.test",
+          "name": "site_session",
+          "sameSite": "lax",
+          "secure": true
+        }
+      ]
+    },
+    {
+      "case": "chrome.privacy.websites.thirdPartyCookiesAllowed = true",
+      "status": "frame code c7",
+      "frame": [
+        "GET /authorize cookies=auth0_session sfs=cross-site"
+      ],
+      "cookies": [
+        {
+          "domain": "tenant.auth0.test",
+          "name": "auth0_session",
+          "sameSite": "no_restriction",
+          "secure": true
+        },
+        {
+          "domain": "site.test",
+          "name": "site_session",
+          "sameSite": "lax",
+          "secure": true
+        }
+      ]
+    },
+    {
+      "case": "chrome.privacy.websites.thirdPartyCookiesAllowed = false",
+      "status": "frame error login_required",
+      "frame": [
+        "GET /authorize cookies=- sfs=cross-site"
+      ],
+      "cookies": [
+        {
+          "domain": "tenant.auth0.test",
+          "name": "auth0_session",
+          "sameSite": "no_restriction",
+          "secure": true
+        },
+        {
+          "domain": "site.test",
+          "name": "site_session",
+          "sameSite": "lax",
+          "secure": true
+        }
+      ]
+    }
+  ],
+  "pids": {
+    "xvfb": [
+      732448
+    ],
+    "chromium": [
+      732492
+    ]
+  }
+}

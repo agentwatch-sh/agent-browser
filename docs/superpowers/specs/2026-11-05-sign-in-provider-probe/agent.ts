@@ -351,32 +351,32 @@ try {
       });
       const short = (r: any) => (r?.ok === false || r?.error ? { error: r.error?.message ?? r.error ?? r.raw } : r);
       const G = "ab";
-      await cli("open", `${S}/logout`, "--name", "s");
-      await rec(G, ln, "open site.test/ and click the sign-in link", async () => ({ open: short(await cli("goto", "s", `${S}/`)), click: short(await cli("click", "s", "#signin-redirect")) }));
+      await cli("open", `${S}/logout`, "--name", "qq1");
+      await rec(G, ln, "open site.test/ and click the sign-in link", async () => ({ open: short(await cli("goto", "qq1", `${S}/`)), click: short(await cli("click", "qq1", "#signin-redirect")) }));
       await sleep(1200);
-      await rec(G, ln, "text of the tab after the click (the tab is on the provider's page)", async () => ({ text: short(await cli("text", "s")), tabs: short(await cli("tabs")) }));
+      await rec(G, ln, "text of the tab after the click (the tab is on the provider's page)", async () => ({ text: short(await cli("text", "qq1")), tabs: short(await cli("tabs")) }));
       if (ln === "L2") {
         await rec(G, ln, "choose an account and type on the provider's page", async () => ({
-          account: short(await cli("click", "s", "#account-ada")), type: short(await cli("type", "s", "pw", "--into", "#password")), submit: short(await cli("click", "s", "#submit")),
+          account: short(await cli("click", "qq1", "#account-ada")), type: short(await cli("type", "qq1", "pw", "--into", "#password")), submit: short(await cli("click", "qq1", "#submit")),
         }));
         await sleep(1200);
-        await rec(G, ln, "text after the sign-in", async () => ({ text: short(await cli("text", "s")) }));
-        await cli("goto", "s", `${S}/logout`);
-        await cli("goto", "s", `${P}/logout`);
+        await rec(G, ln, "text after the sign-in", async () => ({ text: short(await cli("text", "qq1")) }));
+        await cli("goto", "qq1", `${S}/logout`);
+        await cli("goto", "qq1", `${P}/logout`);
       } else {
-        await cli("open", `${S}/`, "--name", "s");
+        await cli("open", `${S}/`, "--name", "qq1");
       }
-      await rec(G, ln, "goto site.test/app while signed out (the site redirects to the provider)", async () => ({ goto: short(await cli("goto", "s", `${S}/app`)) }));
-      await rec(G, ln, "open the provider's page itself (the agent's own navigation)", async () => ({ open: short(await cli("open", `${P}/u/login`, "--name", "p")) }));
-      await cli("open", `${S}/`, "--name", "s");
+      await rec(G, ln, "goto site.test/app while signed out (the site redirects to the provider)", async () => ({ goto: short(await cli("goto", "qq1", `${S}/app`)) }));
+      await rec(G, ln, "open the provider's page itself (the agent's own navigation)", async () => ({ open: short(await cli("open", `${P}/u/login`, "--name", "qq2")) }));
+      await cli("open", `${S}/`, "--name", "qq1");
       await rec(G, ln, "eval location.href = the provider (the agent's script in the page)", async () => {
-        const e = short(await cli("eval", "s", `location.href = ${JSON.stringify(`${P}/u/login`)}; 1`));
+        const e = short(await cli("eval", "qq1", `location.href = ${JSON.stringify(`${P}/u/login`)}; 1`));
         await sleep(1200);
-        return { eval: e, text: short(await cli("text", "s")) };
+        return { eval: e, text: short(await cli("text", "qq1")) };
       });
-      await cli("open", `${S}/`, "--name", "s");
+      await cli("open", `${S}/`, "--name", "qq1");
       await rec(G, ln, "click the popup sign-in, then list the tabs", async () => {
-        const c = short(await cli("click", "s", "#signin-popup"));
+        const c = short(await cli("click", "qq1", "#signin-popup"));
         await sleep(1500);
         return { click: c, tabs: short(await cli("tabs")) };
       });
@@ -385,10 +385,10 @@ try {
           account: short(await cli("click", "web_message", "#account-ada")), type: short(await cli("type", "web_message", "pw", "--into", "#password")), submit: short(await cli("click", "web_message", "#submit")),
         }));
         await sleep(1500);
-        await rec(G, ln, "the opener's status after the popup", async () => ({ status: short(await cli("text", "s", "#status")) }));
-        await cli("goto", "s", `${P}/logout`);
+        await rec(G, ln, "the opener's status after the popup", async () => ({ status: short(await cli("text", "qq1", "#status")) }));
+        await cli("goto", "qq1", `${P}/logout`);
       }
-      for (const t of ["s", "p"]) await cli("close", t).catch(() => {});
+      for (const t of ["qq1", "qq2"]) await cli("close", t).catch(() => {});
     }
   }
 
@@ -398,8 +398,10 @@ try {
     const context = browser.contexts()[0];
     const storage = { local: {}, session: {}, idb: [], caches: [] };
     const cookie = (name: string, value: string, domain: string, sameSite: string) => ({ name, value, domain, hostOnly: true, path: "/", secure: true, httpOnly: true, sameSite, session: true });
-    const siteState = (cookies: object[]) => ({ v: 1, domain: "site.test", url: `${S}/app`, origin: S, cookies, storage });
-    const providerState = (cookies: object[]) => ({ v: 1, domain: "tenant.auth0.test", url: `${P}/u/login`, origin: P, cookies, storage });
+    // C6 step 4 sends the restore tab to the state's url: a url that redirects to the provider would start a sign-in
+    // there. So a sign-out uses the host's logout page, and a send uses a page that does not redirect.
+    const siteState = (cookies: object[]) => ({ v: 1, domain: "site.test", url: cookies.length ? `${S}/` : `${S}/logout`, origin: S, cookies, storage });
+    const providerState = (cookies: object[]) => ({ v: 1, domain: "tenant.auth0.test", url: cookies.length ? `${P}/u/login` : `${P}/logout`, origin: P, cookies, storage });
     /** A new page for each step: an import closes the tabs of its origin (C6 step 1). */
     const fresh = async (fn: (page: any) => Promise<any>) => { const page = await context.newPage(); try { return await fn(page); } finally { await page.close().catch(() => {}); } };
     const gotoApp = (page: any) => page.goto(S + "/app").then((x: any) => ({ status: x?.status() }), (e: any) => ({ error: String(e.message).split("\n")[0] }));

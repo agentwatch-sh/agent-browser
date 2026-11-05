@@ -1,0 +1,435 @@
+{
+  "part": "agent",
+  "port": 8462,
+  "env": {
+    "extension": {
+      "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/auth-design",
+      "commit": "230f381b439ab9ce25d6b5f5e1ced9b5d1eef1c2",
+      "version": "0.2.0",
+      "id": "ifhfjdmdbgbnmllffiadajepajbcdnai"
+    },
+    "agentBrowser": "d173b1b39a0aee304ce84ff1f93495bce3b65924",
+    "playwright": "playwright-core 1.64.1"
+  },
+  "cases": [
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "import site.test with no cookie (signs the site out)",
+      "ms": 130,
+      "detail": {
+        "cookies_removed": 0,
+        "cookies_set": 0,
+        "tabs_closed": 0,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "import tenant.auth0.test with no cookie (signs the provider out)",
+      "ms": 124,
+      "detail": {
+        "error": "restore page"
+      },
+      "hits": [
+        "GET site.test/logout sfs=same-origin cookies=-",
+        "GET site.test/ sfs=same-origin cookies=-"
+      ],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "with neither sign-in: goto site.test/app",
+      "ms": 2297,
+      "detail": {
+        "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at https://site.test:8462/app",
+        "url": "about:blank",
+        "who": null,
+        "status": null
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-"
+      ],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "beam the site's sign-in only (site.test: site_session)",
+      "ms": 119,
+      "detail": {
+        "cookies_removed": 0,
+        "cookies_set": 1,
+        "tabs_closed": 1,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "with the site's cookie: goto site.test/app",
+      "ms": 917,
+      "detail": {
+        "status": null,
+        "url": "https://site.test/app",
+        "who": "signed in as ada"
+      },
+      "hits": [
+        "GET site.test/ sfs=same-origin cookies=site_session",
+        "GET site.test/app sfs=none cookies=site_session"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "with the site's cookie only: the frame's silent renew",
+      "ms": 579,
+      "detail": {
+        "url": "https://site.test/",
+        "who": "signed in as ada",
+        "status": "frame error login_required"
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=site_session",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "the site's session ends (import site.test with no cookie)",
+      "ms": 147,
+      "detail": {
+        "cookies_removed": 1,
+        "cookies_set": 0,
+        "tabs_closed": 1,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "beam the provider's sign-in (a second send: tenant.auth0.test, auth0_session SameSite=None)",
+      "ms": 130,
+      "detail": {
+        "error": "restore page"
+      },
+      "hits": [
+        "GET site.test/logout sfs=same-origin cookies=-",
+        "GET site.test/ sfs=same-origin cookies=-"
+      ],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "with the provider's cookie: goto site.test/app (the site redirects to the provider)",
+      "ms": 3045,
+      "detail": {
+        "error": "page.goto: net::ERR_BLOCKED_BY_CLIENT at https://site.test:8462/app",
+        "url": "chrome-error://chromewebdata/",
+        "who": null,
+        "status": null
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-"
+      ],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "with the provider's cookie: the frame's silent renew",
+      "ms": 612,
+      "detail": {
+        "url": "https://site.test/",
+        "who": "not signed in",
+        "status": "frame error login_required"
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1->L2",
+      "case": "after the failed L1 import of the provider: goto site.test/app under L2",
+      "ms": 1701,
+      "detail": {
+        "status": null,
+        "url": "https://site.test/app",
+        "who": "signed in as ada"
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=none cookies=auth0_session",
+        "GET site.test/callback sfs=none cookies=-",
+        "GET site.test/app sfs=none cookies=site_session"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L1",
+      "case": "the open tabs after the imports",
+      "ms": 3,
+      "detail": [
+        "about:blank",
+        "https://site.test/"
+      ],
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "import site.test with no cookie (signs the site out)",
+      "ms": 145,
+      "detail": {
+        "cookies_removed": 0,
+        "cookies_set": 0,
+        "tabs_closed": 1,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "import tenant.auth0.test with no cookie (signs the provider out)",
+      "ms": 132,
+      "detail": {
+        "cookies_removed": 1,
+        "cookies_set": 0,
+        "tabs_closed": 0,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [
+        "GET site.test/logout sfs=same-origin cookies=-",
+        "GET site.test/ sfs=same-origin cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "with neither sign-in: goto site.test/app",
+      "ms": 2443,
+      "detail": {
+        "status": null,
+        "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+        "who": null
+      },
+      "hits": [
+        "GET tenant.auth0.test/logout sfs=same-origin cookies=-",
+        "GET site.test/ sfs=cross-site cookies=-",
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=none cookies=-",
+        "GET tenant.auth0.test/u/login sfs=none cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "beam the site's sign-in only (site.test: site_session)",
+      "ms": 153,
+      "detail": {
+        "cookies_removed": 0,
+        "cookies_set": 1,
+        "tabs_closed": 2,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "with the site's cookie: goto site.test/app",
+      "ms": 872,
+      "detail": {
+        "status": null,
+        "url": "https://site.test/app",
+        "who": "signed in as ada"
+      },
+      "hits": [
+        "GET site.test/ sfs=same-origin cookies=site_session",
+        "GET site.test/app sfs=none cookies=site_session"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "with the site's cookie only: the frame's silent renew",
+      "ms": 552,
+      "detail": {
+        "url": "https://site.test/",
+        "who": "signed in as ada",
+        "status": "frame error login_required"
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=site_session",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "the site's session ends (import site.test with no cookie)",
+      "ms": 159,
+      "detail": {
+        "cookies_removed": 1,
+        "cookies_set": 0,
+        "tabs_closed": 1,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "beam the provider's sign-in (a second send: tenant.auth0.test, auth0_session SameSite=None)",
+      "ms": 149,
+      "detail": {
+        "cookies_removed": 0,
+        "cookies_set": 1,
+        "tabs_closed": 0,
+        "local": 0,
+        "session": 0,
+        "idb_databases": 0,
+        "idb_records": 0,
+        "cache_entries": 0,
+        "errors": []
+      },
+      "hits": [
+        "GET site.test/logout sfs=same-origin cookies=-",
+        "GET site.test/ sfs=same-origin cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "with the provider's cookie: goto site.test/app (the site redirects to the provider)",
+      "ms": 1714,
+      "detail": {
+        "status": null,
+        "url": "https://site.test/app",
+        "who": "signed in as ada"
+      },
+      "hits": [
+        "GET tenant.auth0.test/u/login sfs=same-origin cookies=auth0_session",
+        "GET other.test/captcha sfs=cross-site cookies=-",
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=none cookies=auth0_session",
+        "GET site.test/callback sfs=none cookies=-",
+        "GET site.test/app sfs=none cookies=site_session"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "with the provider's cookie: the frame's silent renew",
+      "ms": 569,
+      "detail": {
+        "url": "https://site.test/",
+        "who": "signed in as ada",
+        "status": "frame error login_required"
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=site_session",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "beam",
+      "list": "L2",
+      "case": "the open tabs after the imports",
+      "ms": 8,
+      "detail": [
+        "about:blank",
+        "https://site.test/",
+        "https://tenant.auth0.test/u/login"
+      ],
+      "hits": [],
+      "blocked": []
+    }
+  ],
+  "pids": {
+    "xvfb": [
+      775926
+    ],
+    "chromium": [
+      775942
+    ]
+  },
+  "chromiumExit": null
+}
