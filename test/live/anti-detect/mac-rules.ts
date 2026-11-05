@@ -26,12 +26,14 @@ export type MacOptions = {
   skip: Skip[];
   /** Dry run: the private X display. */
   display: number;
+  /** An ffmpeg with libx264 for the records (else ffmpeg on PATH, /opt/homebrew/bin or /usr/local/bin). */
+  ffmpeg?: string;
 };
 
 export const USAGE = `usage (macOS; the operator agrees, and nobody uses the Mac during the run):
-  node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN] [--look SECONDS] [--skip record,popups,person]
+  node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]
 dry run (Linux, in a private Xvfb, with a stand-in watcher; not a Mac result):
-  node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123] [--skip record,popups,person]`;
+  node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]`;
 
 /**
  * The check's argv, or why it refuses (exit 2, before anything starts). On macOS it starts an agent Chrome on the
@@ -44,7 +46,7 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
   try {
     v = parseArgs({ args: argv, strict: true, allowPositionals: false, options: {
       "on-my-screen": { type: "boolean" }, "dry-run": { type: "boolean" }, "out-dir": { type: "string" }, "chrome-bin": { type: "string" }, chrome: { type: "string" },
-      watcher: { type: "string" }, look: { type: "string" }, skip: { type: "string" }, display: { type: "string" },
+      watcher: { type: "string" }, look: { type: "string" }, skip: { type: "string" }, display: { type: "string" }, ffmpeg: { type: "string" },
     } }).values;
   } catch (e) { return { ok: false, message: `${(e as Error).message}\n${USAGE}` }; }
   const no = (message: string) => ({ ok: false as const, message });
@@ -60,13 +62,21 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
     if (!(SKIPPABLE as readonly string[]).includes(s)) return no(`--skip takes ${SKIPPABLE.join(", ")}, not ${JSON.stringify(s)}`);
     skip.push(s as Skip);
   }
+  const ffmpeg = v.ffmpeg;
+  if (typeof ffmpeg === "string") {
+    if (!isAbsolute(ffmpeg)) return no(`--ffmpeg must be an absolute path: ${ffmpeg}`);
+    if (!env.exists(ffmpeg)) return no(`--ffmpeg: no such file: ${ffmpeg}`);
+  }
+  const look = Number(v.look ?? 0);
+  if (typeof v.look === "string" && !/^\d+$/.test(v.look) || !Number.isInteger(look) || look < 0 || look > 300) return no(`--look is a whole number of seconds from 0 to 300: ${v.look}`);
+  const both = { look, skip, ...(typeof ffmpeg === "string" ? { ffmpeg } : {}) };
   if (dryRun) {
-    for (const f of ["chrome-bin", "watcher", "look"]) if (v[f] !== undefined) return no(`--${f} is for the Mac run, not --dry-run`);
+    for (const f of ["chrome-bin", "watcher"]) if (v[f] !== undefined) return no(`--${f} is for the Mac run, not --dry-run`);
     const display = Number(v.display ?? 123);
     if (typeof v.display === "string" && !/^\d+$/.test(v.display) || !Number.isInteger(display) || display < 1 || display > 9999) return no(`--display is a whole display number: ${v.display}`);
     const chrome = typeof v.chrome === "string" ? v.chrome : "/usr/bin/chromium";
     if (!env.exists(chrome)) return no(`--chrome: no such file: ${chrome}`);
-    return { ok: true, options: { dryRun, outDir: out, chromeBin: chrome, look: 0, skip, display } };
+    return { ok: true, options: { dryRun, outDir: out, chromeBin: chrome, display, ...both } };
   }
   for (const f of ["chrome", "display"]) if (v[f] !== undefined) return no(`--${f} is for --dry-run; on the Mac use --chrome-bin`);
   const bin = typeof v["chrome-bin"] === "string" ? v["chrome-bin"] : env.defaultChrome;
@@ -76,9 +86,29 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
   if (!env.exists(bin)) return no(`--chrome-bin: no such file: ${bin}`);
   const watcher = v.watcher;
   if (watcher !== undefined && (typeof watcher !== "string" || !env.exists(watcher))) return no(`--watcher: no such file: ${watcher} (or leave it out: the check compiles test/live/anti-detect/mac-watch.swift)`);
-  const look = Number(v.look ?? 0);
-  if (typeof v.look === "string" && !/^\d+$/.test(v.look) || !Number.isInteger(look) || look < 0 || look > 300) return no(`--look is a whole number of seconds from 0 to 300: ${v.look}`);
-  return { ok: true, options: { dryRun, outDir: out, chromeBin: bin, ...(typeof watcher === "string" ? { watcher } : {}), look, skip, display: 0 } };
+  return { ok: true, options: { dryRun, outDir: out, chromeBin: bin, ...(typeof watcher === "string" ? { watcher } : {}), display: 0, ...both } };
+}
+
+/** Where the check looks for ffmpeg: PATH, then Homebrew's folders (an agent session's PATH can lack them), each folder once. */
+export function ffmpegSearchPath(path: string | undefined): string {
+  return [...new Set([...(path ?? "").split(":").filter(Boolean), "/opt/homebrew/bin", "/usr/local/bin"])].join(":");
+}
+
+/**
+ * The swiftc and the macOS SDK of a developer folder (`xcode-select -p`: the Command Line Tools or Xcode), else of
+ * the Command Line Tools' own folder; undefined when no pair exists. The check passes the SDK with -sdk, so that
+ * swiftc never asks xcrun for one (xcrun can show an install dialog, and a dialog takes the front).
+ */
+export function swiftTools(dev: string, exists: (p: string) => boolean): { swiftc: string; sdk: string } | undefined {
+  const clt = "/Library/Developer/CommandLineTools";
+  const pairs = [
+    ...(dev ? [
+      { swiftc: `${dev}/usr/bin/swiftc`, sdk: `${dev}/SDKs/MacOSX.sdk` },
+      { swiftc: `${dev}/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc`, sdk: `${dev}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk` },
+    ] : []),
+    { swiftc: `${clt}/usr/bin/swiftc`, sdk: `${clt}/SDKs/MacOSX.sdk` },
+  ];
+  return pairs.find((p) => exists(p.swiftc) && exists(p.sdk));
 }
 
 // ------------------------------------------------------------------------------------------------ the watcher's log
@@ -224,6 +254,34 @@ export function watcherProblems(events: readonly WatchEvent[], bad: readonly num
   return p;
 }
 
+/** How long the front may stay away before the check stops (the watcher gives it back in about 0.1 s). */
+export const OPEN_TAKE_MS = 1500;
+
+/**
+ * Why the check must stop now (it gives the front back no more, skips the steps left, and quits its Chrome), or
+ * undefined: a pointer move (a person uses the Mac), a locked screen, a display that slept, another user's session in
+ * front, a Space change, a take of the front that did not come back in OPEN_TAKE_MS, a watcher that ended or went
+ * silent for 3 s, or the run's time limit. After `measureEnd` (the look and the end) no rule applies: the operator's
+ * own clicks then are not the check's.
+ */
+export function stopReason(events: readonly WatchEvent[], steps: readonly Step[], now: number, o: { t0: number; limitMs: number; measureEnd?: number }): string | undefined {
+  if (o.measureEnd !== undefined) return undefined;
+  if (events.some((e) => e.ev === "pointer")) return "the pointer moved: a person uses the Mac (the watcher stopped its give-back)";
+  const states = events.filter((e) => e.ev === "alive");
+  if (states.some((e) => e.locked)) return "the screen locked";
+  if (states.some((e) => e.asleep)) return "the display slept";
+  if (states.some((e) => e.onConsole === false)) return "another user's session came to the front";
+  const sp = spaceChanges(events, steps);
+  if (sp.length) return `the Space changed in ${sp[0].step}`;
+  const open = frontTakes(events, steps).takes.find((t) => t.t1 === null && now - t.t0 > OPEN_TAKE_MS);
+  if (open) return `the front app did not come back to the operator's app (it went to ${open.to.join(", ")})`;
+  const end = events.find((e) => e.ev === "end");
+  if (end) return `the watcher ended (${end.why})`;
+  if (now - (events.at(-1)?.t ?? 0) > 3000) return "the watcher logged nothing for 3 s";
+  if (now - o.t0 > o.limitMs) return `the run's time limit (${o.limitMs / 60_000} minutes)`;
+  return undefined;
+}
+
 // ------------------------------------------------------------------------------------------------ windows
 
 /** A window of layer 0 on the screen (CGWindowList; points, the origin at the top left of the main display). */
@@ -352,21 +410,28 @@ export function realPointerEvents(log: readonly Rec[], at: { x: number; y: numbe
 /**
  * The pass rule (exit 0 only when it holds): the start's take, if any, was given back by the rules of agent-
  * browser's launch (at most START_MAX_AWAY_MS away, to the agent Chrome only, and back); after the start the front
- * app never changed; the Space never changed; the watcher can show both (watcherProblems); every phase ran.
+ * app never changed; the Space never changed; the watcher can show both (watcherProblems); every phase ran; the
+ * agent Chrome quit (`quit`: why it did not). popupOnly: the only problems are takes of the front in popup steps
+ * that came back (Chrome can activate itself when it shows a popup): an expected result of the Mac design.
  */
-export function verdict(p: { takes: readonly Take[]; spaces: readonly SpaceChange[]; watcher: readonly string[]; missing: readonly string[]; aborted?: string; error?: string }): { ok: boolean; problems: string[] } {
+export function verdict(p: { takes: readonly Take[]; spaces: readonly SpaceChange[]; watcher: readonly string[]; missing: readonly string[]; aborted?: string; error?: string; quit?: string }): { ok: boolean; problems: string[]; popupOnly: boolean } {
   const problems: string[] = [...p.watcher];
+  let popupTakes = 0;
   for (const t of p.takes) {
     const where = `${t.step}: the front went to ${t.to.join(", then ")} for ${t.ms} ms${t.t1 === null ? " and did not come back" : ""}`;
     if (t.start) {
       if (t.t1 === null || !t.agentOnly || t.ms > START_MAX_AWAY_MS) problems.push(`the start took the front and broke the give-back rule (at most ${START_MAX_AWAY_MS} ms, to the agent Chrome only, and back): ${where}`);
-    } else problems.push(`a step took the operator's front: ${where}`);
+    } else {
+      problems.push(`a step took the operator's front: ${where}`);
+      if (t.step.startsWith("popup: ") && t.agentOnly && t.t1 !== null) popupTakes++;
+    }
   }
   for (const s of p.spaces) problems.push(`the Space changed (${s.via}) in ${s.step}`);
   if (p.aborted) problems.push(`the check stopped early: ${p.aborted}`);
   if (p.error) problems.push(`the check failed: ${p.error}`);
+  if (p.quit) problems.push(p.quit);
   if (p.missing.length) problems.push(`not run: ${p.missing.join(", ")}`);
-  return { ok: problems.length === 0, problems };
+  return { ok: problems.length === 0, problems, popupOnly: problems.length > 0 && problems.length === popupTakes };
 }
 
 // ------------------------------------------------------------------------------------------------ the summary
@@ -378,7 +443,12 @@ export type WindowRow = { step: string; how: string; cg: string; placement: Plac
 export type PopupRow = { kind: string; asked: string; where: string; outer: string; popup: string; opener: string; front: string; placement: Placement | null };
 
 export type MacResult = {
-  ok: boolean; problems: string[]; dryRun: boolean; run: string; startedAt: string; seconds: number;
+  ok: boolean; problems: string[];
+  /** The only problems are popup takes that came back (verdict). */
+  popupOnly?: boolean;
+  /** How the run ended: how the agent Chrome quit, and what the check removed. */
+  end?: string[];
+  dryRun: boolean; run: string; startedAt: string; seconds: number;
   chrome: string; product: string; flags: string[]; operator: FrontApp | null; frontAtEnd: FrontApp | null;
   takes: Take[]; spaces: SpaceChange[]; startGiveBack: string[];
   windows: WindowRow[]; tabDrive: DriveRow[]; windowDrive: DriveRow[]; records: RecordRow[];
@@ -401,6 +471,7 @@ export function summary(r: MacResult): string {
     `Agent flags: ${r.flags.join(" ")}`,
     "",
     `## Result: ${r.ok ? "exit 0: the check never took the operator's focus or Space" : "exit 1"}`,
+    ...(r.popupOnly ? ["- Only popup steps took the front: an expected result (Chrome can activate itself when it shows a popup), and the watcher gave the front back each time. The rest of the run kept off the operator's focus and Space."] : []),
     ...r.problems.map((p) => `- ${p}`),
     "",
     "## The front app and the Space",
@@ -443,6 +514,7 @@ export function summary(r: MacResult): string {
     "## Not measured",
     ...r.notMeasured.map((a) => `- ${a}`),
     "",
+    ...(r.end?.length ? ["## The end", ...r.end.map((a) => `- ${a}`), ""] : []),
   ];
   return lines.join("\n");
 }

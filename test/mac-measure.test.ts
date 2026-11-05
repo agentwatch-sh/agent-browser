@@ -10,8 +10,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
-  agentWindowsOf, coveredFraction, frontAt, frontTakes, isOperatorWindow, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement,
-  placementText, realPointer, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, summary, verdict, watcherProblems, windowsOf,
+  agentWindowsOf, coveredFraction, ffmpegSearchPath, frontAt, frontTakes, isOperatorWindow, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement,
+  placementText, realPointer, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
   type CgWin, type MacResult, type Step, type WatchEvent,
 } from "./live/anti-detect/mac-rules.ts";
 import type { Rec } from "./live/anti-detect/probe.ts";
@@ -20,8 +20,8 @@ import { ROOT } from "./helpers.ts";
 const DIR = join(ROOT, "test", "live", "anti-detect");
 const BETA = "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta";
 const CFT = "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-const mac = { platform: "darwin", exists: (p: string) => [BETA, CFT, "/tmp/mac-watch"].includes(p), defaultChrome: BETA };
-const linux = { platform: "linux", exists: (p: string) => p === "/usr/bin/chromium", defaultChrome: BETA };
+const mac = { platform: "darwin", exists: (p: string) => [BETA, CFT, "/tmp/mac-watch", "/opt/homebrew/bin/ffmpeg"].includes(p), defaultChrome: BETA };
+const linux = { platform: "linux", exists: (p: string) => ["/usr/bin/chromium", "/usr/bin/ffmpeg"].includes(p), defaultChrome: BETA };
 const refused = (argv: string[], env = mac) => { const r = macArgs(argv, env); assert.equal(r.ok, false, argv.join(" ")); return (r as { message: string }).message; };
 const options = (argv: string[], env = mac) => { const r = macArgs(argv, env); assert.ok(r.ok, r.ok ? "" : r.message); return r.options; };
 
@@ -59,7 +59,33 @@ test("--look is 0 to 300 whole seconds, --skip names known parts, and the dry ru
   assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--display", "99"], linux).display, 99);
   assert.match(refused(["--dry-run", "--out-dir", "/tmp/o", "--display", "0"], linux), /--display/);
   assert.match(refused(["--dry-run", "--out-dir", "/tmp/o", "--chrome", "/nope"], linux), /no such file/);
-  assert.match(refused(["--dry-run", "--out-dir", "/tmp/o", "--look", "5"], linux), /for the Mac run/);
+  assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--look", "5"], linux).look, 5);
+  assert.match(refused(["--dry-run", "--out-dir", "/tmp/o", "--watcher", "/tmp/mac-watch"], linux), /for the Mac run/);
+});
+
+test("--ffmpeg takes an absolute path that exists, on the Mac and in the dry run", () => {
+  assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o", "--ffmpeg", "/opt/homebrew/bin/ffmpeg"]).ffmpeg, "/opt/homebrew/bin/ffmpeg");
+  assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o"]).ffmpeg, undefined);
+  assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--ffmpeg", "/usr/bin/ffmpeg"], linux).ffmpeg, "/usr/bin/ffmpeg");
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--ffmpeg", "ffmpeg"]), /--ffmpeg must be an absolute path/);
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--ffmpeg", "/usr/bin/ffmpeg"]), /--ffmpeg: no such file/);
+});
+
+test("ffmpegSearchPath: PATH first, then Homebrew's two folders, each once", () => {
+  assert.equal(ffmpegSearchPath("/usr/bin:/bin"), "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin");
+  assert.equal(ffmpegSearchPath("/opt/homebrew/bin:/usr/bin"), "/opt/homebrew/bin:/usr/bin:/usr/local/bin");
+  assert.equal(ffmpegSearchPath(undefined), "/opt/homebrew/bin:/usr/local/bin");
+});
+
+test("swiftTools: the swiftc and the macOS SDK of the developer folder that xcode-select names, so that swiftc never starts xcrun", () => {
+  const clt = "/Library/Developer/CommandLineTools", xcode = "/Applications/Xcode.app/Contents/Developer";
+  const has = (...paths: string[]) => (p: string) => paths.includes(p);
+  assert.deepEqual(swiftTools(clt, has(`${clt}/usr/bin/swiftc`, `${clt}/SDKs/MacOSX.sdk`)), { swiftc: `${clt}/usr/bin/swiftc`, sdk: `${clt}/SDKs/MacOSX.sdk` });
+  const xs = `${xcode}/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc`, xsdk = `${xcode}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`;
+  assert.deepEqual(swiftTools(xcode, has(xs, xsdk)), { swiftc: xs, sdk: xsdk });
+  assert.deepEqual(swiftTools("", has(`${clt}/usr/bin/swiftc`, `${clt}/SDKs/MacOSX.sdk`)), { swiftc: `${clt}/usr/bin/swiftc`, sdk: `${clt}/SDKs/MacOSX.sdk` });
+  assert.equal(swiftTools(clt, has(`${clt}/usr/bin/swiftc`)), undefined, "a swiftc with no SDK beside it would ask xcrun for one");
+  assert.equal(swiftTools("", has()), undefined);
 });
 
 test("the watcher's log: one event per line; a broken line is bad unless it is the last one (a kill can cut it)", () => {
@@ -104,7 +130,7 @@ test("frontTakes: each run of the front away from the operator's app, the step i
 
 test("the pass rule: the start may take the front by agent-browser's give-back rule; after it no take and no Space change", () => {
   const take = (o: Partial<ReturnType<typeof frontTakes>["takes"][number]>) => ({ t0: 1500, t1: 1600, ms: 100, to: ["Google Chrome Beta (pid 900, the agent Chrome)"], agentOnly: true, asks: 1, step: "start: agent Chrome start", start: true, ...o });
-  assert.deepEqual(verdict({ takes: [take({})], spaces: [], watcher: [], missing: [] }), { ok: true, problems: [] });
+  assert.deepEqual(verdict({ takes: [take({})], spaces: [], watcher: [], missing: [] }), { ok: true, problems: [], popupOnly: false });
   assert.equal(verdict({ takes: [], spaces: [], watcher: [], missing: [] }).ok, true);
   const slow = verdict({ takes: [take({ ms: START_MAX_AWAY_MS + 1 })], spaces: [], watcher: [], missing: [] });
   assert.equal(slow.ok, false);
@@ -116,6 +142,36 @@ test("the pass rule: the start may take the front by agent-browser's give-back r
   assert.match(verdict({ takes: [], spaces: [{ t: 5100, via: "news", space: 8, step: "window: open window WA" }], watcher: [], missing: [] }).problems[0], /the Space changed \(news\) in window: open window WA/);
   const other = verdict({ takes: [], spaces: [], watcher: ["the screen was locked during the run"], missing: ["popup: x"], aborted: "the pointer moved", error: "boom" });
   assert.deepEqual(other.problems, ["the screen was locked during the run", "the check stopped early: the pointer moved", "the check failed: boom", "not run: popup: x"]);
+  assert.equal(other.popupOnly, false);
+});
+
+test("the pass rule names a run whose only problems are popup takes: an expected result of the Mac design", () => {
+  const take = (step: string, start = false) => ({ t0: 1, t1: 2, ms: 60, to: ["Google Chrome Beta (pid 900, the agent Chrome)"], agentOnly: true, asks: 1, step, start });
+  const only = verdict({ takes: [take("start: agent Chrome start", true), take("popup: a link with target=_blank"), take("popup: close PA (after it)")], spaces: [], watcher: [], missing: [] });
+  assert.deepEqual([only.ok, only.problems.length, only.popupOnly], [false, 2, true]);
+  assert.equal(verdict({ takes: [take("popup: x"), take("window: WA: click")], spaces: [], watcher: [], missing: [] }).popupOnly, false);
+  assert.equal(verdict({ takes: [take("popup: x")], spaces: [], watcher: [], missing: [], quit: "the agent Chrome did not quit" }).popupOnly, false);
+  assert.equal(verdict({ takes: [], spaces: [], watcher: [], missing: [] }).popupOnly, false);
+  const q = verdict({ takes: [], spaces: [], watcher: [], missing: [], quit: "the agent Chrome did not quit (SIGKILL to pid 900)" });
+  assert.deepEqual([q.ok, q.problems], [false, ["the agent Chrome did not quit (SIGKILL to pid 900)"]]);
+});
+
+test("stopReason: the stop rules during the measurement, and none after its end (the look, the end)", () => {
+  const o = { t0: 0, limitMs: 540_000 };
+  const live = (extra: WatchEvent[] = []) => [ready(), { t: 4500, ev: "alive", locked: false, asleep: false, onConsole: true }, ...extra];
+  assert.equal(stopReason(live(), steps, 5000, o), undefined);
+  assert.match(stopReason(live([{ t: 4600, ev: "pointer", x: 1, y: 2 }]), steps, 5000, o) ?? "", /the pointer moved: a person uses the Mac/);
+  assert.equal(stopReason(live([{ t: 4600, ev: "pointer", x: 1, y: 2 }]), steps, 5000, { ...o, measureEnd: 4000 }), undefined, "after the measurement a pointer move is the operator's look");
+  assert.match(stopReason(live([{ t: 4600, ev: "alive", locked: true }]), steps, 4700, o) ?? "", /the screen locked/);
+  assert.match(stopReason(live([{ t: 4600, ev: "alive", asleep: true }]), steps, 4700, o) ?? "", /the display slept/);
+  assert.match(stopReason(live([{ t: 4600, ev: "alive", onConsole: false }]), steps, 4700, o) ?? "", /another user's session/);
+  assert.match(stopReason(live([{ t: 4600, ev: "space", via: "news", space: 2 }]), steps, 4700, o) ?? "", /the Space changed/);
+  assert.match(stopReason(live([front(4000, AG)]), steps, 5600, o) ?? "", /the front app did not come back/);
+  assert.equal(stopReason(live([front(4000, AG)]), steps, 5400, o), undefined, "1.5 s for the give-back");
+  assert.equal(stopReason(live([front(4000, AG), front(4100, OP)]), steps, 4700, o), undefined, "a take that came back does not stop the run (the pass rule counts it)");
+  assert.match(stopReason(live([{ t: 4600, ev: "end", why: "limit" }]), steps, 4700, o) ?? "", /the watcher ended \(limit\)/);
+  assert.match(stopReason(live(), steps, 8000, o) ?? "", /the watcher logged nothing for 3 s/);
+  assert.match(stopReason(live([{ t: 600_000, ev: "alive" }]), steps, 600_001, o) ?? "", /time limit/);
 });
 
 test("spaceChanges lists each Space news after the watcher got ready, with its step", () => {
@@ -228,6 +284,9 @@ test("the summary names the result first, and every part of the measurement", ()
   assert.match(s, /FAIL boom/);
   assert.match(s, /WA: 1 event\(s\) at the real pointer's point, first mouseover at 1,2/);
   assert.match(summary({ ...r, ok: true, problems: [], dryRun: true }), /DRY RUN on Linux[\s\S]*exit 0: the check never took the operator's focus or Space/);
+  assert.doesNotMatch(s, /an expected result/);
+  assert.match(summary({ ...r, popupOnly: true }), /## Result: exit 1\n- Only popup steps took the front: an expected result/);
+  assert.match(summary({ ...r, end: ["the agent Chrome quit (Browser.close)", "removed the profile"] }), /## The end\n- the agent Chrome quit \(Browser\.close\)\n- removed the profile/);
 });
 
 test("the dry run's stand-in watcher speaks the watcher's protocol: ready, snaps, agent, quit", async () => {
@@ -247,6 +306,8 @@ test("the dry run's stand-in watcher speaks the watcher's protocol: ready, snaps
 
 test("the watcher reads only: it sends no input, moves no pointer, sends no Apple Event, and asks only for the give-back's activation", () => {
   const swift = readFileSync(join(DIR, "mac-watch.swift"), "utf8").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(swift.slice(swift.indexOf("func checkPointer()"), swift.indexOf("func checkSpace(")), /armed = false[\s\S]*emit\("disarmed", \["why": "pointer"\]\)/,
+    "at the first pointer move the watcher stops its give-back by itself: a person uses the Mac");
   for (const forbidden of [/CGEventPost/, /CGWarpMouseCursorPosition/, /CGEvent\(mouseEventSource/, /CGEvent\(keyboardEventSource/, /NSAppleScript/, /AXUIElement/, /\.hide\(\)/, /terminate\(/, /kill\(/, /CGDisplayMoveCursor/])
     assert.doesNotMatch(swift, forbidden);
   const activations = swift.match(/\.activate\(/g) ?? [];
@@ -259,5 +320,10 @@ test("the Mac check never activates a window or brings a page forward, and sends
   for (const forbidden of [/"Target\.activateTarget"/, /"Page\.bringToFront"/, /"windows\.update"/, /xdotool/, /osascript/, /cliclick/, /newWindow: true(?!, background: true)/])
     assert.doesNotMatch(ts, forbidden);
   assert.match(ts, /\["-n", "-g", "-a", bundle!/);
+  assert.match(ts, /"-sdk", swift\.sdk/, "swiftc gets the SDK, so it never starts xcrun");
+  // It removes only the throwaway profile and the watcher that it compiled, both inside its own run folder, after its Chrome quit.
+  assert.deepEqual(ts.match(/rmSync\([^)]*\)/g), ["rmSync(profile, { recursive: true, maxRetries: 3 })", "rmSync(watcherBin)"]);
+  assert.match(ts, /if \(chromePid !== undefined && ownChrome\(\)\) endLines\.push\(`kept the profile[\s\S]*else if \(inRun\(profile\)/);
+  assert.match(ts, /!O\.dryRun && !O\.watcher && watcher\.exitCode !== null && inRun\(watcherBin\)/);
   assert.match(ts, /startGiveBack\(bundle!/);
 });

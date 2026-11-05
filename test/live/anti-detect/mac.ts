@@ -3,7 +3,7 @@
 // (mac-rules.ts) are, in test/mac-measure.test.ts.
 //
 //   node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN]
-//        [--look SECONDS] [--skip record,popups,person]
+//        [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]
 //   node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123]   (Linux)
 //
 // On the Mac it runs with one command, in about 3 minutes, with nobody at the keyboard: the operator leaves the Mac
@@ -14,14 +14,18 @@
 // --disable-backgrounding-occluded-windows). It adds only what the measurement needs: --remote-debugging-port=0
 // (so that no "Allow remote debugging?" prompt needs a person; it sets navigator.webdriver, which this check does
 // not measure), --use-mock-keychain (no keychain prompt), and no network (every host but probe.localhost fails to
-// resolve and goes to a dead proxy). agent-browser's commands reach that Chrome through agent-browser's own proxy
-// (the `endpoint` option), as on the Mac today. It never touches the operator's Chrome or another Chrome.
+// resolve and goes to a dead proxy). The debugging port is an exception (named in the README) to its rule against that flag:
+// 127.0.0.1 only, an empty profile, no network, for the few minutes of the run. agent-browser's commands reach that
+// Chrome through agent-browser's own proxy (the `endpoint` option), as on the Mac today. It never touches the
+// operator's Chrome or another Chrome. No other agent session may use the Mac's agent browser during the run: a
+// take of the front by another Chrome counts against the check.
 //
 // A watcher (mac-watch.swift, compiled into the run folder with the Xcode Command Line Tools' swiftc; or --watcher
 // BIN) logs the front app, the pointer, the Space, the on-screen window order (CGWindowList) and the lock state,
 // and gives the front back: each time the agent Chrome is the front app, it asks macOS to activate the operator's
-// app again. The check never moves the pointer and sends no OS input. It stops early (and gives no more front back)
-// when the pointer moves (a person uses the Mac), when the Space changes, or when the front does not come back.
+// app again. At the first pointer move the watcher stops that by itself (a person uses the Mac). The check never
+// moves the pointer and sends no OS input. It stops early (skips the steps left and quits its Chrome) when the pointer
+// moves, the screen locks, the display sleeps, the Space changes, or the front does not come back (stopReason).
 //
 // What it measures, in the order it runs (each step's page signals come from the probe page, probe.ts):
 //   start   the agent Chrome's start: the front app before and after (the give-back), where its first window comes
@@ -33,24 +37,31 @@
 //           click in the second window (does the first page get a blur?), keys into the first window with no click
 //           (an inactive window), person-shaped CDP input (from the real pointer, when it is over the page), and a
 //           click back in the first window
+//   facts   what an API gives of Mission Control, App Expose, the Dock menu and Cmd-` (the agent app's windows, on
+//           and off screen, its activation policy, the window titles); before the popups, which can take the front
 //   popup   from a page in its own window: a target=_blank link, window.open() with no features, and window.open()
 //           with "popup,width=500,height=400": a tab or a window, its size, the opener's and the popup's state
-//   facts   what an API gives of Mission Control, App Expose, the Dock menu and Cmd-` (the agent app's windows, on
-//           and off screen, its activation policy, the window titles)
 //   look    only with --look SECONDS: the give-back stops, the agent windows stay open for that long, and the
 //           summary lists the one short look for the operator (Mission Control, the Dock menu, App Expose, Cmd-`)
 // The real pointer: every probe event at the real pointer's point (macOS gave it, not the check's CDP input).
 //
 // It writes DIR/run-XXXXXX/results.json (every step, the watcher's log, the probe's log, the analysis) and
-// summary.md, and prints the summary.
+// summary.md, and prints the summary. At the end it quits its Chrome (Browser.close, else SIGTERM, else SIGKILL, each
+// to the pid on its own profile) and removes the throwaway profile and the compiled watcher. `open` starts Chrome
+// under launchd, so a kill -9 of node leaves it running: the check prints at the start, and writes to
+// DIR/run-XXXXXX/stop-chrome.txt, how to stop it by hand.
 //   exit 0  every phase ran; the start's take of the front, if any, followed agent-browser's give-back rule (at most
 //           250 ms away, to the agent Chrome only, and back); after the start the front app never changed; the
 //           Space never changed; and the watcher shows both (it ran all the time, the screen stayed unlocked and
 //           awake, and the pointer did not move)
-//   exit 1  the check took the operator's focus or Space, could not show that it did not, or did not finish:
-//           summary.md names each problem (a failed step is a measurement, not a problem)
+//   exit 1  the check took the operator's focus or Space, could not show that it did not, did not finish, or its
+//           Chrome did not quit: summary.md names each problem (a failed step is a measurement, not a problem). When
+//           the only problems are popup takes that came back, the summary says so: an expected result of the design
+//           (Chrome can activate itself when it shows a popup)
 //   exit 2  it refused to start, and nothing started on the screen: a usage error, not macOS (or not Linux for
-//           --dry-run), no swiftc, a locked screen, no front app, a full-screen app in front
+//           --dry-run), no ffmpeg with libx264 (on PATH, in /opt/homebrew/bin or /usr/local/bin; or --ffmpeg; or
+//           --skip record), no swiftc with a macOS SDK (it compiles with -sdk, so swiftc never starts xcrun), a watcher
+//           that did not compile, a locked screen, no front app, a full-screen app in front
 // --dry-run (Linux only) runs every phase against Chromium in a private Xvfb, with a stand-in watcher
 // (mac-standin.ts: no front app, no Space, no window list): a test of the drive and the analysis, not a Mac result.
 // It ends only its own processes, each by the pid that it recorded: the agent Chrome on its own profile, the proxy
@@ -59,7 +70,7 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -73,8 +84,8 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settin
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg } from "../../../src/record.ts";
 import {
-  agentWindowsOf, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, realPointer, realPointerEvents,
-  screenProblem, snapOf, spaceChanges, summary, verdict, watcherProblems, windowsOf,
+  agentWindowsOf, ffmpegSearchPath, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, realPointer, realPointerEvents,
+  screenProblem, snapOf, spaceChanges, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
   type DriveRow, type MacResult, type PopupRow, type RecordRow, type Step, type WatchEvent, type WindowRow,
 } from "./mac-rules.ts";
 import { bothFocusedMs, LAYOUT, startServer, stepSignals, type Rec } from "./probe.ts";
@@ -93,6 +104,12 @@ const LIMIT_MS = 9 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const say = (line: string) => process.stderr.write(`${new Date().toISOString().slice(11, 23)} ${line}\n`);
 say(`${O.dryRun ? "DRY RUN (Linux): " : ""}run folder ${RUN}`);
+// The records need ffmpeg with libx264: without it the run has no record numbers, so it refuses before anything starts.
+let ffmpeg: string | undefined;
+if (!O.skip.includes("record")) {
+  try { ffmpeg = findFfmpeg(O.ffmpeg, ffmpegSearchPath(process.env.PATH)); }
+  catch (e) { refuse(`refusing, nothing started: ${(e as Error).message.split("\n")[0]} (it looked on PATH, in /opt/homebrew/bin and in /usr/local/bin; or pass --skip record)`); }
+}
 
 // ------------------------------------------------------------------ own processes only, each by its recorded pid
 const children: ChildProcess[] = [];
@@ -131,12 +148,14 @@ if (O.dryRun) {
 const bundle = O.dryRun ? null : appBundle(O.chromeBin)!;
 const watchFile = join(RUN, "watch.jsonl");
 const events: WatchEvent[] = [];
-/** The Xcode Command Line Tools' (or Xcode's) swiftc, found without xcrun: xcrun offers an install dialog when they are missing, and a dialog takes the front. */
-function findSwiftc(): string | undefined {
+/**
+ * The Command Line Tools' (or Xcode's) swiftc and macOS SDK, found without xcrun: xcrun offers an install dialog when
+ * they are missing, and a dialog takes the front. The compile gets the SDK with -sdk (and SDKROOT), so swiftc never asks xcrun for one.
+ */
+function findSwift(): { swiftc: string; sdk: string } | undefined {
   let dev = "";
   try { dev = execFileSync("/usr/bin/xcode-select", ["-p"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* none */ }
-  const candidates = [...(dev ? [join(dev, "usr/bin/swiftc"), join(dev, "Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc")] : []), "/Library/Developer/CommandLineTools/usr/bin/swiftc"];
-  return candidates.find((p) => existsSync(p));
+  return swiftTools(dev, existsSync);
 }
 let watcherBin: string, watcherArgs: string[];
 /** The watcher's own time limit: the measurement, the look and the end. */
@@ -145,10 +164,13 @@ if (O.dryRun) { watcherBin = process.execPath; watcherArgs = [join(HERE, "mac-st
 else {
   watcherBin = O.watcher ?? join(RUN, "mac-watch");
   if (!O.watcher) {
-    const swiftc = findSwiftc();
-    if (!swiftc) refuse("no swiftc: install the Xcode Command Line Tools (xcode-select --install), or pass --watcher with mac-watch.swift compiled elsewhere");
-    say(`compiling the watcher with ${swiftc}`);
-    try { execFileSync(swiftc, ["-swift-version", "5", "-O", join(HERE, "mac-watch.swift"), "-o", watcherBin], { stdio: ["ignore", "pipe", "pipe"], timeout: 300_000 }); }
+    const swift = findSwift();
+    if (!swift) refuse("refusing, nothing started: no swiftc with a macOS SDK beside it: install the Xcode Command Line Tools (xcode-select --install), or pass --watcher with mac-watch.swift compiled elsewhere");
+    say(`compiling the watcher with ${swift.swiftc} (SDK ${swift.sdk})`);
+    try {
+      execFileSync(swift.swiftc, ["-sdk", swift.sdk, "-swift-version", "5", "-O", join(HERE, "mac-watch.swift"), "-o", watcherBin],
+        { stdio: ["ignore", "pipe", "pipe"], timeout: 300_000, env: { ...process.env, SDKROOT: swift.sdk } });
+    }
     catch (e) {
       const err = e as { stderr?: Buffer; message: string };
       writeFileSync(join(RUN, "swiftc.log"), String(err.stderr ?? err.message));
@@ -197,24 +219,14 @@ async function loaded(tab: string, ms = 15_000): Promise<void> {
 const steps: Step[] = [];
 const notRun: string[] = [];
 let aborted: string | undefined;
-function harm(): string | undefined {
-  if (events.some((e) => e.ev === "pointer")) return "the pointer moved: a person uses the Mac (the give-back is off from now on)";
-  const sp = spaceChanges(events, steps);
-  if (sp.length) return `the Space changed in ${sp[0].step}`;
-  const open = frontTakes(events, steps).takes.find((t) => t.t1 === null && Date.now() - t.t0 > 1500);
-  if (open) return `the front app did not come back to the operator's app (it went to ${open.to.join(", ")})`;
-  const end = events.find((e) => e.ev === "end");
-  if (end) return `the watcher ended (${end.why})`;
-  if (Date.now() - (events.at(-1)?.t ?? 0) > 3000) return "the watcher logged nothing for 3 s";
-  if (Date.now() - T0 > LIMIT_MS) return `the run's time limit (${LIMIT_MS / 60_000} minutes)`;
-  return undefined;
-}
+/** The end of the measurement: before the look (--look), else after the end step. The stop rules and the analysis cover only the time before it. */
+let measureEnd: number | undefined;
 function checkHarm() {
   if (aborted) return;
-  const why = harm();
+  const why = stopReason(events, steps, Date.now(), { t0: T0, limitMs: LIMIT_MS, measureEnd });
   if (!why) return;
   aborted = why;
-  if (why.startsWith("the pointer moved")) tell("disarm");
+  tell("disarm"); // the watcher also stops its give-back by itself at a pointer move
   say(`STOP: ${why}`);
 }
 /** One step: a snap of the windows before and after it (with `snap`), its time, its error; after it, the stop rules. `always`: it runs also after a stop. */
@@ -278,11 +290,15 @@ await step("start", "agent Chrome start", async () => {
   if (!chromePid) throw new Error("the agent Chrome's pid was not found on its profile");
   tell(`agent ${chromePid}`);
   tell("arm"); // from now on the watcher gives the front back (agent-browser's own guard ended with the start)
+  // `open` starts Chrome under launchd, not as this process's child: if this process is killed (kill -9), Chrome stays.
+  const help = `If this check ends without quitting its agent Chrome (kill -9 of node), stop that Chrome by hand: check that \`ps -o command= -p ${chromePid}\` shows --user-data-dir=${profile}, then run \`kill ${chromePid}\` (the pid is also in the "agent" line of ${watchFile}).`;
+  writeFileSync(join(RUN, "stop-chrome.txt"), `${help}\n`);
+  say(help);
   await loaded("F0");
 }, { limitMs: 45_000, snap: true });
 
 // ------------------------------------------------------------------ agent-browser through its own proxy
-const base: BrowserOptions = { stateDir, socketPath, allow: ["probe.localhost"], ...(endpoint ? { endpoint } : {}), commandName: "mac check", proxyIdleMs: 20 * 60_000, log: (l) => say(`agent-browser: ${l}`) };
+const base: BrowserOptions = { stateDir, socketPath, allow: ["probe.localhost"], ...(endpoint ? { endpoint } : {}), commandName: "mac check", proxyIdleMs: 60_000, log: (l) => say(`agent-browser: ${l}`) };
 const oTab: BrowserOptions = { ...base, hiddenDrive: false }, oWin: BrowserOptions = { ...base, hiddenDrive: true };
 let browser: AgentBrowser | undefined, fatal: string | undefined;
 if (endpoint && !aborted) {
@@ -291,14 +307,12 @@ if (endpoint && !aborted) {
 } else if (!endpoint) fatal = "the agent Chrome did not start";
 const raw = browser?.conn as CDPConnection;
 const records: RecordRow[] = [];
-let ffmpeg: string | undefined;
-try { ffmpeg = findFfmpeg(); } catch { ffmpeg = undefined; }
 async function recordStep(phase: string, name: string, o: BrowserOptions, tab: string, where: string): Promise<void> {
   if (O.skip.includes("record")) { records.push({ where, skipped: "--skip record" }); return; }
-  if (!ffmpeg) { records.push({ where, skipped: "no ffmpeg with libx264 on PATH" }); return; }
+  if (!ffmpeg) { records.push({ where, error: "no ffmpeg" }); return; }
   const script = join(RUN, "record-steps.json");
   writeFileSync(script, JSON.stringify([{ wait: 3000 }]));
-  const r = await step(phase, name, () => commands.record(o, { tab, out: join(RUN, `${phase}-${tab.replace(/\W/g, "")}.mp4`), script, fps: 60, ffmpeg }), { limitMs: 90_000, snap: phase === "window" });
+  const r = await step(phase, name, () => commands.record(o, { tab, out: join(RUN, `${phase}-${tab.replace(/\W/g, "")}.mp4`), script, fps: 60, ffmpeg }), { limitMs: 90_000, snap: true });
   const s = steps.at(-1);
   records.push(r ? { where, fps: +(r.frames / r.seconds).toFixed(1), frames: r.frames, seconds: +r.seconds.toFixed(2), maxFrameGapMs: r.maxFrameGapMs }
     : { where, error: s && s.phase === phase && s.name === name ? s.error ?? "failed" : "not run" });
@@ -397,6 +411,15 @@ if (browser) {
   if (!O.skip.includes("person")) details.person = await step("window", "WA: person-shaped click and typing", () => personInput(wins.WA.target), { snap: true });
 }
 
+// ------------------------------------------------------------------ facts: what an API gives (before the popups, which can take the front)
+const pages: { title: string; url: string; windowId?: number; state?: string }[] = [];
+if (browser) await step("facts", "the agent app's windows", async () => {
+  for (const t of ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; type: string; title: string; url: string }[]).filter((x) => x.type === "page")) {
+    const w = await raw.send("Browser.getWindowForTarget", { targetId: t.targetId }).catch(() => undefined);
+    pages.push({ title: t.title, url: t.url.replace(/^http:\/\/probe\.localhost:\d+/, ""), windowId: w?.windowId, state: w?.bounds?.windowState });
+  }
+}, { snap: true });
+
 // ------------------------------------------------------------------ popup: from a page in its own window
 const POPUPS = [
   { id: "lk", y: 35, tab: "PA", kind: "a link with target=_blank", asked: "a tab" },
@@ -404,6 +427,7 @@ const POPUPS = [
   { id: "o3", y: 135, tab: "PC", kind: "window.open() with popup,width=500,height=400", asked: "a window, outer 500x400 (inner 500x400 asked)" },
 ] as const;
 const popupInfo: Record<string, Record<string, unknown>> = {};
+if (browser && !O.skip.includes("popups") && !wins.WA) notRun.push("popup: every popup step (window WA did not open)");
 if (browser && !O.skip.includes("popups") && wins.WA) {
   await step("popup", "WA: add the link and the two buttons", async () => {
     const sid = await attachTo(wins.WA.target);
@@ -435,17 +459,7 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
   }
 }
 
-// ------------------------------------------------------------------ facts: what an API gives
-const pages: { title: string; url: string; windowId?: number; state?: string }[] = [];
-if (browser) await step("facts", "the agent app's windows", async () => {
-  for (const t of ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; type: string; title: string; url: string }[]).filter((x) => x.type === "page")) {
-    const w = await raw.send("Browser.getWindowForTarget", { targetId: t.targetId }).catch(() => undefined);
-    pages.push({ title: t.title, url: t.url.replace(/^http:\/\/probe\.localhost:\d+/, ""), windowId: w?.windowId, state: w?.bounds?.windowState });
-  }
-}, { snap: true });
-
 // ------------------------------------------------------------------ look (only with --look): the give-back stops
-let measureEnd: number | undefined;
 const LOOK = [
   "Run the check again with --look 60 when you can look at the Mac. When it prints LOOK NOW (the agent windows stay open 60 s, and the check gives the front back no more):",
   "1. Press Mission Control (F3, or Control-Up arrow). Count the agent Chrome's windows (they show probe pages), then press Escape.",
@@ -462,18 +476,39 @@ if (O.look && browser && !aborted) {
 }
 
 // ------------------------------------------------------------------ the end: our Chrome, our proxy, the watcher
+const endLines: string[] = [];
+let quitProblem: string | undefined;
 await step("end", "quit the agent Chrome", async () => {
+  const gone = async (ms: number) => { for (const end = Date.now() + ms; Date.now() < end && ownChrome(); ) await sleep(100); return !ownChrome(); };
   if (raw) await raw.send("Browser.close", {}, undefined, 5000).catch(() => {});
-  for (let i = 0; i < 100 && ownChrome(); i++) await sleep(100);
-  const pid = ownChrome();
-  if (pid) { process.kill(pid, "SIGTERM"); for (let i = 0; i < 50 && ownChrome(); i++) await sleep(100); }
-}, { limitMs: 20_000, tailMs: 1500, always: true });
+  if (await gone(10_000)) { endLines.push("the agent Chrome quit (Browser.close)"); return; }
+  // Each signal goes only to the pid that ps shows on this run's own profile (ownChrome), checked again before it.
+  const term = ownChrome();
+  if (term) { try { process.kill(term, "SIGTERM"); } catch { /* gone */ } }
+  if (await gone(5000)) { endLines.push(`the agent Chrome quit at SIGTERM (pid ${term}), not at Browser.close`); return; }
+  const kill = ownChrome();
+  if (kill) { try { process.kill(kill, "SIGKILL"); } catch { /* gone */ } }
+  const dead = await gone(3000);
+  quitProblem = `the agent Chrome did not quit at Browser.close or SIGTERM: SIGKILL to pid ${kill}${dead ? "" : `, and it still runs: stop it by hand (${join(RUN, "stop-chrome.txt")})`}`;
+  endLines.push(quitProblem);
+}, { limitMs: 45_000, tailMs: 1500, always: true });
 await browser?.disconnect().catch(() => {});
 try { stopProxy(settings!); } catch { /* none */ }
 measureEnd ??= Date.now();
 tell("quit");
 await new Promise((r) => { if (watcher.exitCode !== null) r(null); watcher.once("exit", r); setTimeout(r, 3000); });
 server.close();
+// The run folder keeps the logs, the shots and the records; the throwaway profile and the compiled watcher go, once
+// nothing uses them: only paths that this run made inside its own run folder.
+const inRun = (p: string) => { try { return realpathSync(p).startsWith(`${realpathSync(RUN)}/`); } catch { return false; } };
+if (chromePid !== undefined && ownChrome()) endLines.push(`kept the profile: the agent Chrome still runs (${profile})`);
+else if (inRun(profile) && statSync(profile).isDirectory()) {
+  try { rmSync(profile, { recursive: true, maxRetries: 3 }); endLines.push(`removed the agent Chrome's throwaway profile (${profile})`); }
+  catch (e) { endLines.push(`could not remove the profile ${profile}: ${(e as Error).message.split("\n")[0]}`); }
+}
+if (!O.dryRun && !O.watcher && watcher.exitCode !== null && inRun(watcherBin)) {
+  try { rmSync(watcherBin); endLines.push(`removed the compiled watcher (${watcherBin})`); } catch (e) { endLines.push(`could not remove ${watcherBin}: ${(e as Error).message}`); }
+}
 
 // ------------------------------------------------------------------ analysis
 const watchText = existsSync(watchFile) ? readFileSync(watchFile, "utf8") : "";
@@ -482,7 +517,7 @@ const E = events.filter((e) => e.t <= measureEnd!);
 const { operator, takes } = frontTakes(E, steps);
 const spaces = spaceChanges(E, steps);
 const wprob = O.dryRun ? [] : watcherProblems(E, bad, ready.t, measureEnd);
-const v = verdict({ takes, spaces, watcher: wprob, missing: notRun, aborted, error: fatal });
+const v = verdict({ takes, spaces, watcher: wprob, missing: notRun, aborted, error: fatal, quit: quitProblem });
 const sorted = log.slice().sort((a, b) => a.t - b.t);
 const S = (phase: string, name: string) => steps.find((s) => s.phase === phase && s.name === name);
 const after = (label: string) => snapOf(E, `after ${label}`), before = (label: string) => snapOf(E, `before ${label}`);
@@ -535,10 +570,16 @@ const windowRows = [
   windowRow(steps.find((s) => s.name.startsWith("open window WB")), "Target.createTarget { newWindow: true, background: true }", nB),
   ...POPUPS.map((p) => windowRow(S("popup", p.kind), p.kind)),
 ].filter((x): x is WindowRow => !!x);
+// Each record's window at the record's start (its snap before): how much of it the operator's windows cover.
+const nFirst = startStep ? agentWindowsOf(after(label(startStep)))[0]?.n : undefined;
 for (const r of records) {
-  const s = steps.find((x) => x.name.endsWith("record 3 s") && (r.where.startsWith("a page in a window") ? x.phase === "window" : x.phase === "tab"));
-  const snapR = s && after(label(s));
-  if (snapR && nA !== undefined && s!.phase === "window") { const pa = placement(windowsOf(snapR), agentPid, nA, opPid); if (pa) r.covered = `${Math.round(pa.coveredByOperator * 100)} % of WA covered`; }
+  const phase = r.where.startsWith("a page in a window") ? "window" : "tab";
+  const s = steps.find((x) => x.phase === phase && x.name.endsWith("record 3 s"));
+  const snapB = s && before(label(s)), n = phase === "window" ? nA : nFirst, who = phase === "window" ? "WA" : "the first window";
+  if (!snapB || n === undefined) continue;
+  const pl = placement(windowsOf(snapB), agentPid, n, opPid), w = agentWindowsOf(snapB).find((x) => x.n === n);
+  r.covered = `${who}: ${pl ? `${Math.round(pl.coveredByOperator * 100)} % covered, ${pl.aboveFrontWindow === null ? "no window of the front app on screen" : pl.aboveFrontWindow ? "above the front app's window" : "behind the front app's window"}`
+    : w ? (w.onscreen ? "on screen" : "off screen (minimized, or another Space)") : "not found"}`;
 }
 const focusLine = (name: string, a: string, b: string) => {
   const s = steps.find((x) => x.phase === "window" && x.name === name);
@@ -589,7 +630,7 @@ const notMeasured = [
 ];
 const startGB = existsSync(launches) ? readFileSync(launches, "utf8").split("\n").flatMap((l) => { const m = /^\S+ (give-back .+|chrome=.+)$/.exec(l); return m ? [m[1]] : []; }) : [];
 const result: MacResult = {
-  ok: v.ok, problems: v.problems, dryRun: O.dryRun, run: RUN, startedAt: new Date(T0).toISOString(), seconds: Math.round((Date.now() - T0) / 1000),
+  ok: v.ok, problems: v.problems, popupOnly: v.popupOnly, end: endLines, dryRun: O.dryRun, run: RUN, startedAt: new Date(T0).toISOString(), seconds: Math.round((Date.now() - T0) / 1000),
   chrome: O.chromeBin, product: browser?.product ?? "?", flags: CHROME_ARGS.map((a) => a.startsWith("--user-data-dir=") ? "--user-data-dir=<run>/state/profile" : a.startsWith("--window-name=") ? "--window-name=<name>" : a),
   operator, frontAtEnd: frontAt(E, measureEnd), takes, spaces, startGiveBack: startGB,
   windows: windowRows, tabDrive, windowDrive, records, focus, popups, pointer, apis, look: LOOK, notMeasured,

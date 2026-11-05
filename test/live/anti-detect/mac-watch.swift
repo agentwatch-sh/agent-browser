@@ -24,6 +24,8 @@
 // that was in front before (NSRunningApplication.activate(options: [])), the same call as
 // test/live/takeover/giveback.swift and src/giveback.ts, at once and again every 250 ms, at most 6 times for one
 // take. When another app comes to the front while no take is in progress, that app is the one to give back to.
+// At the first pointer move (a person uses the Mac) it stops the give-back for good, before it acts on the front
+// again, and logs "disarmed" with "why": "pointer": a person's own switch to an app is never undone.
 // It reads only, apart from that request: no input, no Apple Event, no pointer move, and no Accessibility,
 // Automation or Screen Recording grant. It logs no window title (macOS gives none of other apps without Screen
 // Recording), only the owner app's name.
@@ -110,6 +112,7 @@ final class Watcher {
   var lastWindows = ""
   var lastSpace: UInt64?
   var lastAlive = 0.0
+  var personSeen = false
 
   init(bundle: String, seconds: Double) {
     self.bundle = bundle
@@ -190,6 +193,7 @@ final class Watcher {
       lastFront = pid
       emit("front", appInfo(app))
     }
+    checkPointer() // a person's move first: then no give-back acts on their own switch
     guard armed, let app = app, let b = before else { return }
     let t = nowMs()
     if isAgent(app) {
@@ -214,6 +218,12 @@ final class Watcher {
     if abs(p.x - lastPoint.x) + abs(p.y - lastPoint.y) >= 1 {
       lastPoint = p
       emit("pointer", ["x": Double(p.x), "y": Double(p.y)])
+      if !personSeen {
+        personSeen = true
+        armed = false
+        takeAt = nil
+        emit("disarmed", ["why": "pointer"])
+      }
     }
   }
 
@@ -271,6 +281,7 @@ final class Watcher {
     guard let verb = parts.first else { return }
     switch verb {
     case "arm":
+      if personSeen { emit("disarmed", ["why": "pointer"]); return }
       armed = true
       emit("armed")
       checkFront(NSWorkspace.shared.frontmostApplication)

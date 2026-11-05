@@ -18,7 +18,7 @@ if (!Number.isFinite(seconds) || seconds <= 0) { process.stderr.write("usage: ma
 const emit = (ev: string, fields: Record<string, unknown> = {}) => process.stdout.write(`${JSON.stringify({ ...fields, t: Date.now(), ev })}\n`);
 const front = { pid: process.pid, name: "dry run (no front app on Linux)", bundle: null, agent: false };
 const state = { locked: false, onConsole: true, asleep: false };
-let agentPid = 0;
+let agentPid = 0, armed = false, personSeen = false;
 const finish = (why: string) => { emit("end", { why }); process.exit(0); };
 /** The agent's visible top-level X windows, top first: [pid, id, x, y, w, h, 100], as mac-watch.swift's list. */
 function xWindows(): number[][] {
@@ -42,13 +42,14 @@ if (takeAt > 0) setTimeout(() => {
   emit("front", { pid: agentPid, name: "agent Chrome (stand-in)", bundle: null, agent: true });
   setTimeout(() => emit("front", front), 120);
 }, takeAt);
-if (pointerAt > 0) setTimeout(() => emit("pointer", { x: 1, y: 2 }), pointerAt);
+// As mac-watch.swift: the first pointer move stops the give-back for good.
+if (pointerAt > 0) setTimeout(() => { emit("pointer", { x: 1, y: 2 }); if (!personSeen) { personSeen = true; armed = false; emit("disarmed", { why: "pointer" }); } }, pointerAt);
 setTimeout(() => finish("limit"), seconds * 1000);
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   const [verb, rest = ""] = line.trim().split(/ (.*)/s);
-  if (verb === "arm") emit("armed");
-  else if (verb === "disarm") emit("disarmed");
+  if (verb === "arm") { if (personSeen) emit("disarmed", { why: "pointer" }); else { armed = true; emit("armed"); } }
+  else if (verb === "disarm") { armed = false; emit("disarmed"); }
   else if (verb === "agent") { agentPid = Number(rest) || 0; emit("agent", { pid: agentPid }); }
   else if (verb === "snap") {
     const list = xWindows();
