@@ -1,7 +1,7 @@
 // A person's input in a window of its own (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md, "The answer",
 // steps 4 to 6): on Linux each input command (click, click --text, Tab.clickAt, hover, type, press, setFiles) brings
-// its page's window forward when the page has no focus (Page.bringToFront), holds the input lock of its site in the
-// state folder across processes (site-lock.test.ts: one lock per site), and sends a person's input: a pointer path from the real pointer, a press of 70 to 90 ms with force
+// its page's window forward when the page has no focus (Page.bringToFront), holds the input lock of the state folder
+// across processes, and sends a person's input: a pointer path from the real pointer, a press of 70 to 90 ms with force
 // 0.5, one key-event pair per character, a click on a field in place of el.focus() that leaves the caret where
 // `type --into` put it, wheel events in place of scrollIntoView, and a click that opens the file chooser before
 // setFiles. Against the fake Chrome (fake-chrome.ts: windows, the X pointer's event at an activation, a scrolling page,
@@ -18,7 +18,6 @@ import { commands } from "../src/commands.ts";
 import { INPUT_TIMING, resolveOptions, type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
-import { inputLockPath, siteKey } from "../src/input.ts";
 import { NotAllowedError } from "../src/errors.ts";
 import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, ROOT, type Consumer, type Fixture } from "./helpers.ts";
@@ -102,8 +101,6 @@ const mouse = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatc
 const keys = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatchKeyEvent");
 const methods = (calls: Call[]) => calls.map((x) => x.method);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
-/** The input lock of the pages' site (127.0.0.1: an IP address is its own site). */
-const SITE_LOCK = () => inputLockPath(resolveOptions(c.options()), siteKey(`${fx.base}/`));
 
 test("the input timing: the defaults of the research, a partial option, and the CLI's --input-timing", () => {
   assert.deepEqual(INPUT_TIMING, { pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, lockWaitMs: 600_000 });
@@ -356,7 +353,7 @@ test("setFiles: a click on the file input opens the chooser (intercepted), and t
   await commands.close(linux(), { tab: name });
 });
 
-test("one input at a time on one site: two input commands of one process never overlap; the lock is the site's input-<site>.lock in the state folder", async () => {
+test("one input at a time: two input commands of one process never overlap; the lock is the state folder's input.lock", async () => {
   operatorInFront();
   const a = await windowPage(), b = await windowPage();
   const slow = { ...FAST, pressMs: [80, 90] as [number, number] };
@@ -371,7 +368,7 @@ test("one input at a time on one site: two input commands of one process never o
   assert.ok(ca.length > 0);
   assert.equal(a.page.title, "clicked");
   assert.equal(b.page.title, "clicked");
-  assert.equal(existsSync(SITE_LOCK()), false, "released");
+  assert.equal(existsSync(join(c.stateDir, "input.lock")), false, "released");
   await commands.close(linux(), { tab: a.name });
   await commands.close(linux(), { tab: b.name });
 });
@@ -468,10 +465,10 @@ test("open --tab, the Mac and personal mode keep today's input: three mouse even
 
 // ---------- the review of PR #47 (review-47) ----------
 
-/** Another agent-browser process holds the input lock of the pages' site (a live pid in its lock file) for `ms`. */
+/** Another agent-browser process holds the input lock (a live pid in input.lock) for `ms`. */
 function holdLock(ms: number) {
   const holder = spawn("sleep", [String(ms / 1000)], { stdio: "ignore" });
-  writeFileSync(SITE_LOCK(), String(holder.pid), { mode: 0o600 });
+  writeFileSync(join(c.stateDir, "input.lock"), String(holder.pid), { mode: 0o600 });
   return holder;
 }
 
@@ -527,7 +524,7 @@ test("Tab.waitFor's timeoutMs covers its wait for the input lock: on a hidden wi
       assert.equal(await tab.waitFor(() => 7, { timeoutMs: 600 }), 7);
       assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
     } finally { holder.kill(); }
-    rmSync(SITE_LOCK(), { force: true });
+    rmSync(join(c.stateDir, "input.lock"), { force: true });
     // A free lock, and a timeout shorter than the read before the lock: the lock is still tried once, and the tab comes in front.
     assert.equal(await tab.waitFor(() => document.visibilityState === "visible", { timeoutMs: 1 }), true);
     assert.equal(page.visibilityState, "visible");
@@ -809,7 +806,7 @@ test("record holds the input lock for the take only: the lock is free while ffmp
   const { name } = await windowPage();
   const seen = join(c.dir, "ffmpeg-saw-lock.txt"), wrapper = join(c.dir, "ffmpeg-wrapper.sh");
   writeFileSync(wrapper, `#!/bin/sh
-if [ -e "${SITE_LOCK()}" ]; then echo "lock $*" >> "${seen}"; else echo "free $*" >> "${seen}"; fi
+if [ -e "${join(c.stateDir, "input.lock")}" ]; then echo "lock $*" >> "${seen}"; else echo "free $*" >> "${seen}"; fi
 exec "${FFMPEG}" "$@"
 `);
   chmodSync(wrapper, 0o755);

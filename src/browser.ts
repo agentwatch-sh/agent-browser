@@ -865,39 +865,26 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
-   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock of the page's site ends then
-   * (Tab.waitFor's timeout); `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
+   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout);
+   * `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
    */
   async toFront(opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<void> {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
-    // On Linux Page.bringToFront also activates the window: inside the input lock of the page's site, so that it never
-    // lands inside another agent's input command on that site (review-47c: a read's switch during another agent's typing
-    // left two focused pages). The lock is reentrant, so record and the input commands, which hold it, do not wait for
-    // themselves. The page's state is read again inside the lock: the other agent's command can have changed it.
-    const { withInputLock, bringForward } = await import("./input.ts");
-    await withInputLock(this, async () => {
+    // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
+    // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
+    // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
+    // is read again inside the lock: the other agent's command can have changed it.
+    const { withInputLock } = await import("./input.ts");
+    await withInputLock(this.browser.settings, async () => {
       await this.assertAllowed();
       if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
-      await bringForward(this);
+      await this.send("Page.bringToFront");
       for (const end = Date.now() + 1000; Date.now() < end && !opts.signal?.aborted; await new Promise((r) => setTimeout(r, 20)))
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
     }, opts);
-  }
-
-  /**
-   * The site of the page's main frame: the key of its input lock (input.ts, siteKey; ab-v16.46). From the frame tree (no
-   * page code); for a URL with no host, the document's own origin: an about:blank page that a site opened has that
-   * site's origin (self.origin), where the frame tree gives "://" (measured on Chromium 156).
-   */
-  async siteKey(): Promise<string> {
-    const { siteKey, NO_SITE } = await import("./input.ts");
-    const { frameTree } = await this.send("Page.getFrameTree");
-    const url = String(frameTree?.frame?.url ?? ""), key = siteKey(url, frameTree?.frame?.securityOrigin);
-    if (key !== NO_SITE) return key;
-    return siteKey(url, await this.evaluate(() => self.origin).catch(() => undefined));
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -983,10 +970,10 @@ export class Tab {
   /**
    * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front
    * (toFront); its wait for the input lock is part of `timeoutMs` (review-47d note 6), so the wait ends near its timeout
-   * also while another agent's input on the page's site holds the lock (the page then stays hidden, and a condition that
-   * needs a frame times out). The condition is polled from the start, also during that wait (review-52 note 3): one
-   * that holds ends the wait at once, and the page then gets no tab switch. Before the timeout's error, the switch ends
-   * and the condition is polled once more.
+   * also while another agent's input holds the lock (the page then stays hidden, and a condition that needs a frame
+   * times out). The condition is polled from the start, also during that wait (review-52 note 3): one that holds ends
+   * the wait at once, and the page then gets no tab switch. Before the timeout's error, the switch ends and the
+   * condition is polled once more.
    */
   async waitFor<R, A extends unknown[] = []>(
     fn: ((...args: A) => R) | string,
@@ -1022,13 +1009,12 @@ export class Tab {
 
   /**
    * Run `fn` with a person's hands (input.ts), for a page in a window of its own (drive "window"; ab-v16.26): inside
-   * the input lock of the page's site (one input at a time on each site, across processes; ab-v16.46), after the page's
-   * window came forward.
+   * the agent browser's input lock (one input at a time, across processes), after the page's window came forward.
    */
   private async byHand<T>(fn: (h: Hands) => Promise<T>): Promise<T> {
     await this.assertAllowed();
     const { withInputLock, Hands } = await import("./input.ts");
-    return withInputLock(this, async () => {
+    return withInputLock(this.browser.settings, async () => {
       // The wait for the lock can take minutes, and the page can go to a host off the allowlist meanwhile (review-47):
       // the allowlist is read again inside the lock, before any code of ours runs there for the input, and the guard
       // stops each input event once the main frame went off the list (Hands also reads the list before each press
@@ -1066,9 +1052,9 @@ export class Tab {
   }
 
   /**
-   * For a command that sends its own input (record): in a window of its own, the input lock of the page's site and the
-   * window's activation around `fn`, which gets the hands (where the pointer is; Hands.movedTo keeps where it ends);
-   * elsewhere `fn` as it is, with none.
+   * For a command that sends its own input (record): in a window of its own, the input lock and the window's
+   * activation around `fn`, which gets the hands (where the pointer is; Hands.movedTo keeps where it ends); elsewhere
+   * `fn` as it is, with none.
    */
   async withInput<T>(fn: (h?: Hands) => Promise<T>): Promise<T> {
     return this.drive === "window" ? this.byHand((h) => fn(h)) : fn();

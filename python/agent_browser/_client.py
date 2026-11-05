@@ -42,8 +42,8 @@ LAUNCH_WAIT = 600.0
 #: `record` runs at most 30 minutes (the CLI's limit), then encodes the MP4.
 RECORD_WAIT = 1800.0 + 900.0
 
-#: In agent mode on Linux an input command can wait for another one's input lock on its site (inputTiming.lockWaitMs, 600 s
-#: by default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
+#: In agent mode on Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
+#: default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
 LOCK_WAIT_MS = 600_000.0
 KEY_MS = 150.0 + 50.0
 
@@ -376,9 +376,9 @@ class AgentBrowser:
     def outline(self, tab: str, all: bool = False, any_scope: bool = False) -> OutlineResult:
         """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot.
 
-        In agent mode on Linux a read of a hidden window page brings its tab in front inside the input lock of its site, so
-        it can wait for another agent's input command on that site, as `text` and `eval` do. That wait is part of the
-        call's timeout (at most all but 30 s of it, at least half of it): a longer wait fails with the lock's own error.
+        In agent mode on Linux a read of a hidden window page brings its tab in front inside the input lock, so it can wait
+        for another agent's input command, as `text` and `eval` do. That wait is part of the call's timeout (at most all
+        but 30 s of it, at least half of it): a longer wait fails with the lock's own error.
         """
         return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json, lock_wait_ms=self._read_lock_wait_ms())
 
@@ -416,7 +416,7 @@ class AgentBrowser:
         """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
 
         The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
-        about 0.12 s (a person's typing), and another input command on the same site can hold its lock for up to `lockWaitMs`.
+        about 0.12 s (a person's typing), and another input command can hold the lock for up to `lockWaitMs`.
         """
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
                          stdin=text, extra_timeout=self._input_wait(len(text)))

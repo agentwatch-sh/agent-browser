@@ -430,7 +430,7 @@ export const commands = {
     const plan = planRecording(p, allowlistOf(s));
     return onTab(s, p, async (tab, info) => {
       // In a window of its own (Linux), the take is an input command: the window comes forward, and the take (not the
-      // encode) holds the input lock of the page's site.
+      // encode) holds the input lock.
       const r = await recordTab(tab, plan, (take) => tab.withInput(take));
       const { width, height, scale } = plan.viewport;
       // The tab's URL and title from the end of the run: after the encode nothing runs in the tab again.

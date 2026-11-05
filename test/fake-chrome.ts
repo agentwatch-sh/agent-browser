@@ -269,18 +269,6 @@ export class FakePage {
   readonly targetId: string;
   windowId: number;
   url = "about:blank";
-  /** The origin that about:blank got from the page that opened it (window.open() in Chrome), else none. */
-  openerOrigin: string | undefined;
-  /** The document's origin (self.origin): the URL's, else the opener's for about:blank that a page opened, else "null". */
-  get documentOrigin(): string {
-    try { const u = new URL(this.url); if (u.protocol === "http:" || u.protocol === "https:") return u.origin; } catch { /* below */ }
-    return this.url === "about:blank" && this.openerOrigin ? this.openerOrigin : "null";
-  }
-  /**
-   * Page.getFrameTree's securityOrigin: the URL's origin; "://" for about:blank, also one that a page opened (measured
-   * on Chromium 156: its self.origin is the opener's, the frame tree gives "://").
-   */
-  get securityOrigin(): string { return this.documentOrigin === "null" || this.url === "about:blank" ? "://" : this.documentOrigin; }
   title = "";
   text = "";
   elements: FakeElement[] = [];
@@ -645,8 +633,6 @@ export class FakePage {
       open: (url: string) => { page.fake.openFrom(page, url ?? "about:blank"); return null; },
     };
     sandbox.window = sandbox;
-    sandbox.self = sandbox;
-    Object.defineProperty(sandbox, "origin", { get: () => page.documentOrigin, enumerable: true });
     return vm.createContext(sandbox);
   }
 
@@ -884,7 +870,6 @@ export class FakeChrome {
   openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);
-    if (url === "about:blank") page.openerOrigin = opener.securityOrigin;
     page.load(url);
     if (this.tabSwitches) this.activateTab(page, "open");
     return page;
@@ -1150,7 +1135,7 @@ export class FakeChrome {
         } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
         return page.background ? page.capture({ data }, params) : { data };
       }
-      case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url, securityOrigin: page.securityOrigin } } };
+      case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
         const b = page.bodies.get(params.requestId);
         if (!b) throw new Error("No resource with given identifier found");

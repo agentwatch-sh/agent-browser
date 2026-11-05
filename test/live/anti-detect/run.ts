@@ -24,10 +24,11 @@
 //                                                   activation, a person's input, the input lock; F's window takes the focus after each
 //                                                   input step, so T's window comes forward again for each one (several activations).
 //                                                   design-no-x cannot reach the X pointer (as over agentwatch's relay)
-//   design-two                                      the design with two agents at once on one site (two windows, the site's one input
-//                                                   lock), each typing 6 times
-//   design-two-sites                                the same with the two pages on two sites (probe.localhost, other.localhost): one
-//                                                   input lock each, so both agents type at once (ab-v16.46, one input lock per site)
+//   design-two                                      the design with two agents at once on one site (two windows, one input lock),
+//                                                   each typing 6 times, then a third agent on the first page's site
+//   design-two-sites                                the same with the two pages on two sites (probe.localhost, other.localhost): they
+//                                                   share the one input lock (ab-1bi). At e52de19 (one lock per site, ab-v16.46)
+//                                                   both typed at once: the numbers of the README's "One input at a time"
 //   person-window-multi                             the person baseline for several activations: F's window takes the focus after each step
 //   window, window-no-flag, window-default          one window per agent page (candidate 1); window-default sends the old
 //                                                   attach's focus emulation itself around each command
@@ -543,9 +544,9 @@ async function designCase(sc: Scenario, x: boolean) {
 }
 
 /** Two agents at once, each with a window of its own (T, and a second page T2 of the same site, or with `twoSites` of another
- *  site), sharing one agent browser's state folder (one input lock for each site): each types "hello" into its field 6
- *  times, with pauses. Also each alone, for the cost. With two sites both agents type at once, so each page's own
- *  sequence of focus, blur and keys during its own commands is listed (what that site alone sees). */
+ *  site), sharing one agent browser's state folder (one input lock): each types "hello" into its field 6 times, with
+ *  pauses. Also each alone, for the cost. Each page's own sequence of focus, blur and keys during its own commands is
+ *  listed (what that site alone sees); then a third agent types on T's site. */
 async function designTwoCase(sc: Scenario, twoSites: boolean) {
   const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
   await loaded(sc.F);

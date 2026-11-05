@@ -46,7 +46,7 @@ export type InputTiming = {
   moveScale: number;
   /** How long an input command waits for its page's focus after it brings the page's window forward. */
   activateMs: number;
-  /** How long an input command waits for another input command on the same site of the same agent browser (the site's input lock). */
+  /** How long an input command waits for another input command of the same agent browser (the input lock). */
   lockWaitMs: number;
 };
 
