@@ -20,6 +20,7 @@ const S = {
   guardAction: "close", // "close" or "blank"
   retry: false, // reload a tab whose first request was blocked before its rule
   inheritDelay: 0, // ms before a popup's scope is set (to make its rule late on purpose)
+  retryHow: "reload", // the retry: "reload" (tabs.reload) or "update" (tabs.update with the URL)
   chain: Promise.resolve(),
   ruleIds: [],
   attached: new Set(),
@@ -164,7 +165,8 @@ function retry(tabId) {
   S.blocked.delete(tabId);
   const host = hostOf(url);
   if (host === null || !covers(listOf(S.tabScope.get(tabId)), host)) return;
-  chrome.tabs.reload(tabId).then(() => ev("retried", { tabId, url }), (e) => ev("retryerr", { tabId, error: String(e && e.message) }));
+  const again = S.retryHow === "update" ? chrome.tabs.update(tabId, { url }) : chrome.tabs.reload(tabId);
+  again.then(() => ev("retried", { tabId, url }), (e) => ev("retryerr", { tabId, error: String(e && e.message) }));
 }
 
 chrome.webNavigation.onErrorOccurred.addListener((d) => {
@@ -199,7 +201,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // ---- the driver's calls ----
 
 P.config = (o) => {
-  for (const k of ["inherit", "hold", "guard", "guardAction", "retry", "inheritDelay"]) if (k in o) S[k] = o[k];
+  for (const k of ["inherit", "hold", "guard", "guardAction", "retry", "inheritDelay", "retryHow"]) if (k in o) S[k] = o[k];
   return true;
 };
 
@@ -266,7 +268,7 @@ P.reset = async () => {
   S.ruled.clear();
   S.blocked.clear();
   S.tried.clear();
-  Object.assign(S, { inherit: "none", hold: false, guard: "none", guardAction: "close", retry: false, inheritDelay: 0 });
+  Object.assign(S, { inherit: "none", hold: false, guard: "none", guardAction: "close", retry: false, inheritDelay: 0, retryHow: "reload" });
   await apply();
   const extra = (await chrome.declarativeNetRequest.getSessionRules()).map((r) => r.id).filter((id) => !S.ruleIds.includes(id));
   if (extra.length) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: extra });

@@ -1,0 +1,803 @@
+{
+  "config": {
+    "inherit": "nav",
+    "retry": true,
+    "retryHow": "reload"
+  },
+  "groups": {
+    "open": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 10,
+      "firstBlocked": 0,
+      "loaded": 10,
+      "retried": 0,
+      "pages": {
+        "history.length 1, opener true, referrer true": 10
+      },
+      "requests GET": 10,
+      "headers {\"sfs\":\"same-origin\",\"sfm\":\"navigate\",\"sfu\":\"?1\",\"sfd\":\"document\",\"cc\":null,\"pragma\":null,\"referer\":true}": 10
+    },
+    "blank": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 10,
+      "loaded": 10,
+      "retried": 10,
+      "pages": {
+        "history.length 1, opener false, referrer true": 10
+      },
+      "requests GET": 10,
+      "headers {\"sfs\":\"same-origin\",\"sfm\":\"navigate\",\"sfu\":\"?1\",\"sfd\":\"document\",\"cc\":\"max-age=0\",\"pragma\":null,\"referer\":true} (retried)": 10
+    }
+  },
+  "rows": [
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750381,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 15,
+        "ruled": 18,
+        "firstMatch": 28,
+        "request": 29.699951171875
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750385,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 12,
+        "ruled": 15,
+        "firstMatch": 22,
+        "request": 23.300048828125
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750389,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 17,
+        "firstMatch": 28,
+        "request": 29.5
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750393,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 12,
+        "ruled": 18,
+        "firstMatch": 25,
+        "request": 26.300048828125
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750397,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 16,
+        "firstMatch": 27,
+        "request": 28.300048828125
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750401,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 15,
+        "ruled": 18,
+        "firstMatch": 26,
+        "request": 27.89990234375
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750405,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 20,
+        "navtarget": 20,
+        "ruled": 24,
+        "firstMatch": 35,
+        "request": 36.39990234375
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750409,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 21,
+        "firstMatch": 27,
+        "request": 28.699951171875
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750413,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 16,
+        "navtarget": 17,
+        "ruled": 27,
+        "firstMatch": 35,
+        "request": 36.60009765625
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750417,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": 16,
+        "firstMatch": 26,
+        "request": 27.300048828125
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750421,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 19,
+        "navtarget": 20,
+        "ruled": 37,
+        "firstMatch": 29,
+        "request": 95.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750425,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 38,
+        "firstMatch": 25,
+        "request": 96.10009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750429,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 31,
+        "firstMatch": 23,
+        "request": 89.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750433,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": 32,
+        "firstMatch": 24,
+        "request": 90.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750437,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 16,
+        "navtarget": 17,
+        "ruled": 37,
+        "firstMatch": 28,
+        "request": 96.800048828125
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750441,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 33,
+        "firstMatch": 22,
+        "request": 90.39990234375
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750445,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": 34,
+        "firstMatch": 25,
+        "request": 91.199951171875
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750449,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 17,
+        "navtarget": 18,
+        "ruled": 37,
+        "firstMatch": 29,
+        "request": 95.199951171875
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750453,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": 32,
+        "firstMatch": 24,
+        "request": 90
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750457,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": "max-age=0",
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "false",
+        "referrer": "true"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 37,
+        "firstMatch": 23,
+        "request": 96.300048828125
+      }
+    }
+  ]
+}

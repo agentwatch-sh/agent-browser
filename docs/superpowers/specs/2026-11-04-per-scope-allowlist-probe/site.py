@@ -93,6 +93,24 @@ self.addEventListener('fetch', (e) => {
 """
 
 
+SW_PASS = """
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (e) => {
+  if (e.request.mode === 'navigate') e.respondWith(fetch(e.request));
+});
+"""
+
+SW_PRELOAD = """
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(Promise.all([self.clients.claim(), self.registration.navigationPreload.enable()])));
+self.addEventListener('fetch', (e) => {
+  if (e.request.mode !== 'navigate') return;
+  e.respondWith((async () => (await e.preloadResponse) || fetch(e.request))());
+});
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -119,7 +137,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, json.dumps(out).encode(), "application/json")
         with LOCK:
             LOG.append({"t": round(time.time() * 1000, 1), "host": host, "path": u.path, "q": q, "m": self.command,
-                        "sfs": self.headers.get("Sec-Fetch-Site"), "sfd": self.headers.get("Sec-Fetch-Dest")})
+                        "sfs": self.headers.get("Sec-Fetch-Site"), "sfd": self.headers.get("Sec-Fetch-Dest"),
+                        "sfm": self.headers.get("Sec-Fetch-Mode"), "sfu": self.headers.get("Sec-Fetch-User"),
+                        "cc": self.headers.get("Cache-Control"), "pragma": self.headers.get("Pragma"),
+                        "ref": self.headers.get("Referer") is not None,
+                        "swnav": self.headers.get("Service-Worker-Navigation-Preload")})
         to = q.get("to", "about:blank").replace('"', "")
         if u.path == "/page":
             return self.send(200, (PAGE % {"host": host, "to": to, "kind": "page"}).encode(), store="cache" in q)
@@ -134,7 +156,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/shw.js":
             return self.send(200, b"onconnect = (e) => { const p = e.ports[0]; p.onmessage = () => p.postMessage('ok'); };", "text/javascript")
         if u.path == "/sw.js":
-            return self.send(200, SW.encode(), "text/javascript")
+            # pass.<host>: a worker that sends each navigation on to the network (fetch(event.request));
+            # pre.<host>: the same with navigation preload; any other host: a worker that makes the page itself.
+            body = SW_PASS if host.startswith("pass.") else SW_PRELOAD if host.startswith("pre.") else SW
+            return self.send(200, body.encode(), "text/javascript")
         if u.path == "/beacon":
             return self.send(204)
         return self.send(404, b"not found", "text/plain")

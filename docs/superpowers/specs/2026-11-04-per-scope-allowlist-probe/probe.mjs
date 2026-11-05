@@ -2,7 +2,7 @@
 // file), the test sites (site.py) and its own Chromium (a throwaway profile, the probe extension
 // ext/ loaded unpacked), runs the cases, writes results/<case>.json and stops what it started.
 //
-//   node probe.mjs [case ...]       cases: limits rules dnrfetch frames popups popupslate sw bfcache restart
+//   node probe.mjs [case ...]       cases: limits rules dnrfetch frames popups popupslate retryheaders sw swscript swpass bfcache restart
 //
 // Environment: CHROMIUM (default /usr/bin/chromium), RUN (a scratch folder; default a new folder
 // under the system temp folder), SITE_PORT (default 8795), TRIALS (default 10).
@@ -301,6 +301,7 @@ async function popupRun(name, cfg, kinds = Object.keys(KINDS), background = [fal
       firstMatch: first ? first.ruleId : null, // 1: blocked by the static block; 100: allowed by the scope's rule
       requests: log.filter((r) => r.path === "/page" && r.q.id === id).length,
       methods: log.filter((r) => r.path === "/page" && r.q.id === id).map((r) => r.m),
+      headers: log.filter((r) => r.path === "/page" && r.q.id === id).map((r) => ({ sfs: r.sfs, sfm: r.sfm, sfu: r.sfu, sfd: r.sfd, cc: r.cc, pragma: r.pragma, referer: r.ref })),
       loaded: beacon.length > 0,
       page: beacon[0] ? { h: beacon[0].q.h, opener: beacon[0].q.op, referrer: beacon[0].q.ref } : null,
       retried: of("retried").length,
@@ -329,6 +330,7 @@ async function popupRun(name, cfg, kinds = Object.keys(KINDS), background = [fal
     if (r.loaded) g.loaded++;
     if (r.retried) g.retried++;
     for (const m of r.methods) g[`requests ${m}`] = (g[`requests ${m}`] ?? 0) + 1;
+    for (const h of r.headers ?? []) { const k = `headers ${JSON.stringify(h)}${r.retried ? " (retried)" : ""}`; g[k] = (g[k] ?? 0) + 1; }
     if (r.page) { const k = `history.length ${r.page.h}, opener ${r.page.opener}, referrer ${r.page.referrer}`; g.pages[k] = (g.pages[k] ?? 0) + 1; }
   }
   save(`popups-${name}`, { config: cfg, groups, rows });
@@ -558,7 +560,69 @@ async function casePopupsLate() {
   };
 }
 
-const CASES = { limits: caseLimits, rules: caseRules, dnrfetch: caseDnrFetch, frames: caseFrames, popups: casePopups, popupslate: casePopupsLate, sw: caseSw, swscript: () => caseSw("script"), bfcache: caseBfcache, restart: caseRestart };
+// What a site sees of the retry: the headers of a retried popup's request against a popup with no retry.
+async function caseRetryHeaders() {
+  return {
+    reload: await popupRun("retry-reload", { inherit: "nav", retry: true, retryHow: "reload" }, ["open", "blank"], [false]),
+    update: await popupRun("retry-update", { inherit: "nav", retry: true, retryHow: "update" }, ["open", "blank"], [false]),
+    lateReload: await popupRun("retry-late-reload", { inherit: "nav", retry: true, retryHow: "reload", inheritDelay: 40 }, ["open"], [false]),
+  };
+}
+
+// A worker that sends a navigation on to the network (fetch(event.request)), and one with navigation
+// preload: what DNR sees of that request, in the worker's own scope and in another scope.
+async function caseSwPass() {
+  const out = {};
+  for (const mode of ["pass", "pre"]) {
+    const host = `http://${mode}.a.localhost:${PORT}`;
+    for (const extra of [false, true]) {
+      await call("reset");
+      await call("removeWorkers");
+      await call("setLists", LISTS, SCOPES);
+      // The candidate fix: requests of no tab (a worker's) to a host of any list.
+      if (extra) await call("session", [{ id: 9000, priority: 2, action: { type: "allow" }, condition: { tabIds: [-1], requestDomains: ["a.localhost", "b.localhost"], resourceTypes: ["main_frame", "sub_frame"] } }]);
+      const tA = await call("newTab", "A");
+      await serverLog();
+      await call("nav", tA, `${host}/swreg?id=reg`);
+      await waitFor(async () => { const l = await serverLog(); swRun.held = (swRun.held ?? []).concat(l); return swRun.held.some((r) => r.q.kind === "swreg"); }, 5000);
+      const reg = (swRun.held ?? []).find((r) => r.q.kind === "swreg")?.q.r ?? null;
+      swRun.held = [];
+      const rows = [];
+      for (let i = 0; i < 5; i++) for (const scope of ["A", "B"]) {
+        const id = `${mode}-${extra ? "x" : "n"}-${scope}-${i}`;
+        const tab = await call("newTab", scope);
+        await call("nav", tab, `${scope === "A" ? A : B}/page?id=start-${id}`);
+        await sleep(300);
+        await call("log");
+        await serverLog();
+        await call("eval", tab, `location.href = ${JSON.stringify(`${host}/page?id=${id}`)}; 1`).catch(() => {});
+        await sleep(800);
+        const evs = await call("log");
+        const log = await serverLog();
+        const reqs = log.filter((r) => r.path === "/page" && r.q.id === id);
+        rows.push({
+          scope, requestsAtSite: reqs.length, preloadHeader: reqs.some((r) => r.swnav),
+          pageLoaded: log.some((r) => r.q.kind === "page" && r.q.id === id),
+          matches: evs.filter((e) => e.kind === "match" && e.url.includes(id)).map((e) => ({ ruleId: e.ruleId, tabId: e.tabId === tab ? "the tab" : e.tabId, type: e.type })),
+          committed: evs.some((e) => e.kind === "commit" && e.tabId === tab && e.url.includes(id)),
+          error: evs.find((e) => e.kind === "error" && e.tabId === tab)?.error ?? null,
+        });
+        await call("close", tab);
+      }
+      const sum = (scope) => {
+        const r = rows.filter((x) => x.scope === scope);
+        const m = {};
+        for (const x of r) for (const k of x.matches) { const key = `rule ${k.ruleId}, tab ${k.tabId}, ${k.type}`; m[key] = (m[key] ?? 0) + 1; }
+        return { trials: r.length, pageLoaded: r.filter((x) => x.pageLoaded).length, requestsAtSite: r.reduce((a, x) => a + x.requestsAtSite, 0), preloadHeader: r.filter((x) => x.preloadHeader).length, matches: m, errors: [...new Set(r.map((x) => x.error))] };
+      };
+      out[`${mode}${extra ? " + allow rule for tab -1" : ""}`] = { registered: reg, ownScopeA: sum("A"), otherScopeB: sum("B") };
+    }
+  }
+  save("sw-pass", out);
+  return out;
+}
+
+const CASES = { limits: caseLimits, rules: caseRules, dnrfetch: caseDnrFetch, frames: caseFrames, popups: casePopups, popupslate: casePopupsLate, sw: caseSw, swpass: caseSwPass, retryheaders: caseRetryHeaders, swscript: () => caseSw("script"), bfcache: caseBfcache, restart: caseRestart };
 
 async function main() {
   const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(CASES);

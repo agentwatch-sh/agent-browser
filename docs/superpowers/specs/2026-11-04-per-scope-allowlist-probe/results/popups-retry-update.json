@@ -1,0 +1,803 @@
+{
+  "config": {
+    "inherit": "nav",
+    "retry": true,
+    "retryHow": "update"
+  },
+  "groups": {
+    "open": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 10,
+      "firstBlocked": 0,
+      "loaded": 10,
+      "retried": 0,
+      "pages": {
+        "history.length 1, opener true, referrer true": 10
+      },
+      "requests GET": 10,
+      "headers {\"sfs\":\"same-origin\",\"sfm\":\"navigate\",\"sfu\":\"?1\",\"sfd\":\"document\",\"cc\":null,\"pragma\":null,\"referer\":true}": 10
+    },
+    "blank": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 10,
+      "loaded": 10,
+      "retried": 10,
+      "pages": {
+        "history.length 2, opener false, referrer false": 10
+      },
+      "requests GET": 10,
+      "headers {\"sfs\":\"cross-site\",\"sfm\":\"navigate\",\"sfu\":null,\"sfd\":\"document\",\"cc\":null,\"pragma\":null,\"referer\":false} (retried)": 10
+    }
+  },
+  "rows": [
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750463,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": 18,
+        "firstMatch": 30,
+        "request": 31
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750467,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 15,
+        "ruled": 22,
+        "firstMatch": 28,
+        "request": 29.699951171875
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750471,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 21,
+        "firstMatch": 29,
+        "request": 30
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750475,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 13,
+        "ruled": 15,
+        "firstMatch": 26,
+        "request": 27.199951171875
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750479,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 12,
+        "ruled": 18,
+        "firstMatch": 24,
+        "request": 25.699951171875
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750483,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": 22,
+        "firstMatch": 29,
+        "request": 30.89990234375
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750487,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 12,
+        "navtarget": 13,
+        "ruled": 15,
+        "firstMatch": 22,
+        "request": 23.300048828125
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750491,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 17,
+        "firstMatch": 25,
+        "request": 26.89990234375
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750495,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 16,
+        "navtarget": 16,
+        "ruled": 19,
+        "firstMatch": 28,
+        "request": 29.699951171875
+      }
+    },
+    {
+      "kind": "open",
+      "bg": false,
+      "popup": 1190750499,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 100,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "same-origin",
+          "sfm": "navigate",
+          "sfu": "?1",
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": true
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "1",
+        "opener": "true",
+        "referrer": "true"
+      },
+      "retried": 0,
+      "ms": {
+        "created": 17,
+        "navtarget": 17,
+        "ruled": 19,
+        "firstMatch": 26,
+        "request": 27.699951171875
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750503,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": 29,
+        "firstMatch": 22,
+        "request": 90.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750507,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 17,
+        "navtarget": 17,
+        "ruled": 36,
+        "firstMatch": 27,
+        "request": 97.89990234375
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750511,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 32,
+        "firstMatch": 25,
+        "request": 93.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750515,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 18,
+        "navtarget": 19,
+        "ruled": 36,
+        "firstMatch": 28,
+        "request": 95.10009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750519,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 32,
+        "firstMatch": 23,
+        "request": 93.39990234375
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750523,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 15,
+        "navtarget": 16,
+        "ruled": 35,
+        "firstMatch": 25,
+        "request": 96.199951171875
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750527,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 39,
+        "firstMatch": 23,
+        "request": 100.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750531,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": 29,
+        "firstMatch": 21,
+        "request": 89.800048828125
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750535,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": 29,
+        "firstMatch": 21,
+        "request": 89.60009765625
+      }
+    },
+    {
+      "kind": "blank",
+      "bg": false,
+      "popup": 1190750539,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 1,
+      "methods": [
+        "GET"
+      ],
+      "headers": [
+        {
+          "sfs": "cross-site",
+          "sfm": "navigate",
+          "sfu": null,
+          "sfd": "document",
+          "cc": null,
+          "pragma": null,
+          "referer": false
+        }
+      ],
+      "loaded": true,
+      "page": {
+        "h": "2",
+        "opener": "false",
+        "referrer": "false"
+      },
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 31,
+        "firstMatch": 23,
+        "request": 92.10009765625
+      }
+    }
+  ]
+}
