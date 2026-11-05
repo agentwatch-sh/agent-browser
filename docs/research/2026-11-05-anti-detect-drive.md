@@ -1,8 +1,9 @@
 # Drive a page that is not in front, as a person does
 
 Board task ab-v16.21, goal ab-v16. Measured on taylor (Linux) on 2026-11-04 and 2026-11-05 (UTC),
-with Chromium 156.0.8078.79 in a private Xvfb. Nothing ran on the Mac: section 7 collects the Mac
-facts of earlier reports. The script is [`test/live/anti-detect/`](../../test/live/anti-detect/)
+with Chromium 156.0.8078.79 in a private Xvfb. Nothing ran on the Mac for this report: section 7
+collects the Mac facts of earlier reports and, at its end, the later Mac check of 2026-11-05 (board
+task ab-v16.44). The script is [`test/live/anti-detect/`](../../test/live/anti-detect/)
 (section 10), and its tables for the final runs are in [the appendix](#appendix-the-tables-of-the-final-runs).
 
 The operator's goal: "Fully drivable browser for agents that isn't subject to automation blocks, so
@@ -343,7 +344,8 @@ Measured in the final runs:
 
 **The design is for taylor first. Its Mac part waits for a measurement in the Mac's agent browser
 (board task ab-v16.16 holds it).** Nothing ran on the Mac for this report, and one window per agent
-page is not measured there. That measurement needs at least:
+page was not measured there; the Mac check of 2026-11-05 is at the end of this section. That
+measurement needs at least:
 
 - **Window order.** On Linux a new window from `Target.createTarget` with `newWindow: true,
   background: true` comes above the other windows without the focus (`extra.ts --exp raise`; `run.ts`
@@ -391,6 +393,25 @@ steps 1 to 4 and 6, with no activation: a window of its own behind the operator'
 no focus emulation, person-shaped CDP input and one input at a time. The page then gets the focus at
 the agent's first press with no change of the app in front, and a site that also has a page in
 another agent window can see two focused pages.
+
+**Measured on 2026-11-05** (board task ab-v16.44; [`test/live/anti-detect/mac.ts`](../../test/live/anti-detect/mac.ts)
+at main 87be973 on the operator's Mac, Google Chrome Beta 158.0.8127.18 as the agent Chrome, today's
+flags, nobody at the Mac; run 2 ran every step, run 1 stopped after 25 s when the operator used the
+Mac; the README item **One window per agent page on the Mac** has the details). The measurement kept
+the window order and the Space: the start's first window, two windows from `Target.createTarget`
+with `newWindow: true, background: true`, and a sized popup window each came behind the operator's
+front window, 100% covered, on the current Space, and no step changed the Space. A CDP click did not
+bring its window forward. In a covered window of its own with no focus emulation the page stayed
+`visible` at 60 frames a second; text, click, type and End took 8 to 24 ms, a shot 85 ms, and a 3 s
+`record` got 60 fps. The front app changed only at the start (79 and 132 ms, then agent-browser's
+give-back) and at each popup (5 to 25 ms; the check's watcher gave it back). A CDP click gives its
+page the focus with no activation, and the other agent page gets no `blur`: two pages had the focus
+at once for the whole time that the check watched each step (1.2 to 3.7 s). Keys into an inactive
+window arrived. The check's person-shaped input had a press of 72 ms and one pointer jump, where its
+path started at a fixed point, not at the page's last point. No page got an event at the real
+pointer. Not measured: Mission Control, App Exposé, the Dock menu and Cmd-` as the operator sees
+them (`--look`, with the operator), window activation, Google Chrome stable, and the relay with the
+agent extension.
 
 ## 8. The recommended design, and its remaining signals
 
@@ -470,7 +491,7 @@ the person baselines of `run.ts`.
 
 ## 9. What this did not measure
 
-- Anything on the Mac (section 7).
+- Anything on the Mac (section 7), except the Mac check of 2026-11-05 at the end of section 7.
 - Google Chrome: only Chromium 156 ran. The window, focus and input code is the same, but Chrome
   stable was not run.
 - agent mode's real transport: the relay with the extension's `chrome.debugger`. The probe drove
