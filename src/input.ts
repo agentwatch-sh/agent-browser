@@ -410,15 +410,21 @@ export class Hands {
     this.recordMoved = true;
   }
 
-  /** A click where the pointer is: the pause on the target, the allowlist read again, then a press with force 0.5 and a release. */
-  async press(): Promise<void> {
+  /**
+   * A click where the pointer is: the pause on the target, the allowlist read again, then a press with force 0.5 and a
+   * release. `before` (setFiles' second hit test) can still stop it after the pause: false, no press.
+   */
+  async press(before?: () => Promise<boolean>): Promise<boolean> {
     await sleep(between(this.timing.settleMs));
     this.guard();
     await this.tab.assertAllowed();
+    if (before && !(await before())) return false;
+    this.guard();
     const { x, y } = this.at;
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
     await sleep(between(this.timing.pressMs));
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+    return true;
   }
 
   /** A point of the box to click, in its middle 40% (`fx`, `fy`: other parts), inside the viewport. */
@@ -605,7 +611,11 @@ export class Hands {
       // The chooser's wait starts after the wheel and the path, at the press (review-47b: an input below the fold).
       const opened = conn.waitForEvent<{ backendNodeId: number }>("Page.fileChooserOpened", { sessionId: this.tab.sessionId, timeoutMs: 2000, signal: stop.signal });
       opened.catch(() => {});
-      await this.press();
+      // A second hit test just before the press: an element (a frame) can move over the input in the pause (review-47c).
+      if (!(await this.press(() => this.tab.evaluate(hits, at.x, at.y)))) {
+        this.log(`agent-browser setFiles: another element covers ${selector} at the click's point; the files go to it with no click (a site can see that)`);
+        return false;
+      }
       const ev = await opened.catch(() => undefined);
       if (!ev) {
         this.log(`agent-browser setFiles: the click on ${selector}${t.via === "label" ? "'s label" : ""} opened no file chooser; the files go to it with no click (a site can see that)`);

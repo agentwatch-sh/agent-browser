@@ -619,7 +619,9 @@ test("setFiles: a chooser that names another input (a frame's input over this on
     page.select("#hov")[0].rect = [300, 100, 100, 30];
     // Below the fold: the wheel and the path come first, then the chooser's wait.
     const n0 = lines.length;
-    await tab.setFiles("#farfile", ["/tmp/c.txt"]);
+    // A slow wheel (review-47c): the chooser's wait must start at the press, after the wheel, or this one falls back.
+    const slow = await AgentBrowser.connect(linux({ inputTiming: { ...FAST, wheelMs: [90, 100] }, log: (l) => { lines.push(l); } }));
+    try { await (await slow.find(name)).setFiles("#farfile", ["/tmp/c.txt"]); } finally { await slow.disconnect(); }
     assert.deepEqual(page.select("#farfile")[0].files, [{ name: "c.txt" }]);
     assert.equal(page.fileChoosers, before + 1, "through the chooser");
     assert.deepEqual(lines.slice(n0).filter((l) => /setFiles/.test(l)), [], "no fallback");
@@ -640,6 +642,72 @@ test("a log line names why the X-pointer method is off: no xdotool, or a pixel r
     await commands.close(o, { tab: name });
     stopProxy(resolveOptions(o));
   } finally { s.remove(); }
+});
+
+test("a read of a hidden window page waits for another agent's input: its tab switch never lands inside the other's typing (review-47c)", async () => {
+  operatorInFront();
+  const slow = linux({ inputTiming: { ...FAST, keyMs: [60, 70] } });
+  const a = await windowPage(slow), b = await windowPage(slow);
+  const popup = fake.openFrom(b.page, `${fx.base}/`); // b's page is now hidden behind its popup tab
+  assert.equal(b.page.visibilityState, "hidden");
+  const from = fake.calls.length;
+  const typing = commands.type(slow, { tab: a.name, text: "abcdefghijkl", into: "#i" });
+  await new Promise((r) => setTimeout(r, 400));
+  for (const read of [() => commands.text(slow, { tab: b.name }), () => commands.outline(slow, { tab: b.name }), () => commands.eval(slow, { tab: b.name, expression: "1" })]) {
+    fake.selectTab(popup); // the popup in front of b's window again (no window activation)
+    await read();
+  }
+  await typing;
+  const calls = fake.calls.slice(from);
+  const keys = calls.filter((x) => x.targetId === a.page.targetId && x.method === "Input.dispatchKeyEvent");
+  const fronts = calls.filter((x) => x.targetId === b.page.targetId && x.method === "Page.bringToFront");
+  assert.ok(keys.length >= 24 && fronts.length >= 1, `${keys.length} keys, ${fronts.length} tab switches`);
+  assert.ok(fronts.every((x) => x.t >= keys.at(-1)!.t), "every tab switch of the reads came after the typing");
+  assert.equal(a.page.select("#i")[0].value, "abcdefghijkl");
+  assert.equal(a.page.keyFocus, false, "no key went into a window that had lost the focus");
+  await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+  await commands.close(linux(), { tab: a.name });
+  await commands.close(linux(), { tab: b.name });
+});
+
+test("a navigation off the list that the page only asks for (Page.frameRequestedNavigation) stops the input at once (review-47c)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  page.select("#hov")[0].onhover = (p) => p.fake.requestNavigation(p, "http://evil.test/");
+  page.select("#hov")[0].rect = [40, 60, 300, 400];
+  let at = Infinity;
+  const orig = fake.requestNavigation.bind(fake);
+  fake.requestNavigation = (p, u) => { if (at === Infinity) at = fake.calls.length; orig(p, u); };
+  try {
+    await assert.rejects(commands.click(linux(), { tab: name, target: "#b" }), NotAllowedError);
+  } finally { fake.requestNavigation = orig; }
+  const after = fake.calls.slice(at).filter((x) => x.targetId === page.targetId && /^Input\./.test(x.method));
+  assert.ok(after.length <= 1, `at most the move in flight: ${after.map((x) => x.params.type).join(" ")}`);
+  assert.ok(!after.some((x) => x.params.type === "mousePressed"));
+  await commands.close(linux(), { tab: name }).catch(() => {});
+});
+
+test("setFiles: an element that comes over the input after the path gets no press (a second hit test); the old way checks the document's URL (review-47c)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const lines: string[] = [];
+  const o = linux({ inputTiming: { ...FAST, settleMs: [250, 250] }, log: (l) => { lines.push(l); } });
+  const cover = page.select("#hov")[0], file = page.select("#file")[0];
+  let moved = false;
+  file.onhover = (p) => { if (!moved) { moved = true; p.later(120, () => { cover.rect = [40, 320, 200, 24]; }); } };
+  const b = await AgentBrowser.connect(o);
+  try {
+    const calls = await callsOf(page, () => b.find(name).then((t) => t.setFiles("#file", ["/tmp/d.txt"])));
+    assert.ok(!mouse(calls).some((x) => x.params.type === "mousePressed"), "no press on the cover");
+    assert.deepEqual(file.files, [{ name: "d.txt" }], "the old way");
+    assert.ok(lines.some((l) => /setFiles: another element covers #file/.test(l)), lines.join("\n"));
+    // The old way, while the page goes off the list as the document is read: no files.
+    cover.rect = [300, 100, 100, 30];
+    page.onDocument = () => { page.onDocument = undefined; page.fake.navigate(page, "http://evil.test/"); };
+    await assert.rejects((await b.find(name)).setFiles("#orphan", ["/etc/hostname"]), NotAllowedError);
+    assert.deepEqual(fake.calls.filter((x) => x.targetId === page.targetId && x.method === "DOM.setFileInputFiles" && x.params.files?.includes("/etc/hostname")), []);
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: name }).catch(() => {});
 });
 
 test("record holds the input lock for the take only: the lock is free while ffmpeg encodes", needsFfmpeg, async () => {

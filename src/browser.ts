@@ -856,10 +856,19 @@ export class Tab {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
-    await this.send("Page.bringToFront");
-    for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
-      if (await this.evaluate(() => document.visibilityState) === "visible") return;
-    this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
+    // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
+    // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
+    // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
+    // is read again inside the lock: the other agent's command can have changed it.
+    const { withInputLock } = await import("./input.ts");
+    await withInputLock(this.browser.settings, async () => {
+      await this.assertAllowed();
+      if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
+      await this.send("Page.bringToFront");
+      for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
+        if (await this.evaluate(() => document.visibilityState) === "visible") return;
+      this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
+    });
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -979,9 +988,17 @@ export class Tab {
       // and each key).
       await this.assertAllowed();
       let left: string | undefined;
-      const off = this.browser.conn.on("Page.frameNavigated", (p: { frame?: { url?: string; parentId?: string } }, sid?: string) => {
-        if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", this.browser.allow)) left = p.frame?.url ?? "";
+      const main = await this.frameId(), allow = this.browser.allow;
+      const offNav = this.browser.conn.on("Page.frameNavigated", (p: { frame?: { url?: string; parentId?: string } }, sid?: string) => {
+        if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", allow)) left = p.frame?.url ?? "";
       });
+      // Also as soon as the main frame starts or asks for a navigation to a host off the list (review-47c: one move still
+      // reached an off-list page before its commit).
+      const early = (p: { frameId?: string; url?: string }, sid?: string) => {
+        if (sid === this.sessionId && p.frameId === main && p.url && !isAllowedUrl(p.url, allow)) left = p.url;
+      };
+      const offStart = this.browser.conn.on("Page.frameStartedNavigating", early), offAsk = this.browser.conn.on("Page.frameRequestedNavigation", early);
+      const off = () => { offNav(); offStart(); offAsk(); };
       const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
       let h: Hands | undefined;
       try {
@@ -1169,6 +1186,8 @@ export class Tab {
 
   private async setFilesNow(selector: string, files: string[]): Promise<void> {
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
+    // The document whose input gets the files is on the allowlist (review-47c: the page can go to a new page meanwhile).
+    if (typeof root.documentURL === "string" && !isAllowedUrl(root.documentURL, this.browser.allow)) throw new NotAllowedError(root.documentURL);
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
     if (!nodeId) throw new Error(`no element matches ${selector}`);
     await this.send("DOM.setFileInputFiles", { nodeId, files });

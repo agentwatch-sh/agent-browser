@@ -287,6 +287,8 @@ export class FakePage {
   scriptFocus = 0;
   /** The file chooser opened by a trusted click on a file input (or its label), while a session intercepts it. */
   fileChoosers = 0;
+  /** A test's hook: called when a session asks for the document (DOM.getDocument), before the answer. */
+  onDocument?: () => void;
   /** A test's hook: the input that a click's file chooser names (Page.fileChooserOpened), in place of the clicked one. */
   chooserFor?: (clicked: FakeElement) => FakeElement | null;
   /** Listeners that page code added to the document (an isolated world's too): the fake sends them the real pointer event of an activation. */
@@ -841,12 +843,19 @@ export class FakeChrome {
   }
 
   navigate(page: FakePage, url: string) {
+    // As Chrome: the navigation starts (Page.frameStartedNavigating), then the new document commits (Page.frameNavigated).
+    this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
     page.load(url);
     this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url, loaderId: randomUUID() }, type: "Navigation" });
     setTimeout(() => this.toSessions(page, "Page.loadEventFired", { timestamp: Date.now() / 1000 }), 5);
   }
 
   /** window.open() or a target=_blank link: a new tab in the opener's window (with tabSwitches, in front and focused). Returns it. */
+  /** A page's script asks for a navigation of its main frame (Page.frameRequestedNavigation); it does not commit yet. */
+  requestNavigation(page: FakePage, url: string) {
+    this.toSessions(page, "Page.frameRequestedNavigation", { frameId: `F-${page.targetId}`, reason: "scriptInitiated", url, disposition: "currentTab" });
+  }
+
   openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);
@@ -1092,7 +1101,7 @@ export class FakeChrome {
         // A key with text types it, as in Chrome (Enter's "\r" only submits).
         if (params.type === "keyDown" && params.text && params.text !== "\r") page.typeInto(params.text);
         return {};
-      case "DOM.getDocument": return { root: { nodeId: 1, nodeName: "#document" } };
+      case "DOM.getDocument": page.onDocument?.(); return { root: { nodeId: 1, nodeName: "#document", documentURL: page.url } };
       case "DOM.querySelector": {
         const el = page.select(params.selector)[0];
         return { nodeId: el ? page.elements.indexOf(el) + 2 : 0 };

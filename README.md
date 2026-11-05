@@ -260,15 +260,20 @@ person's input**) and `log` (progress lines; default standard error).
     `Tab.withInput(fn)` around a caller's own `Tab.click` does not wait for itself. The wait can take
     minutes, and the page can go to a host off the allowlist meanwhile: so the allowlist is read again
     inside the lock, before any code of agent-browser runs in the page for the input, a guard stops
-    every input event once the main frame has gone off the list (`Page.frameNavigated`; also before each
-    key's release: a keydown can take the page off the list, review-47b), and the list is read again
+    every input event once the main frame has gone off the list, or has started or asked for a
+    navigation to a host off it (`Page.frameNavigated`, `Page.frameStartedNavigating`,
+    `Page.frameRequestedNavigation`, review-47c; also before each key's release: a keydown can take the
+    page off the list, review-47b), and the list is read again
     before each press, before the first key and every 16th, and before `setFiles` gives its files
     (review-47). When the page has no focus, or is hidden behind another tab of its window, the
     command first sends `Page.bringToFront`: on
     Linux that selects the page's tab and activates its window, as a person's switch to the window does
     (measured on taylor: the same result as `Target.activateTarget`; `Page.bringToFront` also passes
-    through agentwatch's relay). A page that has the focus gets none, and a read (`text`, `eval`,
-    `outline`, `shot`, `fetch`) never brings a window forward. A page that a site opened in the
+    through agentwatch's relay). A page that has the focus gets none. A read (`text`, `eval`, `outline`,
+    `Tab.waitFor`) of a visible window page never brings a window forward; a read of a hidden window page
+    (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
+    waits for another agent's input command (review-47c: a tab switch during another agent's typing gave
+    two focused pages). `shot` and `fetch` never do. A page that a site opened in the
     opener's window is in front of that window; to go back to the opener, the next command on the
     opener brings it forward: a tab switch, as a person makes. Keys need this activation: keys into a
     window that is not active gave its page the focus with no switch, so two pages had the focus (the
@@ -284,8 +289,10 @@ person's input**) and `log` (progress lines; default standard error).
     opens its file chooser, which agent-browser intercepts (`Page.setInterceptFileChooserDialog`: no
     dialog opens); the files go to the input that the chooser names only when it is the named input
     (review-47b: a frame off the list that covers the input would get them). When another element covers
-    the click's point, there is no click; when the click opens no chooser in 2 s, or the chooser is
-    another input's, the files go to the named input with no click. Each of these says so in a log line. agent-browser's own page code
+    the click's point, after the path or just before the press (a second hit test, review-47c), there is
+    no click; when the click opens no chooser in 2 s, or the chooser is
+    another input's, the files go to the named input with no click (only when the document that holds it
+    is on the allowlist). Each of these says so in a log line. agent-browser's own page code
     (reads, the input's helpers) runs with no user gesture there: a gesture makes
     `navigator.userActivation` active with no press and no key (measured: each read did). `eval` runs
     as a gesture, as before, so that an agent's expression can open a popup.
@@ -341,7 +348,7 @@ person's input**) and `log` (progress lines; default standard error).
     pointer's one point at each activation: 5 position changes that the movement does not explain and 5
     entries at an earlier entry's point in 6 activations, and a jump at the start of `record` (its cursor
     starts inside the recorded size). `design-two` (two agents at once, one input lock, 6 typings each):
-    both pages focused for 0 to 100 ms; no jump; 1 position change in one page that the movement does not
+    both pages focused for 0 to 200 ms (one or two 100 ms samples at a switch; review-47c's runs); no jump; 1 position change in one page that the movement does not
     explain, where its window came forward under the pointer that the other agent's path left (one
     pointer for both windows, as for a person who switches windows); every typing arrived whole ("hello"
     12 times in each field).
