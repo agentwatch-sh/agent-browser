@@ -87,7 +87,7 @@ setInterval(() => {
   if (frames.length) { extra.frames = frames; frames = []; }
   if (ticks.length) { extra.ticks = ticks; ticks = []; }
   if (moves.length) { send("moves", { list: moves }); moves = []; }
-  send("batch", extra);
+  send("batch", { ...extra, ...ua() });
 }, 250);
 send("load", { ...geo(), webdriver: navigator.webdriver, hl: history.length, ...ua() });
 </script>`;
@@ -173,7 +173,8 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
   const during = of(log, tab, t0, t1 + 200);
   const ins = inputs(log, tab, t0, t1 + 200);
   const down = ins.find((e) => e.type === "mousedown"), up = ins.find((e) => e.type === "mouseup"), pdown = ins.find((e) => e.type === "pointerdown");
-  const moves = ins.filter((e) => e.type === "mousemove");
+  // The moves before the first press (review-47: the column says "before the press"; a move after the release is not one).
+  const moves = ins.filter((e) => e.type === "mousemove" && (!down || (typeof e.te === "number" && typeof down.te === "number" ? e.te < down.te : ins.indexOf(e) < ins.indexOf(down))));
   const keys = ins.filter((e) => e.type === "keydown");
   const inputEv = ins.filter((e) => e.type === "input");
   const after = listOf(log, tab, "frames").filter((t) => t >= t1 + 300 && t <= t1 + 1300).length;
@@ -204,7 +205,20 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
     // A scroll with no wheel, key or press in the second before it (scrollIntoView), and a field's focus with no press
     // in the second before it (el.focus()).
     scrollsWithoutInput: during.filter((e) => e.ev === "scroll" && !ins.some((i) => ["wheel", "keydown", "pointerdown"].includes(i.type) && i.t <= e.t && e.t - i.t < 1000)).length,
-    focusWithoutPress: ins.filter((e) => e.type === "focusin" && e.id === "f" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)).length,
+    // A window that comes forward gives the field that had the focus a focusin again (a person's page too, run 8 of
+    // ab-v16.26: person-window-multi): such a focusin within 100 ms of the page's focus event is not counted.
+    // navigator.userActivation became active in the step with no press and no key (a script run "as a user gesture").
+    // A change of isActive from false to true (the page's batches, 250 ms apart) with no press or key in the 600 ms before it.
+    activationWithoutInput: (() => {
+      const rs = log.filter((e) => e.tab === tab && typeof e.ua === "boolean" && e.t <= t1 + 200);
+      const all = inputs(log, tab, t0 - 1000, t1 + 200);
+      let n = 0;
+      for (let i = 1; i < rs.length; i++) if (rs[i].t >= t0 && rs[i].ua && !rs[i - 1].ua
+        && !all.some((x) => ["pointerdown", "mousedown", "keydown"].includes(x.type) && x.t <= rs[i].t && rs[i].t - x.t < 600)) n++;
+      return n;
+    })(),
+    focusWithoutPress: ins.filter((e) => e.type === "focusin" && e.id === "f" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)
+      && !during.some((x) => x.ev === "focus" && x.t <= e.t + 5 && e.t - x.t < 100)).length,
   };
 }
 

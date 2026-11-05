@@ -363,7 +363,8 @@ export const commands = {
     return onTab(o, p, async (tab, info) => {
       await tab.assertAllowed();
       await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront): an eval can wait for a frame
-      const value = await tab.evaluate(expression);
+      // As a user gesture, as before: an agent's expression can open a popup (a site sees the page's user activation).
+      const value = await tab.evaluateAsUser(expression);
       return { ok: true, command: "eval", tab: info, value: value === undefined ? null : value };
     });
   },
@@ -428,7 +429,9 @@ export const commands = {
     const s = resolveOptions(o);
     const plan = planRecording(p, allowlistOf(s));
     return onTab(s, p, async (tab, info) => {
-      const r = await recordTab(tab, plan);
+      // In a window of its own (Linux), the take is an input command: the window comes forward, and the take (not the
+      // encode) holds the input lock.
+      const r = await recordTab(tab, plan, (take) => tab.withInput(take));
       const { width, height, scale } = plan.viewport;
       // The tab's URL and title from the end of the run: after the encode nothing runs in the tab again.
       const ref: TabRef = { ...info, url: r.finalUrl, title: r.title };

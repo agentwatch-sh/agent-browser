@@ -30,6 +30,8 @@ export type ElementSpec = {
   rect?: [number, number, number, number];
   hidden?: boolean;
   value?: string;
+  /** position: fixed: the element does not move when the page scrolls (FakeChrome.scrolls). */
+  fixed?: boolean;
   onclick?: (page: FakePage, el: FakeElement) => void | Promise<void>;
   onhover?: (page: FakePage, el: FakeElement) => void;
 };
@@ -37,7 +39,7 @@ export type PageSpec = { title?: string; text?: string; elements?: ElementSpec[]
 /** A fixture site: the page for a URL, or undefined for an empty page. */
 export type Site = (url: URL) => PageSpec | undefined;
 
-export type Call = { method: string; params: any; sessionId?: string; targetId?: string };
+export type Call = { method: string; params: any; sessionId?: string; targetId?: string; /** When the fake got it (Date.now()). */ t: number };
 
 /** A 1x1 PNG. */
 export const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -163,7 +165,15 @@ export class FakeElement {
   text: string;
   rect: [number, number, number, number];
   hidden: boolean;
-  value: string | undefined;
+  fixed: boolean;
+  private stored: string | undefined;
+  /**
+   * The caret of a text field or an editable element, as Chromium 156 keeps it (test/live/anti-detect/extra.ts --exp
+   * caret): 0 in a field whose text came with the page, at the end after a script set the value; a press puts it
+   * where it lands (8 px a character); el.focus() keeps it; Home, End, the arrows and Control+Home/End move it.
+   */
+  selectionStart = 0;
+  selectionEnd = 0;
   files: { name: string }[] = [];
   onclick?: ElementSpec["onclick"];
   onhover?: ElementSpec["onhover"];
@@ -176,10 +186,20 @@ export class FakeElement {
     this.text = spec.text ?? "";
     this.rect = spec.rect ?? [10, 10 + row * 30, 120, 24];
     this.hidden = !!spec.hidden;
-    this.value = spec.value ?? (["INPUT", "TEXTAREA"].includes(this.tagName) ? "" : undefined);
+    this.fixed = !!spec.fixed;
+    this.stored = spec.value ?? (["INPUT", "TEXTAREA"].includes(this.tagName) ? "" : undefined);
     this.onclick = spec.onclick;
     this.onhover = spec.onhover;
   }
+  /** An input's or a textarea's text; a script that sets it puts the caret at its end, as in Chrome. */
+  get value(): string | undefined { return this.stored; }
+  set value(v: string | undefined) { this.stored = v; const n = (v ?? "").length; this.selectionStart = this.selectionEnd = n; }
+  /** The text that the caret moves in: an input's value, else an editable element's text. */
+  get caretText(): string { return this.stored ?? this.text; }
+  setSelectionRange(a: number, b: number) { this.selectionStart = a; this.selectionEnd = b; }
+  contains(n: unknown) { return n === this; }
+  closest(sel: string) { return this.page.select(sel).includes(this) ? this : null; }
+  get parentElement() { return null; }
   getAttribute(n: string): string | null { return n === "id" ? (this.id || null) : this.attrs.get(n) ?? null; }
   setAttribute(n: string, v: string) { if (n === "id") this.id = String(v); else this.attrs.set(n, String(v)); }
   removeAttribute(n: string) { this.attrs.delete(n); }
@@ -191,12 +211,18 @@ export class FakeElement {
   get isContentEditable() { return this.attrs.get("contenteditable") === "true"; }
   get type() { return this.attrs.get("type") ?? "text"; }
   getBoundingClientRect() {
-    const [x, y, width, height] = this.hidden ? [0, 0, 0, 0] : this.rect;
+    const [x0, y0, width, height] = this.hidden ? [0, 0, 0, 0] : this.rect;
+    const x = this.fixed || this.hidden ? x0 : x0 - this.page.scrollX, y = this.fixed || this.hidden ? y0 : y0 - this.page.scrollY;
     return { x, y, left: x, top: y, width, height, right: x + width, bottom: y + height };
   }
   getClientRects() { return this.hidden ? [] : [this.getBoundingClientRect()]; }
-  scrollIntoView() {}
-  focus() { this.page.focused = this; }
+  /** A script's scroll (no wheel, no key): counted, and with FakeChrome.scrolls the page scrolls the element to the middle. */
+  scrollIntoView() {
+    this.page.scriptScrolls++;
+    if (this.page.fake.scrolls && !this.fixed) this.page.scrollTo(this.rect[0] + this.rect[2] / 2 - this.page.width / 2, this.rect[1] + this.rect[3] / 2 - this.page.height / 2);
+  }
+  /** A script's focus (no press): counted. The caret stays where it was (Chrome restores the cached selection). */
+  focus() { this.page.scriptFocus++; this.page.focused = this; }
   click() { void this.page.activate(this); }
   set innerHTML(_v: string) { throw new TypeError(TRUSTED_HTML); }
   get innerHTML() { return ""; }
@@ -253,6 +279,31 @@ export class FakePage {
   /** Every key event, with its modifiers, its key codes and macOS editing commands. */
   keyEvents: { type: string; key: string; modifiers: number; keyCode?: number; native?: number; text?: string; commands?: string[] }[] = [];
   wheel = 0;
+  /** The page's scroll offset (FakeChrome.scrolls: the wheel and scrollIntoView move it). */
+  scrollX = 0;
+  scrollY = 0;
+  /** Scrolls by a script (el.scrollIntoView) and focus by a script (el.focus()): a person makes neither. */
+  scriptScrolls = 0;
+  scriptFocus = 0;
+  /** The file chooser opened by a trusted click on a file input (or its label), while a session intercepts it. */
+  fileChoosers = 0;
+  /** A test's hook: called when a session asks for the document (DOM.getDocument), before the answer. */
+  onDocument?: () => void;
+  /** A test's hook: the input that a click's file chooser names (Page.fileChooserOpened), in place of the clicked one. */
+  chooserFor?: (clicked: FakeElement) => FakeElement | null;
+  /** Listeners that page code added to the document (an isolated world's too): the fake sends them the real pointer event of an activation. */
+  listeners = new Map<string, Set<(e: object) => void>>();
+  /** The view size, as innerWidth and innerHeight give it. */
+  get width() { return this.metrics?.width ?? this.stuck?.width ?? 1280; }
+  get height() { return this.metrics?.height ?? this.stuck?.height ?? 800; }
+  /** The page's own height: below its lowest element, at least 2400 px. */
+  get scrollHeight() { return Math.max(2400, ...this.elements.map((e) => e.rect[1] + e.rect[3] + 100)); }
+  scrollTo(x: number, y: number) {
+    this.scrollX = Math.max(0, Math.min(x, 4000));
+    this.scrollY = Math.max(0, Math.min(y, this.scrollHeight - this.height));
+  }
+  /** Dispatch an event to the document's listeners. */
+  dispatch(type: string, e: object) { for (const fn of [...(this.listeners.get(type) ?? [])]) fn({ type, ...e }); }
   /** What a clipped screenshot shows: a test changes it to change the page's pixels (an add-on's fill). */
   paint = 0;
   /** The cells a grid editor (data-cells) committed with Tab or Enter, in order. */
@@ -491,6 +542,8 @@ export class FakePage {
     this.text = spec?.text ?? "";
     this.focused = this.hovered = undefined;
     this.appended = [];
+    this.scrollX = this.scrollY = 0;
+    this.listeners.clear();
     this.elements = (spec?.elements ?? []).map((e, i) => {
       const Cls = e.tag === "input" ? FakeInputElement : e.tag === "a" ? FakeAnchorElement : FakeElement;
       return new Cls(this, e, i);
@@ -543,6 +596,10 @@ export class FakePage {
       get activeElement() { return page.focused ?? body; },
       get visibilityState() { return page.visibilityState; },
       hasFocus: () => page.hasFocus,
+      elementFromPoint: (x: number, y: number) => page.hit(x, y) ?? body,
+      get scrollingElement() { return body; },
+      addEventListener: (type: string, fn: (e: object) => void) => { let set = page.listeners.get(type); if (!set) page.listeners.set(type, (set = new Set())); set.add(fn); },
+      removeEventListener: (type: string, fn: (e: object) => void) => { page.listeners.get(type)?.delete(fn); },
       createElement: (tag: string) => {
         if (tag.toLowerCase() === "style") throw new Error("fake CSP: a <style> element is refused (style-src)");
         return new FakeNode(page, tag);
@@ -552,8 +609,16 @@ export class FakePage {
     const sandbox: Record<string, unknown> = {
       document,
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
-      get innerWidth() { return page.metrics?.width ?? page.stuck?.width ?? 1280; },
-      get innerHeight() { return page.metrics?.height ?? page.stuck?.height ?? 800; },
+      get innerWidth() { return page.width; },
+      get innerHeight() { return page.height; },
+      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on taylor's Xvfb).
+      screenX: 0, screenY: 0,
+      get outerWidth() { return page.width; },
+      get outerHeight() { return page.height + 87; },
+      devicePixelRatio: 1,
+      get scrollX() { return page.scrollX; },
+      get scrollY() { return page.scrollY; },
+      scrollTo: (x: number, y: number) => page.scrollTo(x, y),
       requestAnimationFrame: (fn: (t: number) => void) => page.atFrame(() => fn(performance.now())),
       performance: { now: () => performance.now() },
       getComputedStyle: (el: FakeElement) => ({ visibility: el.hidden ? "hidden" : "visible", display: el.hidden ? "none" : "block" }),
@@ -611,12 +676,25 @@ export class FakePage {
     this.fake.navigate(this, target);
   }
 
-  /** Text typed into the focused field: an input's value, an editable element's text, else the page. */
+  /** Text typed into the focused field at its caret: an input's value, an editable element's text, else the page. */
   typeInto(text: string) {
     const f = this.focused;
-    if (f && f.value !== undefined) f.value += text;
-    else if (f?.isContentEditable) f.text += text;
-    else this.typed += text;
+    if (f && (f.value !== undefined || f.isContentEditable)) {
+      const t = f.caretText, a = Math.min(f.selectionStart, t.length), b = Math.min(Math.max(f.selectionEnd, a), t.length);
+      const next = t.slice(0, a) + text + t.slice(b);
+      if (f.value !== undefined) f.value = next; else f.text = next;
+      f.selectionStart = f.selectionEnd = a + text.length;
+    } else this.typed += text;
+  }
+
+  /** A key that moves the caret of the focused field: Home, End, the arrows; with Control, Home and End go to the start and the end of the whole text. */
+  moveCaret(key: string, modifiers: number) {
+    const f = this.focused;
+    if (!f || (f.value === undefined && !f.isContentEditable)) return;
+    const n = f.caretText.length, at = f.selectionEnd, shift = (modifiers & 8) !== 0;
+    const to = key === "Home" ? 0 : key === "End" ? n : key === "ArrowLeft" ? Math.max(0, at - 1) : key === "ArrowRight" ? Math.min(n, at + 1) : undefined;
+    if (to === undefined) return;
+    if (shift) f.selectionEnd = to; else f.selectionStart = f.selectionEnd = to;
   }
 
   hit(x: number, y: number): FakeElement | undefined {
@@ -629,7 +707,7 @@ export class FakePage {
 
 type Cast = { timer: NodeJS.Timeout; maxWidth: number; maxHeight: number; waiting: boolean; sent: number; acked: number };
 /** A session on a page, or (with `worker`) on one of its workers, attached through the page's session. */
-type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string };
+type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string; /** Page.setInterceptFileChooserDialog is on. */ chooser?: boolean };
 
 export class FakeChrome {
   readonly site: Site;
@@ -646,6 +724,14 @@ export class FakeChrome {
   currentWindow = 1;
   /** The active window: its front tab has the focus. A new window from Target.createTarget with background: true does not take it. */
   focusedWindow = 1;
+  /**
+   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on taylor's Xvfb
+   * with no window manager). When a window comes forward under it, its page gets a trusted mousemove there with
+   * movement 0, as Chrome on Linux gives it (extra.ts --exp pointer). Undefined: the pointer is outside every window.
+   */
+  xPointer: { x: number; y: number } | undefined;
+  /** The wheel and scrollIntoView scroll the page (FakePage.scrollY). Off (the default for the older tests): they move nothing. */
+  scrolls = false;
   /** Each change of the active window, in order, and what made it: "activate" (Target.activateTarget), "bringToFront", "press" (Chrome activates the window of a page that gets a press), "open". */
   readonly windowActivations: { windowId: number; by: string; targetId?: string }[] = [];
   /**
@@ -703,6 +789,9 @@ export class FakeChrome {
     this.focusedWindow = windowId;
     this.windowActivations.push({ windowId, by, ...(targetId ? { targetId } : {}) });
     for (const p of this.pages.values()) { if (p.windowId === windowId) p.keyFocus = false; p.updateFocus(); }
+    // The window comes forward under the X pointer: its front page gets a real pointer event there (not for a press: the pointer is already in it).
+    if (by !== "press" && this.xPointer) for (const p of this.pages.values()) if (p.windowId === windowId && !p.background)
+      p.dispatch("mousemove", { isTrusted: true, clientX: this.xPointer.x, clientY: this.xPointer.y, movementX: 0, movementY: 0 });
   }
 
   /** Target.activateTarget and Page.bringToFront: the tab comes in front of its window (tabSwitches), and its window becomes the active one. */
@@ -754,12 +843,19 @@ export class FakeChrome {
   }
 
   navigate(page: FakePage, url: string) {
+    // As Chrome: the navigation starts (Page.frameStartedNavigating), then the new document commits (Page.frameNavigated).
+    this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
     page.load(url);
     this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url, loaderId: randomUUID() }, type: "Navigation" });
     setTimeout(() => this.toSessions(page, "Page.loadEventFired", { timestamp: Date.now() / 1000 }), 5);
   }
 
   /** window.open() or a target=_blank link: a new tab in the opener's window (with tabSwitches, in front and focused). Returns it. */
+  /** A page's script asks for a navigation of its main frame (Page.frameRequestedNavigation); it does not commit yet. */
+  requestNavigation(page: FakePage, url: string) {
+    this.toSessions(page, "Page.frameRequestedNavigation", { frameId: `F-${page.targetId}`, reason: "scriptInitiated", url, disposition: "currentTab" });
+  }
+
   openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);
@@ -799,7 +895,7 @@ export class FakeChrome {
   private async onMessage(client: WebSocket, msg: { id: number; method: string; params?: any; sessionId?: string }) {
     const params = msg.params ?? {};
     const session = msg.sessionId ? this.sessions.get(msg.sessionId) : undefined;
-    this.calls.push({ method: msg.method, params, sessionId: msg.sessionId, targetId: session?.page.targetId ?? params.targetId });
+    this.calls.push({ method: msg.method, params, sessionId: msg.sessionId, targetId: session?.page.targetId ?? params.targetId, t: Date.now() });
     const reply = (result: object) => client.send(JSON.stringify({ id: msg.id, result, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}) }));
     const fail = (message: string, code = -32000) => client.send(JSON.stringify({ id: msg.id, error: { code, message }, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}) }));
     try {
@@ -954,8 +1050,10 @@ export class FakeChrome {
       case "Input.dispatchMouseEvent": {
         if (params.type === "mouseWheel") {
           page.wheel += params.deltaY ?? 0;
-          // A pane that scrolls (data-scrolls, like the Sheets grid) redraws under the wheel; elsewhere nothing moves.
+          // A pane that scrolls (data-scrolls, like the Sheets grid) redraws under the wheel; elsewhere nothing moves,
+          // except the page itself with FakeChrome.scrolls.
           if (page.hit(params.x, params.y)?.hasAttribute("data-scrolls")) page.paint++;
+          else if (this.scrolls) page.scrollTo(page.scrollX + (params.deltaX ?? 0), page.scrollY + (params.deltaY ?? 0));
           return {};
         }
         if (params.type === "mouseMoved") await page.moveWait(this.moveFallbackMs);
@@ -964,8 +1062,21 @@ export class FakeChrome {
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }
         // On Linux a press in a page whose window is not the active one makes Chrome activate that window (measured on Chromium 156).
         if (params.type === "mousePressed") this.focusWindow(page.windowId, "press", page.targetId);
-        if (params.type === "mousePressed" && el && el.value !== undefined) page.focused = el; // a press focuses a text field, as in Chrome
-        if (params.type === "mouseReleased" && el) await page.activate(el);
+        if (params.type === "mousePressed" && el && (el.value !== undefined || el.isContentEditable)) { // a press focuses a text field, as in Chrome, with the caret where it lands
+          page.focused = el;
+          el.selectionStart = el.selectionEnd = Math.max(0, Math.min(el.caretText.length, Math.round((params.x - el.getBoundingClientRect().left - 2) / 8)));
+        }
+        if (params.type === "mouseReleased" && el) {
+          // A file input, or a label for one: with the chooser intercepted, Chrome tells the session and opens no dialog.
+          const file = el.type === "file" && el.tagName === "INPUT" ? el : el.tagName === "LABEL" ? page.select(`#${el.getAttribute("for")}`)[0] : undefined;
+          if (file?.type === "file") {
+            const who = [...this.sessions.values()].find((x) => x.page === page && x.chooser);
+            const named = page.chooserFor ? page.chooserFor(file) : file; // a test's hook: another input's chooser (a frame's), or none
+            if (who && named) { page.fileChoosers++; who.client.send(JSON.stringify({ method: "Page.fileChooserOpened", params: { frameId: `F-${page.targetId}`, mode: "selectSingle", backendNodeId: page.elements.indexOf(named) + 2 }, sessionId: who.id })); }
+            return {};
+          }
+          await page.activate(el);
+        }
         return {};
       }
       case "Input.insertText":
@@ -981,7 +1092,7 @@ export class FakeChrome {
         if (page.windowId !== this.focusedWindow && !page.keyFocus) { page.keyFocus = true; page.updateFocus(); }
         page.keyEvents.push({ type: params.type, key: params.key, modifiers: params.modifiers ?? 0, keyCode: params.windowsVirtualKeyCode,
           native: params.nativeVirtualKeyCode, text: params.text, commands: params.commands });
-        if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); }
+        if (params.type === "keyDown" || params.type === "rawKeyDown") { page.keys.push(params.key); page.onKey?.(params.key); page.moveCaret(params.key, params.modifiers ?? 0); }
         // In a grid editor (data-cells), Tab and Enter commit the cell and leave the editor empty for the next one.
         if ((params.key === "Tab" || params.key === "Enter") && params.type !== "keyUp" && page.focused?.hasAttribute("data-cells")) {
           page.cells.push(page.focused.text);
@@ -990,13 +1101,16 @@ export class FakeChrome {
         // A key with text types it, as in Chrome (Enter's "\r" only submits).
         if (params.type === "keyDown" && params.text && params.text !== "\r") page.typeInto(params.text);
         return {};
-      case "DOM.getDocument": return { root: { nodeId: 1, nodeName: "#document" } };
+      case "DOM.getDocument": page.onDocument?.(); return { root: { nodeId: 1, nodeName: "#document", documentURL: page.url } };
       case "DOM.querySelector": {
         const el = page.select(params.selector)[0];
         return { nodeId: el ? page.elements.indexOf(el) + 2 : 0 };
       }
+      case "Page.setInterceptFileChooserDialog": s.chooser = !!params.enabled; return {};
+      // A node's backend id: the fake numbers both alike (an element's index + 2).
+      case "DOM.describeNode": return { node: { nodeId: params.nodeId, backendNodeId: params.nodeId ?? params.backendNodeId, nodeName: "INPUT" } };
       case "DOM.setFileInputFiles": {
-        const el = page.elements[params.nodeId - 2];
+        const el = page.elements[(params.nodeId ?? params.backendNodeId) - 2];
         if (!el) throw new Error("Could not find node with given id");
         el.files = (params.files as string[]).map((f) => ({ name: basename(f) }));
         return {};

@@ -207,6 +207,7 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   assert.deepEqual(page.appended, [], "the overlay is removed");
   assert.equal(page.metrics, undefined, "the device metrics override is cleared");
   const m = methods(page);
+  // The CLI's agent Chrome here is no display of its own (display.ts), so the window design does not apply (ab-v16.26).
   assert.ok(!m.includes("Page.bringToFront"), "the window is never raised: the operator stays on their own Space");
   assert.ok(m.lastIndexOf("Page.stopScreencast") > m.indexOf("Page.startScreencast"));
   assert.ok(m.lastIndexOf("Emulation.clearDeviceMetricsOverride") > m.indexOf("Page.startScreencast"));
