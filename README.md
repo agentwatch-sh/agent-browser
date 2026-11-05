@@ -1170,7 +1170,10 @@ a mapping that goes as the JSON of `--input-timing`). `node`,
 each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
 input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.2 s for each
 character of the text (in agent mode on Linux a person's typing takes about 0.12 s a character), so a long
-text and a wait for another agent's input fit.
+text and a wait for another agent's input fit. `text`, `outline` and `eval` add the input lock's wait too:
+a read of a hidden window page brings its tab in front inside the lock (**One window per agent page**), so
+during another agent's long typing or `record` take it waits, as the Node client does, and does not fail
+at 120 s.
 `chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
 `"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
 of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
