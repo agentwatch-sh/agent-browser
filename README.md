@@ -1427,17 +1427,21 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   background tab the page must also have no visible time and no `visibilitychange` (a record's span is
   reported), and no frame in the second after the command. Not part of `npm test`. Measured on taylor on
   2026-11-04; see **A command on a background tab: two modes**.
-- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, pid and clock: the
-  windows check, the answer of one minute for the same Chrome pid, the log line at most once in 5 minutes,
-  a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test runner.
+- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, pid and
+  clock: the windows check, a Wayland session and a window manager (not own), the answer of one minute
+  for the same Chrome pid (with `/proc/<pid>/cmdline` in place of `ps`), the log line at most once in 5
+  minutes, a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test
+  runner.
 - `test/window-per-page.test.ts`: one window per agent page on Linux, against the fake Chrome's model
   of a window that is not in front (`FakeChrome.focusedWindow`: the page is visible and draws, and gets
   the focus at its first press, which activates its window; keys into an inactive window give the page
   the focus with no switch). `open` sends `newWindow: true, background: true`, no command sends focus
   emulation (also `record`, also with `hiddenDrive`), and a page that a site opens is driven where it
   opened. `open --tab` keeps the old default (and the hidden drive) for its tab, also in later
-  commands, through `tab-pages.json`. On the Mac and in personal mode, `open` and focus emulation stay
-  as before.
+  commands, through `tab-pages.json`, also after the gate's fallback. The gate's log line comes at a
+  command that opens or attaches a page, not at `tabs`. Through `bin/agent-browser.js` (Linux only),
+  `open` and `click` with the real display check and stand-ins for `ps`, xdotool and xprop. On the Mac
+  and in personal mode, `open` and focus emulation stay as before.
 - `test/person-input.test.ts`: a person's input in a window of its own on Linux, against the fake
   Chrome (its windows, the X pointer's event when a window comes forward, a page that scrolls, the
   caret of a field, the file chooser): `Page.bringToFront` before the first input event of a page with
