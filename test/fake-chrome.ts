@@ -405,6 +405,15 @@ export class FakePage {
     this.endHeld((c) => c.at < this.frames - 1);
   }
 
+  /**
+   * The page is laid out again (a device metrics override): its next frame changes, and ends the held
+   * captures whose frames Chrome drew already. Seen by review-41b on Chromium 156 with the hidden drive:
+   * the shot's first capture of a still page ended in `shot --size`'s 0.5 s settle.
+   */
+  relayout() {
+    if (this.background) this.atFrame(() => this.endHeld((c) => c.at < this.frames - 1));
+  }
+
   private heldMoves: (() => void)[] = [];
   /**
    * A mouse move on a background page waits for its next frame: at once when Chrome draws the page and
@@ -834,7 +843,10 @@ export class FakeChrome {
         }
         return {};
       case "Target.detachFromTarget": return this.onBrowser(s.client, method, params);
-      case "Emulation.setDeviceMetricsOverride": page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor }; return {};
+      case "Emulation.setDeviceMetricsOverride":
+        page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor };
+        page.relayout();
+        return {};
       case "Emulation.clearDeviceMetricsOverride": page.metrics = undefined; return {};
       case "Page.startScreencast": this.startCast(s, params); return {};
       case "Page.stopScreencast": this.stopCast(s); return {};

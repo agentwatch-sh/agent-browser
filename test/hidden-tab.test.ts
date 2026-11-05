@@ -182,7 +182,7 @@ test("default: shot of a background tab that drew at its open (default mode): th
   await commands.close(o(), { tab: name });
 });
 
-test("default: shot --size and --full of a new background tab: the capture in flight comes before the override, and none but the shot's own while it is set", async () => {
+test("default: shot --size and --full of a new background tab: the capture in flight comes before the override; the override's relayout ends it, so a new one and the shot's own go out while it is set", async () => {
   let { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name });
   let { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
@@ -190,7 +190,7 @@ test("default: shot --size and --full of a new background tab: the capture in fl
   const m = methodsOf(calls);
   const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
   assert.ok(m.indexOf("Page.captureScreenshot") < set, "the capture in flight comes before the override");
-  assert.equal(captures(calls.slice(set, clear)).length, 1, "while the override is set, only the shot's own capture");
+  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }], "while the override is set, a new first capture and the shot's own");
   assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
   assert.equal(page.metrics, undefined);
   assert.deepEqual(page.heldCaptures, []);
@@ -272,14 +272,31 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
-  test(`${label}: shot --size whose first capture ends during the settle: the extra capture ends before the override is cleared, so the override stays cleared`, async () => {
+  test(`${label}: shot --size of a still page: the override's relayout ends the first capture in the settle, so a new first capture and two frames come before the shot's own; at once, with no fallback`, async () => {
+    // review-41b, Chromium 156, --hidden-drive: without the new first capture, 3 of 3 such shots waited
+    // for the 3 s fallback (3.58 s, with its log line); with it, 5 of 5 took 0.61 to 0.64 s.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    const lines: string[] = [];
+    const { calls, ms } = await callsOf(page, () => commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
+    assert.ok(ms < 2000, `${ms} ms (with the 0.5 s settle)`);
+    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.deepEqual(captures(calls.slice(0, set)).map((x) => x.params), [HOLD]);
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }]);
+    assert.deepEqual(lines, [], "no limit and no extra capture");
+    assert.equal(page.metrics, undefined);
+    assert.deepEqual(page.heldCaptures, []);
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size whose new first capture ends just before its own goes out: the extra capture ends before the override is cleared, so the override stays cleared`, async () => {
     const { name, page } = await backgroundTab("/", mode);
     await commands.text(mode(), { tab: name });
     page.onCapture = (p) => { if (p.format === "png") page.changeOnce(); };
     const { calls } = await withTiming({ lateMs: 300 }, () => callsOf(page, () => commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" })));
     page.onCapture = undefined;
     const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
-    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [{ format: "png" }, HOLD], "the extra capture goes out while the override is set");
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }, HOLD], "the extra capture goes out while the override is set");
     assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
     assert.equal(page.metrics, undefined, "no capture ended after the clear (it would set the override again)");
     assert.deepEqual(page.heldCaptures, []);
@@ -450,16 +467,16 @@ test("hiddenDrive: shot of a new background tab: one hidden capture first, two f
   await commands.close(h(), { tab: name });
 });
 
-test("hiddenDrive: shot --size and --full of a new background tab: no capture is sent while the device emulation is changed, but the shot's own", async () => {
+test("hiddenDrive: shot --size and --full of a new background tab: while the size override is set, only a new first capture and the shot's own, which end before the clear", async () => {
   // A capture remembers the emulation that it found and restores it when it ends: one sent while the
-  // size override is set would set it again after the shot cleared it.
+  // size override is set would set it again if it ended after the shot cleared it.
   let { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name });
   let { calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
   const m = methodsOf(calls);
   const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
   assert.ok(m.indexOf("Page.captureScreenshot") < set, "the hidden capture comes before the override");
-  assert.equal(captures(calls.slice(set, clear)).length, 1, "while the override is set, only the shot's own capture");
+  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }], "while the override is set, a new first capture (the relayout ended the first) and the shot's own");
   assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
   assert.equal(page.metrics, undefined);
   stayedHidden(page, calls);

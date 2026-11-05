@@ -208,13 +208,15 @@ tab: two modes**) and `log` (progress lines; default standard error).
     draws just after it starts to draw a page can lack the tiles below the first row. In the default
     mode Chrome draws a background tab about once a second, so the wait takes up to 2 s there. Its
     limit is 5 s. When the limit comes first, a log line says so: with one frame the shot goes on, and
-    with none it fails at once with a clear error (Chrome would end neither capture). When the shot's
-    own capture has not ended after 3 s (the first capture ended before it went out), one more capture
-    goes out to end it, with a log line, and the shot waits until all of them ended. None goes out
-    while a full-page capture waits, because it would set that capture's emulation again when it ends;
-    before a full-page capture, the shot sends a new first capture if the first one ended already. In
-    the default mode every page is `visible`, so a tab in front gets the capture in flight too; there
-    it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
+    with none it fails at once with a clear error (Chrome would end neither capture). The first
+    capture can end before the shot's own goes out: `shot --size` and `shot --full` lay the page out
+    again, and with `--hidden-drive` that relayout ended the first capture of a still page in the 0.5 s
+    settle. So before the own capture of such a shot, when no capture is in flight, the shot sends a
+    new first capture and waits for two frames. Any other shot's own capture that has not ended after
+    3 s gets one more capture to end it, with a log line, and the shot waits until all of them ended.
+    No capture goes out while a full-page capture waits, because it would set that capture's emulation
+    again when it ends. In the default mode every page is `visible`, so a tab in front gets the capture
+    in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
     mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of
     2 s) and in 0.02 s with `--hidden-drive`; the shot's own capture then ended in 1.07 to 2.10 s and
     in 0.07 s. No run of the live checks logged a limit or an extra capture. With no wait (a mutation
@@ -243,8 +245,10 @@ tab: two modes**) and `log` (progress lines; default standard error).
     type, press, shot, `shot --size`, `shot --full`, open and goto (also in a new tab and after a
     goto) had no visible time and no `visibilitychange`, and the page drew no frame in the second
     after; each took 18 to 140 ms (0.9 s for `shot --size`, with its 0.5 s settle); a shot of a new
-    tab took 0.1 s. In 8 runs of `check.ts` (ab-b84.17), a shot of a background tab took 84 to 133 ms,
-    and of a new tab whose page never drew a frame 85 to 118 ms. What a site can still see:
+    tab took 0.1 s. On a still page, `shot --size` took 3.6 s at f18805e (its first capture ended in
+    the settle, and the 3 s fallback ended the shot's own), and 0.6 s with the new first capture
+    (review-41b, 5 of 5). In 8 runs of `check.ts` (ab-b84.17), a shot of a background tab took 84 to
+    133 ms, and of a new tab whose page never drew a frame 85 to 118 ms. What a site can still see:
     (1) `record` makes the page `visible` for its run, 4.6 s for a 3 s script: Chrome sends no
     screencast frame of a hidden page, and with a hidden capture in flight it sends half of them (90 in
     3 s, not 180), unevenly. (2) While an input command or a shot runs (0.1 s; 0.9 s for
