@@ -318,7 +318,10 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     const said = Number(/gave up after (\d+\.\d) s/.exec(err)![1]) * 1000;
     assert.ok(said > 600 && said <= ms + 100, `the error says ${said} ms; the shot took ${ms} ms`);
     assert.equal(lines.filter((l) => /the last .*capture of tab \w+ did not end/.test(l)).length, 1, `one chain: ${JSON.stringify(lines)}`);
-    assert.ok(captures(calls).length <= 1 + 1 + 3 + 4, `${captures(calls).length} captures: the first, the own, 3 extra, at most 4 last ones`);
+    const n = captures(calls).length;
+    assert.ok(n <= 1 + 1 + 3 + 4, `${n} captures: the first, the own, 3 extra, at most 4 last ones`);
+    assert.ok(lines.some((l) => new RegExp(`did not end in 0\\.3 s; ${n} captures of it stay in flight`).test(l)), `the true count, ${n}: ${JSON.stringify(lines)}`);
+    assert.equal(page.heldCaptures.length, n, "the fake holds them all");
     page.noFrames = false;
     await commands.close(mode(), { tab: name });
   });
@@ -334,7 +337,27 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
     assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }, HOLD, HOLD, HOLD], "the new first capture, the own one and 3 extra; no last captures before the clear");
     assert.equal(page.metrics, undefined, "cleared");
-    assert.ok(lines.some((l) => /the shot's size override can come back when its captures end/.test(l)), JSON.stringify(lines));
+    assert.ok(lines.some((l) => /the shot's size override can come back when they end/.test(l)), JSON.stringify(lines));
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose last capture Chrome refuses at once: the log gives Chrome's error, not a timeout, and counts only the captures that Chrome may hold`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let refuse = false;
+    page.onCapture = (p) => {
+      if (refuse) throw new Error("refused by the test");
+      if (p.format === "png") { page.noFrames = true; refuse = true; }
+    };
+    const lines: string[] = [];
+    await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`) }), /the shot gave up after/));
+    page.onCapture = undefined;
+    const chain = lines.filter((l) => /the last .*capture of tab/.test(l));
+    assert.equal(chain.length, 1, JSON.stringify(lines));
+    assert.match(chain[0], /failed \(Page\.captureScreenshot: refused by the test\); 2 captures of it stay in flight/, "the first and the own capture; Chrome holds no refused one");
+    assert.doesNotMatch(chain[0], /did not end in/);
     page.noFrames = false;
     await commands.close(mode(), { tab: name });
   });
