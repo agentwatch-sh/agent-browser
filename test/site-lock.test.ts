@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
-import { inputLockPath, NO_SITE, POINTER_FILE, siteKey } from "../src/input.ts";
+import { FRONT_FILE, inputLockPath, NO_SITE, POINTER_FILE, siteKey } from "../src/input.ts";
+import { findFfmpeg } from "../src/record.ts";
 import { withFileLock } from "../src/lock.ts";
 import { resolveOptions, type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
@@ -20,6 +21,8 @@ import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { consumer, ROOT, type Consumer } from "./helpers.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
+const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" };
 
 // ---------- the site key (no Chrome) ----------
 
@@ -386,5 +389,22 @@ test("the X pointer moves only for the page whose window is in front: a path of 
   assert.ok(xMoves.length >= 1, "one X move at least");
   // Alpha's button is at the left, beta's at the right: each X move went to the window that was active then.
   for (const m of xMoves) assert.equal(m.active, m.x < 400 ? a1.page.windowId : b.page.windowId, JSON.stringify(xMoves));
+  for (const p of [a1, b]) await commands.close(linux(), { tab: p.name });
+});
+
+test("record's own press moves the front record to its page, as Chrome activates that page's window", needsFfmpeg, async () => {
+  operatorInFront();
+  const a1 = await windowPage(A1), b = await windowPage(B);
+  const frontAt: string[] = [];
+  a1.page.select("#b")[0].onclick = (p: FakePage) => { p.title = "clicked"; frontAt.push(JSON.parse(readFileSync(join(c.stateDir, FRONT_FILE), "utf8")).page); };
+  const script = join(c.dir, "front-steps.json");
+  writeFileSync(script, JSON.stringify([{ wait: 900 }, { click: "#b" }]));
+  // An agent on beta brings its window forward during alpha's take, before the take's click.
+  await Promise.all([
+    commands.record(linux(), { tab: a1.name, out: join(c.dir, "front.mp4"), script, size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG }),
+    sleep(300).then(() => commands.click(linux(), { tab: b.name, target: "#b" })),
+  ]);
+  assert.equal(b.page.title, "clicked");
+  assert.deepEqual(frontAt, [a1.page.targetId], "the take's press made alpha's window the front one");
   for (const p of [a1, b]) await commands.close(linux(), { tab: p.name });
 });

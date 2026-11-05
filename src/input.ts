@@ -549,6 +549,11 @@ export class Hands {
     this.at = to;
   }
 
+  /** A press of the command's own (record's): Chrome activated the page's window, so the front record follows it. */
+  async pressed(): Promise<void> {
+    await atFront(this.tab.browser.settings, () => writeFront(this.tab));
+  }
+
   /** The pointer moved to `p` by other input of the command (record's cursor): the X pointer follows it at the end. */
   movedTo(p: Point): void {
     this.at = { x: Math.round(p.x), y: Math.round(p.y) };

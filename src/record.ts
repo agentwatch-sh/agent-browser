@@ -788,6 +788,8 @@ class Driver {
   marks?: Mark[];
   /** Set when a step waits for the network to go quiet. */
   network?: NetworkWatch;
+  /** After each press (a page in a window of its own: Hands.pressed, the front record of input.ts). */
+  onPress?: () => Promise<void>;
   /** When each step began, setup included: waitIdle counts traffic from the start of the step before it. */
   private starts: number[] = [];
   /** Things a person should know about a take that still worked (a wheel that moved nothing). */
@@ -932,6 +934,7 @@ class Driver {
       this.note("press");
       if (this.plan.cursor) await this.tab.evaluate(overlayRipple, point.x, point.y);
       await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
+      await this.onPress?.();
       await this.pause(this.between(70, 90));
       await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1 });
       return this.pause(200);
@@ -943,6 +946,7 @@ class Driver {
         await this.pause(this.between(80, 150));
         if (this.plan.cursor) await this.tab.evaluate(overlayRipple, point.x, point.y);
         await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
+        await this.onPress?.();
         await this.pause(this.between(70, 90));
         await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1 });
         await this.pause(250);
@@ -1166,6 +1170,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, aroun
   // the take's first move. So a retake with the same seed moves the same way from there (else from its own start).
   const fromHands = !!hands?.known && hands!.at.x < width && hands!.at.y < height;
   if (fromHands) { driver.x = hands!.at.x; driver.y = hands!.at.y; }
+  if (hands) driver.onPress = () => hands.pressed();
   const limit = setTimeout(() => driver.fail(new AgentBrowserError("error", `a recording is at most ${MAX_RECORD_SECONDS} s; nothing was written`)), MAX_RECORD_SECONDS * 1000);
   try {
     // A page in a window of its own that is behind another tab of that window comes in front first (Tab.toFront): a

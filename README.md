@@ -314,15 +314,15 @@ person's input**) and `log` (progress lines; default standard error).
     focus with no switch, so two pages had the focus (the research's `window-keys-inactive`).
   - **Two sites at once: one X focus.** The display has one X focus, so the windows of two agents on two
     sites come forward in turn, also inside one command. `front.json` in the state folder names the
-    agent page whose window agent-browser brought forward last (an activation, or a press: Chrome
-    activates the window of a page that gets a press); `front.lock` keeps each activation, press and
-    X-pointer move in one order. Two rules follow. The X pointer moves only for the page whose window is
-    in front (else the move passes over the other site's window, a jump there). And a command whose page
-    holds the focus behind another window at its end (keys gave it that focus with no window switch)
-    brings its window forward again, so that the page loses the focus with a `blur` at the next switch
-    and never holds it beside a later page of its own site. Measured on taylor (`run.ts --only
-    design-two,design-two-sites`, 3 runs each on 2026-11-05; two agents, 6 typings of "hello" each;
-    then a third agent on the first page's site):
+    agent page whose window agent-browser brought forward last (an activation, or a press, also
+    `record`'s: Chrome activates the window of a page that gets a press); `front.lock` keeps each
+    activation, press and X-pointer move in one order. Two rules follow. The X pointer moves only for the
+    page whose window is in front (else the move passes over the other site's window, a jump there). And
+    a command whose page holds the focus behind another window at its end (keys gave it that focus with
+    no window switch) brings its window forward again, so that the page loses the focus with a `blur` at
+    the next switch and never holds it beside a later page of its own site. Measured on taylor (`run.ts
+    --only design-two,design-two-sites`, 3 runs each on 2026-11-05; two agents, 6 typings of "hello"
+    each; then a third agent on the first page's site):
 
     | | one site (`design-two`) | two sites (`design-two-sites`) |
     | --- | --- | --- |
@@ -1533,7 +1533,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   during the wait for the lock (review-52 note 3); `withFileLock` takes a crashed holder's lock in its
   last try (note 4) and stops its wait at a signal; `pointer.json` keeps both pages' points; no page
   holds the focus behind another window after two sites at once; the X pointer moves only for the page
-  in front.
+  in front; `record`'s own press makes its page the front one.
 - `test/hidden-tab.test.ts`: the CDP calls that each command sends to a background tab in both modes,
   against the fake Chrome's model of one (`FakePage.background`: the page is hidden, Chrome draws no
   frame of it, a page that never drew drops a press or a key, a mouse move waits for a frame, a capture
