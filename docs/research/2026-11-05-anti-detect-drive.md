@@ -35,11 +35,14 @@ In detail (section 8):
    `hidden` on Linux too, and the agent's press reaches the hidden page before Chrome raises the
    window (`window-no-flag`).
 4. **A person's input.** A curved pointer path of about 20 moves that starts at the real pointer's
-   position, a press of about 70 to 90 ms with `force: 0.5`, one key-event pair per character at a
-   person's interval in place of `Input.insertText`, a click on a field in place of `el.focus()`, and
-   wheel events in place of `scrollIntoView`. In a window that Chrome has shown, CDP input of that
-   shape matched the person's input in every input field that the probe records (`window-human-cdp`
-   against `person-window`), once its path started at the real pointer (section 5).
+   position at each activation, a press of 70 to 90 ms with `force: 0.5`, one key-event pair per
+   character 90 to 150 ms apart in place of `Input.insertText`, a click on a field in place of
+   `el.focus()` (one that leaves the caret where `type --into` puts it today), and wheel events in
+   place of `scrollIntoView`. On taylor agent-browser moves the real X pointer to the end of each CDP
+   path, so the real pointer event of the next activation comes at the point where the page last saw
+   the pointer. In a window that Chrome has shown, CDP input of that shape matched the person's input
+   in every input field that the probe records (`window-human-cdp` against `person-window`), once its
+   path started at the real pointer (section 5).
 5. **The window comes forward for input, on taylor only.** On Linux the agent's press in a window
    makes Chrome activate and raise that window, as a person's click does: the other window's page gets
    a `blur`. Keys do not: typing into a window after another window took the focus gave the page the
@@ -47,13 +50,14 @@ In detail (section 8):
    activates the window before its input (`Target.activateTarget`; the relay needs a new path for it,
    section 6), as `window-activate` and `window-human-cdp` do.
 6. **One input at a time in each agent browser.** Two agents that each activate their own window and
-   type at the same time give two focused pages: for 11.2 to 12.4 s of 13.8 to 14.8 s (`extra.ts
-   --exp two`; two runs of the review of PR #43 and one more). With one lock around each activation
-   and its input command, 0 to 0.2 s (at most two samples at a switch), and the work took 28 to 57 %
-   longer (19.1 to 21.7 s). agent-browser's own commands take the lock. The
-   relay gets raw `Input.*` calls from a Playwright client and cannot see where one action ends, so a
-   Playwright client keeps this signal until the relay has a design for it. Only a site that has two
-   of the pages open can see it.
+   type at the same time give two focused pages: for 9.6 to 12.4 s of 12.5 to 14.8 s (`extra.ts
+   --exp two`; three runs of the reviews of PR #43 and two more). With one lock around each activation
+   and its input command, 0 to 0.3 s (at most three samples at a switch), and the work took 28 to 55 %
+   longer (per pair of runs; 18.8 to 21.7 s). agent-browser's own commands take the lock. The relay
+   gets raw `Input.*` calls from a Playwright client and cannot see where one action ends, so a
+   Playwright client keeps this signal until the relay has a design for it. A site that has two of the
+   pages open can see it, and so can an anti-bot vendor that serves several sites and links their
+   pages on its server.
 
 Measured with this design's parts (the `window-human-cdp` and `pw-window-filtered` scenarios): the
 driven page was `visible`, drew 60 frames a second and ran its 50 ms timer at full rate, got the focus
@@ -91,9 +95,9 @@ CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8 backg
 (`extra.ts --exp mem`, two runs; 32 to 46 MB more for each window). With the flag every agent page
 draws at full rate, also behind another window. Time: person-shaped input takes 0.5 to 0.9 s for a
 click (the path, the press and the window switch) and about 0.13 s for each typed character, and the
-lock of item 6 makes the work of two agents at once 28 to 57 % longer. Code: agent-browser and the relay already have a new-window path (personal mode's
-`open`, and the relay's `newWindow` branch). Section 8 lists the build steps and the signals that
-stay.
+lock of step 6 makes the work of two agents at once 28 to 55 % longer. Code: agent-browser and the
+relay already have a new-window path (personal mode's `open`, and the relay's `newWindow` branch).
+Section 8 lists the build steps and the signals that stay.
 
 ## 1. What a site can see
 
@@ -196,8 +200,8 @@ appendix has every value.
 | **6a. One window per page, the X focus moved to it, CDP input** (`xfocus-cdp`) | as 1+2; the input's shape | nothing | Linux only |
 | **6b. One window per page, the X focus moved to it, X input** (`xfocus-xinput`) | nothing that the probe records: the same events as `person-window` | nothing (no shot or record in this drive) | Linux only; one pointer for the whole display (a lock); the window must be raised and not covered at the point; the agent maps page points to screen points |
 | **6c. One window per page, `Target.activateTarget`, person-shaped CDP input** (`window-human-cdp`) | the same input as `person-window` (20 moves with movement, a press of 87 to 93 ms, `pressure` 0.5, the right screen offset, 5 `keydown`), and the same window switch. One difference in runs 3 to 5: the activation raises the window under the real X pointer, so the page gets a real pointer event there, and a CDP path that starts elsewhere jumps (195 px in `extra.ts --exp jump`). The final runs start the path at the real pointer and scroll with the wheel: 0 pointer jumps, 0 scrolls with no wheel or key, 0 field focus with no press, as in the person rows (section 5) | nothing | a click takes about 0.9 s, the field click and 5 characters about 1.8 s |
-| **6c with two agents at once** (`extra.ts --exp two`, `two-noact`): each agent activates its own window (or not) and types | the two pages have the focus at the same time: 11.2 to 12.4 s of 13.8 to 14.8 s (with no activation 11.5 to 11.7 s of 12.4 to 12.5 s) | nothing | — |
-| **6c with two agents and one input lock** (`extra.ts --exp two-lock`) | 0 to 0.2 s of both pages focused (at a switch) | nothing | the work takes 28 to 57 % longer (19.1 to 21.7 s) |
+| **6c with two agents at once** (`extra.ts --exp two`, `two-noact`): each agent activates its own window (or not) and types | the two pages have the focus at the same time: 9.6 to 12.4 s of 12.5 to 14.8 s (with no activation 11.5 to 11.7 s of 12.4 to 12.5 s). Each activation after the first also gives a pointer jump, because the X pointer does not follow the CDP path: 12 and 9 moves of more than 100 px in 6 activations of each window (one run) | nothing | — |
+| **6c with two agents and one input lock** (`extra.ts --exp two-lock`) | 0 to 0.3 s of both pages focused (at a switch) | nothing | the work takes 28 to 55 % longer (per pair of runs; 18.8 to 21.7 s) |
 | **Taylor without the flag, with activation before input and shots** (not run as one scenario) | between commands a covered agent window is `hidden`, as a person's covered window; the activation shows it, as a person's click does. It adds a switch for each shot, and for each read that needs frames | a read or a `waitFor` of content that only a frame writes (rAF, `IntersectionObserver`, lazy load) waits until the next activation; the page's own timers run at 1 tick/s | a switch (a `blur` in another page) for each such step |
 
 Why the design keeps the flag on taylor, although the last row is closer to a person's covered window:
@@ -251,15 +255,26 @@ are what agent-browser sends today. The repo already has the parts: ghost-cursor
 
 Three more conditions, from the review of PR #43:
 
-- **The pointer's position at an activation.** When Chrome raises a window, the X server gives the
+- **The pointer's position at each activation.** When Chrome raises a window, the X server gives the
   page a real pointer event at the X pointer's position. A CDP path that starts at another point then
-  jumps: in `extra.ts --exp jump` the first CDP move had `movementX` -195. The pointer cannot be parked
-  outside every window, because production windows fill the screen. So the path starts where the real
-  pointer is. `stepSignals` counts such a jump ("pointer jumps > 100 px"), and in runs 6 and 7
-  `window-human-cdp` starts its path at the X pointer.
+  jumps: in `extra.ts --exp jump` the first CDP move had `movementX` -195. CDP moves do not move the X
+  pointer, so the same happens again at the second activation of the same window, after a CDP path
+  that ended elsewhere (the second review of PR #43: a real move at the X pointer, then a jump of
+  `movementX` -730). The pointer cannot be parked outside every window, because production windows
+  fill the screen. The design's choice for taylor: after each CDP path, agent-browser moves the X
+  pointer to the path's end (it reads and moves the X pointer through the X server, as `run.ts` does
+  with xdotool), so that at each activation the real event and the path start at one point. The
+  relay has no access to the X pointer, so for a Playwright client "the pointer enters at the X
+  pointer's point, then jumps" stays a signal (section 8). `stepSignals` counts such a jump ("pointer
+  jumps > 100 px"); in runs 6 and 7 `window-human-cdp` has one activation and starts its path at the
+  X pointer.
 - **Focus by a click, not by a script.** `type --into` focuses the field with `el.focus()`
   (`src/browser.ts`, line 750): the page gets a `focusin` with no press before it. A person clicks the
-  field. `setFiles` sets the files with no click at all (line 796).
+  field. A click also moves the caret to the point of the click: in the two-agent check each click in
+  the middle of a field that already held text put the next "hello" into the middle
+  ("hellohellohellohehellohellollo"). So the click that replaces `el.focus()` must leave the caret where
+  `type --into` puts it today (for example, a click to the right of the text, or the End key after
+  the click). `setFiles` sets the files with no click at all (line 796).
 - **Scroll by the wheel, not by a script.** `click` and `clickText` bring the element into view with
   `scrollIntoView` (lines 686 and 712): the page scrolls with no wheel or key event. A person scrolls
   with the wheel (or a key). The probe now has a button below the fold, logs each scroll, and counts
@@ -293,10 +308,15 @@ Measured in the final runs:
   `target=_blank` link, and `window.open()` with no window features, open a new tab in the opener's
   window, in front and focused; the opener gets a `blur` and becomes `hidden`. `window.open(url, "",
   "popup,...")` opens a window of its own, focused, and the opener stays `visible` with a `blur`. In
-  each case the new page has `history.length` 1 and the right outer size. The rule: drive the new
-  tab where the site put it, and go back to the opener with a tab switch, as a person does. Do not
-  move tabs between windows (a person cannot do that with one click, and a site sees the opener's
-  window change).
+  each case the new page has `history.length` 1. The popup window does not get the size that the site
+  asked for: `window.open(url, "", "popup,width=500,height=400")` opened at an outer size of 1100x734
+  with `--window-size=1100,700` (which `extra.ts`, `run.ts` and agentwatch's agent unit pass:
+  `agentwatch/daemon/browser/unit.py`, lines 542 and 543), and at 500x434 without the flag (the second
+  review of PR #43). A site can compare the size that it asked for with the size that it got. The
+  rule: drive the new tab or window where the site put it, and go back to the opener with a tab
+  switch, as a person does. Do not move tabs between windows (a person cannot do that with one click,
+  and a site sees the opener's window change). The fix for the popup size can need a change of
+  agentwatch's `--window-size` flag (for example, a size from the first window in place of a flag).
 - **Window activation in the relay.** The relay's `Target.activateTarget` only selects the tab
   (`chrome.tabs.update({ active: true })`, `src/relay/model.ts`, lines 758 to 760), and
   `chrome.tabs.update` does not focus the window. So step 5 of the design needs a new relay path
@@ -363,58 +383,68 @@ another agent window can see two focused pages.
 ## 8. The recommended design, and its remaining signals
 
 **The build** (follow-up tasks; nothing here is built). Taylor first; the Mac waits for ab-v16.16
-(section 7).
+(section 7). The steps have the numbers of "The answer".
 
-1. agent-browser `open` in agent mode: `Target.createTarget` with `newWindow: true` and
-   `background: true` (`src/browser.ts`). `open --tab` stays for a caller that asks for a tab, and
-   keeps `Tab.whileDrawn`.
-2. agent-browser `attach`: no `Emulation.setFocusEmulationEnabled` for a page in a window of its own.
-   `record` needs no focus emulation there either. The default mode and `--hidden-drive` stay for a
-   tab (`open --tab`). Personal mode keeps today's behaviour: it already opens a window of its own,
-   but in the operator's own Chrome, which has no `--disable-backgrounding-occluded-windows`, so a
-   covered window there is `hidden` (not measured here).
-3. The relay (`src/relay/model.ts`): every `Target.createTarget` opens a window
-   (`chrome.windows.create({ focused: false })`); `Emulation.setFocusEmulationEnabled` is answered
-   with `{}` and never reaches Chrome (`src/relay/policy.ts`); a new path activates a page's window
-   (`chrome.windows.update({ focused: true })`) for step 6, on taylor only.
-4. Popups: drive the new tab where the site opened it, and go back to the opener with a tab switch;
+1. **One window per agent page.** agent-browser `open` in agent mode: `Target.createTarget` with
+   `newWindow: true` and `background: true` (`src/browser.ts`). The relay (`src/relay/model.ts`):
+   every `Target.createTarget` opens a window (`chrome.windows.create({ focused: false })`). Popups:
+   drive the new tab or window where the site opened it, and go back to the opener with a tab switch;
    never move a tab into another window (section 6).
-5. Input shape (`Tab.click`, `clickText`, `clickAt`, `hover`, `type`, `press`, `setFiles`): a pointer
-   path from the real pointer's position (ghost-cursor, as `record` uses), a press of 50 to 120 ms with
-   `force: 0.5`, key events per character (`typeChar`) at 60 to 150 ms in place of `Input.insertText`,
-   a click on the field in place of `el.focus()` (`type --into`, and before `setFiles`), and wheel
-   events in place of `scrollIntoView`. Cost: 0.5 to 0.9 s for each click and about 0.13 s for each
-   character.
-6. On taylor, before each input command: activate the page's window if it is not active
-   (`Target.activateTarget`; in the relay item 3's path), as the person's click does. Never on the
-   Mac.
-7. One input at a time in each agent browser: a lock around the activation and the input command, as
-   one step, for agent-browser's commands (across processes: the agent browser's state folder can hold
-   it). Cost: 28 to 57 % more time for two agents that type at once. The relay cannot lock a Playwright
-   client's raw `Input.*` calls by action (section 6): that signal stays until the relay has a design.
-8. Keep `--disable-backgrounding-occluded-windows`. The agent-mode unit on taylor today passes none
-   of the three old flags (the two-modes design, section 7): it needs this one.
-9. Tests: the fake Chrome (`test/fake-chrome.ts`) models a window that is not in front (`visible`,
-   drawing, the focus at the first press). The build's live test runs the whole design as one
-   scenario on taylor, also with two agents at once, against the person baselines of `run.ts`.
+2. **No focus emulation.** agent-browser `attach`: no `Emulation.setFocusEmulationEnabled` for a page
+   in a window of its own; `record` needs no focus emulation there either. The relay answers
+   `Emulation.setFocusEmulationEnabled` with `{}` and never sends it to Chrome
+   (`src/relay/policy.ts`). The default mode and `--hidden-drive` stay only behind an explicit
+   `open --tab`, and the README warns that a site can detect a background tab (the lead's decision for
+   the build task, ab-v16.26). Personal mode keeps today's behaviour: it already opens a window of its
+   own, but in the operator's own Chrome, which has no `--disable-backgrounding-occluded-windows`, so a
+   covered window there is `hidden` (not measured here).
+3. **Keep `--disable-backgrounding-occluded-windows`.** The agent-mode unit on taylor today passes
+   none of the three old flags (the two-modes design, section 7): it needs this one.
+4. **A person's input** (`Tab.click`, `clickText`, `clickAt`, `hover`, `type`, `press`, `setFiles`): a
+   pointer path from the real pointer's position at each activation (ghost-cursor, as `record` uses),
+   a press of 70 to 90 ms with `force: 0.5`, one key-event pair per character (`typeChar`) 90 to 150 ms
+   apart in place of `Input.insertText`, a click on the field in place of `el.focus()` (`type --into`,
+   and before `setFiles`) that leaves the caret where `type --into` puts it today, and wheel events in
+   place of `scrollIntoView`. On taylor, after each CDP path, agent-browser moves the X pointer to the
+   path's end (section 5). Cost: 0.5 to 0.9 s for each click and about 0.13 s for each character.
+5. **The window comes forward for input, on taylor only.** Before each input command, activate the
+   page's window if it is not active (`Target.activateTarget` for agent-browser; in the relay a new
+   path, `chrome.windows.update({ focused: true })`, because its `Target.activateTarget` only selects
+   the tab). Never on the Mac.
+6. **One input at a time in each agent browser.** A lock around the activation and the input command,
+   as one step, for agent-browser's commands (across processes: the agent browser's state folder can
+   hold it). Cost: 28 to 55 % more time for two agents that type at once. The relay cannot lock a
+   Playwright client's raw `Input.*` calls by action (section 6): that signal stays until the relay has
+   a design.
+
+Tests for all steps: the fake Chrome (`test/fake-chrome.ts`) models a window that is not in front
+(`visible`, drawing, the focus at the first press). The build's live test runs the whole design as one
+scenario on taylor, also with two agents at once and with several activations of one window, against
+the person baselines of `run.ts`.
 
 **What a site can still see** with this design:
 
 - **Pace and patterns.** The agent acts fast and with no idle pointer movement between commands. The
   probe records no behaviour model, so this is not measured.
-- **Two agents at once through Playwright** (step 7): two of the site's pages focused at the same
-  time. Only a site that has two of the pages open can see it.
+- **Two agents at once through Playwright** (step 6): two of the site's pages focused at the same
+  time. A site that has two of the pages open can see it, and so can an anti-bot vendor that serves
+  several sites and links their pages on its server.
+- **The pointer at an activation, through Playwright** (step 4): the page gets a real pointer event at
+  the X pointer's point, and the client's first move jumps from there. The relay cannot move the X
+  pointer.
 - **A covered window that draws.** With the flag, an agent window under another window draws at 60
   frames a second. A person's covered window is `hidden`. A site cannot tell a covered window from an
   uncovered one, so it sees a window that is not in front, as on a second screen.
 - **Window geometry.** On taylor's Xvfb, with no window manager, every new window opens at the same
   place and size (0,0 and 1100x700 here), with no window-manager frame. A production agent browser
-  fills the screen with its windows. A person's windows differ. The earlier report found that a Linux
+  fills the screen with its windows. A person's windows differ. With `--window-size`, a site's popup
+  window opens at that size and not at the size that the site asked for (section 6); the fix can need
+  a change in agentwatch's agent unit. The earlier report found that a Linux
   box cannot look like the operator's Mac (its section 2.2).
 - **`history.length` 2** for a page that agent-browser opens at `about:blank` and then navigates
   (`open`, and the relay's hold of contract C10), where a person's new page has 1. Known since board
   task ab-v16.6.
-- **record** keeps the page's focus after its run, with no `blur` (it enables focus emulation; item 2
+- **record** keeps the page's focus after its run, with no `blur` (it enables focus emulation; step 2
   removes it in a window). For its run it also sets a device-metrics override (the page is resized to
   640x360 inside its 1100x700 window here, and gets a `resize`), and it puts its overlay into the DOM
   (a 1x1 pixel that changes each frame, and the cursor; `src/record.ts`).

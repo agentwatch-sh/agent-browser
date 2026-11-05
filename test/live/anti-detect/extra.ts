@@ -26,6 +26,9 @@ import { bothFocusedMs, LAYOUT, startServer, type Rec } from "./probe.ts";
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, display: { type: "string" }, exp: { type: "string" }, n: { type: "string" } } });
 if (!values["out-dir"] || process.platform !== "linux") { process.stderr.write("usage (Linux only): node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise|two|two-lock|two-noact|popup|jump|mem] [--n 8]\n"); process.exit(2); }
 const DISPLAY = Number(values.display ?? 122), EXP = values.exp ?? "raise", N = Number(values.n ?? 8);
+const CHECKS = ["raise", "two", "two-lock", "two-noact", "popup", "jump", "mem"];
+if (!CHECKS.includes(EXP)) { process.stderr.write(`--exp takes one check of: ${CHECKS.join(", ")} (not ${JSON.stringify(EXP)})\n`); process.exit(2); }
+if (!Number.isInteger(DISPLAY) || DISPLAY < 1 || !Number.isInteger(N) || N < 1) { process.stderr.write("--display and --n are whole numbers\n"); process.exit(2); }
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, `${EXP}-`));
@@ -154,6 +157,11 @@ if (EXP === "raise") {
   out.bothFocusedT1T2 = bothFocusedMs(sorted, "T1", "T2", t0, t1);
   out.keydowns = { T1: keysAll("T1"), T2: keysAll("T2") };
   out.keydownsWhileUnfocused = { T1: keysUnfocused("T1"), T2: keysUnfocused("T2") };
+  // Pointer jumps: a mouse move of more than 100 px from the last point (a real event at the X pointer at an activation,
+  // then a CDP move elsewhere), as run.ts's stepSignals counts them.
+  const jumps = (tab: string) => log.filter((e) => e.tab === tab && e.t >= t0).flatMap((e) => e.ev === "in" ? [e as any] : e.ev === "moves" ? (e.list as any[]) : [])
+    .filter((e: any) => e.type === "mousemove" && Math.hypot(e.mx ?? 0, e.my ?? 0) > 100).length;
+  out.pointerJumpsOver100 = { T1: jumps("T1"), T2: jumps("T2") };
   out.focusBlur = { T1: fb("T1"), T2: fb("T2"), F: fb("F") };
   out.fieldValues = await Promise.all(ids.map(async (id) => { const { sessionId } = await c.send("Target.attachToTarget", { targetId: id, flatten: true }); return (await c.send("Runtime.evaluate", { expression: "document.getElementById('f').value", returnByValue: true }, sessionId)).result.value; }));
   await c.stop();
