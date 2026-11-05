@@ -14,7 +14,7 @@ import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
 import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
+import { assertTestStateIsolated, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
@@ -66,13 +66,18 @@ remote debugging. Approve the connection prompt, then retry. If needed, run
 // ---------- browser ----------
 
 /**
- * The tab record, in the state folder. tabs.json maps the name of each tab opened with no tab scope
+ * The tab record, in its folder (options.ts, recordDir): the state folder, or behind agent mode's endpoint (cdpUrl) the
+ * endpoint scope's own folder, <stateDir>/endpoint-scopes/<scopeFolderName(scope)>/ (board task ab-v16.58). The relay
+ * lists only the endpoint scope's tabs, and updateRecord drops the entries of the tabs that the connection does not
+ * list, so a record that two endpoint scopes shared lost each scope's entries at the other's next change. The input
+ * lock (input.lock) and pointer.json stay in the state folder: one of each for the agent browser, for every endpoint
+ * scope (input.ts). tabs.json maps the name of each tab opened with no tab scope
  * to its targetId, as it always has. tab-scopes.json holds each tab opened under a tab scope, by
  * targetId: its scope and its name there (null: no name). So a name belongs to one scope, and two
  * scopes can each have a tab named "main". reads.json holds the read-first marks (targetId -> the URL
  * that outline or text last read there), and window.json the pinned window. tab-pages.json lists the
  * pages that an explicit `open --tab` opened as a background tab where each page gets a window of its
- * own (windowPerPage): they keep the old modes (see Tab.drive). Every caller of the state folder
+ * own (windowPerPage): they keep the old modes (see Tab.drive). Every caller of the record's folder
  * writes these five files, so each of them changes only under the record lock (updateRecord).
  */
 type Registry = Record<string, string>; // tab name -> targetId (tabs with no scope)
@@ -199,12 +204,12 @@ export class AgentBrowser {
   // --- the tab record (names and scopes), persisted across CLI invocations ---
 
   private readRegistry(): Registry {
-    try { return JSON.parse(readFileSync(statePath(this.settings, REGISTRY_FILE), "utf8")); } catch { return {}; }
+    try { return JSON.parse(readFileSync(recordPath(this.settings, REGISTRY_FILE), "utf8")); } catch { return {}; }
   }
 
   private readScopes(): ScopeRecord {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(statePath(this.settings, SCOPES_FILE), "utf8")); } catch { return {}; }
+    try { raw = JSON.parse(readFileSync(recordPath(this.settings, SCOPES_FILE), "utf8")); } catch { return {}; }
     const out: ScopeRecord = {};
     if (raw && typeof raw === "object" && !Array.isArray(raw)) for (const [id, e] of Object.entries(raw as Record<string, { scope?: unknown; name?: unknown }>))
       if (e && typeof e.scope === "string" && (e.name === null || typeof e.name === "string")) out[id] = { scope: e.scope, name: e.name };
@@ -213,13 +218,13 @@ export class AgentBrowser {
 
   private readTabPages(): string[] {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(statePath(this.settings, TAB_PAGES_FILE), "utf8")); } catch { return []; }
+    try { raw = JSON.parse(readFileSync(recordPath(this.settings, TAB_PAGES_FILE), "utf8")); } catch { return []; }
     return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
   }
 
   private readMarks(): Reads {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(statePath(this.settings, READS_FILE), "utf8")); } catch { return {}; }
+    try { raw = JSON.parse(readFileSync(recordPath(this.settings, READS_FILE), "utf8")); } catch { return {}; }
     const out: Reads = {};
     if (raw && typeof raw === "object" && !Array.isArray(raw)) for (const [id, url] of Object.entries(raw as Record<string, unknown>))
       if (typeof url === "string") out[id] = url;
@@ -227,16 +232,18 @@ export class AgentBrowser {
   }
 
   /**
-   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json) under the state
-   * folder's lock (tabs.lock): several processes (CLI calls of different sessions) write it, and a
+   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json) under the record
+   * folder's lock (tabs.lock; recordDir): several processes (CLI calls of different sessions) write it, and a
    * read-modify-write without the lock can lose another's change. The entries of tabs that Chrome no
-   * longer has are dropped here, from the names, the scopes and the read marks. The target list is
+   * longer has (that this connection's Target.getTargets does not list: behind agent mode's endpoint, the endpoint
+   * scope's tabs only, so each endpoint scope has a record of its own) are dropped here, from the names, the scopes,
+   * the read marks and the tab pages. The target list is
    * read inside the lock, so a tab that another process recorded before this one took the lock is in
    * it; when the list cannot be read, nothing is dropped. Only a file that changed is written, to a
    * temporary file renamed over it, so a reader (which takes no lock) never sees half a file.
    */
   private async updateRecord(change: (r: TabRecord) => void): Promise<void> {
-    await withFileLock(statePath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
+    await withFileLock(recordPath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
       const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow(), tabPages: this.readTabPages() };
       const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window, tabPages: JSON.stringify(r.tabPages) };
       change(r);
@@ -248,13 +255,13 @@ export class AgentBrowser {
         for (const id of Object.keys(r.reads)) if (!live.has(id)) delete r.reads[id];
         r.tabPages = r.tabPages.filter((id) => live.has(id));
       }
-      if (JSON.stringify(r.registry) !== before.registry) writeJsonAtomic(statePath(this.settings, REGISTRY_FILE), r.registry);
-      if (JSON.stringify(r.scopes) !== before.scopes) writeJsonAtomic(statePath(this.settings, SCOPES_FILE), r.scopes);
-      if (JSON.stringify(r.reads) !== before.reads) writeJsonAtomic(statePath(this.settings, READS_FILE), r.reads);
-      if (JSON.stringify(r.tabPages) !== before.tabPages) writeJsonAtomic(statePath(this.settings, TAB_PAGES_FILE), r.tabPages);
+      if (JSON.stringify(r.registry) !== before.registry) writeJsonAtomic(recordPath(this.settings, REGISTRY_FILE), r.registry);
+      if (JSON.stringify(r.scopes) !== before.scopes) writeJsonAtomic(recordPath(this.settings, SCOPES_FILE), r.scopes);
+      if (JSON.stringify(r.reads) !== before.reads) writeJsonAtomic(recordPath(this.settings, READS_FILE), r.reads);
+      if (JSON.stringify(r.tabPages) !== before.tabPages) writeJsonAtomic(recordPath(this.settings, TAB_PAGES_FILE), r.tabPages);
       if (r.window !== before.window) {
-        if (r.window === undefined) rmSync(statePath(this.settings, WINDOW_FILE), { force: true });
-        else writeJsonAtomic(statePath(this.settings, WINDOW_FILE), { windowId: r.window });
+        if (r.window === undefined) rmSync(recordPath(this.settings, WINDOW_FILE), { force: true });
+        else writeJsonAtomic(recordPath(this.settings, WINDOW_FILE), { windowId: r.window });
       }
     }, "the tab record lock");
   }
@@ -274,7 +281,7 @@ export class AgentBrowser {
   // --- the pinned window: when pinned, nothing outside that one Chrome window is touched ---
 
   pinnedWindow(): number | undefined {
-    try { return JSON.parse(readFileSync(statePath(this.settings, WINDOW_FILE), "utf8")).windowId; } catch { return undefined; }
+    try { return JSON.parse(readFileSync(recordPath(this.settings, WINDOW_FILE), "utf8")).windowId; } catch { return undefined; }
   }
 
   /** Pin this window, or clear the pin (undefined). Async: it writes window.json under the record lock. */

@@ -39,7 +39,9 @@ const held = new AsyncLocalStorage<ReadonlySet<string>>();
 /**
  * Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). One lock for the
  * pages of every site (board task ab-v16.46: the operator's choice on ab-1bi, after one lock per site on ab-hbt showed
- * each page alone a blur and a focus during its own typing while an agent on another site typed). Reentrant within
+ * each page alone a blur and a focus during its own typing while an agent on another site typed), and for every
+ * endpoint scope behind agent mode's endpoint: only the tab record is per endpoint scope (options.ts, recordDir;
+ * ab-v16.58), never input.lock or pointer.json. Reentrant within
  * one call chain of one process (Tab.withInput around the caller's own Tab.click); another chain, or another process,
  * waits for it, up to lockWaitMs, or up to `deadline` (epoch ms) when that comes first (Tab.waitFor's timeout);
  * `signal` ends that wait at once (Tab.waitFor's condition held: review-52 note 3).
