@@ -1,0 +1,1 @@
+scopeC-named-from-D: pid 833600 ppid 831927: {"scope": "scopeD", "why": "root"}

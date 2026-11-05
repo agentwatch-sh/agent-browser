@@ -1,0 +1,12 @@
+{
+ "scopeC": [
+  830947,
+  3271637,
+  "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-c3e51556-b90d-4aa6-8ea0-a7725a505d15.scope"
+ ],
+ "scopeD": [
+  831927,
+  3271879,
+  "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-6ab54be5-7b68-460d-ae3f-e2f670219b3b.scope"
+ ]
+}
