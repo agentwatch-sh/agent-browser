@@ -269,6 +269,13 @@ export class FakePage {
   readonly targetId: string;
   windowId: number;
   url = "about:blank";
+  /** The origin that about:blank got from the page that opened it (window.open() in Chrome), else none. */
+  openerOrigin: string | undefined;
+  /** The document's security origin, as Page.getFrameTree gives it: the URL's, else the opener's for about:blank, else "://" (opaque). */
+  get securityOrigin(): string {
+    try { const u = new URL(this.url); if (u.protocol === "http:" || u.protocol === "https:") return u.origin; } catch { /* below */ }
+    return this.url === "about:blank" && this.openerOrigin ? this.openerOrigin : "://";
+  }
   title = "";
   text = "";
   elements: FakeElement[] = [];
@@ -870,6 +877,7 @@ export class FakeChrome {
   openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);
+    if (url === "about:blank") page.openerOrigin = opener.securityOrigin;
     page.load(url);
     if (this.tabSwitches) this.activateTab(page, "open");
     return page;
@@ -1135,7 +1143,7 @@ export class FakeChrome {
         } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
         return page.background ? page.capture({ data }, params) : { data };
       }
-      case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
+      case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url, securityOrigin: page.securityOrigin } } };
       case "Network.getResponseBody": {
         const b = page.bodies.get(params.requestId);
         if (!b) throw new Error("No resource with given identifier found");

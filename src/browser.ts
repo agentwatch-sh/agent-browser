@@ -865,25 +865,33 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
-   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout).
+   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock of the page's site ends then
+   * (Tab.waitFor's timeout); `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
    */
-  async toFront(opts: { deadline?: number } = {}): Promise<void> {
+  async toFront(opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<void> {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
-    // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
-    // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
-    // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
-    // is read again inside the lock: the other agent's command can have changed it.
+    // On Linux Page.bringToFront also activates the window: inside the input lock of the page's site, so that it never
+    // lands inside another agent's input command on that site (review-47c: a read's switch during another agent's typing
+    // left two focused pages). The lock is reentrant, so record and the input commands, which hold it, do not wait for
+    // themselves. The page's state is read again inside the lock: the other agent's command can have changed it.
     const { withInputLock } = await import("./input.ts");
-    await withInputLock(this.browser.settings, async () => {
+    await withInputLock(this, async () => {
       await this.assertAllowed();
       if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
       await this.send("Page.bringToFront");
-      for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
+      for (const end = Date.now() + 1000; Date.now() < end && !opts.signal?.aborted; await new Promise((r) => setTimeout(r, 20)))
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
-      this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
-    }, opts.deadline);
+      if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
+    }, opts);
+  }
+
+  /** The site of the page's main frame: the key of its input lock (input.ts, siteKey; ab-v16.46). */
+  async siteKey(): Promise<string> {
+    const { siteKey } = await import("./input.ts");
+    const { frameTree } = await this.send("Page.getFrameTree");
+    return siteKey(String(frameTree?.frame?.url ?? ""), frameTree?.frame?.securityOrigin);
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -967,23 +975,35 @@ export class Tab {
   }
 
   /**
-   * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front first
+   * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front
    * (toFront); its wait for the input lock is part of `timeoutMs` (review-47d note 6), so the wait ends near its timeout
-   * also while another agent's input holds the lock (the page then stays hidden, and a condition that needs a frame
-   * times out).
+   * also while another agent's input on the page's site holds the lock (the page then stays hidden, and a condition that
+   * needs a frame times out). The condition is polled from the start, also during that wait (review-52 note 3): one
+   * that holds ends the wait at once, and the page then gets no tab switch. Before the timeout's error, the switch ends
+   * and the condition is polled once more.
    */
   async waitFor<R, A extends unknown[] = []>(
     fn: ((...args: A) => R) | string,
     opts: { timeoutMs?: number; intervalMs?: number; args?: A; what?: string } = {},
   ): Promise<Awaited<R>> {
     const { timeoutMs = 30_000, intervalMs = 250, args = [] as unknown as A } = opts;
-    const deadline = Date.now() + timeoutMs;
-    await this.toFront({ deadline }).catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
-    for (;;) {
-      const v = await this.evaluate(fn, ...args).catch(() => undefined);
-      if (v) return v as Awaited<R>;
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${opts.what ?? "condition"}`);
-      await new Promise((r) => setTimeout(r, intervalMs));
+    const deadline = Date.now() + timeoutMs, stop = new AbortController();
+    let fronted = false;
+    // A hidden window page draws nothing (toFront); a read that fails there fails below.
+    const front = this.toFront({ deadline, signal: stop.signal }).catch(() => {}).finally(() => { fronted = true; });
+    try {
+      for (;;) {
+        const v = await this.evaluate(fn, ...args).catch(() => undefined);
+        if (v) return v as Awaited<R>;
+        if (Date.now() > deadline) {
+          if (!fronted) { await front; continue; }
+          throw new Error(`timed out waiting for ${opts.what ?? "condition"}`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    } finally {
+      stop.abort();
+      await front;
     }
   }
 
@@ -996,12 +1016,13 @@ export class Tab {
 
   /**
    * Run `fn` with a person's hands (input.ts), for a page in a window of its own (drive "window"; ab-v16.26): inside
-   * the agent browser's input lock (one input at a time, across processes), after the page's window came forward.
+   * the input lock of the page's site (one input at a time on each site, across processes; ab-v16.46), after the page's
+   * window came forward.
    */
   private async byHand<T>(fn: (h: Hands) => Promise<T>): Promise<T> {
     await this.assertAllowed();
     const { withInputLock, Hands } = await import("./input.ts");
-    return withInputLock(this.browser.settings, async () => {
+    return withInputLock(this, async () => {
       // The wait for the lock can take minutes, and the page can go to a host off the allowlist meanwhile (review-47):
       // the allowlist is read again inside the lock, before any code of ours runs there for the input, and the guard
       // stops each input event once the main frame went off the list (Hands also reads the list before each press
@@ -1039,9 +1060,9 @@ export class Tab {
   }
 
   /**
-   * For a command that sends its own input (record): in a window of its own, the input lock and the window's
-   * activation around `fn`, which gets the hands (where the pointer is; Hands.movedTo keeps where it ends); elsewhere
-   * `fn` as it is, with none.
+   * For a command that sends its own input (record): in a window of its own, the input lock of the page's site and the
+   * window's activation around `fn`, which gets the hands (where the pointer is; Hands.movedTo keeps where it ends);
+   * elsewhere `fn` as it is, with none.
    */
   async withInput<T>(fn: (h?: Hands) => Promise<T>): Promise<T> {
     return this.drive === "window" ? this.byHand((h) => fn(h)) : fn();

@@ -2,8 +2,11 @@
 // "The answer", steps 4 to 6, and section 5). Tab's input commands (click, clickText, clickAt, hover, type, press,
 // setFiles) run here when the page's drive is "window" (browser.ts, Tab.drive):
 //
-// - One input at a time in each agent browser: the activation and the input command hold the state folder's input
-//   lock (withInputLock), across processes. Two agents that typed at once otherwise gave two focused pages.
+// - One input at a time on each site of an agent browser: the activation and the input command hold the input lock of
+//   the page's site (withInputLock, siteKey: input-<site>.lock in the state folder), across processes. Two agents that
+//   typed at once on one site otherwise gave that site two focused pages (BroadcastChannel, localStorage, its servers).
+//   Agents on two sites send input at the same time (ab-v16.46, the operator's choice on ab-hbt): then their windows come
+//   forward in turn during one command, and an anti-bot vendor that serves both sites can link two focused pages.
 // - The window comes forward first: a page without the focus gets Page.bringToFront, which on Linux selects its tab
 //   and activates its window, as a person's switch to it does (measured on taylor: it gives the focus, as
 //   Target.activateTarget does; Page.bringToFront also passes through agentwatch's relay).
@@ -31,23 +34,93 @@ import { withFileLock } from "./lock.ts";
 import { statePath, type InputTiming, type Settings } from "./options.ts";
 import { charKey, parseKey, planMove, pointAt, sendKey, type KeyEvent, type Point } from "./record.ts";
 
-export const INPUT_LOCK = "input.lock", POINTER_FILE = "pointer.json";
+export const POINTER_FILE = "pointer.json", POINTER_LOCK = "pointer.lock";
 
-/** The input locks that this call chain holds (by path): withInputLock is reentrant in one chain, never across chains. */
-const held = new AsyncLocalStorage<ReadonlySet<string>>();
+// ---------- the site key: one input lock per site (ab-v16.46) ----------
+
+/** The one key of every page with no host (about:blank, a data: URL, an error page): these pages share one lock. */
+export const NO_SITE = "_";
+
+/** The host of an http(s) URL (lowercase, with no trailing dot), else undefined. */
+function hostOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  let u: URL;
+  try { u = new URL(url); } catch { return undefined; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
+  return u.hostname.toLowerCase().replace(/\.$/, "") || undefined;
+}
 
 /**
- * Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). Reentrant within
- * one call chain of one process (Tab.withInput around the caller's own Tab.click); another chain, or another process,
- * waits for it, up to lockWaitMs, or up to `deadline` (epoch ms) when that comes first (Tab.waitFor's timeout).
+ * The key of a page's input lock: its site (board task ab-v16.46; the operator's choice on ab-hbt: agents on one site
+ * send input one at a time, agents on different sites at the same time). `url` is the main frame's URL, `origin` its
+ * security origin (Page.getFrameTree). The rule:
+ *
+ * - the host of the URL, or, when the URL has no host (about:blank that a site opened, a blob: URL), the host of the
+ *   security origin (window.open() gives about:blank the opener's origin);
+ * - an IP address is its own key; a host of one label (localhost, an intranet name) is its own key;
+ * - any other host gives its last two labels: www.example.com and app.example.com give example.com;
+ * - no host at all (about:blank, a data: URL, an error page): the one shared key NO_SITE.
+ *
+ * It never splits one site into two keys, and it needs no public-suffix list (no new dependency): a site is a
+ * registrable domain (a public suffix and one label more), so it has at least two labels, and every host of one site
+ * ends in the same last two labels. The cost of no list: sites under a public suffix of two labels or more
+ * (example.co.uk and other.co.uk; a.github.io and b.github.io) get one key, and their agents wait for each other, as
+ * every agent did before. The allowlist's entries are not used: two entries of one site (app.example.com and
+ * www.example.com) would split it into two keys.
  */
-export async function withInputLock<T>(s: Settings, fn: () => Promise<T>, deadline?: number): Promise<T> {
-  const path = statePath(s, INPUT_LOCK), mine = held.getStore();
-  if (mine?.has(path)) return fn();
-  const wait = s.inputTiming.lockWaitMs, until = Math.min(Date.now() + wait, deadline ?? Infinity);
-  return withFileLock(path, until, () => held.run(new Set([...(mine ?? []), path]), fn),
-    until < Date.now() + wait ? "the input lock (another input command of this agent browser held it until the wait's timeout)"
-      : `the input lock (another input command of this agent browser held it for ${wait / 1000} s)`);
+export function siteKey(url: string, origin?: string): string {
+  const host = hostOf(url) ?? hostOf(origin);
+  if (!host) return NO_SITE;
+  if (host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return host;
+  return host.split(".").slice(-2).join(".");
+}
+
+/** The lock file of one site's input lock in the state folder: input-<key>.lock (a character that no file name should hold becomes "_"). */
+export function inputLockPath(s: Settings, key: string): string {
+  return statePath(s, `input-${key.replace(/[^a-z0-9.-]/g, "_")}.lock`);
+}
+
+/**
+ * The input locks that this call chain holds: each one's lock file, the pages that took it (by targetId), and whether it
+ * is still held (an async call that the chain started can outlive the lock: it then waits as any other chain does).
+ */
+type Held = { path: string; pages: Set<string>; live: boolean };
+const held = new AsyncLocalStorage<readonly Held[]>();
+
+/** withFileLock's result when the page went to another site while the command waited: the lock of that site instead. */
+const MOVED = Symbol("moved");
+
+/**
+ * Run `fn` while this process holds the input lock of the page's site (siteKey: one lock per site, ab-v16.46; the lock
+ * file input-<key>.lock in the state folder, across processes): agents on one site send input one at a time, agents on
+ * different sites at the same time.
+ *
+ * Reentrant per key within one call chain of one process (Tab.withInput around the caller's own Tab.click): a page that
+ * this chain's lock covers, or a page of the same site, does not wait for itself. A page that the chain took a lock for
+ * keeps that key for the whole chain, also after it went to another site (a click on a link): the command never waits
+ * for the new site's lock half-way. A page of another site in the same chain takes that site's lock too. Another chain,
+ * or another process, waits for the lock up to lockWaitMs, or up to `deadline` (epoch ms) when that comes first
+ * (Tab.waitFor's timeout); `signal` ends the wait (Tab.waitFor's condition held). When the page went to another site
+ * while the command waited, the command takes that site's lock before any input (at most twice).
+ */
+export async function withInputLock<T>(tab: Tab, fn: () => Promise<T>, opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<T> {
+  const s = tab.browser.settings, mine = (held.getStore() ?? []).filter((h) => h.live);
+  if (mine.some((h) => h.pages.has(tab.targetId))) return fn();
+  const wait = s.inputTiming.lockWaitMs, until = Math.min(Date.now() + wait, opts.deadline ?? Infinity);
+  for (let round = 0; ; round++) {
+    const key = await tab.siteKey(), path = inputLockPath(s, key);
+    const same = mine.find((h) => h.path === path);
+    if (same) { same.pages.add(tab.targetId); return fn(); }
+    const site = key === NO_SITE ? "pages with no host" : key;
+    const what = until < Date.now() + wait ? `the input lock of ${site} (another input command on this site held it until the wait's timeout)`
+      : `the input lock of ${site} (another input command on this site held it for ${wait / 1000} s)`;
+    const r = await withFileLock(path, until, async () => {
+      if (round < 2 && await tab.siteKey() !== key) return MOVED;
+      const mineNow: Held = { path, pages: new Set([tab.targetId]), live: true };
+      try { return { v: await held.run([...mine, mineNow], fn) }; } finally { mineNow.live = false; }
+    }, what, opts.signal);
+    if (r !== MOVED) return r.v;
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -57,8 +130,9 @@ const between = ([a, b]: [number, number]) => a + (b - a) * Math.random();
 
 /**
  * The last point of each page's pointer (client CSS px), what is known of the X display (a cdpUrl's display, verified
- * by an activation), and when a log line last named why a display is not used (at most one each 5 minutes). Written
- * inside the input lock.
+ * by an activation), and when a log line last named why a display is not used (at most one each 5 minutes). Read at a
+ * command's start; at its end read again and changed under its own short lock (pointer.lock, updatePointer): commands
+ * on two sites run at once (ab-v16.46), and neither loses the other's change.
  */
 type PointerState = { pages: Record<string, Point>; display?: { name: string; ok: boolean; at: number }; notices?: Record<string, number> };
 
@@ -68,6 +142,17 @@ function readPointer(s: Settings): PointerState {
     if (raw && typeof raw === "object" && raw.pages && typeof raw.pages === "object") return raw as PointerState;
   } catch { /* none yet */ }
   return { pages: {} };
+}
+
+/** Merge this command's changes into pointer.json as it is now, under pointer.lock: its page's point, the display, the notices. */
+async function updatePointer(s: Settings, page: string, at: Point, mine: PointerState): Promise<void> {
+  await withFileLock(statePath(s, POINTER_LOCK), Date.now() + 2_000, async () => {
+    const now = readPointer(s);
+    now.pages[page] = at;
+    if (mine.display && (!now.display || mine.display.at >= now.display.at)) now.display = mine.display;
+    for (const [k, t] of Object.entries(mine.notices ?? {})) if (t > (now.notices?.[k] ?? 0)) (now.notices ??= {})[k] = t;
+    writePointer(s, now);
+  }, "the pointer file's lock");
 }
 
 function writePointer(s: Settings, st: PointerState) {
@@ -348,8 +433,7 @@ export class Hands {
    */
   async end(): Promise<void> {
     if (this.recordMoved && this.x) await this.xMove(this.at);
-    this.state.pages[this.tab.targetId] = { x: Math.round(this.at.x * 100) / 100, y: Math.round(this.at.y * 100) / 100 };
-    writePointer(this.tab.browser.settings, this.state);
+    await updatePointer(this.tab.browser.settings, this.tab.targetId, { x: Math.round(this.at.x * 100) / 100, y: Math.round(this.at.y * 100) / 100 }, this.state);
   }
 
   /**

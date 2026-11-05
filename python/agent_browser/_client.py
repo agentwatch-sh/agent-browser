@@ -42,10 +42,16 @@ LAUNCH_WAIT = 600.0
 #: `record` runs at most 30 minutes (the CLI's limit), then encodes the MP4.
 RECORD_WAIT = 1800.0 + 900.0
 
-#: In agent mode on Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
-#: default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
+#: In agent mode on Linux an input command can wait for another one's input lock on its site (inputTiming.lockWaitMs, 600 s
+#: by default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
 LOCK_WAIT_MS = 600_000.0
 KEY_MS = 150.0 + 50.0
+
+#: A read (text, outline, eval) waits for the input lock inside its own timeout (review-52 note 5), as the library's
+#: Tab.waitFor does: it keeps this many seconds of the timeout for its own work, and at least half of the timeout, and the
+#: rest (at most lockWaitMs) may go to the wait. A read that hangs for another reason fails at the timeout; a long wait
+#: for the lock fails with the lock's own error.
+READ_WORK = 30.0
 
 
 def default_package_dir() -> Optional[Path]:
@@ -236,7 +242,7 @@ class AgentBrowser:
             raise PackageNotFoundError(f"no agent-browser package at {root}; pass package_dir= (a checkout, or node_modules/agent-browser)")
         return root / "bin" / "agent-browser.js"
 
-    def _global_flags(self) -> List[str]:
+    def _global_flags(self, lock_wait_ms: Optional[int] = None) -> List[str]:
         flags = ["--state-dir", os.fspath(self.state_dir)]
         paths: List[Tuple[str, Optional[Path]]] = [("--allowlist", self.allowlist), ("--profile", self.profile), ("--socket", self.socket),
                                                    ("--chrome-bin", self.chrome_bin), ("--personal-user-data-dir", self.personal_user_data_dir)]
@@ -271,16 +277,19 @@ class AgentBrowser:
             flags += ["--tab-scope", self.tab_scope]
         if self.hidden_drive:
             flags.append("--hidden-drive")
-        if self.input_timing is not None:
-            flags += ["--input-timing", json.dumps(self.input_timing)]
+        timing = dict(self.input_timing) if self.input_timing is not None else None
+        if lock_wait_ms is not None:
+            timing = {**(timing or {}), "lockWaitMs": lock_wait_ms}
+        if timing is not None:
+            flags += ["--input-timing", json.dumps(timing)]
         return flags
 
     def _run(self, command: str, args: Sequence[str], parse: Callable[[Mapping[str, object]], R], *, stdin: Optional[str] = None,
-             extra_timeout: float = 0.0, global_flags: bool = True) -> R:
+             extra_timeout: float = 0.0, global_flags: bool = True, lock_wait_ms: Optional[int] = None) -> R:
         if self._node_checked is None:
             self.node_version()
             self._node_checked = self._node_path()
-        argv = [self._node_checked, os.fspath(self._bin()), command, *args, *(self._global_flags() if global_flags else []), "--json"]
+        argv = [self._node_checked, os.fspath(self._bin()), command, *args, *(self._global_flags(lock_wait_ms) if global_flags else []), "--json"]
         try:
             done = subprocess.run(argv, input=(stdin or "").encode("utf-8"), capture_output=True, timeout=self.timeout + extra_timeout,
                                   env=self.env, check=False)
@@ -367,24 +376,30 @@ class AgentBrowser:
     def outline(self, tab: str, all: bool = False, any_scope: bool = False) -> OutlineResult:
         """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot.
 
-        Its timeout adds the input lock's wait: in agent mode on Linux a read of a hidden window page brings its tab in
-        front inside the lock, so it waits for another agent's input command, as `text` and `eval` do.
+        In agent mode on Linux a read of a hidden window page brings its tab in front inside the input lock of its site, so
+        it can wait for another agent's input command on that site, as `text` and `eval` do. That wait is part of the
+        call's timeout (at most all but 30 s of it, at least half of it): a longer wait fails with the lock's own error.
         """
-        return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json, extra_timeout=self._input_wait())
+        return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json, lock_wait_ms=self._read_lock_wait_ms())
+
+    def _timing(self, name: str, default: float, index: Optional[int] = None) -> float:
+        """A number of the input timing (`index`: one end of a range), else the default."""
+        v = (self.input_timing or {}).get(name)
+        try:
+            return float(v[index] if index is not None else v)  # type: ignore[index]
+        except (TypeError, ValueError, IndexError, KeyError):
+            return default
 
     def _input_wait(self, chars: int = 0) -> float:
-        """The time an input command (or a read: text, outline, eval) may add to `timeout`: the input lock's wait, and the typing of `chars` characters
+        """The time an input command may add to `timeout`: the input lock's wait, and the typing of `chars` characters
         at the slowest pace of the input timing (in agent mode on Linux a person's typing takes about 0.12 s a character)."""
-        t = self.input_timing or {}
+        key = self._timing("keyMs", 150.0, 1) + self._timing("holdMs", 50.0, 1)
+        return self._timing("lockWaitMs", LOCK_WAIT_MS) / 1000.0 + chars * (key if self.input_timing else KEY_MS) / 1000.0
 
-        def number(name: str, default: float, index: Optional[int] = None) -> float:
-            v = t.get(name)
-            try:
-                return float(v[index] if index is not None else v)  # type: ignore[index]
-            except (TypeError, ValueError, IndexError, KeyError):
-                return default
-        key = number("keyMs", 150.0, 1) + number("holdMs", 50.0, 1)
-        return number("lockWaitMs", LOCK_WAIT_MS) / 1000.0 + chars * (key if t else KEY_MS) / 1000.0
+    def _read_lock_wait_ms(self) -> int:
+        """A read's wait for the input lock (text, outline, eval), inside its timeout (READ_WORK; review-52 note 5)."""
+        share = max(self.timeout / 2.0, self.timeout - READ_WORK)
+        return max(1, int(min(self._timing("lockWaitMs", LOCK_WAIT_MS), share * 1000.0)))
 
     def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False) -> ClickResult:
         """Trusted click on `target` (#N from outline, or a CSS selector), or on the element whose text is `text`."""
@@ -401,7 +416,7 @@ class AgentBrowser:
         """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
 
         The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
-        about 0.12 s (a person's typing), and another input command can hold the lock for up to `lockWaitMs`.
+        about 0.12 s (a person's typing), and another input command on the same site can hold its lock for up to `lockWaitMs`.
         """
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
                          stdin=text, extra_timeout=self._input_wait(len(text)))
@@ -411,15 +426,15 @@ class AgentBrowser:
         return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json, extra_timeout=self._input_wait())
 
     def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:
-        """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot. Its timeout adds the input lock's wait (see `outline`)."""
+        """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot. It can wait for the input lock inside its timeout (see `outline`)."""
         return self._run("text", [tab, *([selector] if selector is not None else []), *_scope(any_scope)], TextResult.from_json,
-                         extra_timeout=self._input_wait())
+                         lock_wait_ms=self._read_lock_wait_ms())
 
     # Not Python's eval(): the CLI runs the expression inside the allowlisted page (CDP Runtime.evaluate).
     def eval(self, tab: str, expression: str, any_scope: bool = False) -> EvalResult:
         """Evaluate a JavaScript expression in the page and return its JSON value. The expression goes on stdin.
-        Its timeout adds the input lock's wait (see `outline`)."""
-        return self._run("eval", [tab, "--stdin", *_scope(any_scope)], EvalResult.from_json, stdin=expression, extra_timeout=self._input_wait())
+        It can wait for the input lock inside its timeout (see `outline`)."""
+        return self._run("eval", [tab, "--stdin", *_scope(any_scope)], EvalResult.from_json, stdin=expression, lock_wait_ms=self._read_lock_wait_ms())
 
     def shot(self, tab: str, path: Optional[PathLike] = None, full: bool = False, size: Optional[str] = None,
              scale: Optional[float] = None, any_scope: bool = False) -> ShotResult:
