@@ -64,7 +64,7 @@ ID `ifhfjdmdbgbnmllffiadajepajbcdnai`). `results/` holds each run's `results.jso
 
 | Run | Part | File |
 | --- | --- | --- |
-| initiator1 | "initiator", 24 kinds, 6 rule sets | `results/initiator.json` |
+| initiator1 | "initiator", 24 kinds, 6 rule sets (its copy of `ext/` had no `privacy` and `contentSettings` permissions and no helpers of part "cookies" yet; nothing else differs) | `results/initiator.json` |
 | agent1 | "agent", groups pw, ab, beam (its beam group had restore tabs that started sign-ins; see beam2) | `results/agent.json` |
 | beam2 | "agent", group beam, with sign-out pages as the imports' `url` | `results/beam.json` |
 | ab4 | "agent", group ab, with tab names that match no URL | `results/ab.json` |
