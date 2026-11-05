@@ -349,7 +349,7 @@ test("with the real receiver's order (tabs.onCreated after the answer), a new ta
   } finally { await h.close(); }
 });
 
-test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its URL then; a later client's navigation is its own", async () => {
+test("a creator that leaves before its runIfWaitingForDebugger: its tab stays at about:blank (no navigation after its creator left); a later client's navigation is its own", async () => {
   const h = await harness();
   try {
     await h.ready();
@@ -360,7 +360,9 @@ test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its
     await att;
     const navs = () => h.fake.sent("debugger.sendCommand", "Page.navigate").map((r) => r.args[2].url);
     await a.close();
-    await until(() => navs().includes("https://a.example/first"), "the creator's URL at its leave");
+    await until(() => h.fake.sent("debugger.detach").length, "the detach at the creator's leave");
+    await sleep(50);
+    assert.deepEqual(navs(), [], "no navigation for a creator that left (review-58 note 1)");
     const b = await h.connect("s1");
     const bAtt = b.waitForEvent("Target.attachedToTarget");
     await b.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
@@ -368,7 +370,7 @@ test("a creator that leaves before its runIfWaitingForDebugger: its tab gets its
     await b.send("Page.navigate", { url: "https://a.example/mine" }, ev.sessionId);
     await b.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
     await sleep(50);
-    assert.deepEqual(navs(), ["https://a.example/first", "https://a.example/mine"]);
+    assert.deepEqual(navs(), ["https://a.example/mine"]);
     // A detach after a timeout drops a pending URL too: the client's next session gets no stale navigation.
     const c = await h.connect("s3");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });

@@ -804,7 +804,18 @@ daemon must send `set_scopes` (part 3): there is no backward compatibility.
 - The tabs of before. At each link up (and each relay start) the relay reads the extension's map of the
   tabs' scopes (`bridge.tabScopes`) and takes those tabs back into their scopes, free, before it admits a
   connection. So after a link drop or a relay restart a client of the scope sees its pages again
-  (`context.pages()`). Its CDP sessions do not stay.
+  (`context.pages()`). Its CDP sessions do not stay. A failed `bridge.info` (its 30 s deadline, say) is
+  tried again, three tries in all; then the relay waits for the next link up.
+- A bridge answer and a line in one read. The extension's answer (`bridge.tabScopes`, `windows.create`,
+  `tabs.create`) and a line that gives the scope no list can come in one read of the relay's standard
+  input; the line then applies first. So before the relay gives a tab the scope of such an answer, it
+  checks the scope again: no tab joins a scope that the last line (whose `scopes` and `lists` are objects)
+  gives no list, or a scope of an `end_scope`. Such a `Target.createTarget` gets `no list for this scope`.
+- A closed connection. A connection that the relay closed (an `end_scope`, a line without its list, a link
+  change) can still send until its close handshake ends: the relay ignores it (no answer, no bridge
+  request). A tab whose creator left before its `Runtime.runIfWaitingForDebugger` stays at `about:blank`:
+  the relay sends no navigation for it. Before the navigation of a new tab the relay checks its URL again
+  against the last line, which can have changed the scope's list during the hold.
 - Layer 1 of the guard. The relay refuses a `Page.navigate` of a tab's main frame and a
   `Target.createTarget` whose `http:`/`https:` host (or a `blob:` URL's inner host) the scope's list does
   not cover: `Not allowed: <host> is not on the allowlist`, before any bridge request. A frame's

@@ -32,6 +32,9 @@ const CREATED_WAIT_MS = 2000;
 const ACTIVATE_MAX_MS = 2000;
 /** How long a new tab that the relay did not create waits in the model for its bridge.tabScope (C11). */
 export const TAB_SCOPE_WAIT_MS = 500;
+/** The tries of bridge.info at a link up (review-58 note 7): a failed one (a timeout, say) is tried again, then the relay waits for the next link up. */
+export const BRIDGE_INFO_TRIES = 3;
+const BRIDGE_INFO_RETRY_MS = 500;
 /** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
 const SAFE_DANGER = new Set(["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe", "asyncScanning", "asyncLocalPasswordScanning"]);
 
@@ -51,6 +54,8 @@ export const NOT_READY = {
 };
 /** The receiver's answer to an op on a tab that its sweep took out of its scope (C10, the orphan set). */
 const NOT_AN_AGENT_TAB = "not an agent tab";
+/** The receiver's answer to tabs.create and windows.create of a scope with no list (C10); the relay gives it too. */
+const NO_LIST_FOR_SCOPE = "no list for this scope";
 
 /** A client connection as the model sees it: the endpoint gives it a WebSocket. */
 export type Socket = { send(text: string): void; close(code: number, reason: string): void };
@@ -117,6 +122,8 @@ export class Model {
   private tooOld = false;
   /** The last allowlist line since the link came up: the lists of the set_scopes that the receiver confirmed. */
   private allowlist: ScopeSet | null = null;
+  /** The last line since the link came up whose `scopes` and `lists` are objects: the reference for a tab that joins a scope from a bridge answer. */
+  private lastApplied: ScopeSet | null = null;
   /**
    * The last allowlist line had a `roots` field, and this relay runs without the peer check (C11, the scope's session):
    * it applies no list of that line, as if no line had come, and answers each upgrade with the roots 503, until a line
@@ -164,6 +171,15 @@ export class Model {
     return this.notReady() ?? (this.ended.has(scope) || this.allowlist?.listOf(scope) == null ? NOT_READY.noList : null);
   }
 
+  /**
+   * A tab must not join `scope` (review-58 B1): the scope is ended, or the last applied line gives it no list. A bridge
+   * answer and a line can come in one read of the relay's standard input; then the line applies before the code
+   * after the answer's await runs, so the code checks again before it gives a tab the scope of that answer.
+   */
+  private noListFor(scope: string): boolean {
+    return this.ended.has(scope) || (this.lastApplied !== null && this.lastApplied.listOf(scope) === null);
+  }
+
   /** The entries of a scope's list in the last allowlist line, or null for a scope with no list. */
   private entriesOf(scope: string): readonly string[] | null {
     return this.allowlist?.entriesOf(scope) ?? null;
@@ -198,6 +214,7 @@ export class Model {
     this.rootsLine = false;
     const set = parseScopes(msg);
     this.allowlist = set;
+    if (set.applied) this.lastApplied = set;
     if (set.refused) this.log(`relay: the allowlist line has ${set.refused} refused item(s)`);
     // A line that names an ended scope again ends its refusal (a later session of that name, after C4's rule 2).
     for (const scope of [...this.ended]) if (set.scopes.has(scope)) this.ended.delete(scope);
@@ -237,12 +254,21 @@ export class Model {
       void this.queueSettings(async () => { for (const t of CONTENT_TYPES) await this.bridge.call("contentSettings.clear", [t]); });
     }
     let info: any;
-    try {
-      info = await this.bridge.call("bridge.info");
-    } catch (e) {
-      if (link === this.link && (e as Error).message === "unknown op") this.tooOld = true;
-      else this.log(`relay: bridge.info failed: ${(e as Error).message}`);
-      return;
+    for (let tryNo = 1; ; tryNo++) {
+      try {
+        info = await this.bridge.call("bridge.info");
+        break;
+      } catch (e) {
+        const why = (e as Error).message;
+        if (link !== this.link) return;
+        if (why === "unknown op") { this.tooOld = true; return; }
+        // review-58 note 7: a failed bridge.info (its 30 s deadline, say) is tried again a few times; else the relay
+        // would stay "not connected" until the next link up. A link change ends the tries (the generation above).
+        if (tryNo >= BRIDGE_INFO_TRIES) { this.log(`relay: bridge.info failed (try ${tryNo} of ${BRIDGE_INFO_TRIES}): ${why}; the relay gives up until the next link up`); return; }
+        this.log(`relay: bridge.info failed (try ${tryNo} of ${BRIDGE_INFO_TRIES}): ${why}; it tries again`);
+        await sleep(BRIDGE_INFO_RETRY_MS);
+        if (link !== this.link) return;
+      }
     }
     if (link !== this.link) return;
     if (!(info && info.bridge >= 1)) { this.tooOld = true; return; }
@@ -273,6 +299,8 @@ export class Model {
     for (const e of entries) {
       const id = e?.tabId, scope = e?.scope;
       if (!Number.isInteger(id) || id < 0 || typeof scope !== "string" || !SCOPE.test(scope) || this.tabs.has(id)) continue;
+      // A line in the same read as the answer can have dropped the scope (review-58 B1): the tab stays out of it.
+      if (this.noListFor(scope)) continue;
       const tab = this.tabOf(id);
       tab.scope = scope; tab.fromMap = true;
       this.keptScopes.delete(id);
@@ -328,7 +356,7 @@ export class Model {
   private reset(): void {
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
     for (const done of [...this.scopeWaiters.values()]) done(null);
-    this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.rootsLine = false;
+    this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
   }
 
   private closeAll([code, reason]: readonly [number, string]): void {
@@ -398,6 +426,9 @@ export class Model {
 
   /** One CDP message of a client. A call for Chrome goes to the bridge with no await before it, so Chrome gets the calls in order. */
   async onMessage(c: Conn, msg: any): Promise<void> {
+    // A connection that the model closed (end_scope, a line without its list, a link change) can still send until its
+    // close handshake ends (up to 30 s): none of that reaches the bridge, and it gets no answer (review-58 note 1).
+    if (!this.conns.has(c)) return;
     const { id, method, sessionId } = msg ?? {};
     const params = msg?.params ?? {};
     const answer = (body: object) => { if (this.conns.has(c)) c.send(sessionId ? { id, sessionId, ...body } : { id, ...body }); };
@@ -553,6 +584,9 @@ export class Model {
     const url = tab.navigateTo;
     tab.navigateTo = null;
     if (!url) return;
+    // A line can change the scope's list during the hold (review-58 note 5): layer 1 judges the URL again by the last line.
+    const off = offList("Page.navigate", { url }, tab.scope === null || this.ended.has(tab.scope) ? null : this.entriesOf(tab.scope), null);
+    if (off !== null) { this.log(`relay: new tab ${tab.id} is not navigated: ${TEXT.notAllowed(off)}`); return; }
     try {
       await this.ensureAttached(tab);
       await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.navigate", { url }]);
@@ -571,15 +605,22 @@ export class Model {
   /** `c` left while a call for `tab` waited: it keeps no session and no ownership, and a tab with no session carries no debugger. */
   private async abandon(c: Conn, tab: Tab): Promise<never> {
     if (tab.owner === c) tab.owner = null;
-    if (!tab.owner && !tab.sessions.size) await this.leave(tab);
+    if (!tab.owner && !tab.sessions.size) await this.leave(tab, false);
     throw new Error("The connection closed");
   }
 
-  /** The last session of a tab went: a pending client URL still comes, as with a direct create, then the tab carries no debugger. */
-  private async leave(tab: Tab): Promise<void> {
+  /**
+   * The last session of a tab went, and the tab carries no debugger. When the client only detached (its connection is
+   * open), a pending URL of its Target.createTarget still comes, as with a direct create. When its connection left
+   * (it closed, or the model closed it: end_scope, a line without its list), no navigation comes (review-58 note 1):
+   * the tab stays at about:blank, free for the scope.
+   */
+  private async leave(tab: Tab, navigate: boolean): Promise<void> {
     if (tab.navigateTo) {
-      if (tab.held) this.release(tab);
-      await this.navigate(tab);
+      if (navigate) {
+        if (tab.held) this.release(tab);
+        await this.navigate(tab);
+      } else tab.navigateTo = null;
     }
     await this.detach(tab);
   }
@@ -651,7 +692,7 @@ export class Model {
     if (!tab) return;
     tab.sessions.delete(sid);
     if (notify) c.event(s.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
-    if (!tab.sessions.size) { tab.owner = null; await this.leave(tab); }
+    if (!tab.sessions.size) { tab.owner = null; await this.leave(tab, this.conns.has(c)); }
   }
 
   /** After a timeout (C10): detach the tab, which ends the command in Chrome; it keeps its scope and owner, and an auto-attach owner gets it again. */
@@ -1047,6 +1088,10 @@ export class Model {
         // answers `no list for this scope` (the client gets it as -32000, C11) and opens no tab.
         const created = this.windowPerPage || p.newWindow ? (await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }, c.scope])).tabs[0]
           : await this.bridge.call("tabs.create", [{ url: "about:blank", active: !p.background }, c.scope]);
+        // A line (or an end_scope) in the same read as the answer can have dropped the scope (review-58 B1): then the
+        // tab never joins it. It is a tab of no scope for the model (its tabs.onCreated waits, then releases and
+        // detaches it), and the receiver's sweep closes it.
+        if (this.noListFor(c.scope)) throw new Error(NO_LIST_FOR_SCOPE);
         const tab = this.tabOf(created.id);
         // The tab joins the scope also when its creator left meanwhile; then it is free for the scope.
         tab.scope = c.scope; tab.claimed = true; tab.navigateTo = url;

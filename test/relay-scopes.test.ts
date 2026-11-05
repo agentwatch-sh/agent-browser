@@ -13,6 +13,7 @@ import type { CDPConnection } from "../src/cdp.ts";
 import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { offList } from "../src/relay/policy.ts";
 import { covers, normalizeEntry, parseScopes } from "../src/relay/scopes.ts";
+import WebSocket from "ws";
 import { harness, LINE, raw, until, type Harness } from "./fake-bridge.ts";
 
 const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-c99bebb/${name}.json`, import.meta.url), "utf8"));
@@ -266,7 +267,7 @@ test("Target.createTarget names the connection's scope as the second arg of wind
           ["windows.create", [{ url: "about:blank", focused: false }, "sb"]], ["windows.create", [{ url: "about:blank", focused: false }, "sb"]]]
         : [["tabs.create", [{ url: "about:blank", active: true }, "sa"]], ["windows.create", [{ url: "about:blank", focused: false }, "sa"]],
           ["tabs.create", [{ url: "about:blank", active: true }, "sb"]], ["windows.create", [{ url: "about:blank", focused: false }, "sb"]]]);
-      for (const [op, args] of creates) assert.ok(bridgeV.ops.find((o: any) => o.op === op).kinds[1] === "scope" && args[1] === "sa" || args[1] === "sb");
+      for (const [op, args] of creates) assert.ok(bridgeV.ops.find((o: any) => o.op === op).kinds[1] === "scope" && (args[1] === "sa" || args[1] === "sb"), `${op} ${JSON.stringify(args)}`);
     } finally { await h.close(); }
   }
 });
@@ -509,4 +510,155 @@ test("grants per scope: no origin covers the scope's own list; an origin off it 
     assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "contentSettings.set").map((r) => [r.args[0], r.args[1].primaryPattern]).sort(),
       [["automaticDownloads", "*://*.a.example/*"], ["automaticDownloads", "*://*.b.example/*"], ["notifications", "https://b.example/*"]]);
   } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ review-58: answers and lines in one read, closed connections
+
+/** A bridge request that the fake receiver holds (no answer) until the test writes its res. */
+async function held(h: Harness, op: string) {
+  return until(() => h.fake.requests.find((r) => r.op === op), op);
+}
+const res = (id: string, data: unknown) => JSON.stringify({ t: "res", ch: "bridge", id, ok: true, data });
+
+test("step 2: when the bridge.tabScopes answer and a line that gives the scope no list come in one read, the tab never joins the scope", async () => {
+  for (const ended of [false, true]) {
+    const h = await harness();
+    try {
+      // Tab 7 of scope z: the receiver's sweep took it out of its scope (an orphan: still open, getTargets lists it).
+      const t = h.fake.newTab("https://z.example/secret");
+      h.fake.op = ({ op }) => (op === "bridge.tabScopes" ? new Promise(() => {}) : undefined);
+      h.fake.line({ t: "link", up: true, version: "0.3.1" });
+      const req = await held(h, "bridge.tabScopes");
+      h.fake.op = () => undefined;
+      if (ended) h.fake.line({ t: "end_scope", scope: "z" });
+      const line = JSON.stringify({ t: "allowlist", lists: { a: ["a.example"] }, scopes: ended ? { z: "a" } : { s1: "a" }, default: null });
+      // One read of the relay's standard input: the answer resolves step 2, and the line applies before step 2 goes on.
+      h.fake.input.write(ended ? `${res(req.id, [{ tabId: t.id, scope: "z" }])}\n` : `${res(req.id, [{ tabId: t.id, scope: "z" }])}\n${line}\n`);
+      if (ended) { await sleep(20); h.fake.input.write(`${line}\n`); }
+      await until(() => h.relay.model.notReady() === null, "ready");
+      // A later line names z again (a new session z, after C4's rule 2): it never sees the old session's tab.
+      h.fake.line({ t: "allowlist", lists: { a: ["a.example"], zl: ["z.example"] }, scopes: { s1: "a", z: "zl" }, default: null });
+      await until(() => h.relay.model.refuse("z") === null, "z admitted");
+      const c = await h.connect("z");
+      assert.deepEqual((await c.send("Target.getTargets")).targetInfos, [], `ended ${ended}: a new session z sees no tab of the old session z`);
+    } finally { await h.close(); }
+  }
+});
+
+test("Target.createTarget: when the windows.create answer and a line that drops the scope come in one read, the new tab never joins the scope", async () => {
+  for (const ended of [false, true]) {
+    const h = await harness();
+    try {
+      await h.ready(TWO);
+      const c = await h.connect("sb");
+      h.fake.op = ({ op }) => (op === "windows.create" ? new Promise(() => {}) : undefined);
+      const answer = c.send("Target.createTarget", { url: "about:blank" }).then(() => "a target", (e: Error) => e.message);
+      const req = await held(h, "windows.create");
+      h.fake.op = () => undefined;
+      // The receiver created tab 50 (the sweep's close of it is held, so it stays open, in its orphan set).
+      h.fake.tabs.set(50, { id: 50, windowId: 20, url: "https://b.example/secret", title: "secret", targetId: "T50", active: true });
+      const created = JSON.stringify({ t: "ev", ch: "bridge", ev: "tabs.onCreated", tab: { id: 50, windowId: 20, url: "about:blank" }, attached: false, held: false });
+      const drop = ended ? JSON.stringify({ t: "end_scope", scope: "sb" }) : JSON.stringify({ ...TWO, scopes: { sa: "a" } });
+      h.fake.input.write(`${res(req.id, { id: 20, state: "normal", focused: false, tabs: [{ id: 50, windowId: 20, url: "about:blank" }] })}\n${created}\n${drop}\n`);
+      assert.notEqual(await Promise.race([answer, sleep(3000).then(() => "pending")]), "a target");
+      await sleep(TAB_SCOPE_WAIT_MS + 100);
+      h.fake.line(TWO); // a later session sb (after rule 2's line without it)
+      await until(() => h.relay.model.refuse("sb") === null, "sb named again");
+      const later = await h.connect("sb");
+      assert.deepEqual((await later.send("Target.getTargets")).targetInfos, [], `ended ${ended}`);
+    } finally { await h.close(); }
+  }
+});
+
+test("a connection that the model closed (end_scope, or a line without its list) gets no answer and reaches no bridge, also while its close handshake runs", async () => {
+  for (const how of ["end_scope", "line"]) {
+    const h = await harness();
+    try {
+      await h.ready(TWO);
+      const ws = new WebSocket(h.url("sb"));
+      try {
+        await new Promise((r) => ws.once("open", r));
+        // The client does not read the close frame: its socket is paused, so it is still OPEN on its side.
+        (ws as any)._socket.pause();
+        h.fake.line(how === "end_scope" ? { t: "end_scope", scope: "sb" } : { ...TWO, scopes: { sa: "a" } });
+        await sleep(100);
+        const from = h.fake.requests.length;
+        ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "https://b.example/x" } }));
+        ws.send(JSON.stringify({ id: 2, method: "Browser.grantPermissions", params: { permissions: ["geolocation"] } }));
+        await sleep(300);
+        assert.deepEqual(h.fake.requests.slice(from).map((r) => r.op), [], how);
+      } finally { ws.terminate(); }
+    } finally { await h.close(); }
+  }
+});
+
+test("step 3 drops a gone entry of step 2: a later end_scope sends no tabs.remove for it", async () => {
+  const h = await harness();
+  try {
+    const t7 = h.fake.newTab("https://a.example/7", undefined, 1, 0, "s1", true);
+    // Tab 42 of the receiver's map closed before step 3: debugger.getTargets does not list it.
+    h.fake.op = ({ op }) => (op === "bridge.tabScopes" ? [{ tabId: t7.id, scope: "s1" }, { tabId: 42, scope: "s1" }] : undefined);
+    await h.ready();
+    h.fake.op = () => undefined;
+    const from = h.fake.requests.length;
+    h.fake.line({ t: "end_scope", scope: "s1" });
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "tabs.remove"), "the removal");
+    await sleep(50);
+    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "tabs.remove").map((r) => r.args[0]), [t7.id]);
+  } finally { await h.close(); }
+});
+
+test("a line drops the kept bridge.tabScope of a scope that it gives no list: the tab's later tabs.onCreated waits in no scope", async () => {
+  const h = await harness();
+  try {
+    await h.ready(TWO);
+    // The receiver's bridge.tabScope of a popup comes before its tabs.onCreated; then a line drops sb.
+    h.fake.emit("bridge.tabScope", { tabId: 60, scope: "sb" });
+    h.fake.line({ ...TWO, scopes: { sa: "a" } });
+    await sleep(20);
+    h.fake.tabs.set(60, { id: 60, windowId: 1, url: "https://b.example/p", title: "", targetId: "T60", active: true });
+    h.fake.emit("tabs.onCreated", { tab: h.fake.chromeTab(h.fake.tabs.get(60)!), attached: false, held: false });
+    await sleep(TAB_SCOPE_WAIT_MS + 100);
+    h.fake.line(TWO); // a later session sb
+    await until(() => h.relay.model.refuse("sb") === null, "sb named again");
+    const later = await h.connect("sb");
+    assert.deepEqual((await later.send("Target.getTargets")).targetInfos, []);
+  } finally { await h.close(); }
+});
+
+test("the URL of a new tab is checked again before its navigation: a line that moved the scope's list during the hold stops it", async () => {
+  const h = await harness();
+  try {
+    await h.ready(TWO);
+    const c = await h.connect("sa");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    await c.send("Target.createTarget", { url: "https://a.example/x" });
+    const ev = await attached;
+    // During the hold the daemon gives scope sa list b.
+    h.fake.line({ ...TWO, scopes: { sa: "b", sb: "b" } });
+    await until(() => h.relay.model.refuse("sa") === null, "the new line");
+    await c.send("Runtime.runIfWaitingForDebugger", {}, ev.sessionId);
+    await sleep(100);
+    assert.deepEqual(h.fake.sent("debugger.sendCommand", "Page.navigate"), [], "no navigation off the scope's new list");
+    assert.ok(h.logs.some((l) => /a\.example is not on the allowlist/.test(l)), h.logs.join("\n"));
+  } finally { await h.close(); }
+});
+
+test("at a link up, a bridge.info that fails (timeout) is tried again a few times; then the relay gets ready, or it stays not connected with a log line", async () => {
+  for (const fails of [2, 9]) {
+    const h = await harness();
+    try {
+      let n = 0;
+      h.fake.op = ({ op }) => (op === "bridge.info" && n++ < fails ? { error: "timeout" } : undefined);
+      h.fake.line({ t: "link", up: true, version: "0.3.1" });
+      h.fake.line(LINE);
+      if (fails === 2) await until(() => h.relay.model.notReady() === null, "ready after the retries", 8000);
+      else {
+        await until(() => h.logs.some((l) => /bridge\.info failed .*gives up/.test(l)), "the last try", 8000);
+        assert.equal(h.relay.model.notReady(), NOT_READY.link);
+      }
+      assert.ok(h.fake.sent("bridge.info").length <= 4, `at most 4 tries, not ${h.fake.sent("bridge.info").length}`);
+    } finally { await h.close(); }
+  }
 });
