@@ -314,7 +314,11 @@ person's input**) and `log` (progress lines; default standard error).
     left with the focus behind another window kept that focus beside a later page of its own site (two
     focused pages of one site for 3.4 to 3.6 s of 3.5 to 3.7 s) until a rule brought its window forward at
     its command's end. With one lock, agents on two sites wait for each other as agents on one site do,
-    and these signals do not come.
+    and these signals do not come. Measured with one lock again (one run each, at `cb95a91`): `design`
+    as before (no jump, no position change that the movement does not explain, both pages focused 0
+    ms, a click in 1.28 s); `design-two` both pages focused 200 ms, 53 % longer than one agent alone;
+    `design-two-sites` both pages focused 100 ms, 47 % longer, no `blur` inside a page's own commands,
+    no jump, and a third agent on the first site 0 ms with two focused pages of that site.
   - **A person's input.** A pointer path of ghost-cursor's curve (as `record`'s cursor: an overshoot past
     500 px, a time of 300 to 1000 ms by Fitts's law), 12 to 60 moves in whole pixels (no move without
     movement) to a point in the middle 40% of the element, a pause of 80 to 150 ms, then a press of 70 to
