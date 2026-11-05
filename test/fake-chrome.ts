@@ -256,6 +256,12 @@ export class FakePage {
   cells: string[] = [];
   /** Called with each key a key event presses. */
   onKey?: (key: string) => void;
+  /**
+   * The view size that a capture set again when it ended after the override was cleared: it found the
+   * override, and Chrome's ScreenshotCaptured sets the view to its size; no later clear or shot --size
+   * undid it (review-41d on taylor, 3 of 3).
+   */
+  stuck: { width: number; height: number } | undefined;
   /** The device metrics override, while one is set. */
   metrics: { width: number; height: number; deviceScaleFactor: number } | undefined;
   /** Nodes page code appended to the document element (the recording overlay), and its animations. */
@@ -378,7 +384,11 @@ export class FakePage {
     const n = this.nextCapture++, found = this.metrics;
     const replaces = this.drawsByItself || this.heldCaptures.some((c) => c.at < this.frames);
     return new Promise((resolve) => {
-      this.heldCaptures.push({ n, at: this.frames, found: !!found, end: () => { if (found) this.metrics = found; resolve(data); } });
+      this.heldCaptures.push({ n, at: this.frames, found: !!found, end: () => {
+        if (found && !this.metrics) this.stuck = { width: found.width, height: found.height };
+        if (found) this.metrics = found;
+        resolve(data);
+      } });
       this.update();
       if (replaces && !this.noFrames) this.later(16, () => {
         this.drew = true;
@@ -520,8 +530,8 @@ export class FakePage {
     const sandbox: Record<string, unknown> = {
       document,
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
-      get innerWidth() { return page.metrics?.width ?? 1280; },
-      get innerHeight() { return page.metrics?.height ?? 800; },
+      get innerWidth() { return page.metrics?.width ?? page.stuck?.width ?? 1280; },
+      get innerHeight() { return page.metrics?.height ?? page.stuck?.height ?? 800; },
       requestAnimationFrame: (fn: (t: number) => void) => page.atFrame(() => fn(performance.now())),
       performance: { now: () => performance.now() },
       getComputedStyle: (el: FakeElement) => ({ visibility: el.hidden ? "hidden" : "visible", display: el.hidden ? "none" : "block" }),

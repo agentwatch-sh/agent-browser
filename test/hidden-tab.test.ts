@@ -414,6 +414,7 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     page.onCapture = undefined;
     await new Promise((r) => setTimeout(r, 200)); // a late capture would end by now
     assert.equal(page.metrics, undefined, "no capture sent under the override ended after the clear");
+    assert.equal(page.stuck, undefined, "the view size was not set again for good");
     assert.deepEqual(lines.filter((l) => /is \d+x\d+, not/.test(l)), [], JSON.stringify(lines));
     await commands.close(mode(), { tab: name });
   });
@@ -483,6 +484,7 @@ test("hiddenDrive: shot --size whose page goes to a new page during the new firs
   page.onCapture = undefined;
   assert.equal(methodsOf(calls).filter((x) => x === "Emulation.clearDeviceMetricsOverride").length, 1);
   assert.equal(page.metrics, undefined, "the capture under the override ended before the clear");
+  assert.equal(page.stuck, undefined, "and did not set the view size again for good");
   await commands.close(h(), { tab: name });
 });
 
