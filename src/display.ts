@@ -3,11 +3,12 @@
 // its own: a person's windows, focus and pointer on their own screen are theirs. That is agentwatch's private Xvfb
 // behind agent mode's endpoint (cdpUrl: agentwatch's agent unit starts one Xvfb for its one Chromium), and, for an
 // agent Chrome that agent-browser started, a display whose every visible window is that Chrome's (its pid, through
-// xdotool). Elsewhere agent-browser drives the page as before (background tabs, focus emulation), with a log line.
+// xdotool), with no window manager on it and no Wayland session around it (ab-v16.42). Elsewhere agent-browser drives
+// the page as before (background tabs, focus emulation), with a log line.
 
 import { execFile } from "node:child_process";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { agentChromePid } from "./agent.ts";
+import { agentChromePid, isAgentChromeCommand } from "./agent.ts";
 import { statePath, type Settings, type XdotoolRunner } from "./options.ts";
 
 /** xdotool on one display. */
@@ -23,22 +24,34 @@ const DISPLAY_FILE = "display.json";
 /** How long a display check of an agent Chrome that agent-browser started holds (each check costs ps and xdotool calls). */
 const CHECK_MS = 60_000;
 
-/** The DISPLAY and XAUTHORITY of a process, from its environment (/proc/<pid>/environ), or undefined. */
+/**
+ * The DISPLAY, XAUTHORITY and WAYLAND_DISPLAY of a process, from its environment (/proc/<pid>/environ); undefined when
+ * it has no DISPLAY or cannot be read.
+ */
 export function envOf(pid: number): Record<string, string> | undefined {
   try {
     const vars = Object.fromEntries(readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
-    return vars.DISPLAY ? { DISPLAY: vars.DISPLAY, ...(vars.XAUTHORITY ? { XAUTHORITY: vars.XAUTHORITY } : {}) } : undefined;
+    return displayVars(vars);
   } catch { return undefined; }
+}
+
+function displayVars(vars: Record<string, string | undefined>): Record<string, string> | undefined {
+  if (!vars.DISPLAY) return undefined;
+  return { DISPLAY: vars.DISPLAY, ...(vars.XAUTHORITY ? { XAUTHORITY: vars.XAUTHORITY } : {}), ...(vars.WAYLAND_DISPLAY ? { WAYLAND_DISPLAY: vars.WAYLAND_DISPLAY } : {}) };
+}
+
+/** A program of the X display (xdotool, xprop) with this DISPLAY (and XAUTHORITY), never through Wayland. */
+function xProgram(name: string, env: Record<string, string>): XdotoolRunner {
+  const full: NodeJS.ProcessEnv = { ...process.env, ...env };
+  delete full.WAYLAND_DISPLAY;
+  return (args) => new Promise((resolve, reject) => {
+    execFile(name, args, { env: full, timeout: 3000, encoding: "utf8" }, (e, out) => (e ? reject(e) : resolve(out)));
+  });
 }
 
 /** xdotool with this DISPLAY (and XAUTHORITY), never through Wayland. */
 export function xRunner(env: Record<string, string>): XAccess {
-  const full = { ...process.env, ...env };
-  delete full.WAYLAND_DISPLAY;
-  const run: XdotoolRunner = (args) => new Promise((resolve, reject) => {
-    execFile("xdotool", args, { env: full, timeout: 3000, encoding: "utf8" }, (e, out) => (e ? reject(e) : resolve(out)));
-  });
-  return { run, display: env.DISPLAY };
+  return { run: xProgram("xdotool", env), display: env.DISPLAY };
 }
 
 const windowIds = (out: string) => out.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -53,6 +66,19 @@ export async function onlyWindowsOf(x: XAccess, pid: string): Promise<boolean> {
   return visible.length > 0;
 }
 
+/**
+ * A window manager runs on the display: its root window has _NET_SUPPORTING_WM_CHECK (xprop's answer). A person's
+ * desktop has one, also XWayland under a Wayland compositor; agentwatch's Xvfb has none. xprop's three answers, read on
+ * an Xvfb of taylor (ab-v16.42): "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x21f" (set), "...:  not found." (not
+ * set) and "...:  no such atom on any window." (no client named it yet). An xprop that fails, or another answer, throws.
+ */
+export async function hasWindowManager(xprop: XdotoolRunner): Promise<boolean> {
+  const out = await xprop(["-root", "_NET_SUPPORTING_WM_CHECK"]);
+  if (/_NET_SUPPORTING_WM_CHECK\(WINDOW\): window id/.test(out)) return true;
+  if (/_NET_SUPPORTING_WM_CHECK:\s+(not found|no such atom on any window)/.test(out)) return false;
+  throw new Error(`xprop gave no answer: ${out.trim().split("\n")[0]}`);
+}
+
 type Kept = { chromePid: number; own: boolean; why?: string; display?: string; xauthority?: string; at: number; noticeAt?: number };
 
 function readKept(s: Settings): Kept | undefined {
@@ -64,11 +90,21 @@ function writeKept(s: Settings, k: Kept) {
   renameSync(tmp, path);
 }
 
-/** @internal The parts of displayOf that a test replaces: the agent Chrome's pid, a process's display, xdotool on a display, the clock. */
+/** The command line of a process (/proc/<pid>/cmdline, its arguments joined by spaces), or undefined. */
+function cmdlineOf(pid: number): string | undefined {
+  try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).join(" ") || undefined; } catch { return undefined; }
+}
+
+/**
+ * @internal The parts of displayOf that a test replaces: the agent Chrome's pid (ps), a process's command line and
+ * display, xdotool and xprop on a display, the clock.
+ */
 export type DisplayDeps = {
   pid?: (s: Settings) => number | undefined;
+  cmdline?: (pid: number) => string | undefined;
   env?: (pid: number) => Record<string, string> | undefined;
   runner?: (env: Record<string, string>) => XAccess;
+  xprop?: (env: Record<string, string>) => XdotoolRunner;
   now?: () => number;
 };
 
@@ -77,53 +113,71 @@ export type DisplayDeps = {
  * also under a test runner (review-45b: a consumer's own tests against a real agent Chrome must not skip it). Behind
  * cdpUrl: own; xdotool with this process's DISPLAY, which an activation must verify (input.ts). An agent Chrome that
  * agent-browser started: its own environment's DISPLAY first, else this process's; own only when xdotool shows that
- * every visible window there is that Chrome's. That check holds for a minute for the same Chrome pid (display.json in
- * the state folder). A check that fails (no ps, a state folder that cannot be written) gives "not own". When the
- * display is not its own, `log` says why, at most once in 5 minutes.
+ * every visible window there is that Chrome's, its environment has no WAYLAND_DISPLAY (XWayland shows its windows on a
+ * person's screen) and the display's root window has no _NET_SUPPORTING_WM_CHECK (a window manager: a person's
+ * desktop). That check holds for a minute for the same Chrome pid (display.json in the state folder); while it holds,
+ * /proc/<pid>/cmdline of the kept pid says whether it is still this profile's agent Chrome, so no ps runs (review-45c:
+ * 35 to 39 ms on taylor). A check that fails (no ps, no xdotool, no xprop) gives "not own"; a state folder that cannot
+ * be written keeps no answer, and the check runs each time. With `log`, a display that is not its own gets the log line
+ * of noticeNotOwn.
  */
 export async function displayOf(s: Settings, log = false, deps: DisplayDeps = {}): Promise<DisplayInfo> {
   const d = s.display;
-  if (d && d.own !== undefined) {
-    if (!d.own && log) s.log(`agent-browser: the agent Chrome is not on a display of its own (the test says so); ${NOT_OWN}`);
-    return { own: d.own, x: d.xdotool ? { run: d.xdotool, display: "injected" } : undefined, chromePid: d.chromePid, ...(d.own ? {} : { why: "the test says so" }) };
-  }
-  const now = deps.now ?? Date.now;
   let info: DisplayInfo;
-  try { info = await find(s, deps, now); }
-  catch (e) { info = { own: false, why: `the check of the display failed (${(e as Error).message.split("\n")[0]})` }; }
-  if (!info.own && log) {
-    let k: Kept | undefined;
-    try { k = readKept(s); } catch { k = undefined; }
-    if (!k?.noticeAt || now() - k.noticeAt > 5 * 60_000) {
-      s.log(`agent-browser: the agent Chrome is not on a display of its own (${info.why}); ${NOT_OWN}`);
-      try { writeKept(s, { ...(k ?? { chromePid: info.chromePid ?? 0, own: false, at: 0 }), noticeAt: now() }); } catch { /* not writable: the line comes again */ }
-    }
+  if (d && d.own !== undefined) {
+    info = { own: d.own, x: d.xdotool ? { run: d.xdotool, display: "injected" } : undefined, chromePid: d.chromePid, ...(d.own ? {} : { why: "the test says so" }) };
+  } else {
+    try { info = await find(s, deps, deps.now ?? Date.now); }
+    catch (e) { info = { own: false, why: `the check of the display failed (${(e as Error).message.split("\n")[0]})` }; }
   }
+  if (log) noticeNotOwn(s, info, deps.now);
   return info;
+}
+
+/**
+ * The log line of a display that is not the agent browser's own: why, and what agent-browser does instead. At most once
+ * in 5 minutes for a state folder (display.json), and each time for a test's own answer. AgentBrowser gives it at the
+ * first command that opens or attaches a page, not at a command that only lists (review-45c).
+ */
+export function noticeNotOwn(s: Settings, info: DisplayInfo, now: () => number = Date.now): void {
+  if (info.own) return;
+  if (s.display?.own !== undefined) { s.log(`agent-browser: the agent Chrome is not on a display of its own (${info.why}); ${NOT_OWN}`); return; }
+  let k: Kept | undefined;
+  try { k = readKept(s); } catch { k = undefined; }
+  if (k?.noticeAt && now() - k.noticeAt <= 5 * 60_000) return;
+  s.log(`agent-browser: the agent Chrome is not on a display of its own (${info.why}); ${NOT_OWN}`);
+  try { writeKept(s, { ...(k ?? { chromePid: info.chromePid ?? 0, own: false, at: 0 }), noticeAt: now() }); } catch { /* not writable: the line comes again */ }
 }
 
 const NOT_OWN = "agent-browser opens each page as a background tab and drives it as before (focus emulation, or --hidden-drive), which a site can detect, and it brings no window forward and does not move the X pointer";
 
 async function find(s: Settings, deps: DisplayDeps, now: () => number): Promise<DisplayInfo> {
   const d = s.display, run = deps.runner ?? xRunner;
-  const fromEnv = process.env.DISPLAY ? { DISPLAY: process.env.DISPLAY, ...(process.env.XAUTHORITY ? { XAUTHORITY: process.env.XAUTHORITY } : {}) } : undefined;
+  const fromEnv = displayVars(process.env);
   if (s.cdpUrl) return { own: true, x: d?.xdotool === false || !fromEnv ? undefined : run(fromEnv) };
-  const chromePid = (deps.pid ?? agentChromePid)(s);
-  if (!chromePid) return { own: false, why: "agent-browser finds no agent Chrome of its own on this profile (an endpoint that another program started)" };
   const kept = readKept(s);
+  const fresh = kept !== undefined && kept.chromePid > 0 && now() - kept.at < CHECK_MS;
+  // The kept pid first: when its command line is still this profile's agent Chrome, ps need not run (review-45c).
+  const keptLive = fresh && isAgentChromeCommand((deps.cmdline ?? cmdlineOf)(kept.chromePid) ?? "", s.profileDir);
+  const chromePid = keptLive ? kept.chromePid : (deps.pid ?? agentChromePid)(s);
+  if (!chromePid) return { own: false, why: "agent-browser finds no agent Chrome of its own on this profile (an endpoint that another program started)" };
   // The kept answer holds for the same agent Chrome only: a restart on another display within the minute checks again.
-  if (kept && kept.chromePid === chromePid && now() - kept.at < CHECK_MS)
+  if (fresh && kept.chromePid === chromePid)
     return { own: kept.own, chromePid, why: kept.why,
       x: kept.own && kept.display && d?.xdotool !== false ? run({ DISPLAY: kept.display, ...(kept.xauthority ? { XAUTHORITY: kept.xauthority } : {}) }) : undefined };
   const env = (deps.env ?? envOf)(chromePid) ?? fromEnv;
   let info: DisplayInfo;
   if (!env) info = { own: false, chromePid, why: "agent-browser cannot see the agent Chrome's display (no DISPLAY)" };
+  else if (env.WAYLAND_DISPLAY) info = { own: false, chromePid, why: `the agent Chrome runs in a Wayland session (WAYLAND_DISPLAY=${env.WAYLAND_DISPLAY}): its X display ${env.DISPLAY} is XWayland, on a person's screen` };
   else {
     const x = run(env);
-    const own = await onlyWindowsOf(x, String(chromePid)).catch(() => undefined);
-    info = own === undefined ? { own: false, chromePid, why: `agent-browser cannot check the display ${env.DISPLAY} (no xdotool, or it cannot read the display)` }
-      : own ? { own: true, chromePid, x: d?.xdotool === false ? undefined : x }
-      : { own: false, chromePid, why: `another program's window is on the display ${env.DISPLAY}` };
+    const only = await onlyWindowsOf(x, String(chromePid)).catch(() => undefined);
+    const wm = only ? await hasWindowManager((deps.xprop ?? ((e) => xProgram("xprop", e)))(env)).catch(() => undefined) : false;
+    info = only === undefined ? { own: false, chromePid, why: `agent-browser cannot check the display ${env.DISPLAY} (no xdotool, or it cannot read the display)` }
+      : !only ? { own: false, chromePid, why: `another program's window is on the display ${env.DISPLAY}` }
+      : wm === undefined ? { own: false, chromePid, why: `agent-browser cannot check for a window manager on the display ${env.DISPLAY} (no xprop, or it cannot read the display)` }
+      : wm ? { own: false, chromePid, why: `a window manager runs on the display ${env.DISPLAY} (_NET_SUPPORTING_WM_CHECK): a person's desktop` }
+      : { own: true, chromePid, x: d?.xdotool === false ? undefined : x };
   }
   try {
     writeKept(s, { chromePid, own: info.own, why: info.why, display: info.own ? env?.DISPLAY : undefined, xauthority: info.own ? env?.XAUTHORITY : undefined,

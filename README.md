@@ -215,11 +215,17 @@ person's input**) and `log` (progress lines; default standard error).
     own, so that it never puts windows on a person's screen or takes their focus: behind agent mode's
     endpoint (`--cdp-url`: agentwatch's agent unit runs its Chromium on a private Xvfb), and for an agent
     Chrome that agent-browser started when every visible window of its display (its own environment's
-    `DISPLAY`, through xdotool) belongs to that Chrome's pid. That check holds for a minute for the same
-    Chrome pid (`display.json` in the state folder). Elsewhere (another program's window on the display,
-    no xdotool, an endpoint that another program started, a check that fails) every page opens and is
-    driven as before, in a background tab, and a log line says why, at most once in 5 minutes. No test
-    runner skips the check: a test gives its own answer (the internal `display` option).
+    `DISPLAY`, through xdotool) belongs to that Chrome's pid, no window manager runs there (the root
+    window has no `_NET_SUPPORTING_WM_CHECK`, read with xprop of x11-utils: a person's desktop has one)
+    and the Chrome's environment has no `WAYLAND_DISPLAY` (a Chrome forced to X11 under a Wayland
+    desktop is an XWayland client, on a person's screen, also when it is the only one). That check holds
+    for a minute for the same Chrome pid (`display.json` in the state folder); in that minute
+    `/proc/<pid>/cmdline` of the kept pid stands in for `ps`. Elsewhere (another program's window on
+    the display, a window manager, a Wayland session, no xdotool or no xprop, an endpoint that another
+    program started, a check that fails) every page opens and is driven as before, in a background tab,
+    and a log line says why, at most once in 5 minutes, at the first command that opens or attaches a
+    page (`tabs`, `status` and `window` give none). No test runner skips the check: a test gives its
+    own answer (the internal `display` option).
   - **A window page behind another tab of its window** is hidden, as a person's background tab: the
     opener behind a site's popup tab, an older tab of a pinned window (`open` puts each new tab there),
     a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.

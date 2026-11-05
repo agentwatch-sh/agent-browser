@@ -18,7 +18,7 @@ import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
-import { displayOf, type DisplayInfo } from "./display.ts";
+import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -113,6 +113,7 @@ export class AgentBrowser {
   /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
   readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
+  private notedDisplay = false;
 
   private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string, display: DisplayInfo | undefined) {
     this.conn = conn;
@@ -172,7 +173,7 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      const display = windowPerPage(s) ? await displayOf(s, true) : undefined;
+      const display = windowPerPage(s) ? await displayOf(s) : undefined;
       return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
@@ -181,6 +182,16 @@ export class AgentBrowser {
   }
 
   get mode() { return this.settings.mode; }
+
+  /**
+   * The log line of a display that is not the agent browser's own (display.ts, noticeNotOwn): at the first page that
+   * this connection opens or attaches, whose drive it changes, never at a command that only lists (review-45c).
+   */
+  private noteDisplay(): void {
+    if (this.notedDisplay || !this.display || this.display.own) return;
+    this.notedDisplay = true;
+    noticeNotOwn(this.settings, this.display);
+  }
 
   /** The tab scope this browser works in, or undefined: every tab. */
   get tabScope(): string | undefined { return this.settings.tabScope; }
@@ -335,6 +346,7 @@ export class AgentBrowser {
    */
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);
+    this.noteDisplay();
     const win = this.pinnedWindow();
     const agent = this.mode === "agent", windows = this.windows;
     // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Over agent mode's
@@ -449,6 +461,7 @@ export class AgentBrowser {
 
   async attach(targetId: string): Promise<Tab> {
     this.assertPinned();
+    this.noteDisplay();
     const existing = this.sessions.get(targetId);
     if (existing) return existing;
     const { targetInfos } = await this.conn.send("Target.getTargets");

@@ -326,6 +326,21 @@ test("Linux, a display that is not the agent browser's own: open makes a backgro
   await commands.close(o, { tab: name });
 });
 
+test("Linux, a display that is not the agent browser's own: the log line comes at the first command that opens or attaches a page, not at tabs, status or window (review-45c)", async () => {
+  const lines: string[] = [];
+  const o = linux({ display: { own: false }, log: (l: string) => { lines.push(l); } });
+  const gate = () => lines.filter((l) => /not on a display of its own/.test(l)).length;
+  await commands.tabs(o);
+  await commands.status(o);
+  await commands.window(o);
+  assert.equal(gate(), 0, lines.join("\n"));
+  const { name } = await opened(o);
+  assert.equal(gate(), 1, "open: one line, also for its attach");
+  await commands.text(o, { tab: name });
+  assert.equal(gate(), 2, "a command that attaches a page");
+  await commands.close(o, { tab: name });
+});
+
 test("Linux: reads of a hidden opener (text, outline, eval) bring its tab in front first, so an eval that waits for a frame ends (review-45b)", async () => {
   fake.tabSwitches = true;
   try {
