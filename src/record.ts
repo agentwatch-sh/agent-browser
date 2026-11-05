@@ -87,6 +87,8 @@ export function redactStep(step: unknown): unknown {
 
 const describe = (step: unknown) => JSON.stringify(redactStep(step))?.slice(0, 120);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+/** The site of an allowlisted URL, for a sign-in hint; about:blank has none. */
+const siteOf = (url: string) => (url === "about:blank" ? undefined : safeHost(url));
 
 /**
  * Check a step script (the parsed JSON array) before anything touches the tab. Every problem is a
@@ -792,6 +794,12 @@ class Driver {
   stillBefore?: StillShot;
   private current?: Mark;
   private stop = new AbortController();
+  /**
+   * The allowlisted site the take is on, for a sign-in hint (signInHint): the start page's, then each goto step's
+   * (set before the navigation: an HTTP redirect commits on the sign-in page only) and each allowlisted main-frame
+   * navigation's (runAndEncode). Undefined on about:blank.
+   */
+  site?: string;
 
   constructor(tab: Tab, plan: RecordPlan) {
     this.tab = tab;
@@ -906,6 +914,7 @@ class Driver {
     await this.ensureOverlay();
     if ("wait" in step) return this.pause(step.wait);
     if ("goto" in step) {
+      this.site = siteOf(step.goto);
       await this.tab.goto(step.goto);
       this.check();
       await this.tab.assertAllowed();
@@ -1099,6 +1108,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   const videoWidth = Math.round(width * scale), videoHeight = Math.round(height * scale);
   const url = await tab.url();
   const driver = new Driver(tab, plan);
+  driver.site = siteOf(url);
   const frames: { file: string; t: number }[] = [];
   let otherSize: [number, number] | undefined, otherSizes = 0, droppedSize: [number, number] | undefined, dropped = 0;
   // Chrome stamps each frame on its own clock; offset = (when we got it) - (its stamp), the least seen,
@@ -1126,9 +1136,10 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   });
   // A main-frame navigation off the allowlist ends the run at once; no frame after it is kept.
   const offNav = conn.on("Page.frameNavigated", (p: any, sid?: string) => {
-    if (sid !== tab.sessionId || p.frame?.parentId || isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) return;
+    if (sid !== tab.sessionId || p.frame?.parentId) return;
+    if (isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) { driver.site = siteOf(p.frame?.url ?? ""); return; }
     const host = safeHost(p.frame?.url ?? "");
-    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, s, safeHost(url))}; the recording stopped and nothing was written`));
+    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, s, driver.site)}; the recording stopped and nothing was written`));
   });
   const offDetach = conn.on("Target.detachedFromTarget", (p: any) => {
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));

@@ -45,6 +45,11 @@ export function isSignInHost(host: string): boolean {
   return SIGN_IN_HOSTS.some((d) => h === d || h.endsWith("." + d)) || SIGN_IN_LABELS.includes(h.split(".")[0]);
 }
 
+/** The sign-in step behind agent mode's endpoint (cdpUrl), where `launch` refuses: the operator extension sends it. */
+export function operatorSignIn(site: string): string {
+  return `ask the operator to sign in to ${site} in their own Chrome and send that site's sign-in to the agent browser with the operator extension (agentwatch — operator mode)`;
+}
+
 /**
  * What to do about a sign-in page. Agent mode: sign in by hand in the agent browser (`launch --login`). Behind agent
  * mode's endpoint (cdpUrl), `launch` refuses: agentwatch owns that agent browser, so the operator signs in to `site`
@@ -54,8 +59,7 @@ export function isSignInHost(host: string): boolean {
 export function signInHint(host: string, s: { mode: string; commandName: string; cdpUrl?: string }, site?: string): string {
   if (!isSignInHost(host)) return "";
   const where = site ?? "the site";
-  if (s.cdpUrl) return `; ${host} is a sign-in page, so the agent browser is not signed in to ${where}: ask the operator to sign in to ${where} `
-    + "in their own Chrome and send that site's sign-in to the agent browser with the operator extension (agentwatch — operator mode)";
+  if (s.cdpUrl) return `; ${host} is a sign-in page, so the agent browser is not signed in to ${where}: ${operatorSignIn(where)}`;
   return s.mode === "agent"
     ? `; ${host} is a sign-in page, so this profile is not signed in: run \`${s.commandName} launch --login\` and sign in by hand in the agent browser`
     : `; ${host} is a sign-in page: sign in by hand in that window`;
