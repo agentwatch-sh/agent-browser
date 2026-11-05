@@ -1,0 +1,232 @@
+{
+  "config": {
+    "inherit": "nav",
+    "retry": true
+  },
+  "groups": {
+    "formpost": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 10,
+      "loaded": 0,
+      "retried": 10,
+      "pages": {}
+    }
+  },
+  "rows": [
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767266,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 15,
+        "navtarget": 15,
+        "ruled": 37,
+        "firstMatch": 24,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767270,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 21,
+        "navtarget": 21,
+        "ruled": 46,
+        "firstMatch": 35,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767274,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 16,
+        "navtarget": 16,
+        "ruled": 32,
+        "firstMatch": 25,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767278,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 17,
+        "navtarget": 17,
+        "ruled": 34,
+        "firstMatch": 26,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767282,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 17,
+        "navtarget": 18,
+        "ruled": 35,
+        "firstMatch": 27,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767286,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 20,
+        "navtarget": 21,
+        "ruled": 45,
+        "firstMatch": 33,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767290,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 36,
+        "firstMatch": 23,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767294,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 14,
+        "navtarget": 14,
+        "ruled": 35,
+        "firstMatch": 22,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767298,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 13,
+        "ruled": 30,
+        "firstMatch": 21,
+        "request": null
+      }
+    },
+    {
+      "kind": "formpost",
+      "bg": false,
+      "popup": 443767302,
+      "openerTabIdRight": true,
+      "sourceTabIdRight": true,
+      "cdpOpenerRight": null,
+      "firstMatch": 1,
+      "requests": 0,
+      "methods": [],
+      "loaded": false,
+      "page": null,
+      "retried": 1,
+      "ms": {
+        "created": 13,
+        "navtarget": 14,
+        "ruled": 31,
+        "firstMatch": 23,
+        "request": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "control": {
+    "blank": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 0,
+      "loaded": 10,
+      "retried": 0,
+      "pages": {
+        "history.length 1, opener false, referrer true": 10
+      },
+      "requests GET": 10,
+      "headers {\"sfs\":\"same-origin\",\"sfm\":\"navigate\",\"sfu\":\"?1\",\"sfd\":\"document\",\"cc\":null,\"pragma\":null,\"referer\":true}": 10
+    }
+  },
+  "retried": {
+    "blank": {
+      "trials": 10,
+      "popupSeen": 10,
+      "openerTabIdRight": 10,
+      "sourceTabIdRight": 10,
+      "cdpOpenerRight": 0,
+      "firstAllowed": 0,
+      "firstBlocked": 10,
+      "loaded": 10,
+      "retried": 10,
+      "pages": {
+        "history.length 1, opener false, referrer true": 10
+      },
+      "requests GET": 10,
+      "headers {\"sfs\":\"same-origin\",\"sfm\":\"navigate\",\"sfu\":\"?1\",\"sfd\":\"document\",\"cc\":\"max-age=0\",\"pragma\":null,\"referer\":true} (retried)": 10
+    }
+  }
+}
