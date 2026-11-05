@@ -287,6 +287,8 @@ export class FakePage {
   scriptFocus = 0;
   /** The file chooser opened by a trusted click on a file input (or its label), while a session intercepts it. */
   fileChoosers = 0;
+  /** A test's hook: the input that a click's file chooser names (Page.fileChooserOpened), in place of the clicked one. */
+  chooserFor?: (clicked: FakeElement) => FakeElement | null;
   /** Listeners that page code added to the document (an isolated world's too): the fake sends them the real pointer event of an activation. */
   listeners = new Map<string, Set<(e: object) => void>>();
   /** The view size, as innerWidth and innerHeight give it. */
@@ -1060,7 +1062,8 @@ export class FakeChrome {
           const file = el.type === "file" && el.tagName === "INPUT" ? el : el.tagName === "LABEL" ? page.select(`#${el.getAttribute("for")}`)[0] : undefined;
           if (file?.type === "file") {
             const who = [...this.sessions.values()].find((x) => x.page === page && x.chooser);
-            if (who) { page.fileChoosers++; who.client.send(JSON.stringify({ method: "Page.fileChooserOpened", params: { frameId: `F-${page.targetId}`, mode: "selectSingle", backendNodeId: page.elements.indexOf(file) + 2 }, sessionId: who.id })); }
+            const named = page.chooserFor ? page.chooserFor(file) : file; // a test's hook: another input's chooser (a frame's), or none
+            if (who && named) { page.fileChoosers++; who.client.send(JSON.stringify({ method: "Page.fileChooserOpened", params: { frameId: `F-${page.targetId}`, mode: "selectSingle", backendNodeId: page.elements.indexOf(named) + 2 }, sessionId: who.id })); }
             return {};
           }
           await page.activate(el);
@@ -1095,6 +1098,8 @@ export class FakeChrome {
         return { nodeId: el ? page.elements.indexOf(el) + 2 : 0 };
       }
       case "Page.setInterceptFileChooserDialog": s.chooser = !!params.enabled; return {};
+      // A node's backend id: the fake numbers both alike (an element's index + 2).
+      case "DOM.describeNode": return { node: { nodeId: params.nodeId, backendNodeId: params.nodeId ?? params.backendNodeId, nodeName: "INPUT" } };
       case "DOM.setFileInputFiles": {
         const el = page.elements[(params.nodeId ?? params.backendNodeId) - 2];
         if (!el) throw new Error("Could not find node with given id");

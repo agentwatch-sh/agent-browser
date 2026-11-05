@@ -249,13 +249,16 @@ person's input**) and `log` (progress lines; default standard error).
     lock, two agents that typed at once gave two focused pages for 9.6 to 12.4 s of 12.5 to 14.8 s (the
     research). Every caller of one agent browser must use one state folder (with tab scopes, as
     agentwatch does). A command waits for the lock up to `lockWaitMs` (10 minutes); `record` holds it
-    for its take, not for the encode. The lock is reentrant within one call chain of one process:
+    for its take, not for the encode. A take can last up to 30 minutes (`record`'s limit), longer than
+    that wait: where takes run beside other agents' input, give those agents a longer `lockWaitMs`
+    (`--input-timing '{"lockWaitMs": 2000000}'`), or their input commands fail with the lock's timeout. The lock is reentrant within one call chain of one process:
     `Tab.withInput(fn)` around a caller's own `Tab.click` does not wait for itself. The wait can take
     minutes, and the page can go to a host off the allowlist meanwhile: so the allowlist is read again
     inside the lock, before any code of agent-browser runs in the page for the input, a guard stops
-    every input event once the main frame has gone off the list (`Page.frameNavigated`), and the list is
-    read again before each press, before the first key and every 16th, and before `setFiles` gives its
-    files (review-47). When the page has no focus, or is hidden behind another tab of its window, the
+    every input event once the main frame has gone off the list (`Page.frameNavigated`; also before each
+    key's release: a keydown can take the page off the list, review-47b), and the list is read again
+    before each press, before the first key and every 16th, and before `setFiles` gives its files
+    (review-47). When the page has no focus, or is hidden behind another tab of its window, the
     command first sends `Page.bringToFront`: on
     Linux that selects the page's tab and activates its window, as a person's switch to the window does
     (measured on taylor: the same result as `Target.activateTarget`; `Page.bringToFront` also passes
@@ -274,9 +277,10 @@ person's input**) and `log` (progress lines; default standard error).
     the pointer over the element's scroller), in place of `scrollIntoView`. `type --into` clicks the
     field in place of `el.focus()`, and `setFiles` clicks the file input (or its label) so that Chrome
     opens its file chooser, which agent-browser intercepts (`Page.setInterceptFileChooserDialog`: no
-    dialog opens); the files go to the input that the chooser names (when the click opens no chooser in
-    2 s, for example because another element covers the input, the files go to it with no click, with a
-    log line). agent-browser's own page code
+    dialog opens); the files go to the input that the chooser names only when it is the named input
+    (review-47b: a frame off the list that covers the input would get them). When another element covers
+    the click's point, there is no click; when the click opens no chooser in 2 s, or the chooser is
+    another input's, the files go to the named input with no click. Each of these says so in a log line. agent-browser's own page code
     (reads, the input's helpers) runs with no user gesture there: a gesture makes
     `navigator.userActivation` active with no press and no key (measured: each read did). `eval` runs
     as a gesture, as before, so that an agent's expression can open a popup.
@@ -300,7 +304,9 @@ person's input**) and `log` (progress lines; default standard error).
     browser's (the activation's real event came where xdotool says the pointer is) and the display holds
     no other program's window (checked for each command): agentwatch's Xvfb when agent-browser's
     commands have its `DISPLAY` and `XAUTHORITY`, or the display of an agent Chrome that agent-browser
-    started. The two ways of the research, measured on taylor (`extra.ts --exp pointer`: three windows
+    started. When the method is off for any reason (no `DISPLAY` over the relay, no xdotool, a device
+    pixel ratio that is not 1, a display that cannot be verified, another program's window), a log line
+    says why, at most once in 5 minutes for each reason. The two ways of the research, measured on taylor (`extra.ts --exp pointer`: three windows
     at one place, two agents and the operator's page in turn, 3 activations of each agent window):
 
     | the pointer at each activation | jumps over 100 px | position changes that the movement does not explain |

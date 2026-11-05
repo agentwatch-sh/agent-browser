@@ -207,9 +207,8 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   assert.deepEqual(page.appended, [], "the overlay is removed");
   assert.equal(page.metrics, undefined, "the device metrics override is cleared");
   const m = methods(page);
-  if (process.platform === "linux") // a window of its own (ab-v16.26): the take is an input command, so its window comes forward first
-    assert.ok(m.indexOf("Page.bringToFront") >= 0 && m.indexOf("Page.bringToFront") < m.indexOf("Page.startScreencast"), "the window comes forward before the take");
-  else assert.ok(!m.includes("Page.bringToFront"), "the window is never raised: the operator stays on their own Space");
+  // The CLI's agent Chrome here is no display of its own (display.ts), so the window design does not apply (ab-v16.26).
+  assert.ok(!m.includes("Page.bringToFront"), "the window is never raised: the operator stays on their own Space");
   assert.ok(m.lastIndexOf("Page.stopScreencast") > m.indexOf("Page.startScreencast"));
   assert.ok(m.lastIndexOf("Emulation.clearDeviceMetricsOverride") > m.indexOf("Page.startScreencast"));
   const set = fake.callsFor(page.targetId).find((x) => x.method === "Emulation.setDeviceMetricsOverride")!;

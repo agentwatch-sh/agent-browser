@@ -20,7 +20,7 @@ import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
 import { NotAllowedError } from "../src/errors.ts";
 import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
-import { cli, consumer, fixtureServer, flags, type Consumer, type Fixture } from "./helpers.ts";
+import { consumer, fixtureServer, ROOT, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
 const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" };
@@ -61,6 +61,7 @@ const PAGE = {
     { tag: "label", id: "lab", attrs: { for: "hiddenfile" }, text: "Upload", rect: [40, 360, 120, 24] },
     { tag: "input", id: "orphan", attrs: { type: "file" }, hidden: true },
     { tag: "div", id: "hov", text: "menu", rect: [300, 100, 100, 30] },
+    { tag: "input", id: "farfile", attrs: { type: "file" }, rect: [40, 2700, 200, 24] },
   ],
   onload: (p: FakePage) => { p.select("#set")[0].value = "abc"; },
 };
@@ -563,10 +564,10 @@ test("withInput is reentrant in its own call chain: the caller's own Tab.click i
   await commands.close(o, { tab: name });
 });
 
-test("setFiles: a click that opens no file chooser (another element covers the input) gives the files the old way, with a log line", async () => {
+test("setFiles: a click that opens no file chooser in 2 s gives the files the old way, with a log line", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
-  page.select("#hov")[0].rect = [40, 320, 200, 24]; // over #file: the click hits it
+  page.chooserFor = () => null; // the page's own code swallows the click: no chooser opens
   const lines: string[] = [];
   const b = await AgentBrowser.connect(linux({ log: (l) => { lines.push(l); } }));
   try {
@@ -578,6 +579,67 @@ test("setFiles: a click that opens no file chooser (another element covers the i
   assert.equal(page.fileChoosers, 0);
   assert.ok(lines.some((l) => /setFiles: the click on #file opened no file chooser; the files go to it with no click/.test(l)), lines.join("\n"));
   await commands.close(linux(), { tab: name });
+});
+
+test("a key that takes the page off the allowlist: no later input event reaches it, also not that key's keyUp (review-47b)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  await commands.click(linux(), { tab: name, target: "#i" });
+  let downs = 0, navIndex = Infinity;
+  // The 3rd keydown takes the page off the list (its call is in fake.calls already, so the slice after it holds what came later).
+  page.onKey = () => { if (++downs === 3) { navIndex = fake.calls.length; page.fake.navigate(page, "http://evil.test/"); } };
+  await assert.rejects(commands.type(linux(), { tab: name, text: "abcdef" }), NotAllowedError);
+  const after = fake.calls.slice(navIndex).filter((x) => x.targetId === page.targetId && /^Input\./.test(x.method));
+  assert.deepEqual(after.map((x) => `${x.method} ${x.params.type}`), [], "no keyUp of the 3rd key, no 4th key");
+  await commands.close(linux(), { tab: name }).catch(() => {});
+});
+
+test("setFiles: a chooser that names another input (a frame's input over this one) gets no files; a covered input gets no click; an input below the fold opens its chooser (review-47b)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const lines: string[] = [];
+  const b = await AgentBrowser.connect(linux({ log: (l) => { lines.push(l); } }));
+  try {
+    const tab = await b.find(name);
+    const other = page.select("#orphan")[0];
+    page.chooserFor = () => other;
+    await tab.setFiles("#file", ["/etc/hostname"]);
+    assert.deepEqual(other.files, [], "the other input got nothing");
+    assert.deepEqual(page.select("#file")[0].files, [{ name: "hostname" }], "the named input got them, the old way");
+    assert.ok(lines.some((l) => /setFiles: the click on #file opened another input's file chooser/.test(l)), lines.join("\n"));
+    page.chooserFor = undefined;
+    // An element over the input: no click at all (the click would reach the cover), the old way with a log line.
+    page.select("#hov")[0].rect = [40, 320, 200, 24];
+    const before = page.fileChoosers;
+    const calls = await callsOf(page, () => tab.setFiles("#file", ["/tmp/b.txt"]));
+    assert.ok(!mouse(calls).some((x) => x.params.type === "mousePressed"), "no press on the cover");
+    assert.equal(page.fileChoosers, before);
+    assert.deepEqual(page.select("#file")[0].files, [{ name: "b.txt" }]);
+    assert.ok(lines.some((l) => /setFiles: another element covers #file/.test(l)), lines.join("\n"));
+    page.select("#hov")[0].rect = [300, 100, 100, 30];
+    // Below the fold: the wheel and the path come first, then the chooser's wait.
+    const n0 = lines.length;
+    await tab.setFiles("#farfile", ["/tmp/c.txt"]);
+    assert.deepEqual(page.select("#farfile")[0].files, [{ name: "c.txt" }]);
+    assert.equal(page.fileChoosers, before + 1, "through the chooser");
+    assert.deepEqual(lines.slice(n0).filter((l) => /setFiles/.test(l)), [], "no fallback");
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: name });
+});
+
+test("a log line names why the X-pointer method is off: no xdotool, or a pixel ratio that is not 1 (review-47b)", async () => {
+  operatorInFront();
+  const lines: string[] = [];
+  const s = consumer();
+  try {
+    const o = s.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST, display: { own: true, xdotool: false }, log: (l: string) => { lines.push(l); } });
+    const name = "xoff";
+    await commands.open(o, { url: `${fx.base}/`, name });
+    await commands.click(o, { tab: name, target: "#b" });
+    assert.ok(lines.some((l) => /the X-pointer method is off \(no xdotool on the agent browser's display\)/.test(l)), lines.join("\n"));
+    await commands.close(o, { tab: name });
+    stopProxy(resolveOptions(o));
+  } finally { s.remove(); }
 });
 
 test("record holds the input lock for the take only: the lock is free while ffmpeg encodes", needsFfmpeg, async () => {
@@ -627,13 +689,22 @@ test("the X pointer only for the agent Chrome's own windows: a focused window of
   } finally { xdotoolOn = false; }
 });
 
-test("one input at a time across two CLI processes: their activations and input never overlap", async () => {
+test("one input at a time across two processes: their activations and input never overlap", async () => {
   operatorInFront();
   const a = await windowPage(), b = await windowPage();
-  const timing = JSON.stringify({ ...FAST, pressMs: [150, 160] });
-  const run = (tab: string) => cli([...flags(c, fake.ws, ["--input-timing", timing]), "click", tab, "#b", "--json"]);
+  // Two Node processes that run commands.click with this test's options (the display is given, as for every test).
+  const script = join(c.dir, "click-child.ts");
+  writeFileSync(script, `import { commands } from ${JSON.stringify(join(ROOT, "src/commands.ts"))};
+const o = JSON.parse(process.argv[2]);
+await commands.click({ ...o, log: () => {} }, { tab: process.argv[3], target: "#b" });
+`);
+  const o = { ...linux({ inputTiming: { ...FAST, pressMs: [150, 160] } }), log: undefined };
+  const run = (tab: string) => new Promise<number | null>((resolve) => {
+    const child = spawn(process.execPath, [script, JSON.stringify(o), tab], { stdio: ["ignore", "ignore", "inherit"] });
+    child.on("exit", (code) => resolve(code));
+  });
   const [ra, rb] = await Promise.all([run(a.name), run(b.name)]);
-  assert.deepEqual([ra.status, rb.status], [0, 0], ra.stderr + rb.stderr);
+  assert.deepEqual([ra, rb], [0, 0]);
   const span = (p: FakePage) => { const xs = fake.calls.filter((x) => x.targetId === p.targetId && (x.method === "Input.dispatchMouseEvent" || x.method === "Page.bringToFront")); return [xs[0].t, xs.at(-1)!.t]; };
   const [a0, a1] = span(a.page), [b0, b1] = span(b.page);
   assert.ok(a1 <= b0 || b1 <= a0, `a ${a0}-${a1}, b ${b0}-${b1}`);

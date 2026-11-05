@@ -755,12 +755,13 @@ export function jpegSize(buf: Buffer): [number, number] | undefined {
 type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number;
   changes?: number; settled?: number; changed?: number };
 
-/** One key: down (with its text, and on macOS its editing commands) and up, `holdMs` later (a person's hand; input.ts). */
-export async function sendKey(tab: Tab, k: KeyEvent, holdMs = 0): Promise<void> {
+/** One key: down (with its text, and on macOS its editing commands) and up, `holdMs` later (a person's hand; input.ts); `beforeUp` runs before the up (input.ts's allowlist guard). */
+export async function sendKey(tab: Tab, k: KeyEvent, holdMs = 0, beforeUp?: () => void): Promise<void> {
   const base = keyFields(k.key, k.code, k.keyCode, k.modifiers);
   const commands = process.platform === "darwin" ? macCommands(k) : [];
   await tab.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, ...(k.text ? { text: k.text, unmodifiedText: k.text } : {}), ...(commands.length ? { commands } : {}) });
   if (holdMs > 0) await delay(holdMs);
+  beforeUp?.();
   await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
 

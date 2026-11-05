@@ -218,6 +218,12 @@ function fieldState(): { focused: boolean; caret: [number, number] | null } {
 function scriptFocus(): void { ((globalThis as any).__abEl as HTMLElement | null)?.focus(); }
 function scriptCaret(a: number, b: number): void { ((globalThis as any).__abEl as HTMLInputElement | null)?.setSelectionRange(a, b); }
 
+/** The element at the point is the kept one (the file input or its label), or inside it: no other element covers it. */
+function hits(x: number, y: number): boolean {
+  const el = (globalThis as any).__abEl as Element | null, at = document.elementFromPoint(x, y);
+  return !!el && !!at && (at === el || el.contains(at));
+}
+
 /** A file input to click (kept as the element), or a visible label of it: the input's box, else the label's (kept instead). */
 function pickFile(selector: string): { found: boolean; box: Box | null; via: "input" | "label" | null } {
   const el = document.querySelector(selector) as HTMLInputElement | null;
@@ -296,7 +302,10 @@ export class Hands {
       entry = await tab.evaluate(disarm);
       if (!focusedAt) s.log(`agent-browser: the page of tab ${tab.targetId.slice(0, 8)} has no focus ${t.activateMs / 1000} s after Page.bringToFront; the input goes on without it (a press activates its window; keys alone can give two pages the focus)`);
     } else if (!focus || hidden) await tab.evaluate(disarm);
-    let x = geo.dpr === 1 ? disp.x : undefined;
+    // Why the X-pointer method is off, for a log line (review-47b note 5); undefined while it is on.
+    let off: string | undefined = !disp.x ? (s.cdpUrl ? "no DISPLAY of the agent browser's Xvfb in this process (over agentwatch's relay)" : "no xdotool on the agent browser's display")
+      : geo.dpr !== 1 ? `a device pixel ratio of ${geo.dpr}` : undefined;
+    let x = off ? undefined : disp.x;
     if (x) {
       try {
         let pid = disp.chromePid === undefined ? undefined : String(disp.chromePid);
@@ -313,13 +322,14 @@ export class Hands {
           }
           if (verified) pid = (await pidOf(x, focusWin)) || undefined;
         }
-        if (!pid) x = undefined;
+        if (!pid) { off = "the display cannot be verified (no activation's pointer event where xdotool says the pointer is, or not the page's window)"; x = undefined; }
         else if (!(await onlyWindowsOf(x, pid))) {
           notice(s, state, `x-${x.display}`, `agent-browser: another program's window is on the display: agent-browser does not move the X pointer there (each path starts at the page's own pointer event)`);
           x = undefined;
         }
-      } catch { x = undefined; }
+      } catch (e) { off = `xdotool failed (${(e as Error).message.split("\n")[0]})`; x = undefined; }
     }
+    if (off) notice(s, state, `x-off-${off}`, `agent-browser: the X-pointer method is off (${off}): each path starts at the page's own pointer event, and a window that comes forward can show the pointer at another point`);
     let at = entry ?? state.pages[tab.targetId];
     if (!at && x) {
       try { const p = await xLocation(x), o = origin(geo); at = { x: p.x - o.x, y: p.y - o.y }; } catch { /* below */ }
@@ -492,6 +502,7 @@ export class Hands {
     if (!f.found) throw new Error(`no element matches ${selector}`);
     if (f.focused) return;
     const fallback = async (why: string) => {
+      this.guard();
       this.log(`agent-browser type: ${why}; it gets the focus from a script (el.focus()), which a site can see`);
       await this.tab.evaluate(scriptFocus);
     };
@@ -505,6 +516,7 @@ export class Hands {
     const fy: [number, number] = f.kind === "textarea" || f.kind === "editable" ? [Math.min(0.5, 6 / b.h), Math.min(0.5, 12 / b.h)] : [0.35, 0.65];
     await this.moveTo(this.aim(b, fx, fy), Math.min(b.w, b.h));
     await this.press();
+    this.guard(); // the field's click can take the page off the allowlist: no code of ours runs there after it
     const after = await this.tab.evaluate(fieldState);
     if (!after.focused) return fallback(`the click on ${selector} did not focus it`);
     if (f.kind !== "input" && f.kind !== "textarea") return;
@@ -538,7 +550,8 @@ export class Hands {
   /** One key: down, held a short time, up. */
   async key(k: KeyEvent): Promise<void> {
     await this.beforeKey();
-    await sendKey(this.tab, k, between(this.timing.holdMs));
+    // The guard also before the keyUp: a keydown can take the page off the allowlist (review-47b).
+    await sendKey(this.tab, k, between(this.timing.holdMs), () => this.guard());
   }
 
   /** `press`: Tab.press's own key events (a keyDown with the key's text, and a keyUp), held down a short time. */
@@ -576,12 +589,22 @@ export class Hands {
       return false;
     }
     const conn = this.tab.browser.conn, stop = new AbortController();
+    const what = t.via === "label" ? `the label of ${selector}` : `file input ${selector}`;
+    this.guard();
     await this.tab.send("Page.setInterceptFileChooserDialog", { enabled: true });
     try {
+      const b = await this.intoView(what);
+      const at = this.aim(b);
+      await this.moveTo(at, Math.min(b.w, b.h));
+      // A hit test of the click point: when another element (a frame, say) covers the input, the click would reach it,
+      // and its chooser is not this input's (review-47b). Then no click, and the files go the old way.
+      if (!(await this.tab.evaluate(hits, at.x, at.y))) {
+        this.log(`agent-browser setFiles: another element covers ${selector} at the click's point; the files go to it with no click (a site can see that)`);
+        return false;
+      }
+      // The chooser's wait starts after the wheel and the path, at the press (review-47b: an input below the fold).
       const opened = conn.waitForEvent<{ backendNodeId: number }>("Page.fileChooserOpened", { sessionId: this.tab.sessionId, timeoutMs: 2000, signal: stop.signal });
       opened.catch(() => {});
-      const b = await this.intoView(t.via === "label" ? `the label of ${selector}` : `file input ${selector}`);
-      await this.moveTo(this.aim(b), Math.min(b.w, b.h));
       await this.press();
       const ev = await opened.catch(() => undefined);
       if (!ev) {
@@ -590,7 +613,23 @@ export class Hands {
       }
       this.guard();
       await this.tab.assertAllowed();
-      await this.tab.send("DOM.setFileInputFiles", { files, backendNodeId: ev.backendNodeId });
+      try {
+        // The chooser must be the named input's, never another input's (an off-list frame's input over this one).
+        const { root } = await this.tab.send("DOM.getDocument", { depth: 0 });
+        const { nodeId } = await this.tab.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+        const own = nodeId ? (await this.tab.send("DOM.describeNode", { nodeId })).node.backendNodeId : undefined;
+        if (own !== ev.backendNodeId) {
+          this.log(`agent-browser setFiles: the click on ${selector} opened another input's file chooser; the files go to ${selector} with no chooser (a site can see that)`);
+          return false;
+        }
+        this.guard();
+        await this.tab.send("DOM.setFileInputFiles", { files, backendNodeId: ev.backendNodeId });
+      } catch (e) {
+        // The page can go to a new page as the chooser opens: then the refusal, not the DOM call's own error.
+        this.guard();
+        await this.tab.assertAllowed();
+        throw e;
+      }
       return true;
     } finally {
       stop.abort();
