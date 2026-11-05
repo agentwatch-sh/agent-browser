@@ -23,6 +23,20 @@
 // eager attach, its hold and its DNR frame rule (ab-v16.17). It uses port 8781 (the probe's site) and *.localhost
 // hosts only. It never drives or stops a Chrome that it did not start, opens no debugging port, and no prompt can
 // appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. It deletes nothing.
+//
+// The external mode (board ab-v16.57) connects to an agent browser that runs already, for example agentwatch's test
+// browser (agentwatch tests/live/browser_test_unit.py), and starts no Xvfb, Chromium, stand-in daemon or relay:
+//
+//   RELAY_SOCK=<the endpoint's socket> CONTROL=<an executable> npm run test:live:agent
+//
+// CONTROL takes `status`, `end-scope <scope>` and `restart-relay` and prints the answer as one JSON object (for
+// agentwatch's test browser: its control command with --root). The real daemon takes no bridge request of a client,
+// so the cases that used the stand-in's own bridge requests (tabs.*, windows.*, debugger.*) use the endpoint instead,
+// or they are skipped with the reason: each such result says so ("adapted" or "skip"). The relay restarts and the
+// scope ends go through CONTROL; before the first restart and at its end the run ends every scope that it used. The
+// socket of the live daemon (/run/user/<uid>/agentwatch/) is refused: the suite never runs in the operator's agent
+// browser. agentwatch's relay restart has a backoff (1 s, doubled up to 60 s; a relay that ran 300 s resets it), and
+// the link-up group restarts the relay twice: a second run of that group within 5 minutes waits longer for each restart.
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -40,7 +54,14 @@ import { StandInDaemon } from "./daemon.ts";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const PROBE = join(ROOT, "docs/superpowers/specs/2026-11-03-two-modes-probe");
 const EXT = process.env.CHROME_EXTENSION ? resolve(process.env.CHROME_EXTENSION) : "";
-if (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !existsSync(join(EXT, "test/live/host.py"))) {
+/** The external mode: the socket of an endpoint that runs already, and its control. */
+const EXTERNAL = process.env.RELAY_SOCK ? resolve(process.env.RELAY_SOCK) : "";
+const CONTROL = process.env.CONTROL ? resolve(process.env.CONTROL) : "";
+if (EXTERNAL) {
+  const live = [`/run/user/${process.getuid?.()}/agentwatch/`, ...(process.env.XDG_RUNTIME_DIR ? [join(resolve(process.env.XDG_RUNTIME_DIR), "agentwatch") + "/"] : [])];
+  if (live.some((d) => EXTERNAL.startsWith(d))) { process.stderr.write(`refused: ${EXTERNAL} is the live daemon's agent browser\n`); process.exit(2); }
+  if (!CONTROL || !existsSync(CONTROL)) { process.stderr.write("usage: RELAY_SOCK=<socket> CONTROL=<status|end-scope|restart-relay executable> npm run test:live:agent\n"); process.exit(2); }
+} else if (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !existsSync(join(EXT, "test/live/host.py"))) {
   process.stderr.write("usage: CHROME_EXTENSION=<a chrome-extension checkout (a detached worktree)> npm run test:live:agent\n");
   process.exit(2);
 }
@@ -49,19 +70,46 @@ const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,link-up").split(",");
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
-const RELAY_SOCK = join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
-const url = (scope: string) => `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`;
+const RELAY_SOCK = EXTERNAL || join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
+/** The scopes of this run's clients: the external mode ends each at its end (the probe's concurrency script uses s1 to s3). */
+const SCOPES = new Set<string>(["s1", "s2", "s3"]);
+const url = (scope: string) => { SCOPES.add(scope); return `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`; };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** The value of `p`, or null when it has none in `ms`. */
+const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).then(() => null)]);
 const COOKIES = /Not available in the agent browser: cookies \(/;
 const BLOCKED = /ERR_BLOCKED_BY_CLIENT/;
+/** The external mode's reason for a case that needs the stand-in's own bridge requests. */
+const NO_BRIDGE = "external endpoint: the real daemon takes no bridge request of a client";
 
-type Result = { group: string; case: string; status: "pass" | "fail"; ms: number; detail?: unknown; error?: string; why?: string };
+type Result = { group: string; case: string; status: "pass" | "fail" | "skip"; ms: number; detail?: unknown; error?: string; why?: string; adapted?: string };
 const results: Result[] = [];
-const say = (r: Result) => console.log(`${r.status.padEnd(7)} ${r.group}: ${r.case} (${r.ms} ms)${r.why ? ` [${r.why}]` : ""}: ${r.error ?? JSON.stringify(r.detail ?? null)}`.slice(0, 400));
+const say = (r: Result) => console.log(`${r.status.padEnd(7)} ${r.group}: ${r.case} (${r.ms} ms)${r.why ? ` [${r.why}]` : ""}${r.adapted ? ` {adapted: ${r.adapted}}` : ""}: ${r.error ?? JSON.stringify(r.detail ?? null)}`.slice(0, r.adapted ? 700 : 400));
 function record(r: Result) { results.push(r); say(r); }
+function skip(group: string, name: string, why: string) { record({ group, case: name, status: "skip", ms: 0, why }); }
+
+/** The external mode: the tabs that this run's scopes still hold close, as at a session end. Also before a relay
+ *  restart: the new relay knows no scope of the old one, so an end_scope after it would leave those tabs open. */
+async function endRunScopes(when: string) {
+  const ended: string[] = [];
+  for (const scope of SCOPES) ended.push(`${scope}${(await control("end-scope", scope)).ok ? "" : " (failed)"}`);
+  console.log(`ended the run's scopes ${when}: ${ended.join(" ")}`);
+}
+
+/** The external mode: one call of CONTROL (its own process), its output in <RUN>/logs/control.log; the answer's JSON object. */
+function control(...args: string[]): Promise<any> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    execFile(CONTROL, args, { encoding: "utf8", timeout: 120_000 }, (e, stdout, stderr) => {
+      appendFileSync(join(RUN, "logs/control.log"), `${new Date(t0).toISOString()} ${args.join(" ")}: exit ${e ? ((e as any).code ?? e.message) : 0} after ${Date.now() - t0} ms\n${stdout}${stderr}\n`);
+      const i = stdout.indexOf("{");
+      try { resolve(JSON.parse(stdout.slice(i))); } catch { resolve({ ok: false, error: `no JSON answer (exit ${e ? ((e as any).code ?? e.message) : 0})` }); }
+    });
+  });
+}
 
 /** One case: it passes when its value is the wanted one, or, for a refusal, when the error matches. */
-async function step(group: string, name: string, fn: () => Promise<unknown>, o: { want?: (d: any) => boolean; refused?: RegExp; ms?: number } = {}) {
+async function step(group: string, name: string, fn: () => Promise<unknown>, o: { want?: (d: any) => boolean; refused?: RegExp; ms?: number; adapted?: string } = {}) {
   const t0 = Date.now();
   let detail: unknown, error: string | undefined;
   try {
@@ -71,7 +119,7 @@ async function step(group: string, name: string, fn: () => Promise<unknown>, o: 
   } catch (e) { error = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300); }
   const ok = o.refused ? error !== undefined && o.refused.test(error) : error === undefined && (!o.want || o.want(detail));
   record({ group, case: name, status: ok ? "pass" : "fail", ms: Date.now() - t0, ...(error === undefined ? { detail } : { error }),
-    ...(!ok && error === undefined ? { why: "value not as expected" } : {}) });
+    ...(!ok && error === undefined ? { why: "value not as expected" } : {}), ...(o.adapted ? { adapted: o.adapted } : {}) });
 }
 
 const children: ChildProcess[] = [];
@@ -96,11 +144,12 @@ function extensionId(manifest: { key: string }): string {
 mkdirSync(join(RUN, "logs"), { recursive: true });
 mkdirSync(join(RUN, "home"), { recursive: true });
 chmodSync(RUN, 0o700);
-if (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`)) throw new Error(`display :${DISPLAY_N} is taken; set DISPLAY_N`);
+if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) throw new Error(`display :${DISPLAY_N} is taken; set DISPLAY_N`);
 if (!(await portFree(8781))) throw new Error("port 8781 is taken (the probe's site needs it)");
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
-const env = { run: RUN, extension: { dir: EXT, commit: git(EXT, "rev-parse", "HEAD") }, agentBrowser: git(ROOT, "rev-parse", "HEAD"),
-  chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim() };
+const env = EXTERNAL ? { run: RUN, external: { socket: EXTERNAL, control: CONTROL, status: await control("status") }, agentBrowser: git(ROOT, "rev-parse", "HEAD") }
+  : { run: RUN, extension: { dir: EXT, commit: git(EXT, "rev-parse", "HEAD") }, agentBrowser: git(ROOT, "rev-parse", "HEAD"),
+    chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim() };
 console.log(`run ${RUN}\n${JSON.stringify(env)}`);
 
 const INSTALL = join(RUN, "install");
@@ -122,11 +171,15 @@ function cleanup(): Promise<void> {
   return cleaning ??= (async () => {
     const relayExit = daemon ? await daemon.stop() : null;
     if (daemon) record({ group: "relay", case: "the relay ends with its standard input and removes its socket", status: relayExit === 0 && !existsSync(RELAY_SOCK) ? "pass" : "fail", ms: 0, detail: { exit: relayExit } });
+    if (EXTERNAL) {
+      skip("relay", "the relay ends with its standard input and removes its socket", "external endpoint: the run does not own the relay, and it stops nothing of that browser");
+      await endRunScopes("at the end");
+    }
     for (const c of [...children].reverse()) await stopChild(c);
     if (daemon) writeFileSync(join(RUN, "logs/daemon.log"), [...daemon.log, ...daemon.waiting().map((w) => `still waiting: ${w}`)].join("\n") + "\n");
     const count = (st: Result["status"]) => results.filter((r) => r.status === st).length;
     writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, ...(aborted ? { aborted } : {}), results }, null, 2) + "\n");
-    console.log(`\n${aborted ? `ABORTED (${aborted}): ` : ""}${results.length} cases: ${count("pass")} pass, ${count("fail")} fail; ${join(RUN, "results.json")}`);
+    console.log(`\n${aborted ? `ABORTED (${aborted}): ` : ""}${results.length} cases: ${count("pass")} pass, ${count("fail")} fail, ${count("skip")} skipped, ${results.filter((r) => r.adapted).length} adapted; ${join(RUN, "results.json")}`);
     process.exitCode = aborted || count("fail") ? 1 : 0;
   })();
 }
@@ -140,7 +193,44 @@ try {
   npm(["init", "-y"], INSTALL);
   npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball, "playwright-core@1.64.1", "@playwright/mcp@0.0.84"], INSTALL);
 
-  // The agent package, its native host and the profile.
+  writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
+  start(process.execPath, [join(PROBE, "site.mjs")], { env: { ...process.env, SITE_LOG: join(RUN, "site-log.jsonl") }, log: "site.log" });
+  if (!EXTERNAL) await startOwnBrowser();
+  // Ready: a plain request gets 404 once the endpoint takes connections (503 before).
+  let ready = 0;
+  for (let i = 0; i < 120 && (ready = await status("/devtools/browser/probe")) !== 404; i++) await sleep(500);
+  if (ready !== 404) throw new Error(`the endpoint did not get ready (HTTP ${ready}); see ${RUN}/logs`);
+
+  const pw = createRequire(join(INSTALL, "package.json"))("playwright-core");
+  const WS = createRequire(join(INSTALL, "package.json"))("ws");
+  if (CASES.includes("playwright")) await playwrightCases(pw);
+  if (CASES.includes("marks")) await refusedFeatureCases(pw);
+  if (CASES.includes("switch")) await tabSwitchCase(WS);
+  if (CASES.includes("create")) await createWithUrlCases(WS);
+  if (CASES.includes("concurrency")) await probeScript("concurrency", "concurrency.mjs", { RELAY_SOCK, OUT: join(RUN, "concurrency.json") }, (r) =>
+    /storageState/.test(r.case) ? { refused: COOKIES } : {});
+  mkdirSync(join(RUN, "mcp-out"));
+  if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
+  if (CASES.includes("agent-browser")) await agentBrowserCases();
+  if (CASES.includes("windows")) await windowCases(pw, WS);
+  // Last: it closes every other tab of the browser.
+  if (CASES.includes("link-up") && EXTERNAL) { await endRunScopes("before the relay restarts"); await externalLinkUpCases(WS); }
+  else if (CASES.includes("link-up")) await linkUpCases(pw, WS);
+  if (EXTERNAL) await step("browser", "the agent Chromium still runs after every client left", async () => {
+    const st = await control("status");
+    return { running: st.running, receiver: st.receiver, endpoint: st.endpoint?.state, http: await status("/devtools/browser/probe") };
+  }, { want: (d) => d.running === true && d.receiver === true && d.endpoint === "ready" && d.http === 404, adapted: "the control's status (running, receiver, endpoint) and a plain request (404)" });
+  else record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium!.exitCode === null ? "pass" : "fail", ms: 0 });
+} catch (err) {
+  aborted = String((err as Error)?.message ?? err).split("\n")[0];
+} finally {
+  await cleanup();
+}
+await sleep(500);
+process.exit(process.exitCode);
+
+/** The own mode: the agent package, its native host, the profile, the stand-in daemon with its relay, Xvfb and Chromium. */
+async function startOwnBrowser() {
   cpSync(join(EXT, "agent"), join(RUN, "agent"), { recursive: true });
   const id = extensionId(JSON.parse(readFileSync(join(RUN, "agent/manifest.json"), "utf8")));
   const PROFILE = join(RUN, "profile");
@@ -149,9 +239,6 @@ try {
   writeFileSync(hostSh, `#!/bin/sh\nexec /usr/bin/python3 ${join(EXT, "test/live/host.py")} --socket ${DAEMON_SOCK} --log ${join(RUN, "logs/host.log")} "$@"\n`, { mode: 0o700 });
   writeFileSync(join(PROFILE, "NativeMessagingHosts/sh.agentwatch.browser.json"),
     JSON.stringify({ name: "sh.agentwatch.browser", description: "live test", path: hostSh, type: "stdio", allowed_origins: [`chrome-extension://${id}/`] }));
-  writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
-
-  start(process.execPath, [join(PROBE, "site.mjs")], { env: { ...process.env, SITE_LOG: join(RUN, "site-log.jsonl") }, log: "site.log" });
   daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, allowlist: ["a.localhost"],
     relayLog: (l) => appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`) });
   // A private display: one MIT-MAGIC-COOKIE-1 entry from randomBytes in a 0600 file; the cookie never enters an argv.
@@ -164,32 +251,7 @@ try {
     `--load-extension=${join(RUN, "agent")}`, "--silent-debugger-extension-api", "--enable-unsafe-swiftshader", "--lang=en-US",
     "--disable-backgrounding-occluded-windows", "--window-position=0,0", "--window-size=1280,900", "about:blank"],
   { env: { PATH: "/usr/bin:/bin", HOME: join(RUN, "home"), LANG: "en_US.UTF-8", DISPLAY: `:${DISPLAY_N}`, XAUTHORITY: xauth }, log: "chromium.log" });
-  // Ready: a plain request gets 404 once the endpoint takes connections (503 before).
-  let ready = 0;
-  for (let i = 0; i < 120 && (ready = await status("/devtools/browser/probe")) !== 404; i++) await sleep(500);
-  if (ready !== 404) throw new Error(`the endpoint did not get ready (HTTP ${ready}); see ${RUN}/logs`);
-
-  const pw = createRequire(join(INSTALL, "package.json"))("playwright-core");
-  if (CASES.includes("playwright")) await playwrightCases(pw);
-  if (CASES.includes("marks")) await refusedFeatureCases(pw);
-  if (CASES.includes("switch")) await tabSwitchCase(createRequire(join(INSTALL, "package.json"))("ws"));
-  if (CASES.includes("create")) await createWithUrlCases(createRequire(join(INSTALL, "package.json"))("ws"));
-  if (CASES.includes("concurrency")) await probeScript("concurrency", "concurrency.mjs", { RELAY_SOCK, OUT: join(RUN, "concurrency.json") }, (r) =>
-    /storageState/.test(r.case) ? { refused: COOKIES } : {});
-  mkdirSync(join(RUN, "mcp-out"));
-  if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
-  if (CASES.includes("agent-browser")) await agentBrowserCases();
-  if (CASES.includes("windows")) await windowCases(pw);
-  // Last: it closes every other tab of the browser.
-  if (CASES.includes("link-up")) await linkUpCases(pw, createRequire(join(INSTALL, "package.json"))("ws"));
-  record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium.exitCode === null ? "pass" : "fail", ms: 0 });
-} catch (err) {
-  aborted = String((err as Error)?.message ?? err).split("\n")[0];
-} finally {
-  await cleanup();
 }
-await sleep(500);
-process.exit(process.exitCode);
 
 // ---------------------------------------------------------------- the probe's Playwright cases
 
@@ -341,7 +403,32 @@ async function playwrightCases(pw: any) {
   // On Linux each page has a window of its own (ab-v16.28): the other page's window has the focus, the page's input
   // brings its own window forward, and page.bringToFront (Page.bringToFront) focuses it too. Playwright's focus
   // emulation never reaches Chrome, so document.hasFocus() is the real focus.
-  await step(G, "Playwright drives a page whose window is behind another one: its input and bringToFront focus its window", async () => {
+  if (EXTERNAL) await step(G, "Playwright drives a page whose window is behind another one: its input and bringToFront focus its window", async () => {
+    await page.goto(A + "/");
+    const front = await context.newPage();
+    await front.goto(A + "/m");
+    const winOf = async (p: any) => { const s = await context.newCDPSession(p); try { return (await s.send("Browser.getWindowForTarget")).windowId as number; } finally { await s.detach().catch(() => {}); } };
+    const hasFocus = (p: any) => p.evaluate(() => document.hasFocus());
+    // The other window takes the focus as a person's press in it does: the relay brings a page's window forward for its input.
+    const otherTakesFocus = async () => { await front.mouse.click(2, 2); await sleep(300); };
+    const [mine, other] = [await winOf(page), await winOf(front)];
+    await otherTakesFocus();
+    const before = { other: await hasFocus(front), visible: await page.evaluate(() => document.visibilityState), hasFocus: await hasFocus(page) };
+    await page.locator("#name").fill("Back");
+    await page.locator("#go").click();
+    const driven = await page.locator("#out").textContent();
+    const after = { hasFocus: await hasFocus(page), otherHasFocus: await hasFocus(front) };
+    await otherTakesFocus();
+    const lost = await hasFocus(page);
+    await page.bringToFront();
+    await sleep(300);
+    const brought = await hasFocus(page);
+    await front.close();
+    return { separate: mine !== other, before, driven, after, lost, brought };
+  }, { want: (d) => d.separate && d.before.other && d.before.visible === "visible" && !d.before.hasFocus && d.driven === "Hello, Back" && d.after.hasFocus &&
+    !d.after.otherHasFocus && !d.lost && d.brought,
+  adapted: "the other window takes the focus with a press in its page (the relay's windows.update), not the stand-in's windows.update; a window's focus is document.hasFocus() of its page; the windows are Browser.getWindowForTarget" });
+  else await step(G, "Playwright drives a page whose window is behind another one: its input and bringToFront focus its window", async () => {
     await page.goto(A + "/");
     const front = await context.newPage();
     await front.goto(A + "/m");
@@ -412,10 +499,13 @@ async function tabSwitchCase(WebSocket: any) {
       return { targetId, sessionId };
     };
     const state = (s: string) => c.value(s, "[document.visibilityState, document.hasFocus()].join(' ')");
-    const windowOf = async (targetId: string) => (await daemon!.ask("tabs.get", [(await daemon!.ask("debugger.getTargets")).find((t: any) => t.id === targetId).tabId])).windowId;
+    // The external mode: the client's own Browser.getWindowForTarget, and a press in the front page (the relay brings its window forward).
+    const windowOf = EXTERNAL ? async (targetId: string) => (await c.send("Browser.getWindowForTarget", { targetId })).windowId
+      : async (targetId: string) => (await daemon!.ask("tabs.get", [(await daemon!.ask("debugger.getTargets")).find((t: any) => t.id === targetId).tabId])).windowId;
     const behind = await open(A + "/"), front = await open(A + "/m");
     const [wb, wf] = [await windowOf(behind.targetId), await windowOf(front.targetId)];
-    await daemon!.ask("windows.update", [wf, { focused: true }]);
+    if (EXTERNAL) for (const type of ["mousePressed", "mouseReleased"]) await c.send("Input.dispatchMouseEvent", { type, x: 2, y: 2, button: "left", clickCount: 1 }, front.sessionId);
+    else await daemon!.ask("windows.update", [wf, { focused: true }]);
     await sleep(300);
     const before = { behind: await state(behind.sessionId), front: await state(front.sessionId) };
     // CDP input to the page behind: type a name and click the button at its place.
@@ -454,7 +544,8 @@ async function tabSwitchCase(WebSocket: any) {
   }, { want: (d) => d.separate && d.before.behind === "visible false" && d.before.front === "visible true" && d.driven === "Hello, Behind" &&
     d.after.behind === "visible true" && d.after.front === "visible false" && d.popup && d.hidden.startsWith("hidden") &&
     d.clientSwitch.toOpener === "visible true" && d.clientSwitch.toPopup.startsWith("hidden") &&
-    d.back.opener === "visible true" && d.back.name === "Behind!" && d.back.popupWindow === d.openerWindow });
+    d.back.opener === "visible true" && d.back.name === "Behind!" && d.back.popupWindow === d.openerWindow,
+  ...(EXTERNAL ? { adapted: "the front window takes the focus with a press in its page (the relay's windows.update), not the stand-in's windows.update; the windows are Browser.getWindowForTarget" } : {}) });
 }
 
 // ---------------------------------------------------------------- Target.createTarget with a URL (C10: about:blank, then the URL)
@@ -604,7 +695,7 @@ function focusOverlaps(log: Rec[], a: string, b: string, from: number, to: numbe
  * Emulation.setFocusEmulationEnabled reaches Chrome. The other signals (the press time, the pointer path, the
  * typing, the geometry) are in <RUN>/windows.json for the report: they still differ from a person's.
  */
-async function windowCases(pw: any) {
+async function windowCases(pw: any, WebSocket: any) {
   const G = "one window per page";
   const log: Rec[] = [];
   const { server, port } = await startServer(log);
@@ -617,13 +708,24 @@ async function windowCases(pw: any) {
   const tabIdOf = async (tab: string) => (await daemon!.ask("debugger.getTargets")).find((t: any) => String(t.url).includes(`tab=${tab}`))?.tabId as number | undefined;
   const out: any[] = [];
   let n = 0;
-  const variant = async (name: string, drive: (T: string, front: () => Promise<void>, stepOf: StepFn) => Promise<void>) => {
+  const variant = async (name: string, scope: string, drive: (T: string, front: () => Promise<void>, stepOf: StepFn) => Promise<void>) => {
     n++;
-    const F = `F${n}`, T = `T${n}`, from = daemon!.log.length, t0 = Date.now();
-    const fw = (await daemon!.ask("windows.create", [{ url: pageUrl(F), focused: true }])).id;
-    await loaded(F);
-    // The operator (or another agent) has the focus in F's window, in front of T's.
-    const front = async () => { await daemon!.ask("windows.update", [fw, { focused: true }]); await sleep(500); };
+    const F = `F${n}`, T = `T${n}`, from = daemon?.log.length ?? 0, t0 = Date.now();
+    let front: () => Promise<void>, fc: Awaited<ReturnType<typeof rawClient>> | undefined, fTarget = "";
+    if (!EXTERNAL) {
+      const fw = (await daemon!.ask("windows.create", [{ url: pageUrl(F), focused: true }])).id;
+      await loaded(F);
+      // The operator (or another agent) has the focus in F's window, in front of T's.
+      front = async () => { await daemon!.ask("windows.update", [fw, { focused: true }]); await sleep(500); };
+    } else {
+      // The external mode: F is another agent's page (a client of its own scope), whose window takes the focus with a
+      // press in it (the relay brings a page's window forward for its input).
+      const c = (fc = await rawClient(WebSocket, `win-front-${n}`));
+      fTarget = (await c.send("Target.createTarget", { url: pageUrl(F) })).targetId;
+      const { sessionId } = await c.send("Target.attachToTarget", { targetId: fTarget, flatten: true });
+      await loaded(F);
+      front = async () => { for (const type of ["mousePressed", "mouseReleased"]) await c.send("Input.dispatchMouseEvent", { type, x: 2, y: 2, button: "left", clickCount: 1 }, sessionId); await sleep(500); };
+    }
     const steps: any[] = [];
     const stepOf: StepFn = async (label, fn, want) => {
       await sleep(400);
@@ -644,14 +746,25 @@ async function windowCases(pw: any) {
         detail: { ...(shown !== undefined ? { value: shown } : {}), vis: sig.visBefore, focus: sig.focusEvents, focusAfter: sig.focusAfter, framesAfter: sig.framesAfter, input: sig.inputSeq.slice(0, 120), background },
         ...(!ok && !error ? { why: background.length ? `background-tab signal: ${background.join(", ")}` : "value not as expected" } : {}) });
     };
-    let t1 = Date.now();
+    let t1 = Date.now(), windows: { T?: number; F?: number; error?: string } | null = null;
     try { await drive(T, front, stepOf); t1 = Date.now(); }
     finally {
-      for (const tab of [T, F]) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
+      if (EXTERNAL) {
+        // T's window (a second client of T's scope) and F's, then the two scopes end, as at a session end.
+        try {
+          const view = await rawClient(WebSocket, scope);
+          const t = (await view.send("Target.getTargets")).targetInfos.find((x: any) => String(x.url).includes(`tab=${T}`));
+          windows = { T: t ? (await view.send("Browser.getWindowForTarget", { targetId: t.targetId })).windowId : undefined,
+            F: (await fc!.send("Browser.getWindowForTarget", { targetId: fTarget })).windowId };
+          view.close();
+        } catch (e) { windows = { error: String((e as Error).message) }; }
+        fc!.close();
+        for (const sc of [scope, `win-front-${n}`]) await control("end-scope", sc);
+      } else for (const tab of [T, F]) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
     }
     const sorted = log.slice().sort((x, y) => x.t - y.t);
     const tLoad = log.find((e) => e.tab === T && e.ev === "load");
-    const ops = daemon!.log.slice(from);
+    const ops = daemon ? daemon.log.slice(from) : [];
     const count = (re: RegExp) => ops.filter((l) => / req /.test(l) && re.test(l)).length;
     const v = {
       name, steps,
@@ -661,14 +774,18 @@ async function windowCases(pw: any) {
       fEvents: log.filter((e) => e.tab === F && e.t >= t0 && e.t <= t1 && ["visibilitychange", "focus", "blur"].includes(e.ev)).map((e) => `${e.ev}${e.ev === "visibilitychange" ? `:${e.vis}` : ""}@${e.t - t0}`),
       tFocus: log.filter((e) => e.tab === T && e.t >= t0 && e.t <= t1 && (e.ev === "focus" || e.ev === "blur")).map((e) => `${e.ev}@${e.t - t0}`),
       geometry: tLoad && { iw: tLoad.iw, ih: tLoad.ih, ow: tLoad.ow, oh: tLoad.oh, sx: tLoad.sx, sy: tLoad.sy, historyLength: tLoad.hl, webdriver: tLoad.webdriver },
-      bridge: { focusEmulation: count(/Emulation\.setFocusEmulationEnabled/), windowsCreate: count(/ windows\.create$/), windowsUpdate: count(/ windows\.update$/),
-        tabsCreate: count(/ tabs\.create$/), tabsUpdate: count(/ tabs\.update$/) },
+      bridge: daemon ? { focusEmulation: count(/Emulation\.setFocusEmulationEnabled/), windowsCreate: count(/ windows\.create$/), windowsUpdate: count(/ windows\.update$/),
+        tabsCreate: count(/ tabs\.create$/), tabsUpdate: count(/ tabs\.update$/) } : null,
+      windows,
     };
     out.push(v);
     // At each window switch the new page's focus comes a few ms before the old page's blur: each such overlap is short.
-    const ok = v.hiddenAfterLoad === 0 && v.overlaps.every((ms) => ms < 100) && v.fEvents.some((e) => e.startsWith("blur")) && v.bridge.focusEmulation === 0 && v.bridge.windowsCreate >= 1 && v.bridge.tabsCreate === 0;
+    const perPage = v.bridge ? v.bridge.focusEmulation === 0 && v.bridge.windowsCreate >= 1 && v.bridge.tabsCreate === 0
+      : v.windows?.T !== undefined && v.windows.F !== undefined && v.windows.T !== v.windows.F;
+    const ok = v.hiddenAfterLoad === 0 && v.overlaps.every((ms) => ms < 100) && v.fEvents.some((e) => e.startsWith("blur")) && perPage;
     record({ group: G, case: `${name}: T never hidden, F and T both focused only for less than 100 ms at a switch, no focus emulation in Chrome, a window per page`,
-      status: ok ? "pass" : "fail", ms: t1 - t0, detail: { hiddenAfterLoad: v.hiddenAfterLoad, overlaps: v.overlaps, bothFocusedMs: v.bothFocusedMs, fEvents: v.fEvents, tFocus: v.tFocus, bridge: v.bridge } });
+      status: ok ? "pass" : "fail", ms: t1 - t0, detail: { hiddenAfterLoad: v.hiddenAfterLoad, overlaps: v.overlaps, bothFocusedMs: v.bothFocusedMs, fEvents: v.fEvents, tFocus: v.tFocus, bridge: v.bridge, windows: v.windows },
+      ...(EXTERNAL ? { adapted: "no bridge log: the bridge's counts of Emulation.setFocusEmulationEnabled, windows.create and tabs.create are not checked; a window per page is T and F in two windows (Browser.getWindowForTarget)" } : {}) });
   };
 
   // Playwright: connectOverCDP with its defaults (it sends focus emulation, which the relay answers) and with noDefaults.
@@ -789,14 +906,15 @@ async function windowCases(pw: any) {
         status: values.every((v: string) => v === words) && detail.hidden === 0 ? "pass" : "fail", detail });
     } finally {
       for (const b of browsers) await b.close().catch(() => {});
-      for (const tab of tabs) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
+      if (EXTERNAL) for (const sc of ["win-two-a", "win-two-b"]) await control("end-scope", sc);
+      else for (const tab of tabs) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
     }
   };
 
   try {
-    await variant("Playwright (connectOverCDP)", playwright(false));
-    await variant("Playwright (connectOverCDP, noDefaults)", playwright(true));
-    await variant("the Playwright MCP", mcp);
+    await variant("Playwright (connectOverCDP)", "win-pw", playwright(false));
+    await variant("Playwright (connectOverCDP, noDefaults)", "win-nodefaults", playwright(true));
+    await variant("the Playwright MCP", "win-mcp", mcp);
     await twoAtOnce();
   } finally {
     server.close();
@@ -955,4 +1073,122 @@ async function linkUpCases(pw: any, WebSocket: any) {
       return { before, err, chromium: chrome(), after: await after(), pages: browser.contexts()[0]?.pages().length ?? null };
     } finally { await browser.close().catch(() => {}); }
   }, { want: (x) => x.before.length === 1 && x.err === null && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.pages === 0, ms: 40_000 });
+}
+
+/**
+ * The link-up group in the external mode (board ab-v16.57). A relay restart is the control's restart-relay, and the
+ * end of a scope its end-scope: the real daemon's own. With no bridge of its own, the run sees the old client's state
+ * after a restart in the site's log: before the restart the page fetches on a timer, with the time in each URL, and
+ * the old client's Fetch pattern holds each request, under its user-agent override. The cases that need the
+ * browser's only tab (the stand-in closed every other tab with tabs.query and tabs.remove) are skipped: a client sees
+ * its own scope only, and the test browser keeps tabs of its own. The two tabs of the restart cases stay in no scope
+ * after the restart (the new relay knows no scope of the old one, and no client can close them): each goes to
+ * about:blank by itself.
+ */
+async function externalLinkUpCases(WebSocket: any) {
+  const G = "link-up";
+  const siteReqs = () => readFileSync(join(RUN, "site-log.jsonl"), "utf8").split("\n").filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((r) => r?.t === "req" && String(r.path).includes("lu-fetch"));
+  const timeOf = (r: any) => Number(new URL(r.path, A).searchParams.get("t"));
+  const loadedAt = async (c: Awaited<ReturnType<typeof rawClient>>, sessionId: string, want: string) => {
+    for (let i = 0; i < 50 && (await c.value(sessionId, "document.readyState + ' ' + location.href")) !== `complete ${want}`; i++) await sleep(100);
+  };
+  const attachedOf = async (c: Awaited<ReturnType<typeof rawClient>>, targetId: string) => (await c.send("Target.getTargets")).targetInfos.find((t: any) => t.targetId === targetId)?.attached;
+  const ctlOf = (a: any) => ({ ok: a.ok, old: a.old_pid, new: a.new_pid, readyS: a.ready_s, ...(a.error ? { error: a.error } : {}) });
+  /** After a case: the test browser runs, its endpoint is ready, and a plain request answers 404. */
+  const browserUp = async () => { const st = await control("status"); return { running: st.running, receiver: st.receiver, endpoint: st.endpoint?.state, http: await status("/devtools/browser/probe") }; };
+  const up = (b: any) => b.running === true && b.receiver === true && b.endpoint === "ready" && b.http === 404;
+
+  let tStart = 0, tReady = 0;
+  await step(G, "a relay restart with no link change: the new relay detaches the old client's tab before it admits a connection", async () => {
+    const c = await rawClient(WebSocket, "lu-restart");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const want = `${A}/m?lu-restart`;
+    const { targetId } = await c.send("Target.createTarget", { url: want });
+    const { params } = await c.event("Target.attachedToTarget");
+    await loadedAt(c, params.sessionId, want);
+    await c.send("Fetch.enable", { patterns: [{ urlPattern: "*lu-fetch*" }] }, params.sessionId);
+    await c.send("Emulation.setUserAgentOverride", { userAgent: "lu-old-client" }, params.sessionId);
+    // The page's own requests, each 500 ms for 60 s; then the page goes to about:blank (its tab is in no scope after the restart).
+    await c.value(params.sessionId, `(() => { const end = Date.now() + 60000; const t = setInterval(() => { if (Date.now() > end) { clearInterval(t); location.href = "about:blank"; return; }
+      fetch("/api/data?lu-fetch&t=" + Date.now()).catch(() => {}); }, 500); return true; })()`);
+    await sleep(1500);
+    const attachedBefore = await attachedOf(c, targetId);
+    const reachedBefore = siteReqs().length;
+    tStart = Date.now();
+    const ctl = await control("restart-relay");
+    let ready = 0;
+    while (Date.now() - tStart < 30_000 && (ready = await status("/devtools/browser/probe")) !== 404) await sleep(50);
+    tReady = Date.now();
+    return { attachedBefore, reachedBefore, ctl: ctlOf(ctl), oldClient: await within(c.closed, 5000), ready, readyMs: tReady - tStart };
+  }, { want: (x) => x.attachedBefore === true && x.reachedBefore === 0 && x.ctl.ok === true && x.ctl.new !== x.ctl.old && x.oldClient?.[0] === 1001 && x.ready === 404, ms: 60_000,
+    adapted: "the restart is the control's restart-relay (its answer, not the old relay's exit code); attached is the relay's view (Target.getTargets) before the restart; the detach shows in the next case" });
+
+  await step(G, "after the restart the old client's Fetch pattern holds no request of the page, and its user-agent override is gone", async () => {
+    if (!tReady) throw new Error("no restart in the case before");
+    let late: any[] = [];
+    for (const end = Date.now() + 10_000; Date.now() < end && !late.length; await sleep(200)) late = siteReqs().filter((r) => timeOf(r) >= tReady);
+    await sleep(1000);
+    late = siteReqs().filter((r) => timeOf(r) >= tReady);
+    const early = siteReqs().filter((r) => timeOf(r) < tStart);
+    return { late: late.length, uas: [...new Set(late.map((r) => r.ua))], released: { n: early.length, uas: [...new Set(early.map((r) => r.ua))] } };
+  }, { want: (x) => x.late >= 1 && x.uas.every((ua: string) => /Chrome\//.test(ua) && ua !== "lu-old-client"), ms: 30_000,
+    adapted: "the site's log of the page's own fetches (each URL holds its time; the late ones come after the endpoint was ready again), not the stand-in's own debugger.attach and Runtime.evaluate" });
+
+  await step(G, "a client that connects while the relay restarts gets no connection until the link-up detaches are done", async () => {
+    const c = await rawClient(WebSocket, "lu-hold");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const want = `${A}/m?lu-hold`;
+    const { targetId } = await c.send("Target.createTarget", { url: want });
+    const { params } = await c.event("Target.attachedToTarget");
+    await loadedAt(c, params.sessionId, want);
+    await c.value(params.sessionId, `setTimeout(() => { location.href = "about:blank"; }, 20000), true`);
+    const attachedBefore = await attachedOf(c, targetId);
+    const codes: number[] = [];
+    const t0 = Date.now();
+    const restarting = control("restart-relay");
+    let last = 404;
+    // The old relay answers 404 until it ends; then the new relay's socket answers 0 (none yet) or 503 until it is ready.
+    while (Date.now() - t0 < 30_000 && (last = await status("/devtools/browser/probe")) === 404) await sleep(5);
+    codes.push(last);
+    while (Date.now() - t0 < 30_000 && (last = await status("/devtools/browser/probe")) !== 404) { codes.push(last); await sleep(10); }
+    const ctl = await restarting;
+    return { attachedBefore, codes: [...new Set(codes)], ready: last, readyMs: Date.now() - t0, ctl: ctlOf(ctl), oldClient: await within(c.closed, 5000) };
+  }, { want: (x) => x.ready === 404 && x.attachedBefore === true && x.codes.includes(503) && x.ctl.ok === true, ms: 60_000,
+    adapted: "the restart is the control's restart-relay; attached is the relay's view (Target.getTargets) before the restart; the tab's attach after the restart is not visible to a client" });
+
+  const ONLY = "the case needs the browser's only tab(s): the stand-in closed every other tab with tabs.query and tabs.remove, which no client of the real daemon can send (a client sees its own scope only), and the test browser keeps tabs of its own";
+  skip(G, "end_scope of the browser's only tab: Chromium stays up, with one about:blank window in no scope", ONLY);
+  skip(G, "Playwright's page.close() of the browser's only tab (Target.closeTarget): Chromium stays up", ONLY);
+  skip(G, "end_scope of two scopes at once, whose tabs are the browser's only two tabs: Chromium stays up", ONLY);
+  skip(G, "two Target.closeTarget at once (two scopes), of the browser's only two tabs: Chromium stays up", ONLY);
+  skip(G, "Playwright's page.close({ runBeforeUnload: true }) of the browser's only tab (Page.close): Chromium stays up", ONLY);
+
+  // The end of a scope through the real daemon, with the condition of the browser's only tab left out (see above).
+  await step(G, "end_scope (the control's end-scope) of a scope with one tab: its client closes with 1000, a new client of the scope sees no target, the test browser runs", async () => {
+    const c = await rawClient(WebSocket, "lu-end");
+    await c.send("Target.createTarget", { url: `${A}/m?lu-end` });
+    const before = (await c.send("Target.getTargets")).targetInfos.length;
+    const ctl = await control("end-scope", "lu-end");
+    const closed = await within(c.closed, 5000);
+    await sleep(1000);
+    const view = await rawClient(WebSocket, "lu-end");
+    const seen = (await view.send("Target.getTargets")).targetInfos.length;
+    view.close();
+    return { before, ctl: ctl.ok, closed, seen, browser: await browserUp() };
+  }, { want: (x) => x.before === 1 && x.ctl === true && x.closed?.[0] === 1000 && x.seen === 0 && up(x.browser), ms: 30_000,
+    adapted: "new in the external mode, for the skipped end_scope cases: the control's end-scope, not the browser's only tab" });
+
+  await step(G, "end_scope of two scopes at once (two end-scope commands at once): both clients close with 1000, neither scope has a target after, the test browser runs", async () => {
+    const a = await rawClient(WebSocket, "lu-x2a"), b = await rawClient(WebSocket, "lu-x2b");
+    await a.send("Target.createTarget", { url: `${A}/m?lu-x2a` });
+    await b.send("Target.createTarget", { url: `${A}/m?lu-x2b` });
+    const ctl = (await Promise.all([control("end-scope", "lu-x2a"), control("end-scope", "lu-x2b")])).map((r) => r.ok);
+    const closed = (await Promise.all([within(a.closed, 5000), within(b.closed, 5000)])).map((x) => x?.[0] ?? null);
+    await sleep(1000);
+    const seen = [];
+    for (const scope of ["lu-x2a", "lu-x2b"]) { const v = await rawClient(WebSocket, scope); seen.push((await v.send("Target.getTargets")).targetInfos.length); v.close(); }
+    return { ctl, closed, seen, browser: await browserUp() };
+  }, { want: (x) => x.ctl.every((ok: boolean) => ok === true) && x.closed.every((c: number) => c === 1000) && x.seen.every((n: number) => n === 0) && up(x.browser), ms: 30_000,
+    adapted: "new in the external mode, for the skipped end_scope cases: two control end-scope commands at once, not the browser's only two tabs" });
 }
