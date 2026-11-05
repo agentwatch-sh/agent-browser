@@ -36,7 +36,8 @@ taylor (Debian 13), Chromium 156.0.8078.79, 2026-11-05. The receiver: chrome-ext
 | --- | --- | --- |
 | today2, today3 | "today", two runs | `results/today2.json`, `results/today3.json` |
 | ids1 | "ids" | `results/ids1.json` |
-| worker4 | "worker" | `results/worker4.json` |
+| worker4 | "worker": cases C, G and D | `results/worker4.json` |
+| worker2, worker3 | "worker", earlier forms of case D (worker2: a 20 s wait; worker3: 10 s, then 15 s after a new `about:blank` tab); both ended there with "no link". Their case C counts. | `results/worker2.json`, `results/worker3.json` |
 
 ### Part "today"
 
@@ -65,9 +66,9 @@ So `chrome.storage.local`, keyed by tab id, could give a tab of a new run the sc
 
 | Case | What the probe does | Result |
 | --- | --- | --- |
-| C | In the receiver's worker: a value in memory, `chrome.storage.session.set`, a session rule (id 900). Then `Target.closeTarget` on the worker; 10 s; then a new tab. | After the stop: no worker, the host's port closed, no connection in 10 s. After the new tab: the host connects 100 to 151 ms later (three runs). In the new worker: the memory value is gone; `storage.session` and session rule 900 stay; the dynamic rules 2, 4 and 5 stay; the tab ids are the same. |
+| C | In the receiver's worker: a value in memory, `chrome.storage.session.set`, a session rule (id 900). Then `Target.closeTarget` on the worker; 10 s; then a new tab. | After the stop: no worker, the host's port closed, no connection in 10 s. After the new tab: the host connects 100 to 151 ms later (three runs: worker2, worker3, worker4). In the new worker: the memory value is gone; `storage.session` and session rule 900 stay; the dynamic rules 2, 4 and 5 stay; the tab ids are the same. |
 | G | A value in the worker's memory; the probe detaches; 360 s with no event. | The worker still runs, the memory value is still there, and the host neither closed nor connected again. So with its native port open the receiver's worker does not stop when idle. |
-| D | `storage.session`, `storage.local`, session rule 901; then `chrome.runtime.reload()` in the worker. | The receiver did not come back: no extension target in 10 s, none after a new page, no host connection (two runs). The profile's preferences then held the receiver with `disable_reasons` `[16777216]`. So whether `storage.session` stays over a reload is not measured. The receiver's code never calls `chrome.runtime.reload()`. |
+| D | `storage.session`, `storage.local`, session rule 901; then `chrome.runtime.reload()` in the worker. | The receiver did not come back: no extension target in 10 s, none after a new page, no host connection (worker4; worker2 and worker3, with the earlier forms of the case, saw no host connection either). The profile's preferences then held the receiver with `disable_reasons` `[16777216]`. So whether `storage.session` stays over a reload is not measured. The receiver's code never calls `chrome.runtime.reload()`. |
 
 ## Not measured
 

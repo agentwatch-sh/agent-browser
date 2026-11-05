@@ -9,7 +9,7 @@
 //   chrome.storage.session, a DNR session rule and the tab ids stay over a worker stop and over an extension reload,
 //   whether the worker comes back by itself after a stop, and whether it stops when idle with its native port open.
 //
-//   CHROME_EXTENSION=<a detached chrome-extension worktree> PART=today|worker RUN=<empty folder> node probe.ts
+//   CHROME_EXTENSION=<a detached chrome-extension worktree> PART=today|worker|ids RUN=<empty folder> node probe.ts
 //
 // Environment: CHROMIUM (default /usr/bin/chromium), DISPLAY_N (default 137), PORT (default 8793), IDLE_S (default
 // 360, part "worker"). It starts its own Xvfb and Chromium and stops only those, by the pids that it recorded. It
@@ -30,7 +30,7 @@ const EXT = resolve(process.env.CHROME_EXTENSION ?? "");
 const PART = process.env.PART ?? "today";
 const RUN = resolve(process.env.RUN ?? "");
 if (!process.env.CHROME_EXTENSION || !process.env.RUN || !existsSync(join(EXT, "agent/manifest.json"))) {
-  process.stderr.write("usage: CHROME_EXTENSION=<chrome-extension checkout> PART=today|worker RUN=<empty folder> node probe.ts\n");
+  process.stderr.write("usage: CHROME_EXTENSION=<chrome-extension checkout> PART=today|worker|ids RUN=<empty folder> node probe.ts\n");
   process.exit(2);
 }
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";

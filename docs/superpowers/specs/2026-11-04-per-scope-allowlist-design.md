@@ -454,7 +454,10 @@ also when the guard stops the page.
   changes: with one window per page (agent-browser PR #43, the relay's `Target.createTarget` opens a
   window for each page), replacing the last tab of every window would leave an `about:blank` window
   for each closed page. So the receiver lets a window close with its last tab, and keeps only the
-  browser's last window (an `about:blank` tab there), so that Chrome does not end.
+  browser's last window (an `about:blank` tab there), so that Chrome does not end. (The orphan agent
+  tabs design, sections 4 and 7, adds the sweep: the tabs of a scope with no list close too, whatever
+  their URL; no sweep when `scopes` or `lists` is not an object; the closing rule, the sweep and
+  `tabs.remove` run one at a time.)
 - **The worker removal.** The receiver calls `browsingData.remove({}, {serviceWorkers: true})` after
   the rule update and before the tabs close, at the first `set_scopes` after its worker starts, and
   in one case only after that: a scope has a list in the last and in the new `set_scopes`, and the
@@ -572,8 +575,9 @@ shared vector in the build checks both.
 
 - **Readiness.** The relay admits a connection of scope S while the link is up, `bridge.info`
   answered with `bridge` 1 or more, an `allowlist` line came after the link came up (today's rule),
-  and that line gives S a list (its `scopes` entry when it has one, else `default`; section 8.1).
-  Else 503 with the new text `The agent browser is not ready: the allowlist has no list for this
+  and that line gives S a list (its `scopes` entry when it has one, else `default`; section 8.1),
+  and the steps of the link up are done (the orphan agent tabs design, section 8: `bridge.tabScopes`,
+  the target ids, the detaches). Else 503 with the new text `The agent browser is not ready: the allowlist has no list for this
   scope.` (the other 503 texts stay). With choice 1 b, the relay knows that keys are on from its
   start (`agent-browser relay --keys`), not from an `allowlist` line, which it drops at each link
   change. The order with keys on: (1) a request with an `Origin` header gets its 403; (2) a path or
