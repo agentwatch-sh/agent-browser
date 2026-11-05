@@ -26,6 +26,13 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     assert.equal((await commands.eval(o, { tab: "main", expression: "1 + 1" })).value, 2);
     assert.ok((await commands.outline(o, { tab: "main" })).elements.some((e) => e.label === "Go"));
     await commands.click(o, { tab: "main", target: "#b" });
+    // On Linux the page has a window of its own, the relay answers focus emulation itself, and the press of the click
+    // brought the page's window forward (ab-v16.28).
+    assert.deepEqual(h.fake.sent("windows.create").map((r) => r.args), [[{ url: "about:blank", focused: false }]]);
+    assert.deepEqual(h.fake.sent("tabs.create"), []);
+    assert.ok(!chrome.calls.some((x) => x.method === "Emulation.setFocusEmulationEnabled"), "focus emulation reached Chrome");
+    const win = chrome.pages.get(opened.tab.targetId)!.windowId;
+    assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), [[win, { focused: true }]]);
     assert.equal((await commands.tabs(o)).tabs.length, 1);
     const status = await commands.status(o);
     assert.deepEqual([status.connected, status.proxy, status.allowedTabs, status.profileDir, status.target], [true, null, 1, null, `agent mode's endpoint ${h.url("ab-lead")}`]);

@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { copyFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Bridge } from "./bridge.ts";
-import { awaitsPromise, cdpError, DEFAULT_CONTEXT, hideCookies, hidesCookies, isTimeout, route, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { awaitsPromise, cdpError, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
 const PERMISSIONS: Record<string, string> = { geolocation: "location", notifications: "notifications", videoCapture: "camera",
@@ -20,6 +20,8 @@ const HIDDEN_TYPES = new Set(["service_worker", "shared_worker", "browser"]);
 /** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
 /** How long Target.createTarget waits for its tab's tabs.onCreated, which brings the tab's hold (C10 does not order it before the answer). */
 const CREATED_WAIT_MS = 2000;
+/** The longest wait of an input for its page's activation (a bridge op that does not answer): then the input goes anyway. */
+const ACTIVATE_MAX_MS = 2000;
 const SAFE_DANGER = new Set(["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe", "asyncScanning", "asyncLocalPasswordScanning"]);
 
 export const CLOSE = {
@@ -44,6 +46,8 @@ type Tab = {
   navigateTo: string | null;
   /** Its tabs.onCreated came (with attached and held). */
   seen: boolean;
+  /** While an input of the tab waits for its activation: the tab's later calls go to Chrome behind it, in order. */
+  gate: Promise<void> | null;
 };
 type Session = { tabId: number; parent?: string; auto: boolean };
 type Download = { conn: Conn; url: string; name: string; item?: number };
@@ -92,9 +96,19 @@ export class Model {
   private settings: Promise<unknown> = Promise.resolve();
   /** How long a finished download may take to show up complete in chrome.downloads. */
   private readonly downloadWaitMs: number;
+  /**
+   * One window per page, on Linux only (the anti-detect design, docs/research/2026-11-05-anti-detect-drive.md, "The
+   * answer" steps 1, 2 and 5): every Target.createTarget opens a window that does not take the focus, the model
+   * answers a client's focus emulation itself, and before an input that starts an action the page's window comes
+   * forward. On the Mac pages stay tabs, as before (board task ab-v16.27 measures the Mac first).
+   */
+  readonly windowPerPage: boolean;
+  /** The activations of every tab, in order: each one and its input reach the bridge before the next activation reads a window. */
+  private activations: Promise<void> = Promise.resolve();
 
-  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number } = {}) {
+  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
+    this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
   }
 
   /** Why a new connection is refused (C11's 503 texts), or null when the endpoint is ready. */
@@ -210,7 +224,7 @@ export class Model {
       if (!tab) return fail(TEXT.noSession);
       onPage = true;
     }
-    const to = route(method, params, onPage, !!tab && this.children.get(params.sessionId) === tab.id);
+    const to = route(method, params, onPage, !!tab && this.children.get(params.sessionId) === tab.id, this.windowPerPage);
     if (typeof to === "object") return fail(to.refused);
     if (to === "chrome") return this.forward(tab!, child, method, params, answer);
     try {
@@ -223,6 +237,43 @@ export class Model {
   }
 
   private forward(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): void {
+    const send = () => this.send(tab, child, method, params, answer);
+    if (this.windowPerPage && startsAction(method, params)) {
+      // The tab's earlier calls and every earlier activation first; the input goes right behind its own activation.
+      const before = tab.gate ? Promise.all([this.activations, tab.gate]) : this.activations;
+      const step = before.then(() => this.activate(tab)).then(send).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`));
+      this.activations = step;
+      this.behind(tab, step);
+    } else if (tab.gate) this.behind(tab, tab.gate.then(send).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
+    else send();
+  }
+
+  /** The tab's next calls wait for `step`; the last one clears the gate. */
+  private behind(tab: Tab, step: Promise<void>): void {
+    tab.gate = step;
+    void step.then(() => { if (tab.gate === step) tab.gate = null; });
+  }
+
+  /**
+   * Bring the page forward for an input that starts an action, as a person does: a tab switch when another tab of its
+   * window is in front (a popup tab that the site opened there; the relay never moves a tab between windows), and the
+   * focus for its window (chrome.windows.update: Target.activateTarget only selects the tab, and on Linux a key into a
+   * window that is not focused gives its page the focus while another page keeps it). An error or a bridge op that
+   * does not answer in ACTIVATE_MAX_MS is logged, and the input goes on.
+   */
+  private async activate(tab: Tab): Promise<void> {
+    const work = (async () => {
+      const t = await this.bridge.call("tabs.get", [tab.id]);
+      if (!t.active) await this.bridge.call("tabs.update", [tab.id, { active: true }]);
+      const w = await this.bridge.call("windows.get", [t.windowId]);
+      if (!w.focused) await this.bridge.call("windows.update", [t.windowId, { focused: true }]);
+    })().catch((e) => this.log(`relay: the activation of tab ${tab.id} failed: ${(e as Error).message}`));
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<void>((r) => { timer = setTimeout(() => { this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`); r(); }, ACTIVATE_MAX_MS); });
+    await Promise.race([work, late]).finally(() => clearTimeout(timer));
+  }
+
+  private send(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): void {
     const target = child ? { tabId: tab.id, sessionId: child } : { tabId: tab.id };
     this.bridge.call("debugger.sendCommand", [target, method, withForce(method, params)]).then((result) => {
       let r = hidesCookies(method) ? hideCookies(result) : result;
@@ -247,7 +298,7 @@ export class Model {
 
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
-    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false }));
+    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null }));
     return tab;
   }
 
@@ -719,10 +770,12 @@ export class Model {
     "Target.createTarget": async (c, p) => {
       if (p.browserContextId && p.browserContextId !== DEFAULT_CONTEXT) throw new Error(TEXT.noContext);
       // C10: Chrome starts the first request of a tabs.create URL before the receiver can hold the tab. So the tab opens
-      // at about:blank and gets the client's URL after the hold, as Playwright's newPage and goto do.
+      // at about:blank and gets the client's URL after the hold, as Playwright's newPage and goto do. With one window
+      // per page (Linux) every page opens in a window of its own that takes no focus (C10's newWindow), also when the
+      // client asks for a tab or a background tab: a background tab's page is hidden and draws nothing.
       const url = p.url && p.url !== "about:blank" ? String(p.url) : null;
       const flight = (async () => {
-        const created = p.newWindow ? (await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }])).tabs[0]
+        const created = this.windowPerPage || p.newWindow ? (await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }])).tabs[0]
           : await this.bridge.call("tabs.create", [{ url: "about:blank", active: !p.background }]);
         const tab = this.tabOf(created.id);
         // The tab joins the scope also when its creator left meanwhile; then it is free for the scope.
@@ -770,5 +823,8 @@ export class Model {
       c.browserSessions.add(sessionId);
       return { sessionId };
     },
+    // On a page session with one window per page only (route): the page draws in its window, so focus emulation
+    // would only make it report the focus while another page has it.
+    [FOCUS_EMULATION]: async () => ({}),
   };
 }

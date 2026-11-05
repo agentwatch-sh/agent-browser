@@ -13,7 +13,7 @@ import { CDPConnection } from "../src/cdp.ts";
 import { startRelay, type Relay } from "../src/relay/endpoint.ts";
 import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 
-export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string };
+export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string; active: boolean };
 /** A test's answer: a value is the data, { error } a bridge error text, undefined the default answer. */
 type Override = (req: { op: string; args: any[] }) => any;
 
@@ -27,6 +27,10 @@ export class FakeReceiver {
   readonly attached = new Set<number>();
   readonly downloads: any[] = [];
   attachNew = false;
+  /** The window that has the focus (chrome.windows' focused): window 1, the operator's, at the start. */
+  focusedWindow = 1;
+  /** New windows from 10 on: the endpoint vectors name window 2 as one that holds no tab of the scope. */
+  private nextWindow = 10;
   /** Above 0: tabs.create in the real receiver's order (chrome-extension agent/attach.js): the answer first, tabs.onCreated
    *  this many ms later, after the eager attach; a debugger.attach of that tab waits for the event. */
   lateCreatedMs = 0;
@@ -45,9 +49,10 @@ export class FakeReceiver {
   emit(ev: string, fields: object): void { this.line({ t: "ev", ch: "bridge", ev, ...fields }); }
   sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
 
-  /** A new tab, announced as the receiver does: with the eager attach on, it is attached and held. */
+  /** A new tab, announced as the receiver does: with the eager attach on, it is attached and held. It is the active tab of its window. */
   newTab(url: string, opener?: FakeTab, windowId = 1, late = 0): FakeTab {
-    const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, ...(opener ? { openerId: opener.targetId } : {}) };
+    const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, active: true, ...(opener ? { openerId: opener.targetId } : {}) };
+    for (const t of this.tabs.values()) if (t.windowId === windowId) t.active = false;
     this.tabs.set(tab.id, tab);
     const announce = () => {
       if (this.attachNew) this.attached.add(tab.id);
@@ -66,7 +71,7 @@ export class FakeReceiver {
     return tab;
   }
 
-  chromeTab(t: FakeTab) { return { id: t.id, windowId: t.windowId, index: 0, active: true, url: t.url, title: t.title, status: "complete" }; }
+  chromeTab(t: FakeTab) { return { id: t.id, windowId: t.windowId, index: 0, active: t.active, url: t.url, title: t.title, status: "complete" }; }
 
   private async handle(req: { id: string; op: string; args: any[]; wait: number }): Promise<void> {
     this.requests.push(req);
@@ -96,13 +101,21 @@ export class FakeReceiver {
         return {};
       }
       case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs));
-      case "windows.create": { const t = this.newTab(args[0].url, undefined, 2); return { id: 2, state: "normal", tabs: [this.chromeTab(t)] }; }
+      case "windows.create": {
+        const id = this.nextWindow++, t = this.newTab(args[0].url, undefined, id);
+        if (args[0].focused !== false) this.focusedWindow = id;
+        return { id, state: "normal", focused: this.focusedWindow === id, tabs: [this.chromeTab(t)] };
+      }
       case "tabs.get": return this.chromeTab(tab(args[0]));
       case "tabs.query": return [...this.tabs.values()].filter((t) => args[0].windowId === undefined || t.windowId === args[0].windowId).map((t) => this.chromeTab(t));
-      case "tabs.update": return this.chromeTab(tab(args[0]));
+      case "tabs.update": {
+        const t = tab(args[0]);
+        if (args[1]?.active) for (const o of this.tabs.values()) if (o.windowId === t.windowId) o.active = o === t;
+        return this.chromeTab(t);
+      }
       case "tabs.remove": tab(args[0]); this.tabs.delete(args[0]); this.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } }); return null;
-      case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: false };
-      case "windows.update": return { id: args[0], state: "normal" };
+      case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: this.focusedWindow === args[0] };
+      case "windows.update": if (args[1]?.focused) this.focusedWindow = args[0]; return { id: args[0], state: "normal", focused: this.focusedWindow === args[0] };
       case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url));
       default: return null; // tabs.update, downloads.cancel, contentSettings.*, bridge.release
     }
@@ -123,10 +136,11 @@ export async function until<T>(fn: () => T, what = "the condition", ms = 5000): 
 }
 
 /** A relay of its own on a short temp socket path, with the fake behind it. */
-export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number } = {}): Promise<Harness> {
+export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "ab-relay-"));
   const socket = join(dir, "cdp.sock"), fake = new FakeReceiver(), logs: string[] = [], conns: CDPConnection[] = [];
-  const relay = await startRelay({ socket, input: fake.input, output: fake.output, log: (l) => logs.push(l), ...opts });
+  // One window per page (the Linux design) unless a test asks for the Mac's tabs: the tests do not depend on the platform.
+  const relay = await startRelay({ socket, input: fake.input, output: fake.output, log: (l) => logs.push(l), windowPerPage: true, ...opts });
   const url = (scope: string) => `ws+unix://${socket}:/devtools/browser/${scope}`;
   return {
     fake, relay, socket, logs, url,
@@ -198,6 +212,11 @@ export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Prom
         const t = tab(chrome.pages.get((await send("Target.createTarget", { url: args[0].url })).result.targetId)!);
         fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
         return t;
+      }
+      case "windows.create": {
+        const p = chrome.pages.get((await send("Target.createTarget", { url: args[0].url, newWindow: true })).result.targetId)!;
+        fake.emit("tabs.onCreated", { tab: tab(p), attached: false, held: false });
+        return { id: p.windowId, state: "normal", focused: false, tabs: [tab(p)] };
       }
       case "tabs.get": case "tabs.update": return tab(page(args[0]));
       case "tabs.query": return [...chrome.pages.values()].filter((p) => args[0].windowId === undefined || p.windowId === args[0].windowId).map(tab);

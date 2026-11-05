@@ -118,12 +118,24 @@ export function refusal(method: string, params: any, onPage: boolean): string | 
 
 export type Route = "model" | "chrome" | { refused: string };
 
-/** Where a call goes. `child` is true for a Target.detachFromTarget of a child session (a frame or a worker) of the page's tab. */
-export function route(method: string, params: any, onPage: boolean, child = false): Route {
+/**
+ * The call that the model answers itself, on a page session, when each page has a window of its own (Linux; the
+ * anti-detect design, docs/research/2026-11-05-anti-detect-drive.md, step 2). A page in a window draws without focus
+ * emulation, and focus emulation makes a page report "visible" and the focus that it does not have. Playwright sends
+ * it for each page unless it connects with noDefaults.
+ */
+export const FOCUS_EMULATION = "Emulation.setFocusEmulationEnabled";
+
+/**
+ * Where a call goes. `child` is true for a Target.detachFromTarget of a child session (a frame or a worker) of the
+ * page's tab. `windowPerPage`: each page has a window of its own (Linux), and the model answers FOCUS_EMULATION.
+ */
+export function route(method: string, params: any, onPage: boolean, child = false, windowPerPage = false): Route {
   const refused = refusal(method, params, onPage);
   if (refused) return { refused };
   // A page call on the root or a browser session names no tab.
   if (!onPage) return MODEL_SET.has(method) ? "model" : { refused: TEXT.generic(method) };
+  if (windowPerPage && method === FOCUS_EMULATION) return "model";
   if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && child)) return "chrome";
   if (PAGE_MODEL_SET.has(method)) return "model";
   if (method.startsWith("Browser.") || method.startsWith("Target.")) return { refused: TEXT.generic(method) };
@@ -158,6 +170,20 @@ export function withForce(method: string, params: any): any {
   if (method !== "Input.dispatchMouseEvent" || !params || params.force !== undefined) return params;
   if (params.type === "mousePressed" || (params.type === "mouseMoved" && params.buttons)) return { ...params, force: 0.5 };
   return params;
+}
+
+/**
+ * An input that starts an action, as a person's press or key does: before it the model brings the page's window
+ * forward (Linux; the anti-detect design, step 5). On Linux Chrome raises a window for a press in it, but not for
+ * keys: a key into a window that is not focused gives its page the focus while another page keeps it. Moves, wheel
+ * events, releases and key-ups follow the start and need no window of their own.
+ */
+export function startsAction(method: string, params: any): boolean {
+  if (method === "Input.insertText") return true;
+  if (method === "Input.dispatchMouseEvent") return params?.type === "mousePressed";
+  if (method === "Input.dispatchKeyEvent") return params?.type === "keyDown" || params?.type === "rawKeyDown" || params?.type === "char";
+  if (method === "Input.dispatchTouchEvent") return params?.type === "touchStart";
+  return false;
 }
 
 /** A command that waits for a promise: after a timeout the model leaves its tab attached (C10). */
