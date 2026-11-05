@@ -24,7 +24,11 @@
 //                                                   activation, a person's input, the input lock; F's window takes the focus after each
 //                                                   input step, so T's window comes forward again for each one (several activations).
 //                                                   design-no-x cannot reach the X pointer (as over agentwatch's relay)
-//   design-two                                      the design with two agents at once (two windows, one input lock), each typing 6 times
+//   design-two                                      the design with two agents at once on one site (two windows, one input lock),
+//                                                   each typing 6 times, then a third agent on the first page's site
+//   design-two-sites                                the same with the two pages on two sites (probe.localhost, other.localhost): they
+//                                                   share the one input lock (ab-1bi). At e52de19 (one lock per site, ab-v16.46)
+//                                                   both typed at once: the numbers of the README's "One input at a time"
 //   person-window-multi                             the person baseline for several activations: F's window takes the focus after each step
 //   window, window-no-flag, window-default          one window per agent page (candidate 1); window-default sends the old
 //                                                   attach's focus emulation itself around each command
@@ -95,14 +99,15 @@ say(`Xvfb :${DISPLAY} pid ${xvfb.pid}; run folder ${RUN}`);
 // ------------------------------------------------------------------ the probe server
 const log: Rec[] = [];
 const { server, port } = await startServer(log);
-const BASE = `http://probe.localhost:${port}`;
-const urlOf = (tab: string) => `${BASE}/p?tab=${tab}`;
+const BASE = `http://probe.localhost:${port}`, BASE2 = `http://other.localhost:${port}`; // two sites (design-two-sites)
+const urlOf = (tab: string, base = BASE) => `${base}/p?tab=${tab}`;
 const mark = (ev: string, extra: Record<string, unknown> = {}) => log.push({ t: Date.now(), tab: "driver", ev, ...extra });
 
 // ------------------------------------------------------------------ Chromium over a pipe, and the bridge
 const BASE_ARGS = ["--remote-debugging-pipe", "--no-first-run", "--no-default-browser-check", "--ozone-platform=x11", "--password-store=basic",
   "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps",
-  "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE probe.localhost", "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=probe.localhost",
+  "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE probe.localhost , EXCLUDE other.localhost", "--proxy-server=http://127.0.0.1:9",
+  "--proxy-bypass-list=probe.localhost;other.localhost",
   "--window-position=0,0", "--window-size=1100,700"];
 
 type Client = { ws: WebSocket; sessions: Set<string>; label: string };
@@ -285,7 +290,7 @@ function scenario(name: string, what: string): Scenario {
 
 /** agent-browser options for the bridge of `c` (agent mode's endpoint transport). */
 const opts = (c: Chromium, hiddenDrive: boolean): BrowserOptions => ({
-  stateDir: join(RUN, `state-${c.name}-${hiddenDrive ? "h" : "d"}`), cdpUrl: c.cdpUrl, allow: ["probe.localhost"], hiddenDrive,
+  stateDir: join(RUN, `state-${c.name}-${hiddenDrive ? "h" : "d"}`), cdpUrl: c.cdpUrl, allow: ["probe.localhost", "other.localhost"], hiddenDrive,
   // agent-browser's own lines start with its name already (review-45c: "agent-browser: agent-browser: ...").
   commandName: "anti-detect probe", log: (l) => say(/^agent-browser\b/.test(l) ? l : `agent-browser: ${l}`),
 });
@@ -464,7 +469,8 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
   // ---------------------------------------------------------------- the whole design (ab-v16.26)
   async design(sc) { await designCase(sc, true); },
   async "design-no-x"(sc) { await designCase(sc, false); },
-  async "design-two"(sc) { await designTwoCase(sc); },
+  async "design-two"(sc) { await designTwoCase(sc, false); },
+  async "design-two-sites"(sc) { await designTwoCase(sc, true); },
   // ---------------------------------------------------------------- one window per agent page (1)
   async window(sc) { await windowCase(sc, [OCCLUDED], true); },
   async "window-no-flag"(sc) { await windowCase(sc, [], true); },
@@ -537,23 +543,28 @@ async function designCase(sc: Scenario, x: boolean) {
   try { sc.notes.push(`pointer.json: ${readFileSync(join(o.stateDir, "pointer.json"), "utf8").slice(0, 300)}`); } catch { sc.notes.push("no pointer.json"); }
 }
 
-/** Two agents at once, each with a window of its own (T, and a second page T2 of the same site), sharing one agent browser's
- *  state folder (one input lock): each types "hello" into its field 6 times, with pauses. Also each alone, for the cost. */
-async function designTwoCase(sc: Scenario) {
+/** Two agents at once, each with a window of its own (T, and a second page T2 of the same site, or with `twoSites` of another
+ *  site), sharing one agent browser's state folder (one input lock): each types "hello" into its field 6 times, with
+ *  pauses. Also each alone, for the cost. Each page's own sequence of focus, blur and keys during its own commands is
+ *  listed (what that site alone sees); then a third agent types on T's site. */
+async function designTwoCase(sc: Scenario, twoSites: boolean) {
   const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
   await loaded(sc.F);
   const wf = windowOf(c.proc.pid!, sc.F);
   await raiseAndFocus(wf);
-  const o = opts(c, false), T2 = `${sc.T}b`;
+  const o = opts(c, false), T2 = `${sc.T}b`, T3 = `${sc.T}c`; // T3: a third page of T's site, for a later agent there
   await commands.open(o, { url: urlOf(sc.T) });
-  await commands.open(o, { url: urlOf(T2) });
-  await loaded(sc.T); await loaded(T2);
+  await commands.open(o, { url: urlOf(T2, twoSites ? BASE2 : BASE) });
+  await commands.open(o, { url: urlOf(T3) });
+  await loaded(sc.T); await loaded(T2); await loaded(T3);
   await sleep(500);
   await raiseAndFocus(wf);
-  const agent = async (tab: string, delay: number) => {
+  const agent = async (tab: string, delay: number, rounds = 6) => {
     await sleep(delay);
-    for (let r = 0; r < 6; r++) {
+    for (let r = 0; r < rounds; r++) {
+      mark("cmd", { of: tab, phase: "start" });
       await commands.type(o, { tab: `tab=${tab}`, text: "hello", into: "#f" });
+      mark("cmd", { of: tab, phase: "end" });
       await sleep(300 + Math.round(Math.random() * 400));
     }
   };
@@ -563,6 +574,11 @@ async function designTwoCase(sc: Scenario) {
   const sorted = () => log.slice().sort((x, y) => x.t - y.t);
   const s0 = sc.steps.at(-1)!;
   const both = bothFocusedMs(sorted(), sc.T, T2, s0.t0, s0.t1);
+  // A third agent on T's site after both: T and T3 (one site) must never both have the focus (way 1).
+  await step(sc, "a third agent on T's site, after both", () => agent(T3, 0, 2), 60_000);
+  const s3 = sc.steps.at(-1)!;
+  sc.notes.push(`after both, a third agent on T's site: T and T3 both focused ${bothFocusedMs(sorted(), sc.T, T3, s3.t0, s3.t1)} ms, T2 and T3 ${bothFocusedMs(sorted(), T2, T3, s3.t0, s3.t1)} ms of ${s3.t1 - s3.t0} ms; `
+    + `focused at its end: ${[sc.T, T2, T3].map((tab) => `${tab} ${log.filter((e) => e.tab === tab && e.focus !== undefined && e.t <= s3.t1).sort((x, y) => x.t - y.t).at(-1)?.focus}`).join(", ")}`);
   await raiseAndFocus(wf);
   let alone = 0;
   await step(sc, "each agent alone, one after the other", async () => { const t0 = Date.now(); await agent(sc.T, 0); await agent(T2, 0); alone = Date.now() - t0; }, 120_000);
@@ -574,10 +590,36 @@ async function designTwoCase(sc: Scenario) {
     sc.notes.push(`${tab}: keydowns ${ins.filter((e) => e.type === "keydown").length}, while unfocused ${ins.filter((e) => e.type === "keydown" && e.focus === false).length}, untrusted ${ins.filter((e) => e.trusted === false).length}, field focus with no press ${ins.filter((e) => e.type === "focusin" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)
       && !log.some((x) => x.tab === tab && x.ev === "focus" && x.t <= e.t + 5 && e.t - x.t < 100)).length}`);
   }
+  for (const tab of [sc.T, T2]) sc.notes.push(`${tab} alone, during its own commands: ${ownSequence(sorted(), tab, s0.t0, s0.t1 + 200)}`);
   const b = await AgentBrowser.connect(o);
   try { for (const tab of [sc.T, T2]) sc.notes.push(`${tab} field: ${JSON.stringify(await (await b.find(`tab=${tab}`)).evaluate(() => (document.getElementById("f") as HTMLInputElement).value))}`); }
   finally { await b.disconnect().catch(() => {}); }
   await idle(sc, "idle after", 2000);
+}
+
+/**
+ * What one page sees alone during its own commands (the driver's "cmd" marks of design-two): for each command, its events
+ * in order (F focus, B blur, d pointerdown, k keydown, k' a keydown while the page had no focus), and the counts over all
+ * commands: blurs inside a command, focus events after a command's first, keydowns with no focus. A person's page shows
+ * "F d k k k k k" (the window's focus, the field's press, the keys): a blur comes only when the person leaves the window.
+ */
+function ownSequence(sorted: Rec[], tab: string, from: number, to: number): string {
+  const marks = sorted.filter((e) => e.tab === "driver" && e.ev === "cmd" && e.of === tab && e.t >= from && e.t <= to);
+  const spans: [number, number][] = [];
+  for (const m of marks) if (m.phase === "start") spans.push([m.t, to]); else if (spans.length) spans[spans.length - 1][1] = m.t;
+  let blurs = 0, refocus = 0, keysUnfocused = 0;
+  const seqs = spans.map(([a, z]) => {
+    const evs = sorted.filter((e) => e.tab === tab && e.t >= a && e.t <= z + 50 && (e.ev === "focus" || e.ev === "blur" || (e.ev === "in" && (e.type === "keydown" || e.type === "pointerdown"))));
+    let focusSeen = 0;
+    return evs.map((e) => {
+      if (e.ev === "focus") { if (focusSeen++) refocus++; return "F"; }
+      if (e.ev === "blur") { if (e.t <= z) blurs++; return "B"; }
+      if (e.type === "pointerdown") return "d";
+      if (e.focus === false) { keysUnfocused++; return "k'"; }
+      return "k";
+    }).join(" ");
+  });
+  return `${spans.length} commands; blurs inside its commands ${blurs}, focus events after a command's first ${refocus}, keydowns with no focus ${keysUnfocused}; sequences: ${seqs.map((q) => `[${q}]`).join(" ")}`;
 }
 
 /** Candidate 1: T opens in a window of its own (Target.createTarget newWindow, background); F's window stays over it. */

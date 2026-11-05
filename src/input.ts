@@ -37,17 +37,20 @@ export const INPUT_LOCK = "input.lock", POINTER_FILE = "pointer.json";
 const held = new AsyncLocalStorage<ReadonlySet<string>>();
 
 /**
- * Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). Reentrant within
+ * Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). One lock for the
+ * pages of every site (board task ab-v16.46: the operator's choice on ab-1bi, after one lock per site on ab-hbt showed
+ * each page alone a blur and a focus during its own typing while an agent on another site typed). Reentrant within
  * one call chain of one process (Tab.withInput around the caller's own Tab.click); another chain, or another process,
- * waits for it, up to lockWaitMs, or up to `deadline` (epoch ms) when that comes first (Tab.waitFor's timeout).
+ * waits for it, up to lockWaitMs, or up to `deadline` (epoch ms) when that comes first (Tab.waitFor's timeout);
+ * `signal` ends that wait at once (Tab.waitFor's condition held: review-52 note 3).
  */
-export async function withInputLock<T>(s: Settings, fn: () => Promise<T>, deadline?: number): Promise<T> {
+export async function withInputLock<T>(s: Settings, fn: () => Promise<T>, opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<T> {
   const path = statePath(s, INPUT_LOCK), mine = held.getStore();
   if (mine?.has(path)) return fn();
-  const wait = s.inputTiming.lockWaitMs, until = Math.min(Date.now() + wait, deadline ?? Infinity);
+  const wait = s.inputTiming.lockWaitMs, until = Math.min(Date.now() + wait, opts.deadline ?? Infinity);
   return withFileLock(path, until, () => held.run(new Set([...(mine ?? []), path]), fn),
     until < Date.now() + wait ? "the input lock (another input command of this agent browser held it until the wait's timeout)"
-      : `the input lock (another input command of this agent browser held it for ${wait / 1000} s)`);
+      : `the input lock (another input command of this agent browser held it for ${wait / 1000} s)`, { signal: opts.signal });
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
