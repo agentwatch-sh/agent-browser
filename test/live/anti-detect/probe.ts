@@ -96,14 +96,17 @@ send("load", { ...geo(), webdriver: navigator.webdriver, hl: history.length, ...
 /** A 1x1 PNG for the lazy image. */
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 
-/** The log server: /p?tab=NAME serves a probe page, /log takes its beacons, /lazy.png logs its request. */
-export function startServer(log: Rec[]): Promise<{ server: Server; port: number }> {
+/**
+ * The log server: /p?tab=NAME serves a probe page, /log takes its beacons, /lazy.png logs its request. `record`
+ * changes each beacon before it goes into the log (the Mac check drops the key values: mac-rules.ts, probeRecord).
+ */
+export function startServer(log: Rec[], o: { record?: (r: Rec) => Rec } = {}): Promise<{ server: Server; port: number }> {
   const server = createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
     if (req.method === "POST" && u.pathname === "/log") {
       let body = "";
       req.on("data", (c) => (body += c));
-      req.on("end", () => { try { log.push(JSON.parse(body)); } catch { /* not ours */ } res.writeHead(204); res.end(); });
+      req.on("end", () => { try { const r = JSON.parse(body); log.push(o.record ? o.record(r) : r); } catch { /* not ours */ } res.writeHead(204); res.end(); });
       return;
     }
     if (u.pathname === "/lazy.png") {

@@ -1465,6 +1465,27 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   baselines `person-window` and `person-window-multi`. Since ab-v16.26 the probe also counts position
   changes that the movement does not explain, entries at an earlier entry's point, and a user
   activation with no input. Not part of `npm test`.
+- `test/live/anti-detect/mac.ts` (macOS, with the operator's consent and nobody at the keyboard; see
+  its head): `node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR`, about 3 minutes. In
+  its own agent Chrome (today's flags, `open -n -g` and the give-back) it measures drive and record
+  in a background tab and in a window of its own, where each new agent window comes in the window
+  order, the Space, the front app, the focus between agent windows, keys into an inactive window,
+  popups and the real pointer's events. As `test/live/function-keys/` is, it is an exception to the
+  rule against `--remote-debugging-port` (Hard rules): its agent Chrome gets
+  `--remote-debugging-port=0`, so that no "Allow remote debugging?" prompt needs a person, on an
+  empty throwaway profile in its run folder, with no network, on 127.0.0.1 only, for the few minutes
+  of the run; the check quits that Chrome at its end (SIGKILL when it must) and removes the profile.
+  Its watcher (`mac-watch.swift`, compiled by the check) gives the front back, and stops doing so at
+  the first sign of a person (a pointer move, or a key press, a click or a scroll of the hardware);
+  the check then ends the step in progress at once (it reads its stop rules every 100 ms) and quits
+  its Chrome. It refuses before its Chrome starts when a HID reading of the watcher is 0 or less, or
+  when a person used the Mac after the watcher's start. Apps that post keyboard or mouse events
+  (remote-desktop apps, Karabiner, a mouse jiggler, Universal Control) look like a person to it and
+  stop it: quit them first. Its `results.json` keeps no key values (only event types and counts).
+  The check exits 0 only when it never took the operator's focus or Space. It needs ffmpeg with
+  libx264 (or `--skip record`). No other agent session may use the Mac's agent browser during the
+  run. `--dry-run` runs it on Linux in a private Xvfb with a stand-in watcher. Not part of `npm
+  test`; `test/mac-measure.test.ts` tests its pure parts (`mac-rules.ts`).
 - `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
   specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
 - `test/parity-server.test.ts`: the probe's server against Node's own clients: a TLS client that ends
