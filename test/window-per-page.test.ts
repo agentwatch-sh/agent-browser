@@ -7,15 +7,15 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
-import { resolveOptions, windowPerPage, type BrowserOptions } from "../src/options.ts";
+import { resolveOptions, windowPerPage, type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
 import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
-import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
+import { cli, consumer, fixtureServer, flags, site, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
 const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" };
@@ -24,6 +24,8 @@ let fx: Fixture, fake: FakeChrome, c: Consumer, operator: FakePage;
 /** Agent mode on Linux, through the proxy to the fake, on a display of the agent browser's own (the fake is on none: the test says so). */
 const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", display: { own: true }, ...extra });
 const mac = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "darwin", ...extra });
+/** Short input times, as in person-input.test.ts. */
+const FAST: Partial<InputTiming> = { pressMs: [6, 9], keyMs: [6, 9], holdMs: [1, 2], settleMs: [1, 3], wheelMs: [1, 3], moveScale: 0.05, activateMs: 300 };
 
 before(async () => {
   fx = await fixtureServer();
@@ -361,6 +363,50 @@ test("Linux, a display that is not the agent browser's own: open --tab records i
   await commands.close(linux(), { tab: tab.name });
   await commands.close(linux(), { tab: plain.name });
   assert.ok(!tabPages().includes(tab.page.targetId), "dropped at its close");
+});
+
+test("Linux, through bin/agent-browser.js: open without --tab gives the page a window of its own, and click drives it as a person's input, on a display that the real check finds the agent browser's own (review-45c)", { skip: process.platform === "linux" ? false : "the CLI's platform is this machine's" }, async () => {
+  operatorInFront();
+  const own = consumer();
+  try {
+    // The real display check, with stand-ins on PATH: ps names an agent Chrome on this profile (a pid above pid_max: no
+    // real process has it), xdotool shows only its windows, xprop no window manager. Every other ps call is the real one.
+    const bin = join(own.dir, "bin"), log = join(own.dir, "x.log"), pid = 4194999;
+    const realPs = ["/usr/bin/ps", "/bin/ps"].find((p) => existsSync(p))!;
+    const profile = resolveOptions(own.options()).profileDir;
+    mkdirSync(bin);
+    const script = (name: string, body: string) => { writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`); chmodSync(join(bin, name), 0o755); };
+    script("ps", `if [ "$1" = "axww" ]; then echo "${pid} /usr/lib/chromium/chromium --user-data-dir=${profile} --window-name=agent"; exit 0; fi\nexec ${realPs} "$@"`);
+    script("xdotool", [`echo "$*" >> ${log}`, "case \"$1\" in",
+      "  search) if [ \"$2\" = \"--maxdepth\" ]; then echo 1; else printf '1\\n200\\n'; fi ;;",
+      `  getwindowpid) echo ${pid} ;;`, "  getmouselocation) printf 'X=900\\nY=700\\nSCREEN=0\\nWINDOW=200\\n' ;;",
+      "  mousemove) ;;", "  *) exit 1 ;;", "esac"].join("\n"));
+    script("xprop", `echo "$*" >> ${log}\necho "_NET_SUPPORTING_WM_CHECK:  not found."`);
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DISPLAY: ":4194" };
+    delete env.WAYLAND_DISPLAY; delete env.XAUTHORITY;
+    const run = (args: string[]) => cli([...args, ...flags(own, fake.ws), "--json", "--input-timing", JSON.stringify(FAST)], { env });
+    const from = fake.calls.length;
+    const r = await run(["open", `${fx.base}/`, "--name", "w"]);
+    assert.equal(r.json?.ok, true, r.stdout + r.stderr);
+    assert.deepEqual(fake.calls.slice(from).filter((x) => x.method === "Target.createTarget").map((x) => x.params), [{ url: "about:blank", background: true, newWindow: true }]);
+    const page = fake.pages.get(r.json.tab.targetId)!;
+    assert.notEqual(page.windowId, operator.windowId, "a window of its own");
+    assert.doesNotMatch(r.stderr, /not on a display of its own/);
+    assert.equal(JSON.parse(readFileSync(join(own.stateDir, "display.json"), "utf8")).own, true);
+    const c2 = await run(["click", "w", "#b"]);
+    assert.equal(c2.json?.ok, true, c2.stdout + c2.stderr);
+    assert.equal(page.title, "clicked");
+    const calls = fake.calls.slice(from).filter((x) => x.targetId === page.targetId), m = calls.map((x) => x.method);
+    assert.deepEqual(focusCalls(calls), [], "no focus emulation");
+    assert.ok(m.indexOf("Page.bringToFront") >= 0 && m.indexOf("Page.bringToFront") < m.indexOf("Input.dispatchMouseEvent"), "the window comes forward first");
+    const press = calls.find((x) => x.method === "Input.dispatchMouseEvent" && x.params.type === "mousePressed")!;
+    assert.equal(press.params.force, 0.5, "a person's press");
+    const x = readFileSync(log, "utf8");
+    assert.match(x, /^search --onlyvisible --name $/m, "the real windows check");
+    assert.match(x, /^-root _NET_SUPPORTING_WM_CHECK$/m, "the real window manager check");
+    assert.match(x, /^mousemove \d+ \d+$/m, "the X pointer's move: the last step of the path");
+    await run(["close", "w"]);
+  } finally { stopProxy(resolveOptions(own.options())); own.remove(); }
 });
 
 test("Linux: reads of a hidden opener (text, outline, eval) bring its tab in front first, so an eval that waits for a frame ends (review-45b)", async () => {
