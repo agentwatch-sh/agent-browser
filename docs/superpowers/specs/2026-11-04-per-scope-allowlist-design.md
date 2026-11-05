@@ -509,8 +509,9 @@ relay and moves both at once.
 - The daemon names a session's scope in `scopes` before it gives the session its endpoint
   (`agentwatch browser endpoint` waits for the receiver's answer and the `allowlist` line). Else a
   new session could connect in the moment before, and get the default list, which can be another
-  repo's list. This also holds for `agentwatch browser env`, and for an endpoint URL that the daemon
-  puts into a session's environment at its launch: the daemon names the scope before the launch. The
+  repo's list. This also holds for `agentwatch browser env`, and, only when the operator allowed it
+  (C11's target), for an endpoint URL in the session's environment at its launch: the daemon names
+  the scope before the launch. The
   URL is easy to guess (the socket path and the session name), so with a default list any scope name
   that `scopes` does not name gets the default list.
 - At a session's end the daemon writes `end_scope` to the relay and drops the scope from `scopes` in
@@ -669,9 +670,10 @@ session names itself, and the CLI reaches the gateway over TCP localhost with on
 `agentwatch browser endpoint` cannot tell which session calls. Two ways:
 
 - **In the session's environment at its launch.** agentwatch starts each session, so it puts the
-  token into that session's environment (for example `AGENTWATCH_BROWSER_TOKEN`, and for the
-  Playwright MCP the full URL in `PLAYWRIGHT_MCP_CDP_ENDPOINT`). No process check is needed. This is
-  the cheap way.
+  token into that session's environment, in one variable, `AGENTWATCH_BROWSER_CRED`. Its name keeps
+  `KEY`, `SECRET` and `TOKEN` out: Codex's default policy removes such names from the commands that
+  the model runs. agent-browser and scripts read it. No process check is needed. This is the cheap
+  way.
 - **By a process check.** `agentwatch browser endpoint` over a per-user 0600 Unix socket; the daemon
   reads the caller's pid (`SO_PEERCRED` on Linux, `LOCAL_PEERPID` on the Mac) and maps it to the
   session by its process tree. About one task of the size of stage 4. A process that leaves the
@@ -692,25 +694,49 @@ until it starts again. The token is 64 lowercase hex digits (32 random bytes; `w
 URL at each `:`, and a `#` is an error, so hex is safe); its hash is SHA-256 of those 64 ASCII
 characters. No side logs the URL's query or the `X-Agentwatch-Key` header: not the relay, not the
 daemon, not `agentwatch browser <command>`. agent-browser adds the key only at the connect call,
-never in its `Settings.cdpUrl`, because `agent-browser status` prints that. The Playwright MCP reads
-the full URL from `PLAYWRIGHT_MCP_CDP_ENDPOINT`, so agentwatch puts the URL with the key into that
-variable at the session's launch; "the client adds the key to the URL" applies to agent-browser and
-scripts. A limit: with `DEBUG=pw:channel` (or `pw:*`), playwright-core 1.61.1 and 1.63.0 write the
-endpoint URL with its `?key=`, and the header's value, to standard error (review-42f); clients do
-not run with that value.
+never in its `Settings.cdpUrl`, because `agent-browser status` prints that. A limit: with
+`DEBUG=pw:channel` (or `pw:*`), playwright-core 1.61.1 and 1.63.0 write the endpoint URL with its
+`?key=`, and the header's value, to standard error (review-42f); clients do not run with that value.
 
-The limits of either way, stated plainly: the token stops a mistake and a prompt-injected agent that
-only names another scope. It does not stop a process of the same OS user that looks for the token:
-`/proc/<pid>/environ` of another session's process is readable by the same user; a session's
-transcript holds what the session printed; tmux keys sent to another session's pane run there. So
+aw-lead's rules for the key (mail m2308f29, 2026-11-05):
+
+- The operator's answer age-4ks ("env: no", 2026-11-04) stands. Without a key, agentwatch puts no
+  endpoint URL into a session's environment; only `agentwatch browser env` prints it, on request.
+  With a key, agentwatch puts only the key variable into the environment.
+  `PLAYWRIGHT_MCP_CDP_ENDPOINT` with the key goes into it only after the operator answers that
+  question again: it sends each session's Playwright MCP to the signed-in agent browser. (ab-dm6's
+  options do not offer that variable, so a yes there does not answer age-4ks again.)
+- With keys on, `agentwatch browser env` prints the keyless URL and one line that names the key
+  variable (`AGENTWATCH_BROWSER_CRED`), never the key. `agentwatch browser <command>` passes the key
+  variable into agent-browser's environment: that one named variable only.
+- The session's environment is the agent's process environment. The launch line reads the key from
+  the token file. agentwatch never sets the key with `tmux -e` or `set-environment`: both put the
+  value into tmux's argv.
+- The daemon makes a new key at each launch of a session and keeps it over a restart of the
+  session's agent. At the session's end it removes the token file and drops the scope's entry from
+  `keys`, in the line that drops the scope. A later session of the same name never gets an old key.
+- agentwatch picks each session's scope at its launch and keeps it for the session's life. A rename
+  does not change it. No two live sessions share one scope.
+- Only the daemon reads the token files. No agentwatch command reads a key from them: the CLI cannot
+  tell which session calls (agentwatch #563).
+- A launch never waits for the agent browser. The daemon adds the scope to its map before the launch
+  and sends `set_scopes` when the link is up. With `default` `null`, an earlier connection gets the
+  503 `the allowlist has no list for this scope`.
+
+The limits of either way, stated plainly: the same OS user can read `/proc/<pid>/environ`, so the
+token guards against mistakes and against an injected instruction that only names another scope. It
+does not guard against a process of that user that reads another process's environment, a transcript
+or a pane: `/proc/<pid>/environ` of another session's process is readable by the same user; a
+session's transcript holds what the session printed; tmux keys sent to another session's pane run
+there. The agent's own shell commands inherit the key: an `env` writes it into the transcript. So
 the token must never be in an argv (`/proc/<pid>/cmdline` is readable by every user on taylor):
-agent-browser and the Playwright MCP take it from the environment, not from `--cdp-url` with the
-token in it. It must never be in a transcript either. With the environment way, `agentwatch browser
-endpoint` and `agentwatch browser env` cannot tell which session calls (sessions name themselves,
-agentwatch #563), and their output goes into a transcript, so they print no token at all. The client
-(agent-browser, a script) reads the token from its own environment and adds it to the URL itself. A
-program that agentwatch did not start has no token and can no longer connect, unless agentwatch
-gives it a token of its own (choices 1 and 5).
+agent-browser and scripts take it from the environment (`AGENTWATCH_BROWSER_CRED`), not from
+`--cdp-url` with the token in it. It must never be in a transcript either. With the environment way,
+`agentwatch browser endpoint` and `agentwatch browser env` cannot tell which session calls (sessions
+name themselves, agentwatch #563), and their output goes into a transcript, so they print no token
+at all. The client (agent-browser, a script) reads the token from its own environment and adds it to
+the URL itself. A program that agentwatch did not start has no token and can no longer connect,
+unless agentwatch gives it a token of its own (choices 1 and 5).
 
 ## 10. The operator-mode send stays one profile (question 7)
 
@@ -777,7 +803,7 @@ Then (the receiver in three PRs, so that each one stays small enough for one rev
 | 1c. The guard and `blocked` | chrome-extension | The guard (layers 2 and 3), for `blob:` inner hosts too; `blocked` with the scope, once per navigation, and after a failed retry; with choice 2 b, the worker block instead; unit tests; the live test of the worker hole (both forms) and of a list change | 1a |
 | 1d. The operator's own tabs (choice 3) | chrome-extension | The mark of a tab that starts at `chrome://newtab/` and that no page opened; a popup of a marked tab is marked too; the mark's life (it stays at a link change and at `tabs.onReplaced`, it goes at the worker's start); the marked-tab rule of C5's target (id 8, `"*"`), or the marked tabs in the named list's `tabIds` (b, c), none with d or while no tab is marked; the closing rule, the guard and the retry for marked tabs (none of the first two with `"*"`); the `operator` field of `set_scopes` (C4's target) and its refusal rule; unit tests; the live test of a tab that the operator opens and of its popup | 1a, 1b |
 | 2. The relay | agent-browser (`src/relay/`) | The `allowlist` line with lists, scopes and default, and the rules of section 8.1 applied to it (the shared vector); readiness and the 503 text per scope; the closing of connections whose scope lost its list; `tabs.create` and `windows.create` with the scope; a tab's scope from `bridge.tabScope` only, with the 500 ms wait for a new tab; the refusal of off-list navigations (layer 1); grants and the content-setting rebuild per scope; with choice 1 b, the `--keys` start flag, the `keys` field of the `allowlist` line, the token in the URL's query (or the `X-Agentwatch-Key` header), the check for a missing key before the 503s and the hash check after them, the 403 text, the key added only at the connect call (never in `Settings.cdpUrl`, which `agent-browser status` prints), and the redaction of the `key` query in agent-browser's own errors and logs (`src/options.ts` today puts the full `cdpUrl` into a `UsageError`); the drop of a kept `bridge.tabScope` at `tabs.onRemoved`; unit tests with the fake bridge; the live test with two scopes through Playwright and the MCP, popups of every kind many times | the contract PR; runs at the same time as part 1 |
-| 3. agentwatch | agentwatch (aw-lead) | Lists per repo in the web viewer; the scope of each session (session to repo to list) and the default (choice 5); the hello's `features`: to an old receiver `set_allowlist` with `"domains":[]`, no `allowlist` line, and the Browser page text "The agent browser's extension is too old for the per-repo allowlists. Update it."; `set_scopes` after each link up, list change, session start and end, and before a session gets its endpoint; an ended scope dropped at the session's end (B5; with choice 5 b first `null`, dropped after 60 s or at the next link up); the `allowlist` line; `blocked` with the scope in the Browser page; which list a sent site joins (choice 6); the setting of the operator's own tabs (choice 3: the `operator` field of `set_scopes`; the mark is part 1d); with choice 1 b, the token in each session's environment and out of every argv, transcript and log, its hash in the `allowlist` line, and its life over a daemon restart; the skill text (a refused `goto` gives `Not allowed: <host> is not on the allowlist`, no error page); the live test on taylor with two repos and two lists | parts 1a to 1d and 2 |
+| 3. agentwatch | agentwatch (aw-lead) | Lists per repo in the web viewer; the scope of each session (session to repo to list) and the default (choice 5); the hello's `features`: to an old receiver `set_allowlist` with `"domains":[]`, no `allowlist` line, and the Browser page text "The agent browser's extension is too old for the per-repo allowlists. Update it."; `set_scopes` after each link up, list change, session start and end, and before a session gets its endpoint; an ended scope dropped at the session's end (B5; with choice 5 b first `null`, dropped after 60 s or at the next link up); the `allowlist` line; `blocked` with the scope in the Browser page; which list a sent site joins (choice 6); the setting of the operator's own tabs (choice 3: the `operator` field of `set_scopes`; the mark is part 1d); with choice 1 b, the token in each session's environment (the one variable `AGENTWATCH_BROWSER_CRED`, set by the launch line from the token file, never by `tmux -e` or `set-environment`; no endpoint URL in the environment, age-4ks) and out of every argv, transcript and log, a new key at each launch and its removal at the session's end, `agentwatch browser env` with the keyless URL and the variable's name, its hash in the `allowlist` line, and its life over a daemon restart; the skill text (a refused `goto` gives `Not allowed: <host> is not on the allowlist`, no error page); the live test on taylor with two repos and two lists | parts 1a to 1d and 2 |
 
 Each part: test first, a fresh reviewer per PR, no tag or publish. The choices of section 13 change
 parts 1 to 3 only where they say. Before the contract PR merges, ab-lead mails its commit to aw-lead
