@@ -1,0 +1,464 @@
+{
+  "part": "today",
+  "start.tabs": [
+    {
+      "id": 1878823748,
+      "window": 1878823747,
+      "url": "about:blank"
+    }
+  ],
+  "A.before": {
+    "tabs": [
+      {
+        "id": 1878823748,
+        "window": 1878823747,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878823750,
+        "window": 1878823749,
+        "url": "http://a.localhost:8793/a1"
+      },
+      {
+        "id": 1878823752,
+        "window": 1878823751,
+        "url": "http://a.localhost:8793/a2"
+      },
+      {
+        "id": 1878823754,
+        "window": 1878823753,
+        "url": "http://a.localhost:8793/a3"
+      }
+    ],
+    "attached": [
+      {
+        "tab": 1878823750,
+        "attached": false
+      },
+      {
+        "tab": 1878823748,
+        "attached": false
+      },
+      {
+        "tab": 1878823752,
+        "attached": false
+      },
+      {
+        "tab": 1878823754,
+        "attached": false
+      }
+    ],
+    "s1": 2
+  },
+  "A.link": {
+    "downToReady_ms": 4111,
+    "readyAfterRelisten_ms": 2,
+    "s1Closed": {
+      "code": 1011,
+      "reason": "The agent browser's link went down"
+    },
+    "s2Closed": {
+      "code": 1011,
+      "reason": "The agent browser's link went down"
+    }
+  },
+  "A.after.tabs": [
+    {
+      "id": 1878823748,
+      "window": 1878823747,
+      "url": "about:blank"
+    },
+    {
+      "id": 1878823750,
+      "window": 1878823749,
+      "url": "http://a.localhost:8793/a1"
+    },
+    {
+      "id": 1878823752,
+      "window": 1878823751,
+      "url": "http://a.localhost:8793/a2"
+    },
+    {
+      "id": 1878823754,
+      "window": 1878823753,
+      "url": "http://a.localhost:8793/a3"
+    }
+  ],
+  "A.after.attached": [
+    {
+      "tab": 1878823750,
+      "attached": false
+    },
+    {
+      "tab": 1878823748,
+      "attached": false
+    },
+    {
+      "tab": 1878823752,
+      "attached": false
+    },
+    {
+      "tab": 1878823754,
+      "attached": false
+    }
+  ],
+  "A.after.s1-client": {
+    "getTargets": 0,
+    "discovered": 0
+  },
+  "A.after-end_scope-s1": {
+    "tabs": [
+      {
+        "id": 1878823748,
+        "window": 1878823747,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878823750,
+        "window": 1878823749,
+        "url": "http://a.localhost:8793/a1"
+      },
+      {
+        "id": 1878823752,
+        "window": 1878823751,
+        "url": "http://a.localhost:8793/a2"
+      },
+      {
+        "id": 1878823754,
+        "window": 1878823753,
+        "url": "http://a.localhost:8793/a3"
+      }
+    ],
+    "clientClosed": {
+      "code": 1000,
+      "reason": "The agentwatch session ended"
+    }
+  },
+  "A2.port-drop": {
+    "tabs": 5,
+    "pid": 1567547,
+    "connects": 2,
+    "reconnect_ms": 1108,
+    "s5Closed": {
+      "code": 1011,
+      "reason": "The agent browser's link went down"
+    },
+    "newPid": 1568843
+  },
+  "A2.after.tabs": [
+    {
+      "id": 1878823748,
+      "window": 1878823747,
+      "url": "about:blank"
+    },
+    {
+      "id": 1878823750,
+      "window": 1878823749,
+      "url": "http://a.localhost:8793/a1"
+    },
+    {
+      "id": 1878823752,
+      "window": 1878823751,
+      "url": "http://a.localhost:8793/a2"
+    },
+    {
+      "id": 1878823754,
+      "window": 1878823753,
+      "url": "http://a.localhost:8793/a3"
+    },
+    {
+      "id": 1878823756,
+      "window": 1878823755,
+      "url": "http://a.localhost:8793/c1"
+    }
+  ],
+  "A2.after.s5-client": {
+    "getTargets": 0,
+    "discovered": 0
+  },
+  "B.before": {
+    "b1": 1878823758,
+    "attached": [
+      {
+        "tab": 1878823750,
+        "attached": false
+      },
+      {
+        "tab": 1878823758,
+        "attached": true
+      },
+      {
+        "tab": 1878823756,
+        "attached": false
+      },
+      {
+        "tab": 1878823748,
+        "attached": false
+      },
+      {
+        "tab": 1878823752,
+        "attached": false
+      },
+      {
+        "tab": 1878823754,
+        "attached": false
+      }
+    ]
+  },
+  "B.relay-restart": {
+    "oldRelayExit": 0,
+    "s3Closed": {
+      "code": 1001,
+      "reason": "The agent browser stopped"
+    }
+  },
+  "B.after.tabs": [
+    {
+      "id": 1878823748,
+      "window": 1878823747,
+      "url": "about:blank"
+    },
+    {
+      "id": 1878823750,
+      "window": 1878823749,
+      "url": "http://a.localhost:8793/a1"
+    },
+    {
+      "id": 1878823752,
+      "window": 1878823751,
+      "url": "http://a.localhost:8793/a2"
+    },
+    {
+      "id": 1878823754,
+      "window": 1878823753,
+      "url": "http://a.localhost:8793/a3"
+    },
+    {
+      "id": 1878823756,
+      "window": 1878823755,
+      "url": "http://a.localhost:8793/c1"
+    },
+    {
+      "id": 1878823758,
+      "window": 1878823757,
+      "url": "http://a.localhost:8793/b1"
+    }
+  ],
+  "B.after.attached": [
+    {
+      "tab": 1878823750,
+      "attached": false
+    },
+    {
+      "tab": 1878823758,
+      "attached": true
+    },
+    {
+      "tab": 1878823756,
+      "attached": false
+    },
+    {
+      "tab": 1878823748,
+      "attached": false
+    },
+    {
+      "tab": 1878823752,
+      "attached": false
+    },
+    {
+      "tab": 1878823754,
+      "attached": false
+    }
+  ],
+  "B.after.s3-client": {
+    "getTargets": 0,
+    "discovered": 0
+  },
+  "B.after.leftover": {
+    "evaluate": {
+      "fetch": "no answer in 5 s",
+      "ua": "probe-old-client"
+    },
+    "siteSawFetch": false,
+    "pausedEventsOfB1": 1
+  },
+  "B.after-end_scope-s3": {
+    "b1Open": true,
+    "clientClosed": {
+      "code": 1000,
+      "reason": "The agentwatch session ended"
+    }
+  },
+  "F.before": {
+    "tabs": [
+      {
+        "id": 1878823760,
+        "window": 1878823759,
+        "url": "http://a.localhost:8793/f1"
+      }
+    ]
+  },
+  "F.after-end_scope-s4": {
+    "chromium": "exit 0",
+    "s4Closed": {
+      "code": 1000,
+      "reason": "The agentwatch session ended"
+    }
+  },
+  "E1.sigterm": {
+    "startTabs": [
+      {
+        "id": 1878823819,
+        "window": 1878823818,
+        "url": "about:blank"
+      }
+    ],
+    "before": [
+      {
+        "id": 1878823819,
+        "window": 1878823818,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878823828,
+        "window": 1878823827,
+        "url": "http://a.localhost:8793/e1"
+      },
+      {
+        "id": 1878823830,
+        "window": 1878823829,
+        "url": "http://a.localhost:8793/e2"
+      }
+    ],
+    "stopped": 0,
+    "after": [
+      {
+        "id": 1878823882,
+        "window": 1878823881,
+        "url": "about:blank"
+      }
+    ],
+    "siteHitsAfterRestart": 2
+  },
+  "E2.sigkill": {
+    "startTabs": [
+      {
+        "id": 1878823956,
+        "window": 1878823955,
+        "url": "about:blank"
+      }
+    ],
+    "before": [
+      {
+        "id": 1878823956,
+        "window": 1878823955,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878823976,
+        "window": 1878823975,
+        "url": "http://a.localhost:8793/e1"
+      },
+      {
+        "id": 1878823978,
+        "window": 1878823977,
+        "url": "http://a.localhost:8793/e2"
+      }
+    ],
+    "stopped": "SIGKILL",
+    "after": [
+      {
+        "id": 1878823956,
+        "window": 1878823955,
+        "url": "about:blank"
+      }
+    ],
+    "siteHitsAfterRestart": 2
+  },
+  "E3.sigterm-restore-on": {
+    "startTabs": [
+      {
+        "id": 1878824041,
+        "window": 1878824040,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878824042,
+        "window": 1878824040,
+        "url": "about:blank"
+      }
+    ],
+    "before": [
+      {
+        "id": 1878824041,
+        "window": 1878824040,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878824042,
+        "window": 1878824040,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878824064,
+        "window": 1878824063,
+        "url": "http://a.localhost:8793/e1"
+      },
+      {
+        "id": 1878824066,
+        "window": 1878824065,
+        "url": "http://a.localhost:8793/e2"
+      }
+    ],
+    "stopped": 0,
+    "after": [
+      {
+        "id": 1878824129,
+        "window": 1878824128,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878824130,
+        "window": 1878824128,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878824135,
+        "window": 1878824128,
+        "url": "about:blank"
+      },
+      {
+        "id": 1878824132,
+        "window": 1878824131,
+        "url": "http://a.localhost:8793/e1"
+      },
+      {
+        "id": 1878824134,
+        "window": 1878824133,
+        "url": "http://a.localhost:8793/e2"
+      }
+    ],
+    "siteHitsAfterRestart": 4
+  },
+  "relay.stopped": 0,
+  "pids": {
+    "xvfb": [
+      1567220
+    ],
+    "chromium": [
+      1567231,
+      1570104,
+      1571016,
+      1571907,
+      1572608,
+      1573108,
+      1573878
+    ]
+  },
+  "chromiumVersion": "156.0.8078.79",
+  "extension": {
+    "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/orphan",
+    "id": "ifhfjdmdbgbnmllffiadajepajbcdnai",
+    "version": "0.2.0"
+  }
+}

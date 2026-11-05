@@ -287,7 +287,7 @@ class OptionArgvTest(unittest.TestCase):
 
     def test_no_new_flag_by_default(self) -> None:
         argv = self.argv()
-        for flag in ("--approve", "--approve-command", "--chrome-args", "--hidden-drive"):
+        for flag in ("--approve", "--approve-command", "--chrome-args", "--hidden-drive", "--input-timing"):
             self.assertNotIn(flag, argv)
         self.assertEqual(argv[-1], "--json")
 
@@ -311,6 +311,33 @@ class OptionArgvTest(unittest.TestCase):
         self.assertEqual(self.argv(hidden_drive=True).count("--hidden-drive"), 1, "a flag with no value")
         self.assertNotIn("--hidden-drive", self.argv(hidden_drive=False))
 
+    def test_input_timing(self) -> None:
+        timing = {"pressMs": [70, 90], "moveScale": 0.5}
+        self.assertEqual(json.loads(self.value(self.argv(input_timing=timing), "--input-timing")), timing, "one JSON object")
+        self.assertNotIn("--input-timing", self.argv(input_timing=None))
+
+    def test_input_commands_wait_for_the_lock_and_the_text(self) -> None:
+        """A 1000-character type and a wait for the input lock fit in the call's timeout (about 0.12 s a character on Linux)."""
+        timeouts: Dict[str, float] = {}
+
+        def fake_run(argv: List[str], *args: object, **kwargs: Any) -> "subprocess.CompletedProcess[Any]":
+            if argv[1:] == ["--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="v26.0.0\n", stderr="")
+            timeouts[argv[2]] = kwargs["timeout"]
+            out = {"type": '{"ok": true, "command": "type", "tab": {"id": "a", "targetId": "a", "name": null, "url": "u", "title": "t"}, "into": null, "length": 1000}',
+                   "click": '{"ok": true, "command": "click", "tab": {"id": "a", "targetId": "a", "name": null, "url": "u", "title": "t"}, "target": "#b", "text": null}'}
+            return subprocess.CompletedProcess(argv, 0, stdout=(out[argv[2]] + "\n").encode(), stderr=b"")
+
+        with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
+            b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)
+            b.type("a", "x" * 1000)
+            b.click("a", "#b")
+        self.assertGreaterEqual(timeouts["type"], 120 + 600 + 1000 * 0.15)
+        self.assertGreaterEqual(timeouts["click"], 120 + 600)
+        with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
+            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, input_timing={"lockWaitMs": 5000, "keyMs": [10, 20]}).type("a", "x" * 1000)
+        self.assertAlmostEqual(timeouts["type"], 120 + 5 + 1000 * (20 + 50) / 1000)
+
     def test_chrome_args(self) -> None:
         flags = ["--enable-unsafe-swiftshader", "--lang=en-US", "--window-name=a b"]
         argv = self.argv(chrome_args=flags)
@@ -327,6 +354,7 @@ class OptionArgvTest(unittest.TestCase):
             {"approve": True, "approve_command": ["/opt/approve.sh"]},
             {"chrome_args": "--lang=en-US"}, {"chrome_args": ["--lang=en-US", None]}, {"chrome_args": b"--lang=en-US"}, {"chrome_args": 3},
             {"hidden_drive": "yes"}, {"hidden_drive": 1},
+            {"input_timing": '{"pressMs": [70, 90]}'}, {"input_timing": [["pressMs", [70, 90]]]},
         ]
         with mock.patch("agent_browser._client.subprocess.run") as run:
             for options in bad:

@@ -2,7 +2,7 @@
 //   import { AgentBrowser, commands } from "agent-browser";
 
 export { AgentBrowser, Tab, KEYS, allowlistOf, endpointCandidates, rememberEndpoint } from "./browser.ts";
-export type { TargetInfo, PageInfo, Download, CapturedResponse, Viewport } from "./browser.ts";
+export type { TargetInfo, PageInfo, Download, CapturedResponse, Viewport, Drive } from "./browser.ts";
 export { commands, COMMAND_SPECS } from "./commands.ts";
 export type {
   CommandName, CommandSpec, ParamSpec, ParamType, TabRef, LaunchResult, QuitResult, StatusResult, ConnectResult, StopResult,

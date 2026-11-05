@@ -27,6 +27,65 @@ export function validateApprove(spec: ApproveSpec): void {
     throw new UsageError('approve must be true, "osascript", "xdotool", or { command: [program, ...args] }');
 }
 
+/**
+ * The shape of a person's input in a window of its own (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md,
+ * section 5). Ranges are [min, max] in ms; each value is drawn at random between them.
+ */
+export type InputTiming = {
+  /** From a click's press to its release. A person's press through xdotool was 75 to 81 ms on taylor. */
+  pressMs: [number, number];
+  /** From one typed character's key press to the next one's. */
+  keyMs: [number, number];
+  /** How long each key stays down. */
+  holdMs: [number, number];
+  /** The pause on the target after the pointer arrives, before the press, as a person settles on it. */
+  settleMs: [number, number];
+  /** From one wheel notch (100 px) to the next, when a command scrolls an element into view. */
+  wheelMs: [number, number];
+  /** A factor on the time of each pointer path (Fitts's law: 300 to 1000 ms, as `record`'s cursor). */
+  moveScale: number;
+  /** How long an input command waits for its page's focus after it brings the page's window forward. */
+  activateMs: number;
+  /** How long an input command waits for another input command of the same agent browser (the input lock). */
+  lockWaitMs: number;
+};
+
+/** The defaults: the research's person-shaped input. A click costs 0.5 to 0.9 s, a typed character about 0.13 s. */
+export const INPUT_TIMING: Readonly<InputTiming> = Object.freeze({
+  pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, lockWaitMs: 600_000,
+}) as Readonly<InputTiming>;
+
+/** The input timing of a caller's partial option, checked: each range two numbers, 0 <= min <= max; the factor and the waits positive. */
+export function resolveInputTiming(t: unknown): InputTiming {
+  if (t === undefined) return { ...INPUT_TIMING, pressMs: [...INPUT_TIMING.pressMs], keyMs: [...INPUT_TIMING.keyMs], holdMs: [...INPUT_TIMING.holdMs],
+    settleMs: [...INPUT_TIMING.settleMs], wheelMs: [...INPUT_TIMING.wheelMs] } as InputTiming;
+  if (!t || typeof t !== "object" || Array.isArray(t)) throw new UsageError("inputTiming must be an object, for example { \"pressMs\": [70, 90] }");
+  const out = resolveInputTiming(undefined) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(t as Record<string, unknown>)) {
+    if (!(k in INPUT_TIMING)) throw new UsageError(`inputTiming: no field ${JSON.stringify(k)}; the fields are ${Object.keys(INPUT_TIMING).join(", ")}`);
+    if (Array.isArray((INPUT_TIMING as Record<string, unknown>)[k])) {
+      if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === "number" && Number.isFinite(x)) || v[0] < 0 || v[1] < v[0])
+        throw new UsageError(`inputTiming.${k} must be [min, max] in ms, with 0 <= min <= max`);
+      out[k] = [v[0], v[1]];
+    } else {
+      if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) throw new UsageError(`inputTiming.${k} must be a positive number`);
+      out[k] = v;
+    }
+  }
+  return out as InputTiming;
+}
+
+/** Run xdotool with these arguments on the agent browser's display and give its standard output (display.ts). */
+export type XdotoolRunner = (args: string[]) => Promise<string>;
+
+/**
+ * @internal What agent-browser knows of the agent Chrome's display, for the tests (default: found; display.ts,
+ * displayOf). `own`: the agent Chrome runs on a display of its own, where the design of one window per page applies.
+ * `xdotool`: a runner of xdotool commands on that display, or false for none. `chromePid`: the agent Chrome's pid,
+ * whose windows the display must hold.
+ */
+export type DisplayOption = { own?: boolean; xdotool?: XdotoolRunner | false; chromePid?: number };
+
 export type BrowserOptions = {
   /** Absolute folder for this consumer's state: tab names and scopes, window pin, proxy pid and log, launch log, screenshots. */
   stateDir: string;
@@ -89,6 +148,18 @@ export type BrowserOptions = {
   hiddenDrive?: boolean;
   /** Progress and warning lines. Default: standard error. */
   log?: (line: string) => void;
+  /**
+   * @internal The platform whose design applies (default process.platform), for the tests of each
+   * platform's behaviour. On "linux" agent mode gives each page a window of its own (windowPerPage).
+   */
+  platform?: NodeJS.Platform;
+  /**
+   * The shape of a person's input in a window of its own (Linux; ab-v16.26), in parts: the fields that it
+   * names replace the defaults (INPUT_TIMING). CLI --input-timing JSON, Python input_timing=.
+   */
+  inputTiming?: Partial<InputTiming>;
+  /** @internal The agent Chrome's display, for the tests (DisplayOption). Default: found (display.ts, displayOf). */
+  display?: DisplayOption;
 };
 
 export type Settings = {
@@ -112,7 +183,21 @@ export type Settings = {
   tabScope?: string;
   hiddenDrive: boolean;
   log: (line: string) => void;
+  platform: NodeJS.Platform;
+  inputTiming: InputTiming;
+  display?: DisplayOption;
 };
+
+/**
+ * Agent mode on Linux (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md): each page that
+ * agent-browser opens gets a window of its own and no focus emulation, as a person's page in a window
+ * that is not in front. An explicit `open --tab` keeps the old modes for its tab (focus emulation while
+ * a command is attached, or hiddenDrive). On the Mac and in personal mode every behaviour stays as it
+ * was (the Mac waits for its own measurement, ab-v16.27). This is the first half of the gate: the
+ * design applies only where the agent Chrome also runs on a display of its own (display.ts, displayOf;
+ * AgentBrowser.windows), so that it never puts windows on a person's screen or takes their focus.
+ */
+export const windowPerPage = (s: Settings): boolean => s.mode === "agent" && s.platform === "linux";
 
 export const DEFAULT_PROXY_IDLE_MS = 12 * 60 * 60 * 1000;
 
@@ -252,6 +337,9 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     tabScope: o.tabScope,
     hiddenDrive: !!o.hiddenDrive,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
+    platform: o.platform ?? process.platform,
+    inputTiming: resolveInputTiming(o.inputTiming),
+    display: o.display,
   };
 }
 

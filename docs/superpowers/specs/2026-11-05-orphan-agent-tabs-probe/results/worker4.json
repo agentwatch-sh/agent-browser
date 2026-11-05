@@ -1,0 +1,64 @@
+{
+  "part": "worker",
+  "C.after-stop-10s": {
+    "workerRunning": false,
+    "hostCloses": 1,
+    "hostConnects": 0
+  },
+  "C.wake": {
+    "hostConnect_ms_after_event": 100,
+    "stopToEvent_ms": 10029
+  },
+  "C.after-restart": {
+    "inMemory": null,
+    "session": {
+      "scope": "s1",
+      "tab": 1
+    },
+    "sessionRules": [
+      900
+    ],
+    "dynamicRules": [
+      2,
+      4,
+      5
+    ],
+    "tabIdsKept": true
+  },
+  "G.idle": {
+    "idle_s": 360,
+    "workerRunning": true,
+    "inMemory": "still here",
+    "hostConnects": 0,
+    "hostCloses": 0
+  },
+  "D.reload": {
+    "connectedWithin10sByItself": false,
+    "extensionTargetsAt10s": [],
+    "hostConnect_ms_after_event": null,
+    "extensionTargetsAfterEvent": [],
+    "pagesAfter": [
+      "http://a.localhost:8794/w1",
+      "about:blank",
+      "about:blank",
+      "http://a.localhost:8794/d1"
+    ]
+  },
+  "D.after-reload": {
+    "worker": "none"
+  },
+  "pids": {
+    "xvfb": [
+      1662058
+    ],
+    "chromium": [
+      1662082
+    ]
+  },
+  "chromiumVersion": "156.0.8078.79",
+  "extension": {
+    "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/orphan",
+    "id": "ifhfjdmdbgbnmllffiadajepajbcdnai",
+    "version": "0.2.0"
+  }
+}

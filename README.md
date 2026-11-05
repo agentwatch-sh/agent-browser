@@ -4,13 +4,18 @@ agent-browser drives allowlisted tabs in Chrome over the Chrome DevTools Protoco
 of vedlo's `tools/browser/` (vedlo commit `a107f03e8`). vedlo and agentwatch both use it.
 
 Each consumer has its own **agent browser**: a separate Chrome on the consumer's own profile. It does
-not share the operator's Chrome or the operator's logins. The operator signs in to the allowlisted
-sites once inside that profile (`launch --login`), and those logins stay in that profile only. So
-each consumer has its own cookies and logins, its own tab names and its own proxy socket. The
-operator's own Chrome (mail, banking, admin) is not reachable from the tooling. A consumer uses the
-operator's Chrome only in personal mode, only when the operator asks, and then only in one pinned
-window of its own. Several callers of one consumer (for example agentwatch's agent sessions) can
-share its agent browser, each in a tab scope of its own (see **Tab scopes**).
+not share the operator's Chrome, and it holds none of the operator's logins except a sign-in that the
+operator sends to it on purpose (with the operator extension, below). The operator signs in to the
+allowlisted sites once inside that profile (`launch --login`), and those logins stay in that profile
+only. So each consumer has its own cookies and logins, its own tab names and its own proxy socket.
+Behind agent mode's endpoint (`cdpUrl`, see **Agent mode's endpoint**) there is no proxy socket:
+agentwatch owns the agent browser and `launch` refuses, so the operator signs in to a site in their
+own Chrome and sends that site's sign-in to the agent browser with the operator extension
+(agentwatch — operator mode). The operator's own Chrome (mail, banking, admin) is not reachable from
+the tooling. A consumer uses the operator's Chrome only in personal mode, only when the operator asks,
+and then only in one pinned window of its own. Several callers of one consumer (for example
+agentwatch's agent sessions) can share its agent browser, each in a tab scope of its own (see
+**Tab scopes**).
 
 It has two surfaces, and both are tested:
 
@@ -61,7 +66,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`). A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
-| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | `open` makes background tabs (a foreground tab activated Chrome); `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; under about 0.1 s, measured with the same AppKit call from a helper; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, and no other command calls it. Input is CDP input inside the tab, which never moves the real pointer; `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back waits for its Mac run; the Space is not measured) |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On macOS `open` makes background tabs (a foreground tab activated Chrome); on Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on taylor), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**); all of this only where the agent Chrome runs on a display of its own (agentwatch's Xvfb, or a display with no other program's window: `src/display.ts`), else the macOS rule holds there too; on macOS `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; under about 0.1 s, measured with the same AppKit call from a helper; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. On macOS `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, and no other command calls it. Input is CDP input inside the tab, which never moves the real pointer, except on Linux, where agent-browser moves the X pointer to the end of each input path only on a display that holds the agent browser and no other program's window (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back waits for its Mac run; the Space is not measured) |
 | A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
@@ -77,7 +82,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `tab-pages.json` (the tabs of `open --tab` on Linux), `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
@@ -128,8 +133,10 @@ connection, so never a new approval prompt: with no approved proxy up, fail at o
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
 `vedlo browser`), `tabScope` (CLI `--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of
 this scope; see **Tab scopes**), `hiddenDrive` (CLI `--hidden-drive`, Python `hidden_drive=True`: keep a
-background tab's page hidden while a command drives it; default off; see **A command on a background
-tab: two modes**) and `log` (progress lines; default standard error).
+background tab's page hidden while a command drives it; default off; in agent mode on Linux only for a
+tab of `open --tab`; see **A command on a background tab: two modes**), `inputTiming` (CLI `--input-timing JSON`, Python `input_timing=`: the shape of a
+person's input on Linux, in parts, for example `{"pressMs": [70, 90], "keyMs": [90, 150]}`; see **A
+person's input**) and `log` (progress lines; default standard error).
 
 ## How it works
 
@@ -191,7 +198,194 @@ tab: two modes**) and `log` (progress lines; default standard error).
   compare); the check now fails on such a shot. Since ab-b84.17 a shot waits for two frames before its
   capture (see the next item): 0 of 88 shots per mode were incomplete in 8 runs of each mode. On macOS
   none of this is measured again (see **Measured** under **Recording**).
-- **A command on a background tab: two modes.** Chrome draws no frame of a tab that is not in front,
+- **One window per agent page (Linux; ab-v16.26).** In agent mode on Linux, `open` gives each page a
+  window of its own (`Target.createTarget` with `newWindow: true, background: true`), and no command
+  sends focus emulation to it. This is the design of `docs/research/2026-11-05-anti-detect-drive.md`
+  ("The answer"), which measured what a site sees of each way to drive a page that is not in front,
+  against a person (board task ab-v16.21). On Linux a new window from that call comes above the
+  other windows without the focus. With `--disable-backgrounding-occluded-windows` (a launch flag,
+  above) its page is `visible` and draws at 60 frames a second, also when another window covers it,
+  as a person's window that is not in front (or on a second screen). It gets the focus only with the
+  agent's input: each input command brings its window forward first (next items), and the page in
+  front of the other window gets a `blur`, as when a person switches windows. Reads, clicks, typing, shots, `record`, a library
+  session that waits for content that only an animation frame writes, a lazy image and an
+  `IntersectionObserver` callback work with no help (the research measured 56 to 97 ms for a shot).
+  The page's `Tab.drive` is `"window"`.
+  - **Only on a display of its own.** The design applies where the agent Chrome runs on a display of its
+    own, so that it never puts windows on a person's screen or takes their focus: behind agent mode's
+    endpoint (`--cdp-url`: agentwatch's agent unit runs its Chromium on a private Xvfb), and for an agent
+    Chrome that agent-browser started when every visible window of its display (its own environment's
+    `DISPLAY`, through xdotool) belongs to that Chrome's pid. That check holds for a minute for the same
+    Chrome pid (`display.json` in the state folder). Elsewhere (another program's window on the display,
+    no xdotool, an endpoint that another program started, a check that fails) every page opens and is
+    driven as before, in a background tab, and a log line says why, at most once in 5 minutes. No test
+    runner skips the check: a test gives its own answer (the internal `display` option).
+  - **A window page behind another tab of its window** is hidden, as a person's background tab: the
+    opener behind a site's popup tab, an older tab of a pinned window (`open` puts each new tab there),
+    a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.
+    Chrome draws nothing of it there: a click stalled for 5 s, a wait for content that a frame writes
+    and `record` timed out, and after the click the page reported `hidden` with the focus (review-45,
+    measured on taylor). So before input, a wait (`Tab.waitFor`), a read (`text`, `outline`, `eval`: a
+    person who reads a tab switches to it, and an eval that waits for a frame, or lazy content, needs the
+    page drawn) and `record`, such a page comes in front of its window with `Page.bringToFront`, as a
+    person's tab switch does (`Tab.toFront`; on Linux it also activates the window). No tab ever moves to
+    another window.
+  - **A page that a site opens** (a `target=_blank` link, `window.open()`) stays where the site put
+    it: a tab in the opener's window, in front, or a window of its own for `window.open(url, "",
+    "popup,...")`. agent-browser drives it there with no focus emulation and never moves a tab into
+    another window: a person cannot do that with one click, and a site sees the opener's window change.
+    A sized popup (`window.open(url, "", "popup,width=500,height=400")`) does not get the size that the
+    site asked for: with `--window-size=1100,700` it opened at an outer size of 1100x734 (and at 500x434
+    without `--window-position` and `--window-size`). A site can compare the two sizes. agentwatch's
+    agent unit passes `--window-size` (`agentwatch/daemon/browser/unit.py`, lines 542 and 543), so the
+    fix of that signal is agentwatch's.
+  - **`open --tab`** keeps the old modes for its tab (next item): a background tab in the current
+    window, with focus emulation while a command is attached, or with `--hidden-drive` none. Use it only
+    when a window is not possible: **a site can detect a background tab** that agent-browser drives in
+    either mode (the research's section 4: two `visible` tabs in one window, two focused pages, input
+    while `hidden`). The state folder's `tab-pages.json` lists these tabs, so that each later command
+    drives them in the old mode too. `--hidden-drive` changes only such tabs. Over agent mode's endpoint
+    (`--cdp-url`) the exception does not apply: agentwatch's relay opens a window for every new page
+    (board task ab-v16.28).
+  - **One input at a time, after the window comes forward** (`src/input.ts`). In a window of its own,
+    `click`, `click --text`, `hover`, `type`, `press`, `Tab.clickAt`, `Tab.setFiles` and `record` hold the
+    agent browser's input lock (`input.lock` in the state folder) from the activation to the end of the
+    input, across processes. So two agents never give two pages the focus at the same time. Without the
+    lock, two agents that typed at once gave two focused pages for 9.6 to 12.4 s of 12.5 to 14.8 s (the
+    research). Every caller of one agent browser must use one state folder (with tab scopes, as
+    agentwatch does). A command waits for the lock up to `lockWaitMs` (10 minutes); `record` holds it
+    for its take, not for the encode. A take can last up to 30 minutes (`record`'s limit), longer than
+    that wait: where takes run beside other agents' input, give those agents a longer `lockWaitMs`
+    (`--input-timing '{"lockWaitMs": 2000000}'`), or their input commands fail with the lock's timeout. The lock is reentrant within one call chain of one process:
+    `Tab.withInput(fn)` around a caller's own `Tab.click` does not wait for itself. The wait can take
+    minutes, and the page can go to a host off the allowlist meanwhile: so the allowlist is read again
+    inside the lock, before any code of agent-browser runs in the page for the input, a guard stops
+    every input event once the main frame has gone off the list, or has started or asked for a
+    navigation to a host off it (`Page.frameNavigated`, `Page.frameStartedNavigating`,
+    `Page.frameRequestedNavigation`, review-47c; also before each key's release: a keydown can take the
+    page off the list, review-47b), and the list is read again
+    before each press, before the first key and every 16th, and before `setFiles` gives its files
+    (review-47). When the page has no focus, or is hidden behind another tab of its window, the
+    command first sends `Page.bringToFront`: on
+    Linux that selects the page's tab and activates its window, as a person's switch to the window does
+    (measured on taylor: the same result as `Target.activateTarget`; `Page.bringToFront` also passes
+    through agentwatch's relay). A page that has the focus gets none. A read (`text`, `eval`, `outline`,
+    `Tab.waitFor`) of a visible window page never brings a window forward; a read of a hidden window page
+    (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
+    waits for another agent's input command (review-47c: a tab switch during another agent's typing gave
+    two focused pages). `shot` and `fetch` never do. A page that a site opened in the
+    opener's window is in front of that window; to go back to the opener, the next command on the
+    opener brings it forward: a tab switch, as a person makes. Keys need this activation: keys into a
+    window that is not active gave its page the focus with no switch, so two pages had the focus (the
+    research's `window-keys-inactive`).
+  - **A person's input.** A pointer path of ghost-cursor's curve (as `record`'s cursor: an overshoot past
+    500 px, a time of 300 to 1000 ms by Fitts's law), 12 to 60 moves in whole pixels (no move without
+    movement) to a point in the middle 40% of the element, a pause of 80 to 150 ms, then a press of 70 to
+    90 ms with `force: 0.5`. One key-event pair per character, 90 to 150 ms apart, each key down 20 to 50
+    ms, in place of `Input.insertText` (a character with no US-keyboard key still goes as inserted
+    text). An element out of view comes into view by the wheel (100 px a notch, 30 to 70 ms apart, with
+    the pointer over the element's scroller), in place of `scrollIntoView`. `type --into` clicks the
+    field in place of `el.focus()`, and `setFiles` clicks the file input (or its label) so that Chrome
+    opens its file chooser, which agent-browser intercepts (`Page.setInterceptFileChooserDialog`: no
+    dialog opens); the files go to the input that the chooser names only when it is the named input
+    (review-47b: a frame off the list that covers the input would get them). When another element covers
+    the click's point, after the path or just before the press (a second hit test, review-47c), there is
+    no click; when the click opens no chooser in 2 s, or the chooser is
+    another input's, the files go to the named input with no click (only when the document that holds it
+    is on the allowlist). Each of these says so in a log line. agent-browser's own page code
+    (reads, the input's helpers) runs with no user gesture there: a gesture makes
+    `navigator.userActivation` active with no press and no key (measured: each read did). `eval` runs
+    as a gesture, as before, so that an agent's expression can open a popup.
+  - **The caret of `type --into`** stays where it was before this change: where `el.focus()` puts it.
+    Chromium puts it at the start of a field whose text came with the page, at the end after a script
+    set the value, and where it was after an earlier focus (measured, `extra.ts --exp caret`). So the
+    click goes to the field's left end for the start and to its right end for the end, and keys put the
+    caret right when the click did not (Home, End, the arrows; Control+Home and Control+End in a
+    textarea). A field that has the focus gets no click. An editable element gets its click at the
+    start of its text. These ways out leave a signal, with a log line each: a field with no box, or one
+    that another element covers, gets `el.focus()`; a caret in the middle of a text of more than 64
+    characters is set by `setSelectionRange`; an element that the wheel cannot bring into view is
+    scrolled by a script; a file input with no box and no label gets its files with no click.
+  - **The pointer when a window comes forward.** The X server then gives the page a real pointer event
+    at the X pointer. Each path starts at that event's point (a listener in agent-browser's isolated
+    world reads it), else at the page's last point (`pointer.json`). Where agent-browser can reach the X
+    pointer, the last step of each path is a move of the X pointer (`xdotool mousemove`, inside the
+    lock; Chrome gives the page that real move with its movement from the path's last point), so the
+    pointer is one pointer for all the windows, as a person's mouse is: the next activation enters
+    where the last path ended. It does so only when xdotool is on `PATH`, the display is the agent
+    browser's (the activation's real event came where xdotool says the pointer is) and the display holds
+    no other program's window (checked for each command): agentwatch's Xvfb when agent-browser's
+    commands have its `DISPLAY` and `XAUTHORITY`, or the display of an agent Chrome that agent-browser
+    started. When the method is off for any reason (no `DISPLAY` over the relay, no xdotool, a device
+    pixel ratio that is not 1, a display that cannot be verified, another program's window), a log line
+    says why, at most once in 5 minutes for each reason. The two ways of the research, measured on taylor (`extra.ts --exp pointer`: three windows
+    at one place, two agents and the operator's page in turn, 3 activations of each agent window):
+
+    | the pointer at each activation | jumps over 100 px | position changes that the movement does not explain |
+    | --- | --- | --- |
+    | a person (the stand-in window manager raises the window; the pointer does not move) | 0 | 0 |
+    | each path starts at the page's last point | 3 in each window | 2 in each window |
+    | each path starts at the X pointer, which never moves (also when the page's real event gives its place) | 0 | 2 in each window |
+    | each path starts at the page's last point, and the X pointer moves to each path's end | 1 in each window, at its first activation only (this build starts that path at the real event) | 0 |
+
+    So this build takes the first way of the research (move the X pointer to the end of each path) where it
+    can, and the second way (start each path at the X pointer, never move it) where it cannot.
+  - **Measured with the whole design** on taylor (`run.ts --only person-window,person-window-multi,design,
+    design-no-x,design-two`, 2 runs on 2026-11-05 after review-47, and 4 runs before it with the same
+    results except where named; Chromium 156 in a private Xvfb; agent-browser's own commands; F's window
+    takes the focus after each input step, so T's window comes forward 6 times). Against the person
+    baselines, `design` showed no pointer jump, no position change that the movement does not explain,
+    no scroll with no wheel or key, no field focus with no press, no user activation with no input, no
+    action while `hidden`, no untrusted event, pressure 0.5, a press of 86 to 88 ms (the person's 76 to
+    77), 5 `keydown` for 5 characters, and both pages focused for at most one 100 ms sample at a switch.
+    Each step had the person's sequence: the window's `focus`, the real event where the window came
+    forward (no movement, at the page's last point), then moves that each move, the press and the
+    release; 50 to 55 moves before a press (the xdotool person: 20). Before review-47 one more move with no
+    movement came after each press, from the X pointer's move after the path; now the X pointer's move
+    is the path's last step. Every step worked: a shot in 99 to 108 ms, a `record` with no visibility
+    change, a library session that waits for content that a frame writes (0.83 s), a lazy image 119 to
+    130 ms after End. `design-no-x` (no X pointer, as over agentwatch's relay today) entered at the X
+    pointer's one point at each activation: 5 position changes that the movement does not explain and 5
+    entries at an earlier entry's point in 6 activations, and a jump at the start of `record` (its cursor
+    starts inside the recorded size). `design-two` (two agents at once, one input lock, 6 typings each):
+    both pages focused for 0 to 200 ms (one or two 100 ms samples at a switch; review-47c's runs); no jump; 1 position change in one page that the movement does not
+    explain, where its window came forward under the pointer that the other agent's path left (one
+    pointer for both windows, as for a person who switches windows); every typing arrived whole ("hello"
+    12 times in each field).
+  - **The cost.** Input: a click took 1.20 to 1.33 s with an activation and a path of some hundred
+    pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s; the path here takes 300 to
+    1000 ms by Fitts's law, as `record`'s cursor), `type --into` with 5 characters 1.25 to 1.30 s, a click
+    below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s. The lock: two
+    agents that type at once took 39 to 57% longer than one agent alone (3 runs after review-47; before it:
+    46 to 56%; the research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used 608 to 775 MB
+    (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8
+    background tabs: 32 to 46 MB more for each window, and every agent page draws at full rate, also
+    behind another window. The input timing is the `inputTiming` option (CLI `--input-timing JSON`,
+    Python `input_timing=`), in parts: `pressMs` [70, 90], `keyMs` [90, 150], `holdMs` [20, 50],
+    `settleMs` [80, 150], `wheelMs` [30, 70] (ranges in ms), `moveScale` 1 (a factor on each path's
+    time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`) and `lockWaitMs`
+    600000.
+  - **What a site can still see** (the research's section 8, and the runs of this build): the pace and
+    the patterns of an agent (no idle pointer, no behaviour model; not measured); a covered agent window
+    that draws at 60 frames a second, where a person's covered window is `hidden`; over agentwatch's
+    relay, the pointer at each activation (above), and for a Playwright client also its raw input and
+    two focused pages with two agents at once (the relay passes raw `Input.*` calls: board task
+    ab-v16.28); the window geometry of Xvfb with no window manager, and a sized popup at
+    `--window-size`'s size; `history.length` 2 for a page that agent-browser opens (`about:blank`, then
+    the URL); `record`'s device metrics override and its overlay in the DOM (see **Recording**), and
+    its cursor's first move when the page last saw the pointer outside the recorded size, its own
+    input (its presses have `force: 0.5` and 70 to 90 ms, but its cursor's path has no X-pointer step, and
+    it types at its script's pace: 55 ms a character by default, faster than the 90 to 150 ms of `type`),
+    the user activation of its `eval` steps, and one move with no movement at the pointer's place when
+    its size override takes effect (Chrome's own); `eval`'s user activation (an agent's
+    expression runs as a user gesture, so that it can open a popup); the ways out of the caret item above, each with a log line; `outline`'s
+    `data-agent-browser-idx` attribute; and the identity of the machine (the earlier report).
+  - **The Mac** keeps background tabs, and personal mode keeps its own pinned window with focus
+    emulation, until a measurement in the Mac's agent browser shows that windows do not disturb the
+    operator's screen (board task ab-v16.27): on the Mac a new window above the operator's windows
+    would cover their work.
+- **A command on a background tab: two modes** (the Mac, personal mode, and an explicit `open --tab`
+  on Linux). Chrome draws no frame of a tab that is not in front,
   and its page reports `hidden`. There a page that never drew a frame (it loaded in the background, or
   after a `goto` there) drops clicks and keys, a mouse move waits up to 5 s for a frame, and a shot
   can wait for ever.
@@ -268,8 +462,8 @@ tab: two modes**) and `log` (progress lines; default standard error).
     default mode, or the tab in front. This mode is measured on Linux only.
   - Both modes leave signals that a person's page never shows. The measured comparison with a
     person, and the recommended design (one window per agent page, no focus emulation, input in a
-    person's shape), are in `docs/research/2026-11-05-anti-detect-drive.md` (board task ab-v16.21;
-    not built yet).
+    person's shape), are in `docs/research/2026-11-05-anti-detect-drive.md` (board task ab-v16.21). On
+    Linux that design is built (the item before this one; ab-v16.26).
 - **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
   headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
@@ -704,14 +898,20 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   (`requestAnimationFrame`), and the real mouse (for hover effects) follows every 16 ms on its own. The
   cursor aims at a point in the middle 40% of an element's box, and its tip is that point. It is still
   while typing and scrolling. All randomness (paths, aim points, dwell, typing pace) comes from
-  `--seed` (default 1): a retake with the same seed and steps moves the same way.
+  `--seed` (default 1): a retake with the same seed and steps moves the same way. In a window of its
+  own (Linux, ab-v16.26) a take is an input command: its window comes forward first, it holds the input
+  lock for the whole take, and its cursor starts where the page last saw the pointer when that is
+  known and inside `--size` (so its first move is no jump); a retake with the same seed then moves the
+  same way from that start.
 - **The overlay** (cursor, ripple, ring, repaint pixel) is built with DOM calls only (`createElement`,
   `setAttribute`, `element.style`, `element.animate`) inside a closed shadow root, in agent-browser's
   isolated world, and removed afterwards. Google Sheets enforces Trusted Types and a strict style-src,
   which refuse `innerHTML` and a `<style>` element. `--no-cursor` hides the cursor and the ripple; a
   `highlight` step still draws its ring.
-- **The window.** `record` never raises a window or switches the operator's Space: it sends no
-  `Page.bringToFront`, which activates Chrome. The agent browser can stay minimized, hidden (Cmd-H),
+- **The window.** On the Mac `record` never raises a window or switches the operator's Space: it sends no
+  `Page.bringToFront`, which activates Chrome. On Linux, on a display of the agent browser's own, a window
+  page that is hidden behind another tab of its window comes in front first (`Tab.toFront`, a tab switch with
+  `Page.bringToFront`; **One window per agent page**): a hidden page sends no screencast frame. The agent browser can stay minimized, hidden (Cmd-H),
   covered or on another Space during a take (see **Measured**). Only a Chrome start, its one
   "Allow remote debugging?" prompt and a sign-in (`launch --login`) need the window. Start the agent
   browser, click Allow, then hide it: takes run in the background. Chrome sends no screencast frame
@@ -719,6 +919,13 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   In the default mode the attach turns it on for every command; with `hiddenDrive`, `record` turns it
   on for its run and off when the screencast stops. So in a background tab the page reports `visible`
   for the run in both modes, and a site can see that (see **A command on a background tab: two modes**).
+  A page in a window of its own (Linux; **One window per agent page**) is visible and draws without
+  it, so `record` sends none there. Two parts of a take stay that a site can see in such a window too,
+  because `record` needs them for what it makes: the device metrics override (the page is laid out
+  at `--size` inside its window, and gets a `resize` at the start and at the end of the run), and the
+  overlay in the DOM (the 1x1 repaint pixel, and the cursor unless `--no-cursor`; in a closed shadow
+  root, but a page that walks the DOM finds its host element). Without the override the video would
+  have the window's size, not `--size`; without the repaint pixel a still page sends no frames.
 - **Allowlist.** Only an allowlisted tab; a `goto` off the list is refused before the run. When the
   tab's main frame navigates off the list, the run stops at once, writes no MP4 and no JSON, and runs
   no code in the off-list page (the screencast is stopped and the size override cleared).
@@ -767,8 +974,8 @@ flag and with all three; the check that drives background tabs ran on Linux only
 screencast kept a minimized window and a hidden app painting at 55 to 60 fps also without the flags,
 and a covered window at 47 fps; a background tab without the flags painted at 28 fps. In all these
 measurements focus emulation was on, as `record` still does it.
-So the operator can work in another window during a recording, and `record` does not bring the
-tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space). A recording at 1920x1080 and
+So the operator can work in another window during a recording, and on the Mac `record` does not bring the
+tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see **The window**). A recording at 1920x1080 and
 `--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
 60 fps recording, has a smooth bell-shaped speed with no repeated or skipped frame.
 
@@ -840,13 +1047,17 @@ Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
   the record under its lock): await them. `pinWindow` and `forget` were synchronous before tab scopes.
 
 **`Tab`**: `goto(url)`, `url()`, `assertAllowed()`, `evaluate(fn | expression, ...args)`,
+`evaluateAsUser(fn | expression, ...args)` (as a user gesture; in a window of its own `evaluate` is none),
+`withInput(fn)` (the input lock and the window's activation around a caller's own input; Linux),
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
 `clickText(text, { within })`, `clickAt(x, y)`, `hover(selector)`, `type(text, selector?)`,
 `press(key)`, `setFiles(selector, paths)`, `text(selector?)`, `screenshot(path, { fullPage, viewport })`,
 `fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir)` (a download that a
 click starts), `expectResponse(match, action)` (capture an API response body; a CORS preflight's
 response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, transform, action)`
-(rewrite a request body in flight; a CORS preflight is continued untouched), `close()`.
+(rewrite a request body in flight; a CORS preflight is continued untouched), `close()`. Property
+`drive`: `"window"` (a page in a window of its own, Linux), `"focus-emulation"` or `"hidden"` (the
+two modes of a background tab; see **One window per agent page**).
 `Tab.screenshot` is the low-level primitive; the read-first rule is in `commands.shot` and the CLI.
 
 **Lower level:** `launchAgentChrome`, `agentEndpoint`, `agentChromePid`, `agentChromeBin`,
@@ -868,7 +1079,7 @@ agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
               [--chrome-args JSON] [--endpoint WS] [--cdp-url URL] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
-              [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME] [--hidden-drive]
+              [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME] [--hidden-drive] [--input-timing JSON]
 ```
 
 `chromes` and `commands` need no `--state-dir`.
@@ -892,7 +1103,13 @@ Error codes: `usage` (exit 2), `not_allowed`, `pin_required`, `read_first`, `tab
 
 Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
 `not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
-(`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. When Chrome
+(`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. With
+`--cdp-url` (`cdpUrl`), where `launch` refuses, it says instead to ask the operator to sign in to the
+requested site in their own Chrome and to send that site's sign-in to the agent browser with the
+operator extension (agentwatch — operator mode). `record` gives the same hint when the tab goes to a
+sign-in page, with the site that the take was on last (the start page, a `goto` step's site, or an
+allowlisted page that the tab went to). With `--cdp-url`, `launch --login` refuses with the same
+step. When Chrome
 answers the connection with `403 Connection rejected` at once and shows no prompt, this Chrome run
 holds an earlier refusal (a cancelled, closed or unanswered prompt): the `unreachable` message says to
 `quit` and `launch` the agent browser again and click Allow, and the proxy log records the approval
@@ -943,12 +1160,17 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
              chrome_args=None, endpoint=None, cdp_url=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
              notify_command=None, approve=None, approve_command=None, proxy_idle_ms=None, command_name=None,
-             tab_scope=None, hidden_drive=False, node="node", package_dir=None, timeout=120.0, env=None)
+             tab_scope=None, hidden_drive=False, input_timing=None, node="node", package_dir=None, timeout=120.0, env=None)
 ```
 
-Each argument from `state_dir` to `hidden_drive` is the CLI flag of the same name (`chrome_args` is
-`--chrome-args`, `tab_scope` is `--tab-scope`, `hidden_drive=True` is `--hidden-drive`). `node`,
-`package_dir`, `timeout` and `env` tell the adapter how to run the CLI.
+Each argument from `state_dir` to `input_timing` is the CLI flag of the same name (`chrome_args` is
+`--chrome-args`, `tab_scope` is `--tab-scope`, `hidden_drive=True` is `--hidden-drive`, `input_timing`
+a mapping that goes as the JSON of `--input-timing`). `node`,
+`package_dir`, `timeout` and `env` tell the adapter how to run the CLI. `timeout` (120 s) is the limit of
+each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
+input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.2 s for each
+character of the text (in agent mode on Linux a person's typing takes about 0.12 s a character), so a long
+text and a wait for another agent's input fit.
 `chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
 `"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
 of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
@@ -1188,6 +1410,29 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   background tab the page must also have no visible time and no `visibilitychange` (a record's span is
   reported), and no frame in the second after the command. Not part of `npm test`. Measured on taylor on
   2026-11-04; see **A command on a background tab: two modes**.
+- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, pid and clock: the
+  windows check, the answer of one minute for the same Chrome pid, the log line at most once in 5 minutes,
+  a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test runner.
+- `test/window-per-page.test.ts`: one window per agent page on Linux, against the fake Chrome's model
+  of a window that is not in front (`FakeChrome.focusedWindow`: the page is visible and draws, and gets
+  the focus at its first press, which activates its window; keys into an inactive window give the page
+  the focus with no switch). `open` sends `newWindow: true, background: true`, no command sends focus
+  emulation (also `record`, also with `hiddenDrive`), and a page that a site opens is driven where it
+  opened. `open --tab` keeps the old default (and the hidden drive) for its tab, also in later
+  commands, through `tab-pages.json`. On the Mac and in personal mode, `open` and focus emulation stay
+  as before.
+- `test/person-input.test.ts`: a person's input in a window of its own on Linux, against the fake
+  Chrome (its windows, the X pointer's event when a window comes forward, a page that scrolls, the
+  caret of a field, the file chooser): `Page.bringToFront` before the first input event of a page with
+  no focus, never for a read; a path of 12 or more moves from the pointer's place (the activation's
+  real event, else the page's last point, also in a later process), a press with force 0.5 of 70 to
+  90 ms with the default timing; the X pointer moves to each path's end only through xdotool on a
+  display that holds the agent browser only; `type --into` clicks the field where `el.focus()` puts
+  the caret (keys correct it; a field that the click does not focus gets `el.focus()` with a log
+  line), and types one key pair per character 90 to 150 ms apart; the wheel brings an element into
+  view (no `scrollIntoView`); `setFiles` clicks the input or its label and fills the chooser's input;
+  two processes' input commands never overlap (`input.lock`); a popup is driven in its tab, and the
+  opener comes back with a tab switch; `open --tab`, the Mac and personal mode keep today's input.
 - `test/hidden-tab.test.ts`: the CDP calls that each command sends to a background tab in both modes,
   against the fake Chrome's model of one (`FakePage.background`: the page is hidden, Chrome draws no
   frame of it, a page that never drew drops a press or a key, a mouse move waits for a frame, a capture
@@ -1213,8 +1458,13 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Playwright behind a bridge with and without its focus emulation, and a person (xdotool) as the
   baseline. The page logs every visibility, focus, frame, timer, observer and input signal with
   timestamps; `report.ts` prints the tables; `extra.ts` holds the review's checks (window order, two
-  agents with and without an input lock, popups, the pointer at an activation, memory and CPU). Not
-  part of `npm test`.
+  agents with and without an input lock, popups, the pointer at an activation, memory and CPU), and
+  since ab-v16.26 `--exp pointer` (each way to treat the X pointer, against a person) and `--exp caret`.
+  The `design`, `design-no-x` and `design-two` scenarios run the whole design with agent-browser's own
+  commands, with several activations of one window and with two agents at once, against the person
+  baselines `person-window` and `person-window-multi`. Since ab-v16.26 the probe also counts position
+  changes that the movement does not explain, entries at an earlier entry's point, and a user
+  activation with no input. Not part of `npm test`.
 - `test/live/anti-detect/mac.ts` (macOS, with the operator's consent and nobody at the keyboard; see
   its head): `node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR`, about 3 minutes. In
   its own agent Chrome (today's flags, `open -n -g` and the give-back) it measures drive and record

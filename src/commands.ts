@@ -9,7 +9,7 @@ import { listAgentChromes, type AgentChrome } from "./chromes.ts";
 import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
 import { isAllowedUrl } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
+import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, operatorSignIn, redirectError } from "./errors.ts";
 import { resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
@@ -51,9 +51,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
       { ...ANY_SCOPE, description: "reach tabs outside this tab scope; with a tab scope, pin and unpin need it (the pin confines every scope); no effect without a tab scope" }] },
   { name: "tabs", summary: "List allowlisted tabs (other tabs are never shown); with a tab scope, the scope's tabs and a count of the others", usage: "tabs [--any-scope]",
     params: [ANY_SCOPE] },
-  { name: "open", summary: "Open an allowlisted URL in a new tab", usage: "open <url> [--name N] [--tab]",
+  { name: "open", summary: "Open an allowlisted URL in a new tab (agent mode on Linux: in a window of its own)", usage: "open <url> [--name N] [--tab]",
     params: [p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("name", "string", false, "--name", "remember the tab under this name"),
-      p("tab", "boolean", false, "--tab", "personal mode: a tab in the pinned window rather than a window of its own")] },
+      p("tab", "boolean", false, "--tab", "a tab rather than a window of its own: personal mode, in the pinned window; agent mode on Linux, a background tab with the old modes, which a site can detect")] },
   { name: "goto", summary: "Navigate a tab to an allowlisted URL", usage: "goto <tab> <url>",
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ANY_SCOPE] },
   { name: "outline", summary: "Number the interactive elements on screen (read this before a screenshot)", usage: "outline <tab> [--all]",
@@ -199,7 +199,7 @@ export const commands = {
   async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean; giveBack?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
-    if (s.cdpUrl) throw new UsageError("launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
+    if (s.cdpUrl) throw new UsageError(`launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it${p.login ? `; to sign in to a site there, ${operatorSignIn("that site")}` : ""}`);
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
@@ -310,6 +310,7 @@ export const commands = {
 
   async outline(o: BrowserOptions | Settings, p: { tab: string; all?: boolean; anyScope?: boolean }): Promise<OutlineResult> {
     return onTab(o, p, async (tab, info, b) => {
+      await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront)
       const elements = await outlineTab(tab, !!p.all);
       await b.markRead(tab.targetId, await tab.url()); // the read-first rule of shot
       return { ok: true, command: "outline", tab: info, elements };
@@ -361,7 +362,9 @@ export const commands = {
     const expression = need(p.expression, "expression");
     return onTab(o, p, async (tab, info) => {
       await tab.assertAllowed();
-      const value = await tab.evaluate(expression);
+      await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront): an eval can wait for a frame
+      // As a user gesture, as before: an agent's expression can open a popup (a site sees the page's user activation).
+      const value = await tab.evaluateAsUser(expression);
       return { ok: true, command: "eval", tab: info, value: value === undefined ? null : value };
     });
   },
@@ -426,7 +429,9 @@ export const commands = {
     const s = resolveOptions(o);
     const plan = planRecording(p, allowlistOf(s));
     return onTab(s, p, async (tab, info) => {
-      const r = await recordTab(tab, plan);
+      // In a window of its own (Linux), the take is an input command: the window comes forward, and the take (not the
+      // encode) holds the input lock.
+      const r = await recordTab(tab, plan, (take) => tab.withInput(take));
       const { width, height, scale } = plan.viewport;
       // The tab's URL and title from the end of the run: after the encode nothing runs in the tab again.
       const ref: TabRef = { ...info, url: r.finalUrl, title: r.title };

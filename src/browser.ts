@@ -14,9 +14,11 @@ import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
 import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, type BrowserOptions, type Settings } from "./options.ts";
+import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
+import type { Hands } from "./input.ts";
+import { displayOf, type DisplayInfo } from "./display.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -68,15 +70,28 @@ remote debugging. Approve the connection prompt, then retry. If needed, run
  * to its targetId, as it always has. tab-scopes.json holds each tab opened under a tab scope, by
  * targetId: its scope and its name there (null: no name). So a name belongs to one scope, and two
  * scopes can each have a tab named "main". reads.json holds the read-first marks (targetId -> the URL
- * that outline or text last read there), and window.json the pinned window. Every caller of the state
- * folder writes these four files, so each of them changes only under the record lock (updateRecord).
+ * that outline or text last read there), and window.json the pinned window. tab-pages.json lists the
+ * pages that an explicit `open --tab` opened as a background tab where each page gets a window of its
+ * own (windowPerPage): they keep the old modes (see Tab.drive). Every caller of the state folder
+ * writes these five files, so each of them changes only under the record lock (updateRecord).
  */
 type Registry = Record<string, string>; // tab name -> targetId (tabs with no scope)
 type ScopeRecord = Record<string, { scope: string; name: string | null }>; // targetId -> its scope and its name there
 type Reads = Record<string, string>; // targetId -> the URL that outline or text read
 /** The whole record, as a change under the lock sees it and changes it. */
-type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined };
-const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", RECORD_LOCK = "tabs.lock";
+type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined; tabPages: string[] };
+const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", TAB_PAGES_FILE = "tab-pages.json",
+  RECORD_LOCK = "tabs.lock";
+
+/**
+ * How agent-browser drives a page (ab-v16.26). "window": a page in a window of its own, or a tab that a
+ * site or a pinned window put in front of its window, where each page gets a window of its own
+ * (windowPerPage): no focus emulation, as a person's page. "focus-emulation": the old default, focus
+ * emulation while a command is attached (the Mac, personal mode, and an explicit `open --tab` on
+ * Linux). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn
+ * (the same places, with hiddenDrive).
+ */
+export type Drive = "window" | "focus-emulation" | "hidden";
 
 /** Write JSON to a temporary file and rename it over `path`, so a reader never sees half a file. */
 function writeJsonAtomic(path: string, value: unknown) {
@@ -90,13 +105,22 @@ export class AgentBrowser {
   readonly settings: Settings;
   readonly allow: string[];
   readonly product: string;
+  /**
+   * The design of one window per page applies (ab-v16.26): agent mode on Linux (windowPerPage), with the agent Chrome
+   * on a display of its own (display.ts). Else every page is driven as before, in a background tab.
+   */
+  readonly windows: boolean;
+  /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
+  readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
 
-  private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string) {
+  private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string, display: DisplayInfo | undefined) {
     this.conn = conn;
     this.settings = settings;
     this.allow = allow;
     this.product = product;
+    this.display = display;
+    this.windows = !!display?.own;
   }
 
   /**
@@ -148,7 +172,8 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      return new AgentBrowser(conn, s, allow, v.product);
+      const display = windowPerPage(s) ? await displayOf(s, true) : undefined;
+      return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
       throw e;
@@ -175,6 +200,12 @@ export class AgentBrowser {
     return out;
   }
 
+  private readTabPages(): string[] {
+    let raw: unknown;
+    try { raw = JSON.parse(readFileSync(statePath(this.settings, TAB_PAGES_FILE), "utf8")); } catch { return []; }
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
+  }
+
   private readMarks(): Reads {
     let raw: unknown;
     try { raw = JSON.parse(readFileSync(statePath(this.settings, READS_FILE), "utf8")); } catch { return {}; }
@@ -185,7 +216,7 @@ export class AgentBrowser {
   }
 
   /**
-   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json) under the state
+   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json) under the state
    * folder's lock (tabs.lock): several processes (CLI calls of different sessions) write it, and a
    * read-modify-write without the lock can lose another's change. The entries of tabs that Chrome no
    * longer has are dropped here, from the names, the scopes and the read marks. The target list is
@@ -195,8 +226,8 @@ export class AgentBrowser {
    */
   private async updateRecord(change: (r: TabRecord) => void): Promise<void> {
     await withFileLock(statePath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
-      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow() };
-      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window };
+      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow(), tabPages: this.readTabPages() };
+      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window, tabPages: JSON.stringify(r.tabPages) };
       change(r);
       const live = await this.conn.send("Target.getTargets", {}, undefined, 5_000)
         .then(({ targetInfos }) => new Set((targetInfos as TargetInfo[]).map((t) => t.targetId)), () => undefined);
@@ -204,10 +235,12 @@ export class AgentBrowser {
         for (const [name, id] of Object.entries(r.registry)) if (!live.has(id)) delete r.registry[name];
         for (const id of Object.keys(r.scopes)) if (!live.has(id)) delete r.scopes[id];
         for (const id of Object.keys(r.reads)) if (!live.has(id)) delete r.reads[id];
+        r.tabPages = r.tabPages.filter((id) => live.has(id));
       }
       if (JSON.stringify(r.registry) !== before.registry) writeJsonAtomic(statePath(this.settings, REGISTRY_FILE), r.registry);
       if (JSON.stringify(r.scopes) !== before.scopes) writeJsonAtomic(statePath(this.settings, SCOPES_FILE), r.scopes);
       if (JSON.stringify(r.reads) !== before.reads) writeJsonAtomic(statePath(this.settings, READS_FILE), r.reads);
+      if (JSON.stringify(r.tabPages) !== before.tabPages) writeJsonAtomic(statePath(this.settings, TAB_PAGES_FILE), r.tabPages);
       if (r.window !== before.window) {
         if (r.window === undefined) rmSync(statePath(this.settings, WINDOW_FILE), { force: true });
         else writeJsonAtomic(statePath(this.settings, WINDOW_FILE), { windowId: r.window });
@@ -284,10 +317,16 @@ export class AgentBrowser {
 
   /**
    * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
-   * browser it is a background tab in the current window: a foreground tab activates Chrome, which
-   * takes the operator's focus and Space (measured 2026-10-30). Between commands that tab is hidden and
-   * its timers slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9);
-   * during each command its page is visible. Click, type, eval, text, shot and record still work in it
+   * browser on Linux (windowPerPage, ab-v16.26) it gets a window of its own (Target.createTarget with
+   * newWindow and background: a new window without the focus), driven with no focus emulation: its
+   * page is visible and draws, as a person's window that is not in front, and it gets the focus only
+   * with the agent's input. An explicit newWindow: false (`open --tab`) opens a background tab there
+   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. On the
+   * Mac the agent browser opens a background tab in the current window, as before: a foreground tab
+   * activates Chrome, which takes the operator's focus and Space (measured 2026-10-30), and a window
+   * of its own is not measured there (ab-v16.27). Between commands that tab is hidden and its timers
+   * slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9); during
+   * each command its page is visible. Click, type, eval, text, shot and record still work in it
    * (test/live/background-tabs/check.ts; measured on Linux only: on macOS a recording of a background
    * tab may now get about 28 fps, which is not measured again). In the operator's Chrome with no pin,
    * it gets a window of its own, opened behind theirs, and that window is pinned at once: there a
@@ -297,13 +336,16 @@ export class AgentBrowser {
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);
     const win = this.pinnedWindow();
-    const agent = this.mode === "agent";
+    const agent = this.mode === "agent", windows = this.windows;
+    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Over agent mode's
+    // endpoint the relay opens a window for every page (ab-v16.28), so there it is a window page like any other.
+    const tabPage = windows && opts.newWindow === false && !this.settings.cdpUrl;
     let targetId: string;
     if (win !== undefined) targetId = await this.openInWindow(win);
     else {
       if (!agent && opts.newWindow === false)
         throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
-      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? !agent })).targetId;
+      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? (!agent || windows) })).targetId;
     }
     // The new tab exists from here. When it cannot be recorded (the record lock timed out, say) or
     // attached, it is closed again (best effort), so it never stays as a tab that nobody recorded:
@@ -313,8 +355,9 @@ export class AgentBrowser {
       // Personal mode with no pin: the tab's own new window is pinned at once, in the same change as its record.
       const pin = win === undefined && !agent ? await this.windowOf(targetId) : undefined;
       const scope = this.tabScope, name = opts.name;
-      if (pin !== undefined || scope !== undefined || name) await this.updateRecord((r) => {
+      if (pin !== undefined || scope !== undefined || name || tabPage) await this.updateRecord((r) => {
         if (pin !== undefined) r.window = pin;
+        if (tabPage) r.tabPages.push(targetId);
         if (scope !== undefined) {
           // A name belongs to one tab of the scope: a tab that had it before keeps its place in the scope, without the name.
           if (name) for (const e of Object.values(r.scopes)) if (e.scope === scope && e.name === name) e.name = null;
@@ -340,7 +383,7 @@ export class AgentBrowser {
     if (!pages.length) throw new Error("the pinned window has no allowlisted tab to open from; open one there by hand");
     const before = new Set(((await this.conn.send("Target.getTargets")).targetInfos as TargetInfo[]).map((t) => t.targetId));
     const opener = await this.attach((pages.find((p) => this.tabScope !== undefined && p.scope === this.tabScope) ?? pages[0]).targetId);
-    await opener.evaluate(() => { window.open("about:blank", "_blank"); });
+    await opener.evaluateAsUser(() => { window.open("about:blank", "_blank"); });
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const { targetInfos } = await this.conn.send("Target.getTargets");
@@ -414,27 +457,39 @@ export class AgentBrowser {
     if (!isAllowedUrl(info.url, this.allow)) throw new NotAllowedError(info.url);
     if (!(await this.reachable(info))) throw new NotAllowedError(info.url, "refusing: that tab is outside the pinned window");
     const { sessionId } = await this.conn.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab = new Tab(this, targetId, sessionId);
+    const tab = new Tab(this, targetId, sessionId, this.driveOf(targetId));
     await tab.send("Page.enable");
     // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
     // a page can tell the Runtime domain is enabled, and we never need its events.
     // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
     // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
     // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
-    // visibilitychange to "visible" and back. With hiddenDrive there is none (ab-v16.15): input and
-    // shots in a background tab run under Tab.whileDrawn, which keeps the page "hidden".
-    if (!this.settings.hiddenDrive) await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    // visibilitychange to "visible" and back, and a focus that no blur follows. With hiddenDrive there
+    // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn, which keeps
+    // the page "hidden". A page in a window of its own needs none (ab-v16.26): Chrome draws it, and
+    // the agent's input gives it the focus, as a person's does.
+    if (tab.drive === "focus-emulation") await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     this.sessions.set(targetId, tab);
     return tab;
   }
 
-  /** Drop a closed tab: its session, its name, its place in a tab scope and its read mark. Async: the record changes under its lock. */
+  /**
+   * How a page is driven (Drive): where each page gets a window of its own (windowPerPage), "window",
+   * except a tab of an explicit `open --tab`; elsewhere the old modes, by the hiddenDrive option.
+   */
+  driveOf(targetId: string): Drive {
+    if (this.windows && !this.readTabPages().includes(targetId)) return "window";
+    return this.settings.hiddenDrive ? "hidden" : "focus-emulation";
+  }
+
+  /** Drop a closed tab: its session, its name, its place in a tab scope, its read mark and its tab-page mark. Async: the record changes under its lock. */
   async forget(targetId: string): Promise<void> {
     this.sessions.delete(targetId);
     await this.updateRecord((r) => {
       for (const [n, id] of Object.entries(r.registry)) if (id === targetId) delete r.registry[n];
       delete r.scopes[targetId];
       delete r.reads[targetId];
+      r.tabPages = r.tabPages.filter((id) => id !== targetId);
     });
   }
 
@@ -528,11 +583,14 @@ export class Tab {
   readonly browser: AgentBrowser;
   readonly targetId: string;
   readonly sessionId: string;
+  /** How this page is driven (AgentBrowser.driveOf): a window of its own, or one of the old modes of a tab. */
+  readonly drive: Drive;
 
-  constructor(browser: AgentBrowser, targetId: string, sessionId: string) {
+  constructor(browser: AgentBrowser, targetId: string, sessionId: string, drive?: Drive) {
     this.browser = browser;
     this.targetId = targetId;
     this.sessionId = sessionId;
+    this.drive = drive ?? browser.driveOf?.(targetId) ?? "focus-emulation";
   }
 
   private isolatedContextId?: number;
@@ -621,8 +679,8 @@ export class Tab {
    */
   private async whileDrawn<T>(fn: (own: OwnCapture) => Promise<T>, opts: { repeat?: boolean; shot?: boolean } = {}): Promise<T> {
     const plain: OwnCapture = (params) => this.send("Page.captureScreenshot", params, Tab.shotTiming.ownMs);
-    const hidden = this.browser.settings.hiddenDrive, log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
-    if (!hidden && !opts.shot) return fn(plain);
+    const hidden = this.drive === "hidden", log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
+    if (!hidden && !opts.shot) { await this.toFront(); return fn(plain); }
     await this.assertAllowed();
     if (hidden && await this.evaluate(() => document.visibilityState) !== "hidden") return fn(plain);
     const { framesMs, lateMs, ownMs, lastMs } = Tab.shotTiming, t0 = Date.now();
@@ -784,6 +842,35 @@ export class Tab {
     return this.evaluate(() => location.href);
   }
 
+  /**
+   * A page in a window of its own (drive "window") that is not in front of that window is hidden: the opener behind a
+   * site's popup tab, an older tab of a pinned window, a tab that an older agent-browser opened in the background, a
+   * sign-in tab of `launch --login`. Chrome draws nothing of it there: input stalls or reaches a hidden page, and a wait
+   * for content that a frame writes, or record, gets nothing (review-45, measured on taylor). So before input, a wait,
+   * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
+   * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
+   * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
+   * Elsewhere this does nothing.
+   */
+  async toFront(): Promise<void> {
+    if (this.drive !== "window") return;
+    await this.assertAllowed();
+    if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
+    // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
+    // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
+    // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
+    // is read again inside the lock: the other agent's command can have changed it.
+    const { withInputLock } = await import("./input.ts");
+    await withInputLock(this.browser.settings, async () => {
+      await this.assertAllowed();
+      if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
+      await this.send("Page.bringToFront");
+      for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
+        if (await this.evaluate(() => document.visibilityState) === "visible") return;
+      this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
+    });
+  }
+
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
   async assertAllowed(): Promise<void> {
     const url = await this.url();
@@ -830,15 +917,27 @@ export class Tab {
 
   /**
    * Run a function in the page, in our isolated world, and return its (JSON-serialisable) result.
-   * The function is serialised, so it cannot close over Node variables; pass them as args.
+   * The function is serialised, so it cannot close over Node variables; pass them as args. In a window of its own
+   * (Tab.drive "window", ab-v16.26) it does not run as a user gesture: a gesture gives the page a user activation
+   * (navigator.userActivation) with no press and no key, which a site can see (measured on taylor: each read made the
+   * page active). evaluateAsUser runs it as one. Elsewhere it runs as one, as before.
    */
   async evaluate<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
+    return this.evaluateIn(fn, args, this.drive !== "window");
+  }
+
+  /** As evaluate, run as a user gesture (a popup that the page opens needs one): `eval`, and the open in a pinned window. */
+  async evaluateAsUser<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
+    return this.evaluateIn(fn, args, true);
+  }
+
+  private async evaluateIn<R, A extends unknown[]>(fn: ((...args: A) => R) | string, args: A, userGesture: boolean): Promise<Awaited<R>> {
     const expression = typeof fn === "string" ? fn : `(${fn.toString()})(...${JSON.stringify(args)})`;
     for (let attempt = 0; ; attempt++) {
       const contextId = await this.isolatedWorld();
       let res: { exceptionDetails?: { exception?: { description?: string }; text?: string }; result: { value: Awaited<R> } };
       try {
-        res = await this.send("Runtime.evaluate", { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true });
+        res = await this.send("Runtime.evaluate", { expression, contextId, awaitPromise: true, returnByValue: true, ...(userGesture ? { userGesture: true } : {}) });
       } catch (e) {
         // A navigation destroys the isolated world; make a new one and retry once.
         if (attempt === 0 && e instanceof CDPError && /context/i.test(e.message)) { this.isolatedContextId = undefined; continue; }
@@ -859,6 +958,7 @@ export class Tab {
   ): Promise<Awaited<R>> {
     const { timeoutMs = 30_000, intervalMs = 250, args = [] as unknown as A } = opts;
     const deadline = Date.now() + timeoutMs;
+    await this.toFront().catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
     for (;;) {
       const v = await this.evaluate(fn, ...args).catch(() => undefined);
       if (v) return v as Awaited<R>;
@@ -874,16 +974,74 @@ export class Tab {
     }, { args: [selector], timeoutMs, what: selector });
   }
 
-  /** Move the mouse over an element (opens hover menus). Under whileDrawn. */
+  /**
+   * Run `fn` with a person's hands (input.ts), for a page in a window of its own (drive "window"; ab-v16.26): inside
+   * the agent browser's input lock (one input at a time, across processes), after the page's window came forward.
+   */
+  private async byHand<T>(fn: (h: Hands) => Promise<T>): Promise<T> {
+    await this.assertAllowed();
+    const { withInputLock, Hands } = await import("./input.ts");
+    return withInputLock(this.browser.settings, async () => {
+      // The wait for the lock can take minutes, and the page can go to a host off the allowlist meanwhile (review-47):
+      // the allowlist is read again inside the lock, before any code of ours runs there for the input, and the guard
+      // stops each input event once the main frame went off the list (Hands also reads the list before each press
+      // and each key).
+      await this.assertAllowed();
+      let left: string | undefined;
+      const main = await this.frameId(), allow = this.browser.allow;
+      const offNav = this.browser.conn.on("Page.frameNavigated", (p: { frame?: { url?: string; parentId?: string } }, sid?: string) => {
+        if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", allow)) left = p.frame?.url ?? "";
+      });
+      // Also as soon as the main frame starts or asks for a navigation to a host off the list (review-47c: one move still
+      // reached an off-list page before its commit).
+      const early = (p: { frameId?: string; url?: string }, sid?: string) => {
+        if (sid === this.sessionId && p.frameId === main && p.url && !isAllowedUrl(p.url, allow)) left = p.url;
+      };
+      const offStart = this.browser.conn.on("Page.frameStartedNavigating", early), offAsk = this.browser.conn.on("Page.frameRequestedNavigation", early);
+      const off = () => { offNav(); offStart(); offAsk(); };
+      const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
+      let h: Hands | undefined;
+      try {
+        h = await Hands.begin(this, guard);
+        guard();
+        await this.assertAllowed();
+        return await fn(h);
+      } finally {
+        off();
+        await h?.end().catch((e) => { this.browser.settings.log(`agent-browser: could not keep the pointer's place (${(e as Error).message})`); });
+      }
+    });
+  }
+
+  /**
+   * For a command that sends its own input (record): in a window of its own, the input lock and the window's
+   * activation around `fn`, which gets the hands (where the pointer is; Hands.movedTo keeps where it ends); elsewhere
+   * `fn` as it is, with none.
+   */
+  async withInput<T>(fn: (h?: Hands) => Promise<T>): Promise<T> {
+    return this.drive === "window" ? this.byHand((h) => fn(h)) : fn();
+  }
+
+  /**
+   * Move the mouse over an element (opens hover menus). In a window of its own (Tab.drive "window"), a person's
+   * pointer path from where the pointer is, after the wheel brought the element into view (input.ts); else one move
+   * to its centre, under whileDrawn.
+   */
   async hover(selector: string): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.hover(selector));
     await this.whileDrawn(async () => {
       const pt = await this.centerOf(selector);
       await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
     }, { repeat: true });
   }
 
-  /** Trusted click at the centre of the first element matching a CSS selector. Under whileDrawn. */
+  /**
+   * Trusted click on the first element matching a CSS selector. In a window of its own, a person's click (input.ts:
+   * the wheel brings it into view, a path to a point of its middle 40%, a press of 70 to 90 ms with force 0.5); else at
+   * its centre after scrollIntoView, under whileDrawn.
+   */
   async click(selector: string): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.click(selector));
     await this.whileDrawn(async () => {
       const pt = await this.centerOf(selector);
       await this.clickAtNow(pt.x, pt.y);
@@ -904,8 +1062,9 @@ export class Tab {
     return pt;
   }
 
-  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). Under whileDrawn. */
+  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). In a window of its own a person's click; else under whileDrawn. */
   async clickText(text: string, opts: { within?: string } = {}): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.click(null, { text, within: opts.within }));
     await this.assertAllowed();
     await this.whileDrawn(() => this.clickTextNow(text, opts), { repeat: true });
   }
@@ -929,8 +1088,9 @@ export class Tab {
     await this.clickAtNow(pt.x, pt.y);
   }
 
-  /** Trusted click at a point of the viewport (CSS pixels). Under whileDrawn. */
+  /** Trusted click at a point of the viewport (CSS pixels). In a window of its own a person's path and press; else under whileDrawn. */
   async clickAt(x: number, y: number): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.clickAt(x, y));
     await this.whileDrawn(() => this.clickAtNow(x, y), { repeat: true });
   }
 
@@ -948,15 +1108,21 @@ export class Tab {
    * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
    * A tab or a newline moves on (in a spreadsheet, to the next cell or row), after which the field is
    * another one: only the text before the first of them is checked, and the rest goes as key events
-   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. Under whileDrawn.
+   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. Under whileDrawn. In a window of its own
+   * (Tab.drive "window"), a person's typing (input.ts): the field gets the focus by a click, with the caret where
+   * el.focus() would put it, and the text goes as one key-event pair per character, 90 to 150 ms apart, never as
+   * inserted text (a character with no US key excepted).
    */
   async type(text: string, selector?: string): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => this.typeNow(text, selector, h));
     await this.assertAllowed();
     await this.whileDrawn(() => this.typeNow(text, selector), { repeat: true });
   }
 
-  private async typeNow(text: string, selector?: string): Promise<void> {
-    if (selector) {
+  private async typeNow(text: string, selector?: string, h?: Hands): Promise<void> {
+    if (selector && h) await h.focusField(selector);
+    if (h) await h.check(); // the field's click can take the page off the allowlist
+    else if (selector) {
       const ok = await this.evaluate((s: string) => {
         const el = document.querySelector(s) as HTMLElement | null;
         el?.focus();
@@ -975,34 +1141,53 @@ export class Tab {
     if (before === null) throw new Error("type: no text field has the focus; click one first, or name it with --into");
     const cut = text.search(/[\t\n]/), head = cut < 0 ? text : text.slice(0, cut), rest = cut < 0 ? "" : text.slice(cut);
     const { typeChar } = await import("./record.ts");
+    const key = h ? (ch: string) => h.typeChar(ch) : (ch: string) => typeChar(this, ch);
     const unchanged = async () => (await field())?.text === before.text;
     if (head) {
-      if (!before.editable) await this.send("Input.insertText", { text: head });
-      if (before.editable || await unchanged()) {
-        for (const ch of head) await typeChar(this, ch);
-        if (await unchanged()) throw new Error(`type: the text did not arrive: the focused field is unchanged after ${before.editable ? "" : "inserted text and after "}key events`);
+      if (!before.editable && !h) await this.send("Input.insertText", { text: head });
+      if (h || before.editable || await unchanged()) {
+        for (const ch of head) await key(ch);
+        if (await unchanged()) throw new Error(`type: the text did not arrive: the focused field is unchanged after ${before.editable || h ? "" : "inserted text and after "}key events`);
       }
     }
-    for (const ch of rest) await typeChar(this, ch);
+    for (const ch of rest) await key(ch);
   }
 
-  /** Under whileDrawn. */
+  /** Under whileDrawn; in a window of its own, after the window came forward, with the key held down a short time (input.ts). */
   async press(key: keyof typeof KEYS | string): Promise<void> {
     const k = KEYS[key];
     if (!k) throw new UsageError(`unsupported key ${key}; known: ${Object.keys(KEYS).join(", ")}`);
-    await this.assertAllowed();
     const base = keyFields(key, k.code, k.keyCode);
+    // The same key events as below (a keyDown with the key's text; keyFields keeps a function key in the page), held down a short time.
+    if (this.drive === "window") return this.byHand((h) => h.keyPress(base, k.text));
+    await this.assertAllowed();
     await this.whileDrawn(async () => {
       await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: k.text });
       await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
     }, { repeat: true });
   }
 
-  /** Put local files into an <input type=file>. */
+  /**
+   * Put local files into an <input type=file>. In a window of its own, as a person picks them: a click on the input
+   * (or on its label) opens Chrome's file chooser, which agent-browser intercepts, and the files go to the input that
+   * it names (input.ts); an input with no box and no label gets them with no click, as elsewhere, with a log line.
+   */
   async setFiles(selector: string, files: string[]): Promise<void> {
     if (files.some((f) => f === "")) throw new UsageError("setFiles: a file path is empty");
+    if (this.drive === "window") return this.byHand(async (h) => {
+      if (await h.setFiles(selector, files)) return;
+      await this.assertAllowed();
+      await this.setFilesNow(selector, files);
+    });
     await this.assertAllowed();
+    await this.toFront();
+    await this.setFilesNow(selector, files);
+  }
+
+  private async setFilesNow(selector: string, files: string[]): Promise<void> {
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
+    // The document whose input gets the files is on the allowlist (review-47c: the page can go to a new page meanwhile).
+    if (typeof root.documentURL === "string" && !isAllowedUrl(root.documentURL, this.browser.allow)) throw new NotAllowedError(root.documentURL);
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
     if (!nodeId) throw new Error(`no element matches ${selector}`);
     await this.send("DOM.setFileInputFiles", { nodeId, files });
@@ -1059,9 +1244,10 @@ export class Tab {
     return path;
   }
 
-  /** Visible text of the page (or an element), for agents to read without screenshots. */
+  /** Visible text of the page (or an element), for agents to read without screenshots. A hidden window page comes in front first (toFront). */
   async text(selector?: string): Promise<string> {
     await this.assertAllowed();
+    await this.toFront();
     return this.evaluate((s: string | null) => {
       const el = (s ? document.querySelector(s) : document.body) as HTMLElement | null;
       return el?.innerText ?? "";

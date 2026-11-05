@@ -45,9 +45,21 @@ export function isSignInHost(host: string): boolean {
   return SIGN_IN_HOSTS.some((d) => h === d || h.endsWith("." + d)) || SIGN_IN_LABELS.includes(h.split(".")[0]);
 }
 
-/** What to do about a sign-in page, for the operator: sign in by hand, in the agent browser. */
-export function signInHint(host: string, s: { mode: string; commandName: string }): string {
+/** The sign-in step behind agent mode's endpoint (cdpUrl), where `launch` refuses: the operator extension sends it. */
+export function operatorSignIn(site: string): string {
+  return `ask the operator to sign in to ${site} in their own Chrome and send that site's sign-in to the agent browser with the operator extension (agentwatch — operator mode)`;
+}
+
+/**
+ * What to do about a sign-in page. Agent mode: sign in by hand in the agent browser (`launch --login`). Behind agent
+ * mode's endpoint (cdpUrl), `launch` refuses: agentwatch owns that agent browser, so the operator signs in to `site`
+ * (the allowlisted site the tab came from) in their own Chrome and sends that site's sign-in with the operator
+ * extension (the two-modes design). Personal mode: sign in by hand in the operator's own window.
+ */
+export function signInHint(host: string, s: { mode: string; commandName: string; cdpUrl?: string }, site?: string): string {
   if (!isSignInHost(host)) return "";
+  const where = site ?? "the site";
+  if (s.cdpUrl) return `; ${host} is a sign-in page, so the agent browser is not signed in to ${where}: ${operatorSignIn(where)}`;
   return s.mode === "agent"
     ? `; ${host} is a sign-in page, so this profile is not signed in: run \`${s.commandName} launch --login\` and sign in by hand in the agent browser`
     : `; ${host} is a sign-in page: sign in by hand in that window`;
@@ -57,9 +69,9 @@ export function signInHint(host: string, s: { mode: string; commandName: string 
  * A navigation to an allowlisted URL that ended on a host off the allowlist (a redirect): name both
  * hosts, say where the tab is, and how to sign in when it is a sign-in page. Any other error is kept.
  */
-export function redirectError(e: unknown, requested: string, s: { mode: string; commandName: string }): unknown {
+export function redirectError(e: unknown, requested: string, s: { mode: string; commandName: string; cdpUrl?: string }): unknown {
   if (!(e instanceof NotAllowedError) || e.host === safeHost(requested)) return e;
-  return new NotAllowedError(`https://${e.host}/`, `refusing: ${safeHost(requested)} redirected the tab to ${e.host}, which is not on the allowlist${signInHint(e.host, s)}. The tab stays open there; agent-browser does not touch it`);
+  return new NotAllowedError(`https://${e.host}/`, `refusing: ${safeHost(requested)} redirected the tab to ${e.host}, which is not on the allowlist${signInHint(e.host, s, safeHost(requested))}. The tab stays open there; agent-browser does not touch it`);
 }
 
 /** Personal mode acts only inside the caller's own pinned window. */

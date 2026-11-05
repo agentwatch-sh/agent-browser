@@ -7,6 +7,7 @@ expression of `eval`) goes to the CLI's standard input, never into argv.
 
 from __future__ import annotations
 
+import collections.abc
 import json
 import os
 import re
@@ -40,6 +41,11 @@ LAUNCH_WAIT = 600.0
 
 #: `record` runs at most 30 minutes (the CLI's limit), then encodes the MP4.
 RECORD_WAIT = 1800.0 + 900.0
+
+#: In agent mode on Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
+#: default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
+LOCK_WAIT_MS = 600_000.0
+KEY_MS = 150.0 + 50.0
 
 
 def default_package_dir() -> Optional[Path]:
@@ -108,9 +114,16 @@ class AgentBrowser:
 
     `hidden_drive=True` (`--hidden-drive`) keeps a background tab's page hidden while a command drives
     it: no focus emulation, and click, hover, type, press and shot keep Chrome drawing the hidden page
-    with a hidden capture. By default a command turns on focus emulation, so the page is visible for the
-    command's length. See the README, "A command on a background tab: two modes". Measured on Linux
+    with a hidden capture. Without it a command turns on focus emulation for a background tab, so the
+    page is visible for the command's length. In agent mode on Linux each page has a window of its own
+    and needs neither (README, "One window per agent page"): there the two modes apply only to a tab of
+    `open(..., tab=True)`. See the README, "A command on a background tab: two modes". Measured on Linux
     only. A hidden_drive that is not a bool raises ValueError here, before any call.
+
+    `input_timing` (`--input-timing`, a JSON object) changes the shape of a person's input in a window of
+    its own (agent mode on Linux): ms ranges such as `{"pressMs": [70, 90], "keyMs": [90, 150]}`, and
+    `moveScale`, `activateMs`, `lockWaitMs`. The fields that it names replace the defaults; the CLI
+    checks them and raises UsageError. An input_timing that is not a mapping raises ValueError here.
 
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
     current folder. A method's empty path goes to the CLI, which raises UsageError.
@@ -138,6 +151,7 @@ class AgentBrowser:
         command_name: Optional[str] = None,
         tab_scope: Optional[str] = None,
         hidden_drive: bool = False,
+        input_timing: Optional[Mapping[str, object]] = None,
         node: str = "node",
         package_dir: Optional[PathLike] = None,
         timeout: float = DEFAULT_TIMEOUT,
@@ -157,6 +171,8 @@ class AgentBrowser:
             raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
         if not isinstance(hidden_drive, bool):
             raise ValueError(f"hidden_drive must be True or False, not {hidden_drive!r}")
+        if input_timing is not None and not isinstance(input_timing, collections.abc.Mapping):
+            raise ValueError(f"input_timing must be a mapping of field names to ms ranges, not {type(input_timing).__name__}")
         state = _path("state_dir", state_dir)
         if state is None:
             raise ValueError("state_dir is required: this consumer's own state folder")
@@ -180,6 +196,7 @@ class AgentBrowser:
         self.command_name = command_name
         self.tab_scope = tab_scope
         self.hidden_drive = hidden_drive
+        self.input_timing: Optional[Dict[str, object]] = dict(input_timing) if input_timing is not None else None
         self.node = node
         self.package_dir = _path("package_dir", package_dir)
         self.timeout = timeout
@@ -254,6 +271,8 @@ class AgentBrowser:
             flags += ["--tab-scope", self.tab_scope]
         if self.hidden_drive:
             flags.append("--hidden-drive")
+        if self.input_timing is not None:
+            flags += ["--input-timing", json.dumps(self.input_timing)]
         return flags
 
     def _run(self, command: str, args: Sequence[str], parse: Callable[[Mapping[str, object]], R], *, stdin: Optional[str] = None,
@@ -331,7 +350,12 @@ class AgentBrowser:
         return self._run("tabs", _scope(any_scope), TabsResult.from_json)
 
     def open(self, url: str, name: Optional[str] = None, tab: bool = False) -> OpenResult:
-        """Open an allowlisted URL; `name` remembers the tab; `tab` (personal mode) uses the pinned window."""
+        """Open an allowlisted URL; `name` remembers the tab.
+
+        In agent mode on Linux the page gets a window of its own. `tab=True` opens a tab rather than a
+        window: in personal mode, in the pinned window; in agent mode on Linux, a background tab that
+        keeps the old modes (focus emulation, or hidden_drive), which a site can detect.
+        """
         return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else [])], OpenResult.from_json)
 
     # Each method that takes a `tab` also takes `any_scope`: True reaches a tab outside this tab scope.
@@ -344,24 +368,43 @@ class AgentBrowser:
         """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot."""
         return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json)
 
+    def _input_wait(self, chars: int = 0) -> float:
+        """The time an input command may add to `timeout`: the input lock's wait, and the typing of `chars` characters
+        at the slowest pace of the input timing (in agent mode on Linux a person's typing takes about 0.12 s a character)."""
+        t = self.input_timing or {}
+
+        def number(name: str, default: float, index: Optional[int] = None) -> float:
+            v = t.get(name)
+            try:
+                return float(v[index] if index is not None else v)  # type: ignore[index]
+            except (TypeError, ValueError, IndexError, KeyError):
+                return default
+        key = number("keyMs", 150.0, 1) + number("holdMs", 50.0, 1)
+        return number("lockWaitMs", LOCK_WAIT_MS) / 1000.0 + chars * (key if t else KEY_MS) / 1000.0
+
     def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False) -> ClickResult:
         """Trusted click on `target` (#N from outline, or a CSS selector), or on the element whose text is `text`."""
         if (target is None) == (text is None):
             raise ValueError("click needs target or text, not both")
         args = [tab, target] if target is not None else [tab, "--text", text or ""]
-        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json)
+        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json, extra_timeout=self._input_wait())
 
     def hover(self, tab: str, target: str, any_scope: bool = False) -> HoverResult:
         """Move the mouse over `target` (#N or a CSS selector)."""
-        return self._run("hover", [tab, target, *_scope(any_scope)], HoverResult.from_json)
+        return self._run("hover", [tab, target, *_scope(any_scope)], HoverResult.from_json, extra_timeout=self._input_wait())
 
     def type(self, tab: str, text: str, into: Optional[str] = None, any_scope: bool = False) -> TypeResult:
-        """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv."""
-        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json, stdin=text)
+        """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
+
+        The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
+        about 0.12 s (a person's typing), and another input command can hold the lock for up to `lockWaitMs`.
+        """
+        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
+                         stdin=text, extra_timeout=self._input_wait(len(text)))
 
     def press(self, tab: str, key: str, any_scope: bool = False) -> PressResult:
         """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown, or F1 to F12."""
-        return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json)
+        return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json, extra_timeout=self._input_wait())
 
     def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:
         """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot."""
@@ -435,7 +478,7 @@ class AgentBrowser:
             args += ["--settle", repr(float(settle))]
         if seed is not None:
             args += ["--seed", str(int(seed))]
-        return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT)
+        return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT + self._input_wait())
 
     def chromes(self) -> ChromesResult:
         """Every agent-browser Chrome of this user on the machine (not only this consumer's): read-only, it connects to none."""
