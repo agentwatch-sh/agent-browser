@@ -1,0 +1,293 @@
+{
+  "part": "review-53 extra",
+  "port": 8472,
+  "env": {
+    "version": "Chrome/156.0.8078.79",
+    "extId": "dcjomiikplhdgjopngfgiiekcpienfkm"
+  },
+  "defaultThirdPartyCookies": {
+    "levelOfControl": "controllable_by_this_extension",
+    "value": false
+  },
+  "trials": [
+    {
+      "set": "today",
+      "kind": "data-page-script",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "today",
+      "kind": "blank-tab-script",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "today",
+      "kind": "blank-window-script",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "today",
+      "kind": "listed-meta-refresh",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- https://site.test:8472"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- https://site.test:8472"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "today",
+      "kind": "sandboxed-frame-top-nav",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "a_ext",
+      "kind": "data-page-script",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "a_ext",
+      "kind": "blank-tab-script",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "a_ext",
+      "kind": "blank-window-script",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "a_ext",
+      "kind": "listed-meta-refresh",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- https://site.test:8472",
+        "tenant.auth0.test/u/login <- https://site.test:8472"
+      ],
+      "blocked": [],
+      "rules": [
+        "10 tenant.auth0.test/authorize <- https://site.test:8472",
+        "10 tenant.auth0.test/u/login <- https://site.test:8472",
+        "11 other.test/captcha <- https://tenant.auth0.test:8472"
+      ],
+      "committed": [
+        "tenant.auth0.test/u/login link"
+      ],
+      "navErrors": []
+    },
+    {
+      "set": "a_ext",
+      "kind": "sandboxed-frame-top-nav",
+      "call": "ok",
+      "mainRequests": [
+        "tenant.auth0.test/authorize <- null"
+      ],
+      "blocked": [
+        "main_frame tenant.auth0.test/authorize"
+      ],
+      "rules": [
+        "1 tenant.auth0.test/authorize <- null"
+      ],
+      "committed": [],
+      "navErrors": [
+        "0 tenant.auth0.test/authorize net::ERR_BLOCKED_BY_CLIENT"
+      ]
+    },
+    {
+      "set": "today -> a_ext, then tabs.reload",
+      "kind": "retry #signin-popup-url",
+      "first": [
+        "request tenant.auth0.test/authorize <- https://site.test:8472 ",
+        "error tenant.auth0.test/authorize <- https://site.test:8472 net::ERR_BLOCKED_BY_CLIENT"
+      ],
+      "reload": [
+        "request tenant.auth0.test/authorize <- https://site.test:8472 ",
+        "request tenant.auth0.test/u/login <- https://site.test:8472 "
+      ],
+      "reloadCommitted": [
+        "tenant.auth0.test/u/login reload"
+      ],
+      "reloadRules": [
+        "10 tenant.auth0.test/authorize <- https://site.test:8472",
+        "10 tenant.auth0.test/u/login <- https://site.test:8472",
+        "11 other.test/captcha <- https://tenant.auth0.test:8472"
+      ]
+    },
+    {
+      "set": "today -> a_ext, then tabs.reload",
+      "kind": "retry #signin-popup",
+      "first": [
+        "request tenant.auth0.test/authorize <- https://site.test:8472 ",
+        "error tenant.auth0.test/authorize <- https://site.test:8472 net::ERR_BLOCKED_BY_CLIENT"
+      ],
+      "reload": [
+        "request tenant.auth0.test/authorize <- https://site.test:8472 ",
+        "request tenant.auth0.test/u/login <- https://site.test:8472 "
+      ],
+      "reloadCommitted": [
+        "tenant.auth0.test/u/login reload"
+      ],
+      "reloadRules": [
+        "10 tenant.auth0.test/authorize <- https://site.test:8472",
+        "10 tenant.auth0.test/u/login <- https://site.test:8472",
+        "11 other.test/captcha <- https://tenant.auth0.test:8472"
+      ]
+    },
+    {
+      "kind": "cookies",
+      "case": "default",
+      "status": "frame error login_required",
+      "frame": [
+        "GET /authorize cookies=-"
+      ]
+    },
+    {
+      "kind": "cookies-pattern",
+      "primary": "https://[*.]tenant.auth0.test/*",
+      "secondary": "https://[*.]site.test/*",
+      "set": "error: Invalid host."
+    },
+    {
+      "kind": "cookies",
+      "case": "pattern https://[*.]tenant.auth0.test/* / https://[*.]site.test/*: error: Invalid host.",
+      "status": "frame error login_required",
+      "frame": [
+        "GET /authorize cookies=-"
+      ]
+    },
+    {
+      "kind": "cookies-pattern",
+      "primary": "https://*.tenant.auth0.test/*",
+      "secondary": "https://*.site.test/*",
+      "set": "ok"
+    },
+    {
+      "kind": "cookies",
+      "case": "pattern https://*.tenant.auth0.test/* / https://*.site.test/*: ok",
+      "status": "frame code c4",
+      "frame": [
+        "GET /authorize cookies=auth0_session"
+      ]
+    },
+    {
+      "kind": "cookies-pattern",
+      "primary": "https://*.auth0.test/*",
+      "secondary": "https://*.site.test/*",
+      "set": "ok"
+    },
+    {
+      "kind": "cookies",
+      "case": "pattern https://*.auth0.test/* / https://*.site.test/*: ok",
+      "status": "frame code c6",
+      "frame": [
+        "GET /authorize cookies=auth0_session"
+      ]
+    }
+  ],
+  "pids": {
+    "xvfb": [
+      1051802
+    ],
+    "chromium": [
+      1051884
+    ]
+  }
+}
