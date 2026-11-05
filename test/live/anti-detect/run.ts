@@ -523,7 +523,7 @@ async function designCase(sc: Scenario, x: boolean) {
   await loaded(sc.F);
   const wf = windowOf(c.proc.pid!, sc.F);
   await raiseAndFocus(wf);
-  const o: BrowserOptions = { ...opts(c, false), ...(x ? {} : { xdotool: false }) };
+  const o: BrowserOptions = { ...opts(c, false), ...(x ? {} : { display: { xdotool: false } }) };
   await commands.open(o, { url: urlOf(sc.T) });
   await loaded(sc.T);
   await sleep(500);

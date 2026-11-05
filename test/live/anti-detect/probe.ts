@@ -173,7 +173,8 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
   const during = of(log, tab, t0, t1 + 200);
   const ins = inputs(log, tab, t0, t1 + 200);
   const down = ins.find((e) => e.type === "mousedown"), up = ins.find((e) => e.type === "mouseup"), pdown = ins.find((e) => e.type === "pointerdown");
-  const moves = ins.filter((e) => e.type === "mousemove");
+  // The moves before the first press (review-47: the column says "before the press"; a move after the release is not one).
+  const moves = ins.filter((e) => e.type === "mousemove" && (!down || (typeof e.te === "number" && typeof down.te === "number" ? e.te < down.te : ins.indexOf(e) < ins.indexOf(down))));
   const keys = ins.filter((e) => e.type === "keydown");
   const inputEv = ins.filter((e) => e.type === "input");
   const after = listOf(log, tab, "frames").filter((t) => t >= t1 + 300 && t <= t1 + 1300).length;

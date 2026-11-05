@@ -42,6 +42,11 @@ LAUNCH_WAIT = 600.0
 #: `record` runs at most 30 minutes (the CLI's limit), then encodes the MP4.
 RECORD_WAIT = 1800.0 + 900.0
 
+#: In agent mode on Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
+#: default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
+LOCK_WAIT_MS = 600_000.0
+KEY_MS = 150.0 + 50.0
+
 
 def default_package_dir() -> Optional[Path]:
     """The checkout this adapter came from (python/agent_browser/ is two levels below it), if it holds the CLI."""
@@ -363,24 +368,43 @@ class AgentBrowser:
         """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot."""
         return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json)
 
+    def _input_wait(self, chars: int = 0) -> float:
+        """The time an input command may add to `timeout`: the input lock's wait, and the typing of `chars` characters
+        at the slowest pace of the input timing (in agent mode on Linux a person's typing takes about 0.12 s a character)."""
+        t = self.input_timing or {}
+
+        def number(name: str, default: float, index: Optional[int] = None) -> float:
+            v = t.get(name)
+            try:
+                return float(v[index] if index is not None else v)  # type: ignore[index]
+            except (TypeError, ValueError, IndexError, KeyError):
+                return default
+        key = number("keyMs", 150.0, 1) + number("holdMs", 50.0, 1)
+        return number("lockWaitMs", LOCK_WAIT_MS) / 1000.0 + chars * (key if t else KEY_MS) / 1000.0
+
     def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False) -> ClickResult:
         """Trusted click on `target` (#N from outline, or a CSS selector), or on the element whose text is `text`."""
         if (target is None) == (text is None):
             raise ValueError("click needs target or text, not both")
         args = [tab, target] if target is not None else [tab, "--text", text or ""]
-        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json)
+        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json, extra_timeout=self._input_wait())
 
     def hover(self, tab: str, target: str, any_scope: bool = False) -> HoverResult:
         """Move the mouse over `target` (#N or a CSS selector)."""
-        return self._run("hover", [tab, target, *_scope(any_scope)], HoverResult.from_json)
+        return self._run("hover", [tab, target, *_scope(any_scope)], HoverResult.from_json, extra_timeout=self._input_wait())
 
     def type(self, tab: str, text: str, into: Optional[str] = None, any_scope: bool = False) -> TypeResult:
-        """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv."""
-        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json, stdin=text)
+        """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
+
+        The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
+        about 0.12 s (a person's typing), and another input command can hold the lock for up to `lockWaitMs`.
+        """
+        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
+                         stdin=text, extra_timeout=self._input_wait(len(text)))
 
     def press(self, tab: str, key: str, any_scope: bool = False) -> PressResult:
         """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown, or F1 to F12."""
-        return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json)
+        return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json, extra_timeout=self._input_wait())
 
     def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:
         """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot."""
@@ -454,7 +478,7 @@ class AgentBrowser:
             args += ["--settle", repr(float(settle))]
         if seed is not None:
             args += ["--seed", str(int(seed))]
-        return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT)
+        return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT + self._input_wait())
 
     def chromes(self) -> ChromesResult:
         """Every agent-browser Chrome of this user on the machine (not only this consumer's): read-only, it connects to none."""

@@ -9,7 +9,8 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
@@ -17,8 +18,9 @@ import { commands } from "../src/commands.ts";
 import { INPUT_TIMING, resolveOptions, type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
+import { NotAllowedError } from "../src/errors.ts";
 import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
-import { consumer, fixtureServer, type Consumer, type Fixture } from "./helpers.ts";
+import { cli, consumer, fixtureServer, flags, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
 const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" };
@@ -28,19 +30,21 @@ const FAST: Partial<InputTiming> = { pressMs: [6, 9], keyMs: [6, 9], holdMs: [1,
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, operator: FakePage;
 /** The X pointer through a fake xdotool: its moves, in screen pixels (the fake's windows are at 0,0 with 87 px of frame). */
-const xMoves: { x: number; y: number }[] = [];
+const xMoves: { x: number; y: number; t?: number }[] = [];
 let xdotoolOn = false;
 const xdotool = async (args: string[]): Promise<string> => {
   const at = fake.xPointer ?? { x: 900, y: 700 };
   if (args[0] === "getmouselocation") return `X=${Math.round(at.x)}\nY=${Math.round(at.y + 87)}\nSCREEN=0\nWINDOW=200\n`;
-  if (args[0] === "mousemove") { const x = Number(args[1]), y = Number(args[2]); xMoves.push({ x, y }); fake.xPointer = { x, y: y - 87 }; return ""; }
+  if (args[0] === "mousemove") { const x = Number(args[1]), y = Number(args[2]); xMoves.push({ x, y, t: Date.now() }); fake.xPointer = { x, y: y - 87 }; return ""; }
   if (args[0] === "search" && args.includes("--maxdepth")) return "1\n";
   if (args[0] === "search") return "1\n200\n201\n";
   if (args[0] === "getwindowfocus") return "200\n";
   if (args[0] === "getwindowpid") return args[1] === "1" ? "" : "4242\n";
   throw new Error(`fake xdotool: ${args.join(" ")}`);
 };
-const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST, xdotool: xdotoolOn ? xdotool : false, ...extra });
+/** Agent mode on Linux, on a display of the agent browser's own (the fake's windows have the pid 4242). */
+const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST,
+  display: { own: true, xdotool: xdotoolOn ? xdotool : false, chromePid: 4242 }, ...extra });
 
 /** A page with a field that holds text from the page, one that a script fills, an editor, buttons, a far button, file inputs. */
 const PAGE = {
@@ -63,7 +67,8 @@ const PAGE = {
 
 before(async () => {
   fx = await fixtureServer();
-  fake = await FakeChrome.start((url) => (url.origin === fx.base ? PAGE as never : undefined));
+  // http://evil.test/ is off the allowlist: a page that goes there must get no input.
+  fake = await FakeChrome.start((url) => (url.origin === fx.base || url.hostname === "evil.test" ? PAGE as never : undefined));
   fake.backgroundTabs = true;
   fake.scrolls = true;
   fake.tabSwitches = true;
@@ -168,7 +173,7 @@ test("with the X pointer (xdotool on the agent browser's own display): the point
     xMoves.length = 0;
     const ev = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })));
     const end = ev.at(-1)!.params, moves = ev.filter((x) => x.params.type === "mouseMoved");
-    assert.deepEqual(xMoves, [{ x: end.x, y: end.y + 87 }], "one move of the X pointer: the path's last step, on the screen");
+    assert.deepEqual(xMoves.map(({ x, y }) => ({ x, y })), [{ x: end.x, y: end.y + 87 }], "one move of the X pointer: the path's last step, on the screen");
     assert.ok(!moves.some((x) => x.params.x === end.x && x.params.y === end.y), "no CDP move to the last point: the X pointer's move is that step");
     // Another window takes the focus, then this one comes forward again: its page enters at its own last point.
     operatorInFront();
@@ -187,9 +192,11 @@ test("a display that holds another program's window: the X pointer never moves",
     const { name, page } = await windowPage();
     fake.xPointer = { x: 700, y: 500 };
     xMoves.length = 0;
-    await callsOf(page, () => commands.click(linux({ xdotool: other }), { tab: name, target: "#b" }));
+    const lines: string[] = [];
+    await callsOf(page, () => commands.click(linux({ display: { own: true, xdotool: other, chromePid: 4242 }, log: (l) => { lines.push(l); } }), { tab: name, target: "#b" }));
     assert.equal(page.title, "clicked");
     assert.deepEqual(xMoves, []);
+    assert.ok(lines.some((l) => /another program's window is on the display: agent-browser does not move the X pointer/.test(l)), lines.join("\n"));
     await commands.close(linux(), { tab: name });
   } finally { xdotoolOn = false; }
 });
@@ -344,7 +351,7 @@ test("setFiles: a click on the file input opens the chooser (intercepted), and t
   await commands.close(linux(), { tab: name });
 });
 
-test("one input at a time: two processes' input commands never overlap; the lock is the state folder's input.lock", async () => {
+test("one input at a time: two input commands of one process never overlap; the lock is the state folder's input.lock", async () => {
   operatorInFront();
   const a = await windowPage(), b = await windowPage();
   const slow = { ...FAST, pressMs: [80, 90] as [number, number] };
@@ -431,9 +438,12 @@ test("read commands never activate a window: text, eval, outline and shot", asyn
 });
 
 test("open --tab, the Mac and personal mode keep today's input: three mouse events, inserted text, el.focus(), no activation and no lock", async () => {
-  for (const o of [linux(), c.options({ endpoint: fake.ws, platform: "darwin" })]) {
+  const personal = consumer();
+  const po = personal.options({ endpoint: fake.ws, mode: "personal", platform: "linux" });
+  try {
+  for (const o of [linux(), c.options({ endpoint: fake.ws, platform: "darwin" }), po]) {
     const name = `old${++n}`;
-    const r = await commands.open(o, { url: `${fx.base}/`, name, tab: true });
+    const r = await commands.open(o, { url: `${fx.base}/`, name, tab: o !== po });
     const page = fake.pages.get(r.tab.targetId)!;
     const calls = await callsOf(page, async () => {
       await commands.click(o, { tab: name, target: "#b" });
@@ -445,4 +455,185 @@ test("open --tab, the Mac and personal mode keep today's input: three mouse even
     assert.ok(!methods(calls).includes("Page.bringToFront"));
     await commands.close(o, { tab: name });
   }
+  } finally { stopProxy(resolveOptions(po)); personal.remove(); }
+});
+
+// ---------- the review of PR #47 (review-47) ----------
+
+/** Another agent-browser process holds the input lock (a live pid in input.lock) for `ms`. */
+function holdLock(ms: number) {
+  const holder = spawn("sleep", [String(ms / 1000)], { stdio: "ignore" });
+  writeFileSync(join(c.stateDir, "input.lock"), String(holder.pid), { mode: 0o600 });
+  return holder;
+}
+
+const INPUT_COMMANDS: [string, (o: BrowserOptions, name: string) => Promise<unknown>][] = [
+  ["click", (o, name) => commands.click(o, { tab: name, target: "#b" })],
+  ["click --text", (o, name) => commands.click(o, { tab: name, text: "Go" })],
+  ["hover", (o, name) => commands.hover(o, { tab: name, target: "#hov" })],
+  ["type --into", (o, name) => commands.type(o, { tab: name, text: "secret", into: "#i" })],
+  ["press", (o, name) => commands.press(o, { tab: name, key: "Enter" })],
+  ["Tab.clickAt", async (o, name) => { const b = await AgentBrowser.connect(o); try { await (await b.find(name)).clickAt(100, 112); } finally { await b.disconnect(); } }],
+  ["Tab.setFiles", async (o, name) => { const b = await AgentBrowser.connect(o); try { await (await b.find(name)).setFiles("#file", ["/etc/hostname"]); } finally { await b.disconnect(); } }],
+];
+
+for (const [what, run] of INPUT_COMMANDS) {
+  test(`${what}: a page that leaves the allowlist while the command waits for the input lock gets no input and runs no code of ours`, async () => {
+    operatorInFront();
+    const { name, page } = await windowPage();
+    const holder = holdLock(800);
+    const t0 = Date.now();
+    const done = run(linux(), name).then(() => undefined, (e: unknown) => e);
+    await new Promise((r) => setTimeout(r, 300));
+    fake.navigate(page, "http://evil.test/");
+    const navAt = Date.now();
+    const e = await done;
+    holder.kill();
+    assert.ok(e instanceof NotAllowedError, `refused: ${e}`);
+    assert.ok(Date.now() - t0 >= 700, "it waited for the lock");
+    const after = fake.calls.filter((x) => x.targetId === page.targetId && x.t >= navAt);
+    assert.deepEqual(after.filter((x) => /^Input\.|^DOM\.setFileInputFiles|^Page\.bringToFront|^Page\.setInterceptFileChooserDialog/.test(x.method)).map((x) => x.method), []);
+    // The one call that reached the page after it left the list is the allowlist's own read of location.href.
+    assert.ok(after.filter((x) => x.method === "Runtime.evaluate").every((x) => x.params.expression.includes("location.href")),
+      after.filter((x) => x.method === "Runtime.evaluate").map((x) => x.params.expression.slice(0, 60)).join(" | "));
+    assert.deepEqual(page.select("#file")[0].files, []);
+    await commands.close(linux(), { tab: name }).catch(() => {});
+  });
+}
+
+test("a page that leaves the allowlist during the path gets no press; one that leaves it at the field's click gets no key", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  // The pointer passes over #hov on its way: the page then goes off the list (a site's own redirect).
+  page.select("#hov")[0].onhover = (p) => p.fake.navigate(p, "http://evil.test/");
+  page.select("#hov")[0].rect = [40, 60, 300, 400];
+  let calls = await callsOf(page, () => assert.rejects(commands.click(linux(), { tab: name, target: "#b" }), NotAllowedError));
+  assert.ok(!mouse(calls).some((x) => x.params.type === "mousePressed"), "no press on the page off the list");
+  const second = await windowPage();
+  second.page.select("#i")[0].onclick = (p) => p.fake.navigate(p, "http://evil.test/");
+  calls = await callsOf(second.page, () => assert.rejects(commands.type(linux(), { tab: second.name, text: "secret", into: "#i" }), NotAllowedError));
+  assert.deepEqual(keys(calls), [], "no key on the page off the list");
+  await commands.close(linux(), { tab: name }).catch(() => {});
+  await commands.close(linux(), { tab: second.name }).catch(() => {});
+});
+
+test("the default timing with the X pointer: each path's last step that moves is the X pointer's move, before the press; the X pointer never moves after it", async () => {
+  operatorInFront();
+  xdotoolOn = true;
+  try {
+    const { name, page } = await windowPage();
+    for (let i = 0; i < 4; i++) {
+      operatorInFront();
+      fake.xPointer = { x: 600 + 30 * i, y: 500 };
+      xMoves.length = 0;
+      const ev = mouse(await callsOf(page, () => commands.click(linux({ inputTiming: undefined }), { tab: name, target: i % 2 ? "#b" : "#hov" })));
+      const press = ev.find((x) => x.params.type === "mousePressed")!, release = ev.find((x) => x.params.type === "mouseReleased")!;
+      assert.equal(xMoves.length, 1, `one X move: ${JSON.stringify(xMoves)}`);
+      assert.ok(xMoves[0].t! <= press.t, "the X move is a step of the path, before the press");
+      assert.deepEqual([xMoves[0].x, xMoves[0].y - 87], [press.params.x, press.params.y], "at the press point");
+      assert.ok(!ev.some((x) => x.t > release.t && x.params.type === "mouseMoved"));
+    }
+    await commands.close(linux(), { tab: name });
+  } finally { xdotoolOn = false; }
+});
+
+test("withInput is reentrant in its own call chain: the caller's own Tab.click inside it does not wait for the lock; another call chain still waits", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const o = linux({ inputTiming: { ...FAST, lockWaitMs: 2000 } });
+  const b = await AgentBrowser.connect(o);
+  try {
+    const tab = await b.find(name);
+    const t0 = Date.now();
+    await tab.withInput(async () => { await tab.click("#b"); await tab.type("ok", "#i"); });
+    assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
+    assert.equal(page.title, "clicked");
+    assert.equal(page.select("#i")[0].value, "ok");
+    // A second call chain of the same process waits for the first one's lock.
+    const order: string[] = [];
+    await Promise.all([
+      tab.withInput(async () => { order.push("a in"); await new Promise((r) => setTimeout(r, 300)); order.push("a out"); }),
+      (async () => { await new Promise((r) => setTimeout(r, 50)); await tab.click("#b"); order.push("click"); })(),
+    ]);
+    assert.deepEqual(order, ["a in", "a out", "click"]);
+  } finally { await b.disconnect(); }
+  await commands.close(o, { tab: name });
+});
+
+test("setFiles: a click that opens no file chooser (another element covers the input) gives the files the old way, with a log line", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  page.select("#hov")[0].rect = [40, 320, 200, 24]; // over #file: the click hits it
+  const lines: string[] = [];
+  const b = await AgentBrowser.connect(linux({ log: (l) => { lines.push(l); } }));
+  try {
+    const t0 = Date.now();
+    await (await b.find(name)).setFiles("#file", ["/tmp/a.txt"]);
+    assert.ok(Date.now() - t0 < 4000, `${Date.now() - t0} ms`);
+  } finally { await b.disconnect(); }
+  assert.deepEqual(page.select("#file")[0].files, [{ name: "a.txt" }]);
+  assert.equal(page.fileChoosers, 0);
+  assert.ok(lines.some((l) => /setFiles: the click on #file opened no file chooser; the files go to it with no click/.test(l)), lines.join("\n"));
+  await commands.close(linux(), { tab: name });
+});
+
+test("record holds the input lock for the take only: the lock is free while ffmpeg encodes", needsFfmpeg, async () => {
+  operatorInFront();
+  const { name } = await windowPage();
+  const seen = join(c.dir, "ffmpeg-saw-lock.txt"), wrapper = join(c.dir, "ffmpeg-wrapper.sh");
+  writeFileSync(wrapper, `#!/bin/sh
+if [ -e "${join(c.stateDir, "input.lock")}" ]; then echo "lock $*" >> "${seen}"; else echo "free $*" >> "${seen}"; fi
+exec "${FFMPEG}" "$@"
+`);
+  chmodSync(wrapper, 0o755);
+  const script = join(c.dir, `${name}-steps.json`);
+  writeFileSync(script, JSON.stringify([{ wait: 200 }]));
+  await commands.record(linux(), { tab: name, out: join(c.dir, `${name}.mp4`), script, size: "320x180", fps: 10, settle: 100, ffmpeg: wrapper });
+  const encode = readFileSync(seen, "utf8").split("\n").filter((l) => /\.mp4/.test(l));
+  assert.ok(encode.length >= 1 && encode.every((l) => l.startsWith("free")), readFileSync(seen, "utf8"));
+  await commands.close(linux(), { tab: name });
+});
+
+test("a display that is not the agent browser's own (another program's windows, or not known): today's behaviour, with a log line: a background tab, today's input, no activation, no lock", async () => {
+  operatorInFront();
+  const lines: string[] = [];
+  const o = linux({ display: { own: false }, log: (l) => { lines.push(l); } });
+  const name = `notown${++n}`;
+  const page = fake.pages.get((await commands.open(o, { url: `${fx.base}/`, name })).tab.targetId)!;
+  assert.equal(page.background, true, "a background tab, as before");
+  const calls = await callsOf(page, async () => { await commands.click(o, { tab: name, target: "#b" }); await commands.press(o, { tab: name, key: "Enter" }); });
+  assert.ok(!methods(calls).includes("Page.bringToFront"));
+  assert.deepEqual(mouse(calls).map((x) => x.params.type), ["mouseMoved", "mousePressed", "mouseReleased"], "today's click");
+  assert.ok(calls.some((x) => x.method === "Emulation.setFocusEmulationEnabled"), "today's focus emulation");
+  assert.equal(page.title, "clicked");
+  assert.ok(lines.some((l) => /not on a display of its own/.test(l)), lines.join("\n"));
+  await commands.close(o, { tab: name });
+});
+
+test("the X pointer only for the agent Chrome's own windows: a focused window of another pid (another Xvfb of the same size) is not used", async () => {
+  operatorInFront();
+  xdotoolOn = true;
+  try {
+    const { name, page } = await windowPage();
+    fake.xPointer = { x: 700, y: 500 };
+    xMoves.length = 0;
+    await callsOf(page, () => commands.click(linux({ display: { own: true, xdotool, chromePid: 7777 } }), { tab: name, target: "#b" }));
+    assert.equal(page.title, "clicked");
+    assert.deepEqual(xMoves, [], "the windows on that display are not the agent Chrome's");
+    await commands.close(linux(), { tab: name });
+  } finally { xdotoolOn = false; }
+});
+
+test("one input at a time across two CLI processes: their activations and input never overlap", async () => {
+  operatorInFront();
+  const a = await windowPage(), b = await windowPage();
+  const timing = JSON.stringify({ ...FAST, pressMs: [150, 160] });
+  const run = (tab: string) => cli([...flags(c, fake.ws, ["--input-timing", timing]), "click", tab, "#b", "--json"]);
+  const [ra, rb] = await Promise.all([run(a.name), run(b.name)]);
+  assert.deepEqual([ra.status, rb.status], [0, 0], ra.stderr + rb.stderr);
+  const span = (p: FakePage) => { const xs = fake.calls.filter((x) => x.targetId === p.targetId && (x.method === "Input.dispatchMouseEvent" || x.method === "Page.bringToFront")); return [xs[0].t, xs.at(-1)!.t]; };
+  const [a0, a1] = span(a.page), [b0, b1] = span(b.page);
+  assert.ok(a1 <= b0 || b1 <= a0, `a ${a0}-${a1}, b ${b0}-${b1}`);
+  await commands.close(linux(), { tab: a.name });
+  await commands.close(linux(), { tab: b.name });
 });

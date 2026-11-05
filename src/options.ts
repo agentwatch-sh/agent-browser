@@ -338,6 +338,8 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     hiddenDrive: !!o.hiddenDrive,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
     platform: o.platform ?? process.platform,
+    inputTiming: resolveInputTiming(o.inputTiming),
+    display: o.display,
   };
 }
 

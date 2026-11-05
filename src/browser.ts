@@ -18,7 +18,7 @@ import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
-import { displayOf } from "./display.ts";
+import { displayOf, type DisplayInfo } from "./display.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -110,14 +110,17 @@ export class AgentBrowser {
    * on a display of its own (display.ts). Else every page is driven as before, in a background tab.
    */
   readonly windows: boolean;
+  /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
+  readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
 
-  private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string, windows: boolean) {
+  private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string, display: DisplayInfo | undefined) {
     this.conn = conn;
     this.settings = settings;
     this.allow = allow;
     this.product = product;
-    this.windows = windows;
+    this.display = display;
+    this.windows = !!display?.own;
   }
 
   /**
@@ -169,8 +172,8 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      const windows = windowPerPage(s) && (await displayOf(s, true)).own;
-      return new AgentBrowser(conn, s, allow, v.product, windows);
+      const display = windowPerPage(s) ? await displayOf(s, true) : undefined;
+      return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
       throw e;
@@ -968,9 +971,25 @@ export class Tab {
     await this.assertAllowed();
     const { withInputLock, Hands } = await import("./input.ts");
     return withInputLock(this.browser.settings, async () => {
-      const h = await Hands.begin(this);
-      try { return await fn(h); } finally {
-        await h.end().catch((e) => { this.browser.settings.log(`agent-browser: could not keep the pointer's place (${(e as Error).message})`); });
+      // The wait for the lock can take minutes, and the page can go to a host off the allowlist meanwhile (review-47):
+      // the allowlist is read again inside the lock, before any code of ours runs there for the input, and the guard
+      // stops each input event once the main frame went off the list (Hands also reads the list before each press
+      // and each key).
+      await this.assertAllowed();
+      let left: string | undefined;
+      const off = this.browser.conn.on("Page.frameNavigated", (p: { frame?: { url?: string; parentId?: string } }, sid?: string) => {
+        if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", this.browser.allow)) left = p.frame?.url ?? "";
+      });
+      const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
+      let h: Hands | undefined;
+      try {
+        h = await Hands.begin(this, guard);
+        guard();
+        await this.assertAllowed();
+        return await fn(h);
+      } finally {
+        off();
+        await h?.end().catch((e) => { this.browser.settings.log(`agent-browser: could not keep the pointer's place (${(e as Error).message})`); });
       }
     });
   }
@@ -1083,6 +1102,7 @@ export class Tab {
 
   private async typeNow(text: string, selector?: string, h?: Hands): Promise<void> {
     if (selector && h) await h.focusField(selector);
+    if (h) await h.check(); // the field's click can take the page off the allowlist
     else if (selector) {
       const ok = await this.evaluate((s: string) => {
         const el = document.querySelector(s) as HTMLElement | null;
@@ -1135,7 +1155,11 @@ export class Tab {
    */
   async setFiles(selector: string, files: string[]): Promise<void> {
     if (files.some((f) => f === "")) throw new UsageError("setFiles: a file path is empty");
-    if (this.drive === "window") return this.byHand(async (h) => { if (!(await h.setFiles(selector, files))) await this.setFilesNow(selector, files); });
+    if (this.drive === "window") return this.byHand(async (h) => {
+      if (await h.setFiles(selector, files)) return;
+      await this.assertAllowed();
+      await this.setFilesNow(selector, files);
+    });
     await this.assertAllowed();
     await this.toFront();
     await this.setFilesNow(selector, files);

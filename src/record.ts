@@ -921,9 +921,9 @@ class Driver {
       await this.pause(this.between(80, 150)); // a person settles on the target before pressing
       this.note("press");
       if (this.plan.cursor) await this.tab.evaluate(overlayRipple, point.x, point.y);
-      await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
-      await this.pause(this.between(60, 90));
-      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
+      await this.pause(this.between(70, 90));
+      await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1 });
       return this.pause(200);
     }
     if ("type" in step) {
@@ -932,9 +932,9 @@ class Driver {
         await this.moveTo(point, width);
         await this.pause(this.between(80, 150));
         if (this.plan.cursor) await this.tab.evaluate(overlayRipple, point.x, point.y);
-        await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
-        await this.pause(this.between(60, 90));
-        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+        await this.tab.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
+        await this.pause(this.between(70, 90));
+        await this.tab.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1 });
         await this.pause(250);
       }
       const each = step.delay ?? 55;
@@ -1047,7 +1047,8 @@ class Driver {
         if (Date.now() > deadline) throw new Error(`waitChange: the box did not change in ${timeoutMs} ms`);
       }
     }
-    if ("eval" in step) { await this.tab.evaluate(step.eval); return; }
+    // As the eval command: a user gesture, so that a step's script can open a popup or play media (a site sees the user activation).
+    if ("eval" in step) { await this.tab.evaluateAsUser(step.eval); return; }
     throw new UsageError(`unknown step ${describe(step)}`);
   }
 }
@@ -1078,10 +1079,14 @@ function stepError(what: string, n: number, step: Step, e: unknown): unknown {
  * error (it is added to its message), and after a good run it is a warning in the result.
  */
 /**
- * `hands` (a page in a window of its own, ab-v16.26): the demo cursor starts where the page last saw the pointer, when
- * that is known and inside the recorded size, and the pointer's place after the run is where the cursor ended.
+ * `around` (a page in a window of its own, ab-v16.26: Tab.withInput) runs the take, not the encode, inside the input
+ * lock and after the window's activation (review-47: the encode can take a minute, and other agents wait for the lock).
+ * Its hands: the demo cursor starts where the page last saw the pointer, when that is known and inside the recorded
+ * size, and the pointer's place after the take is where the cursor ended.
  */
-export async function recordTab(tab: Tab, plan: RecordPlan, hands?: Hands): Promise<RecordOutcome> {
+export type TakeAround = <T>(take: (hands?: Hands) => Promise<T>) => Promise<T>;
+
+export async function recordTab(tab: Tab, plan: RecordPlan, around: TakeAround = (take) => take(undefined)): Promise<RecordOutcome> {
   const s = tab.browser.settings;
   await tab.assertAllowed();
   const recordings = statePath(s, "recordings");
@@ -1089,7 +1094,7 @@ export async function recordTab(tab: Tab, plan: RecordPlan, hands?: Hands): Prom
   const framesDir = mkdtempSync(join(recordings, "frames-"));
   let outcome: RecordOutcome | undefined, failure: unknown;
   try {
-    outcome = await runAndEncode(tab, plan, framesDir, hands);
+    outcome = await runAndEncode(tab, plan, framesDir, around);
   } catch (e) { failure = e; }
   // The frames can show a signed-in page: they never outlive the run.
   const removed = await runCleanup([["remove the frames", async () => rmSync(framesDir, { recursive: true, force: true })]]);
@@ -1099,15 +1104,12 @@ export async function recordTab(tab: Tab, plan: RecordPlan, hands?: Hands): Prom
   return outcome!;
 }
 
-async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, hands?: Hands): Promise<RecordOutcome> {
+async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, around: TakeAround): Promise<RecordOutcome> {
   const s = tab.browser.settings, conn = tab.browser.conn;
   const { width, height, scale } = plan.viewport;
   const videoWidth = Math.round(width * scale), videoHeight = Math.round(height * scale);
   const url = await tab.url();
   const driver = new Driver(tab, plan);
-  // The cursor starts where the page last saw the pointer, when that is known and inside the recorded size: no jump at
-  // the take's first move. So a retake with the same seed moves the same way from there (else from its own start).
-  if (hands?.known && hands.at.x < width && hands.at.y < height) { driver.x = hands.at.x; driver.y = hands.at.y; }
   const frames: { file: string; t: number }[] = [];
   let otherSize: [number, number] | undefined, otherSizes = 0, droppedSize: [number, number] | undefined, dropped = 0;
   // Chrome stamps each frame on its own clock; offset = (when we got it) - (its stamp), the least seen,
@@ -1142,11 +1144,16 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, hands
   const offDetach = conn.on("Target.detachedFromTarget", (p: any) => {
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));
   });
-  const limit = setTimeout(() => driver.fail(new AgentBrowserError("error", `a recording is at most ${MAX_RECORD_SECONDS} s; nothing was written`)), MAX_RECORD_SECONDS * 1000);
   let focused = false, emulated = false, casting = false;
-  let startedAt = "", endedAt = "", tEnd = 0, runError: unknown;
+  let startedAt = "", endedAt = "", tEnd = 0, runError: unknown, cleanupErrors: string[] = [];
   let final = { url, title: "" };
   const marks: Mark[] = [];
+  try {
+  await around(async (hands) => {
+  // The cursor starts where the page last saw the pointer, when that is known and inside the recorded size: no jump at
+  // the take's first move. So a retake with the same seed moves the same way from there (else from its own start).
+  if (hands?.known && hands.at.x < width && hands.at.y < height) { driver.x = hands.at.x; driver.y = hands.at.y; }
+  const limit = setTimeout(() => driver.fail(new AgentBrowserError("error", `a recording is at most ${MAX_RECORD_SECONDS} s; nothing was written`)), MAX_RECORD_SECONDS * 1000);
   try {
     // A page in a window of its own that is behind another tab of that window comes in front first (Tab.toFront): a
     // hidden page sends no screencast frame.
@@ -1201,7 +1208,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, hands
   writing = false;
   hands?.movedTo({ x: driver.x, y: driver.y });
   const offList = runError instanceof NotAllowedError;
-  const cleanupErrors = await runCleanup([
+  cleanupErrors = await runCleanup([
     ["stop the screencast", casting && (() => tab.send("Page.stopScreencast"))],
     ["stop the focus emulation", focused && (() => tab.send("Emulation.setFocusEmulationEnabled", { enabled: false }))],
     // Never run code in a page off the allowlist: its document is new, so no overlay is left in it anyway.
@@ -1209,10 +1216,13 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, hands
     ["clear the device metrics override", emulated && (() => tab.send("Emulation.clearDeviceMetricsOverride"))],
     ...(driver.network?.stop() ?? []),
   ]);
-  offFrame();
-  offNav();
-  offDetach();
   clearTimeout(limit);
+  });
+  } finally {
+    offFrame();
+    offNav();
+    offDetach();
+  }
   if (runError !== undefined) throw withCleanupErrors(runError, cleanupErrors);
   for (const c of cleanupErrors) s.log(`agent-browser record: cleanup failed: ${c}`);
   const warnings = [...driver.warnings, ...cleanupErrors.map((c) => `cleanup failed: ${c}`)];

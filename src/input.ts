@@ -23,19 +23,28 @@
 //   input gets a click that opens Chrome's file chooser (intercepted), and the files go to the input that it names.
 //   The times are the inputTiming option (options.ts, INPUT_TIMING).
 
-import { execFile } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { agentChromePid } from "./agent.ts";
 import type { Tab } from "./browser.ts";
+import { displayOf, onlyWindowsOf, pidOf, type XAccess } from "./display.ts";
 import { withFileLock } from "./lock.ts";
-import { statePath, underNodeTest, type InputTiming, type Settings, type XdotoolRunner } from "./options.ts";
+import { statePath, type InputTiming, type Settings } from "./options.ts";
 import { charKey, parseKey, planMove, pointAt, sendKey, type KeyEvent, type Point } from "./record.ts";
 
 export const INPUT_LOCK = "input.lock", POINTER_FILE = "pointer.json";
 
-/** Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). */
+/** The input locks that this call chain holds (by path): withInputLock is reentrant in one chain, never across chains. */
+const held = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/**
+ * Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). Reentrant within
+ * one call chain of one process (Tab.withInput around the caller's own Tab.click); another chain, or another process,
+ * waits for it.
+ */
 export async function withInputLock<T>(s: Settings, fn: () => Promise<T>): Promise<T> {
-  return withFileLock(statePath(s, INPUT_LOCK), Date.now() + s.inputTiming.lockWaitMs, fn,
+  const path = statePath(s, INPUT_LOCK), mine = held.getStore();
+  if (mine?.has(path)) return fn();
+  return withFileLock(path, Date.now() + s.inputTiming.lockWaitMs, () => held.run(new Set([...(mine ?? []), path]), fn),
     `the input lock (another input command of this agent browser held it for ${s.inputTiming.lockWaitMs / 1000} s)`);
 }
 
@@ -44,8 +53,12 @@ const between = ([a, b]: [number, number]) => a + (b - a) * Math.random();
 
 // ---------- the pointer's state ----------
 
-/** The last point of each page's pointer (client CSS px), and what is known of the X display. Written inside the input lock. */
-type PointerState = { pages: Record<string, Point>; display?: { name: string; ok: boolean; at: number } };
+/**
+ * The last point of each page's pointer (client CSS px), what is known of the X display (a cdpUrl's display, verified
+ * by an activation), and when a log line last named why a display is not used (at most one each 5 minutes). Written
+ * inside the input lock.
+ */
+type PointerState = { pages: Record<string, Point>; display?: { name: string; ok: boolean; at: number }; notices?: Record<string, number> };
 
 function readPointer(s: Settings): PointerState {
   try {
@@ -63,38 +76,15 @@ function writePointer(s: Settings, st: PointerState) {
   renameSync(tmp, path);
 }
 
-// ---------- the X pointer ----------
-
-type XAccess = { run: XdotoolRunner; display: string };
-
-/**
- * xdotool on the agent browser's display: this process's DISPLAY (and XAUTHORITY), else, for the agent Chrome that
- * agent-browser started, the display in that Chrome's own environment. None under a test (a test passes its own
- * runner), none when the option says so, and none without xdotool.
- */
-function xAccess(s: Settings): XAccess | undefined {
-  if (s.xdotool === false) return undefined;
-  if (s.xdotool) return { run: s.xdotool, display: "injected" };
-  if (underNodeTest() || s.platform !== "linux") return undefined;
-  let env: Record<string, string> | undefined;
-  if (process.env.DISPLAY) env = { DISPLAY: process.env.DISPLAY, ...(process.env.XAUTHORITY ? { XAUTHORITY: process.env.XAUTHORITY } : {}) };
-  else if (!s.cdpUrl) {
-    try {
-      const pid = agentChromePid(s);
-      if (pid) {
-        const vars = Object.fromEntries(readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
-        if (vars.DISPLAY) env = { DISPLAY: vars.DISPLAY, ...(vars.XAUTHORITY ? { XAUTHORITY: vars.XAUTHORITY } : {}) };
-      }
-    } catch { /* no such process, or not readable */ }
-  }
-  if (!env) return undefined;
-  const full = { ...process.env, ...env };
-  delete full.WAYLAND_DISPLAY;
-  const run: XdotoolRunner = (args) => new Promise((resolve, reject) => {
-    execFile("xdotool", args, { env: full, timeout: 3000, encoding: "utf8" }, (e, out) => (e ? reject(e) : resolve(out)));
-  });
-  return { run, display: env.DISPLAY };
+/** A log line, at most once each 5 minutes for one key (the state is written at the command's end). */
+function notice(s: Settings, st: PointerState, key: string, line: string) {
+  const at = st.notices?.[key] ?? 0;
+  if (Date.now() - at < 5 * 60_000) return;
+  (st.notices ??= {})[key] = Date.now();
+  s.log(line);
 }
+
+// ---------- the display (display.ts) ----------
 
 /** The X pointer on the screen. */
 async function xLocation(x: XAccess): Promise<Point> {
@@ -104,45 +94,32 @@ async function xLocation(x: XAccess): Promise<Point> {
   return p;
 }
 
-/**
- * The display holds the agent browser only: every visible top-level window but the root belongs to the process of the
- * window that has the X focus (the agent Chrome, whose window just came forward). Never move a person's pointer.
- */
-async function ownDisplay(x: XAccess): Promise<boolean> {
-  const ids = (out: string) => out.split("\n").map((l) => l.trim()).filter(Boolean);
-  const root = ids(await x.run(["search", "--maxdepth", "0", "--name", ""]))[0];
-  const visible = ids(await x.run(["search", "--onlyvisible", "--name", ""]).catch(() => "")).filter((w) => w !== root);
-  const pidOf = async (w: string) => (await x.run(["getwindowpid", w]).catch(() => "")).trim();
-  const chrome = await pidOf((await x.run(["getwindowfocus"])).trim());
-  if (!chrome) return false;
-  for (const w of visible) if ((await pidOf(w)) !== chrome) return false;
-  return visible.length > 0;
-}
-
 // ---------- the page side (our isolated world) ----------
 
 type Geo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; dpr: number };
 
-/** The page's focus and geometry; with no focus, a listener for the real pointer event that its window's activation gives. */
-function arm(): { focus: boolean; geo: Geo } {
+/**
+ * The page's focus, whether it is in front of its window (not hidden), and its geometry; when it needs the activation
+ * (no focus, or hidden behind another tab of its window), a listener for the real pointer event that the activation gives.
+ */
+function arm(): { focus: boolean; hidden: boolean; geo: Geo } {
   const g = globalThis as any;
   const geo = { sx: screenX, sy: screenY, ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, dpr: devicePixelRatio };
-  const focus = document.hasFocus();
+  const focus = document.hasFocus(), hidden = document.visibilityState === "hidden";
   if (g.__abEntryOff) g.__abEntryOff();
   g.__abEntry = null;
-  if (!focus) {
+  if (!focus || hidden) {
     const types = ["mousemove", "pointermove", "mouseover", "pointerover"];
     const f = (e: MouseEvent) => { if (e.isTrusted && !g.__abEntry) g.__abEntry = { x: e.clientX, y: e.clientY }; };
     for (const t of types) document.addEventListener(t, f as EventListener, { capture: true, passive: true });
     g.__abEntryOff = () => { for (const t of types) document.removeEventListener(t, f as EventListener, { capture: true }); g.__abEntryOff = null; };
   }
-  return { focus, geo };
+  return { focus, hidden, geo };
 }
-function peek(): { focus: boolean; entry: Point | null } { return { focus: document.hasFocus(), entry: (globalThis as any).__abEntry ?? null }; }
+function peek(): { focus: boolean; entry: Point | null } { return { focus: document.hasFocus() && document.visibilityState === "visible", entry: (globalThis as any).__abEntry ?? null }; }
 function disarm(): Point | null { const g = globalThis as any; if (g.__abEntryOff) g.__abEntryOff(); return g.__abEntry ?? null; }
 
 type Box = { x: number; y: number; w: number; h: number };
-const boxOf = (el: Element): Box => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
 
 /** Keep the first element that matches (globalThis.__abEl) and give its box, or null. */
 function pick(selector: string): Box | null {
@@ -259,7 +236,11 @@ function pickFile(selector: string): { found: boolean; box: Box | null; via: "in
 
 // ---------- the hands ----------
 
-/** The input of one command in a window of its own: begin() activates the window and finds the pointer; end() leaves it. */
+/**
+ * The input of one command in a window of its own: begin() activates the window and finds the pointer; end() keeps
+ * the pointer's place. `guard` (Tab.byHand) throws when the page's main frame went to a page off the allowlist: it runs
+ * before each input event, and the allowlist is read again before each press and each key.
+ */
 export class Hands {
   readonly tab: Tab;
   readonly timing: InputTiming;
@@ -270,10 +251,12 @@ export class Hands {
   private readonly x: XAccess | undefined;
   private readonly geo: Geo;
   private readonly state: PointerState;
-  private moved = false;
+  private readonly guard: () => void;
+  private recordMoved = false;
   private lastKey = 0;
+  private keys = 0;
 
-  private constructor(tab: Tab, at: Point, known: boolean, x: XAccess | undefined, geo: Geo, state: PointerState) {
+  private constructor(tab: Tab, at: Point, known: boolean, x: XAccess | undefined, geo: Geo, state: PointerState, guard: () => void) {
     this.tab = tab;
     this.timing = tab.browser.settings.inputTiming;
     this.at = at;
@@ -281,17 +264,25 @@ export class Hands {
     this.x = x;
     this.geo = geo;
     this.state = state;
+    this.guard = guard;
   }
 
   private get log() { return this.tab.browser.settings.log; }
   private get name() { return this.tab.targetId.slice(0, 8); }
 
-  /** Bring the page's window forward when the page has no focus, and find where the pointer is. Call it inside the input lock. */
-  static async begin(tab: Tab): Promise<Hands> {
+  /**
+   * Bring the page's window forward when the page has no focus or is hidden behind another tab of its window (a tab
+   * switch, as a person's), and find where the pointer is. Call it inside the input lock, after the allowlist check.
+   * A window page exists only on a display of the agent browser's own (AgentBrowser.windows, display.ts), so that no
+   * operator's window or focus is ever touched.
+   */
+  static async begin(tab: Tab, guard: () => void = () => {}): Promise<Hands> {
     const s = tab.browser.settings, t = s.inputTiming, state = readPointer(s);
-    const { focus, geo } = await tab.evaluate(arm);
+    const disp = tab.browser.display ?? await displayOf(s);
+    const { focus, hidden, geo } = await tab.evaluate(arm);
     let entry: Point | null = null;
-    if (!focus) {
+    if ((!focus || hidden) && disp.own) {
+      guard();
       await tab.send("Page.bringToFront");
       const deadline = Date.now() + t.activateMs;
       let focusedAt = 0;
@@ -303,21 +294,30 @@ export class Hands {
         await sleep(20);
       }
       entry = await tab.evaluate(disarm);
-      if (!focusedAt) s.log(`agent-browser: the page of tab ${tab.targetId.slice(0, 8)} has no focus ${t.activateMs / 1000} s after Page.bringToFront; the input goes on (its first press activates the window)`);
-    }
-    // The X pointer, where agent-browser may move it: the display is the agent browser's (the activation's real event
-    // came where xdotool says the pointer is; that answer is kept for 5 minutes), and it holds the agent browser only
-    // (checked for each command: another program's window can open at any time).
-    let x = xAccess(s);
+      if (!focusedAt) s.log(`agent-browser: the page of tab ${tab.targetId.slice(0, 8)} has no focus ${t.activateMs / 1000} s after Page.bringToFront; the input goes on without it (a press activates its window; keys alone can give two pages the focus)`);
+    } else if (!focus || hidden) await tab.evaluate(disarm);
+    let x = geo.dpr === 1 ? disp.x : undefined;
     if (x) {
       try {
-        let verified = state.display?.name === x.display && Date.now() - state.display.at < 5 * 60_000 ? state.display.ok : undefined;
-        if (entry && geo.dpr === 1) {
-          const p = await xLocation(x), o = origin(geo);
-          verified = Math.abs(p.x - o.x - entry.x) <= 3 && Math.abs(p.y - o.y - entry.y) <= 3;
-          state.display = { name: x.display, ok: verified, at: Date.now() };
+        let pid = disp.chromePid === undefined ? undefined : String(disp.chromePid);
+        if (pid === undefined) {
+          // Behind cdpUrl the agent Chrome's pid is not known: the display is its own when the activation's real event
+          // came where xdotool says the pointer is, and the focused window is the page's (its title). Kept for 5 minutes.
+          const focusWin = (await x.run(["getwindowfocus"])).trim();
+          let verified = state.display?.name === x.display && Date.now() - state.display.at < 5 * 60_000 ? state.display.ok : undefined;
+          if (entry) {
+            const p = await xLocation(x), o = origin(geo), title = await tab.evaluate(() => document.title);
+            const name = (await x.run(["getwindowname", focusWin]).catch(() => "")).trim();
+            verified = Math.abs(p.x - o.x - entry.x) <= 3 && Math.abs(p.y - o.y - entry.y) <= 3 && (!title || name.startsWith(title));
+            state.display = { name: x.display, ok: verified, at: Date.now() };
+          }
+          if (verified) pid = (await pidOf(x, focusWin)) || undefined;
         }
-        if (!verified || geo.dpr !== 1 || !(await ownDisplay(x))) x = undefined;
+        if (!pid) x = undefined;
+        else if (!(await onlyWindowsOf(x, pid))) {
+          notice(s, state, `x-${x.display}`, `agent-browser: another program's window is on the display: agent-browser does not move the X pointer there (each path starts at the page's own pointer event)`);
+          x = undefined;
+        }
       } catch { x = undefined; }
     }
     let at = entry ?? state.pages[tab.targetId];
@@ -327,18 +327,18 @@ export class Hands {
     const known = !!at;
     at ??= { x: geo.iw * between([0.35, 0.65]), y: geo.ih * between([0.35, 0.65]) };
     at = { x: Math.min(Math.max(at.x, 0), Math.max(0, geo.iw - 1)), y: Math.min(Math.max(at.y, 0), Math.max(0, geo.ih - 1)) };
-    return new Hands(tab, at, known, x, geo, state);
+    return new Hands(tab, at, known, x, geo, state, guard);
   }
 
-  /** After the command: the X pointer goes to the path's end (when agent-browser may move it), and the page's last point is kept. */
+  /**
+   * After the command: the page's last point is kept. After a take of record (its own CDP moves), the X pointer goes
+   * to the cursor's end; after a path of this file it is there already (the path's last step).
+   */
   async end(): Promise<void> {
-    if (this.moved && this.x && (this.xAt?.x !== Math.round(this.at.x) || this.xAt?.y !== Math.round(this.at.y))) await this.xMove(this.at);
+    if (this.recordMoved && this.x) await this.xMove(this.at);
     this.state.pages[this.tab.targetId] = { x: Math.round(this.at.x * 100) / 100, y: Math.round(this.at.y * 100) / 100 };
     writePointer(this.tab.browser.settings, this.state);
   }
-
-  /** Where the X pointer was last moved to, in the page's client px. */
-  private xAt: Point | undefined;
 
   /**
    * Move the X pointer to a point of the page. Chrome gives the page that real move with its movement from the page's
@@ -347,9 +347,9 @@ export class Hands {
    */
   private async xMove(p: Point): Promise<boolean> {
     const o = origin(this.geo), at = { x: Math.round(p.x), y: Math.round(p.y) };
+    this.guard();
     try {
       await this.x!.run(["mousemove", String(Math.round(o.x + at.x)), String(Math.round(o.y + at.y))]);
-      this.xAt = at;
       return true;
     } catch (e) {
       this.log(`agent-browser: could not move the X pointer (${(e as Error).message.split("\n")[0]}); the input goes on with CDP alone`);
@@ -357,13 +357,18 @@ export class Hands {
     }
   }
 
-  private send(method: string, params: object) { return this.tab.send(method, params); }
+  /** An input event to the page, after the guard: never one to a page that left the allowlist. */
+  private send(method: string, params: object) {
+    this.guard();
+    return this.tab.send(method, params);
+  }
 
   /**
    * A pointer path to `to` along ghost-cursor's curve (W: the target's smaller side): 12 to 60 points at about 60 a
    * second, in whole pixels as a mouse gives them, and no move that does not move (a real mouse sends none). Where
-   * agent-browser may move the X pointer, the path's last step is the X pointer's move there (xMove): the pointer is
-   * then where the page saw it last, with no extra move.
+   * agent-browser may move the X pointer, the path's last step that moves is the X pointer's move there (xMove): the
+   * pointer is then where the page saw it last, with no extra move after the press (review-47: in 99.4% of 2000 paths
+   * the last sample rounds to the pixel before it).
    */
   async moveTo(to: Point, width = 24): Promise<void> {
     to = { x: Math.round(to.x), y: Math.round(to.y) };
@@ -371,29 +376,35 @@ export class Hands {
     const legs = await planMove(from, to, width, Math.random);
     if (!legs.length) { this.at = to; return; }
     for (const leg of legs) leg.ms *= this.timing.moveScale;
-    const total = legs.reduce((a, l) => a + l.ms, 0), n = Math.min(60, Math.max(12, Math.round(total / 16))), t0 = Date.now();
+    const total = legs.reduce((a, l) => a + l.ms, 0), n = Math.min(60, Math.max(12, Math.round(total / 16)));
+    // The steps that move, each with its time; the last one ends at `to`.
+    const steps: { p: Point; ms: number }[] = [];
     let last = from;
     for (let i = 1; i <= n; i++) {
       const q = i === n ? to : pointAt(legs, (total * i) / n), p = { x: Math.round(q.x), y: Math.round(q.y) };
-      if (p.x !== last.x || p.y !== last.y) {
-        if (!(i === n && this.x && await this.xMove(p))) await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none", buttons: 0 });
-        last = p;
-      }
-      await sleep(t0 + (total * i) / n - Date.now());
+      if (p.x !== last.x || p.y !== last.y) { steps.push({ p, ms: (total * i) / n }); last = p; }
     }
+    const t0 = Date.now();
+    for (let i = 0; i < steps.length; i++) {
+      await sleep(t0 + steps[i].ms - Date.now());
+      const { p } = steps[i];
+      if (!(i === steps.length - 1 && this.x && await this.xMove(p))) await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none", buttons: 0 });
+    }
+    await sleep(t0 + total - Date.now());
     this.at = to;
-    this.moved = true;
   }
 
   /** The pointer moved to `p` by other input of the command (record's cursor): the X pointer follows it at the end. */
   movedTo(p: Point): void {
     this.at = { x: Math.round(p.x), y: Math.round(p.y) };
-    this.moved = true;
+    this.recordMoved = true;
   }
 
-  /** A click where the pointer is: the pause on the target, then a press with force 0.5 and a release. */
+  /** A click where the pointer is: the pause on the target, the allowlist read again, then a press with force 0.5 and a release. */
   async press(): Promise<void> {
     await sleep(between(this.timing.settleMs));
+    this.guard();
+    await this.tab.assertAllowed();
     const { x, y } = this.at;
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
     await sleep(between(this.timing.pressMs));
@@ -511,13 +522,28 @@ export class Hands {
     await this.tab.evaluate(scriptCaret, a, z);
   }
 
+  /** The page is still on the allowlist: the guard, then the list read again (Tab.assertAllowed). */
+  async check(): Promise<void> {
+    this.guard();
+    await this.tab.assertAllowed();
+    this.guard();
+  }
+
+  /** Before a key: the guard, and the allowlist read again before the first key and each 16th. */
+  private async beforeKey(): Promise<void> {
+    this.guard();
+    if (this.keys++ % 16 === 0) { await this.tab.assertAllowed(); this.guard(); }
+  }
+
   /** One key: down, held a short time, up. */
   async key(k: KeyEvent): Promise<void> {
+    await this.beforeKey();
     await sendKey(this.tab, k, between(this.timing.holdMs));
   }
 
   /** `press`: Tab.press's own key events (a keyDown with the key's text, and a keyUp), held down a short time. */
   async keyPress(fields: object, text?: string): Promise<void> {
+    await this.beforeKey();
     await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...fields, text });
     await sleep(between(this.timing.holdMs));
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...fields });
@@ -531,14 +557,16 @@ export class Hands {
     if (ch === "\t") return this.key(parseKey("Tab"));
     const k = charKey(ch);
     if (k) return this.key(k);
+    await this.beforeKey();
     await this.send("Input.insertText", { text: ch });
   }
 
   /**
    * setFiles as a person picks files: a click on the file input (or on its label, for a hidden input) opens Chrome's
    * file chooser, which a session intercepts (Page.setInterceptFileChooserDialog: no dialog opens), and the files go to
-   * the input that the chooser names. An input with no box and no label gets the files with no click, as before (a log
-   * line: a site can see files with no click). False: that last case, for the caller to do.
+   * the input that the chooser names. An input with no box and no label, and a click that opens no chooser in 2 s
+   * (another element covers the input), give the files with no click, as before, with a log line (a site can see
+   * files with no click). False: those cases, for the caller to do.
    */
   async setFiles(selector: string, files: string[]): Promise<boolean> {
     const t = await this.tab.evaluate(pickFile, selector);
@@ -550,12 +578,18 @@ export class Hands {
     const conn = this.tab.browser.conn, stop = new AbortController();
     await this.tab.send("Page.setInterceptFileChooserDialog", { enabled: true });
     try {
-      const opened = conn.waitForEvent<{ backendNodeId: number }>("Page.fileChooserOpened", { sessionId: this.tab.sessionId, timeoutMs: 5000, signal: stop.signal });
+      const opened = conn.waitForEvent<{ backendNodeId: number }>("Page.fileChooserOpened", { sessionId: this.tab.sessionId, timeoutMs: 2000, signal: stop.signal });
       opened.catch(() => {});
       const b = await this.intoView(t.via === "label" ? `the label of ${selector}` : `file input ${selector}`);
       await this.moveTo(this.aim(b), Math.min(b.w, b.h));
       await this.press();
-      const ev = await opened.catch(() => { throw new Error(`setFiles: the click on ${selector}${t.via === "label" ? "'s label" : ""} opened no file chooser in 5 s`); });
+      const ev = await opened.catch(() => undefined);
+      if (!ev) {
+        this.log(`agent-browser setFiles: the click on ${selector}${t.via === "label" ? "'s label" : ""} opened no file chooser; the files go to it with no click (a site can see that)`);
+        return false;
+      }
+      this.guard();
+      await this.tab.assertAllowed();
       await this.tab.send("DOM.setFileInputFiles", { files, backendNodeId: ev.backendNodeId });
       return true;
     } finally {
