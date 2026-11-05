@@ -27,6 +27,7 @@ operator's Chrome, the agent browser and agentwatch's tmux server were not touch
 | `node_ipc_fd.py`, `node_ipc_relay.mjs`, `node_ws_client.mjs` | fd passing between a Python parent (the daemon's place) and a Node relay over Node's IPC channel (`NODE_CHANNEL_FD`): `daemon-accepts` (the parent accepts, checks, and sends the socket to the relay), `relay-asks` (the relay accepts and sends a duplicate to the parent for the check), `plain` (no check). A WebSocket client in the root's tree (300 one after the other, 50 at once) and one that `setsid -f` re-parents. |
 | `bench_walk.py`, `bench_walk.mjs` | The cost of the walk (6 hops) and of a cgroup read. |
 | `proc_fd_pipe.py` | A process of the same user writes into another process's stdin pipe through `/proc/<pid>/fd/0`. |
+| `ffi_static_import.mjs`, `ffi_dynamic_import.mjs`, `ffi_listen_fd.mjs` | From review-54: a static `node:ffi` import (the warning; `ERR_UNKNOWN_BUILTIN_MODULE` with `--no-experimental-ffi`), a dynamic import that lets the relay fail closed, and `SO_PEERCRED` on the listening fd of a self-connect. |
 
 ## How to run
 
@@ -60,3 +61,6 @@ python3 bench_walk.py; node bench_walk.mjs; python3 proc_fd_pipe.py
 - `claude-code-tree.txt`: the shapes of this real Claude Code session (read only).
 - `fork_pass.jsonl`, `node_ffi_peercred.json`, `node_helper_peercred.jsonl`, `node_proc_scan.jsonl`,
   `node_ipc_fd.jsonl`, `bench_walk.jsonl`, `pid-space.txt`, `cgroup-join.txt`, `proc-fd-pipe.json`.
+- `review-54-server-path.txt`: review-54's run (copied from its folder): session R1's nested tmux
+  server kept R1's pane cgroup, and session R2's `run-shell` through it got R1's cgroup and no root.
+- `ffi-load-and-listen-fd.txt`: the three `ffi_*.mjs` checks, run again by this designer.

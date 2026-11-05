@@ -1,0 +1,22 @@
+# review-54's run (ab-lead's fresh reviewer of PR #54, 2026-11-05), copied from /tmp/claude-1001/review-54/.
+# Session R1 started a nested tmux server (tmux -L <server>), which left R1's tree and kept R1's pane cgroup.
+# A process of session R2 ran a client through it: tmux -L <server> run-shell '<client>'.
+## the client's output (nested-out.txt)
+scopeR1-from-R2-via-run-shell: pid 1109811 ppid 1109810: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+## the probe endpoint's log line
+{"t": 1793882440.0675628, "peercred_us": 20.0, "peer_pid": 1109811, "peer_uid": 1001, "peer_gid": 1002, "peerpidfd_us": 14.8, "pidfd_pid_at_accept": 1109811, "peer_comm_now": "python3", "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-37465f4a-3762-4acc-82c2-d320afc2f05a.scope", "cgroup_scope": "scopeR1", "scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)", "hops": 0, "walk_us": 140.8, "chain": ["1109811:python3", "1109810:sh", "1109767:tmux: server", "1144:systemd"], "pidfd_exited_after_walk": false, "pidfd_pid_after_walk": 1109811, "check_us": 567.8, "request": "GET /devtools/browser/scopeR1-from-R2-via-run-shell HTTP/1.1"}
+## the roots (roots.json)
+{
+ "scopeR1": [
+  1043155,
+  3381030,
+  "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-37465f4a-3762-4acc-82c2-d320afc2f05a.scope"
+ ],
+ "scopeR2": [
+  1029034,
+  3376525,
+  "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1c5110b4-5b55-419c-8ef1-b7b5f714975b.scope"
+ ]
+}
+## the pid space then (pid-space-now.txt)
+uptime_s=34103.29 ns_last_pid=1116893 pid_max=4194304 ptrace_scope=1 kernel=6.12.115+deb13.1-cloud-amd64
