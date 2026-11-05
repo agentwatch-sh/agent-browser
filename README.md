@@ -82,7 +82,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `tab-pages.json` (the tabs of `open --tab` on Linux), `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<scope>/` instead (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
@@ -256,7 +256,7 @@ person's input**) and `log` (progress lines; default standard error).
     window, with focus emulation while a command is attached, or with `--hidden-drive` none. Use it only
     when a window is not possible: **a site can detect a background tab** that agent-browser drives in
     either mode (the research's section 4: two `visible` tabs in one window, two focused pages, input
-    while `hidden`). The state folder's `tab-pages.json` lists these tabs, so that each later command
+    while `hidden`). The tab record's `tab-pages.json` lists these tabs, so that each later command
     drives them in the old mode too, also a tab that `open --tab` opened while the display was not the
     agent browser's own (the item above) and the display is its own later. A plain `open` there opens a
     background tab too, with no entry: once the display is the agent browser's own, that tab is a window
@@ -270,7 +270,8 @@ person's input**) and `log` (progress lines; default standard error).
     input, across processes. So two agents never give two pages the focus at the same time. The lock is
     one for the pages of every site (the next item). Without the lock, two agents that typed at once gave
     two focused pages for 9.6 to 12.4 s of 12.5 to 14.8 s (the research). Every caller of one agent browser must use one state folder (with tab scopes, as
-    agentwatch does). A command waits for the lock up to `lockWaitMs` (10 minutes); `record` holds it
+    agentwatch does). Behind agent mode's endpoint the lock stays the state folder's one `input.lock` for
+    every endpoint scope: only the tab record is per endpoint scope (see **The record of each endpoint scope**). A command waits for the lock up to `lockWaitMs` (10 minutes); `record` holds it
     for its take, not for the encode. A take can last up to 30 minutes (`record`'s limit), longer than
     that wait: where takes run beside other agents' input, give those agents a longer `lockWaitMs`
     (`--input-timing '{"lockWaitMs": 2000000}'`), or their input commands fail with the lock's timeout. The lock is reentrant within one call chain of one process:
@@ -862,6 +863,42 @@ again (with focus emulation every page had the focus). The relay cannot see such
 opens a tab (a window only for `newWindow: true`), focus emulation goes to Chrome, and no window comes
 forward for input.
 
+**The record of each endpoint scope** (board task ab-v16.58). The relay answers an endpoint scope's
+`Target.getTargets` (`/devtools/browser/<scope>`) with that scope's own tabs only, and a change of the tab
+record drops the entries of every tab that its connection does not list (see **Several processes** under
+**Tab scopes**). So with `cdpUrl` each endpoint scope keeps its tab record in a folder of its own, and the
+files of the agent browser stay one of each in the state folder:
+
+```text
+<stateDir>/
+  endpoint-scopes/          mode 0700
+    ab-lead/                the tab record of the endpoint scope ab-lead:
+                            tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json, tabs.lock
+    +ab-+lead/              the tab record of the endpoint scope Ab-Lead
+  input.lock                one input lock for every endpoint scope
+  pointer.json              one pointer for every endpoint scope
+  display.json, launches.log, shots/, recordings/, ...
+```
+
+- The folder name is the scope, with each capital letter written as `+` and its small letter (`Ab-Lead`
+  gives `+ab-+lead`). So two scopes that differ only in case get two folders, also on a disk that ignores
+  case (the Mac's), and no two scopes get one folder (a scope holds no `+`). agent-browser refuses a
+  scope outside the relay's pattern (1 to 64 letters, digits, `.`, `_` or `-`, the first a letter or a
+  digit) before it makes a folder: `cdpUrl` with such a scope is a usage error.
+- With no endpoint scope (the proxy, or `endpoint`: a Chrome that agent-browser reaches itself), the tab
+  record stays in the state folder, as before.
+- A record from before this change, in the state folder, is not moved: a record holds only live tabs, so
+  each endpoint scope starts with an empty record, and the old files stay unused. The old record's tabs
+  stay open: in the new record each one has no name and no tab scope, so under a tab scope only
+  `--any-scope` reaches it.
+- The input lock and the pointer stay one per agent browser (the operator's choice on ab-1bi): the input
+  commands of two sessions over two endpoint scopes wait for each other, as on one scope.
+- Inside an endpoint scope's record the tab scope (`tabScope`, `--tab-scope`) still applies. agentwatch
+  passes the session's name as both.
+- `window pin` pins a window for the callers of one endpoint scope.
+- A scope's folder stays after its session ends: a few small files, with the entries of the tabs that
+  were open at its last change.
+
 ## Tab scopes
 
 One agent browser can serve several callers at the same time, for example the agent sessions of one
@@ -922,7 +959,8 @@ is in one scope at most:
 **Several processes.** Each CLI call is a process, and several sessions call at the same time, so
 several processes write the record: `tabs.json`, `tab-scopes.json`, the read-first marks
 (`reads.json`) and the pinned window (`window.json`). Each change (`open`, `close`, the read mark of
-`outline` and `text`, `window pin` and `unpin`) takes the lock file `tabs.lock` in the state folder:
+`outline` and `text`, `window pin` and `unpin`) takes the lock file `tabs.lock` beside the record
+(in the state folder, or in the endpoint scope's folder: see **The record of each endpoint scope**):
 an exclusive create that holds the pid, like the proxy's start lock (`src/lock.ts`). A crashed
 holder's lock is cleared; a live holder's lock is never cleared. Under the lock the change reads the
 files, changes them, and writes each changed file to a temporary file that it renames over the old
@@ -934,8 +972,9 @@ stays behind that nobody recorded.
 
 **Limits.**
 
-- The pinned window (`window pin`) and the read-first record (`reads.json`) belong to the state
-  folder, not to a scope: a pin confines every caller of that state folder. So under a scope,
+- The pinned window (`window pin`) and the read-first record (`reads.json`) belong to the tab record
+  (the state folder; behind agent mode's endpoint, the endpoint scope's folder), not to a tab scope: a
+  pin confines every caller of that record. So under a scope,
   `window pin` and `unpin` need `--any-scope`. In personal mode, the first `open` with no pin still
   pins its own new window, also under a scope.
 - With a pinned window, `open` makes its tab with `window.open` from a tab that is already in that
@@ -1457,6 +1496,12 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
   lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it
   cannot record), `window pin` and `unpin` under a scope, and no change without a scope.
+- `test/endpoint-scope.test.ts`: the record of each endpoint scope (ab-v16.58; vedlo-codex's
+  reproduction): against a fake endpoint whose two scopes each list only their own tabs, two connections
+  with one state folder keep each scope's read marks and pin; the folder names (capital letters, refused
+  scopes, no endpoint scope); over the relay, two sessions' commands with one state folder, as agentwatch
+  runs them, keep their names, tab scopes and read marks, in one process and in two; and two endpoint
+  scopes' input commands share the state folder's one `input.lock` and `pointer.json` and never overlap.
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
   that encode need ffmpeg and ffprobe on `PATH` (skipped without them).

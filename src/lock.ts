@@ -1,5 +1,6 @@
 // A lock file that the processes of one consumer share: the proxy's start lock (proxy.ts), the lock of the tab
-// record, tabs.json and tab-scopes.json (browser.ts), and the input lock (input.ts). One holder at a time.
+// record, tabs.lock beside tabs.json and tab-scopes.json (browser.ts; one per endpoint scope behind agent mode's
+// endpoint: options.ts, recordDir), and the input lock (input.ts; one per agent browser). One holder at a time.
 
 import { closeSync, fstatSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 

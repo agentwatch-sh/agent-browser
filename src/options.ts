@@ -264,11 +264,18 @@ export function isChromeForTesting(bin: string): boolean {
 }
 
 /**
- * Agent mode's endpoint (contract C11): ws+unix://<absolute socket path>:/devtools/browser/<scope>. Nothing else: a
- * loopback ws:// URL would reach a Chrome's own debugging port (a prompt on each command, past noPrompt), and a
- * wss:// URL would send page data to another host.
+ * An endpoint scope: the <scope> of agent mode's endpoint, /devtools/browser/<scope> (the relay's SCOPE in
+ * src/relay/endpoint.ts; agentwatch passes the calling session's name). The relay lists each scope's own tabs only.
  */
-export const CDP_URL_RE = /^ws\+unix:\/\/(\/[^:]+):\/devtools\/browser\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const ENDPOINT_SCOPE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * Agent mode's endpoint (contract C11): ws+unix://<absolute socket path>:/devtools/browser/<scope> (group 1: the
+ * socket path; group 2: the endpoint scope, ENDPOINT_SCOPE_RE). Nothing else: a loopback ws:// URL would reach a
+ * Chrome's own debugging port (a prompt on each command, past noPrompt), and a wss:// URL would send page data to
+ * another host.
+ */
+export const CDP_URL_RE = /^ws\+unix:\/\/(\/[^:]+):\/devtools\/browser\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/;
 
 /** Validate a consumer's options and fill the defaults. Accepts settings that were already resolved. */
 export function resolveOptions(o: BrowserOptions | Settings): Settings {
@@ -350,6 +357,49 @@ export function stateDir(s: Settings): string {
 }
 
 export const statePath = (s: Settings, name: string) => join(stateDir(s), name);
+
+/** The endpoint scope of agent mode's endpoint: the <scope> of cdpUrl's /devtools/browser/<scope>; undefined with no cdpUrl. */
+export function endpointScope(s: Settings): string | undefined {
+  if (s.cdpUrl === undefined) return undefined;
+  const scope = CDP_URL_RE.exec(s.cdpUrl)?.[2];
+  if (scope === undefined) throw new UsageError(`cdpUrl names no endpoint scope (ws+unix://<socket>:/devtools/browser/<scope>): ${s.cdpUrl}`);
+  return scope;
+}
+
+/** The folder of the endpoint scopes' tab records in the state folder (recordDir). */
+export const ENDPOINT_SCOPES_DIR = "endpoint-scopes";
+
+/**
+ * The folder name of an endpoint scope's tab record (recordDir): the scope, with each capital letter written as "+" and
+ * its small letter ("Ab-Lead" gives "+ab-+lead"). So no folder name has a capital letter, and two scopes that differ
+ * only in case get two folders also on a disk that ignores case (the Mac's). No scope holds a "+", so no two scopes get
+ * one name. A scope that ENDPOINT_SCOPE_RE does not match is refused: no ".", "..", slash or other path part gets in.
+ */
+export function scopeFolderName(scope: string): string {
+  if (typeof scope !== "string" || !ENDPOINT_SCOPE_RE.test(scope))
+    throw new UsageError(`an endpoint scope is 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or a digit, not ${JSON.stringify(scope)}`);
+  return scope.replace(/[A-Z]/g, (c) => `+${c.toLowerCase()}`);
+}
+
+/**
+ * The folder of the tab record (browser.ts: tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json and their
+ * lock tabs.lock), created private to this user. Behind agent mode's endpoint (cdpUrl) each endpoint scope lists only its
+ * own tabs, and a record change drops the entries of every tab that its connection does not list, so each endpoint scope
+ * keeps a record of its own: <stateDir>/endpoint-scopes/<scopeFolderName(scope)>/ (board task ab-v16.58). With no
+ * endpoint scope (the proxy, or a known endpoint) the record stays in the state folder itself, as before. Every other
+ * file of the state folder stays one per agent browser for every endpoint scope: input.lock and pointer.json (input.ts),
+ * display.json, chrome.json, the proxy's files, launches.log, shots/ and recordings/.
+ */
+export function recordDir(s: Settings): string {
+  const scope = endpointScope(s);
+  if (scope === undefined) return stateDir(s);
+  const dir = join(stateDir(s), ENDPOINT_SCOPES_DIR, scopeFolderName(scope));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+/** A file of the tab record (recordDir). */
+export const recordPath = (s: Settings, name: string) => join(recordDir(s), name);
 
 /** True in a process started by Node's test runner (it sets NODE_TEST_CONTEXT in test children). */
 export function underNodeTest(): boolean {
