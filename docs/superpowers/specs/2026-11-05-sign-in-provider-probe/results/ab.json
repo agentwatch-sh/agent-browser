@@ -1,0 +1,565 @@
+{
+  "part": "agent",
+  "port": 8462,
+  "env": {
+    "extension": {
+      "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/auth-design",
+      "commit": "230f381b439ab9ce25d6b5f5e1ced9b5d1eef1c2",
+      "version": "0.2.0",
+      "id": "ifhfjdmdbgbnmllffiadajepajbcdnai"
+    },
+    "agentBrowser": "d173b1b39a0aee304ce84ff1f93495bce3b65924",
+    "playwright": "playwright-core 1.64.1"
+  },
+  "cases": [
+    {
+      "group": "ab",
+      "list": "L1",
+      "case": "open site.test/ and click the sign-in link",
+      "ms": 2447,
+      "detail": {
+        "open": {
+          "ok": true,
+          "command": "goto",
+          "tab": {
+            "id": "B3F71588",
+            "targetId": "B3F715883BF89DAD8644DD73A4E6DBBE",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          }
+        },
+        "click": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "B3F71588",
+            "targetId": "B3F715883BF89DAD8644DD73A4E6DBBE",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "target": "#signin-redirect",
+          "text": null
+        }
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=-",
+        "GET site.test/login sfs=same-origin cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L1",
+      "case": "text of the tab after the click (the tab is on the provider's page)",
+      "ms": 617,
+      "detail": {
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "tabs": {
+          "ok": true,
+          "command": "tabs",
+          "tabs": [],
+          "window": null
+        }
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L1",
+      "case": "goto site.test/app while signed out (the site redirects to the provider)",
+      "ms": 384,
+      "detail": {
+        "goto": {
+          "error": "navigation failed: net::ERR_BLOCKED_BY_CLIENT"
+        }
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-"
+      ],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "ab",
+      "list": "L1",
+      "case": "open the provider's page itself (the agent's own navigation)",
+      "ms": 301,
+      "detail": {
+        "open": {
+          "error": "refusing: tenant.auth0.test is not on the allowlist"
+        }
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L1",
+      "case": "eval location.href = the provider (the agent's script in the page)",
+      "ms": 1929,
+      "detail": {
+        "eval": {
+          "ok": true,
+          "command": "eval",
+          "tab": {
+            "id": "4560D0FE",
+            "targetId": "4560D0FEE811761DE3D07E897CDD5E9C",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "value": 1
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "ab",
+      "list": "L1",
+      "case": "click the popup sign-in, then list the tabs",
+      "ms": 3798,
+      "detail": {
+        "click": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "FADF208A",
+            "targetId": "FADF208AFD38E89914728300BF94BA60",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "target": "#signin-popup",
+          "text": null
+        },
+        "tabs": {
+          "ok": true,
+          "command": "tabs",
+          "tabs": [
+            {
+              "id": "FADF208A",
+              "targetId": "FADF208AFD38E89914728300BF94BA60",
+              "name": "qq1",
+              "url": "https://site.test:8462/",
+              "title": "site"
+            }
+          ],
+          "window": null
+        }
+      },
+      "hits": [],
+      "blocked": [
+        "tenant.auth0.test"
+      ]
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "open site.test/ and click the sign-in link",
+      "ms": 2316,
+      "detail": {
+        "open": {
+          "ok": true,
+          "command": "goto",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          }
+        },
+        "click": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "target": "#signin-redirect",
+          "text": null
+        }
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=-",
+        "GET site.test/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "text of the tab after the click (the tab is on the provider's page)",
+      "ms": 654,
+      "detail": {
+        "text": {
+          "ok": true,
+          "command": "text",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+            "title": "choose an account"
+          },
+          "selector": null,
+          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+        },
+        "tabs": {
+          "ok": true,
+          "command": "tabs",
+          "tabs": [
+            {
+              "id": "B4032804",
+              "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+              "name": "qq1",
+              "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+              "title": "choose an account"
+            }
+          ],
+          "window": null
+        }
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "choose an account and type on the provider's page",
+      "ms": 3609,
+      "detail": {
+        "account": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+            "title": "choose an account"
+          },
+          "target": "#account-ada",
+          "text": null
+        },
+        "type": {
+          "ok": true,
+          "command": "type",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+            "title": "choose an account"
+          },
+          "into": "#password",
+          "length": 2
+        },
+        "submit": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+            "title": "choose an account"
+          },
+          "target": "#submit",
+          "text": null
+        }
+      },
+      "hits": [
+        "POST tenant.auth0.test/u/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=same-origin cookies=auth0_session",
+        "GET site.test/callback sfs=cross-site cookies=-",
+        "GET site.test/app sfs=cross-site cookies=site_session"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "text after the sign-in",
+      "ms": 371,
+      "detail": {
+        "text": {
+          "ok": true,
+          "command": "text",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://site.test:8462/app",
+            "title": "app"
+          },
+          "selector": null,
+          "text": "signed in as ada"
+        }
+      },
+      "hits": [],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "goto site.test/app while signed out (the site redirects to the provider)",
+      "ms": 449,
+      "detail": {
+        "goto": {
+          "ok": true,
+          "command": "goto",
+          "tab": {
+            "id": "B4032804",
+            "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+            "name": "qq1",
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+            "title": "choose an account"
+          }
+        }
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=none cookies=-",
+        "GET tenant.auth0.test/u/login sfs=none cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "open the provider's page itself (the agent's own navigation)",
+      "ms": 578,
+      "detail": {
+        "open": {
+          "ok": true,
+          "command": "open",
+          "tab": {
+            "id": "7841A588",
+            "targetId": "7841A5881739B914CCE1F899A2BE98AB",
+            "name": "qq2",
+            "url": "https://tenant.auth0.test:8462/u/login",
+            "title": "choose an account"
+          },
+          "window": null
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/u/login sfs=none cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "eval location.href = the provider (the agent's script in the page)",
+      "ms": 1965,
+      "detail": {
+        "eval": {
+          "ok": true,
+          "command": "eval",
+          "tab": {
+            "id": "B4161B02",
+            "targetId": "B4161B02F1FDA0A584FDBB49AF83D1DB",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "value": 1
+        },
+        "text": {
+          "ok": true,
+          "command": "text",
+          "tab": {
+            "id": "B4161B02",
+            "targetId": "B4161B02F1FDA0A584FDBB49AF83D1DB",
+            "name": "qq1",
+            "url": "https://tenant.auth0.test:8462/u/login",
+            "title": "choose an account"
+          },
+          "selector": null,
+          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "click the popup sign-in, then list the tabs",
+      "ms": 3792,
+      "detail": {
+        "click": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "6B7C0DA8",
+            "targetId": "6B7C0DA86689525E7968FDB3EAF8502D",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "target": "#signin-popup",
+          "text": null
+        },
+        "tabs": {
+          "ok": true,
+          "command": "tabs",
+          "tabs": [
+            {
+              "id": "B4032804",
+              "targetId": "B40328045A5E4D67C7B6F25666FFD1F1",
+              "name": null,
+              "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+              "title": "choose an account"
+            },
+            {
+              "id": "7841A588",
+              "targetId": "7841A5881739B914CCE1F899A2BE98AB",
+              "name": "qq2",
+              "url": "https://tenant.auth0.test:8462/u/login",
+              "title": "choose an account"
+            },
+            {
+              "id": "B4161B02",
+              "targetId": "B4161B02F1FDA0A584FDBB49AF83D1DB",
+              "name": null,
+              "url": "https://tenant.auth0.test:8462/u/login",
+              "title": "choose an account"
+            },
+            {
+              "id": "6B7C0DA8",
+              "targetId": "6B7C0DA86689525E7968FDB3EAF8502D",
+              "name": "qq1",
+              "url": "https://site.test:8462/",
+              "title": "site"
+            },
+            {
+              "id": "7B50AE11",
+              "targetId": "7B50AE116C9D31441935B791828409DC",
+              "name": null,
+              "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+              "title": "choose an account"
+            }
+          ],
+          "window": null
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "drive the popup on the provider's page (by its URL)",
+      "ms": 3873,
+      "detail": {
+        "account": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "7B50AE11",
+            "targetId": "7B50AE116C9D31441935B791828409DC",
+            "name": null,
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+            "title": "choose an account"
+          },
+          "target": "#account-ada",
+          "text": null
+        },
+        "type": {
+          "ok": true,
+          "command": "type",
+          "tab": {
+            "id": "7B50AE11",
+            "targetId": "7B50AE116C9D31441935B791828409DC",
+            "name": null,
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+            "title": "choose an account"
+          },
+          "into": "#password",
+          "length": 2
+        },
+        "submit": {
+          "ok": true,
+          "command": "click",
+          "tab": {
+            "id": "7B50AE11",
+            "targetId": "7B50AE116C9D31441935B791828409DC",
+            "name": null,
+            "url": "https://tenant.auth0.test:8462/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8462%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+            "title": "choose an account"
+          },
+          "target": "#submit",
+          "text": null
+        }
+      },
+      "hits": [
+        "POST tenant.auth0.test/u/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=same-origin cookies=auth0_session"
+      ],
+      "blocked": []
+    },
+    {
+      "group": "ab",
+      "list": "L2",
+      "case": "the opener's status after the popup",
+      "ms": 342,
+      "detail": {
+        "status": {
+          "ok": true,
+          "command": "text",
+          "tab": {
+            "id": "6B7C0DA8",
+            "targetId": "6B7C0DA86689525E7968FDB3EAF8502D",
+            "name": "qq1",
+            "url": "https://site.test:8462/",
+            "title": "site"
+          },
+          "selector": "#status",
+          "text": "popup code c2"
+        }
+      },
+      "hits": [],
+      "blocked": []
+    }
+  ],
+  "pids": {
+    "xvfb": [
+      800861
+    ],
+    "chromium": [
+      800934
+    ]
+  },
+  "chromiumExit": null
+}
