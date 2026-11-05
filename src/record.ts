@@ -1139,7 +1139,10 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
   let final = { url, title: "" };
   const marks: Mark[] = [];
   try {
-    // No Page.bringToFront: it activates Chrome, and macOS then moves the operator to the agent
+    // A page in a window of its own that is behind another tab of that window comes in front first (Tab.toFront): a
+    // hidden page sends no screencast frame.
+    await tab.toFront();
+    // Else no Page.bringToFront: it activates Chrome, and macOS then moves the operator to the agent
     // browser's Space. Focus emulation instead: Chrome sends no screencast frame of a background tab's
     // hidden page (0 frames in 3 s on Chromium 156), and focus emulation makes the page "visible" and
     // draw. The attach turns it on; with hiddenDrive the attach does not (ab-v16.15), so the run turns it

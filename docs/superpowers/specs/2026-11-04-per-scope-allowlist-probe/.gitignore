@@ -1,0 +1,2 @@
+# Chromium writes its indexed DNR rules into the unpacked extension folder.
+ext/_metadata/

@@ -1,0 +1,80 @@
+{
+  "summary": {
+    "trials": 10,
+    "pausedBeforeRule": 0,
+    "blockedBeforeRule": 10,
+    "reachedAfterRuleAndRelease": 0
+  },
+  "trials": [
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    },
+    {
+      "pausedBeforeRule": false,
+      "blockedBeforeRule": true,
+      "errorBeforeRule": "net::ERR_BLOCKED_BY_CLIENT",
+      "released": 0,
+      "reached": false
+    }
+  ]
+}

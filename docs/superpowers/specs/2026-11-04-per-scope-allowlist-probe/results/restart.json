@@ -1,0 +1,19 @@
+{
+  "before": {
+    "session": [
+      100,
+      101
+    ],
+    "dynamic": [
+      5,
+      2
+    ]
+  },
+  "afterBrowserRestart": {
+    "session": [],
+    "dynamic": [
+      5,
+      2
+    ]
+  }
+}

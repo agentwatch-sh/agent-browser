@@ -1,0 +1,10 @@
+{
+  "frameUnderScopeAPage": true,
+  "frameUnderScopeBPage": true,
+  "frameUnderScopeAAboutBlank": false,
+  "frameUnderNoScopeAboutBlank": false,
+  "rule3Blocks": [
+    "scope A about:blank",
+    "no scope about:blank"
+  ]
+}

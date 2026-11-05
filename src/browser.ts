@@ -17,6 +17,7 @@ import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequir
 import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
+import { displayOf } from "./display.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -103,13 +104,19 @@ export class AgentBrowser {
   readonly settings: Settings;
   readonly allow: string[];
   readonly product: string;
+  /**
+   * The design of one window per page applies (ab-v16.26): agent mode on Linux (windowPerPage), with the agent Chrome
+   * on a display of its own (display.ts). Else every page is driven as before, in a background tab.
+   */
+  readonly windows: boolean;
   private sessions = new Map<string, Tab>();
 
-  private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string) {
+  private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string, windows: boolean) {
     this.conn = conn;
     this.settings = settings;
     this.allow = allow;
     this.product = product;
+    this.windows = windows;
   }
 
   /**
@@ -161,7 +168,8 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      return new AgentBrowser(conn, s, allow, v.product);
+      const windows = windowPerPage(s) && (await displayOf(s, true)).own;
+      return new AgentBrowser(conn, s, allow, v.product, windows);
     } catch (e) {
       await conn.close();
       throw e;
@@ -324,9 +332,10 @@ export class AgentBrowser {
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);
     const win = this.pinnedWindow();
-    const agent = this.mode === "agent", windows = windowPerPage(this.settings);
-    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive).
-    const tabPage = windows && opts.newWindow === false;
+    const agent = this.mode === "agent", windows = this.windows;
+    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Over agent mode's
+    // endpoint the relay opens a window for every page (ab-v16.28), so there it is a window page like any other.
+    const tabPage = windows && opts.newWindow === false && !this.settings.cdpUrl;
     let targetId: string;
     if (win !== undefined) targetId = await this.openInWindow(win);
     else {
@@ -465,7 +474,7 @@ export class AgentBrowser {
    * except a tab of an explicit `open --tab`; elsewhere the old modes, by the hiddenDrive option.
    */
   driveOf(targetId: string): Drive {
-    if (windowPerPage(this.settings) && !this.readTabPages().includes(targetId)) return "window";
+    if (this.windows && !this.readTabPages().includes(targetId)) return "window";
     return this.settings.hiddenDrive ? "hidden" : "focus-emulation";
   }
 
@@ -667,7 +676,7 @@ export class Tab {
   private async whileDrawn<T>(fn: (own: OwnCapture) => Promise<T>, opts: { repeat?: boolean; shot?: boolean } = {}): Promise<T> {
     const plain: OwnCapture = (params) => this.send("Page.captureScreenshot", params, Tab.shotTiming.ownMs);
     const hidden = this.drive === "hidden", log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
-    if (!hidden && !opts.shot) return fn(plain);
+    if (!hidden && !opts.shot) { await this.toFront(); return fn(plain); }
     await this.assertAllowed();
     if (hidden && await this.evaluate(() => document.visibilityState) !== "hidden") return fn(plain);
     const { framesMs, lateMs, ownMs, lastMs } = Tab.shotTiming, t0 = Date.now();
@@ -829,6 +838,24 @@ export class Tab {
     return this.evaluate(() => location.href);
   }
 
+  /**
+   * A page in a window of its own (drive "window") that is not in front of that window is hidden: the opener behind a
+   * site's popup tab, an older tab of a pinned window, a tab that an older agent-browser opened in the background, a
+   * sign-in tab of `launch --login`. Chrome draws nothing of it there: input stalls or reaches a hidden page, and a wait
+   * for content that a frame writes, or record, gets nothing (review-45, measured on taylor). So before input, a wait
+   * and record, such a page comes in front of its window, as a person's tab switch does (Page.bringToFront; on Linux it
+   * also activates the window). No tab ever moves to another window. Elsewhere this does nothing.
+   */
+  async toFront(): Promise<void> {
+    if (this.drive !== "window") return;
+    await this.assertAllowed();
+    if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
+    await this.send("Page.bringToFront");
+    for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
+      if (await this.evaluate(() => document.visibilityState) === "visible") return;
+    this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
+  }
+
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
   async assertAllowed(): Promise<void> {
     const url = await this.url();
@@ -904,6 +931,7 @@ export class Tab {
   ): Promise<Awaited<R>> {
     const { timeoutMs = 30_000, intervalMs = 250, args = [] as unknown as A } = opts;
     const deadline = Date.now() + timeoutMs;
+    await this.toFront().catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
     for (;;) {
       const v = await this.evaluate(fn, ...args).catch(() => undefined);
       if (v) return v as Awaited<R>;
@@ -1047,6 +1075,7 @@ export class Tab {
   async setFiles(selector: string, files: string[]): Promise<void> {
     if (files.some((f) => f === "")) throw new UsageError("setFiles: a file path is empty");
     await this.assertAllowed();
+    await this.toFront();
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
     if (!nodeId) throw new Error(`no element matches ${selector}`);

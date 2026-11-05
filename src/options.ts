@@ -27,6 +27,17 @@ export function validateApprove(spec: ApproveSpec): void {
     throw new UsageError('approve must be true, "osascript", "xdotool", or { command: [program, ...args] }');
 }
 
+/** Run xdotool with these arguments on the agent browser's display and give its standard output (display.ts). */
+export type XdotoolRunner = (args: string[]) => Promise<string>;
+
+/**
+ * @internal What agent-browser knows of the agent Chrome's display, for the tests (default: found; display.ts,
+ * displayOf). `own`: the agent Chrome runs on a display of its own, where the design of one window per page applies.
+ * `xdotool`: a runner of xdotool commands on that display, or false for none. `chromePid`: the agent Chrome's pid,
+ * whose windows the display must hold.
+ */
+export type DisplayOption = { own?: boolean; xdotool?: XdotoolRunner | false; chromePid?: number };
+
 export type BrowserOptions = {
   /** Absolute folder for this consumer's state: tab names and scopes, window pin, proxy pid and log, launch log, screenshots. */
   stateDir: string;
@@ -94,6 +105,8 @@ export type BrowserOptions = {
    * platform's behaviour. On "linux" agent mode gives each page a window of its own (windowPerPage).
    */
   platform?: NodeJS.Platform;
+  /** @internal The agent Chrome's display, for the tests (DisplayOption). Default: found (display.ts, displayOf). */
+  display?: DisplayOption;
 };
 
 export type Settings = {
@@ -118,6 +131,7 @@ export type Settings = {
   hiddenDrive: boolean;
   log: (line: string) => void;
   platform: NodeJS.Platform;
+  display?: DisplayOption;
 };
 
 /**
@@ -125,7 +139,9 @@ export type Settings = {
  * agent-browser opens gets a window of its own and no focus emulation, as a person's page in a window
  * that is not in front. An explicit `open --tab` keeps the old modes for its tab (focus emulation while
  * a command is attached, or hiddenDrive). On the Mac and in personal mode every behaviour stays as it
- * was (the Mac waits for its own measurement, ab-v16.27).
+ * was (the Mac waits for its own measurement, ab-v16.27). This is the first half of the gate: the
+ * design applies only where the agent Chrome also runs on a display of its own (display.ts, displayOf;
+ * AgentBrowser.windows), so that it never puts windows on a person's screen or takes their focus.
  */
 export const windowPerPage = (s: Settings): boolean => s.mode === "agent" && s.platform === "linux";
 
@@ -268,6 +284,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     hiddenDrive: !!o.hiddenDrive,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
     platform: o.platform ?? process.platform,
+    display: o.display,
   };
 }
 

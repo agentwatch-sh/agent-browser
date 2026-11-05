@@ -118,13 +118,25 @@ export function refusal(method: string, params: any, onPage: boolean): string | 
 
 export type Route = "model" | "chrome" | { refused: string };
 
-/** Where a call goes. `child` is true for a Target.detachFromTarget of a child session (a frame or a worker) of the page's tab. */
-export function route(method: string, params: any, onPage: boolean, child = false): Route {
+/**
+ * The call that the model answers itself, on a page session, when each page has a window of its own (Linux; the
+ * anti-detect design, docs/research/2026-11-05-anti-detect-drive.md, step 2). A page in a window draws without focus
+ * emulation, and focus emulation makes a page report "visible" and the focus that it does not have. Playwright sends
+ * it for each page unless it connects with noDefaults.
+ */
+export const FOCUS_EMULATION = "Emulation.setFocusEmulationEnabled";
+
+/**
+ * Where a call goes. `child`: the call is a Target.detachFromTarget of a child session (a frame or a worker) of the
+ * page's tab. `windowPerPage`: each page has a window of its own (Linux), and the model answers FOCUS_EMULATION.
+ */
+export function route(method: string, params: any, onPage: boolean, o: { child?: boolean; windowPerPage?: boolean } = {}): Route {
   const refused = refusal(method, params, onPage);
   if (refused) return { refused };
   // A page call on the root or a browser session names no tab.
   if (!onPage) return MODEL_SET.has(method) ? "model" : { refused: TEXT.generic(method) };
-  if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && child)) return "chrome";
+  if (o.windowPerPage && method === FOCUS_EMULATION) return "model";
+  if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && o.child)) return "chrome";
   if (PAGE_MODEL_SET.has(method)) return "model";
   if (method.startsWith("Browser.") || method.startsWith("Target.")) return { refused: TEXT.generic(method) };
   return "chrome";
@@ -158,6 +170,31 @@ export function withForce(method: string, params: any): any {
   if (method !== "Input.dispatchMouseEvent" || !params || params.force !== undefined) return params;
   if (params.type === "mousePressed" || (params.type === "mouseMoved" && params.buttons)) return { ...params, force: 0.5 };
   return params;
+}
+
+/** Playwright's utility-script function that focuses an element (startsAction): its whole text, as Playwright sends it. */
+export const PLAYWRIGHT_FOCUS = /^\(\[injected\b[^\]]*\]\)\s*=>\s*injected\.focusNode\([^)]*\)\s*$/;
+
+/**
+ * An input that starts an action, as a person's press or key does: before it the model brings the page's window
+ * forward (Linux; the anti-detect design, step 5). On Linux Chrome raises a window for a press in it, but not for
+ * keys: a key into a window that is not focused gives its page the focus while another page keeps it. Moves, wheel
+ * events, releases and key-ups follow the start and need no window of their own.
+ *
+ * Playwright's focus of an element counts too: its injected focusNode (Playwright 1.64.1: locator.pressSequentially,
+ * press and type; focus calls it too) moves the caret of an input to its start when document.hasFocus() is false, so
+ * it would type at the start of a field whose window lost the focus. Playwright sends the text of its utility-script
+ * function, `([injected, node, ...]) => injected.focusNode(...)`, as a string argument of Runtime.callFunctionOn
+ * (PLAYWRIGHT_FOCUS). The rule depends on those internal names: if Playwright renames them, the caret moves to the
+ * start again, and nothing else changes.
+ */
+export function startsAction(method: string, params: any): boolean {
+  if (method === "Input.insertText") return true;
+  if (method === "Runtime.callFunctionOn") return Array.isArray(params?.arguments) && params.arguments.some((a: any) => typeof a?.value === "string" && PLAYWRIGHT_FOCUS.test(a.value));
+  if (method === "Input.dispatchMouseEvent") return params?.type === "mousePressed";
+  if (method === "Input.dispatchKeyEvent") return params?.type === "keyDown" || params?.type === "rawKeyDown" || params?.type === "char";
+  if (method === "Input.dispatchTouchEvent") return params?.type === "touchStart";
+  return false;
 }
 
 /** A command that waits for a promise: after a timeout the model leaves its tab attached (C10). */

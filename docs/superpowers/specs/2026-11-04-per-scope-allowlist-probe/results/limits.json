@@ -1,0 +1,139 @@
+{
+  "limits": {
+    "GETMATCHEDRULES_QUOTA_INTERVAL": 10,
+    "GUARANTEED_MINIMUM_STATIC_RULES": 30000,
+    "MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL": 20,
+    "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES": 5000,
+    "MAX_NUMBER_OF_DYNAMIC_RULES": 30000,
+    "MAX_NUMBER_OF_ENABLED_STATIC_RULESETS": 50,
+    "MAX_NUMBER_OF_REGEX_RULES": 1000,
+    "MAX_NUMBER_OF_SESSION_RULES": 5000,
+    "MAX_NUMBER_OF_STATIC_RULESETS": 100,
+    "MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES": 5000,
+    "MAX_NUMBER_OF_UNSAFE_SESSION_RULES": 5000,
+    "version": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "id": "gbgaclejealjocpclhhdlmmkjhnlhjee"
+  },
+  "counts": [
+    {
+      "n": 4999,
+      "ok": true,
+      "ms": 175
+    },
+    {
+      "n": 5000,
+      "ok": true,
+      "ms": 156
+    },
+    {
+      "n": 5001,
+      "ok": false,
+      "error": "Session rule count exceeded.",
+      "ms": 113
+    }
+  ],
+  "sizes": [
+    {
+      "nDomains": 100,
+      "nTabs": 10,
+      "ok": true,
+      "add": 1,
+      "replace": 1
+    },
+    {
+      "nDomains": 1000,
+      "nTabs": 100,
+      "ok": true,
+      "add": 3,
+      "replace": 2
+    },
+    {
+      "nDomains": 10000,
+      "nTabs": 1000,
+      "ok": true,
+      "add": 20,
+      "replace": 18
+    },
+    {
+      "nDomains": 100000,
+      "nTabs": 1000,
+      "ok": true,
+      "add": 228,
+      "replace": 221
+    },
+    {
+      "nDomains": 1000,
+      "nTabs": 10000,
+      "ok": true,
+      "add": 8,
+      "replace": 6
+    }
+  ],
+  "sets": [
+    {
+      "nLists": 2,
+      "nDomains": 10,
+      "ok": true,
+      "add": 1,
+      "assign": [
+        1,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "nLists": 20,
+      "nDomains": 100,
+      "ok": true,
+      "add": 10,
+      "assign": [
+        6,
+        5,
+        5,
+        5,
+        6
+      ]
+    },
+    {
+      "nLists": 20,
+      "nDomains": 1000,
+      "ok": true,
+      "add": 78,
+      "assign": [
+        48,
+        48,
+        46,
+        45,
+        45
+      ]
+    },
+    {
+      "nLists": 100,
+      "nDomains": 1000,
+      "ok": true,
+      "add": 386,
+      "assign": [
+        251,
+        235,
+        234,
+        238,
+        256
+      ]
+    },
+    {
+      "nLists": 2400,
+      "nDomains": 10,
+      "ok": true,
+      "add": 241,
+      "assign": [
+        145,
+        124,
+        122,
+        118,
+        133
+      ]
+    }
+  ]
+}
