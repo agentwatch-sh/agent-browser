@@ -592,6 +592,28 @@ test("withInput is reentrant in its own call chain: the caller's own Tab.click i
   await commands.close(o, { tab: name });
 });
 
+test("setFiles on a window page that its popup tab hides: its tab comes in front first (a tab switch), through the chooser and the old way alike (review-45b note 5)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const b = await AgentBrowser.connect(linux());
+  try {
+    const tab = await b.find(name);
+    for (const [selector, file] of [["#file", "/tmp/a.txt"], ["#orphan", "/tmp/b.txt"]]) {
+      const popup = fake.openFrom(page, `${fx.base}/`);
+      assert.equal(page.visibilityState, "hidden", "behind its popup tab");
+      const calls = await callsOf(page, () => tab.setFiles(selector, [file]));
+      const m = methods(calls), front = m.indexOf("Page.bringToFront"), files = m.indexOf("DOM.setFileInputFiles");
+      assert.ok(front >= 0 && files > front, `${selector}: the tab switch before the files (${m.filter((x) => /bringToFront|setFileInputFiles/.test(x)).join(" ")})`);
+      assert.equal(page.visibilityState, "visible");
+      assert.equal(popup.background, true, "the popup went behind, in the same window");
+      assert.equal(popup.windowId, page.windowId);
+      assert.deepEqual(page.select(selector)[0].files, [{ name: file.slice(5) }]);
+      await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+    }
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: name });
+});
+
 test("setFiles: a click that opens no file chooser in 2 s gives the files the old way, with a log line", async () => {
   operatorInFront();
   const { name, page } = await windowPage();

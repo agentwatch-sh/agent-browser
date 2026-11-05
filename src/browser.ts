@@ -1202,8 +1202,8 @@ export class Tab {
       await this.assertAllowed();
       await this.setFilesNow(selector, files);
     });
+    // Not a window page, so no tab switch (Tab.toFront does nothing here): a window page's comes in Hands.begin above.
     await this.assertAllowed();
-    await this.toFront();
     await this.setFilesNow(selector, files);
   }
 
