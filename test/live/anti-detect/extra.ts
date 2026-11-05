@@ -2,7 +2,7 @@
 // (review-43). Not part of `npm test`. Linux only, in a private Xvfb, with Chromium processes of its own
 // over a pipe (no debugging port); like run.ts it never connects to a Chrome that it did not start.
 //
-//   node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise,two,two-lock,two-noact,popup,jump,mem] [--n 8]
+//   node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise|two|two-lock|two-noact|popup|jump|mem] [--n 8] [--no-window-size]
 //
 //   raise     the X stacking order and focus after Target.createTarget(newWindow, background), a CDP click, CDP keys and
 //             Target.activateTarget (which window is above, which has the X focus)
@@ -12,6 +12,7 @@
 //   popup     a page in its own window opens a target=_blank link, window.open() with no features, and window.open(..., "popup")
 //   jump      the pointer at an activation: the real X pointer where Xvfb left it (over the windows), or parked outside them
 //   mem       memory (PSS) and CPU of N probe pages as N windows against N background tabs
+// --no-window-size starts Chromium without --window-position and --window-size (agentwatch's agent unit passes both).
 // It prints one JSON object per check and writes it to DIR/<check>-XXXXXX/out.json.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -23,8 +24,8 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { bothFocusedMs, LAYOUT, startServer, type Rec } from "./probe.ts";
 
-const { values } = parseArgs({ options: { "out-dir": { type: "string" }, display: { type: "string" }, exp: { type: "string" }, n: { type: "string" } } });
-if (!values["out-dir"] || process.platform !== "linux") { process.stderr.write("usage (Linux only): node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise|two|two-lock|two-noact|popup|jump|mem] [--n 8]\n"); process.exit(2); }
+const { values } = parseArgs({ options: { "out-dir": { type: "string" }, display: { type: "string" }, exp: { type: "string" }, n: { type: "string" }, "no-window-size": { type: "boolean" } } });
+if (!values["out-dir"] || process.platform !== "linux") { process.stderr.write("usage (Linux only): node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise|two|two-lock|two-noact|popup|jump|mem] [--n 8] [--no-window-size]\n"); process.exit(2); }
 const DISPLAY = Number(values.display ?? 122), EXP = values.exp ?? "raise", N = Number(values.n ?? 8);
 const CHECKS = ["raise", "two", "two-lock", "two-noact", "popup", "jump", "mem"];
 if (!CHECKS.includes(EXP)) { process.stderr.write(`--exp takes one check of: ${CHECKS.join(", ")} (not ${JSON.stringify(EXP)})\n`); process.exit(2); }
@@ -59,7 +60,8 @@ const loaded = async (tab: string) => { for (let i = 0; i < 150; i++) { if (log.
 const ARGS = ["--remote-debugging-pipe", "--no-first-run", "--no-default-browser-check", "--ozone-platform=x11", "--password-store=basic",
   "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps",
   "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE probe.localhost", "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=probe.localhost",
-  "--window-position=0,0", "--window-size=1100,700", "--disable-backgrounding-occluded-windows"];
+  "--window-position=0,0", "--window-size=1100,700", "--disable-backgrounding-occluded-windows"]
+  .filter((a) => !values["no-window-size"] || !/^--window-(position|size)=/.test(a));
 class Pipe {
   proc: ChildProcess; dir: string; private buf = ""; private id = 1; private pend = new Map<number, (m: any) => void>();
   constructor(name: string, urls: string[]) {

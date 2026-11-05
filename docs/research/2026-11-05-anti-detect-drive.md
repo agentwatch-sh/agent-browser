@@ -16,8 +16,9 @@ design.
 
 **Give every agent page a window of its own, and drive it as a person drives a window: Chrome draws
 it as a normal window, the agent activates that window for its input, one input at a time, and the
-input has a person's shape. Never send focus emulation, and never drive a hidden page. Build it for
-taylor first. The Mac part waits for a measurement in the Mac's agent browser (board task
+input has a person's shape. Never send focus emulation, and never drive a hidden page, except in a
+tab that a caller asks for with an explicit `open --tab` (section 8, step 2). Build it for taylor
+first. The Mac part waits for a measurement in the Mac's agent browser (board task
 ab-v16.16).**
 
 In detail (section 8):
@@ -25,12 +26,13 @@ In detail (section 8):
 1. **One window per agent page.** agent-browser's `open` and the relay's `Target.createTarget` open a
    new window (`Target.createTarget` with `newWindow: true, background: true`; in the relay
    `chrome.windows.create({ focused: false })`), also for a Playwright client's `newPage`. Never a
-   background tab. A popup that a site opens as a tab is driven in that tab, and the agent goes back
+   background tab, except for an explicit `open --tab` (step 2). A popup that a site opens as a tab is driven in that tab, and the agent goes back
    to the opener with a tab switch, as a person does (section 6).
 2. **No focus emulation.** agent-browser stops sending `Emulation.setFocusEmulationEnabled` on
    attach, and the relay answers a client's `Emulation.setFocusEmulationEnabled` without sending it to
    Chrome. A page in its own window draws without it, so Playwright works: in `pw-window-filtered`
-   every Playwright step passed, and its shot took 60 to 68 ms.
+   every Playwright step passed, and its shot took 60 to 68 ms. The exception: a tab from an explicit
+   `open --tab` keeps today's default mode or `--hidden-drive`, with a README warning (section 8).
 3. **Keep `--disable-backgrounding-occluded-windows`, also on taylor.** Without it a covered window is
    `hidden` on Linux too, and the agent's press reaches the hidden page before Chrome raises the
    window (`window-no-flag`).
@@ -38,9 +40,9 @@ In detail (section 8):
    position at each activation, a press of 70 to 90 ms with `force: 0.5`, one key-event pair per
    character 90 to 150 ms apart in place of `Input.insertText`, a click on a field in place of
    `el.focus()` (one that leaves the caret where `type --into` puts it today), and wheel events in
-   place of `scrollIntoView`. On taylor agent-browser moves the real X pointer to the end of each CDP
-   path, so the real pointer event of the next activation comes at the point where the page last saw
-   the pointer. In a window that Chrome has shown, CDP input of that shape matched the person's input
+   place of `scrollIntoView`. The X pointer at the next activation needs one of two ways, and neither
+   is measured (section 5): move the X pointer to the end of each CDP path, or start each path at the
+   X pointer and never move the X pointer. The build's live test decides. In a window that Chrome has shown, CDP input of that shape matched the person's input
    in every input field that the probe records (`window-human-cdp` against `person-window`), once its
    path started at the real pointer (section 5).
 5. **The window comes forward for input, on taylor only.** On Linux the agent's press in a window
@@ -261,13 +263,22 @@ Three more conditions, from the review of PR #43:
   pointer, so the same happens again at the second activation of the same window, after a CDP path
   that ended elsewhere (the second review of PR #43: a real move at the X pointer, then a jump of
   `movementX` -730). The pointer cannot be parked outside every window, because production windows
-  fill the screen. The design's choice for taylor: after each CDP path, agent-browser moves the X
-  pointer to the path's end (it reads and moves the X pointer through the X server, as `run.ts` does
-  with xdotool), so that at each activation the real event and the path start at one point. The
-  relay has no access to the X pointer, so for a Playwright client "the pointer enters at the X
-  pointer's point, then jumps" stays a signal (section 8). `stepSignals` counts such a jump ("pointer
-  jumps > 100 px"); in runs 6 and 7 `window-human-cdp` has one activation and starts its path at the
-  X pointer.
+  fill the screen. Two ways remain for taylor, and neither is measured; the build's live test decides:
+  - **Move the X pointer to the end of each CDP path** (agent-browser can read and move the X pointer
+    through the X server, as `run.ts` and `extra.ts` do with xdotool). Risks: a real event's movement
+    comes from the last real pointer point, not from the last point that the page saw (round 2 of the
+    second review's run: `movementX` -730), so the move itself can give the page under the pointer a
+    trusted `mousemove` with a movement of some hundred pixels at a point where the page already saw
+    the pointer; with two agents the X pointer stays at the last agent's path end, so the real event
+    of an activation comes at the page's last point only when the same window is driven again; and the
+    move must be inside step 6's lock.
+  - **Start each path at the X pointer and never move the X pointer.** The real event at each
+    activation then has movement 0, and only its position differs from the page's last point (the
+    page sees the pointer "enter" at the X pointer's point each time).
+  The relay has no access to the X pointer, so for a Playwright client the real event at the X
+  pointer's point, and the jump after it, stay a signal (section 8). `stepSignals` counts such a jump
+  ("pointer jumps > 100 px"); in runs 6 and 7 `window-human-cdp` has one activation and starts its
+  path at the X pointer.
 - **Focus by a click, not by a script.** `type --into` focuses the field with `el.focus()`
   (`src/browser.ts`, line 750): the page gets a `focusin` with no press before it. A person clicks the
   field. A click also moves the caret to the point of the click: in the two-agent check each click in
@@ -311,8 +322,9 @@ Measured in the final runs:
   each case the new page has `history.length` 1. The popup window does not get the size that the site
   asked for: `window.open(url, "", "popup,width=500,height=400")` opened at an outer size of 1100x734
   with `--window-size=1100,700` (which `extra.ts`, `run.ts` and agentwatch's agent unit pass:
-  `agentwatch/daemon/browser/unit.py`, lines 542 and 543), and at 500x434 without the flag (the second
-  review of PR #43). A site can compare the size that it asked for with the size that it got. The
+  `agentwatch/daemon/browser/unit.py`, lines 542 and 543), and at 500x434 without `--window-position`
+  and `--window-size` (first in the second review's copy of `extra.ts`; `extra.ts --exp popup
+  --no-window-size` gives the same, 2026-11-05 01:54 UTC). A site can compare the size that it asked for with the size that it got. The
   rule: drive the new tab or window where the site put it, and go back to the opener with a tab
   switch, as a person does. Do not move tabs between windows (a person cannot do that with one click,
   and a site sees the opener's window change). The fix for the popup size can need a change of
@@ -405,8 +417,9 @@ another agent window can see two focused pages.
    a press of 70 to 90 ms with `force: 0.5`, one key-event pair per character (`typeChar`) 90 to 150 ms
    apart in place of `Input.insertText`, a click on the field in place of `el.focus()` (`type --into`,
    and before `setFiles`) that leaves the caret where `type --into` puts it today, and wheel events in
-   place of `scrollIntoView`. On taylor, after each CDP path, agent-browser moves the X pointer to the
-   path's end (section 5). Cost: 0.5 to 0.9 s for each click and about 0.13 s for each character.
+   place of `scrollIntoView`. On taylor, the X pointer at each activation: either move it to the end
+   of each CDP path (inside step 6's lock), or start each path at it and never move it; neither is
+   measured, and the build's live test decides (section 5, with the risks of each). Cost: 0.5 to 0.9 s for each click and about 0.13 s for each character.
 5. **The window comes forward for input, on taylor only.** Before each input command, activate the
    page's window if it is not active (`Target.activateTarget` for agent-browser; in the relay a new
    path, `chrome.windows.update({ focused: true })`, because its `Target.activateTarget` only selects
@@ -429,9 +442,10 @@ the person baselines of `run.ts`.
 - **Two agents at once through Playwright** (step 6): two of the site's pages focused at the same
   time. A site that has two of the pages open can see it, and so can an anti-bot vendor that serves
   several sites and links their pages on its server.
-- **The pointer at an activation, through Playwright** (step 4): the page gets a real pointer event at
-  the X pointer's point, and the client's first move jumps from there. The relay cannot move the X
-  pointer.
+- **The pointer at an activation** (step 4): the page gets a real pointer event at the X pointer's
+  point. For agent-browser's commands one of the two ways of section 5 removes the jump after it or
+  shrinks it to a change of position; neither is measured. For a Playwright client the jump stays:
+  the relay cannot read or move the X pointer.
 - **A covered window that draws.** With the flag, an agent window under another window draws at 60
   frames a second. A person's covered window is `hidden`. A site cannot tell a covered window from an
   uncovered one, so it sees a window that is not in front, as on a second screen.
@@ -468,6 +482,8 @@ the person baselines of `run.ts`.
   The runs keep T hidden for at most about 60 s. No `freeze`, `resume` or `pagehide` came in any run.
 - Popups in each design: `extra.ts --exp popup` measured them only for a page in a window of its own.
 - The whole design as one scenario: it is not built. The parts ran in separate scenarios.
+- Either way for the X pointer at each activation (section 5): moving it to each path's end, or
+  starting each path at it.
 - "Taylor without the flag, with activation before input and shots" (section 4) as one scenario.
 - Behaviour checks of real anti-bot services. The probe records the signals that a page can read; it
   does not run a vendor's script.
@@ -507,7 +523,9 @@ their focus times are a little longer. The ranges in the text are over runs 3, 4
 where the text names runs 6 and 7 or `extra.ts`. Runs 1 and 2 were earlier versions of the script
 and gave the same results where they measured the same thing; the person-window baseline failed in
 run 1 (a fault of the script, fixed). Each run exited 0. The `extra.ts` values come from one run of
-each check on 2026-11-05 (00:59 to 01:02 UTC) and from the review's runs of the same checks.
+each check on 2026-11-05 (00:59 to 01:02 UTC), a second run of `two` (about 01:41 UTC: both pages
+focused 9.6 of 12.5 s, 12 and 9 pointer jumps of more than 100 px), a run of `popup --no-window-size`
+(01:54 UTC), and the reviews' runs of the same checks.
 
 How to read the tables:
 
