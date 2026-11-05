@@ -341,6 +341,28 @@ test("Linux, a display that is not the agent browser's own: the log line comes a
   await commands.close(o, { tab: name });
 });
 
+test("Linux, a display that is not the agent browser's own: open --tab records its tab page, so it keeps the old modes when the gate opens later; a plain open's background tab is a window page then (review-45b note 6)", async () => {
+  operatorInFront();
+  const o = linux({ display: { own: false } });
+  const tabPages = () => (existsSync(join(c.stateDir, "tab-pages.json")) ? JSON.parse(readFileSync(join(c.stateDir, "tab-pages.json"), "utf8")) as string[] : []);
+  const tab = await opened(o, true), plain = await opened(o);
+  assert.deepEqual([tab.create, plain.create], [{ url: "about:blank", background: true, newWindow: false }, { url: "about:blank", background: true, newWindow: false }]);
+  assert.ok(tabPages().includes(tab.page.targetId), "the explicit tab");
+  assert.ok(!tabPages().includes(plain.page.targetId), "the fallback's own background tab");
+  // The gate opens (a display of its own): the explicit tab keeps the old default, focus emulation on each attach.
+  let calls = await callsOf(tab.page, () => commands.click(linux(), { tab: tab.name, target: "#b" }));
+  assert.equal(tab.page.title, "clicked");
+  assert.deepEqual(focusCalls(calls), [true]);
+  // The plain open's tab is a window page now: no focus emulation, and its window comes forward for input.
+  calls = await callsOf(plain.page, () => commands.click(linux(), { tab: plain.name, target: "#b" }));
+  assert.equal(plain.page.title, "clicked");
+  assert.deepEqual(focusCalls(calls), []);
+  assert.ok(calls.some((x) => x.method === "Page.bringToFront"));
+  await commands.close(linux(), { tab: tab.name });
+  await commands.close(linux(), { tab: plain.name });
+  assert.ok(!tabPages().includes(tab.page.targetId), "dropped at its close");
+});
+
 test("Linux: reads of a hidden opener (text, outline, eval) bring its tab in front first, so an eval that waits for a frame ends (review-45b)", async () => {
   fake.tabSwitches = true;
   try {

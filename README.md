@@ -250,7 +250,11 @@ person's input**) and `log` (progress lines; default standard error).
     when a window is not possible: **a site can detect a background tab** that agent-browser drives in
     either mode (the research's section 4: two `visible` tabs in one window, two focused pages, input
     while `hidden`). The state folder's `tab-pages.json` lists these tabs, so that each later command
-    drives them in the old mode too. `--hidden-drive` changes only such tabs. Over agent mode's endpoint
+    drives them in the old mode too, also a tab that `open --tab` opened while the display was not the
+    agent browser's own (the item above) and the display is its own later. A plain `open` there opens a
+    background tab too, with no entry: once the display is the agent browser's own, that tab is a window
+    page (a tab switch in its window before input, no focus emulation). `--hidden-drive` changes only
+    such tabs. Over agent mode's endpoint
     (`--cdp-url`) the exception does not apply: agentwatch's relay opens a window for every new page
     (board task ab-v16.28).
   - **One input at a time, after the window comes forward** (`src/input.ts`). In a window of its own,

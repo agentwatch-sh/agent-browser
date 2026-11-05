@@ -349,9 +349,11 @@ export class AgentBrowser {
     this.noteDisplay();
     const win = this.pinnedWindow();
     const agent = this.mode === "agent", windows = this.windows;
-    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Over agent mode's
-    // endpoint the relay opens a window for every page (ab-v16.28), so there it is a window page like any other.
-    const tabPage = windows && opts.newWindow === false && !this.settings.cdpUrl;
+    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Also in the gate's
+    // fallback (a display that is not the agent browser's own): so the tab keeps them when the gate opens later
+    // (review-45b note 6). Over agent mode's endpoint the relay opens a window for every page (ab-v16.28), so there it
+    // is a window page like any other.
+    const tabPage = windowPerPage(this.settings) && opts.newWindow === false && !this.settings.cdpUrl;
     let targetId: string;
     if (win !== undefined) targetId = await this.openInWindow(win);
     else {
