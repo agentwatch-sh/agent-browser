@@ -44,8 +44,9 @@ process belongs to, with no key. Each decision has its reason in the section tha
    the daemon is refused.
 3. **The session (sections 4 and 5).** The **root** of a session is its tmux pane's process, by pid
    and start time (field 22 of `/proc/<pid>/stat`). The relay admits a connection of scope S when
-   the walk from the peer through its parents reaches one of S's roots. On Linux it also admits a
-   peer in the pane's own cgroup: tmux puts each pane into its own systemd scope, and every
+   the walk from the peer through its parents reaches one of S's roots. On Linux, when the walk
+   reaches no root, it also admits a peer in the pane's own cgroup: tmux puts each pane into its own
+   systemd scope, and every
    descendant stays in it, also a job that left the tool's shell (`nohup ... &`, `setsid -f`, a
    double fork). Measured: every shape of an agent (a Bash tool command, Claude Code's own command
    form, a `run_in_background` job, a Python script, a Playwright script, `agent-browser`, an
