@@ -687,22 +687,22 @@ session names itself, and the CLI reaches the gateway over TCP localhost with on
   the token belongs to the session's stable identity (not its display name), and a failed `/proc` or
   tmux read refuses the call.
 
-The token (aw-lead's "key") lives only in its token file and in the session's environment, where
-the launch line puts it: never in an argv, never in the output of `agentwatch browser endpoint` or
+The token (aw-lead's "key") lives only in its token file and in the session's environment, where the
+launch line puts it: never in an argv, never in the output of `agentwatch browser endpoint` or
 `agentwatch browser env`, never in a log, and never in a URL that a tool gets as an argument. A
 session that is live before the deploy has no token until its next launch: the relay refuses its
 connection with 403 `The agent browser needs this session's key. A session that started before the
 key existed gets one when agentwatch launches it again.` (fail closed). Only a new launch makes a
 key: a restart of the session's agent reads the existing token file, and with no token file the
-agent gets no key, so its session gets the 403 until agentwatch launches it again. The
-daemon keeps each session's token in a token file under `~/.config/agentwatch/tokens/` (0600 files
-in 0700 folders, the modes applied again at each write; never in the browser state folder), so the
-token lasts over a daemon restart (the session's environment still holds it), and the daemon sends
-the hashes again in its next `allowlist` line; a lost token file means that its session is refused
-until it starts again. The token is 64 lowercase hex digits (32 random bytes; `ws` cuts a `ws+unix:`
-URL at each `:`, and a `#` is an error, so hex is safe); its hash is SHA-256 of those 64 ASCII
-characters. No side logs the URL's query or the `X-Agentwatch-Key` header: not the relay, not the
-daemon, not `agentwatch browser <command>`. agent-browser adds the key only at the connect call,
+agent gets no key, so its session gets the 403 until agentwatch launches it again. The daemon keeps
+each session's token in a token file under `~/.config/agentwatch/tokens/` (0600 files in 0700
+folders, the modes applied again at each write; never in the browser state folder), so the token
+lasts over a daemon restart (the session's environment still holds it), and the daemon sends the
+hashes again in its next `allowlist` line; a lost token file means that its session is refused until
+agentwatch launches it again. The token is 64 lowercase hex digits (32 random bytes; `ws` cuts a
+`ws+unix:` URL at each `:`, and a `#` is an error, so hex is safe); its hash is SHA-256 of those 64
+ASCII characters. No side logs the URL's query or the `X-Agentwatch-Key` header: not the relay, not
+the daemon, not `agentwatch browser <command>`. agent-browser adds the key only at the connect call,
 never in its `Settings.cdpUrl`, because `agent-browser status` prints that. A limit: with
 `DEBUG=pw:channel` (or `pw:*`), playwright-core 1.61.1 and 1.63.0 write the endpoint URL with its
 `?key=`, and the header's value, to standard error (review-42f); clients do not run with that value.
@@ -843,11 +843,12 @@ connect to the agent browser with any session's name and get that session's list
   their output goes into a transcript: they print no token at all. The client reads the token from
   its own environment and adds it to the URL. A program that agentwatch did not start has no token
   and can no longer connect, unless agentwatch gives it a token of its own (see choice 5). A session
-  that started before the change has no token until it starts again; until then the agent browser
-  refuses it with a clear text. A process of your user that looks for a token can still find it: in
-  another session's environment (`/proc`), in a transcript, or by tmux keys to another session's
-  pane. agentwatch never writes it into a command line, a transcript or a log. A stronger check (the
-  daemon tells the calling session by its process) is about one more stage of work in agentwatch.
+  that started before the change has no token until agentwatch launches it again; until then the
+  agent browser refuses it with a clear text. A process of your user that looks for a token can
+  still find it: in another session's environment (`/proc`), in a transcript, or by tmux keys to
+  another session's pane. agentwatch never writes it into a command line, a transcript or a log. A
+  stronger check (the daemon tells the calling session by its process) is about one more stage of
+  work in agentwatch.
 - Recommendation: b, because without it the per-repo list is one name away for any session, and a
   simple injected instruction can use it.
 - No answer: a (no token); the rest of the design does not depend on it.
