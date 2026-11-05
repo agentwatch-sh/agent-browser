@@ -39,13 +39,15 @@ const held = new AsyncLocalStorage<ReadonlySet<string>>();
 /**
  * Run `fn` while this process holds the agent browser's input lock (the state folder's input.lock). Reentrant within
  * one call chain of one process (Tab.withInput around the caller's own Tab.click); another chain, or another process,
- * waits for it.
+ * waits for it, up to lockWaitMs, or up to `deadline` (epoch ms) when that comes first (Tab.waitFor's timeout).
  */
-export async function withInputLock<T>(s: Settings, fn: () => Promise<T>): Promise<T> {
+export async function withInputLock<T>(s: Settings, fn: () => Promise<T>, deadline?: number): Promise<T> {
   const path = statePath(s, INPUT_LOCK), mine = held.getStore();
   if (mine?.has(path)) return fn();
-  return withFileLock(path, Date.now() + s.inputTiming.lockWaitMs, () => held.run(new Set([...(mine ?? []), path]), fn),
-    `the input lock (another input command of this agent browser held it for ${s.inputTiming.lockWaitMs / 1000} s)`);
+  const wait = s.inputTiming.lockWaitMs, until = Math.min(Date.now() + wait, deadline ?? Infinity);
+  return withFileLock(path, until, () => held.run(new Set([...(mine ?? []), path]), fn),
+    until < Date.now() + wait ? "the input lock (another input command of this agent browser held it until the wait's timeout)"
+      : `the input lock (another input command of this agent browser held it for ${wait / 1000} s)`);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));

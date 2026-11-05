@@ -673,6 +673,9 @@ export class FakePage {
     const target = new URL(href, this.url).href;
     // A download finishes after the click returns, as in Chrome.
     if (el.hasAttribute("download")) { void this.fake.download(this, target, el.getAttribute("download") || basename(new URL(target).pathname)); return; }
+    // A target=_blank link (noopener, Chrome's default for it): the opener's frame asks for a navigation in a new tab
+    // (Page.frameRequestedNavigation with disposition newTab, on the opener's sessions), and the page opens there.
+    if (el.getAttribute("target") === "_blank") { this.fake.requestNavigation(this, target, "newTab"); this.fake.openFrom(this, target); return; }
     this.fake.navigate(this, target);
   }
 
@@ -850,12 +853,20 @@ export class FakeChrome {
     setTimeout(() => this.toSessions(page, "Page.loadEventFired", { timestamp: Date.now() / 1000 }), 5);
   }
 
-  /** window.open() or a target=_blank link: a new tab in the opener's window (with tabSwitches, in front and focused). Returns it. */
-  /** A page's script asks for a navigation of its main frame (Page.frameRequestedNavigation); it does not commit yet. */
-  requestNavigation(page: FakePage, url: string) {
-    this.toSessions(page, "Page.frameRequestedNavigation", { frameId: `F-${page.targetId}`, reason: "scriptInitiated", url, disposition: "currentTab" });
+  /**
+   * A page's script asks for a navigation of its main frame (Page.frameRequestedNavigation); it does not commit yet.
+   * `disposition` as Chrome gives it: "currentTab" for the frame itself, "newTab" (and "newWindow") for a page that opens elsewhere.
+   */
+  requestNavigation(page: FakePage, url: string, disposition = "currentTab") {
+    this.toSessions(page, "Page.frameRequestedNavigation", { frameId: `F-${page.targetId}`, reason: disposition === "currentTab" ? "scriptInitiated" : "anchorClick", url, disposition });
   }
 
+  /** A navigation of the main frame starts (Page.frameStartedNavigating) and does not commit yet: a slow server, say. */
+  startNavigation(page: FakePage, url: string) {
+    this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
+  }
+
+  /** window.open() or a target=_blank link: a new tab in the opener's window (with tabSwitches, in front and focused). Returns it. */
   openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);

@@ -6,12 +6,13 @@ import { closeSync, fstatSync, openSync, readFileSync, rmSync, statSync, writeFi
 /**
  * Run `fn` while this process holds the lock file at `path`: the file is created exclusively and
  * holds this process's pid. Another holder is waited for until `deadline` (epoch ms), then the
- * error names `what`. A crashed holder's lock (its pid is gone, or no pid was written within 5 s)
- * is cleared; a live holder's lock is never cleared. The lock is removed only if it is still ours.
+ * error names `what`; a free lock is taken also when the deadline has passed (one try). A crashed
+ * holder's lock (its pid is gone, or no pid was written within 5 s) is cleared; a live holder's lock
+ * is never cleared. The lock is removed only if it is still ours.
  */
 export async function withFileLock<T>(path: string, deadline: number, fn: () => Promise<T>, what = "lock"): Promise<T> {
   let fd: number | undefined;
-  while (Date.now() < deadline) {
+  for (let first = true; first || Date.now() < deadline; first = false) {
     try {
       fd = openSync(path, "wx", 0o600);
       writeFileSync(fd, String(process.pid));

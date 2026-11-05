@@ -18,7 +18,7 @@ import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
-import { displayOf, type DisplayInfo } from "./display.ts";
+import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -113,6 +113,7 @@ export class AgentBrowser {
   /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
   readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
+  private notedDisplay = false;
 
   private constructor(conn: CDPConnection, settings: Settings, allow: string[], product: string, display: DisplayInfo | undefined) {
     this.conn = conn;
@@ -172,7 +173,7 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      const display = windowPerPage(s) ? await displayOf(s, true) : undefined;
+      const display = windowPerPage(s) ? await displayOf(s) : undefined;
       return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
@@ -181,6 +182,16 @@ export class AgentBrowser {
   }
 
   get mode() { return this.settings.mode; }
+
+  /**
+   * The log line of a display that is not the agent browser's own (display.ts, noticeNotOwn): at the first page that
+   * this connection opens or attaches, whose drive it changes, never at a command that only lists (review-45c).
+   */
+  private noteDisplay(): void {
+    if (this.notedDisplay || !this.display || this.display.own) return;
+    this.notedDisplay = true;
+    noticeNotOwn(this.settings, this.display);
+  }
 
   /** The tab scope this browser works in, or undefined: every tab. */
   get tabScope(): string | undefined { return this.settings.tabScope; }
@@ -335,11 +346,14 @@ export class AgentBrowser {
    */
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
     assertAllowedUrl(url, this.allow);
+    this.noteDisplay();
     const win = this.pinnedWindow();
     const agent = this.mode === "agent", windows = this.windows;
-    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Over agent mode's
-    // endpoint the relay opens a window for every page (ab-v16.28), so there it is a window page like any other.
-    const tabPage = windows && opts.newWindow === false && !this.settings.cdpUrl;
+    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Also in the gate's
+    // fallback (a display that is not the agent browser's own): so the tab keeps them when the gate opens later
+    // (review-45b note 6). Over agent mode's endpoint the relay opens a window for every page (ab-v16.28), so there it
+    // is a window page like any other.
+    const tabPage = windowPerPage(this.settings) && opts.newWindow === false && !this.settings.cdpUrl;
     let targetId: string;
     if (win !== undefined) targetId = await this.openInWindow(win);
     else {
@@ -449,6 +463,7 @@ export class AgentBrowser {
 
   async attach(targetId: string): Promise<Tab> {
     this.assertPinned();
+    this.noteDisplay();
     const existing = this.sessions.get(targetId);
     if (existing) return existing;
     const { targetInfos } = await this.conn.send("Target.getTargets");
@@ -850,9 +865,9 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
-   * Elsewhere this does nothing.
+   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout).
    */
-  async toFront(): Promise<void> {
+  async toFront(opts: { deadline?: number } = {}): Promise<void> {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
@@ -868,7 +883,7 @@ export class Tab {
       for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
-    });
+    }, opts.deadline);
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -951,14 +966,19 @@ export class Tab {
     }
   }
 
-  /** Poll a page function until it returns a truthy value; returns that value. */
+  /**
+   * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front first
+   * (toFront); its wait for the input lock is part of `timeoutMs` (review-47d note 6), so the wait ends near its timeout
+   * also while another agent's input holds the lock (the page then stays hidden, and a condition that needs a frame
+   * times out).
+   */
   async waitFor<R, A extends unknown[] = []>(
     fn: ((...args: A) => R) | string,
     opts: { timeoutMs?: number; intervalMs?: number; args?: A; what?: string } = {},
   ): Promise<Awaited<R>> {
     const { timeoutMs = 30_000, intervalMs = 250, args = [] as unknown as A } = opts;
     const deadline = Date.now() + timeoutMs;
-    await this.toFront().catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
+    await this.toFront({ deadline }).catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
     for (;;) {
       const v = await this.evaluate(fn, ...args).catch(() => undefined);
       if (v) return v as Awaited<R>;
@@ -993,11 +1013,16 @@ export class Tab {
         if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", allow)) left = p.frame?.url ?? "";
       });
       // Also as soon as the main frame starts or asks for a navigation to a host off the list (review-47c: one move still
-      // reached an off-list page before its commit).
+      // reached an off-list page before its commit). A request for a page elsewhere (a target=_blank link: disposition
+      // newTab, newWindow or download) leaves the main frame where it is: only "currentTab" counts, as in Playwright
+      // (review-47d note 7). The new tab itself is off the list, so no command reaches it.
       const early = (p: { frameId?: string; url?: string }, sid?: string) => {
         if (sid === this.sessionId && p.frameId === main && p.url && !isAllowedUrl(p.url, allow)) left = p.url;
       };
-      const offStart = this.browser.conn.on("Page.frameStartedNavigating", early), offAsk = this.browser.conn.on("Page.frameRequestedNavigation", early);
+      const offStart = this.browser.conn.on("Page.frameStartedNavigating", early);
+      const offAsk = this.browser.conn.on("Page.frameRequestedNavigation", (p: { frameId?: string; url?: string; disposition?: string }, sid?: string) => {
+        if (p.disposition === "currentTab") early(p, sid);
+      });
       const off = () => { offNav(); offStart(); offAsk(); };
       const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
       let h: Hands | undefined;
@@ -1179,8 +1204,8 @@ export class Tab {
       await this.assertAllowed();
       await this.setFilesNow(selector, files);
     });
+    // Not a window page, so no tab switch (Tab.toFront does nothing here): a window page's comes in Hands.begin above.
     await this.assertAllowed();
-    await this.toFront();
     await this.setFilesNow(selector, files);
   }
 

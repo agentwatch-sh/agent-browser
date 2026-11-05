@@ -376,9 +376,14 @@ export function isBrowserChild(command: string): boolean {
  */
 export function agentMainPid(rows: { pid: number; command: string }[], profile: string): number | undefined {
   for (const { pid, command } of rows) {
-    if (hasUserDataDir(command, profile) && !isBrowserChild(command)) return pid;
+    if (isAgentChromeCommand(command, profile)) return pid;
   }
   return undefined;
+}
+
+/** The command line of the agent browser's main process on `profile` (see agentMainPid). */
+export function isAgentChromeCommand(command: string, profile: string): boolean {
+  return hasUserDataDir(command, profile) && !isBrowserChild(command);
 }
 
 /**

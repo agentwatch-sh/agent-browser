@@ -286,7 +286,8 @@ function scenario(name: string, what: string): Scenario {
 /** agent-browser options for the bridge of `c` (agent mode's endpoint transport). */
 const opts = (c: Chromium, hiddenDrive: boolean): BrowserOptions => ({
   stateDir: join(RUN, `state-${c.name}-${hiddenDrive ? "h" : "d"}`), cdpUrl: c.cdpUrl, allow: ["probe.localhost"], hiddenDrive,
-  commandName: "anti-detect probe", log: (l) => say(`agent-browser: ${l}`),
+  // agent-browser's own lines start with its name already (review-45c: "agent-browser: agent-browser: ...").
+  commandName: "anti-detect probe", log: (l) => say(/^agent-browser\b/.test(l) ? l : `agent-browser: ${l}`),
 });
 
 type Wrap = (fn: () => Promise<unknown>) => Promise<unknown>;
