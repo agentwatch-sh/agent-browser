@@ -1,0 +1,837 @@
+{
+  "part": "plain",
+  "port": 8464,
+  "closed-before-L1": 1,
+  "closed-before-L2": 14,
+  "cases": [
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "open site.test/ and click the sign-in link",
+      "ms": 826,
+      "detail": {
+        "goto": {
+          "ok": true,
+          "url": "https://site.test/"
+        },
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        }
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=-",
+        "GET site.test/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "text of the tab after the click (the tab is on the provider's page)",
+      "ms": 681,
+      "detail": {
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "about:blank"
+          ]
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "choose an account and type on the provider's page",
+      "ms": 1127,
+      "detail": {
+        "account": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "type": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "submit": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "text after the sign-in",
+      "ms": 352,
+      "detail": {
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "(helper, list L2) sign in at the provider so that its session exists",
+      "ms": 5045,
+      "detail": {
+        "ok": true,
+        "url": "https://site.test/app",
+        "text": "signed in as ada"
+      },
+      "hits": [
+        "GET site.test/login sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=none cookies=-",
+        "GET tenant.auth0.test/u/login sfs=none cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-",
+        "POST tenant.auth0.test/u/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=same-origin cookies=auth0_session",
+        "GET site.test/callback sfs=cross-site cookies=-",
+        "GET site.test/app sfs=cross-site cookies=site_session",
+        "GET site.test/logout sfs=none cookies=site_session",
+        "GET site.test/ sfs=none cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "with the provider's session: click the sign-in link (a silent redirect chain through the provider)",
+      "ms": 2620,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "ok": true,
+          "url": "https://site.test/app",
+          "text": "signed in as ada"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "about:blank",
+            "https://site.test/app"
+          ]
+        }
+      },
+      "hits": [
+        "GET site.test/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=auth0_session",
+        "GET site.test/callback sfs=cross-site cookies=-",
+        "GET site.test/app sfs=cross-site cookies=site_session"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "with the provider's session: a popup with window.open(url) (it posts back and closes)",
+      "ms": 3207,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "status": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": "popup code c3"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "about:blank",
+            "https://site.test/app",
+            "https://site.test/",
+            "https://site.test/"
+          ]
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=auth0_session"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "(helper, list L2) sign out at the provider",
+      "ms": 1534,
+      "detail": {
+        "ok": true
+      },
+      "hits": [
+        "GET tenant.auth0.test/logout sfs=none cookies=auth0_session",
+        "GET site.test/ sfs=none cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "goto site.test/app while signed out (the site redirects to the provider)",
+      "ms": 749,
+      "detail": {
+        "goto": {
+          "error": "refusing: site.test redirected the tab to tenant.auth0.test, which is not on the allowlist. The tab stays open there; agent-browser does not touch it"
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=-",
+        "GET site.test/login sfs=none cookies=-",
+        "GET tenant.auth0.test/authorize sfs=none cookies=-",
+        "GET tenant.auth0.test/u/login sfs=none cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "open the provider's page itself (the agent's own navigation)",
+      "ms": 358,
+      "detail": {
+        "open": {
+          "error": "refusing: tenant.auth0.test is not on the allowlist"
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "eval location.href = the provider (the agent's script in the page)",
+      "ms": 1946,
+      "detail": {
+        "eval": {
+          "ok": true,
+          "url": "https://site.test/",
+          "value": 1
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "eval location.href = other.test (the agent's script in the page)",
+      "ms": 1909,
+      "detail": {
+        "eval": {
+          "ok": true,
+          "url": "https://site.test/",
+          "value": 1
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET other.test/eval sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "click the popup sign-in, then list the tabs",
+      "ms": 2304,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://site.test/",
+            "https://site.test/",
+            "https://site.test/",
+            "about:blank",
+            "https://site.test/app"
+          ]
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "drive the popup on the provider's page (by its URL: web_message)",
+      "ms": 1063,
+      "detail": {
+        "account": {
+          "error": "no allowlisted tab matches \"web_message\" (see: agent-browser tabs)"
+        },
+        "type": {
+          "error": "no allowlisted tab matches \"web_message\" (see: agent-browser tabs)"
+        },
+        "submit": {
+          "error": "no allowlisted tab matches \"web_message\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "the opener's status after the popup",
+      "ms": 389,
+      "detail": {
+        "status": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": ""
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "the agent's goto through the site's open redirect to other.test",
+      "ms": 741,
+      "detail": {
+        "goto": {
+          "error": "refusing: site.test redirected the tab to other.test, which is not on the allowlist. The tab stays open there; agent-browser does not touch it"
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET site.test/redirect sfs=none cookies=-",
+        "GET other.test/x sfs=none cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "a click on the site's link to other.test",
+      "ms": 1802,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET other.test/link sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "a click on a sign-in link that goes straight to the provider",
+      "ms": 2329,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://site.test/",
+            "https://site.test/",
+            "about:blank",
+            "https://site.test/app",
+            "https://site.test/"
+          ]
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "a SAML sign-in: a click on the site's SAML link (its form POSTs to the provider), then the account chooser",
+      "ms": 2975,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "drove": null,
+        "after": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://site.test/",
+            "https://site.test/",
+            "about:blank",
+            "https://site.test/app",
+            "https://site.test/"
+          ]
+        }
+      },
+      "hits": [
+        "GET site.test/saml/login sfs=same-origin cookies=-",
+        "POST tenant.auth0.test/samlp/probe sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L1",
+      "case": "stop this consumer's proxy",
+      "ms": 355,
+      "detail": {
+        "ok": true
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "open site.test/ and click the sign-in link",
+      "ms": 767,
+      "detail": {
+        "goto": {
+          "ok": true,
+          "url": "https://site.test/"
+        },
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        }
+      },
+      "hits": [
+        "GET site.test/ sfs=none cookies=-",
+        "GET site.test/login sfs=same-origin cookies=-",
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "text of the tab after the click (the tab is on the provider's page)",
+      "ms": 698,
+      "detail": {
+        "text": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+            "about:blank"
+          ]
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "choose an account and type on the provider's page",
+      "ms": 1412,
+      "detail": {
+        "account": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+          "text": null
+        },
+        "type": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dquery"
+        },
+        "submit": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dquery",
+          "text": null
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "text after the sign-in",
+      "ms": 367,
+      "detail": {
+        "text": {
+          "ok": true,
+          "url": "https://site.test/app",
+          "text": "signed in as ada"
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "goto site.test/app while signed out (the site redirects to the provider)",
+      "ms": 759,
+      "detail": {
+        "goto": {
+          "ok": true,
+          "url": "https://site.test/app"
+        },
+        "text": {
+          "ok": true,
+          "url": "https://site.test/app",
+          "text": "signed in as ada"
+        }
+      },
+      "hits": [
+        "GET site.test/app sfs=none cookies=site_session"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "open the provider's page itself (the agent's own navigation)",
+      "ms": 452,
+      "detail": {
+        "open": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login"
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/u/login sfs=none cookies=auth0_session",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "eval location.href = the provider (the agent's script in the page)",
+      "ms": 1972,
+      "detail": {
+        "eval": {
+          "ok": true,
+          "url": "https://site.test/",
+          "value": 1
+        },
+        "text": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login",
+          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=auth0_session",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "eval location.href = other.test (the agent's script in the page)",
+      "ms": 1955,
+      "detail": {
+        "eval": {
+          "ok": true,
+          "url": "https://site.test/",
+          "value": 1
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET other.test/eval sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "click the popup sign-in, then list the tabs",
+      "ms": 2392,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+            "https://tenant.auth0.test/u/login",
+            "https://tenant.auth0.test/u/login",
+            "about:blank",
+            "https://site.test/",
+            "https://site.test/app",
+            "https://site.test/app"
+          ]
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=auth0_session",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=auth0_session",
+        "GET other.test/captcha sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "drive the popup on the provider's page (by its URL: web_message)",
+      "ms": 1148,
+      "detail": {
+        "account": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+          "text": null
+        },
+        "type": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account"
+        },
+        "submit": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?q=response_type%3Dcode%26client_id%3Dprobe%26redirect_uri%3Dhttps%253A%252F%252Fsite.test%253A8464%252Fcallback%26state%3Dst%26response_mode%3Dweb_message%26prompt%3Dselect_account",
+          "text": null
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "the opener's status after the popup",
+      "ms": 345,
+      "detail": {
+        "status": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": "popup code c5"
+        }
+      },
+      "hits": []
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "the agent's goto through the site's open redirect to other.test",
+      "ms": 829,
+      "detail": {
+        "goto": {
+          "error": "refusing: site.test redirected the tab to other.test, which is not on the allowlist. The tab stays open there; agent-browser does not touch it"
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET site.test/redirect sfs=none cookies=site_session",
+        "GET other.test/x sfs=none cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "a click on the site's link to other.test",
+      "ms": 1796,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET other.test/link sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "a click on a sign-in link that goes straight to the provider",
+      "ms": 2449,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "ok": true,
+          "url": "https://site.test/app",
+          "text": "signed in as ada"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://site.test/app",
+            "https://tenant.auth0.test/u/login",
+            "https://tenant.auth0.test/u/login",
+            "about:blank",
+            "https://site.test/",
+            "https://site.test/app",
+            "https://site.test/app"
+          ]
+        }
+      },
+      "hits": [
+        "GET tenant.auth0.test/authorize sfs=cross-site cookies=auth0_session",
+        "GET site.test/callback sfs=cross-site cookies=site_session",
+        "GET site.test/app sfs=cross-site cookies=site_session"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "a SAML sign-in: a click on the site's SAML link (its form POSTs to the provider), then the account chooser",
+      "ms": 6220,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://site.test/",
+          "text": null
+        },
+        "text": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login?saml=1",
+          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+        },
+        "drove": {
+          "account": {
+            "ok": true,
+            "url": "https://tenant.auth0.test/u/login?saml=1",
+            "text": null
+          },
+          "type": {
+            "ok": true,
+            "url": "https://tenant.auth0.test/u/login?saml=1"
+          },
+          "submit": {
+            "ok": true,
+            "url": "https://tenant.auth0.test/u/login?saml=1",
+            "text": null
+          }
+        },
+        "after": {
+          "ok": true,
+          "url": "https://site.test/app",
+          "text": "signed in as ada"
+        },
+        "tabs": {
+          "ok": true,
+          "tabs": [
+            "https://site.test/app",
+            "https://site.test/app",
+            "https://tenant.auth0.test/u/login",
+            "https://tenant.auth0.test/u/login",
+            "https://site.test/",
+            "about:blank",
+            "https://site.test/",
+            "https://site.test/app",
+            "https://site.test/app"
+          ]
+        }
+      },
+      "hits": [
+        "GET site.test/saml/login sfs=same-origin cookies=site_session",
+        "POST tenant.auth0.test/samlp/probe sfs=cross-site cookies=-",
+        "GET tenant.auth0.test/u/login sfs=cross-site cookies=-",
+        "GET other.test/captcha sfs=cross-site cookies=-",
+        "POST tenant.auth0.test/u/login sfs=same-origin cookies=-",
+        "POST site.test/acs sfs=cross-site cookies=-",
+        "GET site.test/app sfs=cross-site cookies=site_session"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "a click on the provider page's link to other.test",
+      "ms": 1918,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login",
+          "text": null
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET other.test/privacy sfs=cross-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "a click on the provider page's link to manage.auth0.test",
+      "ms": 1937,
+      "detail": {
+        "click": {
+          "ok": true,
+          "url": "https://tenant.auth0.test/u/login",
+          "text": null
+        },
+        "text": {
+          "error": "no allowlisted tab matches \"qq1\" (see: agent-browser tabs)"
+        }
+      },
+      "hits": [
+        "GET manage.auth0.test/ sfs=same-site cookies=-"
+      ]
+    },
+    {
+      "group": "plain",
+      "list": "L2",
+      "case": "stop this consumer's proxy",
+      "ms": 347,
+      "detail": {
+        "ok": true
+      },
+      "hits": []
+    }
+  ],
+  "pids": {
+    "xvfb": [
+      891959
+    ],
+    "chromium": [
+      892049
+    ]
+  }
+}

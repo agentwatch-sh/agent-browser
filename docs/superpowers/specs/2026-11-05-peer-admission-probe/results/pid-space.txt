@@ -1,0 +1,1 @@
+uptime_s=32823.37 ns_last_pid=847834 pid_max=4194304 clk_tck=100 ptrace_scope=1 kernel=6.12.115+deb13.1-cloud-amd64

@@ -1,0 +1,2 @@
+scopeA-named-from-B: pid 722901 ppid 721351: {"scope": "scopeB", "why": "root"}
+scopeA-playwright-from-B: pid 722911 ppid 721351: {"scope": "scopeB", "why": "root"}

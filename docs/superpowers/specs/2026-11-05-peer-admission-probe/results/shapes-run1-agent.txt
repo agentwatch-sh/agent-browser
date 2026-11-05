@@ -1,0 +1,18 @@
+fake_agent: pid 722899 ppid 721336
+tool-python: shell pid 722918: tool-python: pid 722918 ppid 722899: {"scope": "scopeA", "why": "root"}
+tool-playwright: shell pid 722920: tool-playwright: pid 722920 ppid 722899: {"scope": "scopeA", "why": "root"}
+tool-agent-browser: shell pid 723025: agent-browser: an allowlist is required: pass allowlistFile (CLI: --allowlist FILE)
+tool-agentwatch-browser-like: shell pid 723074: agent-browser: an allowlist is required: pass allowlistFile (CLI: --allowlist FILE)
+tool-amp-job-shell-exits: shell pid 723101: 
+tool-nohup-shell-lives: shell pid 723103: tool-nohup-shell-lives: pid 723104 ppid 723103: {"scope": "scopeA", "why": "root"}
+tool-nohup-shell-exits: shell pid 723114: 
+tool-setsid-no-fork: shell pid 723116: tool-setsid-no-fork: pid 723118 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tool-setsid-fork: shell pid 723138: 
+tool-double-fork: shell pid 723141: tool-double-fork: double fork started
+tool-double-fork: pid 723145 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tool-bg-job: started in the background (shell pid 723394)
+mcp-direct: server pid 723401: mcp-direct: pid 723401 ppid 722899: {"scope": "scopeA", "why": "root"}
+mcp-wrapped: server pid 723485: mcp-wrapped: pid 723486 ppid 723485: {"scope": "scopeA", "why": "root"}
+mcp-python: server pid 723571: mcp-python: pid 723572 ppid 723571: {"scope": "scopeA", "why": "root"}
+fake_agent: done
+A-DONE

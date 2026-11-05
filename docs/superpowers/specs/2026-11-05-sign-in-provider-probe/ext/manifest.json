@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "sign-in provider probe (ab-v16.45)",
+  "version": "0.0.1",
+  "description": "Probe only: logs who starts each navigation and applies candidate DNR rules.",
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "webRequest",
+    "webNavigation",
+    "tabs",
+    "debugger",
+    "scripting",
+    "cookies",
+    "privacy",
+    "contentSettings"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "sw.js",
+    "type": "module"
+  }
+}

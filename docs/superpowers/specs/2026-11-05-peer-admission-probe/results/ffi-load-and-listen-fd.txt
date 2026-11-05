@@ -1,0 +1,11 @@
+$ node ffi_static_import.mjs
+loaded function
+(node:1179125) ExperimentalWarning: FFI is an experimental feature and might change at any time
+$ node --no-experimental-ffi ffi_static_import.mjs
+Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:ffi
+  code: 'ERR_UNKNOWN_BUILTIN_MODULE'
+$ node --no-experimental-ffi ffi_dynamic_import.mjs
+dynamic import failed: ERR_UNKNOWN_BUILTIN_MODULE
+relay goes on; ffi absent: self-test 503
+$ node --disable-warning=ExperimentalWarning ffi_listen_fd.mjs <socket>
+{"self":1179174,"accepted_fd_pid":1179174,"listener_fd_pid":1179174}
