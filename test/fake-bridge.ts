@@ -175,8 +175,9 @@ export function raw(url: string, headers: Record<string, string> = {}): Promise<
 
 /**
  * Back the fake receiver with the fake Chrome of fake-chrome.ts, so that agent-browser's own commands run through the
- * relay with real answers: the tabs are the fake Chrome's pages, and each debugger op is a CDP call on one connection
- * of its own, as chrome.debugger is. Returns a function that ends that connection.
+ * relay with real answers: the tabs are the fake Chrome's pages (their windows, focus and front state), and each
+ * debugger op is a CDP call on one connection of its own, as chrome.debugger is. Returns a function that ends that
+ * connection.
  */
 export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Promise<() => void> {
   const ws = new WebSocket(chrome.ws, { perMessageDeflate: false });
@@ -200,7 +201,9 @@ export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Prom
     if (id === undefined) { ids.set(targetId, (id = 100 + ids.size)); targets.set(id, targetId); }
     return id;
   };
-  const tab = (p: FakePage) => ({ id: idOf(p.targetId), windowId: p.windowId, index: 0, active: true, url: p.url, title: p.title, status: "complete" });
+  // One model of the tabs' front state too (review-45b note 9): a tab is active when it is in front of its window in the
+  // fake Chrome (not a background tab: FakeChrome.tabSwitches puts the others behind).
+  const tab = (p: FakePage) => ({ id: idOf(p.targetId), windowId: p.windowId, index: 0, active: !p.background, url: p.url, title: p.title, status: "complete" });
   const page = (id: number) => {
     const p = chrome.pages.get(targets.get(id) ?? "");
     if (!p) throw new Error(`No tab with id: ${id}.`);
