@@ -198,6 +198,15 @@ test("runStep: a stop rule ends the running step at once (the rules are read eve
   assert.deepEqual([limit.ok, limit.error], [false, "no end in 0.12 s"]);
   const fails = await runStep(async () => { throw new Error("boom\nmore"); }, { limitMs: 1000, stopped: () => undefined });
   assert.deepEqual([fails.ok, fails.error], [false, "boom"]);
+  // A wake (the check's stop promise, settled at each stop of a watcher line) ends the step at once, before the next poll.
+  let woke: string | undefined, wake!: () => void;
+  const woken = new Promise<void>((x) => { wake = x; });
+  const fire2 = setTimeout(() => { woke = "a person used the keyboard or the mouse (keyDown)"; wake(); }, 150);
+  const w0 = Date.now();
+  const fast = await runStep(() => new Promise<never>(() => {}), { limitMs: 20_000, stopped: () => woke, wake: woken, pollMs: 10_000 });
+  clearTimeout(fire2);
+  assert.ok(Date.now() - w0 < 150 + 40, `the wake ended the step ${Date.now() - w0} ms after its start (the stop came at 150 ms)`);
+  assert.equal(fast.stopped, "a person used the keyboard or the mouse (keyDown)");
   const own = await runStep(async () => { await new Promise((x) => setTimeout(x, 200)); return "done"; }, { limitMs: 1000, stopped: () => "the screen locked", atOnce: false });
   assert.deepEqual([own.ok, own.value, own.stopped], [true, "done", undefined], "atOnce false (the start): the step finishes its work, so that the check knows its Chrome's pid");
 });
@@ -457,6 +466,7 @@ test("the Mac check never activates a window or brings a page forward, and sends
   assert.match(ts, /if \(watching\) checkHarm\(\);/);
   assert.match(ts, /stopPoll = setInterval\(checkHarm, STOP_POLL_MS\)/);
   assert.match(ts, /runStep\(fn, \{ limitMs: [^}]*stopped: \(\) => \{ checkHarm\(\); return aborted; \}/);
+  assert.match(ts, /return aborted; \}, wake: stopped,/, "a stop at a watcher line ends the step at once, before the next poll");
   assert.match(ts, /tell\("disarm"\);\s+tell\("giveback"\);/);
   // No measurement CDP call goes out after a stop (only the detach and the end's Browser.close use raw.send).
   for (const call of ts.match(/raw\.send\("[^"]+"/g) ?? []) assert.ok(['raw.send("Target.detachFromTarget"', 'raw.send("Browser.close"'].includes(call), call);

@@ -286,7 +286,7 @@ async function step<T>(phase: string, name: string, fn: () => Promise<T>, o: { l
   if (aborted && !o.always) { notRun.push(label); return undefined; }
   current = label;
   const t0 = Date.now();
-  const r = await runStep(fn, { limitMs: o.limitMs ?? 25_000, stopped: () => { checkHarm(); return aborted; }, atOnce: !o.always && o.atOnce !== false });
+  const r = await runStep(fn, { limitMs: o.limitMs ?? 25_000, stopped: () => { checkHarm(); return aborted; }, wake: stopped, atOnce: !o.always && o.atOnce !== false });
   current = undefined;
   const t1 = Date.now();
   steps.push({ phase, name, t0, t1, ok: r.ok, ...(r.error ? { error: r.error } : {}) });

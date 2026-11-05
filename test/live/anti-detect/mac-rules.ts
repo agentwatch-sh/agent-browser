@@ -330,17 +330,20 @@ export const STOP_POLL_MS = 100;
  * One step's work, until it ends, its time limit passes, or a stop rule fires. `stopped` (the stop rules: why the
  * check must stop, or undefined) is read at once and every STOP_POLL_MS; at a stop the step ends at once with
  * `stopped` and leaves its work behind (the check then goes to its end step, which quits its Chrome, so that work
- * ends with that Chrome). With atOnce false (the start, which must learn its Chrome's pid) the step finishes its
- * own work; that work ends its own waits at a stop.
+ * ends with that Chrome). `wake` (the check's stop promise) makes it read `stopped` at once when it settles, before
+ * the next poll. With atOnce false (the start, which must learn its Chrome's pid) the step finishes its own work;
+ * that work ends its own waits at a stop.
  */
-export async function runStep<T>(fn: () => Promise<T>, o: { limitMs: number; stopped: () => string | undefined; atOnce?: boolean; pollMs?: number }): Promise<{ ok: boolean; value?: T; error?: string; stopped?: string }> {
+export async function runStep<T>(fn: () => Promise<T>, o: { limitMs: number; stopped: () => string | undefined; atOnce?: boolean; pollMs?: number; wake?: Promise<unknown> }): Promise<{ ok: boolean; value?: T; error?: string; stopped?: string }> {
   const first = o.atOnce === false ? undefined : o.stopped();
   if (first) return { ok: false, error: `stopped: ${first}`, stopped: first };
   let timer: NodeJS.Timeout | undefined, poll: NodeJS.Timeout | undefined;
   const limit = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`no end in ${o.limitMs / 1000} s`)), o.limitMs); });
   const stop = new Promise<{ stopped: string }>((res) => {
     if (o.atOnce === false) return;
-    poll = setInterval(() => { const why = o.stopped(); if (why) res({ stopped: why }); }, o.pollMs ?? STOP_POLL_MS);
+    const look = () => { const why = o.stopped(); if (why) res({ stopped: why }); };
+    poll = setInterval(look, o.pollMs ?? STOP_POLL_MS);
+    o.wake?.then(look, () => {});
   });
   try {
     const r = await Promise.race([fn().then((value) => ({ value })), limit, stop]);
