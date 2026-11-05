@@ -127,16 +127,16 @@ export type Route = "model" | "chrome" | { refused: string };
 export const FOCUS_EMULATION = "Emulation.setFocusEmulationEnabled";
 
 /**
- * Where a call goes. `child` is true for a Target.detachFromTarget of a child session (a frame or a worker) of the
+ * Where a call goes. `child`: the call is a Target.detachFromTarget of a child session (a frame or a worker) of the
  * page's tab. `windowPerPage`: each page has a window of its own (Linux), and the model answers FOCUS_EMULATION.
  */
-export function route(method: string, params: any, onPage: boolean, child = false, windowPerPage = false): Route {
+export function route(method: string, params: any, onPage: boolean, o: { child?: boolean; windowPerPage?: boolean } = {}): Route {
   const refused = refusal(method, params, onPage);
   if (refused) return { refused };
   // A page call on the root or a browser session names no tab.
   if (!onPage) return MODEL_SET.has(method) ? "model" : { refused: TEXT.generic(method) };
-  if (windowPerPage && method === FOCUS_EMULATION) return "model";
-  if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && child)) return "chrome";
+  if (o.windowPerPage && method === FOCUS_EMULATION) return "model";
+  if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && o.child)) return "chrome";
   if (PAGE_MODEL_SET.has(method)) return "model";
   if (method.startsWith("Browser.") || method.startsWith("Target.")) return { refused: TEXT.generic(method) };
   return "chrome";
@@ -177,9 +177,16 @@ export function withForce(method: string, params: any): any {
  * forward (Linux; the anti-detect design, step 5). On Linux Chrome raises a window for a press in it, but not for
  * keys: a key into a window that is not focused gives its page the focus while another page keeps it. Moves, wheel
  * events, releases and key-ups follow the start and need no window of their own.
+ *
+ * Playwright's focus of an element counts too: its injected focusNode (Playwright 1.64.1: locator.pressSequentially,
+ * press, type and focus) moves the caret of an input to its start when document.hasFocus() is false, so it would type
+ * at the start of a field whose window lost the focus. Playwright sends that function's text as a string argument of
+ * Runtime.callFunctionOn. The rule depends on that internal name: if Playwright renames it, the caret moves to the
+ * start again, and nothing else changes.
  */
 export function startsAction(method: string, params: any): boolean {
   if (method === "Input.insertText") return true;
+  if (method === "Runtime.callFunctionOn") return Array.isArray(params?.arguments) && params.arguments.some((a: any) => typeof a?.value === "string" && a.value.includes(".focusNode("));
   if (method === "Input.dispatchMouseEvent") return params?.type === "mousePressed";
   if (method === "Input.dispatchKeyEvent") return params?.type === "keyDown" || params?.type === "rawKeyDown" || params?.type === "char";
   if (method === "Input.dispatchTouchEvent") return params?.type === "touchStart";

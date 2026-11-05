@@ -31,8 +31,8 @@ export class FakeReceiver {
   focusedWindow = 1;
   /** New windows from 10 on: the endpoint vectors name window 2 as one that holds no tab of the scope. */
   private nextWindow = 10;
-  /** Above 0: tabs.create in the real receiver's order (chrome-extension agent/attach.js): the answer first, tabs.onCreated
-   *  this many ms later, after the eager attach; a debugger.attach of that tab waits for the event. */
+  /** Above 0: tabs.create and windows.create in the real receiver's order (chrome-extension agent/attach.js): the answer
+   *  first, tabs.onCreated this many ms later, after the eager attach; a debugger.attach of that tab waits for the event. */
   lateCreatedMs = 0;
   private readonly lateCreated = new Map<number, Promise<void>>();
   private nextTab = 7;
@@ -102,7 +102,7 @@ export class FakeReceiver {
       }
       case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs));
       case "windows.create": {
-        const id = this.nextWindow++, t = this.newTab(args[0].url, undefined, id);
+        const id = this.nextWindow++, t = this.newTab(args[0].url, undefined, id, this.lateCreatedMs);
         if (args[0].focused !== false) this.focusedWindow = id;
         return { id, state: "normal", focused: this.focusedWindow === id, tabs: [this.chromeTab(t)] };
       }

@@ -17,11 +17,11 @@ const PERMISSIONS: Record<string, string> = { geolocation: "location", notificat
 const CONTENT_TYPES = ["location", "notifications", "camera", "microphone", "clipboard", "automaticDownloads"];
 /** Targets that the model never reports: so context.serviceWorkers() is empty. */
 const HIDDEN_TYPES = new Set(["service_worker", "shared_worker", "browser"]);
-/** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
 /** How long Target.createTarget waits for its tab's tabs.onCreated, which brings the tab's hold (C10 does not order it before the answer). */
 const CREATED_WAIT_MS = 2000;
 /** The longest wait of an input for its page's activation (a bridge op that does not answer): then the input goes anyway. */
 const ACTIVATE_MAX_MS = 2000;
+/** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
 const SAFE_DANGER = new Set(["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe", "asyncScanning", "asyncLocalPasswordScanning"]);
 
 export const CLOSE = {
@@ -224,7 +224,7 @@ export class Model {
       if (!tab) return fail(TEXT.noSession);
       onPage = true;
     }
-    const to = route(method, params, onPage, !!tab && this.children.get(params.sessionId) === tab.id, this.windowPerPage);
+    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage });
     if (typeof to === "object") return fail(to.refused);
     if (to === "chrome") return this.forward(tab!, child, method, params, answer);
     try {
@@ -259,17 +259,21 @@ export class Model {
    * window is in front (a popup tab that the site opened there; the relay never moves a tab between windows), and the
    * focus for its window (chrome.windows.update: Target.activateTarget only selects the tab, and on Linux a key into a
    * window that is not focused gives its page the focus while another page keeps it). An error or a bridge op that
-   * does not answer in ACTIVATE_MAX_MS is logged, and the input goes on.
+   * does not answer in ACTIVATE_MAX_MS is logged, and the input goes on. An activation that gave up changes no tab and
+   * no window when its read answers later: by then another page can have the focus for its own input.
    */
   private async activate(tab: Tab): Promise<void> {
+    let gaveUp = false;
     const work = (async () => {
       const t = await this.bridge.call("tabs.get", [tab.id]);
-      if (!t.active) await this.bridge.call("tabs.update", [tab.id, { active: true }]);
+      if (!t.active && !gaveUp) await this.bridge.call("tabs.update", [tab.id, { active: true }]);
       const w = await this.bridge.call("windows.get", [t.windowId]);
-      if (!w.focused) await this.bridge.call("windows.update", [t.windowId, { focused: true }]);
+      if (!w.focused && !gaveUp) await this.bridge.call("windows.update", [t.windowId, { focused: true }]);
     })().catch((e) => this.log(`relay: the activation of tab ${tab.id} failed: ${(e as Error).message}`));
     let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<void>((r) => { timer = setTimeout(() => { this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`); r(); }, ACTIVATE_MAX_MS); });
+    const late = new Promise<void>((r) => {
+      timer = setTimeout(() => { gaveUp = true; this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`); r(); }, ACTIVATE_MAX_MS);
+    });
     await Promise.race([work, late]).finally(() => clearTimeout(timer));
   }
 

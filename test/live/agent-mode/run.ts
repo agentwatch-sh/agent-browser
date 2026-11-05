@@ -394,9 +394,11 @@ async function rawClient(WebSocket: any, scope: string) {
 async function tabSwitchCase(WebSocket: any) {
   const G = "tab switch (ab-vsm Q4)";
   // On Linux (ab-v16.28) each page has a window of its own, so a page that is not in front is a window behind another
-  // one: it is visible (--disable-backgrounding-occluded-windows) and gets the focus with its input. A tab that a
-  // popup tab hides in its window gets a tab switch before its input, as a person does; no tab moves to another window.
-  await step(G, "a raw client drives a page whose window is behind another one, then a page that a popup tab hides (a tab switch)", async () => {
+  // one: it is visible (--disable-backgrounding-occluded-windows) and gets the focus with its input. The client can
+  // switch tabs in a window itself (Target.activateTarget, the operator's condition: a client can swap tabs). A tab
+  // that a popup tab hides in its window gets a tab switch before its input, as a person does; no tab moves to
+  // another window.
+  await step(G, "a raw client drives a page whose window is behind another one, switches tabs, and drives a page that a popup tab hides (the relay's tab switch)", async () => {
     const c = await rawClient(WebSocket, "switch");
     const open = async (u: string) => {
       const { targetId } = await c.send("Target.createTarget", { url: u });
@@ -425,6 +427,16 @@ async function tabSwitchCase(WebSocket: any) {
     await sleep(800);
     const popup = (await c.send("Target.getTargets")).targetInfos.find((t: any) => t.url.includes("/popup?via=open"));
     const hidden = await state(behind.sessionId);
+    // The client's own tab switch (Target.activateTarget selects a tab in its window), to the opener and back.
+    let clientSwitch: Record<string, string> = {};
+    if (popup) {
+      await c.send("Target.activateTarget", { targetId: behind.targetId });
+      await sleep(300);
+      clientSwitch.toOpener = await state(behind.sessionId);
+      await c.send("Target.activateTarget", { targetId: popup.targetId });
+      await sleep(300);
+      clientSwitch.toPopup = await state(behind.sessionId);
+    }
     // The click left the focus on the button: the field gets it back first (a script's focus, in the hidden page).
     await c.value(behind.sessionId, "document.getElementById('name').focus()");
     await c.send("Input.insertText", { text: "!" }, behind.sessionId);
@@ -433,9 +445,10 @@ async function tabSwitchCase(WebSocket: any) {
       popupWindow: popup ? await windowOf(popup.targetId) : null };
     for (const t of (await c.send("Target.getTargets")).targetInfos) await c.send("Target.closeTarget", { targetId: t.targetId });
     c.close();
-    return { separate: wb !== wf, before, driven, after, popup: !!popup, hidden, back, openerWindow: wb };
+    return { separate: wb !== wf, before, driven, after, popup: !!popup, hidden, clientSwitch, back, openerWindow: wb };
   }, { want: (d) => d.separate && d.before.behind === "visible false" && d.before.front === "visible true" && d.driven === "Hello, Behind" &&
     d.after.behind === "visible true" && d.after.front === "visible false" && d.popup && d.hidden.startsWith("hidden") &&
+    d.clientSwitch.toOpener === "visible true" && d.clientSwitch.toPopup.startsWith("hidden") &&
     d.back.opener === "visible true" && d.back.name === "Behind!" && d.back.popupWindow === d.openerWindow });
 }
 
@@ -639,21 +652,21 @@ async function windowCases(pw: any) {
       await stepOf("click", async () => { await page.click("#b", t); return page.textContent("#s", t); }, (v) => v === "clicks: 1");
       await front();
       await stepOf("fill", async () => { await page.fill("#f", "hello", t); return page.inputValue("#f", t); }, (v) => v === "hello");
-      // Measured, not wanted: Playwright puts the caret at the start of an input that does not have the focus before it
-      // types (injected script focusNode, resetSelectionIfNotFocused; document.hasFocus() is false while another
-      // window has the focus). With focus emulation every page had the focus, so this did not happen.
+      // Playwright puts the caret at the start of an input that does not have the focus before it types (its injected
+      // focusNode, resetSelectionIfNotFocused; document.hasFocus() is false while another window has the focus). The
+      // relay brings the window forward before that focus call, so the caret stays at the end.
       await front();
-      await stepOf("pressSequentially after another window took the focus: Playwright types at the start of the field", async () => {
+      await stepOf("pressSequentially after another window took the focus: the caret stays at the end", async () => {
         await page.locator("#f").pressSequentially(" world", t);
         return page.inputValue("#f", t);
-      }, (v) => v === " worldhello");
+      }, (v) => v === "hello world");
       // A person's way: a click on the field (the caret where the click puts it, after the text), then the keys.
       await front();
       await stepOf("click the field, then pressSequentially", async () => {
         await page.click("#f", t);
         await page.locator("#f").pressSequentially("!", t);
         return page.inputValue("#f", t);
-      }, (v) => v === " worldhello!");
+      }, (v) => v === "hello world!");
       await stepOf("click, waitForFunction a frame's content", async () => {
         await page.click("#r", t);
         await page.waitForFunction(() => document.getElementById("rd")!.textContent === "frames: 1", undefined, { timeout: 5000 });
@@ -701,11 +714,11 @@ async function windowCases(pw: any) {
       await front();
       await stepOf("browser_type", () => call("browser_type", { element: "text field", [refKey]: field, text: "hello" }));
       await front();
-      // As with Playwright's pressSequentially (above): the MCP types at the start of a field that does not have the focus.
-      await stepOf("browser_type slowly after another window took the focus: it types at the start of the field", async () => {
+      // As with Playwright's pressSequentially (above): the caret stays at the end of the field.
+      await stepOf("browser_type slowly after another window took the focus: the caret stays at the end", async () => {
         await call("browser_type", { element: "text field", [refKey]: field, text: " world", slowly: true });
         return text(await call("browser_evaluate", { function: "() => document.getElementById('f').value" }));
-      }, (v) => v.includes('" worldhello"'));
+      }, (v) => v.includes('"hello world"'));
       await stepOf("browser_click, browser_wait_for a frame's content", async () => {
         await call("browser_click", { element: "Frame button", [refKey]: frame });
         await call("browser_wait_for", { text: "frames: 1" });

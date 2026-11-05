@@ -116,6 +116,30 @@ test("before an input that starts an action, the relay focuses the page's window
   } finally { await h.close(); }
 });
 
+test("Playwright's focus of an element (its injected focusNode) brings the window forward first, so Playwright keeps the caret", async () => {
+  // Playwright 1.64.1 (locator.pressSequentially, press, type, focus) calls injected.focusNode, which moves the caret of
+  // an input to its start when document.hasFocus() is false. The function's text is a string argument of the call.
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { sessionId, tab } = await page(h, c);
+    const call = (fn: string) => c.send("Runtime.callFunctionOn", { functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "U1",
+      arguments: [{ objectId: "U1" }, { value: true }, { value: true }, { value: fn }, { value: 1 }, { value: { v: "undefined" } }, { objectId: "N1" }],
+      returnByValue: true, awaitPromise: true, userGesture: true }, sessionId);
+    let from = h.fake.requests.length;
+    await call("([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)");
+    assert.deepEqual(ops(h, from), ["tabs.get", "windows.get", "windows.update", "Runtime.callFunctionOn"]);
+    assert.equal(h.fake.focusedWindow, tab.windowId);
+    // Any other call of a function goes at once.
+    h.fake.focusedWindow = 1;
+    from = h.fake.requests.length;
+    await call("([injected, node]) => injected.blurNode(node)");
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () { return this.focusNode; }", objectId: "N1" }, sessionId);
+    assert.deepEqual(ops(h, from), ["Runtime.callFunctionOn", "Runtime.callFunctionOn"]);
+  } finally { await h.close(); }
+});
+
 test("a call that comes behind an input that waits for its window reaches Chrome behind that input", async () => {
   const h = await harness();
   try {
@@ -232,6 +256,28 @@ test("an activation whose bridge op does not answer holds its input for 2 s at m
     assert.ok(waited >= 1900 && waited < 4000, `${waited} ms`);
     assert.ok(h.logs.includes(`relay: the activation of tab ${tab.id} took more than 2000 ms; the input goes on`), h.logs.join("\n"));
     open();
+  } finally { await h.close(); }
+});
+
+test("an activation that gave up changes no window when its bridge op answers late: the next page keeps the focus", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const a = await h.connect("s1"), b = await h.connect("s2");
+    const pa = await page(h, a), pb = await page(h, b);
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    h.fake.op = async ({ op, args }) => { if (op === "windows.get" && args[0] === pa.tab.windowId) await gate; return undefined; };
+    const from = h.fake.requests.length;
+    await a.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }, pa.sessionId); // its activation gives up after 2 s
+    await b.send("Input.dispatchKeyEvent", { type: "keyDown", key: "b", text: "b" }, pb.sessionId);
+    assert.equal(h.fake.focusedWindow, pb.tab.windowId);
+    open();
+    await sleep(100);
+    const seq = h.fake.requests.slice(from).filter((r) => r.op === "windows.update" || r.op === "tabs.update" || r.args[1] === "Input.dispatchKeyEvent")
+      .map((r) => r.op === "debugger.sendCommand" ? `key ${r.args[0].tabId}` : `${r.op} ${r.args[0]}`);
+    assert.deepEqual(seq, [`key ${pa.tab.id}`, `windows.update ${pb.tab.windowId}`, `key ${pb.tab.id}`]);
+    assert.equal(h.fake.focusedWindow, pb.tab.windowId, "the late activation left the focus where it is");
   } finally { await h.close(); }
 });
 
