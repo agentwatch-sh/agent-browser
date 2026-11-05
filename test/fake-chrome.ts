@@ -297,7 +297,7 @@ export class FakePage {
    * The captures in flight on a background page, by their order: each one ends with a later one.
    * `at` is `frames` when it was sent: the frame that it forces is the next one.
    */
-  heldCaptures: { n: number; at: number; end: () => void }[] = [];
+  heldCaptures: { n: number; at: number; found?: boolean; end: () => void }[] = [];
   /** Every frame that Chrome drew of the page, counted from its tab's start. */
   frames = 0;
   /**
@@ -378,7 +378,7 @@ export class FakePage {
     const n = this.nextCapture++, found = this.metrics;
     const replaces = this.drawsByItself || this.heldCaptures.some((c) => c.at < this.frames);
     return new Promise((resolve) => {
-      this.heldCaptures.push({ n, at: this.frames, end: () => { if (found) this.metrics = found; resolve(data); } });
+      this.heldCaptures.push({ n, at: this.frames, found: !!found, end: () => { if (found) this.metrics = found; resolve(data); } });
       this.update();
       if (replaces && !this.noFrames) this.later(16, () => {
         this.drew = true;
@@ -439,7 +439,8 @@ export class FakePage {
   /**
    * The captures that were in flight when the page went to a new document: Chrome never ends them
    * (review-41b, Chromium 156, default mode: a shot whose page navigated during its own capture failed
-   * after 30 s, though later captures ended).
+   * after 30 s, though later captures ended). One that found a size override ends 50 ms later and sets
+   * that override again (review-41d: 25 ms to 1.1 s after the shot cleared it).
    */
   lostCaptures: { n: number; at: number; end: () => void }[] = [];
 
@@ -447,7 +448,8 @@ export class FakePage {
   load(url: string) {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
-    this.lostCaptures.push(...this.heldCaptures);
+    this.lostCaptures.push(...this.heldCaptures.filter((c) => !c.found));
+    const late = this.heldCaptures.filter((c) => c.found);
     this.heldCaptures = [];
     this.frameDue = false;
     this.frameWaiters = []; // a new document never runs the old one's animation frames
@@ -469,6 +471,7 @@ export class FakePage {
     this.framesDrawn = 0;
     this.shownAs = this.visibilityState; // a new page starts in its tab's state: no visibilitychange
     this.update();
+    for (const c of late) this.later(50, () => c.end());
     spec?.onload?.(this);
   }
 
