@@ -9,9 +9,9 @@ taylor with Debian Chromium 156.0.8078.79 in a private Xvfb.
 This design builds on the two-modes design
 ([2026-11-03-two-modes-playwright-design.md](2026-11-03-two-modes-playwright-design.md), sections 4,
 7, 8, 10 to 13) and on the contracts C4, C5, C10 and C11 in chrome-extension `docs/protocol.md`
-(main `7e36332`; since board task ab-v16.24 that file is the master for C1 and C5 too). The contract text of the target is in that file, on the chrome-extension branch of
-the same name, in blocks marked "Target (board ab-v16.23)" in C4, C5, C6, C10 and C11. No code
-changes in this task.
+(main `7e36332`; since board task ab-v16.24 that file is the master for C1 and C5 too). The contract
+text of the target is in that file, on the chrome-extension branch of the same name, in blocks
+marked "Target (board ab-v16.23)" in C4, C5, C6, C10 and C11. No code changes in this task.
 
 ## 1. The answer in short
 
@@ -24,11 +24,11 @@ decision below has its reason in the section that the line names.
    for the tabs of the scopes that use the list. Static rules 1 and 3 stay; dynamic rules 2 and 4
    go. A tab of no scope matches no allow rule, so it fails closed.
 2. **A tab's scope (section 5).** The receiver keeps the scope of each tab. A tab that the relay
-   opens gets its scope as an argument of `tabs.create` or `windows.create`, and its rule is in force
-   before the answer. A popup takes its opener's scope from `webNavigation.onCreatedNavigationTarget`
-   (`sourceTabId`), never from `chrome.tabs`' `openerTabId`. The receiver reports each popup's scope
-   to the relay in a new event, `bridge.tabScope`, and the relay never puts a tab in a scope that the
-   receiver did not report.
+   opens gets its scope as an argument of `tabs.create` or `windows.create`, and its rule is in
+   force before the answer. A popup takes its opener's scope from
+   `webNavigation.onCreatedNavigationTarget` (`sourceTabId`), never from `chrome.tabs`'
+   `openerTabId`. The receiver reports each popup's scope to the relay in a new event,
+   `bridge.tabScope`, and the relay never puts a tab in a scope that the receiver did not report.
 3. **The race (section 5).** DNR decides before the hold's `Fetch` pause, so a rule must be in force
    before a request starts. A popup whose first request comes before its rule fails closed. The
    receiver then reloads it once when the rule is in force (the retry). A `noopener` popup always
@@ -38,9 +38,9 @@ decision below has its reason in the section that the line names.
    into a new tab fails closed.
 4. **The service-worker hole (section 6).** Measured: a worker of a scope-A site serves its page in
    a scope-B tab, a page that it makes or one that it passes on from the network, and DNR sees
-   neither. In its own scope no worker breaks. The guard: the relay refuses a client's navigation to a host off
-   the scope's list; the receiver sends a tab to `about:blank` at `onBeforeNavigate` and at
-   `onCommitted` of an off-list page. The guard is not a full block. A full block (no service
+   neither. In its own scope no worker breaks. The guard: the relay refuses a client's navigation to
+   a host off the scope's list; the receiver sends a tab to `about:blank` at `onBeforeNavigate` and
+   at `onCommitted` of an off-list page. The guard is not a full block. A full block (no service
    workers in the agent browser) is a choice for the operator (section 13, choice 2).
 5. **A list loses a site (section 7).** Only the tabs whose own list no longer covers their host
    close. The receiver removes every service worker when a scope's list loses an entry. The
@@ -71,9 +71,9 @@ decision below has its reason in the section that the line names.
 
 ## 3. What changes, from today
 
-Today (C5): one list for the whole agent browser. Static rule 1 blocks every main frame; dynamic rule
-2 allows the list. Static rule 3 blocks every frame and `<object>`/`<embed>`; dynamic rule 4 allows
-them under a top-level page on the list. Dynamic rule 5 sets `Sec-Fetch-Site: none` on the
+Today (C5): one list for the whole agent browser. Static rule 1 blocks every main frame; dynamic
+rule 2 allows the list. Static rule 3 blocks every frame and `<object>`/`<embed>`; dynamic rule 4
+allows them under a top-level page on the list. Dynamic rule 5 sets `Sec-Fetch-Site: none` on the
 navigations that the receiver starts. The relay knows each tab's scope, but the block does not.
 
 The target: each tab is blocked by its own list. The relay's scope becomes a part of the block. The
@@ -104,8 +104,9 @@ early enough (section 5).
   `set_scopes` replaces every scope rule and rule 8. A tab that joins or leaves a list replaces only
   that list's two rules (a tab that changes lists, only the two lists' rules); a tab that gets or
   loses the mark replaces rule 8 (with `"*"`) or its list's two rules. A list that only marked tabs
-  use has its two rules too. At a disconnect or a new daemon connection the scope rules go and rule
-  8 stays (the mark stays); at the worker's start every session rule goes. So no moment exists in which a
+  use has its two rules too. At a disconnect or a new daemon connection the scope rules go, and rule
+  8 stays with the marks and the last `operator` value; at the worker's start every session rule
+  goes. So no moment exists in which a
   tab has the rules of two lists, or a list has a rule without its frame rule.
 - A failed update fails closed. When `updateSessionRules` fails (the rule limit, a Chrome error),
   the receiver removes every scope rule and rule 8 with a remove-only call and keeps its map and
@@ -117,8 +118,8 @@ early enough (section 5).
   stay in force: the guard (section 6) still judges each navigation by the new lists of the map, the
   closing rule still closes the tabs off their new list, and every later change is a full replace
   until one succeeds.
-- Rule 5 stays dynamic and global: it names no list. Measured: with a session allow rule at
-  priority 2, rule 5 at priority 3 still sets `Sec-Fetch-Site: none` on a `Page.navigate` (20 of 20).
+- Rule 5 stays dynamic and global: it names no list. Measured: with a session allow rule at priority
+  2, rule 5 at priority 3 still sets `Sec-Fetch-Site: none` on a `Page.navigate` (20 of 20).
 
 **Why.** DNR acts in Chrome's network stack before the request leaves, whatever the client or the
 page does. `tabIds` is the only DNR condition that names a tab, and it exists only for session
@@ -131,9 +132,9 @@ blocked by rule 1, not allowed.
   20 (a subdomain of an entry too, 20 of 20); the other scope's host was blocked by rule 1 20 of 20
   and got no request; a tab of no scope was blocked 20 of 20.
 - One assignment in the probe (a tab joins its scope; the probe replaces all its 2 to 4 scope rules
-  and waits for the call) took 11 to 15 ms, median 13 ms, with small lists and the probe's tabs open.
-  The `limits` case measures the index cost alone (no open tab under the rules): 0 to 1 ms for the
-  same lists. Not found: which part of Chrome's work takes the other 10 ms.
+  and waits for the call) took 11 to 15 ms, median 13 ms, with small lists and the probe's tabs
+  open. The `limits` case measures the index cost alone (no open tab under the rules): 0 to 1 ms for
+  the same lists. Not found: which part of Chrome's work takes the other 10 ms.
 - Frames: under a scope-A page a frame of an off-list host loads (O11 stays); under `about:blank` of
   a scope-A tab and of a tab of no scope it is blocked by rule 3. The frame of a worker's page in a
   scope-B tab (section 6) was blocked 20 of 20: B's frame rule does not cover A's host.
@@ -149,17 +150,17 @@ blocked by rule 1, not allowed.
   client's navigations, not links, redirects, page scripts or popups. Kept as a second layer
   (section 6), not as the block.
 - *A rule that allows a new tab by its initiator* (`initiatorDomains` = L with `excludedTabIds` =
-  the known tabs). A scope-B page on a host that is on both lists could open a popup to a host on A's
-  list only, and its first request would reach that host with its cookies. Rejected.
+  the known tabs). A scope-B page on a host that is on both lists could open a popup to a host on
+  A's list only, and its first request would reach that host with its cookies. Rejected.
 - *One Chrome profile (or one Chrome) per repo.* Real isolation of cookies, workers and content
   settings, but one extension load, one send target and one native link per profile. It changes the
   operator-mode send and the agentwatch unit. Out of scope here; section 10 states what one profile
   shares.
 
-**The limits** (measured, Chromium 156): `MAX_NUMBER_OF_SESSION_RULES` = 5000 (5000 rules added;
-the 5001st refused with "Session rule count exceeded."); `MAX_NUMBER_OF_UNSAFE_SESSION_RULES` = 5000
-(the design has no unsafe session rule). One rule took 100,000 hosts (added in 228 ms) and 10,000 tab
-ids. At two rules per list, about 2,490 lists can be in use at once.
+**The limits** (measured, Chromium 156): `MAX_NUMBER_OF_SESSION_RULES` = 5000 (5000 rules added; the
+5001st refused with "Session rule count exceeded."); `MAX_NUMBER_OF_UNSAFE_SESSION_RULES` = 5000
+(the design has no unsafe session rule). One rule took 100,000 hosts (added in 228 ms) and 10,000
+tab ids. At two rules per list, about 2,490 lists can be in use at once.
 
 The cost that matters is the time of one assignment (a tab joins a list: that list's two rules are
 replaced), because a relay's new tab waits for it and it decides how often a popup needs the retry.
@@ -196,39 +197,41 @@ thousands of hosts make more popups need the retry (section 5.2).
   `url`, the scope arg must be the moved tab's own scope (else `bad args`), and the tab keeps its
   scope and rules.
 - The receiver puts a popup's scope in its map in the event handler itself, before it calls
-  `updateSessionRules`, so the guard of section 6 and the retry judge the popup by its scope at once.
-- The receiver reports each scope that it sets itself (popups, replaced tabs) with a new bridge event,
-  `bridge.tabScope` (`"tabId"`, `"scope"`), and gets a row in C10's event table. For a popup it
-  comes before the popup's `tabs.onCreated` (the navigation-target event comes before the eager
+  `updateSessionRules`, so the guard of section 6 and the retry judge the popup by its scope at
+  once.
+- The receiver reports each scope that it sets itself (popups, replaced tabs) with a new bridge
+  event, `bridge.tabScope` (`"tabId"`, `"scope"`), and gets a row in C10's event table. For a popup
+  it comes before the popup's `tabs.onCreated` (the navigation-target event comes before the eager
   attach ends; with the eager attach off, the receiver sends `tabs.onCreated` after that event, or
-  after 50 ms when none comes). The relay takes a tab that it did not create into a scope
-  only on that event. The reason: the receiver enforces the scope. If the relay computed a popup's
-  scope itself and got another answer, a client of one scope would drive a tab under another scope's
-  list.
-- An argument of `tabs.create`, not a separate op: with an op, a tab would exist for a moment with no
-  scope while the relay knows it, and the relay would have to wait for the op's answer before each
-  navigation. The argument makes the scope a part of the tab's creation.
+  after 50 ms when none comes). The relay takes a tab that it did not create into a scope only on
+  that event. The reason: the receiver enforces the scope. If the relay computed a popup's scope
+  itself and got another answer, a client of one scope would drive a tab under another scope's list.
+- An argument of `tabs.create`, not a separate op: with an op, a tab would exist for a moment with
+  no scope while the relay knows it, and the relay would have to wait for the op's answer before
+  each navigation. The argument makes the scope a part of the tab's creation.
 - The relay keeps Chrome's `openerId` for the popup's **owner** (C11: the owner of the opener takes
   the popup), only when the opener is in the same scope.
-- At each link change and at its worker's start the receiver forgets every tab's scope and removes
-  every session rule (rules 6 and 7 too, at the worker's start). The relay forgets its tabs at a link
-  change too (C11). So a tab from before the link is in no scope on both sides, and fails closed.
+- At each link change the receiver forgets every tab's scope and removes the scope rules; it keeps
+  the operator marks, the last `operator` value and rule 8 (the operator's own tabs are no
+  connection's). At its worker's start it removes every session rule (rules 6, 7 and 8 too). The
+  relay forgets its tabs at a link change too (C11). So a tab of a scope from before the link is in
+  no scope on both sides, and fails closed.
 - The map takes no stale entry. The receiver writes a popup's scope only while the tab exists, and
   drops a write that an op started before a reset (the epoch check that `attach.js` uses for its
   attaches).
 
 ### 5.1 Which source names the opener
 
-Measured (results/popups-*.json, 440 popups in the run of record): `sourceTabId` named the right opener in every popup of
-every kind, also with the opener in the background behind a tab of another scope. Chrome's
-`openerId` (the relay's source today, read with `Target.getTargetInfo` on the attached popup) was
-right in every held popup too (120 of 120, `noopener` popups included). `chrome.tabs`'
-`openerTabId` named the active tab: with the opener in the background it was wrong in every trial
-(0 of 190), and it named the tab of the other scope. Measured with `openerTabId` as the source
-(results/popups-tabs.json): such a popup got the other scope and was blocked 10 of 10. A design that
-used `openerTabId` would put a popup of scope A under scope B's list. The control with no
-inheritance (results/popups-none.json): every popup was blocked (20 of 20), so a popup of no scope
-fails closed.
+Measured (results/popups-*.json, 440 popups in the run of record): `sourceTabId` named the right
+opener in every popup of every kind, also with the opener in the background behind a tab of another
+scope. Chrome's `openerId` (the relay's source today, read with `Target.getTargetInfo` on the
+attached popup) was right in every held popup too (120 of 120, `noopener` popups included).
+`chrome.tabs`' `openerTabId` named the active tab: with the opener in the background it was wrong in
+every trial (0 of 190), and it named the tab of the other scope. Measured with `openerTabId` as the
+source (results/popups-tabs.json): such a popup got the other scope and was blocked 10 of 10. A
+design that used `openerTabId` would put a popup of scope A under scope B's list. The control with
+no inheritance (results/popups-none.json): every popup was blocked (20 of 20), so a popup of no
+scope fails closed.
 
 ### 5.2 The race, and the retry
 
@@ -290,18 +293,18 @@ popups-late-retry.json, popups-form-retry.json):
 - What the site sees of the retry (results/retry-control.json, with rule 5 on): the control is a
   `target=_blank` popup that loaded at once under an allow rule with no `tabIds` (as today's rule
   2). The retried `target=_blank` popup's request has the same `Sec-Fetch-Site` (`same-origin`),
-  `Sec-Fetch-User` (`?1`), `Sec-Fetch-Mode`, `Sec-Fetch-Dest` and `Referer` as the control (10 of
-  10 each), and one header more: `Cache-Control: max-age=0` (10 of 10), as on any reload. The first
+  `Sec-Fetch-User` (`?1`), `Sec-Fetch-Mode`, `Sec-Fetch-Dest` and `Referer` as the control (10 of 10
+  each), and one header more: `Cache-Control: max-age=0` (10 of 10), as on any reload. The first
   runs (results/popups-retry-*.json, rule 5 off) gave the same for `noopener` popups. The headers
   differ by the kind of popup: the sign-in pattern (`window.open("")`, then the opener sets
   `location`) sends no `Sec-Fetch-User` when it needs no retry (20 of 20 in the run of ab-lead's
   reviewer review-42; this probe's popups-nav.json comes from a run before the probe logged that
-  header), and a retried one sends `Sec-Fetch-User: ?1` and `Cache-Control: max-age=0` (ab-lead's reviewer,
-  review-42). A retry with `tabs.update(url)` in place of the reload was worse: no
+  header), and a retried one sends `Sec-Fetch-User: ?1` and `Cache-Control: max-age=0` (ab-lead's
+  reviewer, review-42). A retry with `tabs.update(url)` in place of the reload was worse: no
   `Referer`, `Sec-Fetch-Site: cross-site`, no `Sec-Fetch-User`, and `history.length` 2. So the retry
-  is a reload. A one-shot session rule that removes `Cache-Control` from the retried request did
-  not remove it (20 of 20, ab-lead's reviewer). So the retry stays visible to a site that compares
-  a popup's first request with a normal one: an operator choice (section 13, choice 4).
+  is a reload. A one-shot session rule that removes `Cache-Control` from the retried request did not
+  remove it (20 of 20, ab-lead's reviewer). So the retry stays visible to a site that compares a
+  popup's first request with a normal one: an operator choice (section 13, choice 4).
 - The retry runs once per tab and only for a host that the tab's list covers. A tab of no scope
   never gets one; a marked tab (choice 3) and its popups get it like a tab of a scope. The receiver
   sends no `blocked` notice for a first request that it retries; it sends one when the rule is in
@@ -335,10 +338,10 @@ attach ends, as today. The hold of the event ends at the first of these:
   by the rule and needs no retry, so the hold has no more to wait for. A navigation that started
   before the rule (a `noopener` popup's is blocked at 8 to 21 ms, its rule comes at 15 to 47 ms) or
   a planned retry (its request comes 62 to 95 ms after the block) stops the timer, and then only the
-  other conditions end the hold. (The rule itself can take up to 47 ms with small lists, and 234 to 256
-  ms with large ones, section 4; a script that sets `location` after an `await` often waits longer
-  than 50 ms, and it is then allowed.) This ends the hold of a popup that stays at `about:blank`,
-  for example `window.open("")` and then `document.write`;
+  other conditions end the hold. (The rule itself can take up to 47 ms with small lists, and 234 to
+  256 ms with large ones, section 4; a script that sets `location` after an `await` often waits
+  longer than 50 ms, and it is then allowed.) This ends the hold of a popup that stays at
+  `about:blank`, for example `window.open("")` and then `document.write`;
 - `HOLD_MAX_MS` after `tabs.onCreated`.
 
 Chrome fires `tabs.onCreated` first, and the receiver holds it. Other events of the held popup (for
@@ -358,15 +361,15 @@ through Playwright and the MCP, that one included.
 
 **Measured: the hole exists across scopes** (results/sw-hole.json). Scope A's tab opened a page of
 `a.localhost` that registers a worker for the whole host. Then a scope-B tab (list: `b.localhost`)
-navigated to `a.localhost`, by a client's `Page.navigate` and by a page script. In 20 of 20 trials the
-page committed in the scope-B tab (27 to 43 ms after the navigation started) with no network request
-and no DNR match, and the worker's page ran its script (its beacon reached the site 62 to 87 ms after
-the navigation started). The frame inside the worker's page was blocked (B's frame rule, 0 of 20
-reached the site). DNR cannot see a navigation that a worker answers.
+navigated to `a.localhost`, by a client's `Page.navigate` and by a page script. In 20 of 20 trials
+the page committed in the scope-B tab (27 to 43 ms after the navigation started) with no network
+request and no DNR match, and the worker's page ran its script (its beacon reached the site 62 to 87
+ms after the navigation started). The frame inside the worker's page was blocked (B's frame rule, 0
+of 20 reached the site). DNR cannot see a navigation that a worker answers.
 
-**Workers that pass a navigation on** (results/sw-pass.json, 5 trials each). Many real workers answer
-a navigation with `fetch(event.request)`; some use navigation preload. Measured on `pass.a.localhost`
-and `pre.a.localhost` (both on A's list):
+**Workers that pass a navigation on** (results/sw-pass.json, 5 trials each). Many real workers
+answer a navigation with `fetch(event.request)`; some use navigation preload. Measured on
+`pass.a.localhost` and `pre.a.localhost` (both on A's list):
 
 | Worker | In a scope-A tab (its own scope) | In a scope-B tab |
 | --- | --- | --- |
@@ -403,12 +406,12 @@ that page while it lives.
 workers, and guard in three layers.**
 
 1. The relay refuses a main-frame `Page.navigate` (no `frameId`, or the `frameId` of the tab's own
-   target, which Playwright's `goto` sends) and `Target.createTarget` with a URL, when the URL's host
-   (for a `blob:` URL, its inner origin's host) is off the connection's scope's list: `Not allowed:
-   <host> is not on the allowlist` (the C11 text that `Browser.grantPermissions` uses today). A
-   frame's navigation is not refused (O11). So an agent's own `goto` never reaches a worker of
-   another scope's site. It also gives the agent a clear error in place of Chrome's error page.
-   Other client actions still navigate as the page does (`Runtime.evaluate`, input on a link,
+   target, which Playwright's `goto` sends) and `Target.createTarget` with a URL, when the URL's
+   host (for a `blob:` URL, its inner origin's host) is off the connection's scope's list: `Not
+   allowed: <host> is not on the allowlist` (the C11 text that `Browser.grantPermissions` uses
+   today). A frame's navigation is not refused (O11). So an agent's own `goto` never reaches a
+   worker of another scope's site. It also gives the agent a clear error in place of Chrome's error
+   page. Other client actions still navigate as the page does (`Runtime.evaluate`, input on a link,
    `Page.reload`, `Page.navigateToHistoryEntry`): layers 2 and 3 and DNR cover them.
 2. The receiver, at `webNavigation.onBeforeNavigate` of a main frame whose `http:`/`https:` host the
    tab's list does not cover (for a tab of no scope: the union of the lists; for the restore tab:
@@ -454,7 +457,9 @@ also when the guard stops the page.
 - **The worker removal.** The receiver calls `browsingData.remove({}, {serviceWorkers: true})`
   after the rule update and before the tabs close, at the first `set_scopes` after its worker
   starts, and in one case only after that: a scope has a list in the last and in the new
-  `set_scopes`, and the new list lacks an entry of the old one. A new scope, a scope that leaves the
+  `set_scopes`, and the new list lacks an entry of the old one. The `operator` value counts as one
+  more scope's list here: a change from `"*"` to a list, or a list that loses an entry, removes the
+  workers too. A new scope, a scope that leaves the
   map, and a scope whose new list is none (an ended session's `null`, a list that is gone) do not
   remove the workers: their tabs are blocked and close, so no tab of them can reach a worker. Else
   every session's end would remove every site's workers. The entries count after `scopes` and
@@ -464,9 +469,9 @@ also when the guard stops the page.
   it. In the probe, Back after a list change started a network navigation, and rule 1 blocked it
   (`net::ERR_BLOCKED_BY_CLIENT`, 6 of 6, no request reached the site); the probe's pages did not
   enter the cache (its tabs had `chrome.debugger` attached), so a restore from the cache was not
-  measured; that `chrome.debugger` kept them out is a guess. The guard of section 6 (layer 3) sends a tab to `about:blank` when Chrome reports the restore with
-  `webNavigation.onCommitted`. Whether Chrome reports every restore there is not measured. This stays
-  a stated limit, as in C5.
+  measured; that `chrome.debugger` kept them out is a guess. The guard of section 6 (layer 3) sends
+  a tab to `about:blank` when Chrome reports the restore with `webNavigation.onCommitted`. Whether
+  Chrome reports every restore there is not measured. This stays a stated limit, as in C5.
 - **The relay.** At each `allowlist` line, the relay rebuilds the content settings (section 8.4) and
   closes the connections of a scope that no list covers any more (1008, `The allowlist has no list
   for this scope any more`).
@@ -489,8 +494,9 @@ relay and moves both at once.
 
 - `lists`: list name to entries. A name matches the scope pattern
   (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`); a list with another name applies as absent, and each of its
-  entries counts as refused; a list whose value is not an array applies as absent and counts 1. Each entry is a C5 entry; an entry
-  that is not normalized is refused and counted, and the other entries apply.
+  entries counts as refused; a list whose value is not an array applies as absent and counts 1. Each
+  entry is a C5 entry; an entry that is not normalized is refused and counted, and the other entries
+  apply.
 - `scopes`: scope to list name, or `null`. A scope with `null`, or whose list is not in `lists`, has
   no list; it does not fall back to `default`. A scope that does not match the scope pattern, or
   whose value is neither a string nor `null`, applies as absent and counts as refused.
@@ -517,14 +523,15 @@ relay and moves both at once.
   receiver's map cannot grow without bound. With `default` `null` (choice 5 a) a dropped scope has
   no list: the receiver blocks its tabs, and the relay closes its connections and removes its tabs.
   Only with a default list (choice 5 b) does the daemon first send the ended scope as `null` (no
-  list, no fall-back), and drop it when `end_scope` has removed its tabs; so the ended scope never
-  falls back to the default list.
+  list, no fall-back), so the ended scope never falls back to the default list. `end_scope` has no
+  answer, so the daemon cannot see when its tabs are gone: it drops the `null` entry 60 s after
+  `end_scope` (the relay removes the tabs at once), or at the next link up.
 - The rollout (C4's target). The receiver's hello says `"features":["scopes"]`. A new daemon that
   meets an old receiver (no such feature) fails closed: it sends `set_allowlist` with an empty list
   (the old receiver blocks every site), writes no `allowlist` line (the relay admits no
   connection), and tells the operator on the Browser page that the extension is too old. A new
   receiver that meets an old daemon answers `set_allowlist` with `ok: false` ("set_allowlist is
-  gone: send set_scopes") and applies nothing: every tab is blocked.
+  gone: send set_scopes") and applies nothing: every tab except an import's restore tab is blocked.
 - The object replaces the last one in full. The daemon sends it after each link up (as it sends the
   list today), when a list changes, and when a session starts or ends.
 - The answer: `{"rules":<scope rules in force>,"closed":<tabs closed>,"refused":<entries, list
@@ -559,9 +566,12 @@ shared vector in the build checks both.
 ### 8.4 The relay per scope (C11)
 
 - **Readiness.** The relay admits a connection of scope S while the link is up, `bridge.info`
-  answered with `bridge` 1 or more, and the last `allowlist` line gives S a list (its `scopes` entry
-  when it has one, else `default`; section 8.1). Else 503 with the new text `The agent browser is not ready: the allowlist has no list
-  for this scope.` (the other 503 texts stay). A scope whose list is empty is admitted: it can open
+  answered with `bridge` 1 or more, an `allowlist` line came after the link came up (today's rule),
+  and that line gives S a list (its `scopes` entry when it has one, else `default`; section 8.1).
+  Else 503 with the new text `The agent browser is not ready: the allowlist has no list for this
+  scope.` (the other 503 texts stay). With choice 1 b, a request with no key gets the key's 403
+  (section 9) before any 503, also while the relay is not ready; the order of all checks is in
+  C11's target. A scope whose list is empty is admitted: it can open
   `about:blank` only.
 - **Refusals.** `Not allowed: <host> is not on the allowlist` for `Browser.grantPermissions` with an
   origin off the scope's list (today: off the one list), and for the navigations of section 6
@@ -579,8 +589,8 @@ shared vector in the build checks both.
   `bridge.tabScope` it announces the tab to the scope (C11, as a popup today). At the end of the
   wait it releases and detaches the tab, as for a tab of no scope today; a later `bridge.tabScope`
   still puts the tab in its scope, as a free tab. With the eager attach on, the event comes before
-  `tabs.onCreated` in practice (the receiver sends it at `onCreatedNavigationTarget`, 0 to 1 ms after
-  Chrome creates the tab, and `tabs.onCreated` after the attach). The relay's own handling of
+  `tabs.onCreated` in practice (the receiver sends it at `onCreatedNavigationTarget`, 0 to 1 ms
+  after Chrome creates the tab, and `tabs.onCreated` after the attach). The relay's own handling of
   `tabs.onReplaced` (today it copies the scope itself) follows `bridge.tabScope` too.
 
 ### 8.5 The start: fail closed
@@ -596,11 +606,11 @@ every tab (the upgrade window); it ends before the first `set_scopes`.
 ### 8.6 The import (C6)
 
 Step 2 adds the restore tab's rules 6 and 7 after `tabs.create` (`about:blank`) and before
-`tabs.update(R)`. They allow the sent `domain` whatever the lists hold, so the restore page loads and
-step 4's `location.replace(state.url)` is covered. Step 4 starts that navigation in a timer after the
-script returns, so the rules cannot go at the end of the step: the receiver removes them at the
-restore tab's first main-frame `webNavigation.onCommitted` or `onErrorOccurred` after step 4 (not
-matched to `state.url`: a redirect commits another URL), at most 4 s after step 4, and in every
+`tabs.update(R)`. They allow the sent `domain` whatever the lists hold, so the restore page loads
+and step 4's `location.replace(state.url)` is covered. Step 4 starts that navigation in a timer
+after the script returns, so the rules cannot go at the end of the step: the receiver removes them
+at the restore tab's first main-frame `webNavigation.onCommitted` or `onErrorOccurred` after step 4
+(not matched to `state.url`: a redirect commits another URL), at most 4 s after step 4, and in every
 failure cleanup. The import ends (its answer, and the next import of the queue) only after the rules
 are gone, so two imports never share rules 6 and 7; the 4 s fit in the time budget (100 s + 4 s +
 two cleanups of 4 s = 112 s, below the link's 115 s). Until the rules go, the guard judges the tab
@@ -617,8 +627,8 @@ can connect with the scope of a session of repo A and get A's list.
 **What the per-repo list protects against:**
 
 - An honest agent of repo B that goes to a site of repo A by mistake: its `goto` is refused by the
-  relay, a link or redirect is blocked by DNR (0 of 20 requests reached the other scope's host), and a
-  worker's page is sent away by the guard.
+  relay, a link or redirect is blocked by DNR (0 of 20 requests reached the other scope's host), and
+  a worker's page is sent away by the guard.
 - A page in B's tab that tries to take the tab to A's sites: links, redirects, popups (they inherit
   B's scope, measured right in every trial) and page scripts.
 - An agent of B that follows an injected instruction with its own endpoint.
@@ -638,12 +648,20 @@ can connect with the scope of a session of repo A and get A's list.
 - A content setting that another scope granted for a host that both lists hold (section 8.4).
 
 **A fix exists: a scope token** (section 13, choice 1). The daemon makes a random token for each
-scope; the endpoint path carries it (`/devtools/browser/<scope>/<token>`, not measured with
-Playwright); the daemon sends the relay a hash of each token in the `allowlist` line; the relay
-admits a connection only with the scope's token. A session then cannot take another list by naming
-a scope. It changes C11's rule "every process of the user may connect with any scope", and "the URL
-contains no secret". With the token, `default` must be `null`: a scope that `scopes` does not name
-has no token.
+scope; the endpoint URL carries it in its query,
+`ws+unix://<socket>:/devtools/browser/<scope>?key=<token>` (or in an upgrade header
+`X-Agentwatch-Key`, for a client that can send one, as a script's `connectOverCDP({headers})`); the
+daemon sends the relay a hash of each token in the `allowlist` line (`"keys":{"<scope>":"<sha-256
+hex>"}`); the relay admits a connection only with the scope's token. Not in the path: ab-lead's
+reviewer (review-42e) measured that playwright-core 1.61.1 and 1.63.0 put the full path of a failed
+`connectOverCDP` into the error (six times for a 503), and the Playwright MCP gives that error to
+the agent, so a key in the path goes into a transcript. A key in the query reached the relay, and
+Playwright removed the query from the error (its `stripQueryParams`). Other clients must remove the
+key themselves: agent-browser puts the full `cdpUrl` into a `UsageError` today (`src/options.ts`),
+so its errors and logs redact the `key` query, and so do agentwatch's own logs. A session then
+cannot take another list by naming a scope. It changes C11's rule "every process of the user may
+connect with any scope", and "the URL contains no secret". With the token, `default` must be `null`:
+a scope that `scopes` does not name has no token.
 
 How a session gets its token (aw-lead's facts, mail m0ba5897, 2026-11-05; agentwatch #563): today a
 session names itself, and the CLI reaches the gateway over TCP localhost with one Bearer token, so
@@ -661,21 +679,25 @@ session names itself, and the CLI reaches the gateway over TCP localhost with on
   or tmux read refuses the call.
 
 The token (aw-lead's "key") lives only in the session's environment: never in an argv, never in the
-output of `agentwatch browser endpoint` or `env`, never in a log, and never in a URL that a tool
-gets as an argument. A session that is live before the deploy has no token until its restart: the
-relay refuses its connection with 403 `The agent browser needs this session's key. A session that
-started before the key existed gets one when it starts again.` (fail closed).
+output of `agentwatch browser endpoint` or `agentwatch browser env`, never in a log, and never in a
+URL that a tool gets as an argument. A session that is live before the deploy has no token until
+its restart: the relay refuses its connection with 403 `The agent browser needs this session's key.
+A session that started before the key existed gets one when it starts again.` (fail closed). The
+daemon keeps each live session's token in its own 0600 state over a daemon restart (the session's
+environment still holds it), and sends the hashes again in its next `allowlist` line; a lost state
+means that those sessions are refused until they start again.
 
 The limits of either way, stated plainly: the token stops a mistake and a prompt-injected agent that
 only names another scope. It does not stop a process of the same OS user that looks for the token:
 `/proc/<pid>/environ` of another session's process is readable by the same user; a session's
 transcript holds what the session printed; tmux keys sent to another session's pane run there. So
 the token must never be in an argv (`/proc/<pid>/cmdline` is readable by every user on taylor):
-agent-browser and the Playwright MCP take the endpoint from an environment variable or a 0600 file,
-not from `--cdp-url` with the token in it. It must never be in a transcript either. With the environment way, `agentwatch browser endpoint` and `env` cannot tell which session calls (sessions
-name themselves, agentwatch #563), and their output goes into a transcript, so they print no token
-at all. The client (agent-browser, a script) reads the token from its own environment and adds it
-to the URL itself. A program that agentwatch did not start has no token and can no longer connect, unless
+agent-browser and the Playwright MCP take it from the environment, not from `--cdp-url` with the
+token in it. It must never be in a transcript either. With the environment way, `agentwatch browser
+endpoint` and `agentwatch browser env` cannot tell which session calls (sessions name themselves,
+agentwatch #563), and their output goes into a transcript, so they print no token at all. The
+client (agent-browser, a script) reads the token from its own environment and adds it to the URL
+itself. A program that agentwatch did not start has no token and can no longer connect, unless
 agentwatch gives it a token of its own (choices 1 and 5).
 
 ## 10. The operator-mode send stays one profile (question 7)
@@ -684,8 +706,8 @@ The agent browser has one profile. A sent site's cookies, storage and service wo
 profile for every scope. A scope whose list lacks the sent site cannot open its pages at the top
 level (DNR, the relay and the guard), but:
 
-- its allowlisted pages can still make requests to the sent site, and Chrome sends the site's cookies
-  that are allowed in a third-party context (`SameSite=None`) with them;
+- its allowlisted pages can still make requests to the sent site, and Chrome sends the site's
+  cookies that are allowed in a third-party context (`SameSite=None`) with them;
 - a worker of the sent site can serve its page in that scope's tab until the guard acts (section 6);
 - a content setting that another scope granted for the sent site applies there too.
 
@@ -703,11 +725,11 @@ rejected ways).
 - The guard is not a block for a worker's page, also one that the worker passes on from the network
   (section 6), or a back/forward-cache page (section 7).
 - With a default list, a scope name that `scopes` does not name gets that list (section 8.1).
-- Tabs of no scope fail closed, and that includes the operator's own tabs. Today the operator can open
-  a tab in the agent browser's live view (agentwatch design §5.15) and browse the one list. With this
-  design such a tab has no scope, so it can open no site at all. The receiver can mark such a tab:
-  a new tab that no page opened and that no bridge op created starts at Chrome's New Tab page
-  (`chrome://newtab/`), which no agent tab ever does (the relay opens `about:blank` only). The
+- Tabs of no scope fail closed, and that includes the operator's own tabs. Today the operator can
+  open a tab in the agent browser's live view (agentwatch design §5.15) and browse the one list.
+  With this design such a tab has no scope, so it can open no site at all. The receiver can mark
+  such a tab: a new tab that no page opened and that no bridge op created starts at Chrome's New Tab
+  page (`chrome://newtab/`), which no agent tab ever does (the relay opens `about:blank` only). The
   options are in section 13, choice 3. The mark, its rule, the guard for marked tabs and the
   inheritance by their popups are receiver work (part 1d, section 12); the setting is agentwatch's
   (part 3).
@@ -730,18 +752,20 @@ contract text in the first build PR, with the shared vectors:
 - A new `test/vectors/scopes.json`: `set_scopes` objects and what applies (lists, scopes, `null`,
   default, the `operator` field, the counts in `refused`), for the receiver and the relay alike
   (section 8.3).
+- A new `test/vectors/hello.json`: the hello with `"features":["scopes"]`, and the receiver's
+  `ok:false` answer to `set_allowlist`.
 - agent-browser copies them into `test/vectors/chrome-extension-<commit>/`, as today.
 
 Then (the receiver in three PRs, so that each one stays small enough for one review):
 
 | Part | Repo | What | Depends on |
 | --- | --- | --- | --- |
-| 1a. Rules and map | chrome-extension (`agent/`) | `set_scopes` in place of `set_allowlist`; the scope rules as session rules (a full replace for `set_scopes`, one list's rules for a tab); the removal of dynamic rules 2 and 4 and of every session rule at the worker's start; the tab-to-scope map, its reset at each link change and the epoch check of its writes; `tabs.create` and `windows.create` with the scope arg; `tabs.onReplaced`; the fail-closed path of a failed rule update; the closing rule per list and the window rule of section 7; the worker removal per section 7; the import's rules 6 and 7 and their end at the restore tab's last navigation; `contentDetails` against the union; unit tests with the fake chrome | the contract PR |
-| 1b. Popups and the retry | chrome-extension | Popups from `onCreatedNavigationTarget`; `bridge.tabScope` before `tabs.onCreated`; the retry and its trigger, with its `blocked` cases (blocked again; no request within 1 s); the hold of a popup's `tabs.onCreated` (only for `"held":true`) with all its end conditions of section 5.2 (allowed, the retry's request held, the `blocked` decision, a commit with no request, 50 ms from the rule, `HOLD_MAX_MS`); unit tests; the live test of popups of every kind many times, also with one window per page | 1a |
+| 1a. Rules and map | chrome-extension (`agent/`) | `set_scopes` in place of `set_allowlist`; the hello's `"features":["scopes"]` and the `ok:false` answer to an old daemon's `set_allowlist`; the scope rules as session rules (a full replace for `set_scopes`, one list's rules for a tab); the removal of dynamic rules 2 and 4 and of every session rule at the worker's start; the tab-to-scope map, its reset at each link change and the epoch check of its writes; `tabs.create` and `windows.create` with the scope arg; `tabs.onReplaced`; the fail-closed path of a failed rule update; the closing rule per list and the window rule of section 7; the worker removal per section 7; the import's rules 6 and 7 and their end at the restore tab's last navigation; `contentDetails` against the union; unit tests with the fake chrome | the contract PR |
+| 1b. Popups and the retry | chrome-extension | Popups from `onCreatedNavigationTarget`; `bridge.tabScope` before `tabs.onCreated`; the retry and its trigger, with its `blocked` cases (blocked again; no request within 1 s); the hold of a popup's `tabs.onCreated` (only for `"held":true`) with all its end conditions of section 5.2 (allowed, the retry's request held, the `blocked` decision, a commit with no request, 50 ms from the rule, `HOLD_MAX_MS`); a popup that closes while its event is held gets no `tabs.onCreated`; unit tests; the live test of popups of every kind many times, also with one window per page | 1a |
 | 1c. The guard and `blocked` | chrome-extension | The guard (layers 2 and 3), for `blob:` inner hosts too; `blocked` with the scope, once per navigation, and after a failed retry; with choice 2 b, the worker block instead; unit tests; the live test of the worker hole (both forms) and of a list change | 1a |
 | 1d. The operator's own tabs (choice 3) | chrome-extension | The mark of a tab that starts at `chrome://newtab/` and that no page opened; a popup of a marked tab is marked too; the mark's life (it stays at a link change and at `tabs.onReplaced`, it goes at the worker's start); the marked-tab rule of C5's target (id 8, `"*"`), or the marked tabs in the named list's `tabIds` (b, c), none with d or while no tab is marked; the closing rule, the guard and the retry for marked tabs (none of the first two with `"*"`); the `operator` field of `set_scopes` (C4's target) and its refusal rule; unit tests; the live test of a tab that the operator opens and of its popup | 1a, 1b |
-| 2. The relay | agent-browser (`src/relay/`) | The `allowlist` line with lists, scopes and default, and the rules of section 8.1 applied to it (the shared vector); readiness and the 503 text per scope; the closing of connections whose scope lost its list; `tabs.create` and `windows.create` with the scope; a tab's scope from `bridge.tabScope` only, with the 500 ms wait for a new tab; the refusal of off-list navigations (layer 1); grants and the content-setting rebuild per scope; with choice 1 b, the token; unit tests with the fake bridge; the live test with two scopes through Playwright and the MCP, popups of every kind many times | the contract PR; runs at the same time as part 1 |
-| 3. agentwatch | agentwatch (aw-lead) | Lists per repo in the web viewer; the scope of each session (session to repo to list) and the default (choice 5); `set_scopes` after each link up, list change, session start and end, and before a session gets its endpoint; `null` for an ended scope; the `allowlist` line; `blocked` with the scope in the Browser page; which list a sent site joins (choice 6); the setting of the operator's own tabs (choice 3: the `operator` field of `set_scopes`; the mark is part 1d); with choice 1 b, the token in each session's environment and out of every argv and transcript; the skill text (a refused `goto` gives `Not allowed: <host> is not on the allowlist`, no error page); the live test on taylor with two repos and two lists | parts 1a to 1d and 2 |
+| 2. The relay | agent-browser (`src/relay/`) | The `allowlist` line with lists, scopes and default, and the rules of section 8.1 applied to it (the shared vector); readiness and the 503 text per scope; the closing of connections whose scope lost its list; `tabs.create` and `windows.create` with the scope; a tab's scope from `bridge.tabScope` only, with the 500 ms wait for a new tab; the refusal of off-list navigations (layer 1); grants and the content-setting rebuild per scope; with choice 1 b, the token in the URL's query (or the `X-Agentwatch-Key` header), its check before the 503s, the 403 text, and the redaction of the `key` query in agent-browser's own errors and logs (`src/options.ts` today puts the full `cdpUrl` into a `UsageError`); the drop of a kept `bridge.tabScope` at `tabs.onRemoved`; unit tests with the fake bridge; the live test with two scopes through Playwright and the MCP, popups of every kind many times | the contract PR; runs at the same time as part 1 |
+| 3. agentwatch | agentwatch (aw-lead) | Lists per repo in the web viewer; the scope of each session (session to repo to list) and the default (choice 5); the hello's `features`: to an old receiver `set_allowlist` with `"domains":[]`, no `allowlist` line, and the Browser page text "The agent browser's extension is too old for the per-repo allowlists. Update it."; `set_scopes` after each link up, list change, session start and end, and before a session gets its endpoint; an ended scope dropped at the session's end (B5; with choice 5 b first `null`, dropped after 60 s); the `allowlist` line; `blocked` with the scope in the Browser page; which list a sent site joins (choice 6); the setting of the operator's own tabs (choice 3: the `operator` field of `set_scopes`; the mark is part 1d); with choice 1 b, the token in each session's environment and out of every argv, transcript and log, its hash in the `allowlist` line, and its life over a daemon restart; the skill text (a refused `goto` gives `Not allowed: <host> is not on the allowlist`, no error page); the live test on taylor with two repos and two lists | parts 1a to 1d and 2 |
 
 Each part: test first, a fresh reviewer per PR, no tag or publish. The choices of section 13 change
 parts 1 to 3 only where they say. Before the contract PR merges, ab-lead mails its commit to aw-lead
@@ -755,8 +779,8 @@ ab-dm6, and records choices 2, 4 and 5 as assumptions, each with its option a, i
 operator can reverse an assumption in To Review).
 
 **Choice 1 (asked, ab-dm6). Should each agent session get a scope token, so that a session cannot
-take another repo's list by naming that repo's scope?** Today any process of your OS user can connect
-to the agent browser with any session's name and get that session's list.
+take another repo's list by naming that repo's scope?** Today any process of your OS user can
+connect to the agent browser with any session's name and get that session's list.
 
 - a. Keep the scope advisory. The per-repo list keeps an honest agent and a page inside the repo's
   sites. A session that names another repo's scope gets that list. No more work.
@@ -765,14 +789,14 @@ to the agent browser with any session's name and get that session's list.
   no longer take another repo's list by naming it. Sessions name themselves today (agentwatch
   #563), so `agentwatch browser endpoint` and `agentwatch browser env` cannot tell which session
   calls, and their output goes into a transcript: they print no token at all. The client reads the
-  token from its own environment and adds it to the URL. A program that
-  agentwatch did not start has no token and can no longer connect, unless agentwatch gives it a
-  token of its own (see choice 5). A session that started before the change has no token until it
-starts again; until then the agent browser refuses it with a clear text. A process of your user
-that looks for a token can still find it:
-  in another session's environment (`/proc`), in a transcript, or by tmux keys to another session's
-  pane. The token never goes into a command line or a transcript. A stronger check (the daemon tells
-  the calling session by its process) is about one more stage of work in agentwatch.
+  token from its own environment and adds it to the URL. A program that agentwatch did not start
+  has no token and can no longer connect, unless agentwatch gives it a token of its own (see choice
+  5). A session that started before the change has no token until it starts again; until then the
+  agent browser refuses it with a clear text. A process of your user that looks for a token can
+  still find it: in another session's environment (`/proc`), in a transcript, or by tmux keys to
+  another session's pane. The token never goes into a command line, a transcript or a log. A
+  stronger check (the daemon tells the calling session by its process) is about one more stage of
+  work in agentwatch.
 - Recommendation: b, because without it the per-repo list is one name away for any session, and a
   simple injected instruction can use it.
 - No answer: a (no token); the rest of the design does not depend on it.
@@ -798,8 +822,8 @@ worker never shows its page in another repo's tab?**
 tab that you open there can browse the one list. With per-repo lists it belongs to no repo, so it
 can open no site. The agent browser can mark your tabs: a tab that you open starts at Chrome's New
 Tab page, which no agent tab does (the relay opens `about:blank` only and refuses `chrome:` URLs;
-that a page cannot open a `chrome://` page is Chrome's rule, not measured here). A popup of a marked tab is marked too. No connection of an agent ever sees a
-marked tab.
+that a page cannot open a `chrome://` page is Chrome's rule, not measured here). A popup of a marked
+tab is marked too. No connection of an agent ever sees a marked tab.
 
 - **a. Any site (recommended).** Your own tabs are not checked, as the agentwatch design
   (2026-10-31, §5.6 and §5.15) planned: "a tab the operator opens themself in the live view is never
@@ -829,21 +853,21 @@ most popups would show it.
 **Choice 5 (assumed a, ab-8zv). What list does a scope get that no repo names (the default list)?**
 For example a program that agentwatch did not start, or a scope name that someone made up.
 
-- **a. None (recommended).** Such a connection is refused. Each session gets its repo's list by name;
-  a program that agentwatch did not start needs its own entry in `scopes` (and, with choice 1 b, its
-  own token).
+- **a. None (recommended).** Such a connection is refused. Each session gets its repo's list by
+  name; a program that agentwatch did not start needs its own entry in `scopes` (and, with choice 1
+  b, its own token).
 - b. A default list. Such a scope gets it, also a guessed or made-up name, and with choice 1 b a
   default list leaves that hole open.
 - Recommendation: a, because b gives a list to any name.
 - No answer: a.
 
-**Choice 6 (asked, ab-dm6). Which list does a site that you send to the agent browser join?** Today a
-send adds the site to the one list.
+**Choice 6 (asked, ab-dm6). Which list does a site that you send to the agent browser join?** Today
+a send adds the site to the one list.
 
-- a. You choose the repo (or repos) when you send. The send dialog of the operator extension gets one
-  more field.
-- **b. No list (recommended).** The send only puts your sign-in into the agent browser. The web viewer
-  shows the site as on no list, and you add it to the repos that need it.
+- a. You choose the repo (or repos) when you send. The send dialog of the operator extension gets
+  one more field.
+- **b. No list (recommended).** The send only puts your sign-in into the agent browser. The web
+  viewer shows the site as on no list, and you add it to the repos that need it.
 - c. Every repo's list. As today, every agent can use the sent site.
 - Recommendation: b, because a sign-in is the most sensitive thing on the box, and b makes each
   repo's access an explicit choice with no change to the operator extension.
@@ -851,7 +875,8 @@ send adds the site to the one list.
 
 ## 14. The evidence
 
-The probe: [2026-11-04-per-scope-allowlist-probe/README.md](2026-11-04-per-scope-allowlist-probe/README.md),
+The probe:
+[2026-11-04-per-scope-allowlist-probe/README.md](2026-11-04-per-scope-allowlist-probe/README.md),
 its source (`ext/`, `site.py`, `probe.mjs`) and its results (`results/*.json`). It ran on taylor in
 its own Xvfb (an auth file, `-nolisten tcp`), with the system Chromium 156.0.8078.79, a throwaway
 profile, the probe extension loaded unpacked, and `*.localhost` sites on 127.0.0.1 only. It used a
@@ -872,14 +897,16 @@ rule action ran in the extension. It did not use the agent package, the packed C
 | Back after a list change | a network navigation, blocked by rule 1, 6 of 6; no cache restore seen | bfcache.json |
 | Session rules after a browser restart | none; dynamic rules 2 and 5 stay | restart.json |
 | The rule limits | 5000 session rules; 100,000 hosts in one rule; one assignment grows with all lists' entries | limits.json |
+| Where a key in the URL leaks (ab-lead's reviewer, review-42e) | playwright-core 1.61.1 and 1.63.0 put the full path of a failed `connectOverCDP` into the error (six times for a 503); a `?key=` query reached the server and Playwright removed it from the error | review-42e's Playwright error test |
 
 **Not measured:** Playwright and the MCP on the target (no relay change exists yet), so also whether
 Playwright resolves a popup on the error page before the retry; a page from the back/forward cache;
 prerendered pages; whether Chrome reports a cache restore in `webNavigation.onCommitted`; the
-session rules after a service-worker restart alone (no link change); the relay's refusal of
-off-list navigations (design only); the two receiver guard layers together; the guard for a tab of
-no scope with the union of the lists; a failed rule update; the mark of the operator's own tabs
-(a tab that starts at `chrome://newtab/`) and that a page or a client cannot open a `chrome://`
-page; a popup whose opener sets `location` after an `await`; the signal of a retry that starts no
-request; the token through Playwright's `ws+unix:` URL; Google Chrome
-stable (the probe used Chromium 156; the agent Chrome on taylor will be Chrome stable); the Mac.
+session rules after a service-worker restart alone (no link change); the relay's refusal of off-list
+navigations (design only); the two receiver guard layers together; the guard for a tab of no scope
+with the union of the lists; a failed rule update; the mark of the operator's own tabs (a tab that
+starts at `chrome://newtab/`) and that a page or a client cannot open a `chrome://` page; a popup
+whose opener sets `location` after an `await`; the signal of a retry that starts no request; the
+token in an upgrade header through Playwright and the MCP; the Playwright MCP's own logs of the URL;
+Google Chrome stable (the probe used Chromium 156; the agent Chrome on taylor will be Chrome
+stable); the Mac.
