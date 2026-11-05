@@ -321,7 +321,7 @@ test("two commands at once on two sites keep both pages' pointer places (pointer
   await commands.close(linux(), { tab: b.name });
 });
 
-test("an about:blank page that a site opened takes that site's lock (its security origin), not the shared one", async () => {
+test("an about:blank page that a site opened takes that site's lock (its document's origin; the frame tree gives \"://\", as Chromium 156), not the shared one", async () => {
   operatorInFront();
   const a1 = await windowPage(A1);
   const blank = fake.openFrom(a1.page, "about:blank");

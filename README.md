@@ -273,8 +273,8 @@ person's input**) and `log` (progress lines; default standard error).
     `lockWaitMs` (`--input-timing '{"lockWaitMs": 2000000}'`), or their input commands fail with the
     lock's timeout.
   - **The site of a page** (`siteKey` in `src/input.ts`): the host of its main frame's URL (for an
-    `about:blank` page that a site opened, and for a `blob:` URL, the host of the frame's security
-    origin), cut to its last two labels: `www.example.com` and `app.example.com` are the site
+    `about:blank` page that a site opened, and for a `blob:` URL, the host of the document's origin,
+    `self.origin`: Chrome's frame tree gives `://` for such an `about:blank`), cut to its last two labels: `www.example.com` and `app.example.com` are the site
     `example.com`. An IP address and a host of one label (`localhost`) are their own site. Pages with no
     host (`about:blank`, a `data:` URL, an error page) share one lock. The rule never splits one site
     into two locks, and it needs no public-suffix list (no new dependency): a site (a registrable

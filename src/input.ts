@@ -53,10 +53,10 @@ function hostOf(url: string | undefined): string | undefined {
 /**
  * The key of a page's input lock: its site (board task ab-v16.46; the operator's choice on ab-hbt: agents on one site
  * send input one at a time, agents on different sites at the same time). `url` is the main frame's URL, `origin` its
- * security origin (Page.getFrameTree). The rule:
+ * document's origin (Tab.siteKey: the frame tree's security origin, else self.origin). The rule:
  *
  * - the host of the URL, or, when the URL has no host (about:blank that a site opened, a blob: URL), the host of the
- *   security origin (window.open() gives about:blank the opener's origin);
+ *   origin (window.open() gives about:blank the opener's origin);
  * - an IP address is its own key; a host of one label (localhost, an intranet name) is its own key;
  * - any other host gives its last two labels: www.example.com and app.example.com give example.com;
  * - no host at all (about:blank, a data: URL, an error page): the one shared key NO_SITE.

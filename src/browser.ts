@@ -887,11 +887,17 @@ export class Tab {
     }, opts);
   }
 
-  /** The site of the page's main frame: the key of its input lock (input.ts, siteKey; ab-v16.46). */
+  /**
+   * The site of the page's main frame: the key of its input lock (input.ts, siteKey; ab-v16.46). From the frame tree (no
+   * page code); for a URL with no host, the document's own origin: an about:blank page that a site opened has that
+   * site's origin (self.origin), where the frame tree gives "://" (measured on Chromium 156).
+   */
   async siteKey(): Promise<string> {
-    const { siteKey } = await import("./input.ts");
+    const { siteKey, NO_SITE } = await import("./input.ts");
     const { frameTree } = await this.send("Page.getFrameTree");
-    return siteKey(String(frameTree?.frame?.url ?? ""), frameTree?.frame?.securityOrigin);
+    const url = String(frameTree?.frame?.url ?? ""), key = siteKey(url, frameTree?.frame?.securityOrigin);
+    if (key !== NO_SITE) return key;
+    return siteKey(url, await this.evaluate(() => self.origin).catch(() => undefined));
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
