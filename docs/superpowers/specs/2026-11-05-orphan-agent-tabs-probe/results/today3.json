@@ -1,0 +1,464 @@
+{
+  "part": "today",
+  "start.tabs": [
+    {
+      "id": 303684316,
+      "window": 303684315,
+      "url": "about:blank"
+    }
+  ],
+  "A.before": {
+    "tabs": [
+      {
+        "id": 303684316,
+        "window": 303684315,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684318,
+        "window": 303684317,
+        "url": "http://a.localhost:8795/a1"
+      },
+      {
+        "id": 303684320,
+        "window": 303684319,
+        "url": "http://a.localhost:8795/a2"
+      },
+      {
+        "id": 303684322,
+        "window": 303684321,
+        "url": "http://a.localhost:8795/a3"
+      }
+    ],
+    "attached": [
+      {
+        "tab": 303684318,
+        "attached": false
+      },
+      {
+        "tab": 303684316,
+        "attached": false
+      },
+      {
+        "tab": 303684320,
+        "attached": false
+      },
+      {
+        "tab": 303684322,
+        "attached": false
+      }
+    ],
+    "s1": 2
+  },
+  "A.link": {
+    "downToReady_ms": 3105,
+    "readyAfterRelisten_ms": 2,
+    "s1Closed": {
+      "code": 1011,
+      "reason": "The agent browser's link went down"
+    },
+    "s2Closed": {
+      "code": 1011,
+      "reason": "The agent browser's link went down"
+    }
+  },
+  "A.after.tabs": [
+    {
+      "id": 303684316,
+      "window": 303684315,
+      "url": "about:blank"
+    },
+    {
+      "id": 303684318,
+      "window": 303684317,
+      "url": "http://a.localhost:8795/a1"
+    },
+    {
+      "id": 303684320,
+      "window": 303684319,
+      "url": "http://a.localhost:8795/a2"
+    },
+    {
+      "id": 303684322,
+      "window": 303684321,
+      "url": "http://a.localhost:8795/a3"
+    }
+  ],
+  "A.after.attached": [
+    {
+      "tab": 303684318,
+      "attached": false
+    },
+    {
+      "tab": 303684316,
+      "attached": false
+    },
+    {
+      "tab": 303684320,
+      "attached": false
+    },
+    {
+      "tab": 303684322,
+      "attached": false
+    }
+  ],
+  "A.after.s1-client": {
+    "getTargets": 0,
+    "discovered": 0
+  },
+  "A.after-end_scope-s1": {
+    "tabs": [
+      {
+        "id": 303684316,
+        "window": 303684315,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684318,
+        "window": 303684317,
+        "url": "http://a.localhost:8795/a1"
+      },
+      {
+        "id": 303684320,
+        "window": 303684319,
+        "url": "http://a.localhost:8795/a2"
+      },
+      {
+        "id": 303684322,
+        "window": 303684321,
+        "url": "http://a.localhost:8795/a3"
+      }
+    ],
+    "clientClosed": {
+      "code": 1000,
+      "reason": "The agentwatch session ended"
+    }
+  },
+  "A2.port-drop": {
+    "tabs": 5,
+    "pid": 1663378,
+    "connects": 2,
+    "reconnect_ms": 1105,
+    "s5Closed": {
+      "code": 1011,
+      "reason": "The agent browser's link went down"
+    },
+    "newPid": 1665111
+  },
+  "A2.after.tabs": [
+    {
+      "id": 303684316,
+      "window": 303684315,
+      "url": "about:blank"
+    },
+    {
+      "id": 303684318,
+      "window": 303684317,
+      "url": "http://a.localhost:8795/a1"
+    },
+    {
+      "id": 303684320,
+      "window": 303684319,
+      "url": "http://a.localhost:8795/a2"
+    },
+    {
+      "id": 303684322,
+      "window": 303684321,
+      "url": "http://a.localhost:8795/a3"
+    },
+    {
+      "id": 303684324,
+      "window": 303684323,
+      "url": "http://a.localhost:8795/c1"
+    }
+  ],
+  "A2.after.s5-client": {
+    "getTargets": 0,
+    "discovered": 0
+  },
+  "B.before": {
+    "b1": 303684326,
+    "attached": [
+      {
+        "tab": 303684318,
+        "attached": false
+      },
+      {
+        "tab": 303684326,
+        "attached": true
+      },
+      {
+        "tab": 303684324,
+        "attached": false
+      },
+      {
+        "tab": 303684316,
+        "attached": false
+      },
+      {
+        "tab": 303684320,
+        "attached": false
+      },
+      {
+        "tab": 303684322,
+        "attached": false
+      }
+    ]
+  },
+  "B.relay-restart": {
+    "oldRelayExit": 0,
+    "s3Closed": {
+      "code": 1001,
+      "reason": "The agent browser stopped"
+    }
+  },
+  "B.after.tabs": [
+    {
+      "id": 303684316,
+      "window": 303684315,
+      "url": "about:blank"
+    },
+    {
+      "id": 303684318,
+      "window": 303684317,
+      "url": "http://a.localhost:8795/a1"
+    },
+    {
+      "id": 303684320,
+      "window": 303684319,
+      "url": "http://a.localhost:8795/a2"
+    },
+    {
+      "id": 303684322,
+      "window": 303684321,
+      "url": "http://a.localhost:8795/a3"
+    },
+    {
+      "id": 303684324,
+      "window": 303684323,
+      "url": "http://a.localhost:8795/c1"
+    },
+    {
+      "id": 303684326,
+      "window": 303684325,
+      "url": "http://a.localhost:8795/b1"
+    }
+  ],
+  "B.after.attached": [
+    {
+      "tab": 303684318,
+      "attached": false
+    },
+    {
+      "tab": 303684326,
+      "attached": true
+    },
+    {
+      "tab": 303684324,
+      "attached": false
+    },
+    {
+      "tab": 303684316,
+      "attached": false
+    },
+    {
+      "tab": 303684320,
+      "attached": false
+    },
+    {
+      "tab": 303684322,
+      "attached": false
+    }
+  ],
+  "B.after.s3-client": {
+    "getTargets": 0,
+    "discovered": 0
+  },
+  "B.after.leftover": {
+    "evaluate": {
+      "fetch": "no answer in 5 s",
+      "ua": "probe-old-client"
+    },
+    "siteSawFetch": false,
+    "pausedEventsOfB1": 1
+  },
+  "B.after-end_scope-s3": {
+    "b1Open": true,
+    "clientClosed": {
+      "code": 1000,
+      "reason": "The agentwatch session ended"
+    }
+  },
+  "F.before": {
+    "tabs": [
+      {
+        "id": 303684328,
+        "window": 303684327,
+        "url": "http://a.localhost:8795/f1"
+      }
+    ]
+  },
+  "F.after-end_scope-s4": {
+    "chromium": "exit 0",
+    "s4Closed": {
+      "code": 1000,
+      "reason": "The agentwatch session ended"
+    }
+  },
+  "E1.sigterm": {
+    "startTabs": [
+      {
+        "id": 303684387,
+        "window": 303684386,
+        "url": "about:blank"
+      }
+    ],
+    "before": [
+      {
+        "id": 303684387,
+        "window": 303684386,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684396,
+        "window": 303684395,
+        "url": "http://a.localhost:8795/e1"
+      },
+      {
+        "id": 303684398,
+        "window": 303684397,
+        "url": "http://a.localhost:8795/e2"
+      }
+    ],
+    "stopped": 0,
+    "after": [
+      {
+        "id": 303684450,
+        "window": 303684449,
+        "url": "about:blank"
+      }
+    ],
+    "siteHitsAfterRestart": 2
+  },
+  "E2.sigkill": {
+    "startTabs": [
+      {
+        "id": 303684524,
+        "window": 303684523,
+        "url": "about:blank"
+      }
+    ],
+    "before": [
+      {
+        "id": 303684524,
+        "window": 303684523,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684544,
+        "window": 303684543,
+        "url": "http://a.localhost:8795/e1"
+      },
+      {
+        "id": 303684546,
+        "window": 303684545,
+        "url": "http://a.localhost:8795/e2"
+      }
+    ],
+    "stopped": "SIGKILL",
+    "after": [
+      {
+        "id": 303684524,
+        "window": 303684523,
+        "url": "about:blank"
+      }
+    ],
+    "siteHitsAfterRestart": 2
+  },
+  "E3.sigterm-restore-on": {
+    "startTabs": [
+      {
+        "id": 303684609,
+        "window": 303684608,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684610,
+        "window": 303684608,
+        "url": "about:blank"
+      }
+    ],
+    "before": [
+      {
+        "id": 303684609,
+        "window": 303684608,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684610,
+        "window": 303684608,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684632,
+        "window": 303684631,
+        "url": "http://a.localhost:8795/e1"
+      },
+      {
+        "id": 303684634,
+        "window": 303684633,
+        "url": "http://a.localhost:8795/e2"
+      }
+    ],
+    "stopped": 0,
+    "after": [
+      {
+        "id": 303684697,
+        "window": 303684696,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684698,
+        "window": 303684696,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684703,
+        "window": 303684696,
+        "url": "about:blank"
+      },
+      {
+        "id": 303684700,
+        "window": 303684699,
+        "url": "http://a.localhost:8795/e1"
+      },
+      {
+        "id": 303684702,
+        "window": 303684701,
+        "url": "http://a.localhost:8795/e2"
+      }
+    ],
+    "siteHitsAfterRestart": 4
+  },
+  "relay.stopped": 0,
+  "pids": {
+    "xvfb": [
+      1662982
+    ],
+    "chromium": [
+      1663002,
+      1666836,
+      1667655,
+      1668315,
+      1669068,
+      1669678,
+      1670546
+    ]
+  },
+  "chromiumVersion": "156.0.8078.79",
+  "extension": {
+    "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/orphan",
+    "id": "ifhfjdmdbgbnmllffiadajepajbcdnai",
+    "version": "0.2.0"
+  }
+}
