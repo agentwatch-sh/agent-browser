@@ -6,7 +6,7 @@
 // test/background-tabs.test.ts.
 //
 //   node test/live/background-tabs/check.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 98]
-//     [--before] [--hidden-ms 6000]
+//     [--before] [--hidden-ms 6000] [--hidden-drive] [--new-tabs 5]
 //
 // It goes through agent-browser's own launch, as an agent's first command does: launchAgentChrome
 // starts the Chrome with AGENT_ARGS, no debugging port and remote debugging seeded on, and the proxy
@@ -25,9 +25,9 @@
 // the logs of the runs on taylor 5 to 40 ms for eval, text, type and most clicks, about 1 s for some
 // first clicks in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. With the
 // hiddenDrive option (ab-v16.15) it stays hidden during a command, and only a recording makes it
-// visible, for its run. This check runs the default mode; visibility.ts beside this file measures both
-// modes, per command. The summary gives these spans ("visibleMs") and the state during a command
-// ("during"), as information. agent-browser opens
+// visible, for its run. This check runs the default mode, or with --hidden-drive the hidden drive;
+// visibility.ts beside this file measures both modes, per command. The summary gives these spans
+// ("visibleMs") and the state during a command ("during"), as information. agent-browser opens
 // tabs a and b in the background (the chrome://inspect tab of the launch stays in front), and the check
 // drives each tab by its name with the library's commands (`commands.click`, `type`, `eval`, `text`,
 // `shot`, as the CLI runs them):
@@ -35,6 +35,10 @@
 //   p2  front: a. a's timer (visible) and b's (hidden). Drive b (hidden), then a (in front).
 //   p3  front: b. Drive a (hidden).
 //   p4  front: a again. Drive b (hidden).
+//   p5  front: a. --new-tabs new tabs n1, n2, ..., each opened in the background, then eval, text and
+//       shot at once (ab-b84.17): a shot of a new tab whose page never drew a frame (with --hidden-drive,
+//       where eval and text draw nothing; in the default mode the open draws it). The eval gives the
+//       page's state during the drive ("during"). Each new tab is closed after its drive.
 //   record a (in front) and b (hidden) for 3 s each: frames from Chrome (information only).
 // agent-browser never brings a tab to the front (the operator's focus rule): the check switches the
 // front tab itself, as the operator does with a click on a tab (Target.activateTarget through the
@@ -45,7 +49,8 @@
 // the check reads 500 ms of each page's log: the driven tab must be hidden again (unless it is in front)
 // with no animation frame, and the front tab visible with frames.
 // --before adds the two timer flags back (chromeArgs), to measure the launch of release v0.2.9.
-// It prints a JSON summary with "ok", and writes it to DIR/run-XXXXXX/summary.json.
+// It prints a JSON summary with "ok", and writes it to DIR/run-XXXXXX/summary.json; "shots" lists each
+// shot's time and its problem (rules.ts, shotProblem), if any.
 //   exit 0  every step worked, each page was hidden or visible as its phase expects (right before each
 //           drive, all through each timer window, and after each drive), a hidden tab drew no animation
 //           frame and a visible one drew some, both tabs were listed, a visible tab's timer ran at full
@@ -67,6 +72,15 @@
 // without --before, of a version of ab-v16.15 in which it was the default, exit 0): each drive of a
 // hidden tab read "hidden" during its commands, with no visible span; a shot of a hidden tab took 0.14
 // to 0.19 s; the 3 s recording of hidden tab b got 60 fps, with one visible span of 4.6 s.
+// With ab-b84.17 (a shot keeps a capture in flight and waits for two frames, in both modes), 4 runs of
+// each mode, exit 0 all: 44 shots per mode (20 of hidden tabs, 20 of new tabs in p5, 4 in front), none
+// incomplete. The default mode: a shot of a hidden tab took 0.6 to 3.0 s (median 1.7 s), of a new tab
+// 0.1 to 1.3 s (median 0.4 s), in front 0.1 s. --hidden-drive: 84 to 121 ms for a hidden tab, 85 to
+// 115 ms for a new tab, 55 to 68 ms in front. On 2026-11-05, after review-41 (a frame limit of 5 s, and
+// one more capture when the shot's own capture is late), 4 more runs of each mode, exit 0 all: 44 shots
+// per mode, none incomplete, and no limit or extra capture in the log. The default mode: a hidden tab
+// 0.6 to 3.0 s (median 1.8 s), a new tab 0.1 to 1.8 s (median 0.7 s), in front 0.1 s. --hidden-drive:
+// 84 to 133 ms, 89 to 118 ms, 53 to 64 ms. p5's "during": "visible" in the default mode, else "hidden".
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -86,9 +100,10 @@ import {
   type Drive, type Idle, type Recording, type Run, type Step, type StepName, type Timer,
 } from "./rules.ts";
 
-const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, before: { type: "boolean" }, "hidden-ms": { type: "string" } } });
+const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, before: { type: "boolean" },
+  "hidden-ms": { type: "string" }, "hidden-drive": { type: "boolean" }, "new-tabs": { type: "string" } } });
 if (!values["out-dir"]) {
-  process.stderr.write("usage: node test/live/background-tabs/check.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 98] [--before] [--hidden-ms 6000]\n");
+  process.stderr.write("usage: node test/live/background-tabs/check.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 98] [--before] [--hidden-ms 6000] [--hidden-drive] [--new-tabs 5]\n");
   process.exit(2);
 }
 /** A start that the check refuses: one line, exit 2. The exit handler ends the check's own children. */
@@ -96,7 +111,7 @@ function refuse(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(2);
 }
-const start = startMode(process.platform, { chrome: values.chrome, display: values.display, before: values.before, hiddenMs: values["hidden-ms"] });
+const start = startMode(process.platform, { chrome: values.chrome, display: values.display, before: values.before, hiddenMs: values["hidden-ms"], hiddenDrive: values["hidden-drive"], newTabs: values["new-tabs"] });
 if ("error" in start) refuse(start.error);
 const mode = start;
 const OUT = resolve(values["out-dir"]);
@@ -115,7 +130,7 @@ const sock = join(RUN, "chrome-proxy.sock");
 const o: BrowserOptions = {
   stateDir: RUN, socketPath: Buffer.byteLength(sock) <= MAX_SOCKET_PATH_BYTES ? sock : join(mkdtempSync(join(tmpdir(), "ab-bt-")), "proxy.sock"),
   allow: ["probe.localhost"], chromeBin: mode.chrome, chromeArgs: chromeArgs(mode.before), approve: "xdotool", proxyIdleMs: 120_000,
-  commandName: "background-tabs check", log: (line) => process.stderr.write(`agent-browser: ${line}\n`),
+  hiddenDrive: mode.hiddenDrive, commandName: "background-tabs check", log: (line) => process.stderr.write(`agent-browser: ${line}\n`),
 };
 const s = resolveOptions(o);
 
@@ -171,7 +186,7 @@ document.getElementById("b").addEventListener("click", (e) => {
 write();
 </script>`;
 const server = createServer((req, res) => {
-  const m = /^\/([ab])$/.exec(req.url ?? "");
+  const m = /^\/([ab]|n\d+)$/.exec(req.url ?? "");
   if (!m) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { "content-type": "text/html" });
   res.end(PAGE(m[1]));
@@ -203,6 +218,8 @@ async function toFront(tab: string): Promise<void> {
 }
 
 const timers: Timer[] = [], drives: Drive[] = [], idles: Idle[] = [], recordings: Recording[] = [];
+/** Each shot step's time (ms) and its problem (shotProblem), if any: information, the steps' own failures say the rest. */
+const shots: { phase: string; tab: string; front: string; ms: number; problem?: string }[] = [];
 const expect = (tab: string, front: string) => (tab === front ? "visible" : "hidden");
 
 /** Each tab's timer over the next --hidden-ms, with no command in between. */
@@ -219,21 +236,22 @@ async function measure(phase: string, front: string, tabs: string[]): Promise<vo
 /**
  * Click, type, eval, text and shot in one tab, by its name; each step checks its effect in the page.
  * The page's own state right before the first command comes from its visibility log, after a pause in
- * which no command is attached.
+ * which no command is attached. `only` runs only those steps (a new tab: eval, text and shot).
  */
-async function drive(phase: string, front: string, tab: string): Promise<void> {
+async function drive(phase: string, front: string, tab: string, only?: readonly StepName[]): Promise<void> {
   const steps: Step[] = [];
   let during = "unknown";
   await sleep(500);
   const t0 = Date.now();
   const step = async (name: StepName, run: () => Promise<string | undefined>) => {
+    if (only && !only.includes(name)) return;
     const t0 = Date.now();
     let detail: string | undefined;
     try { detail = await run(); } catch (e) { detail = `error: ${(e as Error).message.split("\n")[0]}`; }
     steps.push({ step: name, ok: detail === undefined, ms: Date.now() - t0, ...(detail === undefined ? {} : { detail }) });
   };
   const first = await pageState(tab), visibility = visibilityIn(first.vis, t0, t0);
-  const n = first.clicks.length + 1, text = `${phase}-${tab}-typed`;
+  const n = first.clicks.length + (!only || only.includes("click") ? 1 : 0), text = `${phase}-${tab}-typed`;
   await step("click", async () => {
     await commands.click(o, { tab, target: "#b" });
     const { clicks } = await pageState(tab);
@@ -255,8 +273,10 @@ async function drive(phase: string, front: string, tab: string): Promise<void> {
     return t.includes(`clicks: ${n}`) ? undefined : `the text is ${JSON.stringify(t.slice(0, 80))}`;
   });
   await step("shot", async () => {
-    const path = (await commands.shot(o, { tab, path: join(RUN, "shots", `${phase}-${tab}.png`) })).path;
-    return shotProblem(pngPixels(readFileSync(path)), n, (await pageState(tab)).dpr);
+    const t0 = Date.now(), path = (await commands.shot(o, { tab, path: join(RUN, "shots", `${phase}-${tab}.png`) })).path, ms = Date.now() - t0;
+    const problem = shotProblem(pngPixels(readFileSync(path)), n, (await pageState(tab)).dpr);
+    shots.push({ phase, tab, front, ms, ...(problem ? { problem } : {}) });
+    return problem;
   });
   const end = Date.now(), logs = await idle(phase, front, tab);
   drives.push({ phase, tab, front, visibility, during, visibleMs: visibleSpans(logs[tab], t0, end), expected: expect(tab, front), steps });
@@ -264,14 +284,14 @@ async function drive(phase: string, front: string, tab: string): Promise<void> {
 
 /**
  * The 500 ms that start 500 ms after a drive of tab `driven`, with no command attached: each page's
- * own visibility and animation frames then. Returns each page's visibility log.
+ * own visibility and animation frames then (a, b and the driven tab). Returns each page's visibility log.
  */
 async function idle(phase: string, front: string, driven: string): Promise<Record<string, [number, string][]>> {
   await sleep(500);
   const from = Date.now();
   await sleep(500);
   const to = Date.now(), logs: Record<string, [number, string][]> = {};
-  for (const tab of ["a", "b"]) {
+  for (const tab of new Set(["a", "b", driven])) {
     const st = await pageState(tab);
     logs[tab] = st.vis;
     idles.push({ phase, driven, tab, front, visibility: visibilityIn(st.vis, from, to), expected: expect(tab, front), frames: timerStats(st.ticks, st.frames, from, to).frames });
@@ -311,6 +331,13 @@ await drive("p3", "b", "a");
 // p4: and back to a; b is hidden again.
 await toFront("a");
 await drive("p4", "a", "b");
+// p5: new tabs, opened in the background behind a, read and shot at once; each closed after its drive.
+for (let i = 1; i <= mode.newTabs; i++) {
+  const tab = `n${i}`;
+  ids[tab] = (await commands.open(o, { url: `${BASE}/${tab}`, name: tab })).tab.targetId;
+  await drive("p5", "a", tab, ["eval", "text", "shot"]);
+  await commands.close(o, { tab });
+}
 let ffmpeg: string | undefined;
 try { ffmpeg = findFfmpeg(); } catch { ffmpeg = undefined; }
 await record("a", "a", ffmpeg);
@@ -321,11 +348,11 @@ const failed = failures(run);
 const ms = (d: Drive) => Object.fromEntries(d.steps.map((x) => [x.step, x.ms]));
 const summary = {
   ok: failed.length === 0, chrome: product, launch: "agent-browser's own (launchAgentChrome, the proxy, approve: xdotool)", launchMs,
-  flags: [...AGENT_ARGS, ...(mode.before ? TIMER_FLAGS : [])], tabs: listed,
+  flags: [...AGENT_ARGS, ...(mode.before ? TIMER_FLAGS : [])], hiddenDrive: mode.hiddenDrive, tabs: listed,
   timers: timers.map((t) => ({ phase: t.phase, tab: t.tab, front: t.front, visibility: t.visibility, ...t.stats, windowMs: mode.hiddenMs, askedMs: TIMER_MS })),
   drives: drives.map((d) => ({ phase: d.phase, tab: d.tab, front: d.front, visibility: d.visibility, during: d.during, visibleMs: d.visibleMs, ok: d.steps.every((x) => x.ok), ms: ms(d) })),
   idles: idles.map((i) => `${i.phase} after ${i.driven}: ${i.tab} ${i.visibility}, ${i.frames} frames`),
-  recordings, failures: failed, run: RUN,
+  recordings, shots, failures: failed, run: RUN,
 };
 // summary.json also has each step's detail and each page's whole visibility log.
 const visibilityLogs = { a: (await pageState("a")).vis, b: (await pageState("b")).vis };

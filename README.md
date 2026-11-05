@@ -188,20 +188,57 @@ tab: two modes**) and `log` (progress lines; default standard error).
   had a median of 1000 ms (6 ticks in 6 s); with the two timer flags, 50 ms (120 ticks). In the default
   mode a shot of a background tab took 0.2 to 3.1 s with either set (0.1 s in front), and 1 of 30 such
   shots with the one flag showed only the top 256 px of the page (0 of 25 with all three; too few to
-  compare); the check now fails on such a shot. On macOS none of this is measured again (see
-  **Measured** under **Recording**).
+  compare); the check now fails on such a shot. Since ab-b84.17 a shot waits for two frames before its
+  capture (see the next item): 0 of 88 shots per mode were incomplete in 8 runs of each mode. On macOS
+  none of this is measured again (see **Measured** under **Recording**).
 - **A command on a background tab: two modes.** Chrome draws no frame of a tab that is not in front,
   and its page reports `hidden`. There a page that never drew a frame (it loaded in the background, or
   after a `goto` there) drops clicks and keys, a mouse move waits up to 5 s for a frame, and a shot
   can wait for ever.
+  - **A shot, in both modes** (ab-b84.17). Chrome ends a `Page.captureScreenshot` only when the frame
+    that it forces is presented, and a frame of a background tab is never on screen: it counts only
+    when a later frame replaces it. A page that changes by itself (a caret, an animation) draws one. On
+    a page that does not change, only a later capture does, and Chrome then ends every earlier capture
+    with it. But two captures sent before Chrome draws a frame share the frame that they force, and
+    nothing replaces it: then both wait. So a lone capture waits for ever, also in the default mode,
+    where the page is `visible`. A shot therefore keeps one capture in flight (`Tab.whileDrawn`), waits
+    for two frames, and then takes its own capture: the frame between the two captures is what ends
+    both. Without the wait, 8 of 8 default-mode shots and 4 of 4 `--hidden-drive` shots failed after
+    30 s (review-41 on taylor). The second frame also makes the picture complete: a frame that Chrome
+    draws just after it starts to draw a page can lack the tiles below the first row. In the default
+    mode Chrome draws a background tab about once a second, so the wait takes up to 2 s there. Its
+    limit is 5 s. When the limit comes first, a log line says so: with one frame the shot goes on, and
+    with none it fails at once with a clear error (Chrome would end neither capture). The first
+    capture can end before the shot's own goes out: `shot --size` and `shot --full` lay the page out
+    again, and with `--hidden-drive` that relayout ended the first capture of a still page in the 0.5 s
+    settle. So before the own capture of such a shot, when no capture is in flight, the shot sends a
+    new first capture and waits for two frames. Any other shot's own capture that has not ended after
+    3 s gets one more capture to end it, with a log line, and the shot waits until all of them ended.
+    No capture goes out while a full-page capture waits, because it would set that capture's emulation
+    again when it ends. When the tab goes to a new page during the shot, Chrome may not end a capture
+    of the old page (in the default mode the shot's own capture waited 30 s; after a same-site
+    navigation one ended 50 ms after the shot failed): the shot fails at once with a clear error. After
+    its own capture, the shot checks the allowlist again, and it writes no file for a tab that left it. In the default mode every page is `visible`, so a tab in front gets the capture
+    in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
+    mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of
+    2 s) and in 0.02 s with `--hidden-drive`; the shot's own capture then ended in 1.07 to 2.10 s and
+    in 0.07 s. No run of the live checks logged a limit or an extra capture. With no wait (a mutation
+    check), 9 plain and `--size` shots waited alone, and the extra capture ended each at 3.1 to 4.1 s;
+    a default-mode `--full` shot failed after 30 s with the clear error.
   - **Default.** A command turns on focus emulation (`Emulation.setFocusEmulationEnabled`) when it
     attaches. Then the page is `visible`, and Chrome draws it, until the detach. A site sees a
     `visibilitychange` to `visible` and one back for each command, and a `focus` and a `blur`.
     Measured on taylor in 3 runs of `test/live/background-tabs/visibility.ts` (main before ab-v16.15,
     and 2 of this release): 9 to 26 ms for eval, text, outline, type and press; about 1 s for a hover
     or the first click in a tab; 3.1 to 4.1 s for a shot, 2.6 to 3.1 s for `shot --size` and 0.25 to
-    0.5 s for `shot --full`; 5 s for a 3 s recording. In all 3 runs a shot of a new background tab
-    failed after 30 s, and the page was visible for those 30 s.
+    0.5 s for `shot --full`; 5 s for a 3 s recording. Before ab-b84.17, in all 4 runs (one more on
+    2026-11-04), a shot of a new background tab failed after 30 s, and the page was visible for those
+    30 s. Since ab-b84.17 (on 2026-11-05, 4 runs of `check.ts` and 2 of `visibility.ts`): a shot of
+    a background tab took 0.6 to 4.1 s (median 1.8 s; the page is visible for that time), of a new tab
+    0.1 to 1.8 s in `check.ts` (median 0.7 s) and 1.1 to 4.1 s in `visibility.ts`, of a tab in front
+    0.1 s; `shot --size` 1.1 s and `shot --full` 0.1 s. That time is Chrome's: in this mode Chrome
+    draws a background tab about once a second, and the shot waits for two frames (up to 2 s), then
+    for its own capture (1 to 2 s). A second shot right after the first one took 0.1 s (2026-11-04).
   - **`hiddenDrive`** (CLI `--hidden-drive`, Python `hidden_drive=True`; ab-v16.15). No focus
     emulation. For `click`, `hover`, `type`, `press`, `Tab.clickAt` and `shot` in a background tab,
     agent-browser keeps one `Page.captureScreenshot` in flight (`Tab.whileDrawn`): while it waits,
@@ -211,21 +248,24 @@ tab: two modes**) and `log` (progress lines; default standard error).
     type, press, shot, `shot --size`, `shot --full`, open and goto (also in a new tab and after a
     goto) had no visible time and no `visibilitychange`, and the page drew no frame in the second
     after; each took 18 to 140 ms (0.9 s for `shot --size`, with its 0.5 s settle); a shot of a new
-    tab took 0.1 s. What a site can still see: (1) `record` makes the page `visible` for its run, 4.6
-    s for a 3 s script: Chrome sends no screencast frame of a hidden page, and with a hidden capture
-    in flight it sends half of them (90 in 3 s, not 180), unevenly. (2) While an input command or a
-    shot runs (0.1 s; 0.9 s for `shot --size`), the hidden page draws frames and runs
-    `requestAnimationFrame`, as a tab that is shared or captured does; it reports `hidden` all the
-    time. (3) The page gets trusted input while it is `hidden`. A person cannot do that, and the
-    launch flag above prevents the same signal for a covered window. Chrome's input focuses the page:
-    two `focus` events, then `document.hasFocus()` is `true`, and no `blur` follows until the operator
-    changes tabs. Without focus emulation no CDP call takes the focus back. (4) Between those
-    commands, and during `open`, `goto`, `text`, `outline`, `eval` and `waitFor`, a background page
-    draws nothing: `requestAnimationFrame`, `IntersectionObserver` and CSS transitions wait. Content
-    that appears only on a frame does not appear, a `waitFor` for it times out, and `transitionend`
-    does not fire. A library session (one `AgentBrowser`, several `Tab` calls) that waits for such
-    content in a background tab needs the default mode, or the tab in front. This mode is measured on
-    Linux only.
+    tab took 0.1 s. On a still page, `shot --size` took 3.6 s at f18805e (its first capture ended in
+    the settle, and the 3 s fallback ended the shot's own), and 0.6 s with the new first capture
+    (review-41b, 5 of 5). In 8 runs of `check.ts` (ab-b84.17), a shot of a background tab took 84 to
+    133 ms, and of a new tab whose page never drew a frame 85 to 118 ms. What a site can still see:
+    (1) `record` makes the page `visible` for its run, 4.6 s for a 3 s script: Chrome sends no
+    screencast frame of a hidden page, and with a hidden capture in flight it sends half of them (90 in
+    3 s, not 180), unevenly. (2) While an input command or a shot runs (0.1 s; 0.9 s for
+    `shot --size`), the hidden page draws frames and runs `requestAnimationFrame`, as a tab that is
+    shared or captured does; it reports `hidden` all the time. (3) The page gets trusted input while it
+    is `hidden`. A person cannot do that, and the launch flag above prevents the same signal for a
+    covered window. Chrome's input focuses the page: two `focus` events, then `document.hasFocus()` is
+    `true`, and no `blur` follows until the operator changes tabs. Without focus emulation no CDP call
+    takes the focus back. (4) Between those commands, and during `open`, `goto`, `text`, `outline`,
+    `eval` and `waitFor`, a background page draws nothing: `requestAnimationFrame`,
+    `IntersectionObserver` and CSS transitions wait. Content that appears only on a frame does not
+    appear, a `waitFor` for it times out, and `transitionend` does not fire. A library session (one
+    `AgentBrowser`, several `Tab` calls) that waits for such content in a background tab needs the
+    default mode, or the tab in front. This mode is measured on Linux only.
   - Both modes leave signals that a person's page never shows. The measured comparison with a
     person, and the recommended design (one window per agent page, no focus emulation, input in a
     person's shape), are in `docs/research/2026-11-05-anti-detect-drive.md` (board task ab-v16.21;

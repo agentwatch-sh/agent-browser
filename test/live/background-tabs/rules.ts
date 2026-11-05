@@ -10,17 +10,18 @@ export const TIMER_FLAGS: readonly string[] = ["--disable-renderer-backgrounding
 /** The page's interval timer asks for this period. */
 export const TIMER_MS = 50;
 
-export type Mode = { chrome: string; display: number; before: boolean; hiddenMs: number };
-export type Flags = { chrome?: string; display?: string; before?: boolean; hiddenMs?: string };
+export type Mode = { chrome: string; display: number; before: boolean; hiddenMs: number; hiddenDrive: boolean; newTabs: number };
+export type Flags = { chrome?: string; display?: string; before?: boolean; hiddenMs?: string; hiddenDrive?: boolean; newTabs?: string };
 
 /** The start guard: the mode to run in, or the usage error (exit 2). */
 export function startMode(platform: string, f: Flags): Mode | { error: string } {
   if (platform !== "linux")
     return { error: `the background-tab check runs on Linux only, in a private Xvfb, so that no window reaches a person's screen (this is ${platform})` };
-  const display = Number(f.display ?? 98), hiddenMs = Number(f.hiddenMs ?? 6000);
+  const display = Number(f.display ?? 98), hiddenMs = Number(f.hiddenMs ?? 6000), newTabs = Number(f.newTabs ?? 5);
   if (!Number.isInteger(display) || display < 1) return { error: `--display is a whole display number: ${f.display}` };
   if (!Number.isInteger(hiddenMs) || hiddenMs < 2000 || hiddenMs > 60_000) return { error: `--hidden-ms is a whole number of ms from 2000 to 60000: ${f.hiddenMs}` };
-  return { chrome: f.chrome ?? "/usr/bin/chromium", display, before: !!f.before, hiddenMs };
+  if (!Number.isInteger(newTabs) || newTabs < 0 || newTabs > 50) return { error: `--new-tabs is a whole number from 0 to 50: ${f.newTabs}` };
+  return { chrome: f.chrome ?? "/usr/bin/chromium", display, before: !!f.before, hiddenMs, hiddenDrive: !!f.hiddenDrive, newTabs };
 }
 
 /**

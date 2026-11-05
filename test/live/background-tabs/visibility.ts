@@ -19,6 +19,8 @@
 // CLI does (`commands.*`), 2.5 s apart:
 //   on a, hidden:  eval, text, outline, hover, click, type, press, shot, shot --size, shot --full
 //   c, new:        open c in the background, then click (a page that never drew a frame), text, shot
+//   d, new:        open d in the background, then text and shot: a shot as the first command that
+//                  draws the page (ab-b84.17; in the default mode the open draws it)
 //   on b, hidden:  goto (a new page, hidden), then click and type
 //   on a, hidden:  record 3 s (needs ffmpeg with libx264)
 //   on a, front:   the check brings a to the front (Target.activateTarget on its own connection, as
@@ -43,6 +45,15 @@
 // in which it was the default), exit 0: no visible time and no visibilitychange for any command but record (4.6 s,
 // two events), no frame after a command, 18 to 140 ms per command (0.9 s for shot --size); the shot of
 // tab c took 0.1 s. In front, as before.
+// With ab-b84.17 (a shot keeps a capture in flight and waits for two frames, in both modes; tab d
+// added), after one more run of main at 7201927 with the same failure: the default mode, 1 run, exit 0:
+// the shot of tab c took 3.1 s and of tab d 1.1 s (visible for that time), shot 4.1 s, shot --size
+// 1.3 s, shot --full 0.13 s, in front 0.1 s. With --hidden-drive, 2 runs, exit 0: shots of tabs c and
+// d 114 to 123 ms, shot 119 to 124 ms, shot --size 0.9 s, shot --full 0.1 s, no visible time. On
+// 2026-11-05, after review-41 (a frame limit of 5 s, one more capture when the shot's own capture is
+// late), 2 runs of each mode, exit 0: the default mode: shot 3.1 s, shot --size 1.1 s, shot --full
+// 0.1 s, tab c 4.1 s, tab d 1.1 to 3.1 s, in front 0.1 s; --hidden-drive: shot 0.12 to 0.13 s, shot
+// --size 0.87 to 0.89 s, shot --full 0.10 to 0.14 s, tabs c and d 0.10 to 0.13 s, no visible time.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -150,7 +161,7 @@ const server = createServer((req, res) => {
     req.on("end", () => { try { log.push(JSON.parse(body)); } catch { /* not ours */ } res.writeHead(204); res.end(); });
     return;
   }
-  const m = /^\/([abc])(\?.*)?$/.exec(req.url ?? "");
+  const m = /^\/([abcd])(\?.*)?$/.exec(req.url ?? "");
   if (!m) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { "content-type": "text/html" });
   res.end(PAGE(m[1]));
@@ -233,6 +244,10 @@ await measure("open", "c", front, async () => { ids.c = (await commands.open(o, 
 await click("c");
 await measure("text", "c", front, () => commands.text(o, { tab: "c" }), (r) => ((r as { text: string }).text.includes("clicks: 1") ? undefined : "no clicks line"));
 await shot("c", "c");
+// d: a new background tab, read and shot at once.
+await measure("open", "d", front, async () => { ids.d = (await commands.open(o, { url: `${BASE}/d`, name: "d" })).tab.targetId; }, () => undefined);
+await measure("text", "d", front, () => commands.text(o, { tab: "d" }), (r) => ((r as { text: string }).text.includes("clicks: 0") ? undefined : "no clicks line"));
+await shot("d", "d");
 // b: a new page in the hidden tab, then input.
 await measure("goto", "b", front, () => commands.goto(o, { tab: "b", url: `${BASE}/b?again` }), () => undefined);
 await click("b");

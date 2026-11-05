@@ -35,12 +35,14 @@ function picture(clicks: number, o: { dpr?: number; channels?: number; drawn?: n
   return { width, height, channels, data };
 }
 
-test("start guard: Linux only, in a private Xvfb; the display and the timer window are checked", () => {
-  assert.deepEqual(startMode("linux", {}), { chrome: "/usr/bin/chromium", display: 98, before: false, hiddenMs: 6000 });
-  assert.deepEqual(startMode("linux", { chrome: "/opt/c/chrome", display: "42", before: true, hiddenMs: "3000" }), { chrome: "/opt/c/chrome", display: 42, before: true, hiddenMs: 3000 });
+test("start guard: Linux only, in a private Xvfb; the display, the timer window and the number of new tabs are checked", () => {
+  assert.deepEqual(startMode("linux", {}), { chrome: "/usr/bin/chromium", display: 98, before: false, hiddenMs: 6000, hiddenDrive: false, newTabs: 5 });
+  assert.deepEqual(startMode("linux", { chrome: "/opt/c/chrome", display: "42", before: true, hiddenMs: "3000", hiddenDrive: true, newTabs: "0" }),
+    { chrome: "/opt/c/chrome", display: 42, before: true, hiddenMs: 3000, hiddenDrive: true, newTabs: 0 });
   const mac = startMode("darwin", {});
   assert.ok("error" in mac && /Linux only/.test(mac.error) && /private Xvfb/.test(mac.error), JSON.stringify(mac));
-  for (const f of [{ display: "x" }, { display: "0" }, { hiddenMs: "100" }, { hiddenMs: "1.5" }]) assert.ok("error" in startMode("linux", f), JSON.stringify(f));
+  for (const f of [{ display: "x" }, { display: "0" }, { hiddenMs: "100" }, { hiddenMs: "1.5" }, { newTabs: "-1" }, { newTabs: "51" }, { newTabs: "2.5" }])
+    assert.ok("error" in startMode("linux", f), JSON.stringify(f));
 });
 
 test("the agent Chrome's extra switches: no network and an X11 window, the timer flags only with --before, and nothing that agent-browser refuses", () => {

@@ -2,22 +2,23 @@
 // fake Chrome's model of a tab that is not in front (FakePage.background: hidden, no frames, input
 // dropped before the first frame, mouse moves held, captures that wait), and the pure parts of the live
 // check (test/live/background-tabs/spans.ts).
-//   default        focus emulation while a command is attached: the page is visible for the command
+//   default        focus emulation while a command is attached: the page is visible for the command;
+//                  a shot under Tab.whileDrawn too (ab-b84.17): alone, its capture would wait for ever
 //   hiddenDrive    no focus emulation; input and shots under Tab.whileDrawn: the page stays hidden
 // Each hidden-mode command gets a new tab whose page never drew a frame, so no earlier command drew it.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AgentBrowser } from "../src/browser.ts";
+import { AgentBrowser, Tab } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
-import { findFfmpeg } from "../src/record.ts";
+import { findFfmpeg, pngPixels } from "../src/record.ts";
 import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./live/background-tabs/spans.ts";
-import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
+import { FakeChrome, SHOT_COLOUR, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
 const FFMPEG = (() => { try { return findFfmpeg(); } catch { return undefined; } })();
@@ -81,6 +82,22 @@ function stayedHidden(page: FakePage, calls: Call[]) {
 /** No mouse move waited for Blink's 5 s fallback, and the input reached the page. */
 function fast(ms: number) { assert.ok(ms < 2000, `${ms} ms`); }
 
+/** Run `fn` with shorter shot timings (Tab.shotTiming), then set them back. */
+async function withTiming<T>(t: Partial<typeof Tab.shotTiming>, fn: () => Promise<T>): Promise<T> {
+  const was = { ...Tab.shotTiming };
+  Object.assign(Tab.shotTiming, t);
+  try { return await fn(); } finally { Object.assign(Tab.shotTiming, was); }
+}
+
+/** The options of mode `mode`, with each log line kept in `lines`. */
+const logged = (mode: typeof o, lines: string[]) => ({ ...mode(), log: (l: string) => { lines.push(l); } });
+
+/** The shot is complete: its bottom row is drawn too (the fake's frame before Chrome drew two frames of the page lacks it). */
+function complete(path: string) {
+  const px = pngPixels(readFileSync(path)), i = px.width * (px.height - 1) * px.channels;
+  assert.deepEqual([px.data[i], px.data[i + 1], px.data[i + 2]], [...SHOT_COLOUR], "a full frame, not only its top row");
+}
+
 // ---------- the default mode ----------
 
 test("default: attach sends Page.enable and focus emulation, as before: the page is visible while the command is attached", async () => {
@@ -94,20 +111,342 @@ test("default: attach sends Page.enable and focus emulation, as before: the page
   await commands.close(o(), { tab: name });
 });
 
-test("default: click, type and shot on a new background tab work with no hidden capture", async () => {
+test("default: click and type on a new background tab send no capture; its shot sends one capture in flight and its own", async () => {
   const { name, page } = await backgroundTab("/", o);
-  const { calls } = await callsOf(page, async () => {
+  let { calls } = await callsOf(page, async () => {
     await commands.click(o(), { tab: name, target: "#b" });
     await commands.type(o(), { tab: name, text: "abc", into: "#i" });
     await commands.text(o(), { tab: name });
-    await commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`) });
   });
   assert.equal(page.title, "clicked");
   assert.equal(page.select("#i")[0].value, "abc");
-  assert.deepEqual(captures(calls).map((x) => x.params), [{ format: "png" }], "only the shot's own capture");
+  assert.deepEqual(captures(calls), [], "focus emulation makes the page draw for input");
   assert.deepEqual(page.dropped, []);
+  const path = join(c.dir, `${name}.png`);
+  let ms: number;
+  ({ calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path })));
+  fast(ms);
+  complete(path);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  assert.deepEqual(page.heldCaptures, []);
   await commands.close(o(), { tab: name });
 });
+
+test("the fake holds a lone capture of a background page, also while focus emulation makes the page visible and draw, until a later capture ends it", async () => {
+  // Chrome ends a capture when the frame that it forces is presented, and a frame of a tab that is not
+  // in front is never on screen: on a page that does not change, only a later capture ends it.
+  const { name, page } = await backgroundTab("/", o);
+  const b = await AgentBrowser.connect(o());
+  try {
+    const tab = await b.find(name);
+    assert.equal(page.visibilityState, "visible", "focus emulation (the attach)");
+    let ended = false;
+    const first = tab.send("Page.captureScreenshot", { format: "png" }).then(() => { ended = true; });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(ended, false, "alone, the capture waits");
+    assert.equal(page.heldCaptures.length, 1);
+    await tab.send("Page.captureScreenshot", HOLD);
+    await first;
+    assert.deepEqual(page.heldCaptures, [], "the later capture ended it, and itself");
+  } finally { await b.disconnect(); }
+  await commands.close(o(), { tab: name });
+});
+
+test("default: shot of a new background tab that never drew: a capture in flight, two frames, then the shot's own capture ends it; complete, at once, focus emulation as before", async () => {
+  // As main sent it (its own capture only) the shot waited for ever: 30 s, then an error.
+  const { name, page } = await backgroundTab(); // its page never drew a frame
+  await commands.text(h(), { tab: name }); // the read-first rule, with no frame
+  assert.equal(page.drew, false);
+  const path = join(c.dir, `${name}.png`);
+  const { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path }));
+  fast(ms);
+  complete(path);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  const m = methodsOf(calls), attach = m.indexOf("Target.attachToTarget");
+  assert.deepEqual(m.slice(attach, attach + 3), ["Target.attachToTarget", "Page.enable", "Emulation.setFocusEmulationEnabled"], "the attach, as before");
+  assert.deepEqual(focusCalls(calls), [true]);
+  assert.deepEqual(page.visibilityChanges, ["visible", "hidden"], "visible for the command, as before");
+  assert.deepEqual(page.heldCaptures, [], "every capture ended");
+  await commands.close(o(), { tab: name });
+});
+
+test("default: shot of a background tab that drew at its open (default mode): the same, complete and at once", async () => {
+  const { name, page } = await backgroundTab("/", o);
+  await commands.text(o(), { tab: name });
+  const path = join(c.dir, `${name}.png`);
+  const { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path }));
+  fast(ms);
+  complete(path);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("default: shot --size and --full of a new background tab: the capture in flight comes before the override, and none but the shot's own while it is set", async () => {
+  let { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  let { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
+  assert.ok(ms < 3000, `${ms} ms (with the 0.5 s settle)`);
+  const m = methodsOf(calls);
+  const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+  assert.ok(m.indexOf("Page.captureScreenshot") < set, "the capture in flight comes before the override");
+  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [{ format: "png" }], "while the override is set, only the shot's own capture (in this mode the relayout does not end the first one)");
+  assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
+  assert.equal(page.metrics, undefined);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+
+  ({ name, page } = await backgroundTab());
+  await commands.text(h(), { tab: name });
+  ({ calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`), full: true })));
+  fast(ms);
+  const full = captures(calls).filter((x) => x.params.clip);
+  assert.equal(full.length, 1);
+  assert.equal(calls.indexOf(full[0]), calls.indexOf(captures(calls).at(-1)!), "the full-page capture is the last one");
+  assert.deepEqual(captures(calls).slice(0, -1).map((x) => x.params), [HOLD]);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("default: a tab in front: the shot's capture in flight ends after a frame, then its own", async () => {
+  // Focus emulation makes every page "visible", so a shot cannot tell a tab in front from a background one.
+  const { name, page } = await backgroundTab("/", o);
+  page.background = false;
+  page.update();
+  await commands.text(o(), { tab: name });
+  const { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`) }));
+  fast(ms);
+  assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
+  assert.deepEqual(page.heldCaptures, []);
+  await commands.close(o(), { tab: name });
+});
+
+test("the fake ends earlier captures with a later one only when Chrome drew a frame between them, as Chrome does", async () => {
+  // Two captures sent before the next frame share that frame, and nothing replaces it: both wait
+  // (review-41, Chromium 156: without a frame between the two captures, every shot failed after 30 s).
+  const { name, page } = await backgroundTab("/", o);
+  const b = await AgentBrowser.connect(o());
+  try {
+    const tab = await b.find(name);
+    let ended = 0;
+    const two = [tab.send("Page.captureScreenshot", HOLD), tab.send("Page.captureScreenshot", HOLD)].map((p) => p.then(() => { ended++; }));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(ended, 0, "no frame between them: neither ends, though the page drew frames since");
+    assert.equal(page.heldCaptures.length, 2);
+    await tab.send("Page.captureScreenshot", HOLD);
+    await Promise.all(two);
+    assert.deepEqual(page.heldCaptures, [], "a third one, after a frame, ends all three");
+  } finally { await b.disconnect(); }
+  await commands.close(o(), { tab: name });
+});
+
+for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
+  test(`${label}: shot of a tab of which Chrome draws no frame: a clear error at the frame limit and a log line, not a silent 30 s wait`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.noFrames = true;
+    const lines: string[] = [], t0 = Date.now();
+    await withTiming({ framesMs: 300 }, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`) }),
+      /shot: Chrome drew no frame of tab \w+ in 0\.3 s after the shot's first capture/));
+    assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
+    assert.ok(lines.some((l) => /tab \w+ drew 0 of 2 frames in 0\.3 s/.test(l)), JSON.stringify(lines));
+    assert.ok(lines.some((l) => /1 capture of tab \w+ stays in flight/.test(l)), JSON.stringify(lines));
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose first capture ends just before its own goes out: one more capture ends the shot's capture at once, and none stays in flight`, async () => {
+    // The page changes once by itself between the two (review-41, against the fake): the shot's capture
+    // then waits alone, and without one more capture it fails after 30 s.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.changeOnce(); };
+    const lines: string[] = [], path = join(c.dir, `${name}.png`);
+    const { calls, ms } = await withTiming({ lateMs: 300 }, () => callsOf(page, () => commands.shot(logged(mode, lines), { tab: name, path })));
+    page.onCapture = undefined;
+    fast(ms);
+    complete(path);
+    assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }, HOLD]);
+    assert.ok(lines.some((l) => /the shot's capture of tab \w+ did not end in 0\.3 s; one more capture goes out to end it/.test(l)), JSON.stringify(lines));
+    assert.deepEqual(page.heldCaptures, [], "no capture stays in flight");
+    if (mode === h) stayedHidden(page, calls);
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size of a still page: when the override's relayout ends the first capture in the settle (the hidden drive), a new first capture and two frames come before the shot's own; at once, with no fallback`, async () => {
+    // review-41b, Chromium 156, --hidden-drive: without the new first capture, 3 of 3 such shots waited
+    // for the 3 s fallback (3.58 s, with its log line); with it, 5 of 5 took 0.61 to 0.64 s.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    const lines: string[] = [];
+    const { calls, ms } = await callsOf(page, () => commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
+    assert.ok(ms < 2000, `${ms} ms (with the 0.5 s settle)`);
+    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.deepEqual(captures(calls.slice(0, set)).map((x) => x.params), [HOLD]);
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), mode === h ? [HOLD, { format: "png" }] : [{ format: "png" }]);
+    assert.deepEqual(lines, [], "no limit and no extra capture");
+    assert.equal(page.metrics, undefined);
+    assert.deepEqual(page.heldCaptures, []);
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size whose first capture ends just before its own goes out: the extra capture ends before the override is cleared, so the override stays cleared`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.changeOnce(); };
+    const { calls } = await withTiming({ lateMs: 300 }, () => callsOf(page, () => commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" })));
+    page.onCapture = undefined;
+    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [...(mode === h ? [HOLD] : []), { format: "png" }, HOLD], "the extra capture goes out while the override is set");
+    assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
+    assert.equal(page.metrics, undefined, "no capture ended after the clear (it would set the override again)");
+    assert.deepEqual(page.heldCaptures, []);
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot when Chrome stops drawing after the two frames: one chain of last captures, not two, and the error gives the shot's true time`, async () => {
+    // review-41b: the shot waited about 42 s, its error said 30 s, and two chains left 13 captures.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    const lines: string[] = [], t0 = Date.now();
+    let err = "";
+    const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => callsOf(page, () => commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`) }).catch((e) => { err = (e as Error).message; })));
+    const ms = Date.now() - t0;
+    page.onCapture = undefined;
+    assert.match(err, /did not end the shot's capture of tab \w+ in 0\.6 s \(also not with 3 more captures\).*; the shot gave up after \d+\.\d s\./);
+    const said = Number(/gave up after (\d+\.\d) s/.exec(err)![1]) * 1000;
+    assert.ok(said > 600 && said <= ms + 100, `the error says ${said} ms; the shot took ${ms} ms`);
+    assert.equal(lines.filter((l) => /the last .*capture of tab \w+ did not end/.test(l)).length, 1, `one chain: ${JSON.stringify(lines)}`);
+    const n = captures(calls).length;
+    assert.ok(n <= 1 + 1 + 3 + 4, `${n} captures: the first, the own, 3 extra, at most 4 last ones`);
+    assert.ok(lines.some((l) => new RegExp(`did not end in 0\\.3 s; ${n} captures of it stay in flight`).test(l)), `the true count, ${n}: ${JSON.stringify(lines)}`);
+    assert.equal(page.heldCaptures.length, n, "the fake holds them all");
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size when Chrome stops drawing after the two frames: no last captures while the override is set, the override is cleared, and the log says it can come back`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    const lines: string[] = [];
+    const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => callsOf(page, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /the shot gave up after/)));
+    page.onCapture = undefined;
+    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [...(mode === h ? [HOLD] : []), { format: "png" }, HOLD, HOLD, HOLD], "the new first capture (the hidden drive), the own one and 3 extra; no last captures before the clear");
+    assert.equal(page.metrics, undefined, "cleared");
+    assert.ok(lines.some((l) => /Chrome can set the shot's size again, and the tab can keep that size/.test(l)), JSON.stringify(lines));
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose last capture Chrome refuses at once: the log gives Chrome's error, not a timeout, and counts only the captures that Chrome may hold`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let refuse = false;
+    page.onCapture = (p) => {
+      if (refuse) throw new Error("refused by the test");
+      if (p.format === "png") { page.noFrames = true; refuse = true; }
+    };
+    const lines: string[] = [];
+    await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`) }), /the shot gave up after/));
+    page.onCapture = undefined;
+    const chain = lines.filter((l) => /the last .*capture of tab/.test(l));
+    assert.equal(chain.length, 1, JSON.stringify(lines));
+    assert.match(chain[0], /failed \(Page\.captureScreenshot: refused by the test\); 2 captures of it stay in flight/, "the first and the own capture; Chrome holds no refused one");
+    assert.doesNotMatch(chain[0], /did not end in/);
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose page goes to a new page during its own capture: a clear error at once, not a 30 s wait, and no file`, async () => {
+    // review-41b, Chromium 156, default mode: Chrome never ended that capture, and the shot failed after 30 s.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); };
+    const path = join(c.dir, `${name}.png`), t0 = Date.now();
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot/);
+    page.onCapture = undefined;
+    assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose page goes to a new page during the frame wait, before its own capture: the same clear error at once, not CDP's raw text`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let first = true;
+    page.onCapture = (p) => { if (first && p.format === "jpeg") { first = false; setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); } };
+    const path = join(c.dir, `${name}.png`), t0 = Date.now();
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot/);
+    page.onCapture = undefined;
+    assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size whose own capture times out and whose override clear fails: the error keeps the cleanup note and gives the whole time`, async () => {
+    // review-41c: gaveUpAfter built the message again from its parts and dropped the note.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    fake.failOnce.set("Emulation.clearDeviceMetricsOverride", "clear refused by the test");
+    await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => assert.rejects(commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }),
+        /did not end the shot's capture of tab \w+ in 0\.6 s.*; the shot gave up after \d+\.\d s\. .*; cleanup also failed: clear the device metrics override: .*clear refused by the test/));
+    page.onCapture = undefined;
+    fake.failOnce.delete("Emulation.clearDeviceMetricsOverride");
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name }).catch(() => {});
+  });
+
+  test(`${label}: shot --size whose page goes to a new page during its own capture: the override is cleared only after the captures sent under it ended, so the size stays cleared`, async () => {
+    // review-41d live: the shot cleared the override at once; the own capture ended 25 ms to 1.1 s
+    // later and set the view to 800x600 again, for good (default mode 9 of 18 runs at c86c9b3).
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); };
+    const lines: string[] = [];
+    await assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /went to a new page during the shot/);
+    page.onCapture = undefined;
+    await new Promise((r) => setTimeout(r, 200)); // a late capture would end by now
+    assert.equal(page.metrics, undefined, "no capture sent under the override ended after the clear");
+    assert.equal(page.stuck, undefined, "the view size was not set again for good");
+    assert.deepEqual(lines.filter((l) => /is \d+x\d+, not/.test(l)), [], JSON.stringify(lines));
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose tab is off the allowlist when its own capture ends: refused, and no file`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.url = "https://off-the-list.example/"; };
+    const path = join(c.dir, `${name}.png`);
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /off-the-list\.example is not on the allowlist/);
+    page.onCapture = undefined;
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name }).catch(() => {});
+  });
+
+  test(`${label}: shot --full whose first capture ends during the frame wait: one more first capture and two frames come before the full-page capture`, async () => {
+    // No capture may go out while a full-page capture waits: it changes the device emulation, and a
+    // capture sent then would set that emulation again when it ends.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let first = true;
+    page.onCapture = (p) => { if (first && p.format === "jpeg") { first = false; page.atFrame(() => page.atFrame(() => page.changeOnce())); } };
+    const { calls, ms } = await callsOf(page, () => commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), full: true }));
+    page.onCapture = undefined;
+    fast(ms);
+    const all = captures(calls);
+    assert.deepEqual(all.slice(0, -1).map((x) => x.params), [HOLD, HOLD]);
+    assert.ok(all.at(-1)!.params.clip, "the full-page capture is the last one");
+    assert.deepEqual(page.heldCaptures, []);
+    await commands.close(mode(), { tab: name });
+  });
+}
 
 test("default: record keeps the attach's focus emulation and turns none on or off itself", needsFfmpeg, async () => {
   const { name, page } = await backgroundTab("/", o);
@@ -119,6 +458,35 @@ test("default: record keeps the attach's focus emulation and turns none on or of
 });
 
 // ---------- the hidden drive ----------
+
+test("hiddenDrive: shot --size whose new first capture, sent under the override, gets no frame: the shot fails at the limit, and the log says the size override can come back", async () => {
+  // review-41c: that step ran outside the own capture's try, so nothing said that the override can
+  // come back when the capture ends after the clear.
+  const { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  page.onCapture = (p) => { if (p.format === "jpeg" && page.metrics) page.noFrames = true; };
+  const lines: string[] = [];
+  await withTiming({ framesMs: 300 },
+    () => assert.rejects(commands.shot(logged(h, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /shot: Chrome drew no frame of tab \w+ in 0\.3 s/));
+  page.onCapture = undefined;
+  assert.equal(page.metrics, undefined, "cleared after the failure");
+  assert.ok(lines.some((l) => /stays? in flight \(Chrome drew no frame\).*Chrome can set the shot's size again, and the tab can keep that size/.test(l)), JSON.stringify(lines));
+  page.noFrames = false;
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: shot --size whose page goes to a new page during the new first capture's frame wait: the clear error, and the override is cleared only after that capture ended", async () => {
+  // review-41c and review-41d live: the first capture ended after the clear and set 800x600 again.
+  const { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  page.onCapture = (p) => { if (p.format === "jpeg" && page.metrics) setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); };
+  const { calls } = await callsOf(page, () => assert.rejects(commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /went to a new page during the shot/));
+  page.onCapture = undefined;
+  assert.equal(methodsOf(calls).filter((x) => x === "Emulation.clearDeviceMetricsOverride").length, 1);
+  assert.equal(page.metrics, undefined, "the capture under the override ended before the clear");
+  assert.equal(page.stuck, undefined, "and did not set the view size again for good");
+  await commands.close(h(), { tab: name });
+});
 
 test("hiddenDrive: --hidden-drive sets it; it is off by default", () => {
   assert.equal(optionsFromFlags({ "state-dir": c.stateDir, "hidden-drive": true }, () => {}).hiddenDrive, true);
@@ -242,27 +610,29 @@ test("hiddenDrive: on a page that draws by itself each capture ends after a fram
   await commands.close(h(), { tab: name });
 });
 
-test("hiddenDrive: shot of a new background tab: one hidden capture first, and the shot's own capture ends it", async () => {
+test("hiddenDrive: shot of a new background tab: one hidden capture first, two frames, and the shot's own capture ends it; complete, at once", async () => {
   const { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name }); // the read-first rule
   const path = join(c.dir, `${name}.png`);
-  const { calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path }));
+  const { calls, ms } = await callsOf(page, () => commands.shot(h(), { tab: name, path }));
   assert.ok(existsSync(path));
+  fast(ms);
+  complete(path);
   assert.deepEqual(captures(calls).map((x) => x.params), [HOLD, { format: "png" }]);
   stayedHidden(page, calls);
   await commands.close(h(), { tab: name });
 });
 
-test("hiddenDrive: shot --size and --full of a new background tab: no capture is sent while the device emulation is changed, but the shot's own", async () => {
+test("hiddenDrive: shot --size and --full of a new background tab: while the size override is set, only a new first capture and the shot's own, which end before the clear", async () => {
   // A capture remembers the emulation that it found and restores it when it ends: one sent while the
-  // size override is set would set it again after the shot cleared it.
+  // size override is set would set it again if it ended after the shot cleared it.
   let { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name });
   let { calls } = await callsOf(page, () => commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
   const m = methodsOf(calls);
   const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
   assert.ok(m.indexOf("Page.captureScreenshot") < set, "the hidden capture comes before the override");
-  assert.equal(captures(calls.slice(set, clear)).length, 1, "while the override is set, only the shot's own capture");
+  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }], "while the override is set, a new first capture (the relayout ended the first) and the shot's own");
   assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
   assert.equal(page.metrics, undefined);
   stayedHidden(page, calls);

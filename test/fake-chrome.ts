@@ -79,6 +79,11 @@ export function rgbaPng(width: number, height: number, pixel: (x: number, y: num
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
+/** A shot of a background page (FakePage.framesDrawn), 2x2 pixels: its top row is SHOT_COLOUR, and its bottom row too, or white when the frame was not fully drawn. */
+export const SHOT_COLOUR: readonly number[] = [0, 128, 255];
+const SHOT_FULL = rgbaPng(2, 2, () => [...SHOT_COLOUR, 255] as [number, number, number, number]).toString("base64");
+const SHOT_TOP_ONLY = rgbaPng(2, 2, (_x, y) => (y === 0 ? [...SHOT_COLOUR, 255] : [255, 255, 255, 255]) as [number, number, number, number]).toString("base64");
+
 const TRUSTED_HTML = "Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.";
 
 /** A node that page code creates (the recording overlay): DOM calls only, as a strict page allows. */
@@ -251,6 +256,12 @@ export class FakePage {
   cells: string[] = [];
   /** Called with each key a key event presses. */
   onKey?: (key: string) => void;
+  /**
+   * The view size that a capture set again when it ended after the override was cleared: it found the
+   * override, and Chrome's ScreenshotCaptured sets the view to its size; no later clear or shot --size
+   * undid it (review-41d on taylor, 3 of 3).
+   */
+  stuck: { width: number; height: number } | undefined;
   /** The device metrics override, while one is set. */
   metrics: { width: number; height: number; deviceScaleFactor: number } | undefined;
   /** Nodes page code appended to the document element (the recording overlay), and its animations. */
@@ -265,22 +276,43 @@ export class FakePage {
    * except while focus emulation is on (which makes the page "visible") or a capture is in flight (a
    * hidden capture: the page stays "hidden"). As measured on Chromium 156: a page that never drew a
    * frame drops each press, release and key (Input.insertText still arrives); a mouse move waits for
-   * the next frame, at most 5 s; a capture sent while the page draws nothing waits until a later
-   * capture ends (Chrome ends every earlier pending capture with a later one).
+   * the next frame, at most 5 s; a capture waits until a later capture ends it (Chrome ends every
+   * earlier pending capture with a later one), also while focus emulation makes the page "visible" and
+   * draw (ab-b84.17): Chrome ends a capture when the frame that it forces is presented, and a frame of
+   * a tab that is not in front is never on screen; it counts only when a later frame replaces it. So a
+   * later capture ends the earlier ones only when Chrome drew a frame between them (see `capture`). A
+   * capture's picture lacks everything below the first row when it was sent before Chrome drew two
+   * frames of the page (see `framesDrawn`).
    */
   background = false;
   /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
   drew = true;
   /** The page changes by itself (a caret, an animation): a capture sent while Chrome draws nothing still ends after a frame. */
   drawsByItself = false;
+  /** Chrome draws no frame of the page at all (a loaded machine, a frozen renderer): no animation frame runs, and no capture ends. */
+  noFrames = false;
+  /** Called with the params of each capture of a background page as it arrives, before the fake holds it (a test's hook). */
+  onCapture?: (params: Record<string, unknown>) => void;
   /** document.visibilityState after each change, in order. */
   visibilityChanges: string[] = [];
   /** The presses, releases and keys that the page dropped because it never drew a frame. */
   dropped: string[] = [];
   /** The sessions with focus emulation on. */
   readonly focusEmulated = new Set<string>();
-  /** The captures in flight on a background page, by their order: each one ends with a later one. */
-  heldCaptures: { n: number; end: () => void }[] = [];
+  /**
+   * The captures in flight on a background page, by their order: each one ends with a later one.
+   * `at` is `frames` when it was sent: the frame that it forces is the next one.
+   */
+  heldCaptures: { n: number; at: number; found?: boolean; end: () => void }[] = [];
+  /** Every frame that Chrome drew of the page, counted from its tab's start. */
+  frames = 0;
+  /**
+   * The frames that Chrome drew of a background page since it last started to draw it (or since its
+   * load). A frame drawn just after that start lacks the tiles below the first row (a shot of only the
+   * top 256 px, seen once in 30 on Chromium 156); from the second one on, the frame is complete.
+   */
+  framesDrawn = 0;
+  private wasDrawing = true;
   private nextCapture = 1;
   private frameWaiters: (() => void)[] = [];
   private frameDue = false;
@@ -311,6 +343,10 @@ export class FakePage {
   update() {
     const v = this.visibilityState;
     if (v !== this.shownAs) { this.shownAs = v; this.visibilityChanges.push(v); }
+    if (this.drawing !== this.wasDrawing) {
+      this.wasDrawing = this.drawing;
+      if (this.drawing) this.framesDrawn = 0;
+    }
     this.scheduleFrame();
   }
 
@@ -322,30 +358,73 @@ export class FakePage {
 
   /** One frame at a time, 16 ms apart, while Chrome draws the page. */
   private scheduleFrame() {
-    if (this.frameDue || !this.drawing) return;
+    if (this.frameDue || !this.drawing || this.noFrames) return;
     this.frameDue = true;
     this.later(16, () => {
       this.frameDue = false;
       this.drew = true;
+      this.framesDrawn++;
+      this.frames++;
       for (const fn of this.frameWaiters.splice(0)) fn();
     });
   }
 
-  /** A capture of a background page (see `background`); its result is `data`. */
-  capture<T>(data: T): Promise<T> {
-    const n = this.nextCapture++, drawing = this.drawing || this.drawsByItself;
+  /**
+   * A capture of a background page (see `background`); its result is `data`. Alone it waits, also
+   * while the page is "visible" and drawn (focus emulation), unless the page changes by itself. A later
+   * capture ends it, and every capture up to that later one, after a frame, but only when Chrome drew a
+   * frame after it (the frame that it forced): two captures sent before the next frame share that frame,
+   * and nothing replaces it, so both wait (as measured on Chromium 156 by review-41: with no frame
+   * between the two captures, 8 of 8 default-mode and 4 of 4 hidden-drive shots failed after 30 s).
+   * A capture sent while a device metrics override is set sets that override again when it ends, as
+   * Chrome's PageHandler::ScreenshotCaptured restores the emulation that the capture found.
+   */
+  capture<T>(data: T, params: Record<string, unknown> = {}): Promise<T> {
+    this.onCapture?.(params);
+    const n = this.nextCapture++, found = this.metrics;
+    const replaces = this.drawsByItself || this.heldCaptures.some((c) => c.at < this.frames);
     return new Promise((resolve) => {
-      this.heldCaptures.push({ n, end: () => resolve(data) });
+      this.heldCaptures.push({ n, at: this.frames, found: !!found, end: () => {
+        if (found && !this.metrics) this.stuck = { width: found.width, height: found.height };
+        if (found) this.metrics = found;
+        resolve(data);
+      } });
       this.update();
-      // Sent while Chrome draws the page: it ends after a frame, and every earlier capture with it.
-      if (drawing) this.later(16, () => {
+      if (replaces && !this.noFrames) this.later(16, () => {
         this.drew = true;
-        const ended = this.heldCaptures.filter((c) => c.n <= n);
-        this.heldCaptures = this.heldCaptures.filter((c) => c.n > n);
-        for (const c of ended) c.end();
-        this.update();
+        this.frames++;
+        this.endHeld((c) => c.n <= n);
       });
     });
+  }
+
+  /** End the held captures that `which` names, in their order. */
+  private endHeld(which: (c: { n: number; at: number }) => boolean) {
+    const ended = this.heldCaptures.filter(which);
+    this.heldCaptures = this.heldCaptures.filter((c) => !which(c));
+    for (const c of ended) c.end();
+    this.update();
+  }
+
+  /**
+   * The page changes once by itself, now: this frame replaces the frames of the held captures that
+   * Chrome drew already, and ends those captures (a capture whose frame is not drawn yet goes on waiting).
+   */
+  changeOnce() {
+    this.frames++;
+    this.endHeld((c) => c.at < this.frames - 1);
+  }
+
+  /**
+   * The page is laid out again (a device metrics override): its next frame changes, and ends the held
+   * captures whose frames Chrome drew already. Seen by review-41b on Chromium 156 with the hidden drive:
+   * the shot's first capture of a still page ended in `shot --size`'s 0.5 s settle. Only for a hidden
+   * page (the hidden drive, where a capture in flight makes Chrome draw at once): in the default mode
+   * Chrome draws a background tab about once a second, and the relayout's frame came after the shot's
+   * own capture (review-41c, 4 of 4 live default-mode `shot --size`: the first capture ended with it).
+   */
+  relayout() {
+    if (this.background && this.visibilityState === "hidden") this.atFrame(() => this.endHeld((c) => c.at < this.frames - 1));
   }
 
   private heldMoves: (() => void)[] = [];
@@ -367,10 +446,21 @@ export class FakePage {
     return true;
   }
 
+  /**
+   * The captures that were in flight when the page went to a new document: Chrome never ends them
+   * (review-41b, Chromium 156, default mode: a shot whose page navigated during its own capture failed
+   * after 30 s, though later captures ended). One that found a size override ends 50 ms later and sets
+   * that override again (review-41d: 25 ms to 1.1 s after the shot cleared it).
+   */
+  lostCaptures: { n: number; at: number; end: () => void }[] = [];
+
   /** Load a URL: a fixture page for http://127.0.0.1, an empty page for anything else (the fake never leaves this machine). */
   load(url: string) {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    this.lostCaptures.push(...this.heldCaptures.filter((c) => !c.found));
+    const late = this.heldCaptures.filter((c) => c.found);
+    this.heldCaptures = [];
     this.frameDue = false;
     this.frameWaiters = []; // a new document never runs the old one's animation frames
     this.flushMoves();
@@ -388,8 +478,10 @@ export class FakePage {
     this.isolatedContexts.clear(); // a navigation destroys every isolated world
     this.context = this.newContext();
     this.drew = !this.background; // a new page in a background tab has drawn no frame yet
+    this.framesDrawn = 0;
     this.shownAs = this.visibilityState; // a new page starts in its tab's state: no visibilitychange
     this.update();
+    for (const c of late) this.later(50, () => c.end());
     spec?.onload?.(this);
   }
 
@@ -438,8 +530,8 @@ export class FakePage {
     const sandbox: Record<string, unknown> = {
       document,
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
-      get innerWidth() { return page.metrics?.width ?? 1280; },
-      get innerHeight() { return page.metrics?.height ?? 800; },
+      get innerWidth() { return page.metrics?.width ?? page.stuck?.width ?? 1280; },
+      get innerHeight() { return page.metrics?.height ?? page.stuck?.height ?? 800; },
       requestAnimationFrame: (fn: (t: number) => void) => page.atFrame(() => fn(performance.now())),
       performance: { now: () => performance.now() },
       getComputedStyle: (el: FakeElement) => ({ visibility: el.hidden ? "hidden" : "visible", display: el.hidden ? "none" : "block" }),
@@ -776,7 +868,10 @@ export class FakeChrome {
         }
         return {};
       case "Target.detachFromTarget": return this.onBrowser(s.client, method, params);
-      case "Emulation.setDeviceMetricsOverride": page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor }; return {};
+      case "Emulation.setDeviceMetricsOverride":
+        page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor };
+        page.relayout();
+        return {};
       case "Emulation.clearDeviceMetricsOverride": page.metrics = undefined; return {};
       case "Page.startScreencast": this.startCast(s, params); return {};
       case "Page.stopScreencast": this.stopCast(s); return {};
@@ -841,8 +936,8 @@ export class FakeChrome {
         if (params.clip) { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
           const k = page.metrics?.deviceScaleFactor ?? 1, v = page.paint % 256;
           data = rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64");
-        }
-        return page.visibilityState === "hidden" ? page.capture({ data }) : { data };
+        } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
+        return page.background ? page.capture({ data }, params) : { data };
       }
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
