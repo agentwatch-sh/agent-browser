@@ -1,0 +1,24 @@
+fake_agent: pid 744422 ppid 721336
+tool-python: shell pid 744434: tool-python: pid 744434 ppid 744422: {"scope": "scopeA", "why": "root"}
+tool-playwright: shell pid 744449: tool-playwright: pid 744449 ppid 744422: {"scope": "scopeA", "why": "root"}
+tool-agent-browser: shell pid 744512: agent-browser: agent mode's endpoint did not answer (could not connect to ws+unix:///tmp/claude-1001/peer-design/probe.sock:/devtools/browser/tool-agent-browser: HTTP 503: {"scope": "scopeA", "why": "root"})
+tool-agentwatch-browser-like: shell pid 744573: agent-browser: agent mode's endpoint did not answer (could not connect to ws+unix:///tmp/claude-1001/peer-design/probe.sock:/devtools/browser/tool-agentwatch-browser-like: HTTP 503: {"scope": "scopeA", "why": "root"})
+tool-amp-job-shell-exits: shell pid 744666: 
+tool-nohup-shell-lives: shell pid 744669: tool-nohup-shell-lives: pid 744670 ppid 744669: {"scope": "scopeA", "why": "root"}
+tool-nohup-shell-exits: shell pid 744682: 
+tool-setsid-sole: shell pid 744685: tool-setsid-sole: pid 744686 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tool-setsid-fork: shell pid 744694: 
+tool-double-fork: shell pid 744699: tool-double-fork: double fork started
+tool-double-fork: pid 744706 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+cc-python: shell pid 744839: cc-python: pid 744840 ppid 744839: {"scope": "scopeA", "why": "root"}
+cc-setsid-real: shell pid 744846: cc-setsid-real: pid 744847 ppid 744846: {"scope": "scopeA", "why": "root"}
+cc-setsid-fork: shell pid 744849: 
+cc-nohup-amp: shell pid 744853: 
+cc-agent-browser: shell pid 744857: agent-browser: agent mode's endpoint did not answer (could not connect to ws+unix:///tmp/claude-1001/peer-design/probe.sock:/devtools/browser/cc-agent-browser: HTTP 503: {"scope": "scopeA", "why": "root"})
+tmux-new-window: shell pid 744917: 
+tool-bg-job: started in the background (shell pid 744920)
+mcp-direct: server pid 744922: mcp-direct: pid 744922 ppid 744422: {"scope": "scopeA", "why": "root"}
+mcp-wrapped: server pid 745059: mcp-wrapped: pid 745060 ppid 745059: {"scope": "scopeA", "why": "root"}
+mcp-python: server pid 745153: mcp-python: pid 745154 ppid 745153: {"scope": "scopeA", "why": "root"}
+fake_agent: done
+A-DONE

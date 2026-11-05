@@ -1,0 +1,3 @@
+{"helper":"peercred","connections":300,"wrongPid":0,"per_connection_us":{"p50":"2189","p99":"5886"}}
+{"helper":"peercred_helper.py","connections":100,"wrongPid":0,"per_connection_us":{"p50":"28178","p99":"43137"}}
+{"helper":"peercred_helper.py","connections":100,"wrongPid":0,"per_connection_us":{"p50":"30366","p99":"45915"}}

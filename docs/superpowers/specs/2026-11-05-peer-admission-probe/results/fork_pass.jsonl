@@ -1,0 +1,5 @@
+{"case": "fork-then-exit", "connecter": 762458, "peercred_pid": 762458, "alive": false, "comm_now": null, "pidfd_error": "errno 22 (Invalid argument)", "sender": "the child of the connecter"}
+{"case": "pass-fd", "connecter": 762516, "sender": 762515, "peercred_pid": 762516, "alive": true, "comm_now": "python3", "pidfd_pid": 762516, "pidfd_exited": false}
+{"case": "connect-then-exec", "connecter": 762755, "peercred_pid": 762755, "alive": true, "comm_now": "sleep", "pidfd_pid": 762755, "pidfd_exited": false}
+{"case": "fork-parent-lives", "connecter": 762867, "peercred_pid": 762867, "alive": true, "comm_now": "python3", "pidfd_pid": 762867, "pidfd_exited": false}
+{"case": "exit-not-reaped", "connecter": 762992, "peercred_pid": 762992, "alive": true, "comm_now": "python3", "pidfd_pid": 762992, "pidfd_exited": true, "state_now": "Z"}

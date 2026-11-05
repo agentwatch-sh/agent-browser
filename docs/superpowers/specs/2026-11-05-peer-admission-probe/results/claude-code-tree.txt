@@ -1,0 +1,19 @@
+# The process shapes of a real Claude Code session on taylor (board ab-v16.47), read only from
+# /proc for this probe's own processes (a subagent of ab-lead's session) on 2026-11-05.
+# pid comm ppid pgid sid
+# A Bash tool command:
+687314 bash   8015 687314 687314   (its own process group and session: Claude Code starts it detached)
+8015   claude 7927 8015   7927     (the agent)
+7927   bash   4455 7927   7927     (the tmux pane's process: the root)
+4455   tmux: server 1144 4455 4455 (agentwatch's tmux server, cgroup app.slice/agentwatch.service)
+1144   systemd 1   1144   1144     (systemd --user, a subreaper)
+# A run_in_background job (Bash tool, run_in_background: true):
+751568 bash   8015 751568 751568   (the same shape: the job's shell stays the parent while the job runs)
+# Children of claude 8015 (ps --ppid 8015):
+8423 uv run --no-config --script .../agentwatch mcp serve   (an MCP server: pgid 8015, sid 7927)
+8438  -> python .../agentwatch mcp serve                     (its child: pgid 8015, sid 7927)
+/bin/bash -c source <shell snapshot> ... && eval '<command>' (each Bash tool command; pgid = sid = its pid)
+/bin/sh -c .../agentwatch hook --session ab-lead --event PreToolUse (a hook)
+# cgroups: claude, its Bash commands and the pane shell are all in
+# app.slice/tmux-spawn-cfd237fe-df37-40bb-aa09-592c68669c3e.scope (the pane's own scope, made by
+# tmux 3.5a with systemd support); the tmux server is in app.slice/agentwatch.service.
