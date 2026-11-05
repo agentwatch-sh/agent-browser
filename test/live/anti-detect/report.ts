@@ -18,7 +18,8 @@ function stateRow(sc: ScOut): Record<string, string> {
   if (!sc.steps.length) return { scenario: sc.name, note: sc.notes.join("; ") };
   const ib = sc.idleBefore ?? {}, ia = sc.idleAfter ?? {};
   const driven = sc.steps.filter((s) => !s.name.startsWith("idle") && !s.name.startsWith("disconnect"));
-  const spans = (names: string[]) => names.map((n) => { const s = find(sc, n); return s ? `${s.visibleMs}` : "-"; }).join(", ");
+  // "all": the page was visible before the step and stayed so (a window); else its visible ms in the step and the 200 ms after.
+  const spans = (names: string[]) => names.map((n) => { const s = find(sc, n); return !s ? "-" : s.visBefore === "visible" && !s.visChanges.length ? "all" : `${s.visibleMs}`; }).join(", ");
   const focusEv = driven.flatMap((s) => s.focusEvents as string[]).map((e) => e.split("@")[0]);
   const count = (k: string) => focusEv.filter((e) => e === k).length;
   return {

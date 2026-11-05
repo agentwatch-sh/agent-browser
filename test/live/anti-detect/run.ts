@@ -27,8 +27,9 @@
 //   xfocus-cdp, xfocus-xinput                       one window per page, the X focus moved to it, CDP or X input (6)
 //   window-human-cdp                                one window per page, Target.activateTarget, person-like CDP input (6)
 //   window-keys-inactive                            one window per page: keys into it after another window took the focus
-// It writes DIR/run-XXXXXX/results.json (every record and every step) and prints a summary table.
-// Exit 0 when every scenario ran (a step may fail: failures are measurements), 2 on a start problem.
+// It writes DIR/run-XXXXXX/results.json (every record and every step) and steps.md, and prints the
+// tables of report.ts. Exit 0 when every scenario ran (a step may fail: a failed step is a measurement),
+// 1 when a scenario could not run (its error is in its notes), 2 on a start problem.
 // It ends only its own children (by the pids it recorded) and never connects to a Chrome it did not start.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -621,4 +622,4 @@ const rows = summary.flatMap((s) => [
 writeFileSync(join(RUN, "steps.md"), `${product}; run ${RUN}\n${rows.join("\n")}\n`);
 process.stdout.write(`${product}; ${RUN}/results.json (every step: ${RUN}/steps.md)\n\n${report([{ summary }])}`);
 server.close();
-process.exit(0);
+process.exit(results.some((sc) => sc.notes.some((n) => n.startsWith("scenario error"))) ? 1 : 0);

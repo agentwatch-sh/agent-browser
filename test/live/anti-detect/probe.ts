@@ -176,7 +176,7 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
     focusEvents: during.filter((e) => e.ev === "focus" || e.ev === "blur").map((e) => `${e.ev}@${e.t - t0}`),
     focusAfter: lastState?.focus, visAfter: lastState?.vis,
     framesDuring: listOf(log, tab, "frames").filter((t) => t >= t0 && t <= t1).length, framesAfter: after,
-    inputSeq: sequence(ins.filter((e) => !["focusin", "focusout"].includes(e.type) || true)),
+    inputSeq: sequence(ins),
     untrusted: ins.filter((e) => e.trusted === false).length,
     // A press, a release, a click, a key or a text change while the page reports "hidden". A person's page can get
     // pointerout and pointerleave while it goes hidden (its window is covered), and never an action.
