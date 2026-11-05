@@ -34,7 +34,7 @@ import { withFileLock } from "./lock.ts";
 import { statePath, type InputTiming, type Settings } from "./options.ts";
 import { charKey, parseKey, planMove, pointAt, sendKey, type KeyEvent, type Point } from "./record.ts";
 
-export const POINTER_FILE = "pointer.json", POINTER_LOCK = "pointer.lock";
+export const POINTER_FILE = "pointer.json", POINTER_LOCK = "pointer.lock", FRONT_FILE = "front.json", FRONT_LOCK = "front.lock";
 
 // ---------- the site key: one input lock per site (ab-v16.46) ----------
 
@@ -118,9 +118,54 @@ export async function withInputLock<T>(tab: Tab, fn: () => Promise<T>, opts: { d
       if (round < 2 && await tab.siteKey() !== key) return MOVED;
       const mineNow: Held = { path, pages: new Set([tab.targetId]), live: true };
       try { return { v: await held.run([...mine, mineNow], fn) }; } finally { mineNow.live = false; }
-    }, what, opts.signal);
+    }, what, { signal: opts.signal });
     if (r !== MOVED) return r.v;
   }
+}
+
+// ---------- the front window: one X focus for the windows of every site (ab-v16.46) ----------
+//
+// Agents on two sites send input at the same time, but the display has one X focus: their windows come forward in
+// turn, also inside one command. front.json names the agent page whose window agent-browser brought forward last (an
+// activation, or a press: Chrome activates the window of a page that gets a press) and that window. Each activation,
+// press and X-pointer move holds front.lock for its few milliseconds, so that the record and the X focus change in one
+// order across processes. Two uses: the X pointer moves only for the page in front (else it would move over another
+// site's window, a jump there), and a page that holds the focus behind another window at its command's end (keys gave it
+// the focus with no window switch, as Chrome gives it: window-keys-inactive) has its window brought forward, so that
+// it loses the focus with a blur as the next window comes forward, and never holds it beside a later page of its site.
+
+type Front = { page: string; window?: number; at: number };
+
+function readFront(s: Settings): Front | undefined {
+  try {
+    const v = JSON.parse(readFileSync(statePath(s, FRONT_FILE), "utf8"));
+    return v && typeof v.page === "string" ? v as Front : undefined;
+  } catch { return undefined; }
+}
+
+/** Run `fn` under front.lock (a few milliseconds: an activation, a press or an X move). */
+function atFront<T>(s: Settings, fn: () => Promise<T>): Promise<T> {
+  return withFileLock(statePath(s, FRONT_LOCK), Date.now() + 5_000, fn, "the front window's lock", { pollMs: 5 });
+}
+
+async function writeFront(tab: Tab): Promise<void> {
+  const s = tab.browser.settings, path = statePath(s, FRONT_FILE), tmp = `${path}.${process.pid}.tmp`;
+  const window = await tab.browser.windowOf(tab.targetId).catch(() => undefined);
+  writeFileSync(tmp, JSON.stringify({ page: tab.targetId, ...(window === undefined ? {} : { window }), at: Date.now() }), { mode: 0o600 });
+  renameSync(tmp, path);
+}
+
+/** Page.bringToFront (on Linux it selects the page's tab and activates its window), and the front record. */
+export async function bringForward(tab: Tab): Promise<void> {
+  await atFront(tab.browser.settings, async () => { await tab.send("Page.bringToFront"); await writeFront(tab); });
+}
+
+/** The page's window is the one that agent-browser brought forward last (the page itself, or a tab of its window); true with no record. */
+async function inFront(tab: Tab): Promise<boolean> {
+  const f = readFront(tab.browser.settings);
+  if (!f || f.page === tab.targetId) return true;
+  if (f.window === undefined) return false;
+  return (await tab.browser.windowOf(tab.targetId).catch(() => undefined)) === f.window;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -345,11 +390,13 @@ export class Hands {
   private readonly geo: Geo;
   private readonly state: PointerState;
   private readonly guard: () => void;
+  /** The display is the agent browser's own: only there does a window come forward (Hands.begin, end). */
+  private readonly own: boolean;
   private recordMoved = false;
   private lastKey = 0;
   private keys = 0;
 
-  private constructor(tab: Tab, at: Point, known: boolean, x: XAccess | undefined, geo: Geo, state: PointerState, guard: () => void) {
+  private constructor(tab: Tab, at: Point, known: boolean, x: XAccess | undefined, geo: Geo, state: PointerState, guard: () => void, own: boolean) {
     this.tab = tab;
     this.timing = tab.browser.settings.inputTiming;
     this.at = at;
@@ -358,6 +405,7 @@ export class Hands {
     this.geo = geo;
     this.state = state;
     this.guard = guard;
+    this.own = own;
   }
 
   private get log() { return this.tab.browser.settings.log; }
@@ -376,7 +424,7 @@ export class Hands {
     let entry: Point | null = null;
     if ((!focus || hidden) && disp.own) {
       guard();
-      await tab.send("Page.bringToFront");
+      await bringForward(tab);
       const deadline = Date.now() + t.activateMs;
       let focusedAt = 0;
       for (;;) {
@@ -424,7 +472,7 @@ export class Hands {
     const known = !!at;
     at ??= { x: geo.iw * between([0.35, 0.65]), y: geo.ih * between([0.35, 0.65]) };
     at = { x: Math.min(Math.max(at.x, 0), Math.max(0, geo.iw - 1)), y: Math.min(Math.max(at.y, 0), Math.max(0, geo.ih - 1)) };
-    return new Hands(tab, at, known, x, geo, state, guard);
+    return new Hands(tab, at, known, x, geo, state, guard, disp.own);
   }
 
   /**
@@ -432,6 +480,12 @@ export class Hands {
    * to the cursor's end; after a path of this file it is there already (the path's last step).
    */
   async end(): Promise<void> {
+    // Another window came forward during the command (an agent on another site), and keys gave this page the focus with
+    // no window switch: its window comes forward now, so that the page loses that focus with a blur at the next switch
+    // and never holds it beside another page of its site (that site's lock is still held here).
+    let allowed = true;
+    try { this.guard(); } catch { allowed = false; } // no code of ours in a page that left the allowlist
+    if (this.own && allowed && !(await inFront(this.tab)) && (await this.tab.evaluate(peek)).focus) await bringForward(this.tab);
     if (this.recordMoved && this.x) await this.xMove(this.at);
     await updatePointer(this.tab.browser.settings, this.tab.targetId, { x: Math.round(this.at.x * 100) / 100, y: Math.round(this.at.y * 100) / 100 }, this.state);
   }
@@ -444,13 +498,18 @@ export class Hands {
   private async xMove(p: Point): Promise<boolean> {
     const o = origin(this.geo), at = { x: Math.round(p.x), y: Math.round(p.y) };
     this.guard();
-    try {
-      await this.x!.run(["mousemove", String(Math.round(o.x + at.x)), String(Math.round(o.y + at.y))]);
-      return true;
-    } catch (e) {
-      this.log(`agent-browser: could not move the X pointer (${(e as Error).message.split("\n")[0]}); the input goes on with CDP alone`);
-      return false;
-    }
+    // Only while this page's window is the one in front: else the X pointer moves over another site's window, and that
+    // page gets a real move that its own path does not explain (ab-v16.46). Then the path's last step is a CDP move.
+    return atFront(this.tab.browser.settings, async () => {
+      if (!(await inFront(this.tab))) return false;
+      try {
+        await this.x!.run(["mousemove", String(Math.round(o.x + at.x)), String(Math.round(o.y + at.y))]);
+        return true;
+      } catch (e) {
+        this.log(`agent-browser: could not move the X pointer (${(e as Error).message.split("\n")[0]}); the input goes on with CDP alone`);
+        return false;
+      }
+    });
   }
 
   /** An input event to the page, after the guard: never one to a page that left the allowlist. */
@@ -507,7 +566,11 @@ export class Hands {
     if (before && !(await before())) return false;
     this.guard();
     const { x, y } = this.at;
-    await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
+    // Chrome activates the window of a page that gets a press: the front record follows it (under front.lock).
+    await atFront(this.tab.browser.settings, async () => {
+      await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
+      await writeFront(this.tab);
+    });
     await sleep(between(this.timing.pressMs));
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
     return true;

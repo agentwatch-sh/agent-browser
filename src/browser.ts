@@ -876,11 +876,11 @@ export class Tab {
     // lands inside another agent's input command on that site (review-47c: a read's switch during another agent's typing
     // left two focused pages). The lock is reentrant, so record and the input commands, which hold it, do not wait for
     // themselves. The page's state is read again inside the lock: the other agent's command can have changed it.
-    const { withInputLock } = await import("./input.ts");
+    const { withInputLock, bringForward } = await import("./input.ts");
     await withInputLock(this, async () => {
       await this.assertAllowed();
       if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
-      await this.send("Page.bringToFront");
+      await bringForward(this);
       for (const end = Date.now() + 1000; Date.now() < end && !opts.signal?.aborted; await new Promise((r) => setTimeout(r, 20)))
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);

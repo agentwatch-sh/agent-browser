@@ -1,6 +1,6 @@
 // A lock file that the processes of one consumer share: the proxy's start lock (proxy.ts), the lock of the tab
-// record, tabs.json and tab-scopes.json (browser.ts), the input lock of each site and the pointer file's lock
-// (input.ts). One holder at a time.
+// record, tabs.json and tab-scopes.json (browser.ts), the input lock of each site, the pointer file's lock and the
+// front window's lock (input.ts). One holder at a time.
 
 import { closeSync, fstatSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 
@@ -33,9 +33,12 @@ function clearCrashed(path: string): boolean {
  * error names `what`; a free lock is taken also when the deadline has passed (one try). A crashed
  * holder's lock (clearCrashed) is cleared and taken in the same try, also in the try after the deadline
  * (review-52 note 4); a live holder's lock is never cleared. `signal` ends the wait (not `fn`) with its
- * reason. The lock is removed only if it is still ours.
+ * reason; `pollMs` is the time between two tries (50 ms; a lock held for milliseconds only can try more often).
+ * The lock is removed only if it is still ours.
  */
-export async function withFileLock<T>(path: string, deadline: number, fn: () => Promise<T>, what = "lock", signal?: AbortSignal): Promise<T> {
+export async function withFileLock<T>(path: string, deadline: number, fn: () => Promise<T>, what = "lock",
+  opts: { signal?: AbortSignal; pollMs?: number } = {}): Promise<T> {
+  const { signal, pollMs = 50 } = opts;
   let fd: number | undefined;
   for (let cleared = 0; ;) {
     signal?.throwIfAborted();
@@ -48,7 +51,7 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
       // A crashed launcher can leave a lock: take it now (at most 3 times in one call, for a lock that keeps coming back).
       if (clearCrashed(path) && cleared++ < 3) continue;
       if (Date.now() >= deadline) break;
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, pollMs));
     }
   }
   if (fd === undefined) throw new Error(`${what} timed out: ${path}`);

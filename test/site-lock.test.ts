@@ -96,7 +96,7 @@ test("withFileLock: a crashed holder's lock is cleared and taken in the same try
     const stop = new AbortController();
     setTimeout(() => stop.abort(), 100);
     const t0 = Date.now();
-    await assert.rejects(withFileLock(path, Date.now() + 5_000, async () => "no", "the test lock", stop.signal));
+    await assert.rejects(withFileLock(path, Date.now() + 5_000, async () => "no", "the test lock", { signal: stop.signal }));
     assert.ok(Date.now() - t0 < 1_000, `${Date.now() - t0} ms`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -112,12 +112,14 @@ const PAGE = {
     { tag: "input", id: "i", rect: [40, 160, 200, 24] },
   ],
 };
+/** Beta's page: its button at the right, so that a test can tell which page an X pointer move was for. */
+const PAGE_B = { ...PAGE, elements: [{ ...PAGE.elements[0], rect: [600, 500, 120, 30] }, PAGE.elements[1]] };
 // Two hosts of one site, and another site; all on the allowlist.
 const A1 = "http://www.alpha.test/", A2 = "http://app.alpha.test/", B = "http://beta.test/";
 
 let fake: FakeChrome, c: Consumer, operator: FakePage;
 before(async () => {
-  fake = await FakeChrome.start((url) => (url.hostname.endsWith(".test") ? PAGE as never : undefined));
+  fake = await FakeChrome.start((url) => (url.hostname === "beta.test" ? PAGE_B as never : url.hostname.endsWith(".test") ? PAGE as never : undefined));
   fake.backgroundTabs = true;
   fake.tabSwitches = true;
   c = consumer(["alpha.test", "beta.test"]);
@@ -132,6 +134,19 @@ after(async () => {
 /** Agent mode on Linux, on a display of the agent browser's own (no xdotool). */
 const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST,
   display: { own: true, xdotool: false, chromePid: 4242 }, ...extra });
+/** The X pointer through a fake xdotool (as person-input.test.ts): each move, and the window that was active then. */
+const xMoves: { x: number; y: number; active: number }[] = [];
+const xdotool = async (args: string[]): Promise<string> => {
+  const at = fake.xPointer ?? { x: 900, y: 700 };
+  if (args[0] === "getmouselocation") return `X=${Math.round(at.x)}\nY=${Math.round(at.y + 87)}\nSCREEN=0\nWINDOW=200\n`;
+  if (args[0] === "mousemove") { const x = Number(args[1]), y = Number(args[2]); xMoves.push({ x, y, active: fake.focusedWindow }); fake.xPointer = { x, y: y - 87 }; return ""; }
+  if (args[0] === "search" && args.includes("--maxdepth")) return "1\n";
+  if (args[0] === "search") return "1\n200\n201\n";
+  if (args[0] === "getwindowfocus") return "200\n";
+  if (args[0] === "getwindowpid") return args[1] === "1" ? "" : "4242\n";
+  throw new Error(`fake xdotool: ${args.join(" ")}`);
+};
+const linuxX = (extra: Partial<BrowserOptions> = {}) => linux({ display: { own: true, xdotool, chromePid: 4242 }, ...extra });
 const lockOf = (key: string) => inputLockPath(resolveOptions(linux()), key);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
 let n = 0;
@@ -339,4 +354,37 @@ await commands.click({ ...o, log: () => {} }, { tab: process.argv[3], target: "#
   [x0, x1] = span(a1.page, t); [y0, y1] = span(a2.page, t);
   assert.ok(x1 <= y0 || y1 <= x0, `one site: never at once (www ${x0}-${x1}, app ${y0}-${y1})`);
   for (const p of [a1, a2, b]) await commands.close(linux(), { tab: p.name });
+});
+
+// ---------- two windows in front in turn: what each page and the X pointer get ----------
+
+test("two sites at once leave no page with the focus behind another window: a later command on the first site never gives it two focused pages", async () => {
+  operatorInFront();
+  const a1 = await windowPage(A1), b = await windowPage(B), a2 = await windowPage(A2);
+  const text = "hello world, hello";
+  // Beta's window comes forward while alpha types: Chrome gives a page that gets keys while its window is not the active
+  // one the focus with no switch (FakePage.keyFocus; measured on taylor, window-keys-inactive).
+  await Promise.all([commands.type(linux(), { tab: a1.name, text, into: "#i" }), sleep(30).then(() => commands.type(linux(), { tab: b.name, text, into: "#i" }))]);
+  assert.equal(a1.page.select("#i")[0].value, text);
+  assert.equal(b.page.select("#i")[0].value, text);
+  const focused = () => [a1, b, a2].filter((p) => p.page.hasFocus).map((p) => p.name);
+  assert.ok(focused().length <= 1, `after both: ${focused().join(", ")} focused`);
+  await commands.type(linux(), { tab: a2.name, text: "hi", into: "#i" });
+  assert.deepEqual(focused(), [a2.name], "one focused page on alpha (and in the browser)");
+  for (const p of [a1, b, a2]) await commands.close(linux(), { tab: p.name });
+});
+
+test("the X pointer moves only for the page whose window is in front: a path of a page whose window lost the front ends with a CDP move", async () => {
+  operatorInFront();
+  const a1 = await windowPage(A1), b = await windowPage(B);
+  fake.xPointer = { x: 700, y: 500 };
+  xMoves.length = 0;
+  const o = linuxX({ inputTiming: { ...FAST, moveScale: 0.4 } });
+  await Promise.all([commands.click(o, { tab: a1.name, target: "#b" }), sleep(20).then(() => commands.click(o, { tab: b.name, target: "#b" }))]);
+  assert.equal(a1.page.title, "clicked");
+  assert.equal(b.page.title, "clicked");
+  assert.ok(xMoves.length >= 1, "one X move at least");
+  // Alpha's button is at the left, beta's at the right: each X move went to the window that was active then.
+  for (const m of xMoves) assert.equal(m.active, m.x < 400 ? a1.page.windowId : b.page.windowId, JSON.stringify(xMoves));
+  for (const p of [a1, b]) await commands.close(linux(), { tab: p.name });
 });
