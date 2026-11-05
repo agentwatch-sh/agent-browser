@@ -993,11 +993,16 @@ export class Tab {
         if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", allow)) left = p.frame?.url ?? "";
       });
       // Also as soon as the main frame starts or asks for a navigation to a host off the list (review-47c: one move still
-      // reached an off-list page before its commit).
+      // reached an off-list page before its commit). A request for a page elsewhere (a target=_blank link: disposition
+      // newTab, newWindow or download) leaves the main frame where it is: only "currentTab" counts, as in Playwright
+      // (review-47d note 7). The new tab itself is off the list, so no command reaches it.
       const early = (p: { frameId?: string; url?: string }, sid?: string) => {
         if (sid === this.sessionId && p.frameId === main && p.url && !isAllowedUrl(p.url, allow)) left = p.url;
       };
-      const offStart = this.browser.conn.on("Page.frameStartedNavigating", early), offAsk = this.browser.conn.on("Page.frameRequestedNavigation", early);
+      const offStart = this.browser.conn.on("Page.frameStartedNavigating", early);
+      const offAsk = this.browser.conn.on("Page.frameRequestedNavigation", (p: { frameId?: string; url?: string; disposition?: string }, sid?: string) => {
+        if (p.disposition === "currentTab") early(p, sid);
+      });
       const off = () => { offNav(); offStart(); offAsk(); };
       const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
       let h: Hands | undefined;

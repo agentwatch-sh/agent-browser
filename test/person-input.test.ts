@@ -62,6 +62,7 @@ const PAGE = {
     { tag: "input", id: "orphan", attrs: { type: "file" }, hidden: true },
     { tag: "div", id: "hov", text: "menu", rect: [300, 100, 100, 30] },
     { tag: "input", id: "farfile", attrs: { type: "file" }, rect: [40, 2700, 200, 24] },
+    { tag: "a", id: "blank", text: "Elsewhere", attrs: { href: "http://evil.test/", target: "_blank", rel: "noopener" }, rect: [420, 160, 100, 24] },
   ],
   onload: (p: FakePage) => { p.select("#set")[0].value = "abc"; },
 };
@@ -681,6 +682,47 @@ test("a navigation off the list that the page only asks for (Page.frameRequested
   try {
     await assert.rejects(commands.click(linux(), { tab: name, target: "#b" }), NotAllowedError);
   } finally { fake.requestNavigation = orig; }
+  const after = fake.calls.slice(at).filter((x) => x.targetId === page.targetId && /^Input\./.test(x.method));
+  assert.ok(after.length <= 1, `at most the move in flight: ${after.map((x) => x.params.type).join(" ")}`);
+  assert.ok(!after.some((x) => x.params.type === "mousePressed"));
+  await commands.close(linux(), { tab: name }).catch(() => {});
+});
+
+test("a target=_blank link to a host off the list (Page.frameRequestedNavigation with disposition newTab) stops no later input of the opener; the new tab stays out of reach (review-47d note 7)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const b = await AgentBrowser.connect(linux());
+  try {
+    const tab = await b.find(name);
+    // One input call chain: the click on the link, then the guard again, then a click on the opener (as a record take does).
+    await tab.withInput(async (h) => { await h!.click("#blank"); await h!.check(); await tab.click("#b"); });
+    assert.equal(page.title, "clicked", "the opener got the later click");
+    assert.equal(page.url, `${fx.base}/`, "the opener stayed on its page");
+    const opened = [...fake.pages.values()].find((p) => p.url === "http://evil.test/");
+    assert.ok(opened, "the link opened its new tab");
+    assert.ok(fake.calls.some((x) => x.targetId === page.targetId && x.method === "Input.dispatchMouseEvent"), "input reached the opener");
+    // The new tab off the list is blocked as before: no command reaches it, and it gets no input.
+    await assert.rejects(b.attach(opened.targetId), NotAllowedError);
+    assert.ok(!(await commands.tabs(linux())).tabs.some((t) => t.targetId === opened.targetId));
+    assert.deepEqual(fake.calls.filter((x) => x.targetId === opened.targetId && /^Input\./.test(x.method)), []);
+    opened.close();
+    fake.pages.delete(opened.targetId);
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: name }).catch(() => {});
+});
+
+test("a navigation off the list that has only started (Page.frameStartedNavigating, with no commit yet) stops the input at once (review-47d note 8)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  page.select("#hov")[0].onhover = (p) => p.fake.startNavigation(p, "http://evil.test/");
+  page.select("#hov")[0].rect = [40, 60, 300, 400];
+  let at = Infinity;
+  const orig = fake.startNavigation.bind(fake);
+  fake.startNavigation = (p, u) => { if (at === Infinity) at = fake.calls.length; orig(p, u); };
+  try {
+    await assert.rejects(commands.click(linux(), { tab: name, target: "#b" }), NotAllowedError);
+  } finally { fake.startNavigation = orig; }
+  assert.equal(page.url, `${fx.base}/`, "no commit: only the start of the navigation said it");
   const after = fake.calls.slice(at).filter((x) => x.targetId === page.targetId && /^Input\./.test(x.method));
   assert.ok(after.length <= 1, `at most the move in flight: ${after.map((x) => x.params.type).join(" ")}`);
   assert.ok(!after.some((x) => x.params.type === "mousePressed"));
