@@ -7,6 +7,7 @@ expression of `eval`) goes to the CLI's standard input, never into argv.
 
 from __future__ import annotations
 
+import collections.abc
 import json
 import os
 import re
@@ -112,6 +113,11 @@ class AgentBrowser:
     command's length. See the README, "A command on a background tab: two modes". Measured on Linux
     only. A hidden_drive that is not a bool raises ValueError here, before any call.
 
+    `input_timing` (`--input-timing`, a JSON object) changes the shape of a person's input in a window of
+    its own (agent mode on Linux): ms ranges such as `{"pressMs": [70, 90], "keyMs": [90, 150]}`, and
+    `moveScale`, `activateMs`, `lockWaitMs`. The fields that it names replace the defaults; the CLI
+    checks them and raises UsageError. An input_timing that is not a mapping raises ValueError here.
+
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
     current folder. A method's empty path goes to the CLI, which raises UsageError.
     """
@@ -138,6 +144,7 @@ class AgentBrowser:
         command_name: Optional[str] = None,
         tab_scope: Optional[str] = None,
         hidden_drive: bool = False,
+        input_timing: Optional[Mapping[str, object]] = None,
         node: str = "node",
         package_dir: Optional[PathLike] = None,
         timeout: float = DEFAULT_TIMEOUT,
@@ -157,6 +164,8 @@ class AgentBrowser:
             raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
         if not isinstance(hidden_drive, bool):
             raise ValueError(f"hidden_drive must be True or False, not {hidden_drive!r}")
+        if input_timing is not None and not isinstance(input_timing, collections.abc.Mapping):
+            raise ValueError(f"input_timing must be a mapping of field names to ms ranges, not {type(input_timing).__name__}")
         state = _path("state_dir", state_dir)
         if state is None:
             raise ValueError("state_dir is required: this consumer's own state folder")
@@ -180,6 +189,7 @@ class AgentBrowser:
         self.command_name = command_name
         self.tab_scope = tab_scope
         self.hidden_drive = hidden_drive
+        self.input_timing: Optional[Dict[str, object]] = dict(input_timing) if input_timing is not None else None
         self.node = node
         self.package_dir = _path("package_dir", package_dir)
         self.timeout = timeout
@@ -254,6 +264,8 @@ class AgentBrowser:
             flags += ["--tab-scope", self.tab_scope]
         if self.hidden_drive:
             flags.append("--hidden-drive")
+        if self.input_timing is not None:
+            flags += ["--input-timing", json.dumps(self.input_timing)]
         return flags
 
     def _run(self, command: str, args: Sequence[str], parse: Callable[[Mapping[str, object]], R], *, stdin: Optional[str] = None,

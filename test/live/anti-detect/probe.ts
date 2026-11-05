@@ -204,7 +204,10 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
     // A scroll with no wheel, key or press in the second before it (scrollIntoView), and a field's focus with no press
     // in the second before it (el.focus()).
     scrollsWithoutInput: during.filter((e) => e.ev === "scroll" && !ins.some((i) => ["wheel", "keydown", "pointerdown"].includes(i.type) && i.t <= e.t && e.t - i.t < 1000)).length,
-    focusWithoutPress: ins.filter((e) => e.type === "focusin" && e.id === "f" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)).length,
+    // A window that comes forward gives the field that had the focus a focusin again (a person's page too, run 8 of
+    // ab-v16.26: person-window-multi): such a focusin within 100 ms of the page's focus event is not counted.
+    focusWithoutPress: ins.filter((e) => e.type === "focusin" && e.id === "f" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)
+      && !during.some((x) => x.ev === "focus" && x.t <= e.t + 5 && e.t - x.t < 100)).length,
   };
 }
 

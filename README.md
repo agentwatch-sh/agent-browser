@@ -77,7 +77,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json`, `tab-pages.json` (the tabs of `open --tab` on Linux), `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run). Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
@@ -129,7 +129,9 @@ connection, so never a new approval prompt: with no approved proxy up, fail at o
 `vedlo browser`), `tabScope` (CLI `--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of
 this scope; see **Tab scopes**), `hiddenDrive` (CLI `--hidden-drive`, Python `hidden_drive=True`: keep a
 background tab's page hidden while a command drives it; default off; see **A command on a background
-tab: two modes**) and `log` (progress lines; default standard error).
+tab: two modes**), `inputTiming` (CLI `--input-timing JSON`, Python `input_timing=`: the shape of a
+person's input on Linux, in parts, for example `{"pressMs": [70, 90], "keyMs": [90, 150]}`; see **A
+person's input**) and `log` (progress lines; default standard error).
 
 ## How it works
 
@@ -820,7 +822,7 @@ agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
               [--chrome-args JSON] [--endpoint WS] [--cdp-url URL] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
               [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
-              [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME] [--hidden-drive]
+              [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME] [--hidden-drive] [--input-timing JSON]
 ```
 
 `chromes` and `commands` need no `--state-dir`.
@@ -895,11 +897,12 @@ Python 3.10+, standard library only, full type annotations (`mypy --strict` is c
 AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
              chrome_args=None, endpoint=None, cdp_url=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
              notify_command=None, approve=None, approve_command=None, proxy_idle_ms=None, command_name=None,
-             tab_scope=None, hidden_drive=False, node="node", package_dir=None, timeout=120.0, env=None)
+             tab_scope=None, hidden_drive=False, input_timing=None, node="node", package_dir=None, timeout=120.0, env=None)
 ```
 
-Each argument from `state_dir` to `hidden_drive` is the CLI flag of the same name (`chrome_args` is
-`--chrome-args`, `tab_scope` is `--tab-scope`, `hidden_drive=True` is `--hidden-drive`). `node`,
+Each argument from `state_dir` to `input_timing` is the CLI flag of the same name (`chrome_args` is
+`--chrome-args`, `tab_scope` is `--tab-scope`, `hidden_drive=True` is `--hidden-drive`, `input_timing`
+a mapping that goes as the JSON of `--input-timing`). `node`,
 `package_dir`, `timeout` and `env` tell the adapter how to run the CLI.
 `chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
 `"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
@@ -1143,6 +1146,18 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   opened. `open --tab` keeps the old default (and the hidden drive) for its tab, also in later
   commands, through `tab-pages.json`. On the Mac and in personal mode, `open` and focus emulation stay
   as before.
+- `test/person-input.test.ts`: a person's input in a window of its own on Linux, against the fake
+  Chrome (its windows, the X pointer's event when a window comes forward, a page that scrolls, the
+  caret of a field, the file chooser): `Page.bringToFront` before the first input event of a page with
+  no focus, never for a read; a path of 12 or more moves from the pointer's place (the activation's
+  real event, else the page's last point, also in a later process), a press with force 0.5 of 70 to
+  90 ms with the default timing; the X pointer moves to each path's end only through xdotool on a
+  display that holds the agent browser only; `type --into` clicks the field where `el.focus()` puts
+  the caret (keys correct it; a field that the click does not focus gets `el.focus()` with a log
+  line), and types one key pair per character 90 to 150 ms apart; the wheel brings an element into
+  view (no `scrollIntoView`); `setFiles` clicks the input or its label and fills the chooser's input;
+  two processes' input commands never overlap (`input.lock`); a popup is driven in its tab, and the
+  opener comes back with a tab switch; `open --tab`, the Mac and personal mode keep today's input.
 - `test/hidden-tab.test.ts`: the CDP calls that each command sends to a background tab in both modes,
   against the fake Chrome's model of one (`FakePage.background`: the page is hidden, Chrome draws no
   frame of it, a page that never drew drops a press or a key, a mouse move waits for a frame, a capture

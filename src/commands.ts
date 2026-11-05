@@ -426,7 +426,8 @@ export const commands = {
     const s = resolveOptions(o);
     const plan = planRecording(p, allowlistOf(s));
     return onTab(s, p, async (tab, info) => {
-      const r = await recordTab(tab, plan);
+      // In a window of its own (Linux), the take is an input command: the window comes forward, and it holds the input lock.
+      const r = await tab.withInput((h) => recordTab(tab, plan, h));
       const { width, height, scale } = plan.viewport;
       // The tab's URL and title from the end of the run: after the encode nothing runs in the tab again.
       const ref: TabRef = { ...info, url: r.finalUrl, title: r.title };

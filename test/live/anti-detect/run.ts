@@ -18,6 +18,12 @@
 //   person-front, person-tab, person-window         baselines: no CDP message at all for these pages
 //   default, hidden-drive                           agent-browser's old modes, now behind open --tab (focus emulation on attach / Tab.whileDrawn)
 //   ab-window                                       agent-browser's own open on Linux (ab-v16.26): a window of its own, no focus emulation
+//   design, design-no-x                             the whole design with agent-browser's real commands (ab-v16.26): a window of its own,
+//                                                   activation, a person's input, the input lock; F's window takes the focus after each
+//                                                   input step, so T's window comes forward again for each one (several activations).
+//                                                   design-no-x cannot reach the X pointer (as over agentwatch's relay)
+//   design-two                                      the design with two agents at once (two windows, one input lock), each typing 6 times
+//   person-window-multi                             the person baseline for several activations: F's window takes the focus after each step
 //   window, window-no-flag, window-default          one window per agent page (candidate 1)
 //   window-activate                                 one window per page, Target.activateTarget on it for each input command
 //   activate                                        Target.activateTarget for each input command, then back (2)
@@ -28,6 +34,9 @@
 //   xfocus-cdp, xfocus-xinput                       one window per page, the X focus moved to it, CDP or X input (6)
 //   window-human-cdp                                one window per page, Target.activateTarget, person-like CDP input (6)
 //   window-keys-inactive                            one window per page: keys into it after another window took the focus
+// Since ab-v16.26 agent-browser's own commands drive a page in a window of its own as the design says (activation, a
+// person's input, the input lock), so the window*, xfocus-cdp and window-keys-inactive scenarios no longer measure
+// the old input in a window: the research's appendix holds those rows. The old modes stay behind open --tab.
 // It writes DIR/run-XXXXXX/results.json (every record and every step) and steps.md, and prints the
 // tables of report.ts. Exit 0 when every scenario ran (a step may fail: a failed step is a measurement),
 // 1 when a scenario could not run (its error is in its notes), 2 on a start problem.
@@ -35,7 +44,7 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
@@ -76,6 +85,8 @@ await sleep(300);
 if (xvfb.exitCode !== null) refuse(`Xvfb did not start on :${DISPLAY}`);
 const XENV: NodeJS.ProcessEnv = { ...process.env, DISPLAY: `:${DISPLAY}`, XAUTHORITY: xauth };
 delete XENV.WAYLAND_DISPLAY; delete XENV.XDG_SESSION_TYPE;
+// agent-browser's own commands reach the X pointer of this run's Xvfb (input.ts, xAccess): never another display.
+process.env.DISPLAY = `:${DISPLAY}`; process.env.XAUTHORITY = xauth; delete process.env.WAYLAND_DISPLAY;
 say(`Xvfb :${DISPLAY} pid ${xvfb.pid}; run folder ${RUN}`);
 
 // ------------------------------------------------------------------ the probe server
@@ -302,12 +313,50 @@ async function agentDrive(sc: Scenario, o: BrowserOptions, wrap: Wrap, opt: { sh
   await idle(sc, "idle after", 3000);
 }
 
-/** A person's drive of T: switch to it (bring), click, type, the frame button, End, switch back (back). */
-async function personDrive(sc: Scenario, bring: () => Promise<void>, back: () => Promise<void>) {
+/**
+ * The whole design (ab-v16.26) with agent-browser's own commands: the same steps as agentDrive, with no wrapper, and
+ * after each input step F's window takes the focus again (the stand-in window manager's raise, as another agent or
+ * the operator), so each input step brings T's window forward again.
+ */
+async function designDrive(sc: Scenario, o: BrowserOptions, wf: string) {
+  const T = `tab=${sc.T}`, away = () => raiseAndFocus(wf);
+  await idle(sc, "idle before", 3000);
+  await step(sc, "text", () => commands.text(o, { tab: T }));
+  await step(sc, "click", () => commands.click(o, { tab: T, target: "#b" }));
+  await away();
+  await step(sc, "type", () => commands.type(o, { tab: T, text: "hello", into: "#f" }));
+  await away();
+  await step(sc, "click below the fold", () => commands.click(o, { tab: T, target: "#far" }));
+  await away();
+  await step(sc, "library: clickAt, waitFor a frame's content", async () => {
+    const b = await AgentBrowser.connect(o);
+    try {
+      const tab = await b.find(T);
+      await tab.clickAt(LAYOUT.rafButton.x, LAYOUT.rafButton.y);
+      await tab.waitFor(() => document.getElementById("rd")!.textContent === "frames: 1", { timeoutMs: 5000, what: "the frame's content" });
+    } finally { await b.disconnect().catch(() => {}); }
+  });
+  await away();
+  await step(sc, "press End (scrolls to the lazy image)", () => commands.press(o, { tab: T, key: "End" }));
+  await away();
+  await step(sc, "shot", () => commands.shot(o, { tab: T, path: join(RUN, `${sc.name}.png`) }), 35_000);
+  const script = join(RUN, "record-steps.json");
+  writeFileSync(script, JSON.stringify([{ wait: 1000 }]));
+  await step(sc, "record 1 s", () => commands.record(o, { tab: T, out: join(RUN, `${sc.name}.mp4`), script, size: "640x360", fps: 30 }));
+  await away();
+  await idle(sc, "idle after", 3000);
+}
+
+/** A person's drive of T: switch to it (bring), click, type, the frame button, End, switch back (back). With `each`, the
+ *  person switches to F after each step and back to T before the next one (several activations of T's window). */
+async function personDrive(sc: Scenario, bring: () => Promise<void>, back: () => Promise<void>, each = false) {
+  const again = async () => { if (each) { await back(); await sleep(400); await bring(); } };
   await idle(sc, "idle before", 3000);
   await step(sc, "bring T to the front", bring);
   await step(sc, "click", () => personClick(sc.T, LAYOUT.button));
+  await again();
   await step(sc, "type", async () => { await personClick(sc.T, LAYOUT.field); await sleep(200); xdo("type", "--delay", "90", "hello"); });
+  await again();
   await step(sc, "click below the fold", async () => {
     await personMove(sc.T, { x: FAR.x, y: 400 });
     for (let i = 0; i < 20; i++) {
@@ -317,7 +366,9 @@ async function personDrive(sc: Scenario, bring: () => Promise<void>, back: () =>
     }
     await personClick(sc.T, { x: FAR.x, y: (farTop(sc.T) ?? 0) + 20 });
   });
+  await again();
   await step(sc, "click the frame button", () => personClick(sc.T, LAYOUT.rafButton));
+  await again();
   await step(sc, "press End (scrolls to the lazy image)", async () => { xdo("key", "End"); });
   await step(sc, "send T back", back);
   await idle(sc, "idle after", 3000);
@@ -346,6 +397,17 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     await raiseAndFocus(win);
     xdo("key", "ctrl+1"); await sleep(800);
     await personDrive(sc, async () => { xdo("key", "ctrl+2"); await sleep(700); }, async () => { xdo("key", "ctrl+1"); });
+  },
+  async "person-window-multi"(sc) {
+    const c = await startChrome(sc, [], [urlOf(sc.T)]);
+    await loaded(sc.T);
+    const wt = windowOf(c.proc.pid!, sc.T);
+    await raiseAndFocus(wt);
+    execFileSync(CHROME, [`--user-data-dir=${join(RUN, `profile-${sc.name}`)}`, "--new-window", urlOf(sc.F)], { env: XENV, stdio: "ignore", timeout: 15_000 });
+    await loaded(sc.F);
+    const wf = windowOf(c.proc.pid!, sc.F);
+    await raiseAndFocus(wf);
+    await personDrive(sc, () => raiseAndFocus(wt), () => raiseAndFocus(wf), true);
   },
   async "person-window"(sc) {
     const c = await startChrome(sc, [], [urlOf(sc.T)]);
@@ -393,6 +455,10 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     await raiseAndFocus(wf); // as windowCase: F's window over T's, the case to measure
     await agentDrive(sc, o, plain);
   },
+  // ---------------------------------------------------------------- the whole design (ab-v16.26)
+  async design(sc) { await designCase(sc, true); },
+  async "design-no-x"(sc) { await designCase(sc, false); },
+  async "design-two"(sc) { await designTwoCase(sc); },
   // ---------------------------------------------------------------- one window per agent page (1)
   async window(sc) { await windowCase(sc, [OCCLUDED], true); },
   async "window-no-flag"(sc) { await windowCase(sc, [], true); },
@@ -446,6 +512,65 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
   async "window-human-cdp"(sc) { await humanCdpCase(sc); },
   async "window-keys-inactive"(sc) { await keysInactiveCase(sc); },
 };
+
+/** The whole design: agent-browser's own open (a window of its own on Linux) and commands; `x`: agent-browser may reach
+ *  the X pointer (this run's Xvfb, through DISPLAY and XAUTHORITY), else not (as over agentwatch's relay). */
+async function designCase(sc: Scenario, x: boolean) {
+  const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
+  await loaded(sc.F);
+  const wf = windowOf(c.proc.pid!, sc.F);
+  await raiseAndFocus(wf);
+  const o: BrowserOptions = { ...opts(c, false), ...(x ? {} : { xdotool: false }) };
+  await commands.open(o, { url: urlOf(sc.T) });
+  await loaded(sc.T);
+  await sleep(500);
+  await raiseAndFocus(wf); // F's window over T's
+  await designDrive(sc, o, wf);
+  try { sc.notes.push(`pointer.json: ${readFileSync(join(o.stateDir, "pointer.json"), "utf8").slice(0, 300)}`); } catch { sc.notes.push("no pointer.json"); }
+}
+
+/** Two agents at once, each with a window of its own (T, and a second page T2 of the same site), sharing one agent browser's
+ *  state folder (one input lock): each types "hello" into its field 6 times, with pauses. Also each alone, for the cost. */
+async function designTwoCase(sc: Scenario) {
+  const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
+  await loaded(sc.F);
+  const wf = windowOf(c.proc.pid!, sc.F);
+  await raiseAndFocus(wf);
+  const o = opts(c, false), T2 = `${sc.T}b`;
+  await commands.open(o, { url: urlOf(sc.T) });
+  await commands.open(o, { url: urlOf(T2) });
+  await loaded(sc.T); await loaded(T2);
+  await sleep(500);
+  await raiseAndFocus(wf);
+  const agent = async (tab: string, delay: number) => {
+    await sleep(delay);
+    for (let r = 0; r < 6; r++) {
+      await commands.type(o, { tab: `tab=${tab}`, text: "hello", into: "#f" });
+      await sleep(300 + Math.round(Math.random() * 400));
+    }
+  };
+  await idle(sc, "idle before", 2000);
+  let together = 0;
+  await step(sc, "two agents type at once", async () => { const t0 = Date.now(); await Promise.all([agent(sc.T, 0), agent(T2, 450)]); together = Date.now() - t0; }, 120_000);
+  const sorted = () => log.slice().sort((x, y) => x.t - y.t);
+  const s0 = sc.steps.at(-1)!;
+  const both = bothFocusedMs(sorted(), sc.T, T2, s0.t0, s0.t1);
+  await raiseAndFocus(wf);
+  let alone = 0;
+  await step(sc, "each agent alone, one after the other", async () => { const t0 = Date.now(); await agent(sc.T, 0); await agent(T2, 0); alone = Date.now() - t0; }, 120_000);
+  const focusOf = (tab: string) => log.filter((e) => e.tab === tab && e.ev === "focus" && e.t >= s0.t0 && e.t <= s0.t1).map((e) => e.t);
+  sc.notes.push(`two at once: ${together} ms; both pages focused ${both} ms; one after the other: ${alone} ms (the lock makes the work of two at once ${Math.round(((together - alone / 2) / (alone / 2)) * 100)}% longer than one agent's, against ${alone} ms for both in turn)`);
+  for (const tab of [sc.T, T2]) sc.notes.push(`${tab} pointer while both typed: ${JSON.stringify(pointerSignals(sorted(), tab, s0.t0, s0.t1 + 200, focusOf(tab)))}`);
+  for (const tab of [sc.T, T2]) {
+    const ins = log.filter((e) => e.tab === tab && e.ev === "in" && e.t >= s0.t0 && e.t <= s0.t1 + 200) as Record<string, any>[];
+    sc.notes.push(`${tab}: keydowns ${ins.filter((e) => e.type === "keydown").length}, while unfocused ${ins.filter((e) => e.type === "keydown" && e.focus === false).length}, untrusted ${ins.filter((e) => e.trusted === false).length}, field focus with no press ${ins.filter((e) => e.type === "focusin" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)
+      && !log.some((x) => x.tab === tab && x.ev === "focus" && x.t <= e.t + 5 && e.t - x.t < 100)).length}`);
+  }
+  const b = await AgentBrowser.connect(o);
+  try { for (const tab of [sc.T, T2]) sc.notes.push(`${tab} field: ${JSON.stringify(await (await b.find(`tab=${tab}`)).evaluate(() => (document.getElementById("f") as HTMLInputElement).value))}`); }
+  finally { await b.disconnect().catch(() => {}); }
+  await idle(sc, "idle after", 2000);
+}
 
 /** Candidate 1: T opens in a window of its own (Target.createTarget newWindow, background); F's window stays over it. */
 async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, activate = false) {

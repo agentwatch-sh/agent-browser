@@ -500,6 +500,10 @@ async function agentBrowserCases() {
   await run("eval", ["eval", "main", "document.title"], (r) => r.value === "probe a");
   await run("outline", ["outline", "main"], (r) => r.elements.some((e: any) => e.label === "Greet"));
   await run("shot", ["shot", "main", join(RUN, "ab-shot.png")], () => statSync(join(RUN, "ab-shot.png")).size > 1000);
+  // On Linux a page in a window of its own gets a person's input (ab-v16.26): the window comes forward, a path, a press, keys.
+  await run("type --into (a click on the field, then keys)", ["type", "main", "Lin", "--into", "#name"], (r) => r.length === 3);
+  await run("click (a path and a press)", ["click", "main", "#go"], () => true);
+  await run("the click and the keys arrived", ["eval", "main", "document.getElementById('out').textContent"], (r) => r.value === "Hello, Lin");
   await run("tabs", ["tabs"], (r) => r.tabs.length === 1);
   await run("status", ["status"], (r) => r.connected === true && r.proxy === null);
   await run("close", ["close", "main"], (r) => r.ok === true);

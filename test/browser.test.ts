@@ -86,7 +86,8 @@ test("evaluate, waitFor, click, type, press, text", async () => {
   await tab.type("hello", "#i");
   assert.equal(await tab.evaluate(() => (document.querySelector("#i") as HTMLInputElement).value), "hello");
   await tab.press("Enter");
-  assert.deepEqual(fake.pages.get(tab.targetId)!.keys, ["Enter"]);
+  // In a window of its own (Linux, ab-v16.26) type sends one key-event pair per character; elsewhere inserted text.
+  assert.deepEqual(fake.pages.get(tab.targetId)!.keys, tab.drive === "window" ? [..."hello", "Enter"] : ["Enter"]);
   await assert.rejects(tab.press("F13"), /unsupported key/);
   await tab.clickText("go");
   assert.match(await tab.text(), /ready/);

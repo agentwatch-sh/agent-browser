@@ -17,6 +17,7 @@ import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequir
 import { assertTestStateIsolated, personalUserDataDir, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
+import type { Hands } from "./input.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -919,16 +920,50 @@ export class Tab {
     }, { args: [selector], timeoutMs, what: selector });
   }
 
-  /** Move the mouse over an element (opens hover menus). Under whileDrawn. */
+  /**
+   * Run `fn` with a person's hands (input.ts), for a page in a window of its own (drive "window"; ab-v16.26): inside
+   * the agent browser's input lock (one input at a time, across processes), after the page's window came forward.
+   */
+  private async byHand<T>(fn: (h: Hands) => Promise<T>): Promise<T> {
+    await this.assertAllowed();
+    const { withInputLock, Hands } = await import("./input.ts");
+    return withInputLock(this.browser.settings, async () => {
+      const h = await Hands.begin(this);
+      try { return await fn(h); } finally {
+        await h.end().catch((e) => { this.browser.settings.log(`agent-browser: could not keep the pointer's place (${(e as Error).message})`); });
+      }
+    });
+  }
+
+  /**
+   * For a command that sends its own input (record): in a window of its own, the input lock and the window's
+   * activation around `fn`, which gets the hands (where the pointer is; Hands.movedTo keeps where it ends); elsewhere
+   * `fn` as it is, with none.
+   */
+  async withInput<T>(fn: (h?: Hands) => Promise<T>): Promise<T> {
+    return this.drive === "window" ? this.byHand((h) => fn(h)) : fn();
+  }
+
+  /**
+   * Move the mouse over an element (opens hover menus). In a window of its own (Tab.drive "window"), a person's
+   * pointer path from where the pointer is, after the wheel brought the element into view (input.ts); else one move
+   * to its centre, under whileDrawn.
+   */
   async hover(selector: string): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.hover(selector));
     await this.whileDrawn(async () => {
       const pt = await this.centerOf(selector);
       await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
     }, { repeat: true });
   }
 
-  /** Trusted click at the centre of the first element matching a CSS selector. Under whileDrawn. */
+  /**
+   * Trusted click on the first element matching a CSS selector. In a window of its own, a person's click (input.ts:
+   * the wheel brings it into view, a path to a point of its middle 40%, a press of 70 to 90 ms with force 0.5); else at
+   * its centre after scrollIntoView, under whileDrawn.
+   */
   async click(selector: string): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.click(selector));
     await this.whileDrawn(async () => {
       const pt = await this.centerOf(selector);
       await this.clickAtNow(pt.x, pt.y);
@@ -949,8 +984,9 @@ export class Tab {
     return pt;
   }
 
-  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). Under whileDrawn. */
+  /** Trusted click on the smallest visible element whose text matches exactly (case-insensitive, trimmed). In a window of its own a person's click; else under whileDrawn. */
   async clickText(text: string, opts: { within?: string } = {}): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.click(null, { text, within: opts.within }));
     await this.assertAllowed();
     await this.whileDrawn(() => this.clickTextNow(text, opts), { repeat: true });
   }
@@ -974,8 +1010,9 @@ export class Tab {
     await this.clickAtNow(pt.x, pt.y);
   }
 
-  /** Trusted click at a point of the viewport (CSS pixels). Under whileDrawn. */
+  /** Trusted click at a point of the viewport (CSS pixels). In a window of its own a person's path and press; else under whileDrawn. */
   async clickAt(x: number, y: number): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => h.clickAt(x, y));
     await this.whileDrawn(() => this.clickAtNow(x, y), { repeat: true });
   }
 
@@ -993,15 +1030,20 @@ export class Tab {
    * not arrive, or no text field has the focus, an error says so: type never reports what did not happen.
    * A tab or a newline moves on (in a spreadsheet, to the next cell or row), after which the field is
    * another one: only the text before the first of them is checked, and the rest goes as key events
-   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. Under whileDrawn.
+   * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. Under whileDrawn. In a window of its own
+   * (Tab.drive "window"), a person's typing (input.ts): the field gets the focus by a click, with the caret where
+   * el.focus() would put it, and the text goes as one key-event pair per character, 90 to 150 ms apart, never as
+   * inserted text (a character with no US key excepted).
    */
   async type(text: string, selector?: string): Promise<void> {
+    if (this.drive === "window") return this.byHand((h) => this.typeNow(text, selector, h));
     await this.assertAllowed();
     await this.whileDrawn(() => this.typeNow(text, selector), { repeat: true });
   }
 
-  private async typeNow(text: string, selector?: string): Promise<void> {
-    if (selector) {
+  private async typeNow(text: string, selector?: string, h?: Hands): Promise<void> {
+    if (selector && h) await h.focusField(selector);
+    else if (selector) {
       const ok = await this.evaluate((s: string) => {
         const el = document.querySelector(s) as HTMLElement | null;
         el?.focus();
@@ -1020,33 +1062,45 @@ export class Tab {
     if (before === null) throw new Error("type: no text field has the focus; click one first, or name it with --into");
     const cut = text.search(/[\t\n]/), head = cut < 0 ? text : text.slice(0, cut), rest = cut < 0 ? "" : text.slice(cut);
     const { typeChar } = await import("./record.ts");
+    const key = h ? (ch: string) => h.typeChar(ch) : (ch: string) => typeChar(this, ch);
     const unchanged = async () => (await field())?.text === before.text;
     if (head) {
-      if (!before.editable) await this.send("Input.insertText", { text: head });
-      if (before.editable || await unchanged()) {
-        for (const ch of head) await typeChar(this, ch);
-        if (await unchanged()) throw new Error(`type: the text did not arrive: the focused field is unchanged after ${before.editable ? "" : "inserted text and after "}key events`);
+      if (!before.editable && !h) await this.send("Input.insertText", { text: head });
+      if (h || before.editable || await unchanged()) {
+        for (const ch of head) await key(ch);
+        if (await unchanged()) throw new Error(`type: the text did not arrive: the focused field is unchanged after ${before.editable || h ? "" : "inserted text and after "}key events`);
       }
     }
-    for (const ch of rest) await typeChar(this, ch);
+    for (const ch of rest) await key(ch);
   }
 
-  /** Under whileDrawn. */
+  /** Under whileDrawn; in a window of its own, after the window came forward, with the key held down a short time (input.ts). */
   async press(key: keyof typeof KEYS | string): Promise<void> {
     const k = KEYS[key];
     if (!k) throw new UsageError(`unsupported key ${key}; known: ${Object.keys(KEYS).join(", ")}`);
-    await this.assertAllowed();
     const base = keyFields(key, k.code, k.keyCode);
+    // The same key events as below (a keyDown with the key's text; keyFields keeps a function key in the page), held down a short time.
+    if (this.drive === "window") return this.byHand((h) => h.keyPress(base, k.text));
+    await this.assertAllowed();
     await this.whileDrawn(async () => {
       await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: k.text });
       await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
     }, { repeat: true });
   }
 
-  /** Put local files into an <input type=file>. */
+  /**
+   * Put local files into an <input type=file>. In a window of its own, as a person picks them: a click on the input
+   * (or on its label) opens Chrome's file chooser, which agent-browser intercepts, and the files go to the input that
+   * it names (input.ts); an input with no box and no label gets them with no click, as elsewhere, with a log line.
+   */
   async setFiles(selector: string, files: string[]): Promise<void> {
     if (files.some((f) => f === "")) throw new UsageError("setFiles: a file path is empty");
+    if (this.drive === "window") return this.byHand(async (h) => { if (!(await h.setFiles(selector, files))) await this.setFilesNow(selector, files); });
     await this.assertAllowed();
+    await this.setFilesNow(selector, files);
+  }
+
+  private async setFilesNow(selector: string, files: string[]): Promise<void> {
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector });
     if (!nodeId) throw new Error(`no element matches ${selector}`);

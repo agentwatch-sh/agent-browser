@@ -30,6 +30,7 @@ import { assertAllowedUrl, isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
+import type { Hands } from "./input.ts";
 
 // ---------- the step script ----------
 
@@ -754,11 +755,12 @@ export function jpegSize(buf: Buffer): [number, number] | undefined {
 type Mark = { step: number; kind: Action; start: number; end: number; press?: number; keys?: number[]; first?: number; last?: number; requests?: number;
   changes?: number; settled?: number; changed?: number };
 
-/** One key: down (with its text, and on macOS its editing commands) and up. */
-export async function sendKey(tab: Tab, k: KeyEvent): Promise<void> {
+/** One key: down (with its text, and on macOS its editing commands) and up, `holdMs` later (a person's hand; input.ts). */
+export async function sendKey(tab: Tab, k: KeyEvent, holdMs = 0): Promise<void> {
   const base = keyFields(k.key, k.code, k.keyCode, k.modifiers);
   const commands = process.platform === "darwin" ? macCommands(k) : [];
   await tab.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, ...(k.text ? { text: k.text, unmodifiedText: k.text } : {}), ...(commands.length ? { commands } : {}) });
+  if (holdMs > 0) await delay(holdMs);
   await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
 
@@ -1075,7 +1077,11 @@ function stepError(what: string, n: number, step: Step, e: unknown): unknown {
  * changed only for the run. Every cleanup step runs; a cleanup failure never replaces the run's own
  * error (it is added to its message), and after a good run it is a warning in the result.
  */
-export async function recordTab(tab: Tab, plan: RecordPlan): Promise<RecordOutcome> {
+/**
+ * `hands` (a page in a window of its own, ab-v16.26): the demo cursor starts where the page last saw the pointer, when
+ * that is inside the recorded size, and the pointer's place after the run is where the cursor ended.
+ */
+export async function recordTab(tab: Tab, plan: RecordPlan, hands?: Hands): Promise<RecordOutcome> {
   const s = tab.browser.settings;
   await tab.assertAllowed();
   const recordings = statePath(s, "recordings");
@@ -1083,7 +1089,7 @@ export async function recordTab(tab: Tab, plan: RecordPlan): Promise<RecordOutco
   const framesDir = mkdtempSync(join(recordings, "frames-"));
   let outcome: RecordOutcome | undefined, failure: unknown;
   try {
-    outcome = await runAndEncode(tab, plan, framesDir);
+    outcome = await runAndEncode(tab, plan, framesDir, hands);
   } catch (e) { failure = e; }
   // The frames can show a signed-in page: they never outlive the run.
   const removed = await runCleanup([["remove the frames", async () => rmSync(framesDir, { recursive: true, force: true })]]);
@@ -1093,12 +1099,14 @@ export async function recordTab(tab: Tab, plan: RecordPlan): Promise<RecordOutco
   return outcome!;
 }
 
-async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Promise<RecordOutcome> {
+async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, hands?: Hands): Promise<RecordOutcome> {
   const s = tab.browser.settings, conn = tab.browser.conn;
   const { width, height, scale } = plan.viewport;
   const videoWidth = Math.round(width * scale), videoHeight = Math.round(height * scale);
   const url = await tab.url();
   const driver = new Driver(tab, plan);
+  // The cursor starts where the page last saw the pointer: no jump at the take's first move.
+  if (hands && hands.at.x < width && hands.at.y < height) { driver.x = hands.at.x; driver.y = hands.at.y; }
   const frames: { file: string; t: number }[] = [];
   let otherSize: [number, number] | undefined, otherSizes = 0, droppedSize: [number, number] | undefined, dropped = 0;
   // Chrome stamps each frame on its own clock; offset = (when we got it) - (its stamp), the least seen,
@@ -1187,6 +1195,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string): Prom
     endedAt = new Date().toISOString();
   } catch (e) { runError = driver.failure ?? e; }
   writing = false;
+  hands?.movedTo({ x: driver.x, y: driver.y });
   const offList = runError instanceof NotAllowedError;
   const cleanupErrors = await runCleanup([
     ["stop the screencast", casting && (() => tab.send("Page.stopScreencast"))],

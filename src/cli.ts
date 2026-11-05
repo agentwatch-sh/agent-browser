@@ -38,6 +38,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
   "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured)" },
+  "input-timing": { type: "string", description: 'the shape of a person\'s input on Linux, a JSON object of ms ranges, e.g. {"pressMs":[70,90],"keyMs":[90,150]}' },
 };
 
 /** Flags of the internal `proxy` command, which startProxy runs in the background. */
@@ -126,13 +127,20 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     if (!Array.isArray(argv)) throw new UsageError("--chrome-args must be a JSON array of strings");
     chromeArgs = argv as string[];
   }
+  let inputTiming: BrowserOptions["inputTiming"];
+  if (str("input-timing") !== undefined) {
+    let t: unknown;
+    try { t = JSON.parse(str("input-timing")!); } catch { t = undefined; }
+    if (!t || typeof t !== "object" || Array.isArray(t)) throw new UsageError("--input-timing must be a JSON object, for example {\"pressMs\":[70,90]}");
+    inputTiming = t as BrowserOptions["inputTiming"];
+  }
   const idle = str("proxy-idle-ms");
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"), cdpUrl: str("cdp-url"),
     personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"),
-    hiddenDrive: !!v["hidden-drive"], log,
+    hiddenDrive: !!v["hidden-drive"], inputTiming, log,
   });
 }
 
