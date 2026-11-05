@@ -37,7 +37,7 @@ taylor (Debian 13), Chromium 156.0.8078.79, 2026-11-05. The receiver: chrome-ext
 | today2, today3 | "today", two runs | `results/today2.json`, `results/today3.json` |
 | ids1 | "ids" | `results/ids1.json` |
 | worker4 | "worker": cases C, G and D | `results/worker4.json` |
-| worker2, worker3 | "worker", earlier forms of case D (worker2: a 20 s wait; worker3: 10 s, then 15 s after a new `about:blank` tab); both ended there with "no link". Their case C counts. | `results/worker2.json`, `results/worker3.json` |
+| worker2, worker3 | "worker", earlier forms of case D (worker2: a 20 s wait; worker3: 10 s, then 15 s after a new `about:blank` tab); both ended there with "no link". Their case C counts. In their `D.reload`, 20013 ms (worker2, `hostConnect_ms`) and 15016 ms (worker3, `hostConnect_ms_after_event`) are the ends of the waits, not connect times: no host connected. | `results/worker2.json`, `results/worker3.json` |
 
 ### Part "today"
 

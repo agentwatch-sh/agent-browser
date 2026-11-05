@@ -1,10 +1,11 @@
 # Orphan agent tabs — design
 
-Date: 2026-11-05. Status: **DRAFT for review.** Author: taylor session `orphan`, a subagent of `ab-lead`
-(board task ab-v16.39, under goal ab-v16). Branch `ab-v16.39-orphan-tabs` in agent-browser. Evidence: the
-probe in [2026-11-05-orphan-agent-tabs-probe/](2026-11-05-orphan-agent-tabs-probe/README.md), run on taylor
-with Debian Chromium 156.0.8078.79 in a private Xvfb, against the receiver of chrome-extension main
-`27543ce` (agent package 0.2.0) and the relay of agent-browser main `b81dd4e`.
+Date: 2026-11-05. Status: **Reviewed** (ab-lead's fresh reviewers, review-48 and review-48b). Author:
+taylor session `orphan`, a subagent of `ab-lead` (board task ab-v16.39, under goal ab-v16). Branch
+`ab-v16.39-orphan-tabs` in agent-browser. Evidence: the probe in
+[2026-11-05-orphan-agent-tabs-probe/](2026-11-05-orphan-agent-tabs-probe/README.md), run on taylor with
+Debian Chromium 156.0.8078.79 in a private Xvfb, against the receiver of chrome-extension main `27543ce`
+(agent package 0.2.0) and the relay of agent-browser main `b81dd4e`.
 
 This design builds on the per-scope allowlist design
 ([2026-11-04-per-scope-allowlist-design.md](2026-11-04-per-scope-allowlist-design.md), sections 5, 7, 8
@@ -365,9 +366,10 @@ Reasons:
 - **"Continue where you left off".** The operator can turn it on in the live view's settings. Then the
   earlier run's pages open again, in new tabs with new ids, and load again (measured, E3). They are
   tabs of no scope: blocked, not seen by any connection, never closed by the sweep. C5's closing rule
-  closes those whose host no list covers. A limit (section 16). If agentwatch wants none of them, the
-  unit can write `"session": {"restore_on_startup": 5}` into the profile's preferences at each start,
-  as it writes the download preferences today (an option for aw-lead, section 15).
+  closes those whose host no list covers. A limit (section 16). A unit that writes `"session":
+  {"restore_on_startup": 5}` into the profile's preferences at each start would prevent them. aw-lead
+  declined that (mail m9e1ad35): it would override the operator's own setting. If the limit ever
+  matters, it is an operator decision (section 15).
 - **An extension reload.** Not measured: `chrome.runtime.reload()` left the receiver disabled in the
   probe (case D), so it never came back to read its copy. The design does not depend on it. If the
   copy goes at a reload, the earlier tabs are tabs of no scope: they fail closed and stay (a limit).
@@ -540,8 +542,21 @@ and 2 rows above make one small receiver part and one small relay part after the
    falls back to the default list, and its tabs stay.
 4. `end_scope` stays as today; no queue for a relay that is not running.
 5. The stage-4 note of the gap can go when the parts of section 14 are pinned.
-6. An option, not a need: the unit writes `"session": {"restore_on_startup": 5}` at each start, so
-   "Continue where you left off" cannot bring back tabs of no scope (section 11).
+6. Declined: the unit writes `"session": {"restore_on_startup": 5}` at each start, so "Continue
+   where you left off" cannot bring back tabs of no scope (section 11). The reason (aw-lead, mail
+   m9e1ad35): it would override the operator's own setting. If that limit ever matters, it is an
+   operator decision.
+
+aw-lead's agreement (mail m9e1ad35, through ab-lead, after review-48): it agrees with rules 1 to 5 and
+declines rule 6. What it says for the daemon:
+
+- The first `set_scopes` on each connection goes after the daemon's first complete read of its
+  sessions. A failed read sends nothing. A good read of zero sessions sends an empty `scopes`.
+- An ended name enters `scopes` again only after an `ok` answer to a `set_scopes` without it. A merged
+  update with the end and the launch of one name is split in two.
+- With choice 5 b, a `null` entry drops after an `ok` answer.
+- `end_scope` stays as today, with no queue.
+- Its B7 documents the gap until parts 1a, 2 and 3 are pinned together.
 
 aw-lead's answer for a session that ended while the daemon was down (mail m1c19e2a, through ab-lead,
 after review-48):
