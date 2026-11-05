@@ -59,6 +59,8 @@ function inputRow(sc: ScOut): Record<string, string> {
     "type: keydowns for 5 chars, inputType": t ? `${t.keydowns}, ${t.inputTypes || "-"}` : "-",
     untrusted: String(sc.steps.reduce((n, s) => n + s.untrusted, 0)),
     "pointer jumps > 100 px": String(sc.steps.reduce((n, s) => n + (s.pointerJumps ?? 0), 0)),
+    "position changes the movement does not explain": sc.pointer ? String(sc.pointer.unexplained) : "-",
+    "entries at an earlier entry's point / entries": sc.pointer ? `${sc.pointer.sameEntries} / ${sc.pointer.entries.length}` : "-",
     "scrolls with no wheel or key": String(sc.steps.reduce((n, s) => n + (s.scrollsWithoutInput ?? 0), 0)),
     "field focus with no press": String(sc.steps.reduce((n, s) => n + (s.focusWithoutPress ?? 0), 0)),
   };

@@ -16,7 +16,8 @@
 // Two probe pages: F (the page in front: the operator's tab, or another agent's) and T (the page that is
 // driven). probe.ts logs every signal of each page with timestamps. The scenarios (see SCENARIOS):
 //   person-front, person-tab, person-window         baselines: no CDP message at all for these pages
-//   default, hidden-drive                           agent-browser today (focus emulation on attach / Tab.whileDrawn)
+//   default, hidden-drive                           agent-browser's old modes, now behind open --tab (focus emulation on attach / Tab.whileDrawn)
+//   ab-window                                       agent-browser's own open on Linux (ab-v16.26): a window of its own, no focus emulation
 //   window, window-no-flag, window-default          one window per agent page (candidate 1)
 //   window-activate                                 one window per page, Target.activateTarget on it for each input command
 //   activate                                        Target.activateTarget for each input command, then back (2)
@@ -45,7 +46,7 @@ import { AgentBrowser } from "../../../src/browser.ts";
 import { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
-import { bothFocusedMs, FAR, LAYOUT, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
+import { bothFocusedMs, FAR, LAYOUT, pointerSignals, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
 import { report } from "./report.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, only: { type: "string" }, playwright: { type: "string" } } });
@@ -365,7 +366,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
     const o = opts(c, false);
-    await commands.open(o, { url: urlOf(sc.T) });
+    await commands.open(o, { url: urlOf(sc.T), tab: true });
     await loaded(sc.T);
     await agentDrive(sc, o, plain);
   },
@@ -374,8 +375,22 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
     const o = opts(c, true);
+    await commands.open(o, { url: urlOf(sc.T), tab: true });
+    await loaded(sc.T);
+    await agentDrive(sc, o, plain);
+  },
+  // ---------------------------------------------------------------- agent-browser's own window per page (ab-v16.26)
+  async "ab-window"(sc) {
+    const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
+    await loaded(sc.F);
+    const wf = windowOf(c.proc.pid!, sc.F);
+    await raiseAndFocus(wf);
+    const o = opts(c, false);
     await commands.open(o, { url: urlOf(sc.T) });
     await loaded(sc.T);
+    await sleep(500);
+    sc.notes.push(`T's window after its open: ${windowOf(c.proc.pid!, sc.T)}; F's window: ${wf}; X focus: ${xdo("getwindowfocus")}`);
+    await raiseAndFocus(wf); // as windowCase: F's window over T's, the case to measure
     await agentDrive(sc, o, plain);
   },
   // ---------------------------------------------------------------- one window per agent page (1)
@@ -389,7 +404,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
     const o = opts(c, true);
-    const t = (await commands.open(o, { url: urlOf(sc.T) })).tab.targetId;
+    const t = (await commands.open(o, { url: urlOf(sc.T), tab: true })).tab.targetId;
     await loaded(sc.T);
     const raw = await CDPConnection.connect(c.cdpUrl);
     const f = ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; url: string }[]).find((x) => x.url.includes(`tab=${sc.F}`))!.targetId;
@@ -406,7 +421,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
     const o = opts(c, true);
-    const t = (await commands.open(o, { url: urlOf(sc.T) })).tab.targetId;
+    const t = (await commands.open(o, { url: urlOf(sc.T), tab: true })).tab.targetId;
     await loaded(sc.T);
     const raw = await CDPConnection.connect(c.cdpUrl);
     const wrap: Wrap = async (fn) => {
@@ -643,6 +658,8 @@ const summary = results.map((sc) => {
     // Up to the record step: record turns focus emulation on for its run, and after it the page keeps the focus with no blur.
     fEvents, bothFocusedMs: bothFocusedMs(log.slice().sort((x, y) => x.t - y.t), sc.F, sc.T, sc.tStart, sc.steps.find((s) => s.name.startsWith("record"))?.t0 ?? end),
     geometry: { F: geo(sc.F), T: geo(sc.T) }, steps,
+    // The pointer over the whole scenario; each focus event of T is an activation of T (ab-v16.26, correction 3b).
+    pointer: pointerSignals(log, sc.T, sc.tStart, end, log.filter((e) => e.tab === sc.T && e.ev === "focus" && e.t >= sc.tStart && e.t <= end).map((e) => e.t)),
   };
 });
 writeFileSync(join(RUN, "results.json"), JSON.stringify({ chrome: product, display: DISPLAY, summary, log }, null, 2) + "\n");
@@ -651,6 +668,7 @@ const rows = summary.flatMap((s) => [
   `- idle before: ${JSON.stringify(s.idleBefore)}; idle after: ${JSON.stringify(s.idleAfter)}`,
   `- lazy request ${s.lazyRequestMs ?? "none"} ms after End; IO ${s.io.join(" ") || "none"}; frame content ${s.rafContent}; F saw ${s.fEvents.join(" ") || "nothing"}; F and T both focused ${s.bothFocusedMs} ms`,
   `- geometry ${JSON.stringify(s.geometry)}`,
+  `- pointer ${JSON.stringify(s.pointer)}`,
   ...s.steps.map((st) => `  - ${st.name}: ${st.ok ? "ok" : `FAIL ${st.error}`} ${st.ms} ms; vis ${st.visBefore} visibleMs ${st.visibleMs} changes [${st.visChanges.join(" ")}] focus [${st.focusEvents.join(" ")}] focusAfter ${st.focusAfter} framesDuring ${st.framesDuring} after ${st.framesAfter}; input ${st.inputSeq || "-"}; hidden-input ${st.inputHidden} unfocused-input ${st.inputUnfocused} untrusted ${st.untrusted} screen-client ${JSON.stringify(st.screenMinusClient)} pressure ${st.pressure} down-up ${st.downUpMs} moves ${st.moves}/${st.movesWithMovement} keydowns ${st.keydowns} inputType ${st.inputTypes}`),
 ]);
 writeFileSync(join(RUN, "steps.md"), `${product}; run ${RUN}\n${rows.join("\n")}\n`);
