@@ -226,6 +226,10 @@ tab: two modes**) and `log` (progress lines; default standard error).
     does not fire. A library session (one `AgentBrowser`, several `Tab` calls) that waits for such
     content in a background tab needs the default mode, or the tab in front. This mode is measured on
     Linux only.
+  - Both modes leave signals that a person's page never shows. The measured comparison with a
+    person, and the recommended design (one window per agent page, no focus emulation, input in a
+    person's shape), are in `docs/research/2026-11-05-anti-detect-drive.md` (board task ab-v16.21;
+    not built yet).
 - **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
   approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
   headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
@@ -1061,6 +1065,13 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Chromium on throwaway profiles against a local `probe.localhost` site that records what a site
   sees, and a stand-in extension that drives the tab through `chrome.debugger`. A local proxy
   refuses all other traffic. Not part of `npm test`.
+- `test/live/anti-detect/` (Linux, in a private Xvfb; see the head of `run.ts`): the measurement of
+  `docs/research/2026-11-05-anti-detect-drive.md`. Each scenario starts a Chromium of its own on a
+  pipe (no debugging port) and drives a probe page that is not in front: agent-browser's default and
+  `--hidden-drive` modes, one window per page, a tab switch or focus emulation for input only,
+  Playwright behind a bridge with and without its focus emulation, and a person (xdotool) as the
+  baseline. The page logs every visibility, focus, frame, timer, observer and input signal with
+  timestamps; `report.ts` prints the tables. Not part of `npm test`.
 - `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
   specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
 - `test/parity-server.test.ts`: the probe's server against Node's own clients: a TLS client that ends
