@@ -310,37 +310,40 @@ person's input**) and `log` (progress lines; default standard error).
     So this build takes the first way of the research (move the X pointer to the end of each path) where it
     can, and the second way (start each path at the X pointer, never move it) where it cannot.
   - **Measured with the whole design** on taylor (`run.ts --only person-window,person-window-multi,design,
-    design-no-x,design-two`, 4 runs on 2026-11-05, Chromium 156 in a private Xvfb; agent-browser's own
-    commands; F's window takes the focus after each input step, so T's window comes forward 6 times).
-    Against the person baselines, `design` showed no pointer jump, no position change that the
-    movement does not explain, no scroll with no wheel or key, no field focus with no press, no user
-    activation with no input, no action while `hidden`, no untrusted event, pressure 0.5, a press of 82
-    to 93 ms (the person's 75 to 77), 5 `keydown` for 5 characters, and both pages focused for at most
-    one 100 ms sample at a switch. Two of its 55 to 58 moves of a click had no movement: the real event
-    when the window comes forward (a person's page gets it too), and one that Chrome itself sends just
-    before the press, after the X pointer's last step; a person's xdotool path has none of the second
-    kind. Every step worked: a shot in 99 to 105 ms, a `record` with no visibility change, a library
-    session that waits for content that a frame writes (0.83 to 1.07 s), a lazy image 88 to 101 ms after
-    End. `design-no-x` (no X pointer, as over agentwatch's relay today) entered at the X pointer's one
-    point at each activation: 5 position changes that the movement does not explain and 5 entries at
-    an earlier entry's point in 6 activations, and a jump at the start of `record` (its cursor starts
-    inside the recorded size). `design-two` (two agents at once, one input lock, 6 typings each): both
-    pages focused for 0 to 100 ms; no jump; at most 1 position change in each page that the movement
-    does not explain, where a page's window came forward under the pointer that the other agent's path
-    left (one pointer for both windows, as for a person who switches windows); every typing arrived
-    whole ("hello" 12 times in each field).
-  - **The cost.** Input: a click took 1.15 to 1.33 s with an activation and a path of some hundred
-    pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s), `type --into` with 5
-    characters 1.16 to 1.35 s, a click below the fold 1.37 to 1.52 s (with the wheel), and each further
-    character about 0.12 s. The lock: two agents that type at once took 46 to 56% longer than one agent
-    alone (the research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used
-    608 to 775 MB (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4
-    CPU-seconds as 8 background tabs: 32 to 46 MB more for each window, and every agent page draws at
-    full rate, also behind another window. The input timing is the `inputTiming` option (CLI
-    `--input-timing JSON`, Python `input_timing=`), in parts: `pressMs` [70, 90], `keyMs` [90, 150],
-    `holdMs` [20, 50], `settleMs` [80, 150], `wheelMs` [30, 70] (ranges in ms), `moveScale` 1 (a factor
-    on each path's time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`) and
-    `lockWaitMs` 600000.
+    design-no-x,design-two`, 2 runs on 2026-11-05 after review-47, and 4 runs before it with the same
+    results except where named; Chromium 156 in a private Xvfb; agent-browser's own commands; F's window
+    takes the focus after each input step, so T's window comes forward 6 times). Against the person
+    baselines, `design` showed no pointer jump, no position change that the movement does not explain,
+    no scroll with no wheel or key, no field focus with no press, no user activation with no input, no
+    action while `hidden`, no untrusted event, pressure 0.5, a press of 86 to 88 ms (the person's 76 to
+    77), 5 `keydown` for 5 characters, and both pages focused for at most one 100 ms sample at a switch.
+    Each step had the person's sequence: the window's `focus`, the real event where the window came
+    forward (no movement, at the page's last point), then moves that each move, the press and the
+    release; 50 to 55 moves before a press (the xdotool person: 20). Before review-47 one more move with no
+    movement came after each press, from the X pointer's move after the path; now the X pointer's move
+    is the path's last step. Every step worked: a shot in 99 to 108 ms, a `record` with no visibility
+    change, a library session that waits for content that a frame writes (0.83 s), a lazy image 119 to
+    130 ms after End. `design-no-x` (no X pointer, as over agentwatch's relay today) entered at the X
+    pointer's one point at each activation: 5 position changes that the movement does not explain and 5
+    entries at an earlier entry's point in 6 activations, and a jump at the start of `record` (its cursor
+    starts inside the recorded size). `design-two` (two agents at once, one input lock, 6 typings each):
+    both pages focused for 0 to 100 ms; no jump; 1 position change in one page that the movement does not
+    explain, where its window came forward under the pointer that the other agent's path left (one
+    pointer for both windows, as for a person who switches windows); every typing arrived whole ("hello"
+    12 times in each field).
+  - **The cost.** Input: a click took 1.20 to 1.33 s with an activation and a path of some hundred
+    pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s; the path here takes 300 to
+    1000 ms by Fitts's law, as `record`'s cursor), `type --into` with 5 characters 1.25 to 1.30 s, a click
+    below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s. The lock: two
+    agents that type at once took 51 to 57% longer than one agent alone (before review-47: 46 to 56%; the
+    research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used 608 to 775 MB
+    (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8
+    background tabs: 32 to 46 MB more for each window, and every agent page draws at full rate, also
+    behind another window. The input timing is the `inputTiming` option (CLI `--input-timing JSON`,
+    Python `input_timing=`), in parts: `pressMs` [70, 90], `keyMs` [90, 150], `holdMs` [20, 50],
+    `settleMs` [80, 150], `wheelMs` [30, 70] (ranges in ms), `moveScale` 1 (a factor on each path's
+    time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`) and `lockWaitMs`
+    600000.
   - **What a site can still see** (the research's section 8, and the runs of this build): the pace and
     the patterns of an agent (no idle pointer, no behaviour model; not measured); a covered agent window
     that draws at 60 frames a second, where a person's covered window is `hidden`; over agentwatch's
@@ -352,7 +355,8 @@ person's input**) and `log` (progress lines; default standard error).
     its cursor's first move when the page last saw the pointer outside the recorded size, its own
     input (its presses have `force: 0.5` and 70 to 90 ms, but its cursor's path has no X-pointer step, and
     it types at its script's pace: 55 ms a character by default, faster than the 90 to 150 ms of `type`),
-    and the user activation of its `eval` steps; MOVE_SIGNAL; `eval`'s user activation (an agent's
+    the user activation of its `eval` steps, and one move with no movement at the pointer's place when
+    its size override takes effect (Chrome's own); `eval`'s user activation (an agent's
     expression runs as a user gesture, so that it can open a popup); the ways out of the caret item above, each with a log line; `outline`'s
     `data-agent-browser-idx` attribute; and the identity of the machine (the earlier report).
   - **The Mac** keeps background tabs, and personal mode keeps its own pinned window with focus

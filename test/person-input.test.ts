@@ -394,12 +394,15 @@ test("record in a window: the window comes forward first, under the input lock; 
   const end = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" }))).at(-1)!.params;
   operatorInFront();
   const script = join(c.dir, `${name}-steps.json`);
-  writeFileSync(script, JSON.stringify([{ wait: 200 }]));
+  writeFileSync(script, JSON.stringify([{ wait: 200 }, { click: "#i" }]));
   const calls = await callsOf(page, () => commands.record(linux(), { tab: name, out: join(c.dir, `${name}.mp4`), script, size: "640x360", fps: 10, settle: 100, ffmpeg: FFMPEG }));
   const m = methods(calls);
   assert.ok(m.indexOf("Page.bringToFront") >= 0 && m.indexOf("Page.bringToFront") < m.indexOf("Page.startScreencast"));
   const first = mouse(calls)[0].params;
-  assert.deepEqual([first.type, first.x, first.y], ["mouseMoved", end.x, end.y], "no jump at the take's first move");
+  assert.equal(first.type, "mouseMoved");
+  assert.ok(Math.hypot(first.x - end.x, first.y - end.y) < 60, `no jump at the take's first move (and no move at the start point, where the page has the pointer): ${first.x},${first.y} from ${end.x},${end.y}`);
+  const press = mouse(calls).find((x) => x.params.type === "mousePressed")!.params;
+  assert.deepEqual([press.force, press.buttons], [0.5, 1], "record's press has a person's force");
   await commands.close(linux(), { tab: name });
 });
 

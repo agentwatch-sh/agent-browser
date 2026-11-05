@@ -1152,7 +1152,8 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, aroun
   await around(async (hands) => {
   // The cursor starts where the page last saw the pointer, when that is known and inside the recorded size: no jump at
   // the take's first move. So a retake with the same seed moves the same way from there (else from its own start).
-  if (hands?.known && hands.at.x < width && hands.at.y < height) { driver.x = hands.at.x; driver.y = hands.at.y; }
+  const fromHands = !!hands?.known && hands!.at.x < width && hands!.at.y < height;
+  if (fromHands) { driver.x = hands!.at.x; driver.y = hands!.at.y; }
   const limit = setTimeout(() => driver.fail(new AgentBrowserError("error", `a recording is at most ${MAX_RECORD_SECONDS} s; nothing was written`)), MAX_RECORD_SECONDS * 1000);
   try {
     // A page in a window of its own that is behind another tab of that window comes in front first (Tab.toFront): a
@@ -1192,7 +1193,8 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, aroun
     for (const deadline = Date.now() + 10_000; !frames.length; await driver.pause(10))
       if (Date.now() > deadline) throw new AgentBrowserError("error", `Chrome sent no screencast frame of ${videoWidth}x${videoHeight} in 10 s: is the agent browser window open, and the tab still there?`);
     driver.marks = marks;
-    await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: driver.x, y: driver.y });
+    // The real mouse at the cursor's start; none where the page has the pointer there already (a move with no movement).
+    if (!fromHands) await tab.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: driver.x, y: driver.y });
     await driver.pause(plan.settleMs);
     await runSteps(driver, plan.steps, "step");
     await driver.pause(plan.settleMs);
