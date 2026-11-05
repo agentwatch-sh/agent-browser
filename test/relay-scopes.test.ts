@@ -51,6 +51,9 @@ test("each set_scopes vector applies to the allowlist line by C4's rules: what a
   for (const v of scopesV.sweep) assert.equal(parseScopes(v.in).applied, v.applied, v.note);
   assert.equal(parseScopes(null).refused, 3, "a line with none of the fields");
   assert.equal(parseScopes({ t: "allowlist", domains: ["a.example"] }).listOf("ab-lead"), null, "an old daemon's line gives no scope a list");
+  // The daemon's line of the bridge vectors (C10).
+  const line = bridgeV.daemonLines.find((l: any) => l.t === "allowlist" && !("roots" in l));
+  assert.deepEqual([parseScopes(line).listOf("ab-lead"), parseScopes(line).listOf("md-other"), parseScopes(line).refused], ["md", null, 0]);
 });
 
 test("the allowlist line vectors without the peer check: a line without roots applies as set_scopes does; the operator field changes nothing", (t) => {
