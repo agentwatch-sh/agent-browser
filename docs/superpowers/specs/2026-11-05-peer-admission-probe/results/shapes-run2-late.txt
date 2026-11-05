@@ -1,0 +1,7 @@
+tool-amp-job-shell-exits: pid 744667 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tool-nohup-shell-exits: pid 744684 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tool-setsid-fork: pid 744698 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tmux-new-window: pid 744921 ppid 744919: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+cc-setsid-fork: pid 744851 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+cc-nohup-amp: pid 744854 ppid 1144: {"scope": null, "why": "reached pid 1 (init) from pid 1144 (systemd)"}
+tool-bg-job: pid 744923 ppid 744920: {"scope": "scopeA", "why": "root"}

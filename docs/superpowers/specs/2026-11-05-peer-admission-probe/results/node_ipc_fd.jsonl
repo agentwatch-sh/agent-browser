@@ -1,0 +1,9 @@
+{"label":"plain: a child of the root","client_pid":794474,"sequential":{"n":300,"ok":300,"p50_us":"751","p99_us":"2319"},"burst":{"n":50,"ok":50,"p50_us":"41024","p99_us":"43967"},"refused":[],"pids_seen":["0"],"scope_seen":["unchecked"]}
+{"label":"plain: re-parented by setsid -f","client_pid":794524,"sequential":{"n":3,"ok":3,"p50_us":"4011","p99_us":"4011"},"burst":{"n":0,"ok":0,"p50_us":null,"p99_us":null},"refused":[],"pids_seen":["0"],"scope_seen":["unchecked"]}
+{"mode": "plain", "daemon_checked": 0, "daemon_refused": 0, "daemon_check_us_p50": null, "daemon_check_us_p99": null}
+{"label":"daemon-accepts: a child of the root","client_pid":794605,"sequential":{"n":300,"ok":300,"p50_us":"1148","p99_us":"2535"},"burst":{"n":50,"ok":50,"p50_us":"59489","p99_us":"63587"},"refused":[],"pids_seen":["794605"],"scope_seen":["probe"]}
+{"label":"daemon-accepts: re-parented by setsid -f","client_pid":794737,"sequential":{"n":3,"ok":0,"p50_us":null,"p99_us":null},"burst":{"n":0,"ok":0,"p50_us":null,"p99_us":null},"refused":[{"ok":false,"status":403}],"pids_seen":[],"scope_seen":[]}
+{"mode": "daemon-accepts", "daemon_checked": 353, "daemon_refused": 3, "daemon_check_us_p50": 426.9, "daemon_check_us_p99": 3056.8}
+{"label":"relay-asks: a child of the root","client_pid":794889,"sequential":{"n":300,"ok":300,"p50_us":"1220","p99_us":"2692"},"burst":{"n":50,"ok":50,"p50_us":"64192","p99_us":"71470"},"refused":[],"pids_seen":["794889"],"scope_seen":["probe"]}
+{"label":"relay-asks: re-parented by setsid -f","client_pid":795076,"sequential":{"n":3,"ok":0,"p50_us":null,"p99_us":null},"burst":{"n":0,"ok":0,"p50_us":null,"p99_us":null},"refused":[{"ok":false,"status":403}],"pids_seen":[],"scope_seen":[]}
+{"mode": "relay-asks", "daemon_checked": 353, "daemon_refused": 3, "daemon_check_us_p50": 138.5, "daemon_check_us_p99": 269.7}
