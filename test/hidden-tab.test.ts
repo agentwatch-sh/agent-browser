@@ -182,7 +182,7 @@ test("default: shot of a background tab that drew at its open (default mode): th
   await commands.close(o(), { tab: name });
 });
 
-test("default: shot --size and --full of a new background tab: the capture in flight comes before the override; the override's relayout ends it, so a new one and the shot's own go out while it is set", async () => {
+test("default: shot --size and --full of a new background tab: the capture in flight comes before the override, and none but the shot's own while it is set", async () => {
   let { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name });
   let { calls, ms } = await callsOf(page, () => commands.shot(o(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }));
@@ -190,7 +190,7 @@ test("default: shot --size and --full of a new background tab: the capture in fl
   const m = methodsOf(calls);
   const set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
   assert.ok(m.indexOf("Page.captureScreenshot") < set, "the capture in flight comes before the override");
-  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }], "while the override is set, a new first capture and the shot's own");
+  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [{ format: "png" }], "while the override is set, only the shot's own capture (in this mode the relayout does not end the first one)");
   assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
   assert.equal(page.metrics, undefined);
   assert.deepEqual(page.heldCaptures, []);
@@ -272,7 +272,7 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
-  test(`${label}: shot --size of a still page: the override's relayout ends the first capture in the settle, so a new first capture and two frames come before the shot's own; at once, with no fallback`, async () => {
+  test(`${label}: shot --size of a still page: when the override's relayout ends the first capture in the settle (the hidden drive), a new first capture and two frames come before the shot's own; at once, with no fallback`, async () => {
     // review-41b, Chromium 156, --hidden-drive: without the new first capture, 3 of 3 such shots waited
     // for the 3 s fallback (3.58 s, with its log line); with it, 5 of 5 took 0.61 to 0.64 s.
     const { name, page } = await backgroundTab("/", mode);
@@ -282,21 +282,21 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     assert.ok(ms < 2000, `${ms} ms (with the 0.5 s settle)`);
     const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
     assert.deepEqual(captures(calls.slice(0, set)).map((x) => x.params), [HOLD]);
-    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }]);
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), mode === h ? [HOLD, { format: "png" }] : [{ format: "png" }]);
     assert.deepEqual(lines, [], "no limit and no extra capture");
     assert.equal(page.metrics, undefined);
     assert.deepEqual(page.heldCaptures, []);
     await commands.close(mode(), { tab: name });
   });
 
-  test(`${label}: shot --size whose new first capture ends just before its own goes out: the extra capture ends before the override is cleared, so the override stays cleared`, async () => {
+  test(`${label}: shot --size whose first capture ends just before its own goes out: the extra capture ends before the override is cleared, so the override stays cleared`, async () => {
     const { name, page } = await backgroundTab("/", mode);
     await commands.text(mode(), { tab: name });
     page.onCapture = (p) => { if (p.format === "png") page.changeOnce(); };
     const { calls } = await withTiming({ lateMs: 300 }, () => callsOf(page, () => commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" })));
     page.onCapture = undefined;
     const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
-    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }, HOLD], "the extra capture goes out while the override is set");
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [...(mode === h ? [HOLD] : []), { format: "png" }, HOLD], "the extra capture goes out while the override is set");
     assert.deepEqual(captures(calls.slice(clear)), [], "none after the override is cleared");
     assert.equal(page.metrics, undefined, "no capture ended after the clear (it would set the override again)");
     assert.deepEqual(page.heldCaptures, []);
@@ -335,7 +335,7 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
       () => callsOf(page, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /the shot gave up after/)));
     page.onCapture = undefined;
     const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
-    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }, HOLD, HOLD, HOLD], "the new first capture, the own one and 3 extra; no last captures before the clear");
+    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [...(mode === h ? [HOLD] : []), { format: "png" }, HOLD, HOLD, HOLD], "the new first capture (the hidden drive), the own one and 3 extra; no last captures before the clear");
     assert.equal(page.metrics, undefined, "cleared");
     assert.ok(lines.some((l) => /the shot's size override can come back when they end/.test(l)), JSON.stringify(lines));
     page.noFrames = false;
@@ -368,11 +368,39 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.text(mode(), { tab: name });
     page.onCapture = (p) => { if (p.format === "png") setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); };
     const path = join(c.dir, `${name}.png`), t0 = Date.now();
-    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot's capture/);
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot/);
     page.onCapture = undefined;
     assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
     assert.equal(existsSync(path), false, "no file");
     await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot whose page goes to a new page during the frame wait, before its own capture: the same clear error at once, not CDP's raw text`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let first = true;
+    page.onCapture = (p) => { if (first && p.format === "jpeg") { first = false; setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); } };
+    const path = join(c.dir, `${name}.png`), t0 = Date.now();
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot/);
+    page.onCapture = undefined;
+    assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size whose own capture times out and whose override clear fails: the error keeps the cleanup note and gives the whole time`, async () => {
+    // review-41c: gaveUpAfter built the message again from its parts and dropped the note.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    fake.failOnce.set("Emulation.clearDeviceMetricsOverride", "clear refused by the test");
+    await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => assert.rejects(commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }),
+        /did not end the shot's capture of tab \w+ in 0\.6 s.*; the shot gave up after \d+\.\d s\. .*; cleanup also failed: clear the device metrics override: .*clear refused by the test/));
+    page.onCapture = undefined;
+    fake.failOnce.delete("Emulation.clearDeviceMetricsOverride");
+    page.noFrames = false;
+    await commands.close(mode(), { tab: name }).catch(() => {});
   });
 
   test(`${label}: shot whose tab is off the allowlist when its own capture ends: refused, and no file`, async () => {
@@ -414,6 +442,34 @@ test("default: record keeps the attach's focus emulation and turns none on or of
 });
 
 // ---------- the hidden drive ----------
+
+test("hiddenDrive: shot --size whose new first capture, sent under the override, gets no frame: the shot fails at the limit, and the log says the size override can come back", async () => {
+  // review-41c: that step ran outside the own capture's try, so nothing said that the override can
+  // come back when the capture ends after the clear.
+  const { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  page.onCapture = (p) => { if (p.format === "jpeg" && page.metrics) page.noFrames = true; };
+  const lines: string[] = [];
+  await withTiming({ framesMs: 300 },
+    () => assert.rejects(commands.shot(logged(h, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /shot: Chrome drew no frame of tab \w+ in 0\.3 s/));
+  page.onCapture = undefined;
+  assert.equal(page.metrics, undefined, "cleared after the failure");
+  assert.ok(lines.some((l) => /stays? in flight \(Chrome drew no frame\).*the shot's size override can come back when they end/.test(l)), JSON.stringify(lines));
+  page.noFrames = false;
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: shot --size whose page goes to a new page during the new first capture's frame wait: the clear error, and the override is cleared again after the last captures end", async () => {
+  // review-41c live: the first capture ended after the clear and set 800x600 again (2 of 18 runs).
+  const { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  page.onCapture = (p) => { if (p.format === "jpeg" && page.metrics) setTimeout(() => fake.navigate(page, fx.base + "/next"), 5); };
+  const { calls } = await callsOf(page, () => assert.rejects(commands.shot(h(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /went to a new page during the shot/));
+  page.onCapture = undefined;
+  assert.equal(methodsOf(calls).filter((x) => x === "Emulation.clearDeviceMetricsOverride").length, 2, "the shot's clear, and one more after the last captures ended");
+  assert.equal(page.metrics, undefined);
+  await commands.close(h(), { tab: name });
+});
 
 test("hiddenDrive: --hidden-drive sets it; it is off by default", () => {
   assert.equal(optionsFromFlags({ "state-dir": c.stateDir, "hidden-drive": true }, () => {}).hiddenDrive, true);

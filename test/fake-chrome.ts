@@ -408,10 +408,13 @@ export class FakePage {
   /**
    * The page is laid out again (a device metrics override): its next frame changes, and ends the held
    * captures whose frames Chrome drew already. Seen by review-41b on Chromium 156 with the hidden drive:
-   * the shot's first capture of a still page ended in `shot --size`'s 0.5 s settle.
+   * the shot's first capture of a still page ended in `shot --size`'s 0.5 s settle. Only for a hidden
+   * page (the hidden drive, where a capture in flight makes Chrome draw at once): in the default mode
+   * Chrome draws a background tab about once a second, and the relayout's frame came after the shot's
+   * own capture (review-41c, 4 of 4 live default-mode `shot --size`: the first capture ended with it).
    */
   relayout() {
-    if (this.background) this.atFrame(() => this.endHeld((c) => c.at < this.frames - 1));
+    if (this.background && this.visibilityState === "hidden") this.atFrame(() => this.endHeld((c) => c.at < this.frames - 1));
   }
 
   private heldMoves: (() => void)[] = [];

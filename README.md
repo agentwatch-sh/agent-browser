@@ -215,10 +215,10 @@ tab: two modes**) and `log` (progress lines; default standard error).
     new first capture and waits for two frames. Any other shot's own capture that has not ended after
     3 s gets one more capture to end it, with a log line, and the shot waits until all of them ended.
     No capture goes out while a full-page capture waits, because it would set that capture's emulation
-    again when it ends. When the tab goes to a new page while the shot's own capture waits, Chrome
-    never ends that capture: the shot fails at once with a clear error (before, in the default mode,
-    after 30 s). After its own capture, the shot checks the allowlist again, and it writes no file for
-    a tab that left it. In the default mode every page is `visible`, so a tab in front gets the capture
+    again when it ends. When the tab goes to a new page during the shot, Chrome may not end a capture
+    of the old page (in the default mode the shot's own capture waited 30 s; after a same-site
+    navigation one ended 50 ms after the shot failed): the shot fails at once with a clear error. After
+    its own capture, the shot checks the allowlist again, and it writes no file for a tab that left it. In the default mode every page is `visible`, so a tab in front gets the capture
     in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
     mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of
     2 s) and in 0.02 s with `--hidden-drive`; the shot's own capture then ended in 1.07 to 2.10 s and

@@ -505,11 +505,14 @@ class ShotTimeout extends Error {
     this.head = head;
     this.tail = tail;
   }
-  /** Add the shot's whole time to the message (and to the stack, which starts with it). */
+  /**
+   * Add the shot's whole time after the head of the message (and of the stack, which starts with it).
+   * Only the head changes: a note that came later (withCleanupErrors) stays.
+   */
   gaveUpAfter(ms: number) {
-    const was = this.message;
-    this.message = `${this.head}; the shot gave up after ${(ms / 1000).toFixed(1)} s. ${this.tail}`;
-    if (this.stack?.includes(was)) this.stack = this.stack.replace(was, this.message);
+    const head = `${this.head}; the shot gave up after ${(ms / 1000).toFixed(1)} s`;
+    this.message = this.message.replace(this.head, head);
+    if (this.stack?.includes(this.head)) this.stack = this.stack.replace(this.head, head);
   }
 }
 
@@ -606,8 +609,9 @@ export class Tab {
    * The allowlist is checked before the first capture: a page off it gets none. When `fn` itself takes
    * the tab off the list (a click on a link), the last captures still reach the new page; their
    * pictures are dropped, as every hold capture's is. A shot checks the allowlist again after its own
-   * capture and writes no file for a tab that left it; when the main frame goes to a new page while
-   * the shot's own capture waits, the shot fails at once (Chrome never ends that capture).
+   * capture and writes no file for a tab that left it; when the main frame goes to a new page during
+   * the shot, the shot fails at once (Chrome may not end a capture of the old page: in the default mode
+   * the shot's own capture waited 30 s).
    *
    * `repeat` sends a new capture each time one ends (on a page that draws by itself, each one ends after
    * a frame): for input. Without it only the first one: for a shot, whose own capture can change the
@@ -638,6 +642,18 @@ export class Tab {
       return p.then((v) => { for (const c of sent.slice(0, sent.indexOf(me) + 1)) c.done = true; return v; },
         (e) => { if (e instanceof CDPError && e.code !== undefined) me.done = true; throw e; });
     };
+    // When the main frame goes to a new page during a shot, Chrome may not end the captures of the old
+    // page (review-41b on taylor, default mode: the shot's own capture failed after 30 s, though later
+    // captures ended; review-41c: after a same-site navigation one ended 50 ms after the shot failed).
+    // So the shot fails at once then, also in its frame waits.
+    const stopNav = new AbortController();
+    const navError = () => new Error(`shot: tab ${tab} went to a new page during the shot, and Chrome may not end a capture of the old page; no shot is taken. Read the page again, then take the shot.`);
+    const navigated: Promise<never> = opts.shot
+      ? this.browser.conn.waitForEvent<{ frame: { parentId?: string } }>("Page.frameNavigated",
+        { sessionId: this.sessionId, predicate: (p) => !p.frame.parentId, timeoutMs: 60 * 60_000, signal: stopNav.signal })
+        .then(() => { throw navError(); }, () => new Promise<never>(() => {}))
+      : new Promise<never>(() => {});
+    navigated.catch(() => {}); // handled: a navigation when nothing waits on it is no unhandled rejection
     // Why a capture did not end: a timeout, or Chrome's own error.
     const why = (e: unknown, timeoutMs: number) => (e instanceof CDPError && /no response after/.test(e.message)
       ? `did not end in ${timeoutMs / 1000} s` : `failed (${(e as Error).message})`);
@@ -654,7 +670,9 @@ export class Tab {
       requestAnimationFrame(frame);
     }), ms);
     const framesForShot = async () => {
-      const n = await twoFrames(framesMs);
+      const n = await Promise.race([navigated, twoFrames(framesMs).catch((e) => {
+        throw e instanceof CDPError && /Inspected target navigated or closed/.test(e.message) ? navError() : e;
+      })]);
       if (n === 2) return;
       log(`agent-browser shot: tab ${tab} drew ${n} of 2 frames in ${framesMs / 1000} s after a capture of its shot; ${n ? "the shot goes on" : "the shot fails"}`);
       if (n) return;
@@ -668,7 +686,7 @@ export class Tab {
         // With no frame, no capture can end now; the tab's next command ends them all. After a failed
         // full-page capture, a capture sent now would set that capture's emulation again when it ends.
         const cause = ownClip ? "a full-page capture failed" : chainFailed ? "the last captures did not end" : "Chrome drew no frame";
-        log(`agent-browser shot: ${n} capture${n > 1 ? "s" : ""} of tab ${tab} stay${n > 1 ? "" : "s"} in flight (${cause}); Chrome can keep drawing that background tab until its next capture`);
+        log(`agent-browser shot: ${n} capture${n > 1 ? "s" : ""} of tab ${tab} stay${n > 1 ? "" : "s"} in flight (${cause}); Chrome can keep drawing that background tab until its next capture${resizedFailed ? "; the shot's size override can come back when they end (the next shot --size of the tab clears it)" : ""}`);
         return;
       }
       // The last capture ends after the next frame (45 to 100 ms on taylor; about 1 s in the default mode),
@@ -691,15 +709,11 @@ export class Tab {
     };
     const own: OwnCapture = async (params, resized = false) => {
       const clip = "clip" in params, rearm: Promise<true | string>[] = [];
-      if ((clip || resized) && !held()) { rearm.push(capture(10 * 60_000)); await framesForShot(); }
-      // When the main frame goes to a new page while the shot's own capture waits, Chrome never ends
-      // that capture (review-41b on taylor, default mode: the shot failed after 30 s, though later
-      // captures ended). So the shot fails at once then.
-      const stop = new AbortController();
-      const navigated = this.browser.conn.waitForEvent<{ frame: { parentId?: string } }>("Page.frameNavigated",
-        { sessionId: this.sessionId, predicate: (p) => !p.frame.parentId, timeoutMs: ownMs + 60_000, signal: stop.signal })
-        .then(() => { throw new Error(`shot: tab ${tab} went to a new page during the shot's capture, and Chrome does not end a capture of the old page; no shot is taken. Read the page again, then take the shot.`); },
-          () => new Promise<never>(() => {}));
+      if ((clip || resized) && !held()) {
+        rearm.push(capture(10 * 60_000));
+        // Sent under a size override, this capture found it, and sets it again when it ends.
+        try { await framesForShot(); } catch (e) { if (resized) resizedFailed = true; throw e; }
+      }
       const shot = track(this.send<{ data: string }>("Page.captureScreenshot", params, ownMs));
       const result = Promise.race([shot, navigated]);
       const kicks: Promise<true | string>[] = [];
@@ -720,7 +734,6 @@ export class Tab {
             "Chrome ends a capture only after it draws a frame of the tab: a loaded machine, a page that hangs or goes to a new page, or a tab that Chrome no longer draws can stop that. Try the shot again.");
         throw e;
       } finally {
-        stop.abort();
         // Before a size override is cleared: a capture sent while it is set sets it again when it ends.
         // The new first capture ends with the shot's own, just before it; an extra one just after it.
         // After a failure, no last captures here: Chrome drew no frame for the whole timeout, and the
@@ -743,6 +756,7 @@ export class Tab {
     } finally {
       done = true;
       await lastCaptures();
+      stopNav.abort();
       // The shot's true time, with its last captures.
       if (failure instanceof ShotTimeout) failure.gaveUpAfter(Date.now() - t0);
     }
