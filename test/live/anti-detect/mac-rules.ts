@@ -32,6 +32,10 @@ export type MacOptions = {
 
 export const USAGE = `usage (macOS; the operator agrees, and nobody uses the Mac during the run):
   node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]
+  Before the run: leave the Mac unlocked and awake, with no full-screen app in front, for about 3 minutes; no other
+  agent session may use the Mac's agent browser. Quit the apps that post keyboard or mouse events (remote-desktop apps,
+  Karabiner, a mouse jiggler, Universal Control): the check takes their events as a person's, so they stop it (exit 1),
+  or it refuses before its Chrome starts (exit 2). A key, a click, a scroll or a pointer move of a person stops it at once.
 dry run (Linux, in a private Xvfb, with a stand-in watcher; not a Mac result):
   node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]`;
 
@@ -209,9 +213,20 @@ export function spaceChanges(events: readonly WatchEvent[], steps: readonly Step
 }
 
 /**
- * Why the operator's screen is not fit for the check, from the watcher's first lines (exit 2, before Chrome starts):
- * no front app, a locked screen, a display that sleeps, a session off the console, or a front app whose top window
- * fills a whole display (a full-screen app: a new Chrome window would open on another Space).
+ * The six types of the hardware's input that the watcher reads (CGEventSource.secondsSinceLastEventType of the HID
+ * state): only a person, or an app that posts HID events, makes them here; the check's own CDP input never does.
+ */
+export const HID_TYPES = ["keyDown", "flagsChanged", "leftMouseDown", "rightMouseDown", "otherMouseDown", "scrollWheel"] as const;
+
+/** The apps that post HID events, which the check takes as a person: the consent text names them (quit them first). */
+export const HID_APPS = "apps that post keyboard or mouse events (remote-desktop apps, Karabiner, a mouse jiggler, Universal Control)";
+
+/**
+ * Why the operator's screen is not fit for the check, from the watcher's lines up to now (exit 2, before Chrome
+ * starts): no front app, a locked screen, a display that sleeps, a session off the console, a front app whose top
+ * window fills a whole display (a full-screen app: a new Chrome window would open on another Space), a HID reading
+ * of 0 or less or none (then the watcher cannot tell a person's input), or a person's input or a pointer move after
+ * the watcher's start (a person, or an app that posts HID events, uses the Mac).
  */
 export function screenProblem(events: readonly WatchEvent[]): string | null {
   const ready = events.find((e) => e.ev === "ready");
@@ -223,7 +238,27 @@ export function screenProblem(events: readonly WatchEvent[]): string | null {
   const top = windowsOf(events.find((e) => e.ev === "windows")).find((w) => w.pid === Number(ready.front.pid) && isOperatorWindow(w, -1));
   const full = top && ((ready.displays ?? []) as { x: number; y: number; w: number; h: number }[]).find((d) => top.x === d.x && top.y === d.y && top.w === d.w && top.h === d.h);
   if (full) return `the front app (${ready.front.name}) is full screen: a new agent window would open on another Space; leave the full-screen view first`;
+  if (!ready.hid || typeof ready.hid !== "object") return "the watcher gave no HID readings in its ready line (a --watcher of an older mac-watch.swift?)";
+  for (const name of HID_TYPES) {
+    const s = ready.hid[name];
+    if (typeof s !== "number" || !Number.isFinite(s) || s <= 0)
+      return `the HID reading of ${name} is ${s ?? "none"} (seconds since the hardware's last ${name}; 0 or less, or none): with it the watcher cannot tell a person's input; quit ${HID_APPS}, then run the check again`;
+  }
+  const person = events.find((e) => (e.ev === "input" || e.ev === "pointer") && e.t >= ready.t);
+  if (person?.ev === "pointer") return `the pointer moved after the watcher's start: a person or one of the ${HID_APPS} uses the Mac; nobody may use the Mac during the run`;
+  if (person) return `a person or an app used the keyboard or the mouse (${person.kind}) after the watcher's start: nobody may use the Mac during the run, and ${HID_APPS} must quit first`;
   return null;
+}
+
+/**
+ * The check's ready line (printed before its Chrome starts): the operator's app, the pointer, the Space, the six HID
+ * readings (seconds since the hardware's last event of each type), and what stops the check from now on.
+ */
+export function readyText(ready: WatchEvent): string {
+  const hid = HID_TYPES.map((n) => `${n} ${ready.hid?.[n] ?? "none"} s`).join(", ");
+  return `watcher ready: front app ${ready.front?.name} (pid ${ready.front?.pid}), pointer ${JSON.stringify(ready.pointer)}, Space ${ready.space ?? "unknown"}; `
+    + `HID readings (time since the last event): ${hid}. From now on nobody may use the Mac: a key, a click, a scroll or a pointer move stops the check, `
+    + `and so do ${HID_APPS}: quit them first.`;
 }
 
 /** The longest silence of the watcher (it logs once a second) that still counts as a working watcher. */
@@ -232,7 +267,8 @@ export const MAX_WATCH_GAP_MS = 2000;
 /**
  * Why the watcher's log cannot show that the check kept off the operator's focus and Space, in [from, to]: no ready
  * line, no front app, a silence of more than MAX_WATCH_GAP_MS, an end before `to`, a bad line, a locked screen, a
- * display that slept, a session off the console, or a pointer move (the check never moves it: a person used the Mac).
+ * display that slept, a session off the console, a pointer move (the check never moves it), or a key press, a
+ * modifier key, a click or a scroll of the hardware (the check sends no OS input): a person used the Mac.
  */
 export function watcherProblems(events: readonly WatchEvent[], bad: readonly number[], from: number, to: number): string[] {
   const p: string[] = [];
@@ -260,11 +296,12 @@ export function watcherProblems(events: readonly WatchEvent[], bad: readonly num
 export const OPEN_TAKE_MS = 1500;
 
 /**
- * Why the check must stop now (it gives the front back no more, skips the steps left, and quits its Chrome), or
- * undefined: a pointer move (a person uses the Mac), a locked screen, a display that slept, another user's session in
- * front, a Space change, a take of the front that did not come back in OPEN_TAKE_MS, a watcher that ended or went
- * silent for 3 s, or the run's time limit. After `measureEnd` (the look and the end) no rule applies: the operator's
- * own clicks then are not the check's.
+ * Why the check must stop now (it ends the step in progress at once, asks for one last give-back, skips the steps
+ * left, and quits its Chrome), or undefined: a pointer move or a person's input (a key press, a modifier key, a
+ * click or a scroll of the hardware: a person, or an app that posts HID events, uses the Mac), a locked screen, a
+ * display that slept, another user's session in front, a Space change, a take of the front that did not come back
+ * in OPEN_TAKE_MS, a watcher that ended or went silent for 3 s, or the run's time limit. After `measureEnd` (the look
+ * and the end) no rule applies: the operator's own clicks then are not the check's.
  */
 export function stopReason(events: readonly WatchEvent[], steps: readonly Step[], now: number, o: { t0: number; limitMs: number; measureEnd?: number }): string | undefined {
   if (o.measureEnd !== undefined) return undefined;
@@ -286,6 +323,57 @@ export function stopReason(events: readonly WatchEvent[], steps: readonly Step[]
   return undefined;
 }
 
+/** How often the check reads the stop rules during a step, a pause or a wait (the brief: every 100 to 250 ms). */
+export const STOP_POLL_MS = 100;
+
+/**
+ * One step's work, until it ends, its time limit passes, or a stop rule fires. `stopped` (the stop rules: why the
+ * check must stop, or undefined) is read at once and every STOP_POLL_MS; at a stop the step ends at once with
+ * `stopped` and leaves its work behind (the check then goes to its end step, which quits its Chrome, so that work
+ * ends with that Chrome). With atOnce false (the start, which must learn its Chrome's pid) the step finishes its
+ * own work; that work ends its own waits at a stop.
+ */
+export async function runStep<T>(fn: () => Promise<T>, o: { limitMs: number; stopped: () => string | undefined; atOnce?: boolean; pollMs?: number }): Promise<{ ok: boolean; value?: T; error?: string; stopped?: string }> {
+  const first = o.atOnce === false ? undefined : o.stopped();
+  if (first) return { ok: false, error: `stopped: ${first}`, stopped: first };
+  let timer: NodeJS.Timeout | undefined, poll: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`no end in ${o.limitMs / 1000} s`)), o.limitMs); });
+  const stop = new Promise<{ stopped: string }>((res) => {
+    if (o.atOnce === false) return;
+    poll = setInterval(() => { const why = o.stopped(); if (why) res({ stopped: why }); }, o.pollMs ?? STOP_POLL_MS);
+  });
+  try {
+    const r = await Promise.race([fn().then((value) => ({ value })), limit, stop]);
+    if ("stopped" in r) return { ok: false, error: `stopped: ${r.stopped}`, stopped: r.stopped };
+    return { ok: true, value: r.value };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e).split("\n")[0].slice(0, 240) };
+  } finally { clearTimeout(timer); clearInterval(poll); }
+}
+
+/** The fields of a probe record that hold what a key or a text input gave (KeyboardEvent key, code, keyCode; InputEvent data). */
+const KEY_VALUES = ["key", "code", "kc", "data"] as const;
+const withoutKeys = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([k]) => !(KEY_VALUES as readonly string[]).includes(k)));
+
+/**
+ * A probe record as the Mac check keeps it: no key values (key, code, keyCode, an input's text), so that a person's
+ * keys that reach a probe page never go into results.json; the event types, the times and the counts stay.
+ */
+export function probeRecord(r: Rec): Rec {
+  const out = withoutKeys(r) as Rec;
+  if (Array.isArray(r.list)) out.list = (r.list as Record<string, unknown>[]).map((m) => m && typeof m === "object" ? withoutKeys(m) : m);
+  return out;
+}
+
+/**
+ * A field's text as the Mac check logs it, before and after the check's keys: the lengths, and whether the keys added
+ * exactly the text that the check sent (no value, so that a person's keys in the field never go into results.json).
+ */
+export function fieldText(before: unknown, after: unknown, sent: string): { charsBefore: number; chars: number; theCheckKeys: boolean } {
+  const n = (v: unknown) => typeof v === "string" ? [...v].length : 0;
+  return { charsBefore: n(before), chars: n(after), theCheckKeys: typeof before === "string" && after === before + sent };
+}
+
 /** The agent Chrome as ps shows it on the run's own profile: its pid, null (none), or undefined (ps failed: not known). */
 export type ChromeState = number | null | undefined;
 
@@ -293,7 +381,8 @@ export type ChromeState = number | null | undefined;
  * The end of the run: Browser.close, then SIGTERM, then SIGKILL, each to the pid that `check` shows at that moment
  * (ps on the run's own profile), with a look again right before each signal. running: false (it quit), true (it
  * still runs) or null (ps cannot tell). A SIGKILL, a Chrome that still runs, and a quit that ps cannot confirm are
- * problems (exit 1); the caller keeps the profile unless running is false.
+ * problems (exit 1); the caller keeps the profile unless running is false. `close` gives false when it had no CDP
+ * connection (a stop before agent-browser connected): then no wait for Browser.close, and the SIGTERM goes at once.
  */
 export async function quitAgentChrome(d: {
   check: () => ChromeState; close: () => Promise<unknown>; signal: (pid: number, sig: "SIGTERM" | "SIGKILL") => void; sleep: (ms: number) => Promise<unknown>;
@@ -308,14 +397,14 @@ export async function quitAgentChrome(d: {
     const problem = `the quit of the agent Chrome is not confirmed: ps failed ${after} (see stop-chrome.txt in the run folder)`;
     return { lines: [problem], problem, running: null };
   };
-  await d.close().catch(() => {});
-  const closed = await wait(w.close);
-  if (closed === null) return { lines: ["the agent Chrome quit (Browser.close)"], running: false };
-  if (closed === undefined) return blind("after Browser.close");
+  const sent = (await d.close().catch(() => true)) !== false; // a close that fails as Chrome drops the socket was sent
+  const closed = await wait(sent ? w.close : 0);
+  if (closed === null) return { lines: [sent ? "the agent Chrome quit (Browser.close)" : "no agent Chrome ran on the run's profile at the end (no CDP connection)"], running: false };
+  if (closed === undefined) return blind(sent ? "after Browser.close" : "before the SIGTERM");
   d.signal(closed, "SIGTERM");
   const termed = await wait(w.term);
   const now = termed === null ? null : d.check(); // a look again right before the SIGKILL
-  if (now === null) return { lines: [`the agent Chrome quit at SIGTERM (pid ${closed}), not at Browser.close`], running: false };
+  if (now === null) return { lines: [`the agent Chrome quit at SIGTERM (pid ${closed})${sent ? ", not at Browser.close" : "; no Browser.close (no CDP connection)"}`], running: false };
   if (now === undefined) return blind("after the SIGTERM");
   d.signal(now, "SIGKILL");
   const killed = await wait(w.kill);

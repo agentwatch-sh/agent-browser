@@ -5,21 +5,26 @@
 //                                         swiftc -swift-version 5 -O mac-watch.swift -o mac-watch)
 //
 // Standard output: one JSON object per line, "t" in ms since 1970 (as Date.now() in node), "ev" its kind:
-//   ready     once, when it watches: the front app, the pointer, the Space, the displays, the lock state
+//   ready     once, when it watches: the front app, the pointer, the Space, the displays, the lock state, and the
+//             six HID readings ("hid": seconds since the hardware's last keyDown, flagsChanged, leftMouseDown,
+//             rightMouseDown, otherMouseDown and scrollWheel; the check refuses a reading of 0 or less)
 //   front     the front app changed (also from NSWorkspace's activation news, so a change under 100 ms shows)
-//   pointer   the pointer moved (the check never moves it: a move is a person at the Mac)
-//   input     the hardware's key, modifier, button or scroll input after the watcher's start (once; a person at the Mac)
+//   pointer   the pointer moved (the check never moves it: a move is a person at the Mac, or an app that moves it)
+//   input     the hardware's key, modifier, button or scroll input after the watcher's start (once; a person at the Mac,
+//             or an app that posts HID events: a remote-desktop app, Karabiner, a mouse jiggler, Universal Control)
 //   space     the active Space changed: NSWorkspace's news ("via": "news"), or a new id from CGSGetActiveSpace
 //             ("via": "id"; a private CoreGraphics call, found with dlsym, read only; no id when it is missing)
 //   windows   the on-screen windows of layer 0 changed (front to back: [pid, number, x, y, w, h, alpha x 100]),
 //             or a "snap LABEL" command asked for them; a snap also lists every window of the agent Chrome
 //             (on or off screen), the agent app's state (activation policy, hidden, active) and the front app
 //   alive     once a second, with the Space id and the lock state, so a reader can tell a stopped watcher
-//   take / ask / back / before   the give-back (below)
+//   take / ask / back / before   the give-back (below); "giveback" the answer to the check's last give-back request
 //   launched  NSWorkspace's news of an app launch (information only)
-// Standard input: one command per line: "arm" and "disarm" (the give-back), "agent PID" (the agent Chrome's
-// pid; before it, an agent Chrome is a new instance of BUNDLE_PATH that did not run at the watcher's start),
-// "snap LABEL", "quit". It ends at "quit", when standard input closes (the check ended), or after SECONDS.
+// Standard input: one command per line: "arm" and "disarm" (the give-back), "giveback" (the check stopped: one last
+// request, only when the agent Chrome is the front app, also after a person was seen; the agent Chrome quits next),
+// "agent PID" (the agent Chrome's pid; before it, an agent Chrome is a new instance of BUNDLE_PATH that did not run
+// at the watcher's start), "snap LABEL", "quit". It ends at "quit", when standard input closes (the check ended), or
+// after SECONDS.
 //
 // The give-back, while armed: each time the agent Chrome is the front app, it asks macOS to activate the app
 // that was in front before (NSRunningApplication.activate(options: [])), the same call as
@@ -30,7 +35,8 @@
 // CGEventSource.secondsSinceLastEventType of the HID state, read only; the check sends no OS input, so such input is
 // a person's). It reads both before it acts on a front change, so a switch that a person makes with the keyboard, the
 // mouse or the trackpad (Cmd-Tab, a click on a window) is not undone. A switch with no hardware input (Voice Control,
-// a script, another app) is not seen as a person's.
+// a script, another app) is not seen as a person's. Apps that post HID events (remote-desktop apps, Karabiner, a mouse
+// jiggler, Universal Control) look like a person here: they stop the check, so the operator quits them first.
 // It reads only, apart from that request: no input, no Apple Event, no pointer move, and no Accessibility,
 // Automation or Screen Recording grant. It logs no window title (macOS gives none of other apps without Screen
 // Recording), only the owner app's name.
@@ -195,6 +201,9 @@ final class Watcher {
     o["spaceReader"] = spaceId != nil
     o["displays"] = displays()
     o["old"] = old.map { Int($0) }.sorted()
+    var hid: [String: Any] = [:]
+    for (type, name) in personTypes { hid[name] = (CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: type) * 1000).rounded() / 1000 }
+    o["hid"] = hid
     emit("ready", o)
     checkWindows(force: "ready", label: nil)
   }
@@ -210,12 +219,7 @@ final class Watcher {
     let t = nowMs()
     if isAgent(app) {
       if takeAt == nil { takeAt = t; asks = 0; emit("take", ["pid": Int(app.processIdentifier), "from": Int(b.processIdentifier)]) }
-      if asks < maxAsks && (asks == 0 || t - lastAsk >= retryMs) {
-        asks += 1
-        lastAsk = t
-        let sent = b.activate(options: [])
-        emit("ask", ["to": Int(b.processIdentifier), "n": asks, "sent": sent])
-      }
+      if asks < maxAsks && (asks == 0 || t - lastAsk >= retryMs) { askBack(b, final: false) }
     } else if app.processIdentifier == b.processIdentifier {
       if let t0 = takeAt { emit("back", ["pid": Int(b.processIdentifier), "afterMs": Int(t - t0), "asks": asks]); takeAt = nil }
     } else if takeAt == nil {
@@ -223,6 +227,26 @@ final class Watcher {
       before = app
       emit("before", appInfo(app))
     }
+  }
+
+  /// The one give-back request: activate the operator's app (the same call as test/live/takeover/giveback.swift).
+  func askBack(_ b: NSRunningApplication, final: Bool) {
+    asks += 1
+    lastAsk = nowMs()
+    let sent = b.activate(options: [])
+    emit("ask", ["to": Int(b.processIdentifier), "n": asks, "sent": sent, "final": final])
+  }
+
+  /// The check stopped: one last request, only while the agent Chrome is the front app (its Chrome quits next), so
+  /// that a person's keys go to their own app; it does not arm the give-back again.
+  func lastGiveBack() {
+    guard let app = NSWorkspace.shared.frontmostApplication, isAgent(app), let b = before else {
+      emit("giveback", ["asked": false, "front": appInfo(NSWorkspace.shared.frontmostApplication)])
+      return
+    }
+    asks = 0
+    askBack(b, final: true)
+    emit("giveback", ["asked": true, "front": appInfo(app)])
   }
 
   /// A person at the Mac: the give-back stops for good.
@@ -317,6 +341,8 @@ final class Watcher {
       armed = false
       takeAt = nil
       emit("disarmed")
+    case "giveback":
+      lastGiveBack()
     case "agent":
       agentPid = Int32(parts.count > 1 ? parts[1] : "") ?? 0
       emit("agent", ["pid": Int(agentPid)])

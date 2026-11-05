@@ -11,10 +11,10 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   agentWindowsOf, coveredFraction, ffmpegSearchPath, frontAt, frontTakes, isOperatorWindow, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement,
-  placementText, quitAgentChrome, realPointer, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
+  fieldText, placementText, probeRecord, quitAgentChrome, readyText, realPointer, runStep, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, STOP_POLL_MS, stopReason, summary, swiftTools, USAGE, verdict, watcherProblems, windowsOf,
   type CgWin, type MacResult, type Step, type WatchEvent,
 } from "./live/anti-detect/mac-rules.ts";
-import type { Rec } from "./live/anti-detect/probe.ts";
+import { startServer, type Rec } from "./live/anti-detect/probe.ts";
 import { ROOT } from "./helpers.ts";
 
 const DIR = join(ROOT, "test", "live", "anti-detect");
@@ -103,7 +103,9 @@ const steps: Step[] = [
 ];
 const OP = { pid: 500, name: "Terminal", agent: false };
 const AG = { pid: 900, name: "Google Chrome Beta", agent: true };
-const ready = (extra: Record<string, unknown> = {}): WatchEvent => ({ t: 500, ev: "ready", front: OP, pointer: [100, 200], space: 7, locked: false, asleep: false, onConsole: true, displays: [{ x: 0, y: 0, w: 1512, h: 982, main: true }], ...extra });
+/** The six HID readings of the watcher's ready line: seconds since the hardware's last event of each type. */
+const HID = { keyDown: 4.2, flagsChanged: 30.5, leftMouseDown: 61.25, rightMouseDown: 900, otherMouseDown: 3600, scrollWheel: 75 };
+const ready = (extra: Record<string, unknown> = {}): WatchEvent => ({ t: 500, ev: "ready", front: OP, pointer: [100, 200], space: 7, locked: false, asleep: false, onConsole: true, displays: [{ x: 0, y: 0, w: 1512, h: 982, main: true }], hid: HID, ...extra });
 const front = (t: number, app: typeof OP) => ({ t, ev: "front", ...app });
 
 test("stepAt names the step that runs at a time, or the one that just ended", () => {
@@ -176,6 +178,52 @@ test("stopReason: the stop rules during the measurement, and none after its end 
   assert.match(stopReason(live([{ t: 600_000, ev: "alive" }]), steps, 600_001, o) ?? "", /time limit/);
 });
 
+test("runStep: a stop rule ends the running step at once (the rules are read every 100 to 250 ms), and the step's own end or time limit else", async () => {
+  assert.ok(STOP_POLL_MS >= 100 && STOP_POLL_MS <= 250, `STOP_POLL_MS ${STOP_POLL_MS}`);
+  let why: string | undefined;
+  const fire = setTimeout(() => { why = "a person used the keyboard or the mouse (keyDown)"; }, 150);
+  const t0 = Date.now();
+  const r = await runStep(() => new Promise<never>(() => {}), { limitMs: 20_000, stopped: () => why });
+  const ms = Date.now() - t0;
+  clearTimeout(fire);
+  assert.ok(ms >= 140 && ms < 150 + STOP_POLL_MS + 60, `the step ended ${ms} ms after its start (the stop came at 150 ms)`);
+  assert.deepEqual([r.ok, r.stopped], [false, "a person used the keyboard or the mouse (keyDown)"]);
+  assert.match(r.error ?? "", /^stopped: a person used the keyboard/);
+  const early = Date.now();
+  const before = await runStep(async () => { await new Promise((x) => setTimeout(x, 2000)); return 1; }, { limitMs: 20_000, stopped: () => "the screen locked" });
+  assert.ok(Date.now() - early < STOP_POLL_MS + 60, "a stop before the step ends it at once");
+  assert.deepEqual([before.ok, before.stopped, before.value], [false, "the screen locked", undefined]);
+  assert.deepEqual(await runStep(async () => 7, { limitMs: 1000, stopped: () => undefined }), { ok: true, value: 7 });
+  const limit = await runStep(() => new Promise<never>(() => {}), { limitMs: 120, stopped: () => undefined });
+  assert.deepEqual([limit.ok, limit.error], [false, "no end in 0.12 s"]);
+  const fails = await runStep(async () => { throw new Error("boom\nmore"); }, { limitMs: 1000, stopped: () => undefined });
+  assert.deepEqual([fails.ok, fails.error], [false, "boom"]);
+  const own = await runStep(async () => { await new Promise((x) => setTimeout(x, 200)); return "done"; }, { limitMs: 1000, stopped: () => "the screen locked", atOnce: false });
+  assert.deepEqual([own.ok, own.value, own.stopped], [true, "done", undefined], "atOnce false (the start): the step finishes its work, so that the check knows its Chrome's pid");
+});
+
+test("probeRecord: the probe's log keeps no key values (key, code, keyCode, an input's text), only event types and counts", async () => {
+  const keydown = { t: 1, tab: "WA", ev: "in", type: "keydown", trusted: true, id: "f", key: "s", code: "KeyS", kc: 83, rep: false, vis: "visible", focus: true };
+  const typed = { t: 2, tab: "WA", ev: "in", type: "input", trusted: true, id: "f", it: "insertText", data: "s" };
+  const moves = { t: 3, tab: "WA", ev: "moves", list: [{ type: "mousemove", cx: 1, cy: 2, key: "x" }] };
+  assert.deepEqual(probeRecord(keydown as Rec), { t: 1, tab: "WA", ev: "in", type: "keydown", trusted: true, id: "f", rep: false, vis: "visible", focus: true });
+  assert.deepEqual(probeRecord(typed as Rec), { t: 2, tab: "WA", ev: "in", type: "input", trusted: true, id: "f", it: "insertText" });
+  assert.deepEqual(probeRecord(moves as unknown as Rec), { t: 3, tab: "WA", ev: "moves", list: [{ type: "mousemove", cx: 1, cy: 2 }] });
+  assert.deepEqual(probeRecord({ t: 4, tab: "WA", ev: "load", iw: 800 } as Rec), { t: 4, tab: "WA", ev: "load", iw: 800 });
+  assert.deepEqual(fieldText("hello", "hellokeys", "keys"), { charsBefore: 5, chars: 9, theCheckKeys: true });
+  assert.deepEqual(fieldText("hello", "hellokesecret", "keys"), { charsBefore: 5, chars: 13, theCheckKeys: false });
+  assert.deepEqual(fieldText(undefined, undefined, "keys"), { charsBefore: 0, chars: 0, theCheckKeys: false });
+  // The log server keeps only what probeRecord gives (mac.ts writes that log to results.json).
+  const log: Rec[] = [];
+  const { server, port } = await startServer(log, { record: probeRecord });
+  try {
+    for (const r of [keydown, typed]) await fetch(`http://127.0.0.1:${port}/log`, { method: "POST", body: JSON.stringify(r) });
+  } finally { server.close(); }
+  assert.equal(log.length, 2);
+  assert.doesNotMatch(JSON.stringify(log), /"(key|code|kc|data)":/);
+  assert.deepEqual(log.map((r) => r.type), ["keydown", "input"]);
+});
+
 test("spaceChanges lists each Space news after the watcher got ready, with its step", () => {
   const evs: WatchEvent[] = [{ t: 100, ev: "space", via: "news", space: 3 }, ready(), { t: 5100, ev: "space", via: "id", space: 9 }];
   assert.deepEqual(spaceChanges(evs, steps), [{ t: 5100, via: "id", space: 9, step: "window: open window WA" }]);
@@ -210,6 +258,25 @@ test("screenProblem refuses a locked screen, no front app, a sleeping display, a
   assert.match(screenProblem([ready({ front: { pid: 0 } })]) ?? "", /no front app/);
   assert.match(screenProblem([ready(), windowsLine([win(500, 10, 0, 0, 1512, 982)])]) ?? "", /full screen/);
   assert.match(screenProblem([]) ?? "", /never got ready/);
+});
+
+test("screenProblem refuses before the Chrome start: a HID reading of 0 or less or none, and a person's input or a pointer move after the watcher's start", () => {
+  assert.equal(screenProblem([ready(), windowsLine([win(500, 10, 0, 33, 800, 600)])]), null);
+  for (const [name, bad] of [["keyDown", 0], ["scrollWheel", -1], ["leftMouseDown", null], ["otherMouseDown", Number.NaN]] as const)
+    assert.match(screenProblem([ready({ hid: { ...HID, [name]: bad } })]) ?? "", new RegExp(`the HID reading of ${name} is .*0 or less.*quit apps that post keyboard or mouse events`));
+  const { flagsChanged: _, ...five } = HID;
+  assert.match(screenProblem([ready({ hid: five })]) ?? "", /the HID reading of flagsChanged is none/);
+  assert.match(screenProblem([ready({ hid: undefined })]) ?? "", /the watcher gave no HID readings/);
+  assert.match(screenProblem([ready(), { t: 700, ev: "input", kind: "keyDown", agoMs: 3 }]) ?? "", /the keyboard or the mouse \(keyDown\) after the watcher's start.*remote-desktop apps, Karabiner, a mouse jiggler, Universal Control/);
+  assert.match(screenProblem([ready(), { t: 700, ev: "pointer", x: 1, y: 2 }]) ?? "", /the pointer moved after the watcher's start/);
+  assert.equal(screenProblem([{ t: 400, ev: "pointer", x: 1, y: 2 }, ready()]), null, "a move before the watcher's start is not counted");
+});
+
+test("readyText: the ready line names the six HID readings and the apps that stop the check", () => {
+  const text = readyText(ready());
+  for (const [name, s] of Object.entries(HID)) assert.ok(text.includes(`${name} ${s} s`), name);
+  assert.match(text, /Terminal \(pid 500\)/);
+  assert.match(text, /remote-desktop apps, Karabiner, a mouse jiggler, Universal Control/);
 });
 
 test("placement: where an agent window is against the operator's windows, by the CGWindowList order (front to back)", () => {
@@ -293,14 +360,14 @@ test("the summary names the result first, and every part of the measurement", ()
 });
 
 test("quitAgentChrome: Browser.close, then SIGTERM, then SIGKILL, each to the pid on the run's own profile; a quit that ps cannot confirm is a problem", async () => {
-  const run = async (states: (number | null | undefined)[]) => {
+  const run = async (states: (number | null | undefined)[], sent?: false) => {
     const signals: string[] = [];
-    let i = 0, closed = 0;
+    let i = 0, closed = 0, checks = 0;
     const r = await quitAgentChrome({
-      check: () => states[Math.min(i++, states.length - 1)], close: async () => { closed++; }, signal: (pid, sig) => { signals.push(`${sig} ${pid}`); }, sleep: async () => {},
+      check: () => { checks++; return states[Math.min(i++, states.length - 1)]; }, close: async () => { closed++; return sent; }, signal: (pid, sig) => { signals.push(`${sig} ${pid}`); }, sleep: async () => {},
       waits: { close: 300, term: 200, kill: 200 },
     });
-    return { ...r, signals, closed };
+    return { ...r, signals, closed, checks };
   };
   const quick = await run([null]);
   assert.deepEqual([quick.lines, quick.problem, quick.running, quick.signals, quick.closed], [["the agent Chrome quit (Browser.close)"], undefined, false, [], 1]);
@@ -319,24 +386,38 @@ test("quitAgentChrome: Browser.close, then SIGTERM, then SIGKILL, each to the pi
   const blind = await run([undefined]);
   assert.deepEqual([blind.running, blind.signals], [null, []]);
   assert.match(blind.problem ?? "", /the quit of the agent Chrome is not confirmed: ps failed/);
+  // No CDP connection (a stop before agent-browser connected): no Browser.close went out, so no wait for it; SIGTERM at once.
+  const noConn = await run([9, null], false);
+  assert.deepEqual([noConn.signals, noConn.running, noConn.lines], [["SIGTERM 9"], false, ["the agent Chrome quit at SIGTERM (pid 9); no Browser.close (no CDP connection)"]]);
+  assert.equal(noConn.checks, 2, "one look before the SIGTERM, one after it");
   const blindLater = await run([9, 9, 9, 9, undefined]);
   assert.equal(blindLater.running, null);
   assert.match(blindLater.problem ?? "", /not confirmed/);
 });
 
-test("the dry run's stand-in watcher speaks the watcher's protocol: ready, snaps, agent, quit", async () => {
-  const child = spawn(process.execPath, [join(DIR, "mac-standin.ts"), "30"], { stdio: ["pipe", "pipe", "pipe"] });
-  const lines: WatchEvent[] = [];
-  createInterface({ input: child.stdout! }).on("line", (l) => lines.push(JSON.parse(l)));
-  const until = async (pred: () => boolean) => { for (let i = 0; i < 100 && !pred(); i++) await new Promise((r) => setTimeout(r, 20)); assert.ok(pred()); };
-  await until(() => lines.some((e) => e.ev === "ready"));
-  child.stdin!.write("agent 42\narm\nsnap after x: y\nquit\n");
-  const code = await new Promise((r) => child.once("exit", r));
-  assert.equal(code, 0);
-  assert.deepEqual(lines.map((e) => e.ev), ["ready", "windows", "agent", "armed", "windows", "end"]);
+test("the dry run's stand-in watcher speaks the watcher's protocol: ready with the six HID readings, snaps, agent, giveback, quit", async () => {
+  const talk = async (env: Record<string, string>, input: string) => {
+    const child = spawn(process.execPath, [join(DIR, "mac-standin.ts"), "30"], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
+    const lines: WatchEvent[] = [];
+    createInterface({ input: child.stdout! }).on("line", (l) => lines.push(JSON.parse(l)));
+    const until = async (pred: () => boolean) => { for (let i = 0; i < 100 && !pred(); i++) await new Promise((r) => setTimeout(r, 20)); assert.ok(pred()); };
+    await until(() => lines.some((e) => e.ev === "ready"));
+    child.stdin!.write(input);
+    const code = await new Promise((r) => child.once("exit", r));
+    assert.equal(code, 0);
+    return lines;
+  };
+  const lines = await talk({}, "agent 42\narm\ngiveback\nsnap after x: y\nquit\n");
+  assert.deepEqual(lines.map((e) => e.ev), ["ready", "windows", "agent", "armed", "giveback", "windows", "end"]);
+  assert.deepEqual(Object.keys(lines[0].hid), ["keyDown", "flagsChanged", "leftMouseDown", "rightMouseDown", "otherMouseDown", "scrollWheel"]);
+  assert.equal(screenProblem(lines), null, "the stand-in's ready line passes the check's refusal rules");
   assert.equal(lines.find((e) => e.ev === "agent")!.pid, 42);
+  assert.equal(lines.find((e) => e.ev === "giveback")!.asked, false, "no agent Chrome in front: no last give-back");
   assert.equal(lines.at(-2)!.label, "after x: y");
   assert.equal(lines.at(-1)!.why, "quit");
+  const zero = await talk({ MAC_STANDIN_HID: "keyDown=0" }, "quit\n");
+  assert.equal(zero[0].hid.keyDown, 0);
+  assert.match(screenProblem(zero) ?? "", /the HID reading of keyDown is 0/);
 });
 
 test("the watcher reads only: it sends no input, moves no pointer, sends no Apple Event, and asks only for the give-back's activation", () => {
@@ -352,6 +433,13 @@ test("the watcher reads only: it sends no input, moves no pointer, sends no Appl
   const activations = swift.match(/\.activate\(/g) ?? [];
   assert.equal(activations.length, 1, "one activation: the give-back to the operator's app");
   assert.match(swift, /let sent = b\.activate\(options: \[\]\)/);
+  // The ready line has the six HID readings (the check refuses a reading of 0 or less).
+  assert.match(swift.slice(swift.indexOf("func ready()"), swift.indexOf("func checkFront(")), /for \(type, name\) in personTypes \{ hid\[name\] = \(CGEventSource\.secondsSinceLastEventType\(\.hidSystemState, eventType: type\)[\s\S]*o\["hid"\] = hid[\s\S]*emit\("ready", o\)/);
+  // The check's last give-back request asks only while the agent Chrome is in front, and does not arm the give-back again.
+  const last = swift.slice(swift.indexOf("func lastGiveBack()"), swift.indexOf("func personSeen("));
+  assert.match(last, /guard let app = NSWorkspace\.shared\.frontmostApplication, isAgent\(app\), let b = before else/);
+  assert.doesNotMatch(last, /armed = true/);
+  assert.match(swift, /case "giveback":\s+lastGiveBack\(\)/);
 });
 
 test("the Mac check never activates a window or brings a page forward, and sends no OS input", () => {
@@ -365,4 +453,22 @@ test("the Mac check never activates a window or brings a page forward, and sends
   assert.match(ts, /if \(quit\.running !== false\) endLines\.push\(`kept the profile[\s\S]*else if \(inRun\(profile\)/, "the profile stays while the agent Chrome runs or ps cannot tell");
   assert.match(ts, /!O\.dryRun && !O\.watcher && watcher\.exitCode !== null && inRun\(watcherBin\)/);
   assert.match(ts, /startGiveBack\(bundle!/);
+  // The stop rules run at each watcher line and every STOP_POLL_MS from the start on, and each step ends at a stop.
+  assert.match(ts, /if \(watching\) checkHarm\(\);/);
+  assert.match(ts, /stopPoll = setInterval\(checkHarm, STOP_POLL_MS\)/);
+  assert.match(ts, /runStep\(fn, \{ limitMs: [^}]*stopped: \(\) => \{ checkHarm\(\); return aborted; \}/);
+  assert.match(ts, /tell\("disarm"\);\s+tell\("giveback"\);/);
+  // No measurement CDP call goes out after a stop (only the detach and the end's Browser.close use raw.send).
+  for (const call of ts.match(/raw\.send\("[^"]+"/g) ?? []) assert.ok(['raw.send("Target.detachFromTarget"', 'raw.send("Browser.close"'].includes(call), call);
+  // The refusal rules (the HID readings, a person before the start) run in both modes, and again right before the launch.
+  assert.equal((ts.match(/screenProblem\(events\)/g) ?? []).length, 2);
+  assert.doesNotMatch(ts, /if \(!O\.dryRun\) \{\s+const problem = screenProblem/);
+  // The probe's log keeps no key values, and the field only its length.
+  assert.match(ts, /startServer\(log, \{ record: probeRecord \}\)/);
+  assert.match(ts, /return fieldText\(before, await evaluate\(sid, FIELD\), text\)/);
+});
+
+test("the help text names the consent limits: the apps that post HID events stop the check", () => {
+  assert.match(USAGE, /Quit the apps that post keyboard or mouse events \(remote-desktop apps,\s+Karabiner, a mouse jiggler, Universal Control\)/);
+  assert.match(refused(["--out-dir", "/tmp/o"]), /Universal Control/);
 });

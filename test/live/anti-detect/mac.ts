@@ -7,7 +7,9 @@
 //   node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123]   (Linux)
 //
 // On the Mac it runs with one command, in about 3 minutes, with nobody at the keyboard: the operator leaves the Mac
-// unlocked and awake, with no full-screen app in front, and does not use it during the run. It starts its own agent
+// unlocked and awake, with no full-screen app in front, does not use it during the run, and first quits the apps that
+// post keyboard or mouse events (remote-desktop apps, Karabiner, a mouse jiggler, Universal Control): the watcher
+// takes their events as a person's, so they stop the check (or make it refuse before its Chrome starts). It starts its own agent
 // Chrome (the app of --chrome-bin; default agent-browser's: Google Chrome Beta when it is installed, else Google
 // Chrome) on a new profile in its run folder, as agent-browser's launch does: `open -n -g` with agent-browser's
 // give-back guard (src/giveback.ts) and AGENT_ARGS (today's flags: no timer flag,
@@ -24,10 +26,17 @@
 // BIN) logs the front app, the pointer, the Space, the on-screen window order (CGWindowList) and the lock state,
 // and gives the front back: each time the agent Chrome is the front app, it asks macOS to activate the operator's
 // app again. At the first sign of a person (a pointer move, or the hardware's key press, modifier, click or scroll)
-// the watcher stops that by itself. The check never moves the pointer and sends no OS input. It stops early (skips the
-// steps left and quits its Chrome) when a person uses the Mac (a pointer move or such input), the screen locks, the
+// the watcher stops that by itself. The check never moves the pointer and sends no OS input. It refuses (exit 2,
+// before its Chrome starts) when one of the six HID readings of the watcher's ready line is 0 or less, or when a
+// person's input or a pointer move came after the watcher's start. After the start it stops early when a person uses
+// the Mac (a pointer move, a key press, a modifier key, a click or a scroll of the hardware), the screen locks, the
 // display sleeps, another user's session comes to the front, the Space changes, the front does not come back in
-// 1.5 s, the watcher ends or goes silent for 3 s, or the run reaches its time limit (stopReason in mac-rules.ts).
+// 1.5 s, the watcher ends or goes silent for 3 s, or the run reaches its time limit (stopReason in mac-rules.ts). It
+// reads these rules at each watcher line and every 100 ms (STOP_POLL_MS), also inside a step: at a stop the step in
+// progress ends at once, the watcher gets one last give-back request (only while the agent Chrome is in front), and
+// the check goes to its end step (it quits its Chrome by the recorded pid, then writes its results). The probe's log
+// keeps no key values (probeRecord: no key, code, keyCode or input text; only event types and counts), so a person's
+// keys that reach a probe page never go into results.json.
 //
 // What it measures, in the order it runs (each step's page signals come from the probe page, probe.ts):
 //   start   the agent Chrome's start: the front app before and after (the give-back), where its first window comes
@@ -55,8 +64,8 @@
 // DIR/run-XXXXXX/stop-chrome.txt, how to stop it by hand.
 //   exit 0  every phase ran; the start's take of the front, if any, followed agent-browser's give-back rule (at most
 //           250 ms away, to the agent Chrome only, and back); after the start the front app never changed; the
-//           Space never changed; and the watcher shows both (it ran all the time, the screen stayed unlocked and
-//           awake, and the pointer did not move)
+//           Space never changed; the watcher shows both (it ran all the time, the screen stayed unlocked and awake,
+//           the pointer did not move, and no key, click or scroll of the hardware came); and the agent Chrome quit
 //   exit 1  the check took the operator's focus or Space, could not show that it did not, did not finish, or its
 //           Chrome did not quit: summary.md names each problem (a failed step is a measurement, not a problem). When
 //           the only problems are popup takes that came back, the summary says so: an expected result of the design
@@ -64,9 +73,11 @@
 //   exit 2  it refused to start, and nothing started on the screen: a usage error, not macOS (or not Linux for
 //           --dry-run), no ffmpeg with libx264 (on PATH, in /opt/homebrew/bin or /usr/local/bin; or --ffmpeg; or
 //           --skip record), no swiftc with a macOS SDK (it compiles with -sdk, so swiftc never starts xcrun), a watcher
-//           that did not compile, a locked screen, no front app, a full-screen app in front
+//           that did not compile, a locked screen, no front app, a full-screen app in front, a HID reading of 0 or
+//           less (or none), a person's input or a pointer move after the watcher's start
 // --dry-run (Linux only) runs every phase against Chromium in a private Xvfb, with a stand-in watcher
-// (mac-standin.ts: no front app, no Space, no window list): a test of the drive and the analysis, not a Mac result.
+// (mac-standin.ts: no front app, no Space, no window list): a test of the drive, the stop rules, the refusals and the
+// analysis, not a Mac result.
 // It ends only its own processes, each by the pid that it recorded: the agent Chrome on its own profile, the proxy
 // of its own state folder, the watcher, caffeinate (which keeps the display awake for the run) and, in the dry run,
 // its Xvfb and Chromium.
@@ -87,8 +98,8 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settin
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg } from "../../../src/record.ts";
 import {
-  agentWindowsOf, ffmpegSearchPath, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, realPointer, realPointerEvents,
-  screenProblem, snapOf, spaceChanges, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
+  agentWindowsOf, ffmpegSearchPath, fieldText, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, probeRecord,
+  readyText, realPointer, realPointerEvents, runStep, screenProblem, snapOf, spaceChanges, STOP_POLL_MS, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
   type DriveRow, type MacResult, type PopupRow, type RecordRow, type Step, type WatchEvent, type WindowRow,
 } from "./mac-rules.ts";
 import { bothFocusedMs, LAYOUT, startServer, stepSignals, type Rec } from "./probe.ts";
@@ -190,72 +201,101 @@ else {
 const watcher = spawn(watcherBin, watcherArgs, { env: XENV, stdio: ["pipe", "pipe", openSync(join(RUN, "watch.err"), "a")] });
 children.push(watcher);
 watcher.on("error", (e) => say(`watcher: ${e.message}`));
+/** From the Chrome start on, the stop rules run at each watcher line (and every STOP_POLL_MS: checkHarm below). */
+let watching = false;
 createInterface({ input: watcher.stdout! }).on("line", (line) => {
   appendFileSync(watchFile, `${line}\n`);
   try { const e = JSON.parse(line); if (typeof e?.t === "number" && typeof e.ev === "string") events.push(e); } catch { /* counted as bad in the analysis */ }
+  if (watching) checkHarm();
 });
 const tell = (cmd: string) => { if (watcher.stdin?.writable) watcher.stdin.write(`${cmd}\n`); };
 async function waitEvent(pred: (e: WatchEvent) => boolean, ms: number): Promise<WatchEvent | undefined> {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) { const e = events.find(pred); if (e) return e; }
   return undefined;
 }
-async function snap(label: string): Promise<WatchEvent | undefined> {
-  tell(`snap ${label}`);
-  return waitEvent((e) => e.ev === "windows" && e.why === "snap" && e.label === label, 3000);
-}
-const ready = await waitEvent((e) => e.ev === "ready", 20_000);
-if (!ready) refuse(`the watcher did not start (see ${join(RUN, "watch.err")})`);
-await sleep(400);
-if (!O.dryRun) {
-  const problem = screenProblem(events);
-  if (problem) refuse(`refusing, nothing started: ${problem}`);
-  // The display and the system stay awake for the run (an assertion that ends with this process).
-  children.push(spawn("/usr/bin/caffeinate", ["-d", "-i", "-w", String(process.pid)], { stdio: "ignore" }));
-}
-say(`watcher ready: front app ${ready.front?.name} (pid ${ready.front?.pid}), pointer ${JSON.stringify(ready.pointer)}, Space ${ready.space ?? "unknown"}`);
-
-// ------------------------------------------------------------------ the probe pages
-const log: Rec[] = [];
-const { server, port } = await startServer(log);
-const urlOf = (tab: string) => `http://probe.localhost:${port}/p?tab=${tab}`;
-async function loaded(tab: string, ms = 15_000): Promise<void> {
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (log.some((e) => e.tab === tab && e.ev === "load")) return;
-  throw new Error(`page ${tab} did not load in ${ms / 1000} s`);
-}
-
-// ------------------------------------------------------------------ steps, and the stop rules
-const steps: Step[] = [];
-const notRun: string[] = [];
+// ------------------------------------------------------------------ the stop rules: at each watcher line, every STOP_POLL_MS, inside each step
 let aborted: string | undefined;
+/** The stop: its time, the step in progress then, and the watcher line of the person's first sign (pointer or input). */
+let stopInfo: { why: string; t: number; step: string; cause?: WatchEvent } | undefined;
+let onStop: () => void = () => {};
+/** Settles at the first stop: each pause, snap and step of the measurement ends at once then. */
+const stopped = new Promise<void>((r) => { onStop = r; });
+let stopPoll: NodeJS.Timeout | undefined;
+const steps: Step[] = [];
 /** The end of the measurement: before the look (--look), else after the end step. The stop rules and the analysis cover only the time before it. */
 let measureEnd: number | undefined;
+let current: string | undefined;
 function checkHarm() {
   if (aborted) return;
   const why = stopReason(events, steps, Date.now(), { t0: T0, limitMs: LIMIT_MS, measureEnd });
   if (!why) return;
   aborted = why;
-  tell("disarm"); // the watcher also stops its give-back by itself at a pointer move
-  say(`STOP: ${why}`);
+  stopInfo = { why, t: Date.now(), step: current ?? "between steps", cause: events.find((e) => e.ev === "pointer" || e.ev === "input") };
+  // The watcher stops its give-back by itself at a person's first sign (a pointer move, a key press, a modifier key,
+  // a click or a scroll of the hardware); "disarm" stops it for the other stops. Then one last request, only while
+  // the agent Chrome is in front, so that a person's keys go to their own app while the end step quits that Chrome.
+  tell("disarm");
+  tell("giveback");
+  say(`STOP${stopInfo.cause ? ` (${stopInfo.t - stopInfo.cause.t} ms after the watcher's ${stopInfo.cause.ev} line)` : ""} in ${stopInfo.step}: ${why}`);
+  onStop();
 }
-/** One step: a snap of the windows before and after it (with `snap`), its time, its error; after it, the stop rules. `always`: it runs also after a stop. */
-async function step<T>(phase: string, name: string, fn: () => Promise<T>, o: { limitMs?: number; tailMs?: number; snap?: boolean; always?: boolean } = {}): Promise<T | undefined> {
+/** A sleep that ends at once at a stop. */
+const pause = (ms: number) => Promise.race([sleep(ms), stopped]);
+async function snap(label: string): Promise<WatchEvent | undefined> {
+  if (aborted) return undefined;
+  tell(`snap ${label}`);
+  return Promise.race([waitEvent((e) => e.ev === "windows" && e.why === "snap" && e.label === label, 3000), stopped.then(() => undefined)]);
+}
+const ready = await waitEvent((e) => e.ev === "ready", 20_000);
+if (!ready) refuse(`the watcher did not start (see ${join(RUN, "watch.err")})`);
+await sleep(400);
+// Before anything starts on the screen: the screen, the six HID readings, and nobody at the Mac since the watcher's
+// start (also in the dry run, with the stand-in's lines). The start step looks again right before its launch.
+const problem = screenProblem(events);
+if (problem) refuse(`refusing, nothing started: ${problem}`);
+// The display and the system stay awake for the run (an assertion that ends with this process).
+if (!O.dryRun) children.push(spawn("/usr/bin/caffeinate", ["-d", "-i", "-w", String(process.pid)], { stdio: "ignore" }));
+say(readyText(ready));
+
+// ------------------------------------------------------------------ the probe pages
+// The log keeps no key values (probeRecord): a person's keys that reach a probe page never go into results.json.
+const log: Rec[] = [];
+const { server, port } = await startServer(log, { record: probeRecord });
+const urlOf = (tab: string) => `http://probe.localhost:${port}/p?tab=${tab}`;
+async function loaded(tab: string, ms = 15_000): Promise<void> {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) {
+    if (log.some((e) => e.tab === tab && e.ev === "load")) return;
+    if (aborted) throw new Error("stopped");
+  }
+  throw new Error(`page ${tab} did not load in ${ms / 1000} s`);
+}
+
+// ------------------------------------------------------------------ steps
+const notRun: string[] = [];
+/**
+ * One step: a snap of the windows before and after it (with `snap`), its time, its error; the stop rules before, in
+ * and after it (runStep reads them every STOP_POLL_MS, and a stop ends the step at once: its work is left behind,
+ * and the end step's quit of the agent Chrome ends that work). `always`: it runs also after a stop, to its own end
+ * (the end step). `atOnce: false`: a stop does not cut the step short (the start: it must learn its Chrome's pid).
+ */
+async function step<T>(phase: string, name: string, fn: () => Promise<T>, o: { limitMs?: number; tailMs?: number; snap?: boolean; always?: boolean; atOnce?: boolean } = {}): Promise<T | undefined> {
   const label = `${phase}: ${name}`;
   if (aborted && !o.always) { notRun.push(label); return undefined; }
   if (o.snap) await snap(`before ${label}`);
-  await sleep(300);
+  if (!aborted) await pause(300);
+  if (aborted && !o.always) { notRun.push(label); return undefined; }
+  current = label;
   const t0 = Date.now();
-  let ok = true, error: string | undefined, value: T | undefined, timer: NodeJS.Timeout | undefined;
-  const limit = o.limitMs ?? 25_000;
-  try { value = await Promise.race([fn(), new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`no end in ${limit / 1000} s`)), limit); })]); }
-  catch (e) { ok = false; error = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 240); }
-  finally { clearTimeout(timer); }
+  const r = await runStep(fn, { limitMs: o.limitMs ?? 25_000, stopped: () => { checkHarm(); return aborted; }, atOnce: !o.always && o.atOnce !== false });
+  current = undefined;
   const t1 = Date.now();
-  steps.push({ phase, name, t0, t1, ok, ...(error ? { error } : {}) });
-  say(`${label}: ${ok ? "ok" : `FAILED: ${error}`} (${t1 - t0} ms)`);
-  await sleep(o.tailMs ?? 1200);
+  steps.push({ phase, name, t0, t1, ok: r.ok, ...(r.error ? { error: r.error } : {}) });
+  if (r.stopped) notRun.push(`${label} (stopped in it after ${t1 - t0} ms)`);
+  say(`${label}: ${r.ok ? "ok" : r.stopped ? "STOPPED" : `FAILED: ${r.error}`} (${t1 - t0} ms)`);
+  if (o.always) await sleep(o.tailMs ?? 1200); else await pause(o.tailMs ?? 1200);
   if (o.snap) await snap(`after ${label}`);
   checkHarm();
-  return value;
+  return r.value;
 }
 
 // ------------------------------------------------------------------ the agent Chrome's start
@@ -275,11 +315,18 @@ let endpoint: string | undefined;
 async function devtoolsEndpoint(ms: number): Promise<string> {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(200)) {
     try { const [p, path] = readFileSync(join(profile, "DevToolsActivePort"), "utf8").trim().split("\n"); if (/^\d+$/.test(p) && path?.startsWith("/devtools/browser/")) return `ws://127.0.0.1:${p}${path}`; } catch { /* not yet */ }
+    if (aborted) throw new Error("stopped before the DevTools port");
   }
   throw new Error(`no DevToolsActivePort in ${ms / 1000} s`);
 }
 await step("start", "agent Chrome start", async () => {
-  let guard: GiveBack | undefined;
+  // Right before the launch, a look again: the HID readings, and nobody at the Mac since the watcher's start (exit 2).
+  const late = screenProblem(events);
+  if (late) refuse(`refusing, nothing started: ${late}`);
+  // From now on the stop rules run at each watcher line and every STOP_POLL_MS, also between and inside steps.
+  watching = true;
+  stopPoll = setInterval(checkHarm, STOP_POLL_MS);
+  let guard: GiveBack | undefined, failed: unknown;
   try {
     if (O.dryRun) {
       const fd = openSync(join(RUN, "chrome.log"), "a");
@@ -293,12 +340,14 @@ await step("start", "agent Chrome start", async () => {
       if (code !== 0) throw new Error(`open exited with ${code}`);
     }
     endpoint = await devtoolsEndpoint(30_000);
-  } finally {
+  } catch (e) { failed = e; } finally {
     await guard?.finish(endpoint ? GIVE_BACK_GRACE_MS : 0);
-    // From now on the watcher gives the front back (agent-browser's own guard ended with the start). Until it knows the
-    // pid, a new instance of the agent's app bundle counts as the agent Chrome.
-    tell("arm");
+    // From now on the watcher gives the front back (agent-browser's own guard ended with the start), unless the check
+    // stopped. Until it knows the pid, a new instance of the agent's app bundle counts as the agent Chrome.
+    if (!aborted) tell("arm");
   }
+  // The pid, also after a stop or a failed start: the end step quits this Chrome by it. (This step finishes its own
+  // work at a stop: atOnce false; its waits for the DevTools port and the first page end at a stop.)
   for (let i = 0; i < 50 && !chromePid; i++, await sleep(100)) chromePid = ownChrome();
   // `open` starts Chrome under launchd, not as this process's child: if this process is killed (kill -9), Chrome stays.
   const help = chromePid
@@ -306,10 +355,11 @@ await step("start", "agent Chrome start", async () => {
     : `The check did not find its agent Chrome's pid (ps). If that Chrome still runs after the check, find it with \`ps axww -o pid,command | grep -F -- '--user-data-dir=${profile}'\` and stop its main process (the line with no --type=) with kill PID.`;
   writeFileSync(join(RUN, "stop-chrome.txt"), `${help}\n`);
   say(help);
+  if (chromePid) tell(`agent ${chromePid}`);
+  if (failed) throw failed;
   if (!chromePid) throw new Error("the agent Chrome's pid was not found on its profile (ps)");
-  tell(`agent ${chromePid}`);
   await loaded("F0");
-}, { limitMs: 45_000, snap: true });
+}, { limitMs: 45_000, snap: true, atOnce: false });
 
 // ------------------------------------------------------------------ agent-browser through its own proxy
 const base: BrowserOptions = { stateDir, socketPath, allow: ["probe.localhost"], ...(endpoint ? { endpoint } : {}), commandName: "mac check", proxyIdleMs: 60_000, log: (l) => say(`agent-browser: ${l}`) };
@@ -317,9 +367,12 @@ const oTab: BrowserOptions = { ...base, hiddenDrive: false }, oWin: BrowserOptio
 let browser: AgentBrowser | undefined, fatal: string | undefined;
 if (endpoint && !aborted) {
   settings = resolveOptions(base);
-  try { browser = await AgentBrowser.connect(base); } catch (e) { fatal = `agent-browser could not connect through its proxy: ${(e as Error).message.split("\n")[0]}`; say(fatal); }
-} else if (!endpoint) fatal = "the agent Chrome did not start";
+  // The connection ends its wait at a stop (the end step then quits the Chrome with SIGTERM: no CDP connection).
+  try { browser = await Promise.race([AgentBrowser.connect(base), stopped.then(() => undefined)]); } catch (e) { fatal = `agent-browser could not connect through its proxy: ${(e as Error).message.split("\n")[0]}`; say(fatal); }
+} else if (!endpoint && !aborted) fatal = "the agent Chrome did not start";
 const raw = browser?.conn as CDPConnection;
+/** The measurement's own CDP calls: none goes out after a stop, so a step's work that a stop left behind sends no more input. */
+const cdp = (method: string, params: object = {}, sessionId?: string): Promise<any> => aborted ? Promise.reject(new Error("stopped")) : raw.send(method, params, sessionId);
 const records: RecordRow[] = [];
 async function recordStep(phase: string, name: string, o: BrowserOptions, tab: string, where: string): Promise<void> {
   if (O.skip.includes("record")) { records.push({ where, skipped: "--skip record" }); return; }
@@ -331,9 +384,9 @@ async function recordStep(phase: string, name: string, o: BrowserOptions, tab: s
   records.push(r ? { where, fps: +(r.frames / r.seconds).toFixed(1), frames: r.frames, seconds: +r.seconds.toFixed(2), maxFrameGapMs: r.maxFrameGapMs }
     : { where, error: s && s.phase === phase && s.name === name ? s.error ?? "failed" : "not run" });
 }
-const attachTo = async (targetId: string) => (await raw.send("Target.attachToTarget", { targetId, flatten: true })).sessionId as string;
-const evaluate = async (sid: string, expression: string) => (await raw.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sid)).result?.value;
-const targetOf = async (tab: string) => ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; url: string; type: string }[]).find((t) => t.type === "page" && t.url.includes(`tab=${tab}`))?.targetId;
+const attachTo = async (targetId: string) => (await cdp("Target.attachToTarget", { targetId, flatten: true })).sessionId as string;
+const evaluate = async (sid: string, expression: string) => (await cdp("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sid)).result?.value;
+const targetOf = async (tab: string) => ((await cdp("Target.getTargets")).targetInfos as { targetId: string; url: string; type: string }[]).find((t) => t.type === "page" && t.url.includes(`tab=${tab}`))?.targetId;
 
 // ------------------------------------------------------------------ tab: today's agent mode, a background tab
 if (browser) {
@@ -350,23 +403,26 @@ if (browser) {
 // ------------------------------------------------------------------ window: one window per agent page
 const wins: Record<string, { target: string; windowId?: number; bounds?: { left?: number; top?: number; width?: number; height?: number } }> = {};
 const details: Record<string, unknown> = {};
-async function keysInto(targetId: string, text: string): Promise<string> {
+const FIELD = "document.getElementById('f').value";
+/** Keys into a page with no click; it gives the field's lengths and whether the keys added `text` (no value: fieldText). */
+async function keysInto(targetId: string, text: string): Promise<{ charsBefore: number; chars: number; theCheckKeys: boolean }> {
   const sid = await attachTo(targetId);
   try {
+    const before = await evaluate(sid, FIELD);
     for (const ch of text) {
       const code = `Key${ch.toUpperCase()}`, vk = ch.toUpperCase().charCodeAt(0);
-      await raw.send("Input.dispatchKeyEvent", { type: "keyDown", key: ch, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text: ch, unmodifiedText: ch }, sid);
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: ch, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text: ch, unmodifiedText: ch }, sid);
       await sleep(40);
-      await raw.send("Input.dispatchKeyEvent", { type: "keyUp", key: ch, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }, sid);
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: ch, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }, sid);
       await sleep(90);
     }
-    return String(await evaluate(sid, "document.getElementById('f').value"));
+    return fieldText(before, await evaluate(sid, FIELD), text);
   } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
 }
 /** Person-shaped CDP input (the research's humanCdp): a curved path of 20 moves, a 70 ms press with force 0.5, one key pair per character. */
 async function personInput(targetId: string): Promise<unknown> {
   const sid = await attachTo(targetId);
-  const send = (m: string, p: object) => raw.send(m, p, sid);
+  const send = (m: string, p: object) => cdp(m, p, sid);
   try {
     const g = await evaluate(sid, "({ sx: screenX, sy: screenY, ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight })") as Record<string, number>;
     const side = Math.max(0, Math.round((g.ow - g.iw) / 2)), ox = g.sx + side, oy = g.sy + g.oh - g.ih - side;
@@ -404,10 +460,10 @@ async function personInput(targetId: string): Promise<unknown> {
 }
 if (browser) {
   for (const name of ["WA", "WB"]) await step("window", `open window ${name} (Target.createTarget newWindow, background)`, async () => {
-    const { targetId } = await raw.send("Target.createTarget", { url: urlOf(name), newWindow: true, background: true });
+    const { targetId } = await cdp("Target.createTarget", { url: urlOf(name), newWindow: true, background: true });
     wins[name] = { target: targetId };
     await loaded(name);
-    const w = await raw.send("Browser.getWindowForTarget", { targetId });
+    const w = await cdp("Browser.getWindowForTarget", { targetId });
     wins[name] = { target: targetId, windowId: w.windowId, bounds: w.bounds };
   }, { snap: true });
   await step("window", "idle 3 s", () => sleep(3000), { snap: true });
@@ -428,8 +484,8 @@ if (browser) {
 // ------------------------------------------------------------------ facts: what an API gives (before the popups, which can take the front)
 const pages: { title: string; url: string; windowId?: number; state?: string }[] = [];
 if (browser) await step("facts", "the agent app's windows", async () => {
-  for (const t of ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; type: string; title: string; url: string }[]).filter((x) => x.type === "page")) {
-    const w = await raw.send("Browser.getWindowForTarget", { targetId: t.targetId }).catch(() => undefined);
+  for (const t of ((await cdp("Target.getTargets")).targetInfos as { targetId: string; type: string; title: string; url: string }[]).filter((x) => x.type === "page")) {
+    const w = await cdp("Browser.getWindowForTarget", { targetId: t.targetId }).catch(() => undefined);
     pages.push({ title: t.title, url: t.url.replace(/^http:\/\/probe\.localhost:\d+/, ""), windowId: w?.windowId, state: w?.bounds?.windowState });
   }
 }, { snap: true });
@@ -441,7 +497,7 @@ const POPUPS = [
   { id: "o3", y: 135, tab: "PC", kind: "window.open() with popup,width=500,height=400", asked: "a window, outer 500x400 (inner 500x400 asked)" },
 ] as const;
 const popupInfo: Record<string, Record<string, unknown>> = {};
-if (browser && !O.skip.includes("popups") && !wins.WA) notRun.push("popup: every popup step (window WA did not open)");
+if (browser && !O.skip.includes("popups") && !wins.WA) notRun.push(aborted ? "popup: every popup step" : "popup: every popup step (window WA did not open)");
 if (browser && !O.skip.includes("popups") && wins.WA) {
   await step("popup", "WA: add the link and the two buttons", async () => {
     const sid = await attachTo(wins.WA.target);
@@ -455,13 +511,13 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
     await step("popup", p.kind, async () => {
       const sid = await attachTo(wins.WA.target);
       try {
-        for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await raw.send("Input.dispatchMouseEvent", { type, x: 360, y: p.y, button: "left", clickCount: 1, buttons: type === "mousePressed" ? 1 : 0 }, sid);
+        for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: 360, y: p.y, button: "left", clickCount: 1, buttons: type === "mousePressed" ? 1 : 0 }, sid);
       } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
       await loaded(p.tab, 8000);
       await sleep(1000);
       const pt = await targetOf(p.tab);
       if (!pt) throw new Error(`no target for ${p.tab}`);
-      const pw = await raw.send("Browser.getWindowForTarget", { targetId: pt }), ow = await raw.send("Browser.getWindowForTarget", { targetId: wins.WA.target });
+      const pw = await cdp("Browser.getWindowForTarget", { targetId: pt }), ow = await cdp("Browser.getWindowForTarget", { targetId: wins.WA.target });
       const ps = await attachTo(pt);
       try {
         const st = await evaluate(ps, "({ ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, vis: document.visibilityState, focus: document.hasFocus(), hl: history.length })") as Record<string, unknown>;
@@ -469,7 +525,7 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
       } finally { await raw.send("Target.detachFromTarget", { sessionId: ps }).catch(() => {}); }
     }, { limitMs: 20_000, snap: true });
     const pt = popupInfo[p.tab]?.target as string | undefined;
-    if (pt) await step("popup", `close ${p.tab}`, () => raw.send("Target.closeTarget", { targetId: pt }), { tailMs: 800, snap: true });
+    if (pt) await step("popup", `close ${p.tab}`, () => cdp("Target.closeTarget", { targetId: pt }), { tailMs: 800, snap: true });
   }
 }
 
@@ -483,6 +539,7 @@ const LOOK = [
 ];
 if (O.look && browser && !aborted) {
   measureEnd = Date.now();
+  clearInterval(stopPoll);
   tell("disarm");
   process.stdout.write(`\nLOOK NOW (${O.look} s):\n${LOOK.slice(1).join("\n")}\n\n`);
   say(`LOOK NOW: the agent windows stay open for ${O.look} s`);
@@ -498,14 +555,23 @@ await step("end", "quit the agent Chrome", async () => {
   if (chromePid === undefined && chromeNow() === null) { quit = { running: false }; endLines.push("no agent Chrome ran on the run's profile"); return; }
   // Each signal goes only to the pid that ps shows on this run's own profile at that moment (chromeNow).
   const q = await quitAgentChrome({
-    check: chromeNow, close: async () => { if (raw) await raw.send("Browser.close", {}, undefined, 5000); },
+    // With no CDP connection (a stop before agent-browser connected) no Browser.close goes out: SIGTERM at once.
+    check: chromeNow, close: async () => { if (!raw) return false; await raw.send("Browser.close", {}, undefined, 5000); },
     signal: (pid, sig) => { try { process.kill(pid, sig); } catch { /* gone */ } }, sleep,
   });
   quit = q;
   quitProblem = q.problem;
   endLines.push(...q.lines);
 }, { limitMs: 45_000, tailMs: 1500, always: true });
+clearInterval(stopPoll);
 const endStep = steps.at(-1);
+if (stopInfo) {
+  // How fast the stop was: from the watcher's line of the person's first sign (or the stop) to the end of the step in
+  // progress and to the start of the end step.
+  const from = stopInfo.cause?.t ?? stopInfo.t, cut = steps.find((x) => `${x.phase}: ${x.name}` === stopInfo!.step);
+  endLines.push(`the stop (${stopInfo.why}) came in ${stopInfo.step}, ${stopInfo.t - from} ms after the watcher's ${stopInfo.cause ? `${stopInfo.cause.ev} line${stopInfo.cause.kind ? ` (${stopInfo.cause.kind})` : ""}` : "line"}; `
+    + `${cut ? `that step ended ${cut.t1 - from} ms after it; ` : ""}the end step began ${endStep?.phase === "end" ? `${endStep.t0 - from} ms` : "?"} after it`);
+}
 if (endStep?.phase === "end" && !endStep.ok && !quitProblem) quitProblem = `the quit of the agent Chrome did not finish (${endStep.error}); see stop-chrome.txt in the run folder`;
 await browser?.disconnect().catch(() => {});
 try { stopProxy(settings!); } catch { /* none */ }
@@ -605,7 +671,10 @@ const focusLine = (name: string, a: string, b: string) => {
 const focus = [
   focusLine("WA: click", "WA", "WB"),
   focusLine("WB: click (WA had the focus)", "WB", "WA"),
-  (() => { const l = focusLine("WA: keys with no click (WB has the focus)", "WA", "WB"); return l && `${l}; WA's field holds ${JSON.stringify(details.keys ?? null)}`; })(),
+  (() => {
+    const l = focusLine("WA: keys with no click (WB has the focus)", "WA", "WB"), k = details.keys as { charsBefore: number; chars: number; theCheckKeys: boolean } | undefined;
+    return l && `${l}; WA's field: ${k ? `${k.charsBefore} characters before the keys, ${k.chars} after (${k.theCheckKeys ? "the check's keys arrived" : "NOT only the check's keys"})` : "not read"}`;
+  })(),
   focusLine("WB: click (WA had the focus again)", "WB", "WA"),
   focusLine("WA: click (WB had the focus)", "WA", "WB"),
   (() => { const l = focusLine("WA: person-shaped click and typing", "WA", "WB"); const s = steps.find((x) => x.name === "WA: person-shaped click and typing"); if (!l || !s) return l; const g = stepSignals(sorted, "WA", s.t0, s.t1); return `${l}; input: ${g.moves} moves (${g.movesWithMovement} with movement), press ${g.downUpMs} ms, pressure ${g.pressure}, screen - client ${JSON.stringify(g.screenMinusClient)}, ${g.keydowns} keydown, pointer jumps ${g.pointerJumps}; path from ${JSON.stringify(details.person ?? null)}`; })(),
@@ -652,6 +721,7 @@ const result: MacResult = {
 };
 const text = summary(result);
 writeFileSync(join(RUN, "summary.md"), text);
-writeFileSync(join(RUN, "results.json"), `${JSON.stringify({ options: O, result, steps, notRun, details, popupInfo, pages, wins, watch: events, probe: log }, null, 1)}\n`);
+// The probe's log has no key values (probeRecord), and details.keys only a length (fieldText).
+writeFileSync(join(RUN, "results.json"), `${JSON.stringify({ options: O, result, steps, notRun, stop: stopInfo ?? null, details, popupInfo, pages, wins, watch: events, probe: log }, null, 1)}\n`);
 process.stdout.write(`${text}\n(results: ${join(RUN, "results.json")})\n`);
 process.exit(v.ok ? 0 : 1);

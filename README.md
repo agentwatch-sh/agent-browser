@@ -1477,7 +1477,12 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   of the run; the check quits that Chrome at its end (SIGKILL when it must) and removes the profile.
   Its watcher (`mac-watch.swift`, compiled by the check) gives the front back, and stops doing so at
   the first sign of a person (a pointer move, or a key press, a click or a scroll of the hardware);
-  the check exits 0 only when it never took the operator's focus or Space. It needs ffmpeg with
+  the check then ends the step in progress at once (it reads its stop rules every 100 ms) and quits
+  its Chrome. It refuses before its Chrome starts when a HID reading of the watcher is 0 or less, or
+  when a person used the Mac after the watcher's start. Apps that post keyboard or mouse events
+  (remote-desktop apps, Karabiner, a mouse jiggler, Universal Control) look like a person to it and
+  stop it: quit them first. Its `results.json` keeps no key values (only event types and counts).
+  The check exits 0 only when it never took the operator's focus or Space. It needs ffmpeg with
   libx264 (or `--skip record`). No other agent session may use the Mac's agent browser during the
   run. `--dry-run` runs it on Linux in a private Xvfb with a stand-in watcher. Not part of `npm
   test`; `test/mac-measure.test.ts` tests its pure parts (`mac-rules.ts`).
