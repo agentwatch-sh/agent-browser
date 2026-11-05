@@ -430,6 +430,8 @@ async function swRun(name, cfg) {
   for (const k of ["networkRequest", "rule1Match", "committedInScopeB", "swPageScriptRan", "frameOfSwPageReached", "guarded"]) s[k] = rows.filter((r) => r[k]).length;
   const ms = (k) => rows.map((r) => r.ms[k]).filter((x) => x !== null).sort((a, b) => a - b);
   s.ms = { commit: ms("commit"), guarded: ms("guarded"), swpageBeacon: ms("swpageBeacon") };
+  // Leave no worker behind for the next case.
+  await call("removeWorkers");
   save(`sw-${name}`, { config: cfg, summary: s, rows });
   return s;
 }
@@ -477,6 +479,7 @@ async function caseSw(only) {
   await call("reset");
   out.workerScript = { seen, registeredWithObserver: regSeen, blockType: type, registrationWithBlock: regBlocked,
     workersWithBlock: wb && { dedicated: wb.dedicated, shared: wb.shared }, workersWithoutBlock: wf && { dedicated: wf.dedicated, shared: wf.shared }, blockedByTheRule: workerTypes };
+  await call("removeWorkers");
   save(only === "script" ? "sw-script" : "sw", out);
   return out;
 }
@@ -635,6 +638,7 @@ async function caseSwPass() {
       out[`${mode}${extra ? " + allow rule for tab -1" : ""}`] = { registered: reg, ownScopeA: sum("A"), otherScopeB: sum("B") };
     }
   }
+  await call("removeWorkers");
   save("sw-pass", out);
   return out;
 }
