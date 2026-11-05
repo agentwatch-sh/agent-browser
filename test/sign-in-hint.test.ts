@@ -14,8 +14,8 @@ import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
-import { backByChrome, harness, until } from "./fake-bridge.ts";
-import { consumer, fixtureServer, site } from "./helpers.ts";
+import { backByChrome, harness, lineOf, until } from "./fake-bridge.ts";
+import { consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
 
 const CDP_URL = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/ab-lead";
 const AGENT = { mode: "agent", commandName: "vedlo browser" };
@@ -80,16 +80,16 @@ test("the unreachable hint: without cdpUrl it names `launch --login`; with cdpUr
 });
 
 test("over agent mode's endpoint, a redirect to a sign-in page names the operator extension, and the tab stays there", async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   const end = await backByChrome(h.fake, chrome);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const o = c.options({ cdpUrl: h.url("ab-lead") });
     await commands.open(o, { url: fx.base + "/", name: "redir" });
     await assert.rejects(commands.goto(o, { tab: "redir", url: fx.base + "/redirect" }), (e: unknown) => {
       assert.ok(e instanceof NotAllowedError);
-      assert.equal(e.message, "refusing: 127.0.0.1 redirected the tab to login.elsewhere.invalid, which is not on the allowlist"
-        + `${operatorHint("login.elsewhere.invalid", "127.0.0.1")}. The tab stays open there; agent-browser does not touch it`);
+      assert.equal(e.message, `refusing: ${FIXTURE_HOST} redirected the tab to login.elsewhere.invalid, which is not on the allowlist`
+        + `${operatorHint("login.elsewhere.invalid", FIXTURE_HOST)}. The tab stays open there; agent-browser does not touch it`);
       assert.ok(!e.message.includes("SECRET-CODE"));
       return true;
     });
@@ -132,13 +132,13 @@ test("a recording that lands on a sign-in page, without cdpUrl: the hint names `
 });
 
 test("over agent mode's endpoint, a recording that lands on a sign-in page names the operator extension and the recorded site", needsFfmpeg, async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
   const end = await backByChrome(h.fake, chrome);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST]));
     const e = await recordOntoSignIn(chrome, c.options({ cdpUrl: h.url("ab-lead") }), c.dir, fx.base);
     assert.ok(e instanceof NotAllowedError, String(e));
-    assert.equal(e.message, recordRefusal(operatorHint("login.elsewhere.invalid", "127.0.0.1")));
+    assert.equal(e.message, recordRefusal(operatorHint("login.elsewhere.invalid", FIXTURE_HOST)));
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
 
@@ -147,13 +147,13 @@ const SECOND = "docs.second.invalid";
 const secondSite = (base: string) => (url: URL) => url.hostname === SECOND ? { title: "second", text: "the second site" } : site(base)(url);
 
 test("over agent mode's endpoint, a goto step to a second site that redirects to a sign-in page: the hint names the second site", needsFfmpeg, async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(secondSite(fx.base)), h = await harness(), c = consumer(["127.0.0.1", SECOND]);
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(secondSite(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST, SECOND]);
   const end = await backByChrome(h.fake, chrome);
   // An HTTP redirect: the main frame commits on the sign-in page only, never on the second site first.
   const navigate = chrome.navigate.bind(chrome);
   chrome.navigate = (page, url) => navigate(page, new URL(url).hostname === SECOND ? "https://accounts.second.invalid/signin?code=SECRET-CODE" : url);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST, SECOND]));
     const e = await recordTake(chrome, c.options({ cdpUrl: h.url("ab-lead") }), c.dir, fx.base, [{ goto: `https://${SECOND}/doc` }, { wait: 20_000 }]);
     assert.ok(e instanceof NotAllowedError, String(e));
     assert.equal(e.message, recordRefusal(operatorHint("accounts.second.invalid", SECOND), "accounts.second.invalid"));
@@ -161,10 +161,10 @@ test("over agent mode's endpoint, a goto step to a second site that redirects to
 });
 
 test("over agent mode's endpoint, a navigation to a second allowlisted site, then to a sign-in page: the hint names the second site", needsFfmpeg, async () => {
-  const fx = await fixtureServer(), chrome = await FakeChrome.start(secondSite(fx.base)), h = await harness(), c = consumer(["127.0.0.1", SECOND]);
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(secondSite(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST, SECOND]);
   const end = await backByChrome(h.fake, chrome);
   try {
-    await h.ready();
+    await h.ready(lineOf([FIXTURE_HOST, SECOND]));
     const e = await recordTake(chrome, c.options({ cdpUrl: h.url("ab-lead") }), c.dir, fx.base, [{ wait: 20_000 }], (page) => {
       chrome.navigate(page, `https://${SECOND}/doc`); // a link the page follows: an allowlisted main-frame navigation
       setTimeout(() => chrome.navigate(page, "https://login.elsewhere.invalid/oauth?code=SECRET-CODE"), 300);

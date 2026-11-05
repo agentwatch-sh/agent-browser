@@ -890,8 +890,11 @@ export class FakeChrome {
   }
 
   private local(url: string): string {
-    if (new URL(url).hostname !== "127.0.0.1") throw new Error("the fake Chrome reaches only 127.0.0.1");
-    return url;
+    const u = new URL(url);
+    // A *.localhost name (the fixture's name over agent mode's endpoint) is this machine: it goes to 127.0.0.1, with no lookup.
+    if (u.hostname.endsWith(".localhost")) u.hostname = "127.0.0.1";
+    if (u.hostname !== "127.0.0.1") throw new Error("the fake Chrome reaches only 127.0.0.1");
+    return u.href;
   }
 
   private toSessions(page: FakePage, method: string, params: object, want: (s: Session) => boolean = (s) => !s.worker) {

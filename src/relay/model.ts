@@ -4,12 +4,21 @@
 // one connection at a time (all sessions of a tab share its one chrome.debugger attachment and its domain state),
 // and every other page call goes to debugger.sendCommand after the refusals of policy.ts. It grew from the probe's
 // relay.mjs (docs/superpowers/specs/2026-11-03-two-modes-probe/).
+//
+// Each scope has its own allowlist (part 2 of the per-scope build, board ab-v16.35; the per-scope design,
+// docs/superpowers/specs/2026-11-04-per-scope-allowlist-design.md, section 8.4, and the orphan-tabs design,
+// 2026-11-05-orphan-agent-tabs-design.md, section 8). The receiver keeps each tab's scope and blocks each tab by its
+// own list; the relay names the scope of each tab that it opens, takes every other tab into a scope only when the
+// receiver reports it (bridge.tabScope, and bridge.tabScopes at each link up), admits a connection only while its
+// scope has a list, and refuses a client's navigation off that list (layer 1 of the guard). The receiver keeps the
+// browser's last window for every close (C10, removals and the last window), so the relay sends its closes as they are.
 
 import { randomBytes } from "node:crypto";
 import { copyFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Bridge } from "./bridge.ts";
-import { awaitsPromise, cdpError, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { awaitsPromise, cdpError, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { covers, parseScopes, SCOPE, type ScopeSet } from "./scopes.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
 const PERMISSIONS: Record<string, string> = { geolocation: "location", notifications: "notifications", videoCapture: "camera",
@@ -21,8 +30,8 @@ const HIDDEN_TYPES = new Set(["service_worker", "shared_worker", "browser"]);
 const CREATED_WAIT_MS = 2000;
 /** The longest wait of an input for its page's activation (a bridge op that does not answer): then the input goes anyway. */
 const ACTIVATE_MAX_MS = 2000;
-/** How long the removals wait for a client's Page.close to end in its tab's tabs.onRemoved (Page.close answers first). */
-const PAGE_CLOSE_WAIT_MS = 2000;
+/** How long a new tab that the relay did not create waits in the model for its bridge.tabScope (C11). */
+export const TAB_SCOPE_WAIT_MS = 500;
 /** chrome.downloads danger values that wait for a person's confirmation (not measured; agent mode never confirms one). */
 const SAFE_DANGER = new Set(["safe", "accepted", "allowlistedByPolicy", "deepScannedSafe", "asyncScanning", "asyncLocalPasswordScanning"]);
 
@@ -31,12 +40,16 @@ export const CLOSE = {
   scopeEnded: [1000, "The agentwatch session ended"],
   linkDown: [1011, "The agent browser's link went down"],
   stopped: [1001, "The agent browser stopped"],
+  noList: [1008, "The allowlist has no list for this scope any more"],
 } as const;
 export const NOT_READY = {
   link: "The agent browser is not ready: its extension is not connected.",
   allowlist: "The agent browser is not ready: its extension has not confirmed the allowlist.",
   old: "The agent browser is not ready: its extension is too old for agent mode.",
+  noList: "The agent browser is not ready: the allowlist has no list for this scope.",
 };
+/** The receiver's answer to an op on a tab that its sweep took out of its scope (C10, the orphan set). */
+const NOT_AN_AGENT_TAB = "not an agent tab";
 
 /** A client connection as the model sees it: the endpoint gives it a WebSocket. */
 export type Socket = { send(text: string): void; close(code: number, reason: string): void };
@@ -50,6 +63,10 @@ type Tab = {
   seen: boolean;
   /** While an input of the tab waits for its activation: the tab's later calls go to Chrome behind it, in order. */
   gate: Promise<void> | null;
+  /** It came from the receiver's map at the link up (bridge.tabScopes, step 2): step 3 gives it its target id, or drops it. */
+  fromMap: boolean;
+  /** A new tab whose bridge.tabScope did not come in TAB_SCOPE_WAIT_MS: released and detached; a later one still puts it in its scope. */
+  late: boolean;
 };
 type Session = { tabId: number; parent?: string; auto: boolean };
 type Download = { conn: Conn; url: string; name: string; item?: number };
@@ -88,14 +105,17 @@ export class Model {
   /** Target.createTarget calls in flight: a new tab waits for them, so that only its creator takes a tab that it opened. */
   private readonly creating = new Set<Promise<unknown>>();
   private readonly seenWaiters = new Map<number, () => void>();
-  /** A client's Page.close that waits for its tab's tabs.onRemoved, by tab. */
-  private readonly removedWaiters = new Map<number, () => void>();
+  /** The bridge.tabScope of a tab that the model does not know yet: it comes before the tab's tabs.onCreated or tabs.onReplaced. */
+  private readonly keptScopes = new Map<number, string>();
+  /** A new tab that waits for its bridge.tabScope (TAB_SCOPE_WAIT_MS), by tab. */
+  private readonly scopeWaiters = new Map<number, (scope: string | null) => void>();
   private nextConn = 1;
   private link = 0; // the generation of the link: an answer from before a link change changes nothing
   private linkUp = false;
   private info: { bridge: number; userAgent?: string; fullVersion?: string; version?: string } | null = null;
   private tooOld = false;
-  private allowlist: string[] | null = null;
+  /** The last allowlist line since the link came up: the lists of the set_scopes that the receiver confirmed. */
+  private allowlist: ScopeSet | null = null;
   private cleared = false;
   private settings: Promise<unknown> = Promise.resolve();
   /** How long a finished download may take to show up complete in chrome.downloads. */
@@ -109,8 +129,6 @@ export class Model {
   readonly windowPerPage: boolean;
   /** The activations of every tab, in order: each one and its input reach the bridge before the next activation reads a window. */
   private activations: Promise<void> = Promise.resolve();
-  /** The removals of tabs, in order: each one's tabs.query sees the end of the removal before it (C11). */
-  private removals: Promise<unknown> = Promise.resolve();
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
@@ -125,6 +143,17 @@ export class Model {
     return this.info ? null : NOT_READY.link;
   }
 
+  /** Why a connection of `scope` is refused (C11, the order of the checks without the peer check), or null to admit it. */
+  refuse(scope: string): string | null {
+    // A scope whose list is empty is admitted: it can open about:blank only.
+    return this.notReady() ?? (this.allowlist?.listOf(scope) == null ? NOT_READY.noList : null);
+  }
+
+  /** The entries of a scope's list in the last allowlist line, or null for a scope with no list. */
+  private entriesOf(scope: string): readonly string[] | null {
+    return this.allowlist?.entriesOf(scope) ?? null;
+  }
+
   // ------------------------------------------------------------------ the daemon's lines
 
   /** A line from the daemon other than a res: a receiver event, a link change, an allowlist or the end of a scope. */
@@ -132,13 +161,43 @@ export class Model {
     if (msg.t === "ev") this.onEvent(msg);
     else if (msg.t === "link" && msg.up) void this.onLinkUp();
     else if (msg.t === "link") this.onLinkDown();
-    else if (msg.t === "allowlist" && Array.isArray(msg.domains)) {
-      this.allowlist = msg.domains.map(String);
-      // Content settings act on the whole profile: the grants that the new list still covers, and automatic downloads for its domains.
-      void this.queueSettings(() => this.rebuild(CONTENT_TYPES));
-    } else if (msg.t === "end_scope") void this.endScope(String(msg.scope));
+    else if (msg.t === "allowlist") this.onAllowlist(msg);
+    else if (msg.t === "end_scope") void this.endScope(String(msg.scope));
   }
 
+  /**
+   * C10's allowlist line: the object of the set_scopes that the receiver confirmed, by C4's rules (scopes.ts). An old
+   * daemon's line ({"domains": [...]}) gives every scope no list: the endpoint admits no connection (no backward
+   * compatibility; C4, the rollout).
+   */
+  private onAllowlist(msg: unknown): void {
+    const set = parseScopes(msg);
+    this.allowlist = set;
+    if (set.refused) this.log(`relay: the allowlist line has ${set.refused} refused item(s)`);
+    // C11: every connection of a scope that has no list any more closes; its tabs are detached and freed.
+    for (const c of [...this.conns]) {
+      if (set.listOf(c.scope) !== null) continue;
+      c.socket.close(...CLOSE.noList);
+      void this.close(c);
+    }
+    // C11: at a line whose scopes and lists are objects, the model drops each tab of a scope that the line gives no
+    // list. The receiver's sweep closed it, or took it out of its scope into its orphan set (C5), so a later session
+    // of the same name never sees it. A tab that still waits for its bridge.tabScope has no scope yet, and it stays.
+    if (set.applied) {
+      for (const tab of [...this.tabs.values()]) if (tab.scope !== null && set.listOf(tab.scope) === null) this.drop(tab);
+      for (const [id, scope] of this.keptScopes) if (set.listOf(scope) === null) this.keptScopes.delete(id);
+    }
+    // Content settings act on the whole profile: the grants that each connection's own list still covers, and
+    // automatic downloads for every entry of every list.
+    void this.queueSettings(() => this.rebuild(CONTENT_TYPES));
+  }
+
+  /**
+   * C10, the steps of the link up, at each link up and so at each relay start (the daemon writes the link-up line to
+   * each relay that starts while the link is up), before the relay admits a connection: (1) bridge.info; (2)
+   * bridge.tabScopes, whose entries join the model at once; (3) debugger.getTargets, which gives those entries their
+   * target ids and drops the ones whose tab is gone; (4) the detach of every tab that Chrome reports attached.
+   */
   private async onLinkUp(): Promise<void> {
     // A new receiver detached every tab at its link up (C10): no session of an earlier link is alive.
     this.closeAll(CLOSE.linkDown);
@@ -160,30 +219,76 @@ export class Model {
     }
     if (link !== this.link) return;
     if (!(info && info.bridge >= 1)) { this.tooOld = true; return; }
-    await this.detachEvery(link);
-    // Ready only now (with the allowlist line): no connection meets a tab that still carries an earlier client's state.
+    const fromMap = await this.readMap(link);
+    if (link !== this.link) return;
+    await this.targetsAndDetach(link, fromMap);
+    // Ready only now (with the allowlist line): no connection meets a tab that still carries an earlier client's
+    // state, and each scope's tabs from before the link up are in the model.
     if (link === this.link) this.info = info;
   }
 
   /**
-   * C10, at each link up and so at each relay start: detach every tab that Chrome reports attached, before the relay
-   * admits a connection. A relay that starts with no link change (the daemon restarts a relay that ended) finds the
-   * tabs of the relay before it still attached, with their clients' domain state: measured (board ab-v16.39), the old
-   * client's Fetch pattern still paused a page's request, and its user-agent override stayed. After a link change the
-   * receiver has already detached its bridge tabs, so each detach answers null. The errors are ignored (the restore
-   * tab of a running import answers `not an agent tab`); a failed debugger.getTargets is logged, and the relay goes on.
+   * Step 2: the receiver keeps its tab-to-scope map over a link drop and a relay restart (C10, each tab's scope), so
+   * the model takes those tabs back into their scopes: free (no owner), not attached, not held, no target id yet. A
+   * client of the scope that connects again sees them. The entries join at once, and each later event applies on top
+   * (a tabs.onRemoved drops one, a bridge.tabScope adds one): the receiver sends its events in order, so an event
+   * before the answer is in it already. A failed or late bridge.tabScopes is logged, and the relay goes on with no
+   * tab of an earlier link. Returns the tabs that it added.
    */
-  private async detachEvery(link: number): Promise<void> {
+  private async readMap(link: number): Promise<Set<number>> {
+    const added = new Set<number>();
+    let entries: unknown;
+    try { entries = await this.bridge.call("bridge.tabScopes"); } catch (e) {
+      this.log(`relay: bridge.tabScopes at the link up failed: ${(e as Error).message}`);
+      return added;
+    }
+    if (link !== this.link || !Array.isArray(entries)) return added;
+    for (const e of entries) {
+      const id = e?.tabId, scope = e?.scope;
+      if (!Number.isInteger(id) || id < 0 || typeof scope !== "string" || !SCOPE.test(scope) || this.tabs.has(id)) continue;
+      const tab = this.tabOf(id);
+      tab.scope = scope; tab.fromMap = true;
+      this.keptScopes.delete(id);
+      added.add(id);
+    }
+    if (added.size) this.log(`relay: ${added.size} tab(s) of the receiver's map at the link up`);
+    return added;
+  }
+
+  /**
+   * Steps 3 and 4. Step 3 changes only the model, and only the entries of step 2: an entry of a later bridge.tabScope
+   * gets its target id as a popup's does. Step 4: a relay that starts with no link change (the daemon restarts a relay
+   * that ended) finds the tabs of the relay before it still attached, with their clients' domain state: measured
+   * (board ab-v16.39), the old client's Fetch pattern still paused a page's request, and its user-agent override
+   * stayed. After a link change the receiver has already detached its bridge tabs, so each detach answers null. The
+   * errors are ignored (the restore tab of a running import answers `not an agent tab`); a failed
+   * debugger.getTargets is logged, and the relay goes on.
+   */
+  private async targetsAndDetach(link: number, fromMap: Set<number>): Promise<void> {
     let targets: unknown;
     try { targets = await this.bridge.call("debugger.getTargets"); } catch (e) {
       this.log(`relay: debugger.getTargets at the link up failed: ${(e as Error).message}`);
       return;
     }
     if (link !== this.link || !Array.isArray(targets)) return;
-    const tabs = new Set<number>();
-    for (const t of targets) if (t?.attached === true && Number.isInteger(t.tabId) && t.tabId >= 0) tabs.add(t.tabId);
-    await Promise.all([...tabs].map((id) => this.bridge.call("debugger.detach", [id]).catch(() => {})));
-    if (tabs.size) this.log(`relay: detached ${tabs.size} tab(s) at the link up`);
+    const ids = new Map<number, string>(), attached = new Set<number>();
+    for (const t of targets) {
+      if (!Number.isInteger(t?.tabId) || t.tabId < 0) continue;
+      if (typeof t.id === "string" && t.id) ids.set(t.tabId, t.id);
+      if (t.attached === true) attached.add(t.tabId);
+    }
+    let gone = 0;
+    for (const id of fromMap) {
+      const tab = this.tabs.get(id);
+      if (!tab?.fromMap) continue;
+      const targetId = ids.get(id);
+      if (targetId) tab.targetId ??= targetId;
+      else { this.removed(id); gone++; } // the tab closed (the receiver's map drops it at its own tabs.onRemoved)
+    }
+    if (gone) this.log(`relay: ${gone} tab(s) of the receiver's map are gone`);
+    for (const id of attached) { const tab = this.tabs.get(id); if (tab) { tab.attached = false; tab.held = false; } }
+    await Promise.all([...attached].map((id) => this.bridge.call("debugger.detach", [id]).catch(() => {})));
+    if (attached.size) this.log(`relay: detached ${attached.size} tab(s) at the link up`);
   }
 
   private onLinkDown(): void {
@@ -194,7 +299,8 @@ export class Model {
   }
 
   private reset(): void {
-    this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear();
+    this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
+    for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null;
   }
 
@@ -212,73 +318,29 @@ export class Model {
     this.closeAll(CLOSE.stopped);
   }
 
+  /**
+   * C10's end_scope: the scope's connections close (1000) and its tabs are removed. The receiver keeps the browser's
+   * last window for every close (its removal queue and window rule, C10), so the relay sends each tabs.remove as it
+   * is, with no query, window or queue of its own (board ab-v16.41, chrome-extension PR #17). A late end_scope, after
+   * the receiver's sweep took a tab out of its scope (the orphan set, C5), gets `not an agent tab` (board ab-v16.48):
+   * that removal is done for the relay, which drops the tab from its model and logs no error; the receiver's next
+   * sweep item closes the tab. The receiver's sweep is the guarantee, end_scope the fast path (C4).
+   */
   private async endScope(scope: string): Promise<void> {
     for (const c of [...this.conns]) if (c.scope === scope) { c.socket.close(...CLOSE.scopeEnded); await this.close(c); }
-    for (const tab of [...this.tabs.values()]) {
-      if (tab.scope === scope) await this.removeTab(tab.id).catch((e) => this.log(`relay: end_scope kept tab ${tab.id}: ${(e as Error).message}`));
-    }
+    const tabs = [...this.tabs.values()].filter((t) => t.scope === scope);
+    await Promise.all(tabs.map((tab) => this.bridge.call("tabs.remove", [tab.id]).then(() => {}, (e) => {
+      if ((e as Error).message === NOT_AN_AGENT_TAB) { if (this.tabs.get(tab.id) === tab) this.drop(tab); }
+      else this.log(`relay: end_scope kept tab ${tab.id}: ${(e as Error).message}`);
+    })));
   }
 
-  /**
-   * C11: the relay never closes the browser's last window. Before each removal of a tab (tabs.remove, and a client's
-   * Page.close), when the tab is the browser's only tab, an about:blank window (not focused, in no scope) opens
-   * first, as C5's closing rule does: measured (board ab-v16.39), an end_scope that removed the only tab ended
-   * Chromium. One query and removal at a time (the queue `removals`), so two removals cannot each count the other's
-   * tab (measured, review-48 X2b: two at once ended Chromium). A failed query or window keeps the tab (the error goes
-   * to the caller). A page's own window.close() is outside the relay: Chrome closes that tab itself.
-   */
-  private async keepLastWindow(id: number): Promise<void> {
-    const all = await this.bridge.call<unknown>("tabs.query", [{}]);
-    // An answer that is not a list counts as no other tab: an extra window is better than a browser that ends.
-    const others = Array.isArray(all) && all.some((t) => t?.id !== id);
-    if (!others) await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }]);
-  }
-
-  /** One step of the removals queue: it starts when the step before it ended. */
-  private queueRemoval(step: () => Promise<void>): Promise<void> {
-    const run = this.removals.then(step);
-    this.removals = run.catch(() => {});
-    return run;
-  }
-
-  private removeTab(id: number): Promise<void> {
-    // tabs.onRemoved comes before chrome.tabs.remove ends (measured, review-48 X4): the next query sees the tab gone.
-    return this.queueRemoval(async () => {
-      await this.keepLastWindow(id);
-      await this.bridge.call("tabs.remove", [id]);
-    });
-  }
-
-  /**
-   * A client's Page.close on a page session (Playwright's page.close({ runBeforeUnload: true })), in the removals
-   * queue: the guard, then Page.close to Chrome. Page.close answers before its tab closes, so the queue goes on at the
-   * tab's tabs.onRemoved, or after PAGE_CLOSE_WAIT_MS (a beforeunload handler can keep the tab), or at once after an
-   * error. The returned promise ends when Page.close went to the bridge: the tab's later calls go behind it, in order.
-   */
-  private closePage(tab: Tab, params: any, answer: (body: object) => void, before: Promise<void> | null): Promise<void> {
-    let sent!: () => void;
-    const gate = new Promise<void>((r) => { sent = r; });
-    void this.queueRemoval(async () => {
-      try {
-        if (before) await before;
-        try { await this.keepLastWindow(tab.id); } catch (e) { answer({ error: cdpError("Page.close", e) }); return; }
-        const gone = this.whenRemoved(tab.id, PAGE_CLOSE_WAIT_MS);
-        const call = this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.close", params]);
-        sent();
-        const failed = call.then((r) => { answer({ result: r ?? {} }); return false; }, (e) => { answer({ error: cdpError("Page.close", e) }); return true; });
-        await Promise.race([gone, failed.then((f) => (f ? undefined : gone))]);
-      } finally { sent(); }
-    }).catch((e) => this.log(`relay: the Page.close of tab ${tab.id} failed: ${(e as Error).message}`));
-    return gate;
-  }
-
-  /** Ends at the tab's tabs.onRemoved, or after `ms`. */
-  private whenRemoved(tabId: number, ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      const done = () => { clearTimeout(timer); if (this.removedWaiters.get(tabId) === done) this.removedWaiters.delete(tabId); resolve(); };
-      const timer = setTimeout(done, ms);
-      this.removedWaiters.set(tabId, done);
-    });
+  /** The tab leaves the model (its scope has no list any more, or the receiver took it out of its scope): its sessions end, and it carries no debugger. */
+  private drop(tab: Tab): void {
+    const attached = tab.attached || !!tab.attaching;
+    this.removed(tab.id);
+    tab.attached = false; tab.held = false;
+    if (attached) this.bridge.call("debugger.detach", [tab.id]).catch(() => {});
   }
 
   // ------------------------------------------------------------------ connections
@@ -322,6 +384,11 @@ export class Model {
     }
     const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage });
     if (typeof to === "object") return fail(to.refused);
+    // Layer 1 of the guard (C11; the per-scope design, section 6): a navigation of the tab's main frame, or a new tab's
+    // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off
+    // that list.
+    const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined);
+    if (off !== null) return fail(TEXT.notAllowed(off));
     if (to === "chrome") return this.forward(tab!, child, method, params, answer);
     try {
       const result = await this.handlers[method](c, params, sessionId, tab);
@@ -333,8 +400,9 @@ export class Model {
   }
 
   private forward(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): void {
-    // C11: a page's Page.close can close the browser's last window, so it goes through the removals queue.
-    if (method === "Page.close" && !child) { this.behind(tab, this.closePage(tab, params, answer, tab.gate)); return; }
+    // A client's Page.close goes to Chrome as any page call: the receiver runs it in its removal queue, with its window
+    // rule, so it never closes the browser's last window (C10, C11; board ab-v16.41). On a child session (a frame or a
+    // worker) Chrome refuses it, with no window rule.
     const send = () => this.send(tab, child, method, params, answer);
     if (this.windowPerPage && startsAction(method, params)) {
       // The tab's earlier calls and every earlier activation first; the input goes right behind its own activation.
@@ -400,7 +468,7 @@ export class Model {
 
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
-    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null }));
+    if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false }));
     return tab;
   }
 
@@ -599,16 +667,26 @@ export class Model {
         for (const c of this.conns) if (c.discover && c.scope === tab.scope) c.event(undefined, "Target.targetInfoChanged", { targetInfo: this.infoOf(tab, ev.tab) });
         return;
       }
-      case "tabs.onRemoved": this.removedWaiters.get(ev.tabId)?.(); return this.removed(ev.tabId);
+      case "bridge.tabScope": return this.onTabScope(ev.tabId, ev.scope);
+      case "tabs.onRemoved":
+        // A popup that closes while the receiver holds its tabs.onCreated gets none: its kept bridge.tabScope goes (C11).
+        this.keptScopes.delete(ev.tabId);
+        this.scopeWaiters.get(ev.tabId)?.(null);
+        return this.removed(ev.tabId);
       case "tabs.onReplaced": {
+        // The receiver sends the added tab's bridge.tabScope right before this event (C10): the added tab's scope comes
+        // from it, never from the removed tab. The added tab keeps the removed tab's owner and opener in that scope.
         const old = this.tabs.get(ev.removedTabId);
-        if (!old?.scope) return;
-        const owner = old.owner && this.conns.has(old.owner) ? old.owner : null;
-        this.removed(old.id);
-        // The new tab takes the old one's place: its scope, its owner and its opener.
+        const scope = this.keptScopes.get(ev.addedTabId) ?? this.tabs.get(ev.addedTabId)?.scope ?? null;
+        this.keptScopes.delete(ev.addedTabId);
+        const same = !!old && old.scope !== null && old.scope === scope;
+        const owner = same && old!.owner && this.conns.has(old!.owner) ? old!.owner : null;
+        const opener = same ? old!.opener : null;
+        if (old) this.removed(old.id);
+        if (!scope || !Number.isInteger(ev.addedTabId)) return;
         const tab = this.tabOf(ev.addedTabId);
-        tab.scope = old.scope; tab.owner = owner; tab.opener = old.opener; tab.claimed = true;
-        void this.targetIdOf(tab.id).then((t) => { tab.targetId = t; return this.announce(tab); }).catch(() => {});
+        tab.scope = scope; tab.owner = owner; tab.opener = opener; tab.claimed = true;
+        void this.targetIdOf(tab.id).then((t) => { if (this.tabs.get(tab.id) !== tab) return; tab.targetId = t; return this.announce(tab); }).catch(() => {});
         return;
       }
       case "downloads.onCreated": return this.onDownloadItem(ev.item ?? {});
@@ -658,30 +736,83 @@ export class Model {
     this.bridge.call("debugger.sendCommand", [parent, "Target.detachFromTarget", { sessionId: p.sessionId }]).catch(() => {});
   }
 
+  /**
+   * A new tab that the relay did not create (a popup, the receiver's about:blank tab of its window rule, the
+   * operator's tab). It joins a scope only by the receiver's bridge.tabScope (C10, C11): the receiver enforces each
+   * tab's list, so the relay never computes a tab's scope itself. For a popup the event comes before its tabs.onCreated
+   * in practice (keptScopes); else the model keeps the tab with no scope, attached and held as the receiver reported
+   * it, for up to TAB_SCOPE_WAIT_MS. With no scope then, it is released and detached, as a tab of no scope; a later
+   * bridge.tabScope still puts it in its scope, as a free tab (onTabScope).
+   */
   private async onCreated(ev: any): Promise<void> {
     const link = this.link;
+    if (!Number.isInteger(ev.tab?.id)) return;
     const tab = this.tabOf(ev.tab.id);
     tab.attached = !!ev.attached; tab.held = !!ev.held; tab.seen = true;
     this.seenWaiters.get(tab.id)?.();
     if (this.creating.size) await Promise.allSettled([...this.creating]);
-    if (tab.claimed || link !== this.link) return;
-    // The opener comes from Chrome's own target info: chrome.tabs' openerTabId named the active tab instead of the
-    // tab that called window.open (measured). A tab with no opener in a scope is in no scope: no connection sees it.
-    if (tab.attached) {
-      const info = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Target.getTargetInfo", {}]).then((r) => r?.targetInfo, () => null);
-      const opener = info?.openerId ? this.byTarget(info.openerId) : undefined;
-      if (info?.targetId) tab.targetId = info.targetId;
-      if (opener?.scope) { tab.opener = opener.id; tab.scope = opener.scope; }
-    }
+    if (tab.claimed || link !== this.link || this.tabs.get(tab.id) !== tab) return;
+    tab.claimed = true;
+    const kept = this.keptScopes.get(tab.id);
+    this.keptScopes.delete(tab.id);
+    tab.scope ??= kept ?? await this.scopeWait(tab);
+    if (link !== this.link || this.tabs.get(tab.id) !== tab) return;
     if (!tab.scope) {
-      this.tabs.delete(tab.id);
+      tab.late = true;
       if (tab.attached) { this.release(tab); await this.detach(tab); }
       return;
     }
+    // The owner: the owner of its opener, for an opener in the same scope. The opener comes from Chrome's own target
+    // info: chrome.tabs' openerTabId named the active tab instead of the tab that called window.open (measured).
+    if (tab.attached) {
+      const info = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Target.getTargetInfo", {}]).then((r) => r?.targetInfo, () => null);
+      const opener = info?.openerId ? this.byTarget(info.openerId) : undefined;
+      if (info?.targetId) tab.targetId ??= info.targetId;
+      if (opener && opener !== tab && opener.scope === tab.scope) tab.opener = opener.id;
+    }
     tab.targetId ??= await this.targetIdOf(tab.id);
+    if (this.tabs.get(tab.id) !== tab) return;
     await this.announce(tab);
     // Nobody took it: it carries no debugger until a connection attaches.
     if (!tab.sessions.size && tab.attached) { this.release(tab); await this.detach(tab); }
+  }
+
+  /** Up to TAB_SCOPE_WAIT_MS for the tab's bridge.tabScope: its scope, or null. */
+  private scopeWait(tab: Tab): Promise<string | null> {
+    return new Promise((resolve) => {
+      const done = (scope: string | null) => { clearTimeout(timer); if (this.scopeWaiters.get(tab.id) === done) this.scopeWaiters.delete(tab.id); resolve(scope); };
+      const timer = setTimeout(() => done(null), TAB_SCOPE_WAIT_MS);
+      this.scopeWaiters.set(tab.id, done);
+    });
+  }
+
+  /**
+   * C10's bridge.tabScope: the receiver gave a tab a scope itself (a popup takes its opener's, a replaced tab its old
+   * one). The relay never puts a tab in a scope that the receiver did not report.
+   */
+  private onTabScope(tabId: unknown, scope: unknown): void {
+    if (!Number.isInteger(tabId) || (tabId as number) < 0 || typeof scope !== "string" || !SCOPE.test(scope)) return;
+    const id = tabId as number;
+    const tab = this.tabs.get(id);
+    // Before the tab's tabs.onCreated or tabs.onReplaced: kept for it, until its tabs.onRemoved.
+    if (!tab) { this.keptScopes.set(id, scope); return; }
+    if (tab.scope !== null) {
+      // The receiver changes no tab's scope (a replaced tab has a new id), so this names the scope that the tab has.
+      if (tab.scope !== scope) this.log(`relay: bridge.tabScope of tab ${id} names another scope than the model's; the tab keeps its scope`);
+      return;
+    }
+    tab.scope = scope;
+    const waiter = this.scopeWaiters.get(id);
+    if (waiter) { waiter(scope); return; }
+    if (tab.late) void this.joinLate(tab).catch((e) => this.log(`relay: tab ${id}: ${(e as Error).message}`));
+  }
+
+  /** A tab whose bridge.tabScope came after TAB_SCOPE_WAIT_MS joins its scope as a free tab (it was detached at the end of the wait). */
+  private async joinLate(tab: Tab): Promise<void> {
+    tab.late = false;
+    tab.targetId ??= await this.targetIdOf(tab.id);
+    if (this.tabs.get(tab.id) !== tab) return;
+    await this.announce(tab);
   }
 
   private removed(tabId: number): void {
@@ -753,8 +884,9 @@ export class Model {
 
   // ------------------------------------------------------------------ permissions and content settings
 
-  private covers(host: string): boolean {
-    return (this.allowlist ?? []).some((d) => host === d || host.endsWith(`.${d}`));
+  /** The connection's scope's list covers the host (C11: a grant reaches no host off its own scope's list). */
+  private coveredFor(c: Conn, host: string): boolean {
+    return covers(this.entriesOf(c.scope) ?? [], host);
   }
 
   private queueSettings(step: () => Promise<unknown>): Promise<unknown> {
@@ -763,13 +895,17 @@ export class Model {
     return run;
   }
 
-  /** Set each content-setting type again from the grants of the open connections that the list covers (and automatic downloads for its domains). */
+  /**
+   * Set each content-setting type again: the grants of the open connections that their own scope's list still covers,
+   * and automatic downloads for each entry of every list (C11). A content setting acts on the whole profile, so a grant
+   * of one scope applies to another scope's tab on the same host, when that scope's list holds the host too.
+   */
   private async rebuild(types: Iterable<string>): Promise<void> {
     for (const type of types) {
       await this.bridge.call("contentSettings.clear", [type]);
       const patterns = new Set<string>();
-      if (type === "automaticDownloads") for (const d of this.allowlist ?? []) patterns.add(`*://*.${d}/*`);
-      for (const c of this.conns) for (const g of c.grants) if (g.type === type && this.covers(/^[^:]+:\/\/(?:\*\.)?([^:/]+)/.exec(g.pattern)?.[1] ?? "")) patterns.add(g.pattern);
+      if (type === "automaticDownloads") for (const d of this.allowlist?.union() ?? []) patterns.add(`*://*.${d}/*`);
+      for (const c of this.conns) for (const g of c.grants) if (g.type === type && this.coveredFor(c, /^[^:]+:\/\/(?:\*\.)?([^:/]+)/.exec(g.pattern)?.[1] ?? "")) patterns.add(g.pattern);
       for (const primaryPattern of patterns) await this.bridge.call("contentSettings.set", [type, { primaryPattern, setting: "allow" }]);
     }
   }
@@ -811,9 +947,9 @@ export class Model {
       if (p.origin) {
         let u: URL;
         try { u = new URL(String(p.origin)); } catch { throw new Error(TEXT.notAllowed(String(p.origin))); }
-        if (!this.covers(u.hostname)) throw new Error(TEXT.notAllowed(u.hostname));
+        if (!this.coveredFor(c, u.hostname)) throw new Error(TEXT.notAllowed(u.hostname));
         patterns = [`${u.protocol}//${u.host}/*`];
-      } else patterns = (this.allowlist ?? []).map((d) => `*://*.${d}/*`); // no origin: the allowlisted domains
+      } else patterns = (this.entriesOf(c.scope) ?? []).map((d) => `*://*.${d}/*`); // no origin: the scope's list
       const names: string[] = Array.isArray(p.permissions) ? p.permissions.map(String) : [];
       for (const name of names) if (!PERMISSIONS[name]) throw new Error(TEXT.permission(name));
       await this.queueSettings(async () => {
@@ -877,8 +1013,10 @@ export class Model {
       // client asks for a tab or a background tab: a background tab's page is hidden and draws nothing.
       const url = p.url && p.url !== "about:blank" ? String(p.url) : null;
       const flight = (async () => {
-        const created = this.windowPerPage || p.newWindow ? (await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }])).tabs[0]
-          : await this.bridge.call("tabs.create", [{ url: "about:blank", active: !p.background }]);
+        // The scope is the second arg (C10): the receiver puts the tab under the scope's list before it answers, or
+        // answers `no list for this scope` (the client gets it as -32000, C11) and opens no tab.
+        const created = this.windowPerPage || p.newWindow ? (await this.bridge.call("windows.create", [{ url: "about:blank", focused: false }, c.scope])).tabs[0]
+          : await this.bridge.call("tabs.create", [{ url: "about:blank", active: !p.background }, c.scope]);
         const tab = this.tabOf(created.id);
         // The tab joins the scope also when its creator left meanwhile; then it is free for the scope.
         tab.scope = c.scope; tab.claimed = true; tab.navigateTo = url;
@@ -907,7 +1045,9 @@ export class Model {
       return { targetId: tab.targetId };
     },
     "Target.closeTarget": async (c, p) => {
-      await this.removeTab(this.scoped(c, p.targetId).id);
+      // The receiver's close (C10: Target.closeTarget through chrome.debugger, no beforeunload), in its removal queue,
+      // with its window rule; the client gets the receiver's answer, an error of the window rule too.
+      await this.bridge.call("tabs.remove", [this.scoped(c, p.targetId).id]);
       return { success: true };
     },
     "Target.activateTarget": async (c, p) => {

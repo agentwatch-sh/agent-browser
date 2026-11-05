@@ -1,16 +1,17 @@
 // The relay's policy and its side of the bridge, checked against the shared vectors of contracts C10 and C11. The
-// vectors are copies of agentwatch-sh/chrome-extension test/vectors/{bridge,endpoint}.json at commit ffaf794 (main,
-// the merge of PR #5); the folder name names that commit. Copy them again when the contracts change.
+// vectors are copies of agentwatch-sh/chrome-extension test/vectors/{bridge,endpoint,scopes}.json at commit c99bebb
+// (main, the merge of PR #21: the per-scope contract and the receiver 0.3.1); the folder name names that commit. Copy
+// them again when the contracts change.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Bridge, BridgeError, MAX_IN_FLIGHT_PER_TAB, MAX_REQUEST, WAIT_DEFAULT_MS, WAIT_MAX_MS } from "../src/relay/bridge.ts";
 import { SCOPE, NOT_FOUND, FROM_PAGE } from "../src/relay/endpoint.ts";
-import { CLOSE, NOT_READY } from "../src/relay/model.ts";
+import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { cdpError, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
 
-const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-ffaf794/${name}.json`, import.meta.url), "utf8"));
+const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-c99bebb/${name}.json`, import.meta.url), "utf8"));
 const bridgeV = vectors("bridge"), endpointV = vectors("endpoint");
 
 test("the constants, the default context, the marker, the 404, 403 and 503 bodies and the close codes are the contracts'", () => {
@@ -18,8 +19,13 @@ test("the constants, the default context, the marker, the 404, 403 and 503 bodie
   assert.deepEqual([WAIT_DEFAULT_MS, WAIT_MAX_MS, MAX_IN_FLIGHT_PER_TAB, MAX_REQUEST], [c.WAIT_DEFAULT_MS, c.WAIT_MAX_MS, c.MAX_IN_FLIGHT_PER_TAB, c.MAX_REQUEST]);
   assert.equal(DEFAULT_CONTEXT, endpointV.defaultContext);
   assert.equal(COOKIE_MARKER, endpointV.cookieMarker);
-  assert.deepEqual([NOT_FOUND, FROM_PAGE, NOT_READY.link, NOT_READY.allowlist, NOT_READY.old], endpointV.upgradeAnswers.map((a: any) => a.body));
-  assert.deepEqual([CLOSE.browserClose, CLOSE.scopeEnded, CLOSE.linkDown, CLOSE.stopped], endpointV.closes.map((x: any) => [x.code, x.reason]));
+  const body = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id).body;
+  assert.deepEqual([NOT_FOUND, FROM_PAGE, NOT_READY.link, NOT_READY.allowlist, NOT_READY.old, NOT_READY.noList],
+    ["notFound", "fromPage", "notConnected", "notConfirmed", "tooOld", "noList"].map(body));
+  // The peer check's 403s and 503s are board ab-v16.51.
+  assert.deepEqual([CLOSE.browserClose, CLOSE.scopeEnded, CLOSE.linkDown, CLOSE.stopped, CLOSE.noList],
+    endpointV.closes.filter((x: any) => x.id !== "root").map((x: any) => [x.code, x.reason]));
+  assert.equal(TAB_SCOPE_WAIT_MS, endpointV.constants.TAB_SCOPE_WAIT_MS);
 });
 
 test("a scope matches the contract's pattern", () => {

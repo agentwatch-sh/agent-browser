@@ -40,7 +40,7 @@ test("every Target.createTarget opens a window of its own, not focused, also whe
       const from = h.fake.requests.length;
       const { tab } = await page(h, c, params);
       assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "windows.create" || r.op === "tabs.create").map((r) => [r.op, r.args]),
-        [["windows.create", [{ url: "about:blank", focused: false }]]], JSON.stringify(params));
+        [["windows.create", [{ url: "about:blank", focused: false }, "s1"]]], JSON.stringify(params));
       windows.add(tab.windowId);
     }
     assert.equal(windows.size, asks.length, "each page has a window of its own");
@@ -322,10 +322,10 @@ test("on the Mac the relay keeps today's tabs: tabs.create, focus emulation to C
     const c = await h.connect();
     let from = h.fake.requests.length;
     const { sessionId } = await page(h, c);
-    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op.endsWith(".create")).map((r) => [r.op, r.args]), [["tabs.create", [{ url: "about:blank", active: true }]]]);
+    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op.endsWith(".create")).map((r) => [r.op, r.args]), [["tabs.create", [{ url: "about:blank", active: true }, "s1"]]]);
     from = h.fake.requests.length;
     await page(h, c, { url: "about:blank", background: true });
-    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op.endsWith(".create")).map((r) => [r.op, r.args]), [["tabs.create", [{ url: "about:blank", active: false }]]]);
+    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op.endsWith(".create")).map((r) => [r.op, r.args]), [["tabs.create", [{ url: "about:blank", active: false }, "s1"]]]);
     from = h.fake.requests.length;
     await page(h, c, { url: "about:blank", newWindow: true });
     assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op.endsWith(".create")).map((r) => r.op), ["windows.create"]);

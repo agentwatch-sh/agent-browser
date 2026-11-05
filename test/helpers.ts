@@ -18,7 +18,15 @@ export const BIN = Buffer.alloc(9 * 1024 * 1024 + 123).map((_, i) => (i * 31) & 
 
 export type Fixture = { base: string; server: Server; close: () => Promise<void> };
 
-export async function fixtureServer(): Promise<Fixture> {
+/**
+ * The fixture's host name for the tests over agent mode's endpoint: the relay refuses a navigation off the scope's
+ * list (C11, layer 1), and a list entry is a host name with two labels, never an IP address (C5). The server still
+ * listens on 127.0.0.1, and the fake Chrome reaches the name there.
+ */
+export const FIXTURE_HOST = "fixture.localhost";
+
+/** A fixture server on 127.0.0.1; `host` names it in its base URL. */
+export async function fixtureServer(host = "127.0.0.1"): Promise<Fixture> {
   const server = createServer((req, res) => {
     if (req.url === "/file.bin") { res.setHeader("content-type", "application/octet-stream"); return res.end(BIN); }
     if (req.url === "/small.txt") { res.setHeader("content-type", "text/plain"); return res.end("small file\n"); }
@@ -28,7 +36,7 @@ export async function fixtureServer(): Promise<Fixture> {
     res.end("not found");
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const base = `http://${host}:${(server.address() as { port: number }).port}`;
   return { base, server, close: () => new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); }) };
 }
 
