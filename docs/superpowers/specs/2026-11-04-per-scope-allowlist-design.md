@@ -184,7 +184,10 @@ thousands of hosts make more popups need the retry (section 5.2).
 - The receiver puts a popup's scope in its map in the event handler itself, before it calls
   `updateSessionRules`, so the guard of section 6 and the retry judge the popup by its scope at once.
 - The receiver reports each scope that it sets itself (popups, replaced tabs) with a new bridge event,
-  `bridge.tabScope` (`"tabId"`, `"scope"`). The relay takes a tab that it did not create into a scope
+  `bridge.tabScope` (`"tabId"`, `"scope"`), and gets a row in C10's event table. For a popup it
+  comes before the popup's `tabs.onCreated` (the navigation-target event comes before the eager
+  attach ends; with the eager attach off, the receiver sends `tabs.onCreated` after that event, or
+  after 50 ms when none comes). The relay takes a tab that it did not create into a scope
   only on that event. The reason: the receiver enforces the scope. If the relay computed a popup's
   scope itself and got another answer, a client of one scope would drive a tab under another scope's
   list.
@@ -265,22 +268,37 @@ popups-late-retry.json, popups-form-retry.json):
   2). The retried `target=_blank` popup's request has the same `Sec-Fetch-Site` (`same-origin`),
   `Sec-Fetch-User` (`?1`), `Sec-Fetch-Mode`, `Sec-Fetch-Dest` and `Referer` as the control (10 of
   10 each), and one header more: `Cache-Control: max-age=0` (10 of 10), as on any reload. The first
-  runs (results/popups-retry-*.json, rule 5 off) gave the same. A retry with `tabs.update(url)` in place of the reload was worse: no
+  runs (results/popups-retry-*.json, rule 5 off) gave the same for `noopener` popups. The headers
+  differ by the kind of popup: the sign-in pattern (`window.open("")`, then the opener sets
+  `location`) sends no `Sec-Fetch-User` when it needs no retry (results/popups-nav.json: 20 of 20),
+  and a retried one sends `Sec-Fetch-User: ?1` and `Cache-Control: max-age=0` (ab-lead's reviewer,
+  review-42). A retry with `tabs.update(url)` in place of the reload was worse: no
   `Referer`, `Sec-Fetch-Site: cross-site`, no `Sec-Fetch-User`, and `history.length` 2. So the retry
-  is a reload. The build can try a one-shot session rule that removes `Cache-Control` from the
-  retried request (not measured).
+  is a reload. A one-shot session rule that removes `Cache-Control` from the retried request did
+  not remove it (20 of 20, ab-lead's reviewer). So the retry stays visible to a site that compares
+  a popup's first request with a normal one: an operator choice (section 13, choice 4).
 - The retry runs once per tab and only for a host that the tab's list covers. A tab of no scope
   never gets one. The receiver sends no `blocked` notice for a first request that it retries; it
-  sends one when the rule is in force and does not cover the host, or when the tab gets no scope.
+  sends one when the rule is in force and does not cover the host, when the tab gets no scope, and
+  when the retried request is blocked again (no second retry).
+
+**How often a popup with an opener needs the retry** depends on the load of the box. In this
+probe: 1 of 60 with no hold, 2 of 60 with the hold (the table above). ab-lead's reviewer (review-42,
+the same probe) measured more: 3 to 4 of 20 with the hold, 2 of 10 for the sign-in pattern, and 8
+of 10 with one window per page (agent-browser PR #43) and the opener behind another window. The
+time of one assignment also grows with the tabs open under the rules: median 9 ms with none, 13 ms
+with 50, 25 ms with 100 (the reviewer). So the retry is a normal path, not a rare one.
 
 **What a client sees.** The eager attach and the hold (C10) stay. A popup that needs the retry shows
 Chrome's error page for about 60 to 100 ms, then the retry's request. The hold keeps that request
 until the client's `Runtime.runIfWaitingForDebugger`, while the hold is still on (it ends by itself
-after `HOLD_MAX_MS` = 5 s; the retry comes about 70 ms after the block). Not measured with Playwright: whether `waitForEvent
-("popup")` and `waitForLoadState()` can resolve on the error page before the retry. The build's live
-test runs the popup kinds many times through Playwright and the MCP (section 12). If Playwright
-resolves on the error page, the receiver holds the popup's `tabs.onCreated` event until the retry's
-request is in the hold; that is a change in the receiver only.
+after `HOLD_MAX_MS` = 5 s; the retry comes about 70 ms after the block). **Decision:** while the
+eager attach is on, the receiver also holds a popup's `tabs.onCreated` event until the popup's
+first request is allowed or the retry's request is in the hold. So a client attaches to a popup
+whose real document is still to come, and never takes Chrome's error page for the popup's page.
+This is a part of the build (part 1b, section 12), not a later fix. Not measured with Playwright:
+how `waitForEvent("popup")` and `waitForLoadState()` behave on such a popup; the build's live test
+runs the popup kinds many times through Playwright and the MCP.
 
 ## 6. The service-worker hole (question 3)
 
@@ -303,7 +321,11 @@ and `pre.a.localhost` (both on A's list):
 
 So no site breaks in its own scope: the per-scope rules need no rule for the requests of no tab (a
 candidate rule for them, `tabIds: [-1]`, changed nothing). But the hole has two forms across scopes:
-a page that the worker makes, and a page from the network that the worker passes on. Navigation
+a page that the worker makes, and a page from the network that the worker passes on. For the second
+form the guard stops the page, not the request: with both receiver layers on, no page committed in
+the scope-B tab (0 of 10), but the worker's request reached the site in 10 of 10, with scope A's
+site's cookies, and the answer came back to the worker (ab-lead's reviewer). A page of scope B can
+so make A's site act on one navigation request with A's sign-in (a GET, as for a link). Navigation
 preload alone is blocked; a worker that falls back to `fetch()` after a failed preload (as Workbox
 does) loads the page in the pass-on form (not measured).
 
@@ -354,7 +376,9 @@ and for a page's own links, at no cost to sites; the full block is the operator'
 
 **What the guard leaves open:** a page's navigation that the receiver does not win at
 `onBeforeNavigate` commits; the worker's page then runs its scripts for some tens of ms before the
-receiver sends the tab away, and a client attached to the tab can read it during that time.
+receiver sends the tab away, and a client attached to the tab can read it during that time. And a
+worker that passes navigations on sends each such navigation to its site with the site's cookies,
+also when the guard stops the page.
 
 ## 7. When a scope's list loses a site (question 4)
 
@@ -365,9 +389,11 @@ receiver sends the tab away, and a client attached to the tab can read it during
   closed (C6). A tab of another scope on the same host stays when its own list covers the host. The
   about:blank guard of C5 stays: the last tab of a window is replaced, not closed.
 - **The worker removal.** The receiver calls `browsingData.remove({}, {serviceWorkers: true})`
-  after the rule update and before the tabs close, when the list of a scope that is in the last and
-  the new map, or the default list, lost an entry, and at the first `set_scopes` after its worker
-  starts. "Lost an entry" compares the entries (after `scopes` and `default`), not the list names;
+  after the rule update and before the tabs close, when a scope that has a list in the last and in
+  the new `set_scopes` lost an entry, and at the first `set_scopes` after its worker starts. A scope
+  whose new list is none (an ended session's `null`, a list that is gone) does not remove the
+  workers: its tabs are blocked and close, so no tab of it can reach a worker. Else every session's
+  end would remove every site's workers. "Lost an entry" compares the entries (after `scopes` and `default`), not the list names;
   "the last" is the last `set_scopes` that applied in full. A new scope, or a scope that leaves the map, does not remove the workers. The removal is
   coarse (every site's workers go), as today.
 - **The back/forward cache.** A page in the cache comes back with no request, so DNR does not block
@@ -522,8 +548,9 @@ can connect with the scope of a session of repo A and get A's list.
 - Frames and subresources: an allowlisted page of B loads frames and requests from any host, with
   that host's cookies that Chrome sends in a third-party context, and B's client can read them (O11,
   two-modes design section 8). This is the same for the one list today.
-- The page of a worker that wins the guard's race (section 6), also a page that the worker passes on
-  from the network with the site's cookies, unless the operator chooses the full block.
+- The page of a worker that wins the guard's race (section 6), and the request of a worker that
+  passes a navigation on: it reaches the site with the site's cookies also when the guard stops the
+  page (10 of 10). Only the full block (choice 2 b) stops both.
 - A scope name that `scopes` does not name, while a default list exists (section 8.1): it gets the
   default list.
 - A process that reads the profile's files (the cookie store) directly, as today.
@@ -612,7 +639,9 @@ page in another repo's tab?**
 
 - **a. Keep service workers; the guard stops most such pages (recommended).** Sites work as in a
   normal Chrome. A page's link to another repo's site that has a worker can still show that page for
-  some tens of ms before the agent browser sends the tab away.
+  some tens of ms before the agent browser sends the tab away. A worker that passes navigations on
+  still sends that one navigation request to the other repo's site with its sign-in, also when the
+  page is stopped.
 - b. Block service workers. No site's worker can serve another repo's tab. Every site in the agent
   browser fails to register a worker, as with an ad blocker that blocks worker scripts: no offline
   pages and no push, and a site that tests for workers sees it.
