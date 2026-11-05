@@ -4,14 +4,19 @@
 // (daemon.ts) and `agent-browser relay` from a scratch install. Then it runs the probe's Playwright, MCP and
 // concurrency cases against the endpoint, with the refusals of contract C11, popups many times, the operator's
 // tab-switch condition (ab-vsm Q4: a client switches tabs and drives a tab that is not in front), and agent-browser's
-// own commands over the endpoint (--cdp-url).
+// own commands over the endpoint (--cdp-url). On Linux the relay opens every page in a window of its own and brings
+// that window forward for input (ab-v16.28), so the group `windows` drives the anti-detect probe's page
+// (test/live/anti-detect/probe.ts) with Playwright, with and without noDefaults, and with the Playwright MCP, and
+// checks that the page shows no background-tab signal. Chromium gets --disable-backgrounding-occluded-windows, as
+// the anti-detect design needs (docs/research/2026-11-05-anti-detect-drive.md, step 3): without it a covered window
+// is hidden and draws nothing.
 //
 //   CHROME_EXTENSION=<a detached worktree of chrome-extension> npm run test:live:agent
 //
 // Environment: CHROME_EXTENSION (required: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
 // DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), CASES (default all:
-// playwright,marks,switch,create,concurrency,mcp,agent-browser) runs some groups only. The agent package must be
+// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows) runs some groups only. The agent package must be
 // chrome-extension main b82c65d or later: the popup cases, the hold of a new tab and the off-list frame need its
 // eager attach, its hold and its DNR frame rule (ab-v16.17). It uses port 8781 (the probe's site) and *.localhost
 // hosts only. It never drives or stops a Chrome that it did not start, opens no debugging port, and no prompt can
@@ -27,6 +32,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TEXT } from "../../../src/relay/policy.ts";
+import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../anti-detect/probe.ts";
 import { StandInDaemon } from "./daemon.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -39,7 +45,7 @@ if (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !existsSync(join(EX
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
-const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser").split(",");
+const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows").split(",");
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 const RELAY_SOCK = join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 const url = (scope: string) => `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`;
@@ -67,9 +73,10 @@ async function step(group: string, name: string, fn: () => Promise<unknown>, o: 
 }
 
 const children: ChildProcess[] = [];
-function start(bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; log: string }): ChildProcess {
+/** A child of this run, its output in <RUN>/logs/<log>; with `pipe`, its standard input and output are pipes (an MCP server). */
+function start(bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; log: string; pipe?: boolean }): ChildProcess {
   const fd = openSync(join(RUN, "logs", opts.log), "a");
-  const child = spawn(bin, args, { env: opts.env ?? process.env, stdio: ["ignore", fd, fd] });
+  const child = spawn(bin, args, { env: opts.env ?? process.env, stdio: opts.pipe ? ["pipe", "pipe", fd] : ["ignore", fd, fd] });
   children.push(child);
   return child;
 }
@@ -153,7 +160,7 @@ try {
   for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`); i++) await sleep(200);
   chromium = start(CHROMIUM, [`--user-data-dir=${PROFILE}`, "--no-first-run", "--no-default-browser-check", "--password-store=basic",
     `--load-extension=${join(RUN, "agent")}`, "--silent-debugger-extension-api", "--enable-unsafe-swiftshader", "--lang=en-US",
-    "--window-position=0,0", "--window-size=1280,900", "about:blank"],
+    "--disable-backgrounding-occluded-windows", "--window-position=0,0", "--window-size=1280,900", "about:blank"],
   { env: { PATH: "/usr/bin:/bin", HOME: join(RUN, "home"), LANG: "en_US.UTF-8", DISPLAY: `:${DISPLAY_N}`, XAUTHORITY: xauth }, log: "chromium.log" });
   // Ready: a plain request gets 404 once the endpoint takes connections (503 before).
   let ready = 0;
@@ -170,6 +177,7 @@ try {
   mkdirSync(join(RUN, "mcp-out"));
   if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") }, () => ({}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
+  if (CASES.includes("windows")) await windowCases(pw);
   record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium.exitCode === null ? "pass" : "fail", ms: 0 });
 } catch (err) {
   aborted = String((err as Error)?.message ?? err).split("\n")[0];
@@ -325,25 +333,34 @@ async function playwrightCases(pw: any) {
   await step(G, "context.clearCookies() is refused", () => context.clearCookies(), { refused: COOKIES });
   await step(G, "context.storageState() is refused", () => context.storageState(), { refused: COOKIES });
   await step(G, "context.request (reads the cookies first) is refused", () => context.request.get(A + "/m"), { refused: COOKIES });
-  // The operator's condition for dropping the timer flags (ab-vsm Q4): a client drives a tab that is not in front, and
-  // switches tabs. Playwright turns focus emulation on, so its pages always report "visible": which tab is in front
-  // comes from the receiver (tabs.query), and the raw client's case below reads the page's own visibility.
-  await step(G, "Playwright drives a tab that is not in front, then brings it to the front", async () => {
+  // The operator's condition for dropping the timer flags (ab-vsm Q4): a client drives a page that is not in front.
+  // On Linux each page has a window of its own (ab-v16.28): the other page's window has the focus, the page's input
+  // brings its own window forward, and page.bringToFront (Page.bringToFront) focuses it too. Playwright's focus
+  // emulation never reaches Chrome, so document.hasFocus() is the real focus.
+  await step(G, "Playwright drives a page whose window is behind another one: its input and bringToFront focus its window", async () => {
     await page.goto(A + "/");
     const front = await context.newPage();
     await front.goto(A + "/m");
-    const activeTab = async () => (await daemon!.ask("tabs.query", [{ active: true }])).map((t: any) => t.id);
     const tabOf = async (p: any) => { const id = (await (await context.newCDPSession(p)).send("Target.getTargetInfo")).targetInfo.targetId; return (await daemon!.ask("debugger.getTargets")).find((t: any) => t.id === id)?.tabId; };
-    const [mine, other] = [await tabOf(page), await tabOf(front)];
-    const before = await activeTab();
+    const winOf = async (p: any) => (await daemon!.ask("tabs.get", [await tabOf(p)])).windowId as number;
+    const focused = async (w: number) => (await daemon!.ask("windows.get", [w])).focused as boolean;
+    const [mine, other] = [await winOf(page), await winOf(front)];
+    await daemon!.ask("windows.update", [other, { focused: true }]);
+    await sleep(300);
+    const before = { mine: await focused(mine), other: await focused(other), visible: await page.evaluate(() => document.visibilityState), hasFocus: await page.evaluate(() => document.hasFocus()) };
     await page.locator("#name").fill("Back");
     await page.locator("#go").click();
     const driven = await page.locator("#out").textContent();
+    const after = { mine: await focused(mine), other: await focused(other), hasFocus: await page.evaluate(() => document.hasFocus()), otherHasFocus: await front.evaluate(() => document.hasFocus()) };
+    await daemon!.ask("windows.update", [other, { focused: true }]);
+    await sleep(300);
     await page.bringToFront();
-    const after = await activeTab();
+    await sleep(300);
+    const brought = await focused(mine);
     await front.close();
-    return { inFrontBefore: before.includes(other) && !before.includes(mine), driven, inFrontAfter: after.includes(mine) };
-  }, { want: (d) => d.inFrontBefore && d.driven === "Hello, Back" && d.inFrontAfter });
+    return { separate: mine !== other, before, driven, after, brought };
+  }, { want: (d) => d.separate && !d.before.mine && d.before.other && d.before.visible === "visible" && !d.before.hasFocus && d.driven === "Hello, Back" &&
+    d.after.mine && !d.after.other && d.after.hasFocus && !d.after.otherHasFocus && d.brought });
   await step(G, "round trip: 20 x page.evaluate", async () => { const s = Date.now(); for (let i = 0; i < 20; i++) await page.evaluate(() => 1); return Math.round((Date.now() - s) / 20); },
     { want: (d) => d < 50 });
   await step(G, "page.close", async () => { await page.close(); return context.pages().length; }, { want: (d) => d === 0 });
@@ -376,7 +393,10 @@ async function rawClient(WebSocket: any, scope: string) {
 
 async function tabSwitchCase(WebSocket: any) {
   const G = "tab switch (ab-vsm Q4)";
-  await step(G, "a raw client drives a tab that is not in front (hidden), then switches tabs (Target.activateTarget)", async () => {
+  // On Linux (ab-v16.28) each page has a window of its own, so a page that is not in front is a window behind another
+  // one: it is visible (--disable-backgrounding-occluded-windows) and gets the focus with its input. A tab that a
+  // popup tab hides in its window gets a tab switch before its input, as a person does; no tab moves to another window.
+  await step(G, "a raw client drives a page whose window is behind another one, then a page that a popup tab hides (a tab switch)", async () => {
     const c = await rawClient(WebSocket, "switch");
     const open = async (u: string) => {
       const { targetId } = await c.send("Target.createTarget", { url: u });
@@ -384,21 +404,39 @@ async function tabSwitchCase(WebSocket: any) {
       for (let i = 0; i < 50 && (await c.value(sessionId, "document.readyState + location.href")) !== `complete${u}`; i++) await sleep(100);
       return { targetId, sessionId };
     };
+    const state = (s: string) => c.value(s, "[document.visibilityState, document.hasFocus()].join(' ')");
+    const windowOf = async (targetId: string) => (await daemon!.ask("tabs.get", [(await daemon!.ask("debugger.getTargets")).find((t: any) => t.id === targetId).tabId])).windowId;
     const behind = await open(A + "/"), front = await open(A + "/m");
-    const before = { behind: await c.value(behind.sessionId, "document.visibilityState"), front: await c.value(front.sessionId, "document.visibilityState") };
-    // CDP input to the hidden tab: type a name and click the button at its place.
+    const [wb, wf] = [await windowOf(behind.targetId), await windowOf(front.targetId)];
+    await daemon!.ask("windows.update", [wf, { focused: true }]);
+    await sleep(300);
+    const before = { behind: await state(behind.sessionId), front: await state(front.sessionId) };
+    // CDP input to the page behind: type a name and click the button at its place.
     await c.value(behind.sessionId, "document.getElementById('name').value = ''; document.getElementById('name').focus()");
-    await c.send("Input.insertText", { text: "Hidden" }, behind.sessionId);
-    const box = await c.value(behind.sessionId, "(() => { const r = document.getElementById('go').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
-    for (const type of ["mousePressed", "mouseReleased"]) await c.send("Input.dispatchMouseEvent", { type, x: box[0], y: box[1], button: "left", clickCount: 1 }, behind.sessionId);
+    await c.send("Input.insertText", { text: "Behind" }, behind.sessionId);
+    const box = async (id: string) => c.value(behind.sessionId, `(() => { const r = document.getElementById('${id}').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const click = async (at: number[]) => { for (const type of ["mousePressed", "mouseReleased"]) await c.send("Input.dispatchMouseEvent", { type, x: at[0], y: at[1], button: "left", clickCount: 1 }, behind.sessionId); };
+    await click(await box("go"));
     const driven = await c.value(behind.sessionId, "document.getElementById('out').textContent");
-    await c.send("Target.activateTarget", { targetId: behind.targetId });
-    await sleep(500);
-    const after = { behind: await c.value(behind.sessionId, "document.visibilityState"), front: await c.value(front.sessionId, "document.visibilityState") };
-    for (const t of [behind, front]) await c.send("Target.closeTarget", { targetId: t.targetId });
+    await sleep(300);
+    const after = { behind: await state(behind.sessionId), front: await state(front.sessionId) };
+    // window.open with no features: a popup tab in front in the opener's window; the opener is hidden behind it.
+    await click(await box("winopen"));
+    await sleep(800);
+    const popup = (await c.send("Target.getTargets")).targetInfos.find((t: any) => t.url.includes("/popup?via=open"));
+    const hidden = await state(behind.sessionId);
+    // The click left the focus on the button: the field gets it back first (a script's focus, in the hidden page).
+    await c.value(behind.sessionId, "document.getElementById('name').focus()");
+    await c.send("Input.insertText", { text: "!" }, behind.sessionId);
+    await sleep(300);
+    const back = { opener: await state(behind.sessionId), name: await c.value(behind.sessionId, "document.getElementById('name').value"),
+      popupWindow: popup ? await windowOf(popup.targetId) : null };
+    for (const t of (await c.send("Target.getTargets")).targetInfos) await c.send("Target.closeTarget", { targetId: t.targetId });
     c.close();
-    return { before, driven, after };
-  }, { want: (d) => d.before.behind === "hidden" && d.before.front === "visible" && d.driven === "Hello, Hidden" && d.after.behind === "visible" && d.after.front === "hidden" });
+    return { separate: wb !== wf, before, driven, after, popup: !!popup, hidden, back, openerWindow: wb };
+  }, { want: (d) => d.separate && d.before.behind === "visible false" && d.before.front === "visible true" && d.driven === "Hello, Behind" &&
+    d.after.behind === "visible true" && d.after.front === "visible false" && d.popup && d.hidden.startsWith("hidden") &&
+    d.back.opener === "visible true" && d.back.name === "Behind!" && d.back.popupWindow === d.openerWindow });
 }
 
 // ---------------------------------------------------------------- Target.createTarget with a URL (C10: about:blank, then the URL)
@@ -505,4 +543,215 @@ async function agentBrowserCases() {
   await run("close", ["close", "main"], (r) => r.ok === true);
   await step(G, "quit refuses: agentwatch owns the agent browser", async () => cli("quit"), { want: (r) => r.ok === false && r.error.code === "usage" });
   await step(G, "no proxy socket in the state folder", async () => existsSync(join(state, "chrome-proxy.sock")), { want: (d) => d === false });
+}
+
+// ---------------------------------------------------------------- one window per page, on the anti-detect probe's page (ab-v16.28)
+
+type StepFn = (label: string, fn: () => Promise<unknown>, want?: (v: any) => boolean) => Promise<void>;
+
+/**
+ * The anti-detect design over the relay (docs/research/2026-11-05-anti-detect-drive.md, "The answer" steps 1, 2 and
+ * 5, sections 6 and 8; board task ab-v16.28). Playwright with and without noDefaults, and the Playwright MCP, drive
+ * the probe's page T in a window of its own, while the probe's page F has the focused window in front of it (the
+ * operator's, or another agent's). Before some steps F's window takes the focus again, so the relay must bring T's
+ * window forward again. Each step must pass, and T must show no background-tab signal: "visible" all the time, about
+ * 60 frames a second after each step, no action while it is hidden or not focused, no untrusted event. For the whole
+ * drive: F and T have the focus at the same time for at most two 100 ms samples (a switch), F gets a blur, and no
+ * Emulation.setFocusEmulationEnabled reaches Chrome. The other signals (the press time, the pointer path, the
+ * typing, the geometry) are in <RUN>/windows.json for the report: they still differ from a person's.
+ */
+async function windowCases(pw: any) {
+  const G = "one window per page";
+  const log: Rec[] = [];
+  const { server, port } = await startServer(log);
+  const P = `http://probe.a.localhost:${port}`;
+  const pageUrl = (tab: string) => `${P}/p?tab=${tab}`;
+  const loaded = async (tab: string) => {
+    for (const end = Date.now() + 15_000; Date.now() < end; await sleep(100)) if (log.some((e) => e.tab === tab && e.ev === "load")) return;
+    throw new Error(`page ${tab} did not load`);
+  };
+  const tabIdOf = async (tab: string) => (await daemon!.ask("debugger.getTargets")).find((t: any) => String(t.url).includes(`tab=${tab}`))?.tabId as number | undefined;
+  const out: any[] = [];
+  let n = 0;
+  const variant = async (name: string, drive: (T: string, front: () => Promise<void>, stepOf: StepFn) => Promise<void>) => {
+    n++;
+    const F = `F${n}`, T = `T${n}`, from = daemon!.log.length, t0 = Date.now();
+    const fw = (await daemon!.ask("windows.create", [{ url: pageUrl(F), focused: true }])).id;
+    await loaded(F);
+    // The operator (or another agent) has the focus in F's window, in front of T's.
+    const front = async () => { await daemon!.ask("windows.update", [fw, { focused: true }]); await sleep(500); };
+    const steps: any[] = [];
+    const stepOf: StepFn = async (label, fn, want) => {
+      await sleep(400);
+      const s0 = Date.now();
+      let error: string | undefined, value: unknown, timer: NodeJS.Timeout | undefined;
+      try { value = await Promise.race([fn(), new Promise((_, j) => { timer = setTimeout(() => j(new Error("no end in 20 s")), 20_000); })]); }
+      catch (e) { error = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300); }
+      finally { clearTimeout(timer); }
+      const s1 = Date.now();
+      await sleep(1600); // the frames in the second after the step
+      const sig = stepSignals(log, T, s0, s1);
+      const background = [sig.visBefore !== "visible" && "visBefore", sig.visChanges.length && "visChanges", sig.inputHidden && "inputHidden",
+        sig.inputUnfocused && "inputUnfocused", sig.untrusted && "untrusted", sig.framesAfter < 30 && "framesAfter"].filter(Boolean);
+      const ok = !error && !background.length && (!want || want(value));
+      steps.push({ label, ok, ms: s1 - s0, ...(error ? { error } : {}), ...(background.length ? { background } : {}), ...rates(log, T, s0, s1), ...sig });
+      const shown = typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? String(value).slice(0, 80) : undefined;
+      record({ group: G, case: `${name}: ${label}`, status: ok ? "pass" : "fail", ms: s1 - s0, ...(error ? { error } : {}),
+        detail: { ...(shown !== undefined ? { value: shown } : {}), vis: sig.visBefore, focus: sig.focusEvents, focusAfter: sig.focusAfter, framesAfter: sig.framesAfter, input: sig.inputSeq.slice(0, 120), background },
+        ...(!ok && !error ? { why: background.length ? `background-tab signal: ${background.join(", ")}` : "value not as expected" } : {}) });
+    };
+    let t1 = Date.now();
+    try { await drive(T, front, stepOf); t1 = Date.now(); }
+    finally {
+      for (const tab of [T, F]) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
+    }
+    const sorted = log.slice().sort((x, y) => x.t - y.t);
+    const tLoad = log.find((e) => e.tab === T && e.ev === "load");
+    const ops = daemon!.log.slice(from);
+    const count = (re: RegExp) => ops.filter((l) => / req /.test(l) && re.test(l)).length;
+    const v = {
+      name, steps,
+      hiddenAfterLoad: log.filter((e) => e.tab === T && e.ev === "visibilitychange" && e.vis === "hidden" && e.t <= t1).length,
+      bothFocusedMs: bothFocusedMs(sorted, F, T, t0, t1),
+      fEvents: log.filter((e) => e.tab === F && e.t >= t0 && e.t <= t1 && ["visibilitychange", "focus", "blur"].includes(e.ev)).map((e) => `${e.ev}${e.ev === "visibilitychange" ? `:${e.vis}` : ""}@${e.t - t0}`),
+      tFocus: log.filter((e) => e.tab === T && e.t >= t0 && e.t <= t1 && (e.ev === "focus" || e.ev === "blur")).map((e) => `${e.ev}@${e.t - t0}`),
+      geometry: tLoad && { iw: tLoad.iw, ih: tLoad.ih, ow: tLoad.ow, oh: tLoad.oh, sx: tLoad.sx, sy: tLoad.sy, historyLength: tLoad.hl, webdriver: tLoad.webdriver },
+      bridge: { focusEmulation: count(/Emulation\.setFocusEmulationEnabled/), windowsCreate: count(/ windows\.create$/), windowsUpdate: count(/ windows\.update$/),
+        tabsCreate: count(/ tabs\.create$/), tabsUpdate: count(/ tabs\.update$/) },
+    };
+    out.push(v);
+    const ok = v.hiddenAfterLoad === 0 && v.bothFocusedMs <= 200 && v.fEvents.some((e) => e.startsWith("blur")) && v.bridge.focusEmulation === 0 && v.bridge.windowsCreate >= 1 && v.bridge.tabsCreate === 0;
+    record({ group: G, case: `${name}: T never hidden, F and T never both focused beyond a switch, no focus emulation in Chrome, a window per page`,
+      status: ok ? "pass" : "fail", ms: t1 - t0, detail: { hiddenAfterLoad: v.hiddenAfterLoad, bothFocusedMs: v.bothFocusedMs, fEvents: v.fEvents, tFocus: v.tFocus, bridge: v.bridge } });
+  };
+
+  // Playwright: connectOverCDP with its defaults (it sends focus emulation, which the relay answers) and with noDefaults.
+  const playwright = (noDefaults: boolean) => async (T: string, front: () => Promise<void>, stepOf: StepFn) => {
+    const browser = await pw.chromium.connectOverCDP(url(noDefaults ? "win-nodefaults" : "win-pw"), { noDefaults, timeout: 20_000 });
+    try {
+      const page = await browser.contexts()[0].newPage();
+      await page.goto(pageUrl(T));
+      await loaded(T);
+      await front();
+      const t = { timeout: 8000 };
+      await stepOf("idle before", () => sleep(3000));
+      await stepOf("textContent", () => page.textContent("#s", t), (v) => v === "clicks: 0");
+      await stepOf("click", async () => { await page.click("#b", t); return page.textContent("#s", t); }, (v) => v === "clicks: 1");
+      await front();
+      await stepOf("fill", async () => { await page.fill("#f", "hello", t); return page.inputValue("#f", t); }, (v) => v === "hello");
+      // Measured, not wanted: Playwright puts the caret at the start of an input that does not have the focus before it
+      // types (injected script focusNode, resetSelectionIfNotFocused; document.hasFocus() is false while another
+      // window has the focus). With focus emulation every page had the focus, so this did not happen.
+      await front();
+      await stepOf("pressSequentially after another window took the focus: Playwright types at the start of the field", async () => {
+        await page.locator("#f").pressSequentially(" world", t);
+        return page.inputValue("#f", t);
+      }, (v) => v === " worldhello");
+      // A person's way: a click on the field (the caret where the click puts it, after the text), then the keys.
+      await front();
+      await stepOf("click the field, then pressSequentially", async () => {
+        await page.click("#f", t);
+        await page.locator("#f").pressSequentially("!", t);
+        return page.inputValue("#f", t);
+      }, (v) => v === " worldhello!");
+      await stepOf("click, waitForFunction a frame's content", async () => {
+        await page.click("#r", t);
+        await page.waitForFunction(() => document.getElementById("rd")!.textContent === "frames: 1", undefined, { timeout: 5000 });
+      });
+      await stepOf("click below the fold", () => page.click("#far", t));
+      await front();
+      await stepOf("keyboard.press End", () => page.keyboard.press("End"));
+      await stepOf("screenshot", async () => (await page.screenshot(t)).length, (v) => v > 1000);
+      await stepOf("idle after", () => sleep(3000));
+    } finally { await browser.close().catch(() => {}); }
+  };
+
+  // The Playwright MCP (it connects with noDefaults), as an MCP client over its standard input and output.
+  const mcp = async (T: string, front: () => Promise<void>, stepOf: StepFn) => {
+    const child = start(process.execPath, [join(INSTALL, "node_modules/@playwright/mcp/cli.js"), "--output-dir", join(RUN, "mcp-out")],
+      { env: { ...process.env, PLAYWRIGHT_MCP_CDP_ENDPOINT: url("win-mcp") }, log: "mcp-windows.log", pipe: true });
+    let buf = "", next = 1;
+    const waiting = new Map<number, (m: any) => void>();
+    child.stdout!.on("data", (d) => {
+      buf += d;
+      for (let i; (i = buf.indexOf("\n")) >= 0;) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; const m = JSON.parse(line); waiting.get(m.id)?.(m); waiting.delete(m.id); }
+    });
+    const rpc = (method: string, params: object) => new Promise<any>((resolve) => { const id = next++; waiting.set(id, resolve); child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); });
+    const text = (r: any) => (r.result?.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
+    try {
+      await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "ab-v16.28-live", version: "0" } });
+      child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+      const tools = (await rpc("tools/list", {})).result.tools as any[];
+      // The element reference is "target" in @playwright/mcp 0.0.84 ("ref" in some other versions).
+      const refKey = "target" in (tools.find((x) => x.name === "browser_click")?.inputSchema?.properties ?? {}) ? "target" : "ref";
+      const call = async (name: string, args: object) => {
+        const r = await rpc("tools/call", { name, arguments: args });
+        if (r.error || r.result?.isError) throw new Error(`${name}: ${r.error?.message ?? text(r)}`.split("\n").slice(0, 2).join(" "));
+        return r;
+      };
+      await call("browser_navigate", { url: pageUrl(T) });
+      await loaded(T);
+      await front();
+      await stepOf("idle before", () => sleep(3000));
+      let snap = "";
+      await stepOf("browser_snapshot", async () => (snap = text(await call("browser_snapshot", {}))), (v) => /button "Click"/.test(v));
+      const ref = (re: RegExp) => (re.exec(snap) ?? [])[1];
+      const [button, field, frame] = [ref(/button "Click" \[ref=(\w+)\]/), ref(/textbox[^\n]*\[ref=(\w+)\]/), ref(/button "Frame" \[ref=(\w+)\]/)];
+      await stepOf("browser_click", async () => { await call("browser_click", { element: "Click button", [refKey]: button }); return text(await call("browser_snapshot", {})); }, (v) => v.includes("clicks: 1"));
+      await front();
+      await stepOf("browser_type", () => call("browser_type", { element: "text field", [refKey]: field, text: "hello" }));
+      await front();
+      // As with Playwright's pressSequentially (above): the MCP types at the start of a field that does not have the focus.
+      await stepOf("browser_type slowly after another window took the focus: it types at the start of the field", async () => {
+        await call("browser_type", { element: "text field", [refKey]: field, text: " world", slowly: true });
+        return text(await call("browser_evaluate", { function: "() => document.getElementById('f').value" }));
+      }, (v) => v.includes('" worldhello"'));
+      await stepOf("browser_click, browser_wait_for a frame's content", async () => {
+        await call("browser_click", { element: "Frame button", [refKey]: frame });
+        await call("browser_wait_for", { text: "frames: 1" });
+      });
+      await front();
+      await stepOf("browser_press_key End", () => call("browser_press_key", { key: "End" }));
+      await stepOf("browser_take_screenshot", async () => (await call("browser_take_screenshot", {})).result.content.some((c: any) => c.type === "image"), (v) => v === true);
+      await stepOf("idle after", () => sleep(3000));
+    } finally { await stopChild(child); }
+  };
+
+  // Two agents at once (the design's step 6): two Playwright clients, each in its own window, type at the same time.
+  // The relay focuses a page's window before each key down, one activation at a time, but it cannot lock a whole
+  // action: the measure is how long both pages had the focus and how often the focus went back and forth.
+  const twoAtOnce = async () => {
+    const tabs = ["TA", "TB"], words = "the quick brown fox jumps over the lazy dog";
+    const browsers = await Promise.all(["win-two-a", "win-two-b"].map((scope) => pw.chromium.connectOverCDP(url(scope), { timeout: 20_000 })));
+    try {
+      const pages = await Promise.all(browsers.map((b: any) => b.contexts()[0].newPage()));
+      await Promise.all(pages.map((p: any, i: number) => p.goto(pageUrl(tabs[i]))));
+      for (const tab of tabs) await loaded(tab);
+      await sleep(1000);
+      const s0 = Date.now();
+      const values = await Promise.all(pages.map(async (p: any) => { await p.click("#f"); await p.keyboard.type(words); return p.inputValue("#f"); }));
+      const s1 = Date.now();
+      await sleep(1000);
+      const sorted = log.slice().sort((x, y) => x.t - y.t);
+      const switches = log.filter((e) => tabs.includes(e.tab) && e.t >= s0 && e.t <= s1 + 200 && (e.ev === "focus" || e.ev === "blur")).length;
+      const detail = { ms: s1 - s0, bothFocusedMs: bothFocusedMs(sorted, tabs[0], tabs[1], s0, s1), focusAndBlurEvents: switches, values,
+        hidden: log.filter((e) => tabs.includes(e.tab) && e.ev === "visibilitychange" && e.vis === "hidden" && e.t >= s0 && e.t <= s1).length };
+      out.push({ name: "two Playwright clients type at once", ...detail });
+      record({ group: G, case: "two Playwright clients type at once, each page in its own window (a measure of the focus)", ms: s1 - s0,
+        status: values.every((v: string) => v === words) && detail.hidden === 0 ? "pass" : "fail", detail });
+    } finally {
+      for (const b of browsers) await b.close().catch(() => {});
+      for (const tab of tabs) { const id = await tabIdOf(tab); if (id !== undefined) await daemon!.ask("tabs.remove", [id]).catch(() => {}); }
+    }
+  };
+
+  try {
+    await variant("Playwright (connectOverCDP)", playwright(false));
+    await variant("Playwright (connectOverCDP, noDefaults)", playwright(true));
+    await variant("the Playwright MCP", mcp);
+    await twoAtOnce();
+  } finally {
+    server.close();
+    writeFileSync(join(RUN, "windows.json"), JSON.stringify({ variants: out, log }, null, 2) + "\n");
+  }
 }

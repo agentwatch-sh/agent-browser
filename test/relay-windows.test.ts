@@ -217,6 +217,24 @@ test("a failed activation is logged and the input still goes to Chrome", async (
   } finally { await h.close(); }
 });
 
+test("an activation whose bridge op does not answer holds its input for 2 s at most", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { sessionId, tab } = await page(h, c);
+    let open!: () => void;
+    const never = new Promise<void>((r) => (open = r));
+    h.fake.op = async ({ op }) => { if (op === "windows.get") await never; return undefined; };
+    const t0 = Date.now();
+    await c.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }, sessionId);
+    const waited = Date.now() - t0;
+    assert.ok(waited >= 1900 && waited < 4000, `${waited} ms`);
+    assert.ok(h.logs.includes(`relay: the activation of tab ${tab.id} took more than 2000 ms; the input goes on`), h.logs.join("\n"));
+    open();
+  } finally { await h.close(); }
+});
+
 test("on the Mac the relay keeps today's tabs: tabs.create, focus emulation to Chrome, no window op before an input", async () => {
   const h = await harness({ windowPerPage: false });
   try {
