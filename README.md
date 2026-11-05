@@ -344,8 +344,8 @@ person's input**) and `log` (progress lines; default standard error).
     pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s; the path here takes 300 to
     1000 ms by Fitts's law, as `record`'s cursor), `type --into` with 5 characters 1.25 to 1.30 s, a click
     below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s. The lock: two
-    agents that type at once took 51 to 57% longer than one agent alone (before review-47: 46 to 56%; the
-    research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used 608 to 775 MB
+    agents that type at once took 39 to 57% longer than one agent alone (3 runs after review-47; before it:
+    46 to 56%; the research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used 608 to 775 MB
     (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8
     background tabs: 32 to 46 MB more for each window, and every agent page draws at full rate, also
     behind another window. The input timing is the `inputTiming` option (CLI `--input-timing JSON`,
