@@ -131,11 +131,24 @@ test("Playwright's focus of an element (its injected focusNode) brings the windo
     await call("([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)");
     assert.deepEqual(ops(h, from), ["tabs.get", "windows.get", "windows.update", "Runtime.callFunctionOn"]);
     assert.equal(h.fake.focusedWindow, tab.windowId);
-    // Any other call of a function goes at once.
+    // The unbundled form of the same function (Playwright's source names the argument without the 2).
     h.fake.focusedWindow = 1;
     from = h.fake.requests.length;
-    await call("([injected, node]) => injected.blurNode(node)");
+    await call("([injected, node, resetSelectionIfNotFocused]) => injected.focusNode(node, resetSelectionIfNotFocused)");
+    assert.deepEqual(ops(h, from), ["tabs.get", "windows.get", "windows.update", "Runtime.callFunctionOn"]);
+    // Any other call of a function goes at once: another injected function, a name that only starts like it, and a
+    // client's own function or string that mentions focusNode (page.evaluate((s) => s.length, "see el.focusNode(x)")).
+    for (const fn of ["([injected, node]) => injected.blurNode(node)", "([injected, node]) => injected.focusNodeLater(node)",
+      "([injected, node]) => injected.focusNode", "([page, node]) => page.focusNode(node)", "(s) => s.length", "see el.focusNode(x)",
+      "focusNode", "() => injected.focusNode(document.body)"]) {
+      h.fake.focusedWindow = 1;
+      from = h.fake.requests.length;
+      await call(fn);
+      assert.deepEqual(ops(h, from), ["Runtime.callFunctionOn"], fn);
+    }
+    from = h.fake.requests.length;
     await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () { return this.focusNode; }", objectId: "N1" }, sessionId);
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "(s) => s.length", objectId: "U1", arguments: [{ value: "see el.focusNode(x)" }] }, sessionId);
     assert.deepEqual(ops(h, from), ["Runtime.callFunctionOn", "Runtime.callFunctionOn"]);
   } finally { await h.close(); }
 });
@@ -278,6 +291,27 @@ test("an activation that gave up changes no window when its bridge op answers la
       .map((r) => r.op === "debugger.sendCommand" ? `key ${r.args[0].tabId}` : `${r.op} ${r.args[0]}`);
     assert.deepEqual(seq, [`key ${pa.tab.id}`, `windows.update ${pb.tab.windowId}`, `key ${pb.tab.id}`]);
     assert.equal(h.fake.focusedWindow, pb.tab.windowId, "the late activation left the focus where it is");
+  } finally { await h.close(); }
+});
+
+test("an activation that gave up selects no tab when its read answers late: a popup tab stays in front", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const opener = await page(h, c);
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    const popup = h.fake.newTab("https://a.example/popup", opener.tab, opener.tab.windowId);
+    await attached;
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    h.fake.op = async ({ op, args }) => { if (op === "tabs.get" && args[0] === opener.tab.id) await gate; return undefined; };
+    const from = h.fake.requests.length;
+    await c.send("Input.insertText", { text: "x" }, opener.sessionId); // its activation gives up after 2 s
+    open();
+    await sleep(100);
+    assert.deepEqual(ops(h, from), ["tabs.get", "Input.insertText", "windows.get"], "no tabs.update and no windows.update after the give-up");
+    assert.deepEqual([h.fake.tabs.get(opener.tab.id)!.active, h.fake.tabs.get(popup.id)!.active], [false, true]);
   } finally { await h.close(); }
 });
 

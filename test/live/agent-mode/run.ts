@@ -562,6 +562,27 @@ async function agentBrowserCases() {
 
 type StepFn = (label: string, fn: () => Promise<unknown>, want?: (v: any) => boolean) => Promise<void>;
 
+/** The times in [from, to] in which a page had the focus, from its own focus and blur events (a page whose first event
+ *  there is a blur had the focus from `from`; one whose last event is a focus keeps it to `to`). */
+function focusSpans(log: Rec[], tab: string, from: number, to: number): [number, number][] {
+  const evs = log.filter((e) => e.tab === tab && e.t >= from && e.t <= to && (e.ev === "focus" || e.ev === "blur")).sort((x, y) => x.t - y.t);
+  const out: [number, number][] = [];
+  let start: number | null = evs[0]?.ev === "blur" ? from : null;
+  for (const e of evs) {
+    if (e.ev === "focus" && start === null) start = e.t;
+    else if (e.ev === "blur" && start !== null) { out.push([start, e.t]); start = null; }
+  }
+  if (start !== null) out.push([start, to]);
+  return out;
+}
+
+/** Each time in [from, to] in which pages a and b both had the focus, in ms, measured from their focus and blur events
+ *  (the 100 ms samples of bothFocusedMs count a short overlap at a switch as 100 ms or nothing). */
+function focusOverlaps(log: Rec[], a: string, b: string, from: number, to: number): number[] {
+  const sa = focusSpans(log, a, from, to), sb = focusSpans(log, b, from, to);
+  return sa.flatMap(([a0, a1]) => sb.map(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0)).filter((ms) => ms > 0));
+}
+
 /**
  * The anti-detect design over the relay (docs/research/2026-11-05-anti-detect-drive.md, "The answer" steps 1, 2 and
  * 5, sections 6 and 8; board task ab-v16.28). Playwright with and without noDefaults, and the Playwright MCP, drive
@@ -569,7 +590,8 @@ type StepFn = (label: string, fn: () => Promise<unknown>, want?: (v: any) => boo
  * operator's, or another agent's). Before some steps F's window takes the focus again, so the relay must bring T's
  * window forward again. Each step must pass, and T must show no background-tab signal: "visible" all the time, about
  * 60 frames a second after each step, no action while it is hidden or not focused, no untrusted event. For the whole
- * drive: F and T have the focus at the same time for at most two 100 ms samples (a switch), F gets a blur, and no
+ * drive: F and T have the focus at the same time only for less than 100 ms at each switch (measured from their focus
+ * and blur events: the new page's focus comes a few ms before the old page's blur), F gets a blur, and no
  * Emulation.setFocusEmulationEnabled reaches Chrome. The other signals (the press time, the pointer path, the
  * typing, the geometry) are in <RUN>/windows.json for the report: they still differ from a person's.
  */
@@ -626,6 +648,7 @@ async function windowCases(pw: any) {
       name, steps,
       hiddenAfterLoad: log.filter((e) => e.tab === T && e.ev === "visibilitychange" && e.vis === "hidden" && e.t <= t1).length,
       bothFocusedMs: bothFocusedMs(sorted, F, T, t0, t1),
+      overlaps: focusOverlaps(log, F, T, t0, t1),
       fEvents: log.filter((e) => e.tab === F && e.t >= t0 && e.t <= t1 && ["visibilitychange", "focus", "blur"].includes(e.ev)).map((e) => `${e.ev}${e.ev === "visibilitychange" ? `:${e.vis}` : ""}@${e.t - t0}`),
       tFocus: log.filter((e) => e.tab === T && e.t >= t0 && e.t <= t1 && (e.ev === "focus" || e.ev === "blur")).map((e) => `${e.ev}@${e.t - t0}`),
       geometry: tLoad && { iw: tLoad.iw, ih: tLoad.ih, ow: tLoad.ow, oh: tLoad.oh, sx: tLoad.sx, sy: tLoad.sy, historyLength: tLoad.hl, webdriver: tLoad.webdriver },
@@ -633,9 +656,10 @@ async function windowCases(pw: any) {
         tabsCreate: count(/ tabs\.create$/), tabsUpdate: count(/ tabs\.update$/) },
     };
     out.push(v);
-    const ok = v.hiddenAfterLoad === 0 && v.bothFocusedMs <= 200 && v.fEvents.some((e) => e.startsWith("blur")) && v.bridge.focusEmulation === 0 && v.bridge.windowsCreate >= 1 && v.bridge.tabsCreate === 0;
-    record({ group: G, case: `${name}: T never hidden, F and T never both focused beyond a switch, no focus emulation in Chrome, a window per page`,
-      status: ok ? "pass" : "fail", ms: t1 - t0, detail: { hiddenAfterLoad: v.hiddenAfterLoad, bothFocusedMs: v.bothFocusedMs, fEvents: v.fEvents, tFocus: v.tFocus, bridge: v.bridge } });
+    // At each window switch the new page's focus comes a few ms before the old page's blur: each such overlap is short.
+    const ok = v.hiddenAfterLoad === 0 && v.overlaps.every((ms) => ms < 100) && v.fEvents.some((e) => e.startsWith("blur")) && v.bridge.focusEmulation === 0 && v.bridge.windowsCreate >= 1 && v.bridge.tabsCreate === 0;
+    record({ group: G, case: `${name}: T never hidden, F and T both focused only for less than 100 ms at a switch, no focus emulation in Chrome, a window per page`,
+      status: ok ? "pass" : "fail", ms: t1 - t0, detail: { hiddenAfterLoad: v.hiddenAfterLoad, overlaps: v.overlaps, bothFocusedMs: v.bothFocusedMs, fEvents: v.fEvents, tFocus: v.tFocus, bridge: v.bridge } });
   };
 
   // Playwright: connectOverCDP with its defaults (it sends focus emulation, which the relay answers) and with noDefaults.
@@ -747,7 +771,9 @@ async function windowCases(pw: any) {
       await sleep(1000);
       const sorted = log.slice().sort((x, y) => x.t - y.t);
       const switches = log.filter((e) => tabs.includes(e.tab) && e.t >= s0 && e.t <= s1 + 200 && (e.ev === "focus" || e.ev === "blur")).length;
-      const detail = { ms: s1 - s0, bothFocusedMs: bothFocusedMs(sorted, tabs[0], tabs[1], s0, s1), focusAndBlurEvents: switches, values,
+      const overlaps = focusOverlaps(log, tabs[0], tabs[1], s0, s1);
+      const detail = { ms: s1 - s0, bothFocusedMs: bothFocusedMs(sorted, tabs[0], tabs[1], s0, s1),
+        overlaps: { n: overlaps.length, totalMs: overlaps.reduce((x, y) => x + y, 0), longestMs: Math.max(0, ...overlaps) }, focusAndBlurEvents: switches, values,
         hidden: log.filter((e) => tabs.includes(e.tab) && e.ev === "visibilitychange" && e.vis === "hidden" && e.t >= s0 && e.t <= s1).length };
       out.push({ name: "two Playwright clients type at once", ...detail });
       record({ group: G, case: "two Playwright clients type at once, each page in its own window (a measure of the focus)", ms: s1 - s0,

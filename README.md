@@ -496,9 +496,12 @@ extension's bridge (contract C10).
 Measured on taylor with Chromium 156 and chrome-extension main 7e36332 (`CASES=windows` of
 `test/live/agent-mode/run.ts`, three runs on 2026-11-05): with Playwright's defaults, with `noDefaults` and
 with the Playwright MCP, every step passed while another window had the focus. The page stayed `visible`,
-drew 48 to 78 frames a second, got no action while it was hidden or did not have the focus, and got the
-focus only with the input, while the other page got a `blur`. Both pages had the focus at the same time for
-at most two 100 ms samples. No `Emulation.setFocusEmulationEnabled` reached Chrome. What a site can still
+drew 55 to 67 frames a second in each step of 100 ms or more (60 in each 3 s idle step; eight runs of the
+group, with the reviews' runs), got no action while it was hidden or did not have the focus, and got the
+focus only with the input, while the other page got a `blur`. Both pages had the focus at the same time only
+at a switch of the window: the new page's `focus` came 4 to 32 ms before the old page's `blur` (7 to 9
+switches in each drive, 200 in the eight runs, measured from the pages' `focus` and `blur` events; a
+person's switch was not measured that way). No `Emulation.setFocusEmulationEnabled` reached Chrome. What a site can still
 see of a Playwright client (section 8 of the research):
 
 - Playwright's own input: a click with one or two moves and no path, a press of 0 to 2 ms (a person's
@@ -511,9 +514,10 @@ see of a Playwright client (section 8 of the research):
 - The first activation of a new window gives the page two `focus` events (a person's click gives one).
 - Two agents at once. The relay brings one page forward for each press or key, but it cannot lock a
   client's whole action. Two Playwright clients that typed 43 characters each at the same time had the
-  focus together for 400 to 1200 ms of 7.3 to 8.5 s (five runs), and their pages got 177 `focus` and
-  `blur` events: the focus went back and forth at almost each key. A site that has both pages open can
-  see it.
+  focus together for 400 to 1200 ms of 7.3 to 8.5 s (100 ms samples, six runs; from the `focus` and
+  `blur` events of one run: 87 overlaps of at most 41 ms, 540 ms in all), and their pages got 177 `focus`
+  and `blur` events: the focus went back and forth at almost each key. A site that has both pages open
+  can see it.
 - A covered window draws at 60 frames a second; a person's covered window is `hidden`. Every window opens
   at the same place and size (the unit's `--window-position` and `--window-size`). At its load a page in a
   new window can report `outerWidth` and `outerHeight` 0 (6 of 9 pages in three runs): it loads before
@@ -523,15 +527,22 @@ see of a Playwright client (section 8 of the research):
   `window.open(url, "", "popup,width=500,height=400")` opens as large as the other windows (1100x734 in
   the research, section 6). The fix can need a change of agentwatch's agent unit.
 
-Playwright's focus of an element: `pressSequentially`, `press`, `type` and `focus` on a locator first call
-Playwright's injected `focusNode` (Playwright 1.64.1). It moves the caret of an input to its start when
-`document.hasFocus()` is false, so in a window that lost the focus Playwright would type at the start of
-the field (`def` after `abc` gives `defabc`, and Backspace deletes nothing). With focus emulation every page
-had the focus. So the relay also brings the window forward before a `Runtime.callFunctionOn` whose
-arguments hold a string with `.focusNode(` (Playwright sends the function's text that way). Then the caret
-stays where it was (measured live with Playwright's defaults, `noDefaults` and the MCP's
-`browser_type` with `slowly`). The rule depends on Playwright's internal name `focusNode`: if a later
-Playwright renames it, the caret moves to the start again, and nothing else breaks.
+Playwright's focus of an element: `pressSequentially`, `press` and `type` on a locator first call
+Playwright's injected `focusNode` with a caret reset (Playwright 1.64.1). It moves the caret of an input to
+its start when `document.hasFocus()` is false, so in a window that lost the focus Playwright would type at
+the start of the field (`def` after `abc` gives `defabc`, and Backspace deletes nothing). With focus
+emulation every page had the focus. So the relay also brings the window forward before a
+`Runtime.callFunctionOn` with a string argument that is Playwright's utility-script function
+`([injected, node, ...]) => injected.focusNode(...)` (the whole string; Playwright sends the function's text
+that way). A client's own function or string that only mentions `focusNode` does not count. `focus()` on a
+locator calls `focusNode` too, without the caret reset, and its window comes forward as well. Then the
+caret stays where it was (measured live with Playwright's defaults, `noDefaults` and the MCP's
+`browser_type` with `slowly`). The rule depends on Playwright's internal names `injected` and `focusNode`:
+if a later Playwright renames them, the caret moves to the start again, and nothing else breaks.
+
+Playwright's `expect(locator).toBeFocused()` also reads `document.hasFocus()`. After another window took
+the focus, it fails for a field that is the page's active element, until the page's window has the focus
+again (with focus emulation every page had the focus). The relay cannot see such a check.
 
 **On the Mac** the relay keeps its tabs until board task ab-v16.27 measures the Mac: `Target.createTarget`
 opens a tab (a window only for `newWindow: true`), focus emulation goes to Chrome, and no window comes

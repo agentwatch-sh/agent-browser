@@ -172,6 +172,9 @@ export function withForce(method: string, params: any): any {
   return params;
 }
 
+/** Playwright's utility-script function that focuses an element (startsAction): its whole text, as Playwright sends it. */
+export const PLAYWRIGHT_FOCUS = /^\(\[injected\b[^\]]*\]\)\s*=>\s*injected\.focusNode\([^)]*\)\s*$/;
+
 /**
  * An input that starts an action, as a person's press or key does: before it the model brings the page's window
  * forward (Linux; the anti-detect design, step 5). On Linux Chrome raises a window for a press in it, but not for
@@ -179,14 +182,15 @@ export function withForce(method: string, params: any): any {
  * events, releases and key-ups follow the start and need no window of their own.
  *
  * Playwright's focus of an element counts too: its injected focusNode (Playwright 1.64.1: locator.pressSequentially,
- * press, type and focus) moves the caret of an input to its start when document.hasFocus() is false, so it would type
- * at the start of a field whose window lost the focus. Playwright sends that function's text as a string argument of
- * Runtime.callFunctionOn. The rule depends on that internal name: if Playwright renames it, the caret moves to the
+ * press and type; focus calls it too) moves the caret of an input to its start when document.hasFocus() is false, so
+ * it would type at the start of a field whose window lost the focus. Playwright sends the text of its utility-script
+ * function, `([injected, node, ...]) => injected.focusNode(...)`, as a string argument of Runtime.callFunctionOn
+ * (PLAYWRIGHT_FOCUS). The rule depends on those internal names: if Playwright renames them, the caret moves to the
  * start again, and nothing else changes.
  */
 export function startsAction(method: string, params: any): boolean {
   if (method === "Input.insertText") return true;
-  if (method === "Runtime.callFunctionOn") return Array.isArray(params?.arguments) && params.arguments.some((a: any) => typeof a?.value === "string" && a.value.includes(".focusNode("));
+  if (method === "Runtime.callFunctionOn") return Array.isArray(params?.arguments) && params.arguments.some((a: any) => typeof a?.value === "string" && PLAYWRIGHT_FOCUS.test(a.value));
   if (method === "Input.dispatchMouseEvent") return params?.type === "mousePressed";
   if (method === "Input.dispatchKeyEvent") return params?.type === "keyDown" || params?.type === "rawKeyDown" || params?.type === "char";
   if (method === "Input.dispatchTouchEvent") return params?.type === "touchStart";
