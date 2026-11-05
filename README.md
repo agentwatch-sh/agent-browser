@@ -1071,7 +1071,9 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   `--hidden-drive` modes, one window per page, a tab switch or focus emulation for input only,
   Playwright behind a bridge with and without its focus emulation, and a person (xdotool) as the
   baseline. The page logs every visibility, focus, frame, timer, observer and input signal with
-  timestamps; `report.ts` prints the tables. Not part of `npm test`.
+  timestamps; `report.ts` prints the tables; `extra.ts` holds the review's checks (window order, two
+  agents with and without an input lock, popups, the pointer at an activation, memory and CPU). Not
+  part of `npm test`.
 - `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
   specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
 - `test/parity-server.test.ts`: the probe's server against Node's own clients: a TLS client that ends

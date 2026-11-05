@@ -45,7 +45,7 @@ import { AgentBrowser } from "../../../src/browser.ts";
 import { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
-import { bothFocusedMs, LAYOUT, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
+import { bothFocusedMs, FAR, LAYOUT, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
 import { report } from "./report.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, only: { type: "string" }, playwright: { type: "string" } } });
@@ -193,6 +193,10 @@ class Chromium {
       this.proc.kill("SIGTERM");
       for (let i = 0; i < 50 && this.proc.exitCode === null; i++) await sleep(100);
     }
+    if (this.proc.exitCode === null) { // our own child, by its pid: never a Chrome that this script did not start
+      this.proc.kill("SIGKILL");
+      for (let i = 0; i < 20 && this.proc.exitCode === null; i++) await sleep(100);
+    }
   }
 }
 
@@ -225,6 +229,8 @@ async function personMove(tab: string, pt: { x: number; y: number }) {
     await sleep(14);
   }
 }
+/** The far button's top in T's viewport, from the page's latest scroll record (or from load, before any scroll). */
+const farTop = (tab: string) => { const r = log.filter((e) => e.tab === tab && e.ev === "scroll").at(-1); return r ? Number(r.farTop) : FAR.pageY - 20; };
 async function personClick(tab: string, pt: { x: number; y: number }) {
   await personMove(tab, pt);
   await sleep(120);
@@ -278,6 +284,7 @@ async function agentDrive(sc: Scenario, o: BrowserOptions, wrap: Wrap, opt: { sh
   await step(sc, "text", () => commands.text(o, { tab: T }));
   await step(sc, "click", () => wrap(() => commands.click(o, { tab: T, target: "#b" })));
   await step(sc, "type", () => wrap(() => commands.type(o, { tab: T, text: "hello", into: "#f" })));
+  await step(sc, "click below the fold", () => wrap(() => commands.click(o, { tab: T, target: "#far" })));
   await step(sc, "library: clickAt, waitFor a frame's content", () => wrap(async () => {
     const b = await AgentBrowser.connect(o);
     try {
@@ -300,6 +307,15 @@ async function personDrive(sc: Scenario, bring: () => Promise<void>, back: () =>
   await step(sc, "bring T to the front", bring);
   await step(sc, "click", () => personClick(sc.T, LAYOUT.button));
   await step(sc, "type", async () => { await personClick(sc.T, LAYOUT.field); await sleep(200); xdo("type", "--delay", "90", "hello"); });
+  await step(sc, "click below the fold", async () => {
+    await personMove(sc.T, { x: FAR.x, y: 400 });
+    for (let i = 0; i < 20; i++) {
+      const top = farTop(sc.T);
+      if (top !== undefined && top > 80 && top < 450) break;
+      xdo("click", "--repeat", "2", "--delay", "70", "5"); await sleep(300);
+    }
+    await personClick(sc.T, { x: FAR.x, y: (farTop(sc.T) ?? 0) + 20 });
+  });
   await step(sc, "click the frame button", () => personClick(sc.T, LAYOUT.rafButton));
   await step(sc, "press End (scrolls to the lazy image)", async () => { xdo("key", "End"); });
   await step(sc, "send T back", back);
@@ -427,7 +443,10 @@ async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, a
   await loaded(sc.T);
   await sleep(500);
   sc.notes.push(`T's window after its open: ${windowOf(c.proc.pid!, sc.T)}; F's window: ${wf}; X focus: ${xdo("getwindowfocus")}`);
-  await raiseAndFocus(wf); // the operator's (or another agent's) window stays in front, as the Mac's give-back leaves it
+  // On Linux a new window with background: true comes above F's window without the X focus (review-43's raise
+  // check, extra.ts --exp raise). The script raises F's window again, so that T's window is covered: the case to
+  // measure. On the Mac the order of a new window is not measured.
+  await raiseAndFocus(wf);
   const f = ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; url: string }[]).find((x) => x.url.includes(`tab=${sc.F}`))!.targetId;
   // activate: Chrome's own window activation (Target.activateTarget; the relay's chrome.windows.update focused) before input, then back.
   const wrap: Wrap = activate ? async (fn) => {
@@ -485,7 +504,18 @@ async function humanCdp(raw: CDPConnection, sessionId: string) {
     await sleep(40);
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
   };
-  return { click, key, type: async (text: string) => { for (const ch of text) { await key(ch); await sleep(90); } } };
+  const wheel = async (deltaY: number) => { await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY }); await sleep(70); };
+  // The path starts where the real pointer is (review-43: an activation gives the page a real pointer event at the X
+  // pointer, and a path that starts elsewhere jumps by some hundred pixels).
+  const startAt = (pt: { x: number; y: number }) => { at = pt; };
+  return { click, key, wheel, startAt, type: async (text: string) => { for (const ch of text) { await key(ch); await sleep(90); } } };
+}
+
+/** The real X pointer in T's viewport (CSS px), clamped into the viewport. */
+function pointerIn(tab: string): { x: number; y: number } {
+  const loc = Object.fromEntries(xdo("getmouselocation", "--shell").split("\n").map((l) => l.split("=")));
+  const o = origin(tab), g = log.filter((e) => e.tab === tab && (e.ev === "load" || e.ev === "geo")).at(-1) as Record<string, number>;
+  return { x: Math.min(Math.max(Number(loc.X) - o.x, 1), g.iw - 2), y: Math.min(Math.max(Number(loc.Y) - o.y, 1), g.ih - 2) };
 }
 
 /** One window per page, Chrome's own activation before input, and the person-like CDP input of humanCdp. */
@@ -502,12 +532,16 @@ async function humanCdpCase(sc: Scenario) {
   const f = ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; url: string }[]).find((x) => x.url.includes(`tab=${sc.F}`))!.targetId;
   const { sessionId } = await raw.send("Target.attachToTarget", { targetId: t, flatten: true });
   const h = await humanCdp(raw, sessionId);
-  const bring = async () => { await raw.send("Target.activateTarget", { targetId: t }); await sleep(300); };
+  const bring = async () => { await raw.send("Target.activateTarget", { targetId: t }); await sleep(300); h.startAt(pointerIn(sc.T)); };
   const back = async () => { await raw.send("Target.activateTarget", { targetId: f }); };
   await idle(sc, "idle before", 3000);
   await step(sc, "bring T to the front", bring);
   await step(sc, "click", () => h.click(LAYOUT.button));
   await step(sc, "type", async () => { await h.click(LAYOUT.field); await sleep(200); await h.type("hello"); });
+  await step(sc, "click below the fold", async () => {
+    for (let i = 0; i < 20; i++) { const top = farTop(sc.T); if (top > 80 && top < 450) break; await h.wheel(100); await sleep(150); }
+    await h.click({ x: FAR.x, y: farTop(sc.T) + 20 });
+  });
   await step(sc, "click the frame button", () => h.click(LAYOUT.rafButton));
   await step(sc, "press End (scrolls to the lazy image)", () => h.key("End"));
   await step(sc, "send T back", back);

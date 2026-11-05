@@ -40,7 +40,7 @@ function workRow(sc: ScOut): Record<string, string> {
   const cell = (prefix: string) => { const s = find(sc, prefix); return !s ? "-" : s.ok ? `ok ${s.ms} ms` : `FAIL (${String(s.error).slice(0, 60)})`; };
   return {
     scenario: sc.name,
-    text: cell("text"), click: cell("click"), type: cell("type"), "library (frame content)": cell("library") + (sc.rafContent ? "" : ", no frame content"),
+    text: cell("text"), click: cell("click"), type: cell("type"), "click below the fold": cell("click below"), "library (frame content)": cell("library") + (sc.rafContent ? "" : ", no frame content"),
     "End: lazy image": sc.lazyRequestMs === null ? "not loaded" : `${sc.lazyRequestMs} ms`,
     "End: IntersectionObserver": ((sc.io as string[]).find((e) => e.startsWith("in@")) ?? "no callback").replace("in@", "") + ((sc.io as string[]).some((e) => e.startsWith("in@")) ? " ms" : ""),
     shot: cell("shot"), record: cell("record"),
@@ -58,6 +58,9 @@ function inputRow(sc: ScOut): Record<string, string> {
     pressure: String(c.pressure ?? "-"), "press ms": String(c.downUpMs ?? "-"),
     "type: keydowns for 5 chars, inputType": t ? `${t.keydowns}, ${t.inputTypes || "-"}` : "-",
     untrusted: String(sc.steps.reduce((n, s) => n + s.untrusted, 0)),
+    "pointer jumps > 100 px": String(sc.steps.reduce((n, s) => n + (s.pointerJumps ?? 0), 0)),
+    "scrolls with no wheel or key": String(sc.steps.reduce((n, s) => n + (s.scrollsWithoutInput ?? 0), 0)),
+    "field focus with no press": String(sc.steps.reduce((n, s) => n + (s.focusWithoutPress ?? 0), 0)),
   };
 }
 

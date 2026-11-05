@@ -22,14 +22,16 @@ export type Rec = { t: number; tab: string; ev: string; vis?: string; focus?: bo
 
 /** The probe's own layout: fixed boxes, so a person's pointer (xdotool) can find them without CDP. */
 export const LAYOUT = { button: { x: 70, y: 280 }, field: { x: 110, y: 232 }, rafButton: { x: 70, y: 345 }, neutral: { x: 600, y: 420 } };
+/** A button below the fold (page y 1200 to 1240, the viewport is 557 px high): a person scrolls to it first. */
+export const FAR = { x: 70, pageY: 1220 };
 
 export function page(tab: string): string {
   return `<!doctype html><title>probe ${tab}</title>
 <style>body{margin:0;font:16px sans-serif;height:7000px}#box{position:fixed;left:0;top:0;width:200px;height:200px;background:#c00}
 #f{position:fixed;left:10px;top:220px;width:200px;height:24px}#b{position:fixed;left:10px;top:260px;width:120px;height:40px}
 #r{position:fixed;left:10px;top:325px;width:120px;height:40px}#s{position:fixed;left:220px;top:260px}#rd{position:fixed;left:220px;top:325px}
-#lazy{position:absolute;left:10px;top:6000px;width:100px;height:100px}#sent{position:absolute;left:200px;top:6980px;width:10px;height:10px}</style>
-<div id="box"></div><input id="f" autocomplete="off"><button id="b">Click</button><button id="r">Frame</button>
+#far{position:absolute;left:10px;top:1200px;width:120px;height:40px}#lazy{position:absolute;left:10px;top:6000px;width:100px;height:100px}#sent{position:absolute;left:200px;top:6980px;width:10px;height:10px}</style>
+<div id="box"></div><input id="f" autocomplete="off"><button id="b">Click</button><button id="r">Frame</button><button id="far">Far</button>
 <p id="s">clicks: 0</p><p id="rd">frames: 0</p>
 <img id="lazy" loading="lazy" src="/lazy.png?tab=${tab}"><div id="sent"></div>
 <script>
@@ -68,6 +70,12 @@ let clicks = 0, rafs = 0;
 document.getElementById("b").addEventListener("click", () => { clicks++; document.getElementById("s").textContent = "clicks: " + clicks; });
 // Content that only a frame makes: a click asks for a frame, and only that frame writes the count.
 document.getElementById("r").addEventListener("click", () => requestAnimationFrame(() => { rafs++; document.getElementById("rd").textContent = "frames: " + rafs; send("raf-content", { n: rafs }); }));
+// Scrolls (at most one record each 100 ms, and the last one): a person scrolls with the wheel or a key; a script's
+// scrollIntoView scrolls with neither. farTop is the far button's top in the viewport.
+let lastScroll = 0, scrollTimer = 0;
+const scrolled = () => send("scroll", { y: Math.round(scrollY), farTop: Math.round(document.getElementById("far").getBoundingClientRect().top) });
+addEventListener("scroll", () => { if (Date.now() - lastScroll > 100) { lastScroll = Date.now(); scrolled(); } clearTimeout(scrollTimer); scrollTimer = setTimeout(scrolled, 150); }, { passive: true });
+document.getElementById("far").addEventListener("click", () => send("far-click"));
 addEventListener("keydown", (e) => { if (e.key === "End") { scrollTo(0, document.body.scrollHeight); send("scrolled", { y: scrollY }); } });
 new IntersectionObserver((es) => { for (const x of es) send("io", { target: x.target.id, hit: x.isIntersecting }); }).observe(document.getElementById("sent"));
 document.getElementById("lazy").addEventListener("load", () => send("lazy-load"));
@@ -187,6 +195,13 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
     moves: moves.length, movesWithMovement: moves.filter((m) => m.mx || m.my).length,
     keydowns: keys.length, inputTypes: [...new Set(inputEv.map((e) => e.it))].join(","),
     activationAtDown: down ? down.ua : undefined,
+    // A move of more than 100 px from the last pointer point: the jump from a real pointer event (an activation
+    // under the X pointer) to the first CDP move, or a CDP move with no path.
+    pointerJumps: ins.filter((e) => (e.type === "mousemove" || e.type === "pointermove") && Math.hypot(e.mx ?? 0, e.my ?? 0) > 100).length / 2 + 0.5 | 0,
+    // A scroll with no wheel, key or press in the second before it (scrollIntoView), and a field's focus with no press
+    // in the second before it (el.focus()).
+    scrollsWithoutInput: during.filter((e) => e.ev === "scroll" && !ins.some((i) => ["wheel", "keydown", "pointerdown"].includes(i.type) && i.t <= e.t && e.t - i.t < 1000)).length,
+    focusWithoutPress: ins.filter((e) => e.type === "focusin" && e.id === "f" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)).length,
   };
 }
 
