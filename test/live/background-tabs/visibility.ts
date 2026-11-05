@@ -49,7 +49,11 @@
 // added), after one more run of main at 7201927 with the same failure: the default mode, 1 run, exit 0:
 // the shot of tab c took 3.1 s and of tab d 1.1 s (visible for that time), shot 4.1 s, shot --size
 // 1.3 s, shot --full 0.13 s, in front 0.1 s. With --hidden-drive, 2 runs, exit 0: shots of tabs c and
-// d 114 to 123 ms, shot 119 to 124 ms, shot --size 0.9 s, shot --full 0.1 s, no visible time.
+// d 114 to 123 ms, shot 119 to 124 ms, shot --size 0.9 s, shot --full 0.1 s, no visible time. On
+// 2026-11-05, after review-41 (a frame limit of 5 s, one more capture when the shot's own capture is
+// late), 2 runs of each mode, exit 0: the default mode: shot 3.1 s, shot --size 1.1 s, shot --full
+// 0.1 s, tab c 4.1 s, tab d 1.1 to 3.1 s, in front 0.1 s; --hidden-drive: shot 0.12 to 0.13 s, shot
+// --size 0.87 to 0.89 s, shot --full 0.10 to 0.14 s, tabs c and d 0.10 to 0.13 s, no visible time.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";

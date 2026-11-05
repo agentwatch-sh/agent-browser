@@ -35,9 +35,10 @@
 //   p2  front: a. a's timer (visible) and b's (hidden). Drive b (hidden), then a (in front).
 //   p3  front: b. Drive a (hidden).
 //   p4  front: a again. Drive b (hidden).
-//   p5  front: a. --new-tabs new tabs n1, n2, ..., each opened in the background, then text and shot at
-//       once (ab-b84.17): a shot of a new tab whose page never drew a frame (with --hidden-drive; in the
-//       default mode the open draws it). Each new tab is closed after its drive.
+//   p5  front: a. --new-tabs new tabs n1, n2, ..., each opened in the background, then eval, text and
+//       shot at once (ab-b84.17): a shot of a new tab whose page never drew a frame (with --hidden-drive,
+//       where eval and text draw nothing; in the default mode the open draws it). The eval gives the
+//       page's state during the drive ("during"). Each new tab is closed after its drive.
 //   record a (in front) and b (hidden) for 3 s each: frames from Chrome (information only).
 // agent-browser never brings a tab to the front (the operator's focus rule): the check switches the
 // front tab itself, as the operator does with a click on a tab (Target.activateTarget through the
@@ -75,7 +76,11 @@
 // each mode, exit 0 all: 44 shots per mode (20 of hidden tabs, 20 of new tabs in p5, 4 in front), none
 // incomplete. The default mode: a shot of a hidden tab took 0.6 to 3.0 s (median 1.7 s), of a new tab
 // 0.1 to 1.3 s (median 0.4 s), in front 0.1 s. --hidden-drive: 84 to 121 ms for a hidden tab, 85 to
-// 115 ms for a new tab, 55 to 68 ms in front.
+// 115 ms for a new tab, 55 to 68 ms in front. On 2026-11-05, after review-41 (a frame limit of 5 s, and
+// one more capture when the shot's own capture is late), 4 more runs of each mode, exit 0 all: 44 shots
+// per mode, none incomplete, and no limit or extra capture in the log. The default mode: a hidden tab
+// 0.6 to 3.0 s (median 1.8 s), a new tab 0.1 to 1.8 s (median 0.7 s), in front 0.1 s. --hidden-drive:
+// 84 to 133 ms, 89 to 118 ms, 53 to 64 ms. p5's "during": "visible" in the default mode, else "hidden".
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -231,7 +236,7 @@ async function measure(phase: string, front: string, tabs: string[]): Promise<vo
 /**
  * Click, type, eval, text and shot in one tab, by its name; each step checks its effect in the page.
  * The page's own state right before the first command comes from its visibility log, after a pause in
- * which no command is attached. `only` runs only those steps (a new tab: text and shot).
+ * which no command is attached. `only` runs only those steps (a new tab: eval, text and shot).
  */
 async function drive(phase: string, front: string, tab: string, only?: readonly StepName[]): Promise<void> {
   const steps: Step[] = [];
@@ -330,7 +335,7 @@ await drive("p4", "a", "b");
 for (let i = 1; i <= mode.newTabs; i++) {
   const tab = `n${i}`;
   ids[tab] = (await commands.open(o, { url: `${BASE}/${tab}`, name: tab })).tab.targetId;
-  await drive("p5", "a", tab, ["text", "shot"]);
+  await drive("p5", "a", tab, ["eval", "text", "shot"]);
   await commands.close(o, { tab });
 }
 let ffmpeg: string | undefined;

@@ -273,22 +273,33 @@ export class FakePage {
    * the next frame, at most 5 s; a capture waits until a later capture ends it (Chrome ends every
    * earlier pending capture with a later one), also while focus emulation makes the page "visible" and
    * draw (ab-b84.17): Chrome ends a capture when the frame that it forces is presented, and a frame of
-   * a tab that is not in front is never on screen. A capture's picture lacks everything below the
-   * first row when it was sent before Chrome drew two frames of the page (see `framesDrawn`).
+   * a tab that is not in front is never on screen; it counts only when a later frame replaces it. So a
+   * later capture ends the earlier ones only when Chrome drew a frame between them (see `capture`). A
+   * capture's picture lacks everything below the first row when it was sent before Chrome drew two
+   * frames of the page (see `framesDrawn`).
    */
   background = false;
   /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
   drew = true;
   /** The page changes by itself (a caret, an animation): a capture sent while Chrome draws nothing still ends after a frame. */
   drawsByItself = false;
+  /** Chrome draws no frame of the page at all (a loaded machine, a frozen renderer): no animation frame runs, and no capture ends. */
+  noFrames = false;
+  /** Called with the params of each capture of a background page as it arrives, before the fake holds it (a test's hook). */
+  onCapture?: (params: Record<string, unknown>) => void;
   /** document.visibilityState after each change, in order. */
   visibilityChanges: string[] = [];
   /** The presses, releases and keys that the page dropped because it never drew a frame. */
   dropped: string[] = [];
   /** The sessions with focus emulation on. */
   readonly focusEmulated = new Set<string>();
-  /** The captures in flight on a background page, by their order: each one ends with a later one. */
-  heldCaptures: { n: number; end: () => void }[] = [];
+  /**
+   * The captures in flight on a background page, by their order: each one ends with a later one.
+   * `at` is `frames` when it was sent: the frame that it forces is the next one.
+   */
+  heldCaptures: { n: number; at: number; end: () => void }[] = [];
+  /** Every frame that Chrome drew of the page, counted from its tab's start. */
+  frames = 0;
   /**
    * The frames that Chrome drew of a background page since it last started to draw it (or since its
    * load). A frame drawn just after that start lacks the tiles below the first row (a shot of only the
@@ -341,34 +352,57 @@ export class FakePage {
 
   /** One frame at a time, 16 ms apart, while Chrome draws the page. */
   private scheduleFrame() {
-    if (this.frameDue || !this.drawing) return;
+    if (this.frameDue || !this.drawing || this.noFrames) return;
     this.frameDue = true;
     this.later(16, () => {
       this.frameDue = false;
       this.drew = true;
       this.framesDrawn++;
+      this.frames++;
       for (const fn of this.frameWaiters.splice(0)) fn();
     });
   }
 
   /**
    * A capture of a background page (see `background`); its result is `data`. Alone it waits, also
-   * while the page is "visible" and drawn (focus emulation), unless the page changes by itself.
+   * while the page is "visible" and drawn (focus emulation), unless the page changes by itself. A later
+   * capture ends it, and every capture up to that later one, after a frame, but only when Chrome drew a
+   * frame after it (the frame that it forced): two captures sent before the next frame share that frame,
+   * and nothing replaces it, so both wait (as measured on Chromium 156 by review-41: with no frame
+   * between the two captures, 8 of 8 default-mode and 4 of 4 hidden-drive shots failed after 30 s).
+   * A capture sent while a device metrics override is set sets that override again when it ends, as
+   * Chrome's PageHandler::ScreenshotCaptured restores the emulation that the capture found.
    */
-  capture<T>(data: T): Promise<T> {
-    const n = this.nextCapture++, kicks = this.heldCaptures.length > 0 || this.drawsByItself;
+  capture<T>(data: T, params: Record<string, unknown> = {}): Promise<T> {
+    this.onCapture?.(params);
+    const n = this.nextCapture++, found = this.metrics;
+    const replaces = this.drawsByItself || this.heldCaptures.some((c) => c.at < this.frames);
     return new Promise((resolve) => {
-      this.heldCaptures.push({ n, end: () => resolve(data) });
+      this.heldCaptures.push({ n, at: this.frames, end: () => { if (found) this.metrics = found; resolve(data); } });
       this.update();
-      // Sent while another capture waits (or on a page that changes by itself): it ends after a frame, and every earlier capture with it.
-      if (kicks) this.later(16, () => {
+      if (replaces && !this.noFrames) this.later(16, () => {
         this.drew = true;
-        const ended = this.heldCaptures.filter((c) => c.n <= n);
-        this.heldCaptures = this.heldCaptures.filter((c) => c.n > n);
-        for (const c of ended) c.end();
-        this.update();
+        this.frames++;
+        this.endHeld((c) => c.n <= n);
       });
     });
+  }
+
+  /** End the held captures that `which` names, in their order. */
+  private endHeld(which: (c: { n: number; at: number }) => boolean) {
+    const ended = this.heldCaptures.filter(which);
+    this.heldCaptures = this.heldCaptures.filter((c) => !which(c));
+    for (const c of ended) c.end();
+    this.update();
+  }
+
+  /**
+   * The page changes once by itself, now: this frame replaces the frames of the held captures that
+   * Chrome drew already, and ends those captures (a capture whose frame is not drawn yet goes on waiting).
+   */
+  changeOnce() {
+    this.frames++;
+    this.endHeld((c) => c.at < this.frames - 1);
   }
 
   private heldMoves: (() => void)[] = [];
@@ -866,7 +900,7 @@ export class FakeChrome {
           const k = page.metrics?.deviceScaleFactor ?? 1, v = page.paint % 256;
           data = rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64");
         } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
-        return page.background ? page.capture({ data }) : { data };
+        return page.background ? page.capture({ data }, params) : { data };
       }
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
