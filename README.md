@@ -4,13 +4,18 @@ agent-browser drives allowlisted tabs in Chrome over the Chrome DevTools Protoco
 of vedlo's `tools/browser/` (vedlo commit `a107f03e8`). vedlo and agentwatch both use it.
 
 Each consumer has its own **agent browser**: a separate Chrome on the consumer's own profile. It does
-not share the operator's Chrome or the operator's logins. The operator signs in to the allowlisted
-sites once inside that profile (`launch --login`), and those logins stay in that profile only. So
-each consumer has its own cookies and logins, its own tab names and its own proxy socket. The
-operator's own Chrome (mail, banking, admin) is not reachable from the tooling. A consumer uses the
-operator's Chrome only in personal mode, only when the operator asks, and then only in one pinned
-window of its own. Several callers of one consumer (for example agentwatch's agent sessions) can
-share its agent browser, each in a tab scope of its own (see **Tab scopes**).
+not share the operator's Chrome, and it holds none of the operator's logins except a sign-in that the
+operator sends to it on purpose (with the operator extension, below). The operator signs in to the
+allowlisted sites once inside that profile (`launch --login`), and those logins stay in that profile
+only. So each consumer has its own cookies and logins, its own tab names and its own proxy socket.
+Behind agent mode's endpoint (`cdpUrl`, see **Agent mode's endpoint**) there is no proxy socket:
+agentwatch owns the agent browser and `launch` refuses, so the operator signs in to a site in their
+own Chrome and sends that site's sign-in to the agent browser with the operator extension
+(agentwatch — operator mode). The operator's own Chrome (mail, banking, admin) is not reachable from
+the tooling. A consumer uses the operator's Chrome only in personal mode, only when the operator asks,
+and then only in one pinned window of its own. Several callers of one consumer (for example
+agentwatch's agent sessions) can share its agent browser, each in a tab scope of its own (see
+**Tab scopes**).
 
 It has two surfaces, and both are tested:
 
@@ -1091,7 +1096,13 @@ Error codes: `usage` (exit 2), `not_allowed`, `pin_required`, `read_first`, `tab
 
 Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
 `not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
-(`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. When Chrome
+(`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. With
+`--cdp-url` (`cdpUrl`), where `launch` refuses, it says instead to ask the operator to sign in to the
+requested site in their own Chrome and to send that site's sign-in to the agent browser with the
+operator extension (agentwatch — operator mode). `record` gives the same hint when the tab goes to a
+sign-in page, with the site that the take was on last (the start page, a `goto` step's site, or an
+allowlisted page that the tab went to). With `--cdp-url`, `launch --login` refuses with the same
+step. When Chrome
 answers the connection with `403 Connection rejected` at once and shows no prompt, this Chrome run
 holds an earlier refusal (a cancelled, closed or unanswered prompt): the `unreachable` message says to
 `quit` and `launch` the agent browser again and click Allow, and the proxy log records the approval

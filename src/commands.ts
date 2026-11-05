@@ -9,7 +9,7 @@ import { listAgentChromes, type AgentChrome } from "./chromes.ts";
 import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
 import { isAllowedUrl } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
+import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, operatorSignIn, redirectError } from "./errors.ts";
 import { resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
@@ -199,7 +199,7 @@ export const commands = {
   async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean; giveBack?: boolean } = {}): Promise<LaunchResult> {
     const s = resolveOptions(o);
     if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
-    if (s.cdpUrl) throw new UsageError("launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
+    if (s.cdpUrl) throw new UsageError(`launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it${p.login ? `; to sign in to a site there, ${operatorSignIn("that site")}` : ""}`);
     const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
     const running = s.endpoint ?? await agentEndpoint(s);
     const endpoint = running ?? await launchAgentChrome(s, {
