@@ -1,0 +1,8 @@
+[
+  {
+    "id": 3,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "resourceTypes": ["sub_frame", "object"] }
+  }
+]

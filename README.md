@@ -128,8 +128,8 @@ connection, so never a new approval prompt: with no approved proxy up, fail at o
 `proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
 `vedlo browser`), `tabScope` (CLI `--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of
 this scope; see **Tab scopes**), `hiddenDrive` (CLI `--hidden-drive`, Python `hidden_drive=True`: keep a
-background tab's page hidden while a command drives it; default off; see **A command on a background
-tab: two modes**), `inputTiming` (CLI `--input-timing JSON`, Python `input_timing=`: the shape of a
+background tab's page hidden while a command drives it; default off; in agent mode on Linux only for a
+tab of `open --tab`; see **A command on a background tab: two modes**), `inputTiming` (CLI `--input-timing JSON`, Python `input_timing=`: the shape of a
 person's input on Linux, in parts, for example `{"pressMs": [70, 90], "keyMs": [90, 150]}`; see **A
 person's input**) and `log` (progress lines; default standard error).
 
@@ -206,6 +206,22 @@ person's input**) and `log` (progress lines; default standard error).
   session that waits for content that only an animation frame writes, a lazy image and an
   `IntersectionObserver` callback work with no help (the research measured 56 to 97 ms for a shot).
   The page's `Tab.drive` is `"window"`.
+  - **Only on a display of its own.** The design applies where the agent Chrome runs on a display of its
+    own, so that it never puts windows on a person's screen or takes their focus: behind agent mode's
+    endpoint (`--cdp-url`: agentwatch's agent unit runs its Chromium on a private Xvfb), and for an agent
+    Chrome that agent-browser started when every visible window of its display (its own environment's
+    `DISPLAY`, through xdotool) belongs to that Chrome. That check holds for a minute (`display.json`
+    in the state folder). Elsewhere (another program's window on the display, no xdotool, an endpoint
+    that another program started) every page opens and is driven as before, in a background tab, and a
+    log line says why, at most once in 5 minutes.
+  - **A window page behind another tab of its window** is hidden, as a person's background tab: the
+    opener behind a site's popup tab, an older tab of a pinned window (`open` puts each new tab there),
+    a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.
+    Chrome draws nothing of it there: a click stalled for 5 s, a wait for content that a frame writes
+    and `record` timed out, and after the click the page reported `hidden` with the focus (review-45,
+    measured on taylor). So before input, a wait (`Tab.waitFor`) and `record`, such a page comes in front
+    of its window with `Page.bringToFront`, as a person's tab switch does (`Tab.toFront`; on Linux it
+    also activates the window). No tab ever moves to another window.
   - **A page that a site opens** (a `target=_blank` link, `window.open()`) stays where the site put
     it: a tab in the opener's window, in front, or a window of its own for `window.open(url, "",
     "popup,...")`. agent-browser drives it there with no focus emulation and never moves a tab into
@@ -593,6 +609,102 @@ Auto-approve removes Chrome's one safeguard against an external app taking full 
 so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by
 the test suite (the fake Chrome raises no native dialog); the suite covers the orchestration and the
 fail-safe button-name targeting, and the Linux mechanism was verified on a live Chromium 156.
+
+## Agent mode's endpoint (`agent-browser relay`)
+
+The agentwatch daemon starts `agent-browser relay --socket <path>` with the agent Chrome's unit. The relay
+serves agent mode's CDP endpoint (contract C11 of chrome-extension's `docs/protocol.md`) to Playwright, the
+Playwright MCP and agent-browser's commands with `--cdp-url`. It drives the agent Chrome through the agent
+extension's bridge (contract C10).
+
+**On Linux, one window per page** (board task ab-v16.28; the anti-detect design of
+`docs/research/2026-11-05-anti-detect-drive.md`, "The answer" steps 1, 2 and 5):
+
+- Every `Target.createTarget` opens a new window that does not take the focus
+  (`chrome.windows.create({ focused: false })`), also when the client asks for a tab or a background tab.
+  Playwright's `newPage`, the MCP's first page, and agent-browser's `open` and `open --tab` with `--cdp-url`
+  each get a window. So the `open --tab` exception (a background tab with focus emulation or
+  `--hidden-drive`) does not apply over the endpoint.
+- The relay answers `Emulation.setFocusEmulationEnabled` on a page session itself, with `{}`, and never
+  sends it to Chrome. A page in a window draws without it. With it, a page reports the focus while another
+  page has it. Playwright sends it for each page unless it connects with `noDefaults: true`; the
+  Playwright MCP connects with `noDefaults`.
+- Before an input that starts an action (`Input.dispatchMouseEvent` `mousePressed`,
+  `Input.dispatchKeyEvent` `keyDown`, `rawKeyDown` or `char`, `Input.insertText`,
+  `Input.dispatchTouchEvent` `touchStart`, and Playwright's focus of an element, below), the relay
+  brings the page forward, as a person does. When
+  another tab is in front in the page's window (a popup tab that the site opened there), it selects the
+  page's tab (`chrome.tabs.update`). When the window does not have the focus, it focuses the window
+  (`chrome.windows.update({ focused: true })`). The page's later calls wait behind that input, and the
+  relay brings one page forward at a time. Moves, wheel events, releases and key-ups go at once. On Linux
+  Chrome raises a window for a press in it, but not for keys: a key into a window that does not have the
+  focus gives its page the focus while another page keeps it. `Target.activateTarget` still only selects
+  the tab in its window. `Page.bringToFront` goes to Chrome, which selects the tab and focuses its window.
+- A popup stays where the site opened it: a tab in the opener's window (`target=_blank`, `window.open`
+  with no features), or a window of its own. The relay never moves a tab to another window.
+- The agent Chrome needs `--disable-backgrounding-occluded-windows`. Without it a window under another
+  window is `hidden` and draws nothing, and a Playwright click waits for a frame that does not come
+  (the research, step 3).
+- The cost: about 32 to 46 MB of memory for each window over a tab, and every page draws at full rate,
+  also under another window (the research). Each input that starts an action also reads the page's tab
+  and window through the bridge first: two requests, a median of 16 ms in the live run (`tabs.get` 3 ms,
+  `windows.get` 13 ms), and `windows.update` (29 ms) when the window comes forward. So typing with key
+  events takes about 16 ms more for each character.
+
+Measured on taylor with Chromium 156 and chrome-extension main 7e36332 (`CASES=windows` of
+`test/live/agent-mode/run.ts`, three runs on 2026-11-05): with Playwright's defaults, with `noDefaults` and
+with the Playwright MCP, every step passed while another window had the focus. The page stayed `visible`,
+drew 55 to 67 frames a second in each step of 100 ms or more (60 in each 3 s idle step; eight runs of the
+group, with the reviews' runs), got no action while it was hidden or did not have the focus, and got the
+focus only with the input, while the other page got a `blur`. Both pages had the focus at the same time only
+at a switch of the window: the new page's `focus` came 4 to 32 ms before the old page's `blur` (7 to 9
+switches in each drive, 200 in the eight runs, measured from the pages' `focus` and `blur` events; a
+person's switch was not measured that way). No `Emulation.setFocusEmulationEnabled` reached Chrome. What a site can still
+see of a Playwright client (section 8 of the research):
+
+- Playwright's own input: a click with one or two moves and no path, a press of 0 to 2 ms (a person's
+  takes 70 to 90 ms), `fill` as one `insertText` with no key event, a field's focus with no press
+  (`el.focus()`), and a scroll with no wheel or key (`scrollIntoViewIfNeeded`). The relay does not shape
+  a client's input.
+- The pointer at each activation. When the relay focuses a window, the page gets a real pointer event
+  at the X pointer's point, and the next CDP move starts at another point (a jump). The relay cannot read
+  or move the X pointer.
+- The first activation of a new window gives the page two `focus` events (a person's click gives one).
+- Two agents at once. The relay brings one page forward for each press or key, but it cannot lock a
+  client's whole action. Two Playwright clients that typed 43 characters each at the same time had the
+  focus together for 400 to 1200 ms of 7.3 to 8.5 s (100 ms samples, six runs; from the `focus` and
+  `blur` events of one run: 87 overlaps of at most 41 ms, 540 ms in all), and their pages got 177 `focus`
+  and `blur` events: the focus went back and forth at almost each key. A site that has both pages open
+  can see it.
+- A covered window draws at 60 frames a second; a person's covered window is `hidden`. Every window opens
+  at the same place and size (the unit's `--window-position` and `--window-size`). At its load a page in a
+  new window can report `outerWidth` and `outerHeight` 0 (6 of 9 pages in three runs): it loads before
+  Chrome shows the window. `history.length` is 2 for a page that `Target.createTarget` opened with a URL
+  (C10: the relay opens it at `about:blank` and navigates it after the hold).
+- A site's popup window does not get the size that it asked for: with the unit's `--window-size`,
+  `window.open(url, "", "popup,width=500,height=400")` opens as large as the other windows (1100x734 in
+  the research, section 6). The fix can need a change of agentwatch's agent unit.
+
+Playwright's focus of an element: `pressSequentially`, `press` and `type` on a locator first call
+Playwright's injected `focusNode` with a caret reset (Playwright 1.64.1). It moves the caret of an input to
+its start when `document.hasFocus()` is false, so in a window that lost the focus Playwright would type at
+the start of the field (`def` after `abc` gives `defabc`, and Backspace deletes nothing). With focus
+emulation every page had the focus. So the relay also brings the window forward before a
+`Runtime.callFunctionOn` with a string argument that is Playwright's utility-script function
+`([injected, node, ...]) => injected.focusNode(...)` (the whole string; Playwright sends the function's text
+that way). A client's own function or string that only mentions `focusNode` does not count. `focus()` on a
+locator calls `focusNode` too, without the caret reset, and its window comes forward as well. Then the
+caret stays where it was (measured live with Playwright's defaults, `noDefaults` and the MCP's
+`browser_type` with `slowly`). The rule depends on Playwright's internal names `injected` and `focusNode`:
+if a later Playwright renames them, the caret moves to the start again, and nothing else breaks.
+
+Playwright's `expect(locator).toBeFocused()` also reads `document.hasFocus()`. After another window took
+the focus, it fails for a field that is the page's active element, until the page's window has the focus
+again (with focus emulation every page had the focus). The relay cannot see such a check.
+
+**On the Mac** the relay keeps its tabs until board task ab-v16.27 measures the Mac: `Target.createTarget`
+opens a tab (a window only for `newWindow: true`), focus emulation goes to Chrome, and no window comes
+forward for input.
 
 ## Tab scopes
 
@@ -1203,17 +1315,22 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Meta+R (reload), Meta+W (the window closed) and Meta+T (a new tab). A `--background` run (Chrome
   Beta) exited 1, as expected: its `record` and `press` trials were not measured. The head of
   `check.ts` gives these results and the Linux results of 2026-11-03.
-- `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-commands.test.ts`: agent mode's relay
+- `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-commands.test.ts`, `test/relay-windows.test.ts`: agent mode's relay
   (`agent-browser relay`, contracts C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake
-  receiver and daemon (`test/fake-bridge.ts`): the policy against the contracts' vectors (copied in
-  `test/vectors/chrome-extension-ffaf794/`), the model through real CDP clients on the socket, and
-  agent-browser's own commands over the endpoint (`--cdp-url`) with the fake Chrome behind the fake
-  receiver.
+  receiver and daemon (`test/fake-bridge.ts`, which also models windows, their focus and each window's
+  active tab): the policy against the contracts' vectors (copied in
+  `test/vectors/chrome-extension-ffaf794/`), the model through real CDP clients on the socket, one window
+  per page on Linux and the Mac's tabs, and agent-browser's own commands over the endpoint (`--cdp-url`)
+  with the fake Chrome behind the fake receiver.
 - `test/live/agent-mode/` (Linux, in a private Xvfb; see the head of `run.ts`): agent mode live. A
   Chromium of its own loads chrome-extension's agent package; a stand-in for the daemon's bridge side
   and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
   concurrency cases run against it, with the C11 refusals, the tab switch of the timer answer (ab-vsm
-  Q4) and agent-browser's commands with `--cdp-url`. `CHROME_EXTENSION=<a detached worktree of
+  Q4) and agent-browser's commands with `--cdp-url`. Its group `windows` drives the anti-detect probe's
+  page (`test/live/anti-detect/probe.ts`) in its own window with Playwright (with and without
+  `noDefaults`) and the Playwright MCP while another window has the focus, and checks that the page shows
+  no background-tab signal; it also measures two Playwright clients that type at once. Chromium gets
+  `--disable-backgrounding-occluded-windows`. `CHROME_EXTENSION=<a detached worktree of
   chrome-extension at main b82c65d or later> npm run test:live:agent`. Not part of `npm test`.
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the

@@ -26,6 +26,13 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     assert.equal((await commands.eval(o, { tab: "main", expression: "1 + 1" })).value, 2);
     assert.ok((await commands.outline(o, { tab: "main" })).elements.some((e) => e.label === "Go"));
     await commands.click(o, { tab: "main", target: "#b" });
+    // On Linux the page has a window of its own, the relay answers focus emulation itself, and the press of the click
+    // brought the page's window forward (ab-v16.28).
+    assert.deepEqual(h.fake.sent("windows.create").map((r) => r.args), [[{ url: "about:blank", focused: false }]]);
+    assert.deepEqual(h.fake.sent("tabs.create"), []);
+    assert.ok(!chrome.calls.some((x) => x.method === "Emulation.setFocusEmulationEnabled"), "focus emulation reached Chrome");
+    const win = chrome.pages.get(opened.tab.targetId)!.windowId;
+    assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), [[win, { focused: true }]]);
     assert.equal((await commands.tabs(o)).tabs.length, 1);
     const status = await commands.status(o);
     assert.deepEqual([status.connected, status.proxy, status.allowedTabs, status.profileDir, status.target], [true, null, 1, null, `agent mode's endpoint ${h.url("ab-lead")}`]);
@@ -42,6 +49,23 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     await assert.rejects(commands.launch(o), /cdpUrl/);
     await assert.rejects(commands.quit(o), /cdpUrl/);
     await assert.rejects(commands.front(o), /cdpUrl/);
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
+test("open --tab over the endpoint (Linux): the relay opens a window, so agent-browser records no tab page and drives it as a window (review-45 F8)", async () => {
+  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const end = await backByChrome(h.fake, chrome);
+  try {
+    await h.ready();
+    const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
+    const opened = await commands.open(o, { url: fx.base, name: "t", tab: true });
+    const page = chrome.pages.get(opened.tab.targetId)!;
+    assert.notEqual(page.windowId, 1, "a window of its own");
+    assert.equal(existsSync(join(c.stateDir, "tab-pages.json")), false, "no tab page");
+    await commands.click(o, { tab: "t", target: "#b" });
+    assert.equal(page.title, "clicked");
+    assert.deepEqual(chrome.callsFor(page.targetId).filter((x) => x.method === "Emulation.setFocusEmulationEnabled"), []);
+    await commands.close(o, { tab: "t" });
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
 

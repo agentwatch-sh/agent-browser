@@ -235,3 +235,93 @@ test("personal mode on Linux: open gets a window of its own that it pins, with f
     stopProxy(resolveOptions(o));
   } finally { p.remove(); }
 });
+
+// ---------- review-45: a window page that is not in front of its own window ----------
+
+/** A click handler whose content only an animation frame writes: a page that Chrome does not draw never shows it. */
+const framed = (p: FakePage) => p.atFrame(() => { p.title = "framed"; });
+
+async function checkBroughtForward(name: string, page: FakePage) {
+  assert.equal(page.visibilityState, "hidden", "behind another tab of its window");
+  page.select("#b")[0].onclick = framed;
+  let calls = await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" }));
+  const m = calls.map((x) => x.method);
+  assert.ok(m.includes("Page.bringToFront") && m.indexOf("Page.bringToFront") < m.indexOf("Input.dispatchMouseEvent"), "a tab switch before the input");
+  assert.equal(page.visibilityState, "visible");
+  assert.deepEqual(focusCalls(calls), [], "no focus emulation");
+  // A library wait for content that a frame writes: the page draws, so it comes.
+  const b = await AgentBrowser.connect(linux());
+  try { await (await b.find(name)).waitFor(() => document.title === "framed", { timeoutMs: 2000, what: "the frame's content" }); } finally { await b.disconnect(); }
+  return calls;
+}
+
+test("Linux: the opener behind a site's popup tab is hidden; input, a wait and record bring its tab in front first (a person's tab switch), no tab moves", async () => {
+  fake.tabSwitches = true;
+  try {
+    operatorInFront();
+    const { name, page } = await opened(linux());
+    const popup = fake.openFrom(page, `${fx.base}/next`);
+    assert.equal(popup.windowId, page.windowId);
+    await checkBroughtForward(name, page);
+    // The popup comes in front again; a wait alone brings the opener back too.
+    fake.activateTab(popup, "test");
+    assert.equal(page.visibilityState, "hidden");
+    const b = await AgentBrowser.connect(linux());
+    try {
+      const tab = await b.find(name);
+      await tab.evaluate(() => { document.title = "not yet"; });
+      page.atFrame(() => { page.title = "drawn"; });
+      await tab.waitFor(() => document.title === "drawn", { timeoutMs: 2000, what: "a frame" });
+    } finally { await b.disconnect(); }
+    assert.equal(popup.windowId, page.windowId, "no tab moved");
+    await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+    await commands.close(linux(), { tab: name });
+  } finally { fake.tabSwitches = false; }
+});
+
+test("Linux: record in the hidden opener brings its tab in front, so Chrome sends frames", needsFfmpeg, async () => {
+  fake.tabSwitches = true;
+  try {
+    const { name, page } = await opened(linux());
+    const popup = fake.openFrom(page, `${fx.base}/next`);
+    assert.equal(page.visibilityState, "hidden");
+    const script = join(c.dir, `${name}-steps.json`);
+    writeFileSync(script, JSON.stringify([{ wait: 200 }]));
+    const calls = await callsOf(page, async () => {
+      const r = await commands.record(linux(), { tab: name, out: join(c.dir, `${name}.mp4`), script, size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG });
+      assert.ok(r.frames >= 2, `${r.frames} frames`);
+    });
+    const m = calls.map((x) => x.method);
+    assert.ok(m.indexOf("Page.bringToFront") >= 0 && m.indexOf("Page.bringToFront") < m.indexOf("Page.startScreencast"));
+    assert.deepEqual(focusCalls(calls), []);
+    await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+    await commands.close(linux(), { tab: name });
+  } finally { fake.tabSwitches = false; }
+});
+
+test("Linux: an older tab of a pinned window (open puts each new tab there) is brought in front for input and waits", async () => {
+  fake.tabSwitches = true;
+  try {
+    const { name, page } = await opened(linux());
+    await commands.window(linux(), { pin: name });
+    const later = await commands.open(linux(), { url: `${fx.base}/`, name: `${name}-later` });
+    const newer = fake.pages.get(later.tab.targetId)!;
+    assert.equal(newer.windowId, page.windowId, "in the pinned window");
+    await checkBroughtForward(name, page);
+    assert.equal(newer.visibilityState, "hidden", "the tab switch put the newer tab behind, as a person's does");
+    await commands.window(linux(), { unpin: true });
+    await commands.close(linux(), { tab: `${name}-later` });
+    await commands.close(linux(), { tab: name });
+  } finally { fake.tabSwitches = false; }
+});
+
+test("Linux, a display that is not the agent browser's own: open makes a background tab, driven as before (focus emulation), with a log line", async () => {
+  const lines: string[] = [];
+  const o = linux({ display: { own: false }, log: (l: string) => { lines.push(l); } });
+  const { name, page, create } = await opened(o);
+  assert.deepEqual(create, { url: "about:blank", background: true, newWindow: false });
+  const calls = await callsOf(page, () => commands.click(o, { tab: name, target: "#b" }));
+  assert.deepEqual(focusCalls(calls), [true]);
+  assert.ok(lines.some((l) => /not on a display of its own/.test(l)), lines.join("\n"));
+  await commands.close(o, { tab: name });
+});

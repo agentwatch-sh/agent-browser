@@ -1,0 +1,241 @@
+{
+  "trials": [
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "A",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    },
+    {
+      "scope": "B",
+      "ownLoaded": true,
+      "subdomainLoaded": true,
+      "otherReached": false,
+      "noScopeReached": false,
+      "otherBlockedByRule1": true,
+      "noScopeBlockedByRule1": true,
+      "secFetchSite": "none"
+    }
+  ],
+  "ruleMs": [
+    11,
+    11,
+    12,
+    12,
+    12,
+    12,
+    12,
+    12,
+    12,
+    12,
+    13,
+    13,
+    13,
+    13,
+    14,
+    14,
+    14,
+    14,
+    14,
+    15
+  ],
+  "summary": {
+    "trials": 20,
+    "ownLoaded": 20,
+    "subdomainLoaded": 20,
+    "otherScopeReached": 0,
+    "otherBlockedByRule1": 20,
+    "noScopeReached": 0,
+    "noScopeBlockedByRule1": 20,
+    "secFetchSiteNone": 20,
+    "ruleMs": {
+      "min": 11,
+      "max": 15,
+      "median": 13
+    }
+  }
+}

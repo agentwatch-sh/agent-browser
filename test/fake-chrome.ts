@@ -792,10 +792,16 @@ export class FakeChrome {
 
   /** Target.activateTarget and Page.bringToFront: the tab comes in front of its window (tabSwitches), and its window becomes the active one. */
   activateTab(page: FakePage, by: string) {
-    if (this.tabSwitches) for (const q of this.pages.values()) if (q !== page && q.windowId === page.windowId && !q.background) { q.background = true; q.update(); }
-    if (page.background) { page.background = false; page.update(); }
+    this.selectTab(page);
     this.focusWindow(page.windowId, by, page.targetId);
     page.updateFocus();
+  }
+
+  /** chrome.tabs.update({ active: true }): the tab comes in front of its window (tabSwitches: the others go behind); the window keeps or lacks the focus. */
+  selectTab(page: FakePage) {
+    if (this.tabSwitches) for (const q of this.pages.values()) if (q !== page && q.windowId === page.windowId && !q.background) { q.background = true; q.update(); }
+    if (page.background) { page.background = false; page.update(); }
+    for (const q of this.pages.values()) if (q.windowId === page.windowId) q.updateFocus();
   }
 
   /** A tab the test opens "by hand", for example a mail tab no command may touch. */

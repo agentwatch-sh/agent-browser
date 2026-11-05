@@ -24,7 +24,8 @@
 //                                                   design-no-x cannot reach the X pointer (as over agentwatch's relay)
 //   design-two                                      the design with two agents at once (two windows, one input lock), each typing 6 times
 //   person-window-multi                             the person baseline for several activations: F's window takes the focus after each step
-//   window, window-no-flag, window-default          one window per agent page (candidate 1)
+//   window, window-no-flag, window-default          one window per agent page (candidate 1); window-default sends the old
+//                                                   attach's focus emulation itself around each command
 //   window-activate                                 one window per page, Target.activateTarget on it for each input command
 //   activate                                        Target.activateTarget for each input command, then back (2)
 //   emulate-input                                   focus emulation only around each input command (3)
@@ -290,10 +291,10 @@ type Wrap = (fn: () => Promise<unknown>) => Promise<unknown>;
 const plain: Wrap = (fn) => fn();
 
 /** The agent's drive of T: the same commands in each agent scenario; `wrap` is the candidate's input wrapper. */
-async function agentDrive(sc: Scenario, o: BrowserOptions, wrap: Wrap, opt: { shotWrap?: boolean } = {}) {
+async function agentDrive(sc: Scenario, o: BrowserOptions, wrap: Wrap, opt: { shotWrap?: boolean; readWrap?: boolean } = {}) {
   const T = `tab=${sc.T}`;
   await idle(sc, "idle before", 3000);
-  await step(sc, "text", () => commands.text(o, { tab: T }));
+  await step(sc, "text", () => (opt.readWrap ? wrap : plain)(() => commands.text(o, { tab: T })));
   await step(sc, "click", () => wrap(() => commands.click(o, { tab: T, target: "#b" })));
   await step(sc, "type", () => wrap(() => commands.type(o, { tab: T, text: "hello", into: "#f" })));
   await step(sc, "click below the fold", () => wrap(() => commands.click(o, { tab: T, target: "#far" })));
@@ -462,7 +463,9 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
   // ---------------------------------------------------------------- one window per agent page (1)
   async window(sc) { await windowCase(sc, [OCCLUDED], true); },
   async "window-no-flag"(sc) { await windowCase(sc, [], true); },
-  async "window-default"(sc) { await windowCase(sc, [OCCLUDED], false); },
+  // The old default in a window: since ab-v16.26 agent-browser sends no focus emulation to a window page, so the
+  // scenario sends it itself around each command, as the old attach did (review-45 F4).
+  async "window-default"(sc) { await windowCase(sc, [OCCLUDED], false, false, true); },
   async "window-activate"(sc) { await windowCase(sc, [OCCLUDED], true, true); },
   // ---------------------------------------------------------------- activate the tab for input (2)
   async activate(sc) {
@@ -573,7 +576,7 @@ async function designTwoCase(sc: Scenario) {
 }
 
 /** Candidate 1: T opens in a window of its own (Target.createTarget newWindow, background); F's window stays over it. */
-async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, activate = false) {
+async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, activate = false, emulate = false) {
   const c = await startChrome(sc, flags, [urlOf(sc.F)]);
   await loaded(sc.F);
   const wf = windowOf(c.proc.pid!, sc.F);
@@ -592,8 +595,15 @@ async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, a
   const wrap: Wrap = activate ? async (fn) => {
     await raw.send("Target.activateTarget", { targetId: t }); await sleep(100);
     try { return await fn(); } finally { await raw.send("Target.activateTarget", { targetId: f }); }
+  } : emulate ? async (fn) => {
+    const { sessionId } = await raw.send("Target.attachToTarget", { targetId: t, flatten: true });
+    await raw.send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId);
+    try { return await fn(); } finally {
+      await raw.send("Emulation.setFocusEmulationEnabled", { enabled: false }, sessionId).catch(() => {});
+      await raw.send("Target.detachFromTarget", { sessionId }).catch(() => {});
+    }
   } : plain;
-  await agentDrive(sc, opts(c, hiddenDrive), wrap);
+  await agentDrive(sc, opts(c, hiddenDrive), wrap, { readWrap: emulate });
   await raw.close();
 }
 

@@ -55,9 +55,6 @@ export const INPUT_TIMING: Readonly<InputTiming> = Object.freeze({
   pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, lockWaitMs: 600_000,
 }) as Readonly<InputTiming>;
 
-/** Run xdotool with these arguments on the agent browser's display and give its standard output (input.ts). */
-export type XdotoolRunner = (args: string[]) => Promise<string>;
-
 /** The input timing of a caller's partial option, checked: each range two numbers, 0 <= min <= max; the factor and the waits positive. */
 export function resolveInputTiming(t: unknown): InputTiming {
   if (t === undefined) return { ...INPUT_TIMING, pressMs: [...INPUT_TIMING.pressMs], keyMs: [...INPUT_TIMING.keyMs], holdMs: [...INPUT_TIMING.holdMs],
@@ -77,6 +74,17 @@ export function resolveInputTiming(t: unknown): InputTiming {
   }
   return out as InputTiming;
 }
+
+/** Run xdotool with these arguments on the agent browser's display and give its standard output (display.ts). */
+export type XdotoolRunner = (args: string[]) => Promise<string>;
+
+/**
+ * @internal What agent-browser knows of the agent Chrome's display, for the tests (default: found; display.ts,
+ * displayOf). `own`: the agent Chrome runs on a display of its own, where the design of one window per page applies.
+ * `xdotool`: a runner of xdotool commands on that display, or false for none. `chromePid`: the agent Chrome's pid,
+ * whose windows the display must hold.
+ */
+export type DisplayOption = { own?: boolean; xdotool?: XdotoolRunner | false; chromePid?: number };
 
 export type BrowserOptions = {
   /** Absolute folder for this consumer's state: tab names and scopes, window pin, proxy pid and log, launch log, screenshots. */
@@ -150,11 +158,8 @@ export type BrowserOptions = {
    * names replace the defaults (INPUT_TIMING). CLI --input-timing JSON, Python input_timing=.
    */
   inputTiming?: Partial<InputTiming>;
-  /**
-   * @internal How input.ts reaches the X pointer: a runner of xdotool commands (tests), false for none.
-   * Default: xdotool on the agent browser's display, when it is on PATH (input.ts, xPointer).
-   */
-  xdotool?: XdotoolRunner | false;
+  /** @internal The agent Chrome's display, for the tests (DisplayOption). Default: found (display.ts, displayOf). */
+  display?: DisplayOption;
 };
 
 export type Settings = {
@@ -180,7 +185,7 @@ export type Settings = {
   log: (line: string) => void;
   platform: NodeJS.Platform;
   inputTiming: InputTiming;
-  xdotool?: XdotoolRunner | false;
+  display?: DisplayOption;
 };
 
 /**
@@ -188,7 +193,9 @@ export type Settings = {
  * agent-browser opens gets a window of its own and no focus emulation, as a person's page in a window
  * that is not in front. An explicit `open --tab` keeps the old modes for its tab (focus emulation while
  * a command is attached, or hiddenDrive). On the Mac and in personal mode every behaviour stays as it
- * was (the Mac waits for its own measurement, ab-v16.27).
+ * was (the Mac waits for its own measurement, ab-v16.27). This is the first half of the gate: the
+ * design applies only where the agent Chrome also runs on a display of its own (display.ts, displayOf;
+ * AgentBrowser.windows), so that it never puts windows on a person's screen or takes their focus.
  */
 export const windowPerPage = (s: Settings): boolean => s.mode === "agent" && s.platform === "linux";
 
@@ -331,8 +338,6 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     hiddenDrive: !!o.hiddenDrive,
     log: o.log ?? ((line: string) => { process.stderr.write(`${line}\n`); }),
     platform: o.platform ?? process.platform,
-    inputTiming: resolveInputTiming(o.inputTiming),
-    xdotool: o.xdotool,
   };
 }
 

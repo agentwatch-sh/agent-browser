@@ -84,7 +84,7 @@ test("every refusal of the vectors gets its exact text before any bridge request
     for (const v of endpointV.passes) {
       const before = h.fake.requests.length;
       await c.send(v.method, v.params, v.session === "page" ? sessionId : undefined);
-      const reached = h.fake.requests.slice(before).find((r) => (r.op === "debugger.sendCommand" && r.args[1] === v.method) || (r.op === "tabs.create" && v.method === "Target.createTarget"));
+      const reached = h.fake.requests.slice(before).find((r) => (r.op === "debugger.sendCommand" && r.args[1] === v.method) || (r.op === "windows.create" && v.method === "Target.createTarget"));
       assert.ok(reached, `${v.method} did not reach Chrome`);
       if (reached.op === "debugger.sendCommand") assert.deepEqual(reached.args[2], v.params);
     }
@@ -289,7 +289,7 @@ test("Target.createTarget with a URL opens the tab at about:blank, then navigate
     const attached = waiting.waitForEvent("Target.attachedToTarget");
     await waiting.send("Target.createTarget", { url: "https://a.example/x" });
     const ev = await attached;
-    assert.deepEqual(h.fake.sent("tabs.create").at(-1)!.args, [{ url: "about:blank", active: true }]);
+    assert.deepEqual(h.fake.sent("windows.create").at(-1)!.args, [{ url: "about:blank", focused: false }]);
     assert.ok(ev.waitingForDebugger);
     assert.ok(!ops(from).includes("Page.navigate"), "no navigation before the client is ready");
     from = h.fake.requests.length;
@@ -384,12 +384,12 @@ test("a connection that leaves while Target.createTarget or Target.attachToTarge
     let open!: () => void;
     const gate = (name: string) => { const g = new Promise<void>((r) => (open = r)); h.fake.op = async ({ op }) => { if (op === name) await g; return undefined; }; };
     // The createTarget form, with auto-attach on.
-    gate("tabs.create");
+    gate("windows.create");
     const a = await raw(h.url("s1"));
     a.ws!.send(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true } }));
     await sleep(20);
     a.ws!.send(JSON.stringify({ id: 2, method: "Target.createTarget", params: { url: "about:blank" } }));
-    await until(() => h.fake.sent("tabs.create").length, "tabs.create");
+    await until(() => h.fake.sent("windows.create").length, "windows.create");
     const keep = await h.connect("s1"); // the eager attach stays on, so the new tab comes attached and held
     a.ws!.close();
     await a.closed;

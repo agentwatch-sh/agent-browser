@@ -35,7 +35,7 @@ test("the model's call sets are the contract's", () => {
 
 test("each call goes where the routing vectors say", () => {
   const to = (r: ReturnType<typeof route>) => (typeof r === "object" ? "refused" : r === "model" ? "the model" : "Chrome");
-  for (const v of endpointV.routing) assert.equal(to(route(v.method, v.params, v.session === "page", !!v.child)), v.to, `${v.session} ${v.method}`);
+  for (const v of endpointV.routing) assert.equal(to(route(v.method, v.params, v.session === "page", { child: !!v.child })), v.to, `${v.session} ${v.method}`);
   for (const v of endpointV.passes) assert.notEqual(to(route(v.method, v.params, v.session === "page")), "refused", `${v.session} ${v.method}`);
 });
 

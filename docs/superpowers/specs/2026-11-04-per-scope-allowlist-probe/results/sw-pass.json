@@ -1,0 +1,102 @@
+{
+  "pass": {
+    "registered": "ok",
+    "ownScopeA": {
+      "trials": 5,
+      "pageLoaded": 5,
+      "requestsAtSite": 5,
+      "preloadHeader": 0,
+      "matches": {},
+      "errors": [
+        null
+      ]
+    },
+    "otherScopeB": {
+      "trials": 5,
+      "pageLoaded": 5,
+      "requestsAtSite": 5,
+      "preloadHeader": 0,
+      "matches": {},
+      "errors": [
+        null
+      ]
+    }
+  },
+  "pass + allow rule for tab -1": {
+    "registered": "ok",
+    "ownScopeA": {
+      "trials": 5,
+      "pageLoaded": 5,
+      "requestsAtSite": 5,
+      "preloadHeader": 0,
+      "matches": {},
+      "errors": [
+        null
+      ]
+    },
+    "otherScopeB": {
+      "trials": 5,
+      "pageLoaded": 5,
+      "requestsAtSite": 5,
+      "preloadHeader": 0,
+      "matches": {},
+      "errors": [
+        null
+      ]
+    }
+  },
+  "pre": {
+    "registered": "ok",
+    "ownScopeA": {
+      "trials": 5,
+      "pageLoaded": 5,
+      "requestsAtSite": 5,
+      "preloadHeader": 5,
+      "matches": {
+        "rule 100, tab the tab, main_frame": 5
+      },
+      "errors": [
+        null
+      ]
+    },
+    "otherScopeB": {
+      "trials": 5,
+      "pageLoaded": 0,
+      "requestsAtSite": 0,
+      "preloadHeader": 0,
+      "matches": {
+        "rule 1, tab the tab, main_frame": 5
+      },
+      "errors": [
+        "net::ERR_FAILED"
+      ]
+    }
+  },
+  "pre + allow rule for tab -1": {
+    "registered": "ok",
+    "ownScopeA": {
+      "trials": 5,
+      "pageLoaded": 5,
+      "requestsAtSite": 5,
+      "preloadHeader": 5,
+      "matches": {
+        "rule 100, tab the tab, main_frame": 5
+      },
+      "errors": [
+        null
+      ]
+    },
+    "otherScopeB": {
+      "trials": 5,
+      "pageLoaded": 0,
+      "requestsAtSite": 0,
+      "preloadHeader": 0,
+      "matches": {
+        "rule 1, tab the tab, main_frame": 5
+      },
+      "errors": [
+        "net::ERR_FAILED"
+      ]
+    }
+  }
+}

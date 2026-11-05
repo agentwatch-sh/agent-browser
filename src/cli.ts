@@ -37,7 +37,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "proxy-idle-ms": { type: "string", description: "the proxy exits after this long with no clients (default 12 h)" },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
-  "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured)" },
+  "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured); on Linux in agent mode only for a tab of open --tab" },
   "input-timing": { type: "string", description: 'the shape of a person\'s input on Linux, a JSON object of ms ranges, e.g. {"pressMs":[70,90],"keyMs":[90,150]}' },
 };
 
