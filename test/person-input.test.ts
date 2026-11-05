@@ -167,8 +167,9 @@ test("with the X pointer (xdotool on the agent browser's own display): the point
     fake.xPointer = { x: 700, y: 500 };
     xMoves.length = 0;
     const ev = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })));
-    const end = ev.at(-1)!.params;
-    assert.deepEqual(xMoves, [{ x: Math.round(end.x), y: Math.round(end.y) + 87 }], "one move of the X pointer, to the path's end on the screen");
+    const end = ev.at(-1)!.params, moves = ev.filter((x) => x.params.type === "mouseMoved");
+    assert.deepEqual(xMoves, [{ x: end.x, y: end.y + 87 }], "one move of the X pointer: the path's last step, on the screen");
+    assert.ok(!moves.some((x) => x.params.x === end.x && x.params.y === end.y), "no CDP move to the last point: the X pointer's move is that step");
     // Another window takes the focus, then this one comes forward again: its page enters at its own last point.
     operatorInFront();
     fake.xPointer = { x: end.x, y: end.y };
@@ -393,6 +394,26 @@ test("record in a window: the window comes forward first, under the input lock; 
   const first = mouse(calls)[0].params;
   assert.deepEqual([first.type, first.x, first.y], ["mouseMoved", end.x, end.y], "no jump at the take's first move");
   await commands.close(linux(), { tab: name });
+});
+
+test("in a window agent-browser's own page code runs with no user gesture (no user activation with no input); eval runs as one; a tab as before", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const gestures = (calls: Call[]) => calls.filter((x) => x.method === "Runtime.evaluate").map((x) => x.params.userGesture === true);
+  let calls = await callsOf(page, async () => {
+    await commands.text(linux(), { tab: name });
+    await commands.outline(linux(), { tab: name });
+    await commands.click(linux(), { tab: name, target: "#b" });
+    await commands.type(linux(), { tab: name, text: "a", into: "#i" });
+  });
+  assert.ok(gestures(calls).length > 5 && gestures(calls).every((g) => !g), "no gesture");
+  calls = await callsOf(page, () => commands.eval(linux(), { tab: name, expression: "1 + 1" }));
+  assert.ok(gestures(calls).includes(true), "eval, as before");
+  await commands.close(linux(), { tab: name });
+  const r = await commands.open(linux(), { url: `${fx.base}/`, name: "gtab", tab: true });
+  calls = await callsOf(fake.pages.get(r.tab.targetId)!, () => commands.text(linux(), { tab: "gtab" }));
+  assert.ok(gestures(calls).every((g) => g), "a tab of open --tab, as before");
+  await commands.close(linux(), { tab: "gtab" });
 });
 
 test("read commands never activate a window: text, eval, outline and shot", async () => {

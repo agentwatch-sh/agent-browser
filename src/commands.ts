@@ -361,7 +361,8 @@ export const commands = {
     const expression = need(p.expression, "expression");
     return onTab(o, p, async (tab, info) => {
       await tab.assertAllowed();
-      const value = await tab.evaluate(expression);
+      // As a user gesture, as before: an agent's expression can open a popup (a site sees the page's user activation).
+      const value = await tab.evaluateAsUser(expression);
       return { ok: true, command: "eval", tab: info, value: value === undefined ? null : value };
     });
   },

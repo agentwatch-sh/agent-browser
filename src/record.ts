@@ -1079,7 +1079,7 @@ function stepError(what: string, n: number, step: Step, e: unknown): unknown {
  */
 /**
  * `hands` (a page in a window of its own, ab-v16.26): the demo cursor starts where the page last saw the pointer, when
- * that is inside the recorded size, and the pointer's place after the run is where the cursor ended.
+ * that is known and inside the recorded size, and the pointer's place after the run is where the cursor ended.
  */
 export async function recordTab(tab: Tab, plan: RecordPlan, hands?: Hands): Promise<RecordOutcome> {
   const s = tab.browser.settings;
@@ -1105,8 +1105,9 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, hands
   const videoWidth = Math.round(width * scale), videoHeight = Math.round(height * scale);
   const url = await tab.url();
   const driver = new Driver(tab, plan);
-  // The cursor starts where the page last saw the pointer: no jump at the take's first move.
-  if (hands && hands.at.x < width && hands.at.y < height) { driver.x = hands.at.x; driver.y = hands.at.y; }
+  // The cursor starts where the page last saw the pointer, when that is known and inside the recorded size: no jump at
+  // the take's first move. So a retake with the same seed moves the same way from there (else from its own start).
+  if (hands?.known && hands.at.x < width && hands.at.y < height) { driver.x = hands.at.x; driver.y = hands.at.y; }
   const frames: { file: string; t: number }[] = [];
   let otherSize: [number, number] | undefined, otherSizes = 0, droppedSize: [number, number] | undefined, dropped = 0;
   // Chrome stamps each frame on its own clock; offset = (when we got it) - (its stamp), the least seen,

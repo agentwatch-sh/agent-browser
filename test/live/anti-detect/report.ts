@@ -63,6 +63,7 @@ function inputRow(sc: ScOut): Record<string, string> {
     "entries at an earlier entry's point / entries": sc.pointer ? `${sc.pointer.sameEntries} / ${sc.pointer.entries.length}` : "-",
     "scrolls with no wheel or key": String(sc.steps.reduce((n, s) => n + (s.scrollsWithoutInput ?? 0), 0)),
     "field focus with no press": String(sc.steps.reduce((n, s) => n + (s.focusWithoutPress ?? 0), 0)),
+    "user activation with no input (steps)": String(sc.steps.reduce((n, s) => n + (s.activationWithoutInput ?? 0), 0)),
   };
 }
 

@@ -10,12 +10,13 @@
 // - The pointer is one pointer for all the windows, as a person's mouse is. Chrome gives a window that comes forward a
 //   real pointer event at the X pointer, so each path starts at that event's point (read by a listener in our
 //   isolated world), else at the page's last point (pointer.json in the state folder). Where agent-browser can reach
-//   the X pointer (xdotool on the agent browser's own display: no other program's window on it), the X pointer moves
-//   to the end of each path, inside the lock, so the next activation enters where the page last saw the pointer.
-//   Measured on taylor (test/live/anti-detect/extra.ts --exp pointer): with the X pointer moved to each path's end,
-//   0 jumps and 0 position changes that the movement does not explain, as for a person who switches windows; with
-//   the X pointer never moved, 0 jumps but each later activation entered at the X pointer's one point, a position
-//   change that the movement does not explain (2 in each window per 3 activations).
+//   the X pointer (xdotool on the agent browser's own display: no other program's window on it), the last step of
+//   each path is the X pointer's move there, inside the lock, so the next activation enters where the page last saw
+//   the pointer. Measured on taylor (test/live/anti-detect/extra.ts --exp pointer): with the X pointer moved to each
+//   path's end, 0 jumps and 0 position changes that the movement does not explain, as for a person who switches
+//   windows; with the X pointer never moved, 0 jumps but each later activation entered at the X pointer's one point,
+//   a position change that the movement does not explain (2 in each window per 3 activations). The whole design
+//   (run.ts design, 4 runs): 0 and 0.
 // - The shape: a ghost-cursor path (as `record`'s cursor) of 12 to 60 moves, a pause on the target, a press of 70 to
 //   90 ms with force 0.5; one key-event pair per character, 90 to 150 ms apart; the wheel brings an element into view
 //   (100 px a notch); a field gets the focus by a click, and the caret goes where el.focus() would have put it; a file
@@ -264,16 +265,19 @@ export class Hands {
   readonly timing: InputTiming;
   /** The pointer, in the page's client CSS px. */
   at: Point;
+  /** Where the pointer is came from the page or the X pointer (not a guess): record starts its cursor there. */
+  readonly known: boolean;
   private readonly x: XAccess | undefined;
   private readonly geo: Geo;
   private readonly state: PointerState;
   private moved = false;
   private lastKey = 0;
 
-  private constructor(tab: Tab, at: Point, x: XAccess | undefined, geo: Geo, state: PointerState) {
+  private constructor(tab: Tab, at: Point, known: boolean, x: XAccess | undefined, geo: Geo, state: PointerState) {
     this.tab = tab;
     this.timing = tab.browser.settings.inputTiming;
     this.at = at;
+    this.known = known;
     this.x = x;
     this.geo = geo;
     this.state = state;
@@ -320,28 +324,46 @@ export class Hands {
     if (!at && x) {
       try { const p = await xLocation(x), o = origin(geo); at = { x: p.x - o.x, y: p.y - o.y }; } catch { /* below */ }
     }
+    const known = !!at;
     at ??= { x: geo.iw * between([0.35, 0.65]), y: geo.ih * between([0.35, 0.65]) };
     at = { x: Math.min(Math.max(at.x, 0), Math.max(0, geo.iw - 1)), y: Math.min(Math.max(at.y, 0), Math.max(0, geo.ih - 1)) };
-    return new Hands(tab, at, x, geo, state);
+    return new Hands(tab, at, known, x, geo, state);
   }
 
   /** After the command: the X pointer goes to the path's end (when agent-browser may move it), and the page's last point is kept. */
   async end(): Promise<void> {
-    if (this.moved && this.x) {
-      const o = origin(this.geo);
-      await this.x.run(["mousemove", String(Math.round(o.x + this.at.x)), String(Math.round(o.y + this.at.y))]).catch((e) => {
-        this.log(`agent-browser: could not move the X pointer to the end of the path (${(e as Error).message.split("\n")[0]})`);
-      });
-    }
+    if (this.moved && this.x && (this.xAt?.x !== Math.round(this.at.x) || this.xAt?.y !== Math.round(this.at.y))) await this.xMove(this.at);
     this.state.pages[this.tab.targetId] = { x: Math.round(this.at.x * 100) / 100, y: Math.round(this.at.y * 100) / 100 };
     writePointer(this.tab.browser.settings, this.state);
+  }
+
+  /** Where the X pointer was last moved to, in the page's client px. */
+  private xAt: Point | undefined;
+
+  /**
+   * Move the X pointer to a point of the page. Chrome gives the page that real move with its movement from the page's
+   * last point (measured: a move to the point where a CDP path ended had movement 0), so as the last step of a path
+   * it is one more step of that path, not a jump. True when it moved.
+   */
+  private async xMove(p: Point): Promise<boolean> {
+    const o = origin(this.geo), at = { x: Math.round(p.x), y: Math.round(p.y) };
+    try {
+      await this.x!.run(["mousemove", String(Math.round(o.x + at.x)), String(Math.round(o.y + at.y))]);
+      this.xAt = at;
+      return true;
+    } catch (e) {
+      this.log(`agent-browser: could not move the X pointer (${(e as Error).message.split("\n")[0]}); the input goes on with CDP alone`);
+      return false;
+    }
   }
 
   private send(method: string, params: object) { return this.tab.send(method, params); }
 
   /**
    * A pointer path to `to` along ghost-cursor's curve (W: the target's smaller side): 12 to 60 points at about 60 a
-   * second, in whole pixels as a mouse gives them, and no move that does not move (a real mouse sends none).
+   * second, in whole pixels as a mouse gives them, and no move that does not move (a real mouse sends none). Where
+   * agent-browser may move the X pointer, the path's last step is the X pointer's move there (xMove): the pointer is
+   * then where the page saw it last, with no extra move.
    */
   async moveTo(to: Point, width = 24): Promise<void> {
     to = { x: Math.round(to.x), y: Math.round(to.y) };
@@ -354,7 +376,7 @@ export class Hands {
     for (let i = 1; i <= n; i++) {
       const q = i === n ? to : pointAt(legs, (total * i) / n), p = { x: Math.round(q.x), y: Math.round(q.y) };
       if (p.x !== last.x || p.y !== last.y) {
-        await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none", buttons: 0 });
+        if (!(i === n && this.x && await this.xMove(p))) await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none", buttons: 0 });
         last = p;
       }
       await sleep(t0 + (total * i) / n - Date.now());

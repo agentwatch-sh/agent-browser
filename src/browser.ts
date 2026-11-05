@@ -371,7 +371,7 @@ export class AgentBrowser {
     if (!pages.length) throw new Error("the pinned window has no allowlisted tab to open from; open one there by hand");
     const before = new Set(((await this.conn.send("Target.getTargets")).targetInfos as TargetInfo[]).map((t) => t.targetId));
     const opener = await this.attach((pages.find((p) => this.tabScope !== undefined && p.scope === this.tabScope) ?? pages[0]).targetId);
-    await opener.evaluate(() => { window.open("about:blank", "_blank"); });
+    await opener.evaluateAsUser(() => { window.open("about:blank", "_blank"); });
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const { targetInfos } = await this.conn.send("Target.getTargets");
@@ -876,15 +876,27 @@ export class Tab {
 
   /**
    * Run a function in the page, in our isolated world, and return its (JSON-serialisable) result.
-   * The function is serialised, so it cannot close over Node variables; pass them as args.
+   * The function is serialised, so it cannot close over Node variables; pass them as args. In a window of its own
+   * (Tab.drive "window", ab-v16.26) it does not run as a user gesture: a gesture gives the page a user activation
+   * (navigator.userActivation) with no press and no key, which a site can see (measured on taylor: each read made the
+   * page active). evaluateAsUser runs it as one. Elsewhere it runs as one, as before.
    */
   async evaluate<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
+    return this.evaluateIn(fn, args, this.drive !== "window");
+  }
+
+  /** As evaluate, run as a user gesture (a popup that the page opens needs one): `eval`, and the open in a pinned window. */
+  async evaluateAsUser<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
+    return this.evaluateIn(fn, args, true);
+  }
+
+  private async evaluateIn<R, A extends unknown[]>(fn: ((...args: A) => R) | string, args: A, userGesture: boolean): Promise<Awaited<R>> {
     const expression = typeof fn === "string" ? fn : `(${fn.toString()})(...${JSON.stringify(args)})`;
     for (let attempt = 0; ; attempt++) {
       const contextId = await this.isolatedWorld();
       let res: { exceptionDetails?: { exception?: { description?: string }; text?: string }; result: { value: Awaited<R> } };
       try {
-        res = await this.send("Runtime.evaluate", { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true });
+        res = await this.send("Runtime.evaluate", { expression, contextId, awaitPromise: true, returnByValue: true, ...(userGesture ? { userGesture: true } : {}) });
       } catch (e) {
         // A navigation destroys the isolated world; make a new one and retry once.
         if (attempt === 0 && e instanceof CDPError && /context/i.test(e.message)) { this.isolatedContextId = undefined; continue; }
