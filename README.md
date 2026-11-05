@@ -814,12 +814,21 @@ daemon must send `set_scopes` (part 3): there is no backward compatibility.
   a host of that list. At each line the relay sets again the grants that each connection's own list still
   covers, and allows automatic downloads for each entry of every list. A content setting acts on the whole
   profile: a grant of one scope also applies to another scope's tab on the same host.
+- The end of a scope. From an `end_scope` on, a new connection of that scope gets the no-list 503 until
+  a later line names the scope again (in `scopes`), also over a link change and also when the `default`
+  list would cover it. This is stricter than the contract text of chrome-extension main c99bebb; board
+  task ab-v16.55 adds the matching C11 sentence.
+- A line with `roots`. This relay runs without the peer check, so it applies no list of a line that has a
+  `roots` field (any value), as if no line had come: every open connection closes (1008), and each upgrade
+  gets the 503 `The agent browser is not ready: the allowlist has session roots, but the relay was started
+  without --peer-check.`, until a line without `roots` comes. So a daemon and a relay that disagree fail
+  closed.
 - Closes. The extension keeps the browser's last window for every close (its removal queue). So the
   relay sends `end_scope`'s `tabs.remove`, `Target.closeTarget` (as `tabs.remove`: the extension's close,
   with no `beforeunload`) and a client's `Page.close` as they are, with no query, window or queue of its
   own. A late `end_scope`, whose tab the extension's sweep took out of its scope, gets `not an agent tab`:
   for the relay that removal is done.
-- Not in this part: the peer check (`--peer-check`, the session roots in the line; board task
+- Not in this part: the peer check (`--peer-check` and the check of the session roots; board task
   ab-v16.51). Until then the scope is advisory: any process of the daemon's user can connect with any
   scope and get that scope's list.
 
@@ -1601,7 +1610,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
   (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
   scope): the policy and the allowlist line against the contracts' vectors (copied in
-  `test/vectors/chrome-extension-c99bebb/`; the peer check's vectors are `todo` until board task
+  `test/vectors/chrome-extension-c99bebb/`; the vectors of the peer check itself wait for board task
   ab-v16.51), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver. Over the endpoint the fixture site

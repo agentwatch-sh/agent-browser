@@ -47,6 +47,7 @@ export const NOT_READY = {
   allowlist: "The agent browser is not ready: its extension has not confirmed the allowlist.",
   old: "The agent browser is not ready: its extension is too old for agent mode.",
   noList: "The agent browser is not ready: the allowlist has no list for this scope.",
+  roots: "The agent browser is not ready: the allowlist has session roots, but the relay was started without --peer-check.",
 };
 /** The receiver's answer to an op on a tab that its sweep took out of its scope (C10, the orphan set). */
 const NOT_AN_AGENT_TAB = "not an agent tab";
@@ -116,6 +117,19 @@ export class Model {
   private tooOld = false;
   /** The last allowlist line since the link came up: the lists of the set_scopes that the receiver confirmed. */
   private allowlist: ScopeSet | null = null;
+  /**
+   * The last allowlist line had a `roots` field, and this relay runs without the peer check (C11, the scope's session):
+   * it applies no list of that line, as if no line had come, and answers each upgrade with the roots 503, until a line
+   * without `roots` comes. So a daemon and a relay that disagree fail closed. The peer check is board ab-v16.51.
+   */
+  private rootsLine = false;
+  /**
+   * The scopes of an end_scope that no later line named again (ab-lead's decision for PR #58; the C11 sentence comes
+   * with board ab-v16.55): their new connections get the no-list 503, also over a link change. So no process of an
+   * ended session connects again in the moment before the daemon's next line drops its scope, also with a default
+   * list. A later session of the same name comes only after a line that names its scope (C4, rule 2).
+   */
+  private readonly ended = new Set<string>();
   private cleared = false;
   private settings: Promise<unknown> = Promise.resolve();
   /** How long a finished download may take to show up complete in chrome.downloads. */
@@ -139,14 +153,15 @@ export class Model {
   notReady(): string | null {
     if (!this.linkUp) return NOT_READY.link;
     if (this.tooOld) return NOT_READY.old;
-    if (!this.allowlist) return NOT_READY.allowlist;
-    return this.info ? null : NOT_READY.link;
+    if (!this.allowlist && !this.rootsLine) return NOT_READY.allowlist;
+    if (!this.info) return NOT_READY.link;
+    return this.rootsLine ? NOT_READY.roots : null;
   }
 
   /** Why a connection of `scope` is refused (C11, the order of the checks without the peer check), or null to admit it. */
   refuse(scope: string): string | null {
     // A scope whose list is empty is admitted: it can open about:blank only.
-    return this.notReady() ?? (this.allowlist?.listOf(scope) == null ? NOT_READY.noList : null);
+    return this.notReady() ?? (this.ended.has(scope) || this.allowlist?.listOf(scope) == null ? NOT_READY.noList : null);
   }
 
   /** The entries of a scope's list in the last allowlist line, or null for a scope with no list. */
@@ -171,9 +186,21 @@ export class Model {
    * compatibility; C4, the rollout).
    */
   private onAllowlist(msg: unknown): void {
+    if (msg && typeof msg === "object" && Object.hasOwn(msg, "roots")) {
+      // C11: a relay without --peer-check applies no list of a line with roots (any value), as if no line had come: every
+      // open connection closes (1008), and each upgrade gets the roots 503, until a line without roots comes.
+      if (!this.rootsLine) this.log("relay: the allowlist line has session roots, but the relay was started without --peer-check: it admits no connection");
+      this.rootsLine = true;
+      this.allowlist = null;
+      for (const c of [...this.conns]) { c.socket.close(...CLOSE.noList); void this.close(c); }
+      return;
+    }
+    this.rootsLine = false;
     const set = parseScopes(msg);
     this.allowlist = set;
     if (set.refused) this.log(`relay: the allowlist line has ${set.refused} refused item(s)`);
+    // A line that names an ended scope again ends its refusal (a later session of that name, after C4's rule 2).
+    for (const scope of [...this.ended]) if (set.scopes.has(scope)) this.ended.delete(scope);
     // C11: every connection of a scope that has no list any more closes; its tabs are detached and freed.
     for (const c of [...this.conns]) {
       if (set.listOf(c.scope) !== null) continue;
@@ -301,7 +328,7 @@ export class Model {
   private reset(): void {
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
     for (const done of [...this.scopeWaiters.values()]) done(null);
-    this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null;
+    this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.rootsLine = false;
   }
 
   private closeAll([code, reason]: readonly [number, string]): void {
@@ -324,9 +351,12 @@ export class Model {
    * is, with no query, window or queue of its own (board ab-v16.41, chrome-extension PR #17). A late end_scope, after
    * the receiver's sweep took a tab out of its scope (the orphan set, C5), gets `not an agent tab` (board ab-v16.48):
    * that removal is done for the relay, which drops the tab from its model and logs no error; the receiver's next
-   * sweep item closes the tab. The receiver's sweep is the guarantee, end_scope the fast path (C4).
+   * sweep item closes the tab. The receiver's sweep is the guarantee, end_scope the fast path (C4). From the
+   * end_scope on, a new connection of the scope gets the no-list 503 until a later line names the scope again (`ended`).
    */
   private async endScope(scope: string): Promise<void> {
+    if (!SCOPE.test(scope)) return; // no scope can have that name (C11's 404)
+    this.ended.add(scope);
     for (const c of [...this.conns]) if (c.scope === scope) { c.socket.close(...CLOSE.scopeEnded); await this.close(c); }
     const tabs = [...this.tabs.values()].filter((t) => t.scope === scope);
     await Promise.all(tabs.map((tab) => this.bridge.call("tabs.remove", [tab.id]).then(() => {}, (e) => {

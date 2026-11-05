@@ -170,7 +170,11 @@ test("a late end_scope: a tabs.remove that gets 'not an agent tab' is done for t
     await until(() => h.logs.some((l) => l.includes(`kept tab ${other.tab.id}`)), "the log of the other error");
     assert.ok(!h.logs.some((l) => l.includes(String(orphan.tab.id)) && /kept|fail|error/i.test(l)), h.logs.join("\n"));
     assert.ok(h.fake.tabs.has(orphan.tab.id), "the tab stays open until the receiver's next sweep item closes it");
-    // The relay dropped the orphan's tab from its model: a later connection of the scope never sees it.
+    // From the end_scope on the scope is refused until a line names it again; then the relay has dropped the orphan's
+    // tab from its model: a later connection of the scope never sees it.
+    assert.deepEqual(await raw(h.url("s6")).then((r) => [r.status, r.body]), [503, NOT_READY.noList]);
+    h.fake.line({ ...LINE, scopes: { s6: "a" } });
+    await until(() => h.relay.model.refuse("s6") === null, "the line that names the scope again");
     const later = await h.connect("s6");
     assert.deepEqual((await later.send("Target.getTargets")).targetInfos.map((t: any) => t.targetId), [other.targetId]);
   } finally { await h.close(); }

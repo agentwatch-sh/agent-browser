@@ -13,7 +13,7 @@ import type { CDPConnection } from "../src/cdp.ts";
 import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { offList } from "../src/relay/policy.ts";
 import { covers, normalizeEntry, parseScopes } from "../src/relay/scopes.ts";
-import { harness, raw, until, type Harness } from "./fake-bridge.ts";
+import { harness, LINE, raw, until, type Harness } from "./fake-bridge.ts";
 
 const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-c99bebb/${name}.json`, import.meta.url), "utf8"));
 const scopesV = vectors("scopes"), endpointV = vectors("endpoint"), bridgeV = vectors("bridge");
@@ -21,8 +21,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
 const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id);
 const closeOf = (id: string) => { const c = endpointV.closes.find((x: any) => x.id === id); return [c.code, c.reason]; };
-/** The peer check (and a relay without it that gets roots) is board ab-v16.51. */
-const PEER_CHECK = "the peer check and the roots of the line: board ab-v16.51";
 
 /** Two scopes with two lists, as the per-scope design's example. */
 const TWO = { t: "allowlist", lists: { a: ["a.example"], b: ["b.example"] }, scopes: { sa: "a", sb: "b" }, default: null };
@@ -56,12 +54,16 @@ test("each set_scopes vector applies to the allowlist line by C4's rules: what a
   assert.deepEqual([parseScopes(line).listOf("ab-lead"), parseScopes(line).listOf("md-other"), parseScopes(line).refused], ["md", null, 0]);
 });
 
-test("the allowlist line vectors without the peer check: a line without roots applies as set_scopes does; the operator field changes nothing", (t) => {
+test("the allowlist line vectors without the peer check: a line without roots applies as set_scopes does; one with roots applies no list (fail closed)", async () => {
   for (const v of scopesV.lines.filter((x: any) => !x.peerCheck)) {
-    if (v.failClosed) { t.todo(`${v.note} (${PEER_CHECK})`); continue; }
-    const s = parseScopes(v.line);
-    assert.deepEqual(Object.fromEntries(s.lists), { md: ["a.example"] }, v.note);
-    assert.equal(s.listOf("md-lead"), "md", v.note);
+    const h = await harness();
+    try {
+      await h.ready(v.line.roots === undefined ? v.line : LINE);
+      if (v.line.roots !== undefined) h.fake.line(v.line);
+      await until(() => h.relay.model.notReady() !== null || h.relay.model.refuse("md-lead") === null, "the line");
+      if (v.failClosed) assert.equal(h.relay.model.refuse("md-lead"), NOT_READY.roots, v.note);
+      else assert.equal(h.relay.model.refuse("md-lead"), null, v.note);
+    } finally { await h.close(); }
   }
 });
 
@@ -84,13 +86,12 @@ async function inState(h: Harness, relay: { link: boolean; bridge: number | null
   if (relay.line) h.fake.line(endpointV.lines[relay.line]);
   if (relay.bridge === null) await until(() => h.fake.sent("bridge.info").length, "bridge.info");
   else if (relay.bridge === 0) await until(() => h.relay.model.notReady() === NOT_READY.old, "the too-old answer");
-  else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() === null : true), "the steps of the link up");
+  else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() !== NOT_READY.link : true), "the steps of the link up");
   await sleep(10);
 }
 
-test("the order of the checks before the upgrade, without the peer check (upgradeChecks): the 503s, then the no-list 503 of the scope", async (t) => {
+test("the order of the checks before the upgrade, without the peer check (upgradeChecks): the 503s, then the no-list 503 of the scope", async () => {
   for (const v of endpointV.upgradeChecks.filter((x: any) => !x.peerCheck)) {
-    if (v.answer === "rootsWithout") { t.todo(`${v.note} (${PEER_CHECK})`); continue; }
     const h = await harness();
     try {
       await inState(h, v.relay);
@@ -120,9 +121,8 @@ test("a scope with no list gets the no-list 503 at once, until a line gives it a
 
 // ------------------------------------------------------------------ a scope that loses its list (C11, when a connection ends)
 
-test("the 1008 close of each connection whose scope has no list any more (lineCloses, without the peer check)", async (t) => {
+test("the 1008 close of each connection whose scope has no list any more (lineCloses, without the peer check)", async () => {
   for (const v of endpointV.lineCloses.filter((x: any) => !x.peerCheck)) {
-    if (v.line === "plainWithRoots") { t.todo(`${v.note} (${PEER_CHECK})`); continue; }
     const h = await harness();
     try {
       await h.ready(endpointV.lines.plainDefault); // the default list admits every scope of the vectors
@@ -135,6 +135,71 @@ test("the 1008 close of each connection whose scope has no list any more (lineCl
     } finally { await h.close(); }
   }
   assert.deepEqual(CLOSE.noList, closeOf("noList"));
+});
+
+test("a relay without --peer-check that gets a line with roots applies no list of it: the open connections close with 1008, each upgrade gets the roots 503, until a line without roots comes", async () => {
+  const h = await harness();
+  try {
+    await h.ready(TWO);
+    const a = await raw(h.url("sa"));
+    const c = await h.connect("sb");
+    const pb = await page(h, c);
+    const from = h.fake.requests.length;
+    h.fake.line({ ...TWO, roots: { sa: [{ pid: 3100, start: 6000 }] } });
+    assert.deepEqual(await Promise.race([a.closed, sleep(2000).then(() => null)]), closeOf("noList"));
+    assert.equal(await Promise.race([c.closedPromise.then(() => "closed"), sleep(2000).then(() => "open")]), "closed");
+    for (const scope of ["sa", "sb", "s-other"]) assert.deepEqual(await raw(h.url(scope)).then((r) => [r.status, r.body]), [503, answer("rootsWithout").body], scope);
+    assert.equal(NOT_READY.roots, answer("rootsWithout").body);
+    // As if no line had come: no tab is dropped and no content setting changes.
+    await sleep(30);
+    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op.startsWith("contentSettings.") || (r.op === "debugger.detach" && r.args[0] !== pb.tab.id)), []);
+    // roots of any value: also null and an empty object.
+    for (const roots of [null, {}]) {
+      h.fake.line(TWO);
+      await until(() => h.relay.model.refuse("sa") === null, "the line without roots");
+      h.fake.line({ ...TWO, roots });
+      await until(() => h.relay.model.refuse("sa") === NOT_READY.roots, `the roots ${JSON.stringify(roots)}`);
+    }
+    // A line without roots: the lists apply again, and the scope's tab of before is still in the model.
+    h.fake.line(TWO);
+    await until(() => h.relay.model.refuse("sb") === null, "the line without roots");
+    const again = await h.connect("sb");
+    assert.deepEqual((await again.send("Target.getTargets")).targetInfos.map((x: any) => x.targetId), [pb.targetId]);
+  } finally { await h.close(); }
+});
+
+test("from an end_scope on, the relay refuses new connections of that scope (the no-list 503) until a later line names the scope again, also over a link change", async () => {
+  const h = await harness();
+  try {
+    await h.ready(); // the default list gives every scope a list
+    const c = await h.connect("s-end");
+    await page(h, c);
+    h.fake.line({ t: "end_scope", scope: "s-end" });
+    assert.equal(await Promise.race([c.closedPromise.then(() => "closed"), sleep(2000).then(() => "open")]), "closed");
+    assert.deepEqual(await raw(h.url("s-end")).then((r) => [r.status, r.body]), [503, NOT_READY.noList], "the last line still gives it the default list");
+    assert.ok(await h.connect("s-other"), "another scope is admitted");
+    // A line that does not name the scope (here it would get the default list): still refused.
+    h.fake.line(LINE);
+    await sleep(20);
+    assert.equal(h.relay.model.refuse("s-end"), NOT_READY.noList);
+    // A link change does not end the refusal.
+    h.fake.line({ t: "link", up: false });
+    await h.ready();
+    assert.equal(h.relay.model.refuse("s-end"), NOT_READY.noList);
+    // A later line names the scope again (a new session of that name, after C4's rule 2): admitted.
+    h.fake.line({ ...LINE, scopes: { "s-end": "a" } });
+    await until(() => h.relay.model.refuse("s-end") === null, "the line that names the scope");
+    assert.ok(await h.connect("s-end"));
+    // A line that names it with null gives it no list, as any such line does.
+    h.fake.line({ t: "end_scope", scope: "s-end" });
+    h.fake.line({ ...LINE, scopes: { "s-end": null } });
+    await sleep(20);
+    assert.equal(h.relay.model.refuse("s-end"), NOT_READY.noList);
+    // An end_scope of a name that is no scope pattern changes nothing.
+    h.fake.line({ t: "end_scope", scope: "a/b" });
+    await sleep(20);
+    assert.equal(h.relay.model.refuse("s-other"), null);
+  } finally { await h.close(); }
 });
 
 test("at a line whose scopes and lists are objects, the model drops each tab of a scope with no list: a later session of the same name never sees one", async () => {

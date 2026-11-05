@@ -97,6 +97,11 @@ function start(bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; log
 }
 const portFree = (port: number) => new Promise<boolean>((r) => { const s = connect(port, "127.0.0.1"); s.once("connect", () => { s.destroy(); r(false); }); s.once("error", () => r(true)); });
 const status = (path: string) => new Promise<number>((r) => { get({ socketPath: RELAY_SOCK, path }, (res) => { res.resume(); r(res.statusCode ?? 0); }).once("error", () => r(0)); });
+/** The relay's HTTP answer to a plain request of `path`: its status and body (404 means that the relay would admit the scope). */
+const answerOf = (path: string) => new Promise<[number, string]>((r) => {
+  get({ socketPath: RELAY_SOCK, path }, (res) => { let b = ""; res.setEncoding("utf8"); res.on("data", (d) => (b += d)).on("end", () => r([res.statusCode ?? 0, b])); }).once("error", () => r([0, ""]));
+});
+const NO_LIST = "The agent browser is not ready: the allowlist has no list for this scope.";
 
 /** The extension ID that Chrome derives from the manifest's key. */
 function extensionId(manifest: { key: string }): string {
@@ -1015,7 +1020,7 @@ async function scopeCases(pw: any, WebSocket: any) {
     }, { want: (x) => x.a.filter((h: string) => h !== "about:blank").join() === "a.localhost" && x.b.filter((h: string) => h !== "about:blank").join() === "b.localhost", ms: 60_000 });
 
     // The end of a scope. end_scope (the session ended): its connections close with 1000 and its tabs close.
-    await step(G, "end_scope closes the scope's connections and its tabs (a page and its popup); a later client of the scope sees none", async () => {
+    await step(G, "end_scope closes the scope's connections and its tabs (a page and its popup); then the scope gets the no-list 503, and after a line that names it again a client sees no page", async () => {
       const b = await pw.chromium.connectOverCDP(url("sc-end"), { timeout: 20_000 });
       const ctx = b.contexts()[0];
       const page = await ctx.newPage();
@@ -1028,11 +1033,31 @@ async function scopeCases(pw: any, WebSocket: any) {
       await Promise.race([disconnected, sleep(5000)]);
       await sleep(1000);
       const open = (await openTabs()).map((t: any) => t.id);
+      // From the end_scope on the relay refuses the scope, though the default list covers it, until a line names it again.
+      const refused = await answerOf("/devtools/browser/sc-end");
+      await d.setScopes({ ...SCOPES, scopes: { ...SCOPES.scopes, "sc-end": "a" } });
       const later = await pw.chromium.connectOverCDP(url("sc-end"), { timeout: 20_000 });
       const seen = later.contexts()[0].pages().length;
       await later.close();
-      return { tabs, closed: tabs.filter((t) => t !== undefined && !open.includes(t)).length, connected: b.isConnected(), seen, chromium: alive() };
-    }, { want: (x) => x.tabs.every((t: unknown) => t !== undefined) && x.closed === 2 && !x.connected && x.seen === 0 && x.chromium, ms: 40_000 });
+      await d.setScopes(SCOPES);
+      return { tabs, closed: tabs.filter((t) => t !== undefined && !open.includes(t)).length, connected: b.isConnected(), refused, seen, chromium: alive() };
+    }, { want: (x) => x.tabs.every((t: unknown) => t !== undefined) && x.closed === 2 && !x.connected && x.refused[0] === 503 && x.refused[1] === NO_LIST && x.seen === 0 && x.chromium, ms: 40_000 });
+
+    // C11: this relay runs without --peer-check, so a line with session roots (a daemon with the peer check on) gives
+    // no list: the relay fails closed until a line without roots comes (ab-lead's decision for PR #58; board ab-v16.51
+    // adds the check itself).
+    await step(G, "a line with roots: the open connection closes with 1008 and each upgrade gets the roots 503, until a line without roots comes", async () => {
+      const c = await rawClient(WebSocket, "sc-roots");
+      d.rawLine({ t: "allowlist", ...SCOPES, roots: { "sc-roots": [{ pid: 4242, start: 1 }] } });
+      const closed = await Promise.race([c.closed, sleep(5000).then(() => null)]);
+      const during = [await answerOf("/devtools/browser/sc-roots"), await answerOf("/devtools/browser/sc-a")];
+      d.rawLine({ t: "allowlist", ...SCOPES });
+      await sleep(300);
+      const after = await answerOf("/devtools/browser/sc-roots");
+      return { closed, during, after };
+    }, { want: (x) => x.closed?.[0] === 1008 && x.closed?.[1] === "The allowlist has no list for this scope any more"
+      && x.during.every((a: [number, string]) => a[0] === 503 && a[1] === "The agent browser is not ready: the allowlist has session roots, but the relay was started without --peer-check.")
+      && x.after[0] === 404, ms: 30_000 });
 
     // A set_scopes that gives the scope no list (choice 5 b's null): the receiver sweeps its tabs, and the relay closes its
     // connections with 1008 at the allowlist line; until a line gives it a list again, it gets the no-list 503.
@@ -1216,10 +1241,10 @@ async function linkUpCases(pw: any, WebSocket: any) {
     const closed = await c.closed;
     await sleep(END_WAIT_MS);
     const after = alive() ? await urls() : null;
-    let seen: number | null = null;
-    if (alive()) { const view = await rawClient(WebSocket, "lu-last"); seen = (await view.send("Target.getTargets")).targetInfos.length; view.close(); }
-    return { before, closed, chromium: chrome(), after, seen };
-  }, { want: (x) => x.before.length === 1 && x.closed[0] === 1000 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.seen === 0, ms: 30_000 });
+    // From the end_scope on the scope gets the no-list 503 (no client sees the about:blank tab, which is in no scope).
+    const refused = await answerOf("/devtools/browser/lu-last");
+    return { before, closed, chromium: chrome(), after, refused };
+  }, { want: (x) => x.before.length === 1 && x.closed[0] === 1000 && x.chromium === "running" && x.after?.length === 1 && x.after[0] === "about:blank" && x.refused[0] === 503 && x.refused[1] === NO_LIST, ms: 30_000 });
 
   await step(G, "Playwright's page.close() of the browser's only tab (Target.closeTarget): Chromium stays up", async () => {
     const browser = await pw.chromium.connectOverCDP(url("lu-close"), { timeout: 20_000 });

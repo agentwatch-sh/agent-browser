@@ -229,6 +229,9 @@ export class StandInDaemon {
     return false;
   }
 
+  /** A line to the relay as it is (for example an allowlist line with session roots, which only a daemon with the peer check writes). */
+  rawLine(msg: object): void { this.toRelay(msg); }
+
   /** The agentwatch session `scope` ended (C10's end_scope line). */
   endScope(scope: string): void { this.toRelay({ t: "end_scope", scope }); }
 
