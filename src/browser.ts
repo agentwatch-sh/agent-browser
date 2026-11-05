@@ -850,9 +850,9 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
-   * Elsewhere this does nothing.
+   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout).
    */
-  async toFront(): Promise<void> {
+  async toFront(opts: { deadline?: number } = {}): Promise<void> {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
@@ -868,7 +868,7 @@ export class Tab {
       for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
-    });
+    }, opts.deadline);
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -951,14 +951,19 @@ export class Tab {
     }
   }
 
-  /** Poll a page function until it returns a truthy value; returns that value. */
+  /**
+   * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front first
+   * (toFront); its wait for the input lock is part of `timeoutMs` (review-47d note 6), so the wait ends near its timeout
+   * also while another agent's input holds the lock (the page then stays hidden, and a condition that needs a frame
+   * times out).
+   */
   async waitFor<R, A extends unknown[] = []>(
     fn: ((...args: A) => R) | string,
     opts: { timeoutMs?: number; intervalMs?: number; args?: A; what?: string } = {},
   ): Promise<Awaited<R>> {
     const { timeoutMs = 30_000, intervalMs = 250, args = [] as unknown as A } = opts;
     const deadline = Date.now() + timeoutMs;
-    await this.toFront().catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
+    await this.toFront({ deadline }).catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
     for (;;) {
       const v = await this.evaluate(fn, ...args).catch(() => undefined);
       if (v) return v as Awaited<R>;

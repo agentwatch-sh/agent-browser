@@ -10,7 +10,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
@@ -505,6 +505,33 @@ for (const [what, run] of INPUT_COMMANDS) {
     await commands.close(linux(), { tab: name }).catch(() => {});
   });
 }
+
+test("Tab.waitFor's timeoutMs covers its wait for the input lock: on a hidden window page it ends near its timeout while another agent holds the lock (review-47d note 6)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const popup = fake.openFrom(page, `${fx.base}/`); // the page is hidden behind its popup tab
+  assert.equal(page.visibilityState, "hidden");
+  const b = await AgentBrowser.connect(linux());
+  try {
+    const tab = await b.find(name);
+    const holder = holdLock(4000);
+    try {
+      let t0 = Date.now();
+      await assert.rejects(tab.waitFor(() => false, { timeoutMs: 600, what: "nothing" }), /timed out waiting for nothing/);
+      assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms: its timeout, not the lock's wait`);
+      // A condition that holds ends the wait as before, also when the lock is not free within the timeout.
+      t0 = Date.now();
+      assert.equal(await tab.waitFor(() => 7, { timeoutMs: 600 }), 7);
+      assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+    } finally { holder.kill(); }
+    rmSync(join(c.stateDir, "input.lock"), { force: true });
+    // A free lock, and a timeout shorter than the read before the lock: the lock is still tried once, and the tab comes in front.
+    assert.equal(await tab.waitFor(() => document.visibilityState === "visible", { timeoutMs: 1 }), true);
+    assert.equal(page.visibilityState, "visible");
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+  await commands.close(linux(), { tab: name });
+});
 
 test("a page that leaves the allowlist during the path gets no press; one that leaves it at the field's click gets no key", async () => {
   operatorInFront();

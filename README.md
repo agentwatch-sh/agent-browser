@@ -273,7 +273,8 @@ person's input**) and `log` (progress lines; default standard error).
     `Tab.waitFor`) of a visible window page never brings a window forward; a read of a hidden window page
     (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
     waits for another agent's input command (review-47c: a tab switch during another agent's typing gave
-    two focused pages). `shot` and `fetch` never do. A page that a site opened in the
+    two focused pages). `Tab.waitFor`'s `timeoutMs` covers that wait: while the lock is busy until its
+    timeout, the page stays hidden and the wait ends at its timeout (review-47d). `shot` and `fetch` never do. A page that a site opened in the
     opener's window is in front of that window; to go back to the opener, the next command on the
     opener brings it forward: a tab switch, as a person makes. Keys need this activation: keys into a
     window that is not active gave its page the focus with no switch, so two pages had the focus (the
