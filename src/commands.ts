@@ -310,6 +310,7 @@ export const commands = {
 
   async outline(o: BrowserOptions | Settings, p: { tab: string; all?: boolean; anyScope?: boolean }): Promise<OutlineResult> {
     return onTab(o, p, async (tab, info, b) => {
+      await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront)
       const elements = await outlineTab(tab, !!p.all);
       await b.markRead(tab.targetId, await tab.url()); // the read-first rule of shot
       return { ok: true, command: "outline", tab: info, elements };
@@ -361,6 +362,7 @@ export const commands = {
     const expression = need(p.expression, "expression");
     return onTab(o, p, async (tab, info) => {
       await tab.assertAllowed();
+      await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront): an eval can wait for a frame
       const value = await tab.evaluate(expression);
       return { ok: true, command: "eval", tab: info, value: value === undefined ? null : value };
     });
