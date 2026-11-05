@@ -192,8 +192,8 @@ person's input**) and `log` (progress lines; default standard error).
   minutes in the background, Chrome's intensive wake-up throttling can slow chained timers in a hidden
   tab to one wake-up a minute (from Chrome's documentation; not measured here). agent-browser still
   drives the tab (see the next item). A caller that needs the old timers can pass the two flags in
-  `chromeArgs` (`--chrome-args`). Measured on Linux only (taylor, 2026-11-04, Chromium 156, Xvfb,
-  `test/live/background-tabs/`): click, type, eval, text, shot and record worked in a background tab,
+  `chromeArgs` (`--chrome-args`). `test/live/background-tabs/` ran on Linux only (taylor, 2026-11-04,
+  Chromium 156, Xvfb): click, type, eval, text, shot and record worked in a background tab,
   also after the front tab changed, with the one flag and with all three. A hidden tab's 50 ms timer
   had a median of 1000 ms (6 ticks in 6 s); with the two timer flags, 50 ms (120 ticks). In the default
   mode a shot of a background tab took 0.2 to 3.1 s with either set (0.1 s in front), and 1 of 30 such
@@ -431,7 +431,8 @@ person's input**) and `log` (progress lines; default standard error).
   - **The Mac** keeps background tabs, and personal mode keeps its own pinned window with focus
     emulation, until the Mac build (board task ab-v16.27). The Mac check of 2026-11-05 measured the
     windows there (next item): a new agent window came behind the operator's front window, on the same
-    Space, but a site's popup took the front for a moment.
+    Space, but a site's popup took the front until the check gave it back (with no give-back, the
+    length of a take is not measured).
 - **One window per agent page on the Mac: measured, not built (ab-v16.44).** The Mac check
   (`test/live/anti-detect/mac.ts`; see **Tests**) ran on the operator's Mac on 2026-11-05, in Google
   Chrome Beta 158.0.8127.18 as the agent Chrome, on a new profile, with today's start and flags
@@ -456,8 +457,9 @@ person's input**) and `log` (progress lines; default standard error).
     `target=_blank` link after 25 ms, `window.open()` after 9 ms, the sized popup after 7 and 5 ms.
     These times end at the give-back: they do not say how long Chrome keeps the front. With no
     give-back the length of a take is not measured, and agent-browser's own give-back ends with
-    `launch`. Keys typed during a take go to the agent Chrome. No other step changed the front app.
-    The operator's Google Chrome was in front at the start and at the end.
+    `launch`. Keys typed during a take go to the agent Chrome: that is the macOS rule for the front
+    app, and this check did not measure it. No other step changed the front app. The operator's
+    Google Chrome was in front at the start and at the end.
   - **The Space.** No step changed it.
   - **Drive and record in a covered window of its own** (no focus emulation, no activation). The page
     stayed `visible` and drew 60 frames a second. `text` took 11 ms, `click` 24 ms, `type` 12 ms,
@@ -477,12 +479,13 @@ person's input**) and `log` (progress lines; default standard error).
     was not over the page.
   - **Popups** (from WA, a page in a window of its own). A `target=_blank` link and `window.open()`
     with no features opened a tab in WA's window. The popup tab was `visible` with no focus (PA got a
-    `blur` at its load). The opener WA went `hidden` (47 ms and 23 ms after the click) and kept the
-    focus, with no `blur`, until the check closed the popup. `window.open(url, "",
-    "popup,width=500,height=400")` opened a window of its own: its page had no focus, and WA stayed
-    `visible` with the focus. That popup asked for 500x400 and got an inner size of 500x399 and an
-    outer size of 500x466. Each popup page had `history.length` 1. On Linux (the research's section 6)
-    the popup tab comes in front with the focus, and the opener gets a `blur`.
+    `blur` at its load). The opener WA went `hidden` (47 ms and 23 ms after the step began, with the
+    check's click) and kept the focus, with no `blur`, until the check closed the popup.
+    `window.open(url, "", "popup,width=500,height=400")` opened a window of its own: its page had no
+    focus, and WA stayed `visible` with the focus. That popup asked for 500x400 and got an inner size
+    of 500x399 and an outer size of 500x466. Each popup page had `history.length` 1. On Linux (the
+    research's section 6) the popup tab comes in front with the focus, and the opener gets a `blur`;
+    the sized popup's window gets the focus, and the opener gets a `blur` too.
   - **The real pointer.** No probe page got an event at its point. The check never moves it.
   - **What an API gives.** The agent Chrome had 3 windows, all on the current Space (CGWindowList), so
     Mission Control can show them, and App Exposé and the Dock menu of its icon can list them. It is a

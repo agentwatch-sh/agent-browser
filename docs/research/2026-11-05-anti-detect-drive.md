@@ -410,7 +410,8 @@ its page the focus with no activation, and the other agent page gets no `blur`: 
 click in WB, two pages had the focus at once for the whole time that the check watched each step
 (1.2 to 3.7 s). Keys into an inactive window arrived. A popup tab (`target=_blank`, `window.open()`)
 came `visible` with no focus, and the opener behind it went `hidden` and kept the focus with no
-`blur`; on Linux (section 6) the popup tab takes the focus and the opener gets a `blur`. The check's
+`blur`; the sized popup's page had no focus, and the opener kept it. On Linux (section 6) the popup
+tab and the sized popup's window take the focus, and the opener gets a `blur`. The check's
 person-shaped input had a press of 72 ms and one pointer jump, where its path started at a fixed
 point, not at the page's last point. No page got an event at the real pointer. Not measured:
 Mission Control, App Exposé, the Dock menu and Cmd-` as the operator sees them (`--look`, with the
