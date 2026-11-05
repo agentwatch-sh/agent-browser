@@ -496,13 +496,19 @@ relay and moves both at once.
   puts into a session's environment at its launch: the daemon names the scope before the launch. The
   URL is easy to guess (the socket path and the session name), so with a default list any scope name
   that `scopes` does not name gets the default list.
-- At a session's end the daemon keeps the scope in `scopes` with `null` (no list), and writes
-  `end_scope` to the relay. So the ended scope's tabs and connections never fall back to the default
-  list: the receiver blocks its tabs, and the relay closes its connections (section 7) and removes
-  its tabs. `scopes` then grows with each ended session until the next link up (the receiver empties
-  its map then, and the daemon sends the live sessions only). With `default` `null` (choice 5 a),
-  the daemon can drop an ended scope as soon as `end_scope` has removed its tabs: an unnamed scope
-  has no list anyway.
+- At a session's end the daemon writes `end_scope` to the relay and drops the scope from `scopes` in
+  its next `set_scopes` (agentwatch stage 4, B5). So `scopes` holds only the live sessions, and the
+  receiver's map cannot grow without bound. With `default` `null` (choice 5 a) a dropped scope has
+  no list: the receiver blocks its tabs, and the relay closes its connections and removes its tabs.
+  Only with a default list (choice 5 b) does the daemon first send the ended scope as `null` (no
+  list, no fall-back), and drop it when `end_scope` has removed its tabs; so the ended scope never
+  falls back to the default list.
+- The rollout (C4's target). The receiver's hello says `"features":["scopes"]`. A new daemon that
+  meets an old receiver (no such feature) fails closed: it sends `set_allowlist` with an empty list
+  (the old receiver blocks every site), writes no `allowlist` line (the relay admits no
+  connection), and tells the operator on the Browser page that the extension is too old. A new
+  receiver that meets an old daemon answers `set_allowlist` with `ok: false` ("set_allowlist is
+  gone: send set_scopes") and applies nothing: every tab is blocked.
 - The object replaces the last one in full. The daemon sends it after each link up (as it sends the
   list today), when a list changes, and when a session starts or ends.
 - The answer: `{"rules":<scope rules in force>,"closed":<tabs closed>,"refused":<entries, list
@@ -638,6 +644,12 @@ session names itself, and the CLI reaches the gateway over TCP localhost with on
   the token belongs to the session's stable identity (not its display name), and a failed `/proc`
   or tmux read refuses the call.
 
+The token (aw-lead's "key") lives only in the session's environment: never in an argv, never in the
+output of `agentwatch browser endpoint` or `env`, never in a log, and never in a URL that a tool
+gets as an argument. A session that is live before the deploy has no token until its restart: the
+relay refuses its connection with 403 `The agent browser needs this session's key. A session that
+started before the key existed gets one when it starts again.` (fail closed).
+
 The limits of either way, stated plainly: the token stops a mistake and a prompt-injected agent that
 only names another scope. It does not stop a process of the same OS user that looks for the token:
 `/proc/<pid>/environ` of another session's process is readable by the same user; a session's
@@ -741,7 +753,9 @@ to the agent browser with any session's name and get that session's list.
   calls, and their output goes into a transcript: they print no token at all. The client reads the
   token from its own environment and adds it to the URL. A program that
   agentwatch did not start has no token and can no longer connect, unless agentwatch gives it a
-  token of its own (see choice 5). A process of your user that looks for a token can still find it:
+  token of its own (see choice 5). A session that started before the change has no token until it
+starts again; until then the agent browser refuses it with a clear text. A process of your user
+that looks for a token can still find it:
   in another session's environment (`/proc`), in a transcript, or by tmux keys to another session's
   pane. The token never goes into a command line or a transcript. A stronger check (the daemon tells
   the calling session by its process) is about one more stage of work in agentwatch.
