@@ -551,15 +551,16 @@ async function designTwoCase(sc: Scenario, twoSites: boolean) {
   await loaded(sc.F);
   const wf = windowOf(c.proc.pid!, sc.F);
   await raiseAndFocus(wf);
-  const o = opts(c, false), T2 = `${sc.T}b`;
+  const o = opts(c, false), T2 = `${sc.T}b`, T3 = `${sc.T}c`; // T3: a third page of T's site, for a later agent there
   await commands.open(o, { url: urlOf(sc.T) });
   await commands.open(o, { url: urlOf(T2, twoSites ? BASE2 : BASE) });
-  await loaded(sc.T); await loaded(T2);
+  await commands.open(o, { url: urlOf(T3) });
+  await loaded(sc.T); await loaded(T2); await loaded(T3);
   await sleep(500);
   await raiseAndFocus(wf);
-  const agent = async (tab: string, delay: number) => {
+  const agent = async (tab: string, delay: number, rounds = 6) => {
     await sleep(delay);
-    for (let r = 0; r < 6; r++) {
+    for (let r = 0; r < rounds; r++) {
       mark("cmd", { of: tab, phase: "start" });
       await commands.type(o, { tab: `tab=${tab}`, text: "hello", into: "#f" });
       mark("cmd", { of: tab, phase: "end" });
@@ -572,6 +573,11 @@ async function designTwoCase(sc: Scenario, twoSites: boolean) {
   const sorted = () => log.slice().sort((x, y) => x.t - y.t);
   const s0 = sc.steps.at(-1)!;
   const both = bothFocusedMs(sorted(), sc.T, T2, s0.t0, s0.t1);
+  // A third agent on T's site after both: T and T3 (one site) must never both have the focus (way 1).
+  await step(sc, "a third agent on T's site, after both", () => agent(T3, 0, 2), 60_000);
+  const s3 = sc.steps.at(-1)!;
+  sc.notes.push(`after both, a third agent on T's site: T and T3 both focused ${bothFocusedMs(sorted(), sc.T, T3, s3.t0, s3.t1)} ms, T2 and T3 ${bothFocusedMs(sorted(), T2, T3, s3.t0, s3.t1)} ms of ${s3.t1 - s3.t0} ms; `
+    + `focused at its end: ${[sc.T, T2, T3].map((tab) => `${tab} ${log.filter((e) => e.tab === tab && e.focus !== undefined && e.t <= s3.t1).sort((x, y) => x.t - y.t).at(-1)?.focus}`).join(", ")}`);
   await raiseAndFocus(wf);
   let alone = 0;
   await step(sc, "each agent alone, one after the other", async () => { const t0 = Date.now(); await agent(sc.T, 0); await agent(T2, 0); alone = Date.now() - t0; }, 120_000);
