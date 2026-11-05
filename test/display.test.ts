@@ -7,7 +7,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { displayOf, onlyWindowsOf, type DisplayDeps, type XAccess } from "../src/display.ts";
+import { displayOf, hasWindowManager, onlyWindowsOf, type DisplayDeps, type XAccess } from "../src/display.ts";
 import { resolveOptions, type BrowserOptions } from "../src/options.ts";
 import { consumer, type Consumer } from "./helpers.ts";
 
@@ -32,6 +32,11 @@ function fakeX(windows: Record<string, string>, root = "1") {
 }
 
 const settings = (extra: Partial<BrowserOptions> = {}) => resolveOptions(c.options({ platform: "linux", ...extra }));
+/** xprop on a display with no window manager (agentwatch's Xvfb), or with one (a person's desktop). */
+const noWm = () => async () => "_NET_SUPPORTING_WM_CHECK:  not found.\n";
+const aWm = () => async () => "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x21f\n";
+/** xprop on a new Xvfb: no client has named the atom yet. */
+const noAtom = () => async () => "_NET_SUPPORTING_WM_CHECK:  no such atom on any window.\n";
 
 test("onlyWindowsOf: every visible window but the root is the pid's; another pid, or no window, is not a display of its own", async () => {
   assert.equal(await onlyWindowsOf(fakeX({ 10: "4242", 11: "4242" }).x, "4242"), true);
@@ -45,7 +50,7 @@ test("onlyWindowsOf: every visible window but the root is the pid's; another pid
 test("an agent Chrome that agent-browser started: own when its display holds only its windows; the answer holds a minute for that pid", async () => {
   let t = 1_000_000, pid = 4242;
   const disp = fakeX({ 10: "4242" });
-  const deps: DisplayDeps = { pid: () => pid, env: () => ({ DISPLAY: ":42" }), runner: () => disp.x, now: () => t };
+  const deps: DisplayDeps = { pid: () => pid, env: () => ({ DISPLAY: ":42" }), runner: () => disp.x, xprop: noWm, now: () => t };
   const s = settings();
   let info = await displayOf(s, false, deps);
   assert.deepEqual([info.own, info.chromePid, !!info.x], [true, 4242, true]);
@@ -76,7 +81,7 @@ test("not a display of its own: the log line says why, at most once in 5 minutes
     const lines: string[] = [];
     const s = resolveOptions(o.options({ platform: "linux", log: (l) => { lines.push(l); } }));
     const other = fakeX({ 10: "4242", 11: "777" });
-    const deps: DisplayDeps = { pid: () => 4242, env: () => ({ DISPLAY: ":42" }), runner: () => other.x, now: () => t };
+    const deps: DisplayDeps = { pid: () => 4242, env: () => ({ DISPLAY: ":42" }), runner: () => other.x, xprop: noWm, now: () => t };
     let info = await displayOf(s, true, deps);
     assert.equal(info.own, false);
     assert.match(info.why!, /another program's window is on the display :42/);
@@ -98,6 +103,75 @@ test("not a display of its own: the log line says why, at most once in 5 minutes
     assert.match(info.why!, /cannot see the agent Chrome's display \(no DISPLAY\)/);
     info = await displayOf(s, false, { ...deps, pid: () => undefined });
     assert.match(info.why!, /finds no agent Chrome of its own/);
+  } finally { o.remove(); }
+});
+
+test("a Wayland session or a window manager is not a display of its own: WAYLAND_DISPLAY in the agent Chrome's environment, _NET_SUPPORTING_WM_CHECK on the root, or no xprop (ab-v16.42)", async () => {
+  const o = consumer();
+  try {
+    let t = 3_000_000;
+    const s = resolveOptions(o.options({ platform: "linux" }));
+    // The agent Chrome forced to X11 (--ozone-platform=x11) is the only XWayland client, and nothing frames it: xdotool alone says "own".
+    const only = fakeX({ 10: "4242" });
+    const base: DisplayDeps = { pid: () => 4242, runner: () => only.x, xprop: noWm, now: () => (t += 61_000) };
+    let info = await displayOf(s, false, { ...base, env: () => ({ DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" }) });
+    assert.equal(info.own, false);
+    assert.match(info.why!, /runs in a Wayland session \(WAYLAND_DISPLAY=wayland-0\): its X display :0 is XWayland/);
+    info = await displayOf(s, false, { ...base, env: () => ({ DISPLAY: ":0" }), xprop: aWm });
+    assert.equal(info.own, false);
+    assert.match(info.why!, /a window manager runs on the display :0 \(_NET_SUPPORTING_WM_CHECK\)/);
+    info = await displayOf(s, false, { ...base, env: () => ({ DISPLAY: ":0" }), xprop: () => async () => { throw new Error("spawn xprop ENOENT"); } });
+    assert.equal(info.own, false);
+    assert.match(info.why!, /cannot check for a window manager on the display :0 \(no xprop/);
+    // This process's environment, when the agent Chrome's cannot be read: its WAYLAND_DISPLAY counts too.
+    const saved = { d: process.env.DISPLAY, w: process.env.WAYLAND_DISPLAY };
+    process.env.DISPLAY = ":0"; process.env.WAYLAND_DISPLAY = "wayland-1";
+    try { info = await displayOf(s, false, { ...base, env: () => undefined }); }
+    finally {
+      if (saved.d === undefined) delete process.env.DISPLAY; else process.env.DISPLAY = saved.d;
+      if (saved.w === undefined) delete process.env.WAYLAND_DISPLAY; else process.env.WAYLAND_DISPLAY = saved.w;
+    }
+    assert.match(info.why!, /WAYLAND_DISPLAY=wayland-1/);
+    // No window manager and no Wayland: own, as before.
+    info = await displayOf(s, false, { ...base, env: () => ({ DISPLAY: ":42" }) });
+    assert.equal(info.own, true);
+  } finally { o.remove(); }
+});
+
+test("hasWindowManager reads xprop's answer: a window id, not found, no such atom, or an answer it does not know (an error)", async () => {
+  assert.equal(await hasWindowManager(aWm()), true);
+  assert.equal(await hasWindowManager(noWm()), false);
+  assert.equal(await hasWindowManager(noAtom()), false);
+  await assert.rejects(hasWindowManager(async () => "xprop: unable to open display ':9'\n"), /xprop gave no answer/);
+});
+
+test("within the minute, the kept pid's /proc/<pid>/cmdline stands in for ps: no ps while it is still this profile's agent Chrome (review-45c)", async () => {
+  const o = consumer();
+  try {
+    let t = 4_000_000, psCalls = 0;
+    const s = resolveOptions(o.options({ platform: "linux" }));
+    const disp = fakeX({ 10: "4242" });
+    let cmdline: string | undefined = `/usr/lib/chromium/chromium --user-data-dir=${s.profileDir} --window-name=agent`;
+    const deps: DisplayDeps = { pid: () => { psCalls++; return 4242; }, cmdline: (p) => (p === 4242 ? cmdline : undefined), env: () => ({ DISPLAY: ":42" }),
+      runner: () => disp.x, xprop: noWm, now: () => t };
+    assert.equal((await displayOf(s, false, deps)).own, true);
+    assert.equal(psCalls, 1, "the first check finds the pid with ps");
+    t += 30_000;
+    assert.equal((await displayOf(s, false, deps)).own, true);
+    assert.equal(psCalls, 1, "the kept pid is still the agent Chrome: no ps");
+    // The pid now belongs to another process (a renderer, another profile, or none): ps again.
+    for (const other of [`/usr/lib/chromium/chromium --type=renderer --user-data-dir=${s.profileDir}`, `/usr/lib/chromium/chromium --user-data-dir=${s.profileDir}-other`, undefined]) {
+      cmdline = other;
+      const n = psCalls;
+      await displayOf(s, false, deps);
+      assert.equal(psCalls, n + 1, String(other));
+    }
+    // After the minute the check runs again, with ps.
+    cmdline = `/usr/lib/chromium/chromium --user-data-dir=${s.profileDir}`;
+    t += 61_000;
+    const n = psCalls;
+    await displayOf(s, false, deps);
+    assert.equal(psCalls, n + 1);
   } finally { o.remove(); }
 });
 

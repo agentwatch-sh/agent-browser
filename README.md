@@ -215,11 +215,17 @@ person's input**) and `log` (progress lines; default standard error).
     own, so that it never puts windows on a person's screen or takes their focus: behind agent mode's
     endpoint (`--cdp-url`: agentwatch's agent unit runs its Chromium on a private Xvfb), and for an agent
     Chrome that agent-browser started when every visible window of its display (its own environment's
-    `DISPLAY`, through xdotool) belongs to that Chrome's pid. That check holds for a minute for the same
-    Chrome pid (`display.json` in the state folder). Elsewhere (another program's window on the display,
-    no xdotool, an endpoint that another program started, a check that fails) every page opens and is
-    driven as before, in a background tab, and a log line says why, at most once in 5 minutes. No test
-    runner skips the check: a test gives its own answer (the internal `display` option).
+    `DISPLAY`, through xdotool) belongs to that Chrome's pid, no window manager runs there (the root
+    window has no `_NET_SUPPORTING_WM_CHECK`, read with xprop of x11-utils: a person's desktop has one)
+    and the Chrome's environment has no `WAYLAND_DISPLAY` (a Chrome forced to X11 under a Wayland
+    desktop is an XWayland client, on a person's screen, also when it is the only one). That check holds
+    for a minute for the same Chrome pid (`display.json` in the state folder); in that minute
+    `/proc/<pid>/cmdline` of the kept pid stands in for `ps`. Elsewhere (another program's window on
+    the display, a window manager, a Wayland session, no xdotool or no xprop, an endpoint that another
+    program started, a check that fails) every page opens and is driven as before, in a background tab,
+    and a log line says why, at most once in 5 minutes, at the first command that opens or attaches a
+    page (`tabs`, `status` and `window` give none). No test runner skips the check: a test gives its
+    own answer (the internal `display` option).
   - **A window page behind another tab of its window** is hidden, as a person's background tab: the
     opener behind a site's popup tab, an older tab of a pinned window (`open` puts each new tab there),
     a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.
@@ -244,7 +250,11 @@ person's input**) and `log` (progress lines; default standard error).
     when a window is not possible: **a site can detect a background tab** that agent-browser drives in
     either mode (the research's section 4: two `visible` tabs in one window, two focused pages, input
     while `hidden`). The state folder's `tab-pages.json` lists these tabs, so that each later command
-    drives them in the old mode too. `--hidden-drive` changes only such tabs. Over agent mode's endpoint
+    drives them in the old mode too, also a tab that `open --tab` opened while the display was not the
+    agent browser's own (the item above) and the display is its own later. A plain `open` there opens a
+    background tab too, with no entry: once the display is the agent browser's own, that tab is a window
+    page (a tab switch in its window before input, no focus emulation). `--hidden-drive` changes only
+    such tabs. Over agent mode's endpoint
     (`--cdp-url`) the exception does not apply: agentwatch's relay opens a window for every new page
     (board task ab-v16.28).
   - **One input at a time, after the window comes forward** (`src/input.ts`). In a window of its own,
@@ -273,7 +283,8 @@ person's input**) and `log` (progress lines; default standard error).
     `Tab.waitFor`) of a visible window page never brings a window forward; a read of a hidden window page
     (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
     waits for another agent's input command (review-47c: a tab switch during another agent's typing gave
-    two focused pages). `shot` and `fetch` never do. A page that a site opened in the
+    two focused pages). `Tab.waitFor`'s `timeoutMs` covers that wait: while the lock is busy until its
+    timeout, the page stays hidden and the wait ends at its timeout (review-47d). `shot` and `fetch` never do. A page that a site opened in the
     opener's window is in front of that window; to go back to the opener, the next command on the
     opener brings it forward: a tab switch, as a person makes. Keys need this activation: keys into a
     window that is not active gave its page the focus with no switch, so two pages had the focus (the
@@ -910,9 +921,10 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   `highlight` step still draws its ring.
 - **The window.** On the Mac `record` never raises a window or switches the operator's Space: it sends no
   `Page.bringToFront`, which activates Chrome. On Linux, on a display of the agent browser's own, a window
-  page that is hidden behind another tab of its window comes in front first (`Tab.toFront`, a tab switch with
-  `Page.bringToFront`; **One window per agent page**): a hidden page sends no screencast frame. The agent browser can stay minimized, hidden (Cmd-H),
-  covered or on another Space during a take (see **Measured**). Only a Chrome start, its one
+  page that is hidden behind another tab of its window comes in front first (`Tab.toFront`, a tab switch
+  with `Page.bringToFront`; **One window per agent page**): a hidden page sends no screencast frame. The
+  agent browser can stay minimized, hidden (Cmd-H), covered or on another Space during a take (see
+  **Measured**). Only a Chrome start, its one
   "Allow remote debugging?" prompt and a sign-in (`launch --login`) need the window. Start the agent
   browser, click Allow, then hide it: takes run in the background. Chrome sends no screencast frame
   of a background tab's hidden page, so `record` needs focus emulation (`Emulation.setFocusEmulationEnabled`).
@@ -973,9 +985,11 @@ background tab may now get about 28 fps with gaps of 0.63 s, as in the "no flags
 flag and with all three; the check that drives background tabs ran on Linux only. On macOS the
 screencast kept a minimized window and a hidden app painting at 55 to 60 fps also without the flags,
 and a covered window at 47 fps; a background tab without the flags painted at 28 fps. In all these
-measurements focus emulation was on, as `record` still does it.
+measurements focus emulation was on, as `record` still has it for a background tab (the Mac, personal
+mode, `open --tab`). A window page on Linux has none: it draws without it (**The window**).
 So the operator can work in another window during a recording, and on the Mac `record` does not bring the
-tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see **The window**). A recording at 1920x1080 and
+tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see
+**The window**). A recording at 1920x1080 and
 `--scale 2` (3840x2160 frames) got 58.8 fps from Chrome. A cursor move, tracked frame by frame in a
 60 fps recording, has a smooth bell-shaped speed with no repeated or skipped frame.
 
@@ -1170,7 +1184,10 @@ a mapping that goes as the JSON of `--input-timing`). `node`,
 each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
 input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.2 s for each
 character of the text (in agent mode on Linux a person's typing takes about 0.12 s a character), so a long
-text and a wait for another agent's input fit.
+text and a wait for another agent's input fit. `text`, `outline` and `eval` add the input lock's wait too:
+a read of a hidden window page brings its tab in front inside the lock (**One window per agent page**), so
+during another agent's long typing or `record` take it waits, as the Node client does, and does not fail
+at 120 s.
 `chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
 `"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
 of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
@@ -1410,17 +1427,21 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   background tab the page must also have no visible time and no `visibilitychange` (a record's span is
   reported), and no frame in the second after the command. Not part of `npm test`. Measured on taylor on
   2026-11-04; see **A command on a background tab: two modes**.
-- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, pid and clock: the
-  windows check, the answer of one minute for the same Chrome pid, the log line at most once in 5 minutes,
-  a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test runner.
+- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, pid and
+  clock: the windows check, a Wayland session and a window manager (not own), the answer of one minute
+  for the same Chrome pid (with `/proc/<pid>/cmdline` in place of `ps`), the log line at most once in 5
+  minutes, a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test
+  runner.
 - `test/window-per-page.test.ts`: one window per agent page on Linux, against the fake Chrome's model
   of a window that is not in front (`FakeChrome.focusedWindow`: the page is visible and draws, and gets
   the focus at its first press, which activates its window; keys into an inactive window give the page
   the focus with no switch). `open` sends `newWindow: true, background: true`, no command sends focus
   emulation (also `record`, also with `hiddenDrive`), and a page that a site opens is driven where it
   opened. `open --tab` keeps the old default (and the hidden drive) for its tab, also in later
-  commands, through `tab-pages.json`. On the Mac and in personal mode, `open` and focus emulation stay
-  as before.
+  commands, through `tab-pages.json`, also after the gate's fallback. The gate's log line comes at a
+  command that opens or attaches a page, not at `tabs`. Through `bin/agent-browser.js` (Linux only),
+  `open` and `click` with the real display check and stand-ins for `ps`, xdotool and xprop. On the Mac
+  and in personal mode, `open` and focus emulation stay as before.
 - `test/person-input.test.ts`: a person's input in a window of its own on Linux, against the fake
   Chrome (its windows, the X pointer's event when a window comes forward, a page that scrolls, the
   caret of a field, the file chooser): `Page.bringToFront` before the first input event of a page with

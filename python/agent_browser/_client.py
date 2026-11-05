@@ -365,11 +365,15 @@ class AgentBrowser:
         return self._run("goto", [tab, url, *_scope(any_scope)], GotoResult.from_json)
 
     def outline(self, tab: str, all: bool = False, any_scope: bool = False) -> OutlineResult:
-        """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot."""
-        return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json)
+        """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot.
+
+        Its timeout adds the input lock's wait: in agent mode on Linux a read of a hidden window page brings its tab in
+        front inside the lock, so it waits for another agent's input command, as `text` and `eval` do.
+        """
+        return self._run("outline", [tab, *(["--all"] if all else []), *_scope(any_scope)], OutlineResult.from_json, extra_timeout=self._input_wait())
 
     def _input_wait(self, chars: int = 0) -> float:
-        """The time an input command may add to `timeout`: the input lock's wait, and the typing of `chars` characters
+        """The time an input command (or a read: text, outline, eval) may add to `timeout`: the input lock's wait, and the typing of `chars` characters
         at the slowest pace of the input timing (in agent mode on Linux a person's typing takes about 0.12 s a character)."""
         t = self.input_timing or {}
 
@@ -407,13 +411,15 @@ class AgentBrowser:
         return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json, extra_timeout=self._input_wait())
 
     def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:
-        """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot."""
-        return self._run("text", [tab, *([selector] if selector is not None else []), *_scope(any_scope)], TextResult.from_json)
+        """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot. Its timeout adds the input lock's wait (see `outline`)."""
+        return self._run("text", [tab, *([selector] if selector is not None else []), *_scope(any_scope)], TextResult.from_json,
+                         extra_timeout=self._input_wait())
 
     # Not Python's eval(): the CLI runs the expression inside the allowlisted page (CDP Runtime.evaluate).
     def eval(self, tab: str, expression: str, any_scope: bool = False) -> EvalResult:
-        """Evaluate a JavaScript expression in the page and return its JSON value. The expression goes on stdin."""
-        return self._run("eval", [tab, "--stdin", *_scope(any_scope)], EvalResult.from_json, stdin=expression)
+        """Evaluate a JavaScript expression in the page and return its JSON value. The expression goes on stdin.
+        Its timeout adds the input lock's wait (see `outline`)."""
+        return self._run("eval", [tab, "--stdin", *_scope(any_scope)], EvalResult.from_json, stdin=expression, extra_timeout=self._input_wait())
 
     def shot(self, tab: str, path: Optional[PathLike] = None, full: bool = False, size: Optional[str] = None,
              scale: Optional[float] = None, any_scope: bool = False) -> ShotResult:

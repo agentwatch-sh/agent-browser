@@ -112,9 +112,9 @@ test("installed under node_modules, the library, the CLI and its proxy child all
     const bin = join(installed, "bin", "agent-browser.js");
     const tabs = await run(process.execPath, [bin, "tabs", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", fake.ws, "--no-launch", "--json"], { cwd: app });
     assert.deepEqual(JSON.parse(tabs.stdout), { ok: true, command: "tabs", tabs: [], window: null });
-    // The one stderr line: this call opened the first connection, which a person approves in Chrome. On Linux also the
-    // display gate's notice (ab-v16.26): this endpoint is no agent Chrome that agent-browser started.
-    assert.match(tabs.stderr, /^agent-browser: no approved connection\. Opening a new one to [^\n]*\n(agent-browser: the agent Chrome is not on a display of its own [^\n]*\n)?$/, "no ExperimentalWarning or other noise");
+    // The one stderr line, on every platform: this call opened the first connection, which a person approves in Chrome.
+    // The display gate's notice (ab-v16.26) comes at a command that opens or attaches a page, never at tabs (review-45c).
+    assert.match(tabs.stderr, /^agent-browser: no approved connection\. Opening a new one to [^\n]*\n$/, "no ExperimentalWarning, gate notice or other noise");
     const proxy = JSON.parse(readFileSync(join(c.stateDir, "chrome-proxy.json"), "utf8"));
     const { stdout: command } = await run("ps", ["-ww", "-o", "command=", "-p", String(proxy.pid)]);
     assert.ok(command.includes(join("node_modules", "agent-browser", "bin", "agent-browser.js")), "the proxy runs from the installed copy");

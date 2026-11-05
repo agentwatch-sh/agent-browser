@@ -72,6 +72,34 @@ test("open --tab over the endpoint (Linux): the relay opens a window, so agent-b
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
 
+test("the fake receiver's tabs have the fake Chrome's front state: a tab behind a popup tab is not active, and the relay's input gives it a tab switch (review-45b note 9)", async () => {
+  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  chrome.tabSwitches = true;
+  const end = await backByChrome(h.fake, chrome);
+  try {
+    await h.ready();
+    const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
+    const opened = await commands.open(o, { url: fx.base, name: "o" });
+    const page = chrome.pages.get(opened.tab.targetId)!;
+    const conn = await h.connect("ab-lead");
+    const { sessionId } = await conn.send("Target.attachToTarget", { targetId: page.targetId, flatten: true });
+    const popup = chrome.openFrom(page, `${fx.base}/next`); // the site's popup tab, in front of the opener's window
+    assert.equal(page.background, true);
+    let from = h.fake.requests.length;
+    await conn.send("Input.insertText", { text: "x" }, sessionId);
+    const update = h.fake.requests.slice(from).filter((r) => r.op === "tabs.update");
+    assert.equal(update.length, 1, "the relay saw the opener behind its popup: a tab switch");
+    assert.deepEqual(update[0].args[1], { active: true });
+    assert.deepEqual([page.background, popup.background, popup.windowId], [false, true, page.windowId], "in the fake Chrome, in the same window");
+    // In front now: the next input needs no tab switch.
+    from = h.fake.requests.length;
+    await conn.send("Input.insertText", { text: "y" }, sessionId);
+    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "tabs.update"), []);
+    await conn.send("Target.detachFromTarget", { sessionId });
+    await commands.close(o, { tab: "o" });
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
 test("an endpoint that is not ready: status names the endpoint and C11's text, also in --notify; a command fails with that text", async () => {
   const h = await harness(), c = consumer(), sent: string[] = [];
   try {

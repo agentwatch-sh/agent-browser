@@ -10,7 +10,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
@@ -62,6 +62,7 @@ const PAGE = {
     { tag: "input", id: "orphan", attrs: { type: "file" }, hidden: true },
     { tag: "div", id: "hov", text: "menu", rect: [300, 100, 100, 30] },
     { tag: "input", id: "farfile", attrs: { type: "file" }, rect: [40, 2700, 200, 24] },
+    { tag: "a", id: "blank", text: "Elsewhere", attrs: { href: "http://evil.test/", target: "_blank", rel: "noopener" }, rect: [420, 160, 100, 24] },
   ],
   onload: (p: FakePage) => { p.select("#set")[0].value = "abc"; },
 };
@@ -505,6 +506,33 @@ for (const [what, run] of INPUT_COMMANDS) {
   });
 }
 
+test("Tab.waitFor's timeoutMs covers its wait for the input lock: on a hidden window page it ends near its timeout while another agent holds the lock (review-47d note 6)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const popup = fake.openFrom(page, `${fx.base}/`); // the page is hidden behind its popup tab
+  assert.equal(page.visibilityState, "hidden");
+  const b = await AgentBrowser.connect(linux());
+  try {
+    const tab = await b.find(name);
+    const holder = holdLock(4000);
+    try {
+      let t0 = Date.now();
+      await assert.rejects(tab.waitFor(() => false, { timeoutMs: 600, what: "nothing" }), /timed out waiting for nothing/);
+      assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms: its timeout, not the lock's wait`);
+      // A condition that holds ends the wait as before, also when the lock is not free within the timeout.
+      t0 = Date.now();
+      assert.equal(await tab.waitFor(() => 7, { timeoutMs: 600 }), 7);
+      assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+    } finally { holder.kill(); }
+    rmSync(join(c.stateDir, "input.lock"), { force: true });
+    // A free lock, and a timeout shorter than the read before the lock: the lock is still tried once, and the tab comes in front.
+    assert.equal(await tab.waitFor(() => document.visibilityState === "visible", { timeoutMs: 1 }), true);
+    assert.equal(page.visibilityState, "visible");
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+  await commands.close(linux(), { tab: name });
+});
+
 test("a page that leaves the allowlist during the path gets no press; one that leaves it at the field's click gets no key", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
@@ -562,6 +590,28 @@ test("withInput is reentrant in its own call chain: the caller's own Tab.click i
     assert.deepEqual(order, ["a in", "a out", "click"]);
   } finally { await b.disconnect(); }
   await commands.close(o, { tab: name });
+});
+
+test("setFiles on a window page that its popup tab hides: its tab comes in front first (a tab switch), through the chooser and the old way alike (review-45b note 5)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const b = await AgentBrowser.connect(linux());
+  try {
+    const tab = await b.find(name);
+    for (const [selector, file] of [["#file", "/tmp/a.txt"], ["#orphan", "/tmp/b.txt"]]) {
+      const popup = fake.openFrom(page, `${fx.base}/`);
+      assert.equal(page.visibilityState, "hidden", "behind its popup tab");
+      const calls = await callsOf(page, () => tab.setFiles(selector, [file]));
+      const m = methods(calls), front = m.indexOf("Page.bringToFront"), files = m.indexOf("DOM.setFileInputFiles");
+      assert.ok(front >= 0 && files > front, `${selector}: the tab switch before the files (${m.filter((x) => /bringToFront|setFileInputFiles/.test(x)).join(" ")})`);
+      assert.equal(page.visibilityState, "visible");
+      assert.equal(popup.background, true, "the popup went behind, in the same window");
+      assert.equal(popup.windowId, page.windowId);
+      assert.deepEqual(page.select(selector)[0].files, [{ name: file.slice(5) }]);
+      await commands.close(linux(), { tab: popup.targetId.slice(0, 8) });
+    }
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: name });
 });
 
 test("setFiles: a click that opens no file chooser in 2 s gives the files the old way, with a log line", async () => {
@@ -681,6 +731,47 @@ test("a navigation off the list that the page only asks for (Page.frameRequested
   try {
     await assert.rejects(commands.click(linux(), { tab: name, target: "#b" }), NotAllowedError);
   } finally { fake.requestNavigation = orig; }
+  const after = fake.calls.slice(at).filter((x) => x.targetId === page.targetId && /^Input\./.test(x.method));
+  assert.ok(after.length <= 1, `at most the move in flight: ${after.map((x) => x.params.type).join(" ")}`);
+  assert.ok(!after.some((x) => x.params.type === "mousePressed"));
+  await commands.close(linux(), { tab: name }).catch(() => {});
+});
+
+test("a target=_blank link to a host off the list (Page.frameRequestedNavigation with disposition newTab) stops no later input of the opener; the new tab stays out of reach (review-47d note 7)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const b = await AgentBrowser.connect(linux());
+  try {
+    const tab = await b.find(name);
+    // One input call chain: the click on the link, then the guard again, then a click on the opener (as a record take does).
+    await tab.withInput(async (h) => { await h!.click("#blank"); await h!.check(); await tab.click("#b"); });
+    assert.equal(page.title, "clicked", "the opener got the later click");
+    assert.equal(page.url, `${fx.base}/`, "the opener stayed on its page");
+    const opened = [...fake.pages.values()].find((p) => p.url === "http://evil.test/");
+    assert.ok(opened, "the link opened its new tab");
+    assert.ok(fake.calls.some((x) => x.targetId === page.targetId && x.method === "Input.dispatchMouseEvent"), "input reached the opener");
+    // The new tab off the list is blocked as before: no command reaches it, and it gets no input.
+    await assert.rejects(b.attach(opened.targetId), NotAllowedError);
+    assert.ok(!(await commands.tabs(linux())).tabs.some((t) => t.targetId === opened.targetId));
+    assert.deepEqual(fake.calls.filter((x) => x.targetId === opened.targetId && /^Input\./.test(x.method)), []);
+    opened.close();
+    fake.pages.delete(opened.targetId);
+  } finally { await b.disconnect(); }
+  await commands.close(linux(), { tab: name }).catch(() => {});
+});
+
+test("a navigation off the list that has only started (Page.frameStartedNavigating, with no commit yet) stops the input at once (review-47d note 8)", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  page.select("#hov")[0].onhover = (p) => p.fake.startNavigation(p, "http://evil.test/");
+  page.select("#hov")[0].rect = [40, 60, 300, 400];
+  let at = Infinity;
+  const orig = fake.startNavigation.bind(fake);
+  fake.startNavigation = (p, u) => { if (at === Infinity) at = fake.calls.length; orig(p, u); };
+  try {
+    await assert.rejects(commands.click(linux(), { tab: name, target: "#b" }), NotAllowedError);
+  } finally { fake.startNavigation = orig; }
+  assert.equal(page.url, `${fx.base}/`, "no commit: only the start of the navigation said it");
   const after = fake.calls.slice(at).filter((x) => x.targetId === page.targetId && /^Input\./.test(x.method));
   assert.ok(after.length <= 1, `at most the move in flight: ${after.map((x) => x.params.type).join(" ")}`);
   assert.ok(!after.some((x) => x.params.type === "mousePressed"));
