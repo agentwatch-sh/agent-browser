@@ -260,9 +260,9 @@ person's input**) and `log` (progress lines; default standard error).
   - **One input at a time, after the window comes forward** (`src/input.ts`). In a window of its own,
     `click`, `click --text`, `hover`, `type`, `press`, `Tab.clickAt`, `Tab.setFiles` and `record` hold the
     agent browser's input lock (`input.lock` in the state folder) from the activation to the end of the
-    input, across processes. So two agents never give two pages the focus at the same time. Without the
-    lock, two agents that typed at once gave two focused pages for 9.6 to 12.4 s of 12.5 to 14.8 s (the
-    research). Every caller of one agent browser must use one state folder (with tab scopes, as
+    input, across processes. So two agents never give two pages the focus at the same time. The lock is
+    one for the pages of every site (the next item). Without the lock, two agents that typed at once gave
+    two focused pages for 9.6 to 12.4 s of 12.5 to 14.8 s (the research). Every caller of one agent browser must use one state folder (with tab scopes, as
     agentwatch does). A command waits for the lock up to `lockWaitMs` (10 minutes); `record` holds it
     for its take, not for the encode. A take can last up to 30 minutes (`record`'s limit), longer than
     that wait: where takes run beside other agents' input, give those agents a longer `lockWaitMs`
@@ -284,11 +284,41 @@ person's input**) and `log` (progress lines; default standard error).
     (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
     waits for another agent's input command (review-47c: a tab switch during another agent's typing gave
     two focused pages). `Tab.waitFor`'s `timeoutMs` covers that wait: while the lock is busy until its
-    timeout, the page stays hidden and the wait ends at its timeout (review-47d). `shot` and `fetch` never do. A page that a site opened in the
+    timeout, the page stays hidden and the wait ends at its timeout (review-47d), and the condition is read
+    from the start, also during the wait, so a condition that holds ends it at once (review-52). `shot` and
+    `fetch` never do. A page that a site opened in the
     opener's window is in front of that window; to go back to the opener, the next command on the
     opener brings it forward: a tab switch, as a person makes. Keys need this activation: keys into a
     window that is not active gave its page the focus with no switch, so two pages had the focus (the
     research's `window-keys-inactive`).
+  - **One lock for the pages of every site** (board task ab-v16.46). The operator first chose one lock
+    per site (ab-hbt: "Agents on one site wait; agents on different sites work at full speed"). The build
+    of it (PR #55 at `e52de19`) measured on taylor that the display has one X focus: the windows of two
+    sites then come forward in turn inside one command, and each page alone sees signals that a
+    person's page does not show. After that measurement the operator chose one lock per browser again
+    (ab-1bi, 2026-11-05: "Go back to one lock per browser"). The measurement (`run.ts --only
+    design-two,design-two-sites`, 5 runs each; two agents, 6 typings of "hello" each):
+
+    | | one lock, one site (`design-two`) | one lock per site, two sites (`design-two-sites` at `e52de19`) |
+    | --- | --- | --- |
+    | the work of both agents at once | 9.8 to 10.5 s | 8.2 to 8.5 s |
+    | against one agent alone | 40 to 68 % longer | 20 to 28 % longer |
+    | both pages focused | 0 to 100 ms | 4.4 to 4.8 s |
+    | `blur` events inside a page's own commands (6 commands) | 0 | 6 or 7 |
+    | a page's sequence during one command (F `focus`, B `blur`, k a key) | `[F k k k k k B]` | `[F k k B F k k k]` |
+
+    With one lock per site each page alone saw a `blur` and then a `focus` with no press in the middle of
+    its own typing (a key gave the focus back with no window switch), and the X pointer at the same
+    point at each activation (10 or 11 entries at an earlier entry's point in each page): any site can
+    see that in its own page, with no second page and no vendor that links sites. And a page that keys
+    left with the focus behind another window kept that focus beside a later page of its own site (two
+    focused pages of one site for 3.4 to 3.6 s of 3.5 to 3.7 s) until a rule brought its window forward at
+    its command's end. With one lock, agents on two sites wait for each other as agents on one site do,
+    and these signals do not come. Measured with one lock again (one run each, at `cb95a91`): `design`
+    as before (no jump, no position change that the movement does not explain, both pages focused 0
+    ms, a click in 1.28 s); `design-two` both pages focused 200 ms, 53 % longer than one agent alone;
+    `design-two-sites` both pages focused 100 ms, 47 % longer, no `blur` inside a page's own commands,
+    no jump, and a third agent on the first site 0 ms with two focused pages of that site.
   - **A person's input.** A pointer path of ghost-cursor's curve (as `record`'s cursor: an overshoot past
     500 px, a time of 300 to 1000 ms by Fitts's law), 12 to 60 moves in whole pixels (no move without
     movement) to a point in the middle 40% of the element, a pause of 80 to 150 ms, then a press of 70 to
@@ -835,9 +865,13 @@ stays behind that nobody recorded.
   call runs in that tab's page (it opens `about:blank` only, and reads nothing there).
 - The lock can, in theory, be broken twice. When a holder crashes and two waiters see its dead pid
   in the same few milliseconds, the first one clears the lock and takes it, and the second one can
-  then remove that live lock and take its own: for that one change, two holders run at the same time,
-  and one of their changes (a tab's name, scope or read mark, or the pin) can be lost. Each file is
-  still written whole. It needs a crashed holder and two waiters at the same moment.
+  then remove that live lock and take its own: for that one change, two holders run at the same time.
+  For the tab record, one of their changes (a tab's name, scope or read mark, or the pin) can be lost;
+  each file is still written whole. For the input lock (`input.lock`, the same kind of lock), two
+  input commands can overlap: two pages with the focus at the same time. A waiter that clears a
+  crashed holder's lock tries again only after 50 ms (review-55: when it took the lock at once, 6
+  waiters gave two holders in 20 of 1500 rounds), so the second waiter's removal must come more than
+  50 ms after its read of the dead pid. It needs a crashed holder and two waiters at the same moment.
 
 ## Recording (`record`)
 
@@ -1184,10 +1218,13 @@ a mapping that goes as the JSON of `--input-timing`). `node`,
 each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
 input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.2 s for each
 character of the text (in agent mode on Linux a person's typing takes about 0.12 s a character), so a long
-text and a wait for another agent's input fit. `text`, `outline` and `eval` add the input lock's wait too:
-a read of a hidden window page brings its tab in front inside the lock (**One window per agent page**), so
-during another agent's long typing or `record` take it waits, as the Node client does, and does not fail
-at 120 s.
+text and a wait for another agent's input fit. `text`, `outline` and `eval` wait for the input lock inside
+their `timeout`, as the Node client's `Tab.waitFor` does (review-52): a read of a hidden window page brings
+its tab in front inside the lock (**One window per agent page**), and that wait may take all of the timeout
+but 30 s, and at least half of it (90 s of 120 s; the adapter passes it as `lockWaitMs`, never more than
+the caller's). A longer wait fails with the lock's own error, and a read that hangs for another reason
+fails at the timeout, not 600 s later. Give a read a longer `timeout` where it can wait for another agent's
+long typing or `record` take.
 `chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
 `"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
 of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
@@ -1454,6 +1491,17 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   view (no `scrollIntoView`); `setFiles` clicks the input or its label and fills the chooser's input;
   two processes' input commands never overlap (`input.lock`); a popup is driven in its tab, and the
   opener comes back with a tab switch; `open --tab`, the Mac and personal mode keep today's input.
+- `test/input-lock.test.ts`: the input lock stays one per agent browser (ab-v16.46, the operator's
+  ab-1bi), against the fake Chrome: pages of two sites share the one `input.lock` and their input never
+  overlaps, in one process and in two, as on one site; another process's lock makes input on any site
+  wait; reentrance in one call chain; after two sites typed at once no page holds the focus behind
+  another window, and a later page of the first site is its only focused page; the X pointer moves only
+  over the window in front; `Tab.waitFor` reads its condition during the wait for the lock (review-52
+  note 3), waits for a tab switch that its timeout interrupts and reads once more, and ends the switch's
+  wait for the page to show when its condition holds (review-55); `withFileLock` takes a crashed
+  holder's lock in its last try (note 4), never in the same few milliseconds as its clear (a second
+  waiter that read the same dead pid never removes its live lock, review-55), and stops its wait at a
+  signal.
 - `test/hidden-tab.test.ts`: the CDP calls that each command sends to a background tab in both modes,
   against the fake Chrome's model of one (`FakePage.background`: the page is hidden, Chrome draws no
   frame of it, a page that never drew drops a press or a key, a mouse move waits for a frame, a capture
@@ -1481,9 +1529,11 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   timestamps; `report.ts` prints the tables; `extra.ts` holds the review's checks (window order, two
   agents with and without an input lock, popups, the pointer at an activation, memory and CPU), and
   since ab-v16.26 `--exp pointer` (each way to treat the X pointer, against a person) and `--exp caret`.
-  The `design`, `design-no-x` and `design-two` scenarios run the whole design with agent-browser's own
-  commands, with several activations of one window and with two agents at once, against the person
-  baselines `person-window` and `person-window-multi`. Since ab-v16.26 the probe also counts position
+  The `design`, `design-no-x`, `design-two` and `design-two-sites` scenarios run the whole design with
+  agent-browser's own commands, with several activations of one window and with two agents at once (on
+  one site, and since ab-v16.46 on two sites, `probe.localhost` and `other.localhost`; then a third
+  agent on the first site; each page's own sequence of `focus`, `blur` and keys during its commands),
+  against the person baselines `person-window` and `person-window-multi`. Since ab-v16.26 the probe also counts position
   changes that the movement does not explain, entries at an earlier entry's point, and a user
   activation with no input. Not part of `npm test`.
 - `test/live/anti-detect/mac.ts` (macOS, with the operator's consent and nobody at the keyboard; see

@@ -11,7 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest import mock
 
 from agent_browser import (
@@ -317,13 +317,16 @@ class OptionArgvTest(unittest.TestCase):
         self.assertNotIn("--input-timing", self.argv(input_timing=None))
 
     def test_input_commands_wait_for_the_lock_and_the_text(self) -> None:
-        """A 1000-character type and a wait for the input lock fit in the call's timeout (about 0.12 s a character on Linux); text, outline and eval wait for the lock too."""
+        """A 1000-character type and a wait for the input lock fit in the call's timeout (about 0.12 s a character on Linux).
+        text, outline and eval wait for the lock inside the call's timeout, with the lock's own error (review-52 note 5)."""
         timeouts: Dict[str, float] = {}
+        timings: Dict[str, Optional[Dict[str, Any]]] = {}
 
         def fake_run(argv: List[str], *args: object, **kwargs: Any) -> "subprocess.CompletedProcess[Any]":
             if argv[1:] == ["--version"]:
                 return subprocess.CompletedProcess(argv, 0, stdout="v26.0.0\n", stderr="")
             timeouts[argv[2]] = kwargs["timeout"]
+            timings[argv[2]] = json.loads(argv[argv.index("--input-timing") + 1]) if "--input-timing" in argv else None
             tab = '"tab": {"id": "a", "targetId": "a", "name": null, "url": "u", "title": "t"}'
             out = {"type": '{"ok": true, "command": "type", ' + tab + ', "into": null, "length": 1000}',
                    "click": '{"ok": true, "command": "click", ' + tab + ', "target": "#b", "text": null}',
@@ -332,22 +335,35 @@ class OptionArgvTest(unittest.TestCase):
                    "eval": '{"ok": true, "command": "eval", ' + tab + ', "value": 1}'}
             return subprocess.CompletedProcess(argv, 0, stdout=(out[argv[2]] + "\n").encode(), stderr=b"")
 
+        def reads(**options: Any) -> None:
+            b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, **options)
+            b.text("a")
+            b.outline("a")
+            b.eval("a", "1")
+
         with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
             b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)
             b.type("a", "x" * 1000)
             b.click("a", "#b")
-            # A read of a hidden window page brings its tab in front inside the input lock (Tab.toFront), so it waits
-            # for another agent's input as the Node client does (review-47d note 5).
-            b.text("a")
-            b.outline("a")
-            b.eval("a", "1")
+            # A read of a hidden window page brings its tab in front inside the input lock (Tab.toFront), so it can wait for
+            # another agent's input. That wait is part of the call's timeout, as Tab.waitFor's is: a read that hangs for
+            # another reason fails at the timeout, and a long wait for the lock fails with the lock's own error.
+            reads()
         self.assertGreaterEqual(timeouts["type"], 120 + 600 + 1000 * 0.15)
         self.assertGreaterEqual(timeouts["click"], 120 + 600)
+        self.assertIsNone(timings["click"], "no --input-timing for an input command by default")
         for read in ("text", "outline", "eval"):
-            self.assertGreaterEqual(timeouts[read], 120 + 600, read)
+            self.assertEqual(timeouts[read], 120, read)
+            self.assertEqual(timings[read], {"lockWaitMs": 90_000}, read)
         with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
             AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, input_timing={"lockWaitMs": 5000, "keyMs": [10, 20]}).type("a", "x" * 1000)
+            reads(input_timing={"lockWaitMs": 5000, "keyMs": [10, 20]})
         self.assertAlmostEqual(timeouts["type"], 120 + 5 + 1000 * (20 + 50) / 1000)
+        self.assertEqual(timings["text"], {"lockWaitMs": 5000, "keyMs": [10, 20]}, "a shorter lockWaitMs of the caller stays")
+        with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
+            reads(timeout=20)
+        self.assertEqual(timeouts["eval"], 20)
+        self.assertEqual(timings["eval"], {"lockWaitMs": 10_000}, "a short timeout: half of it for the lock")
 
     def test_chrome_args(self) -> None:
         flags = ["--enable-unsafe-swiftshader", "--lang=en-US", "--window-name=a b"]

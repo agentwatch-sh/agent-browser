@@ -865,9 +865,10 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
-   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout).
+   * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout);
+   * `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
    */
-  async toFront(opts: { deadline?: number } = {}): Promise<void> {
+  async toFront(opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<void> {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
@@ -880,10 +881,10 @@ export class Tab {
       await this.assertAllowed();
       if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
       await this.send("Page.bringToFront");
-      for (const end = Date.now() + 1000; Date.now() < end; await new Promise((r) => setTimeout(r, 20)))
+      for (const end = Date.now() + 1000; Date.now() < end && !opts.signal?.aborted; await new Promise((r) => setTimeout(r, 20)))
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
-      this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
-    }, opts.deadline);
+      if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
+    }, opts);
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -967,23 +968,35 @@ export class Tab {
   }
 
   /**
-   * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front first
+   * Poll a page function until it returns a truthy value; returns that value. A hidden window page comes in front
    * (toFront); its wait for the input lock is part of `timeoutMs` (review-47d note 6), so the wait ends near its timeout
    * also while another agent's input holds the lock (the page then stays hidden, and a condition that needs a frame
-   * times out).
+   * times out). The condition is polled from the start, also during that wait (review-52 note 3): one that holds ends
+   * the wait at once, and the page then gets no tab switch. Before the timeout's error, the switch ends and the
+   * condition is polled once more.
    */
   async waitFor<R, A extends unknown[] = []>(
     fn: ((...args: A) => R) | string,
     opts: { timeoutMs?: number; intervalMs?: number; args?: A; what?: string } = {},
   ): Promise<Awaited<R>> {
     const { timeoutMs = 30_000, intervalMs = 250, args = [] as unknown as A } = opts;
-    const deadline = Date.now() + timeoutMs;
-    await this.toFront({ deadline }).catch(() => {}); // a hidden window page draws nothing (toFront); a read that fails here fails below
-    for (;;) {
-      const v = await this.evaluate(fn, ...args).catch(() => undefined);
-      if (v) return v as Awaited<R>;
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${opts.what ?? "condition"}`);
-      await new Promise((r) => setTimeout(r, intervalMs));
+    const deadline = Date.now() + timeoutMs, stop = new AbortController();
+    let fronted = false;
+    // A hidden window page draws nothing (toFront); a read that fails there fails below.
+    const front = this.toFront({ deadline, signal: stop.signal }).catch(() => {}).finally(() => { fronted = true; });
+    try {
+      for (;;) {
+        const v = await this.evaluate(fn, ...args).catch(() => undefined);
+        if (v) return v as Awaited<R>;
+        if (Date.now() > deadline) {
+          if (!fronted) { await front; continue; }
+          throw new Error(`timed out waiting for ${opts.what ?? "condition"}`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    } finally {
+      stop.abort();
+      await front;
     }
   }
 

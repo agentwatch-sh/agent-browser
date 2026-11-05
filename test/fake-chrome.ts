@@ -747,6 +747,10 @@ export class FakeChrome {
   connections = 0;
   /** A method named here fails once with this message (a test of error handling). */
   readonly failOnce = new Map<string, string>();
+  /** A method named here waits this many ms before Chrome handles it (a slow Chrome). */
+  readonly delays = new Map<string, number>();
+  /** Pages (by targetId) that Page.bringToFront does not bring in front of their window: they stay hidden. */
+  readonly stayBehind = new Set<string>();
   /** Screencast frames sent and acknowledged, over every session. */
   frames = { sent: 0, acked: 0 };
   /** Target.createTarget with background: true (and no new window) opens a background tab, as in Chrome (see FakePage.background). Off: every page is in front. */
@@ -913,6 +917,8 @@ export class FakeChrome {
       if (msg.sessionId && !session) return fail(`Session with given id not found.`);
       const failure = this.failOnce.get(msg.method);
       if (failure !== undefined) { this.failOnce.delete(msg.method); return fail(failure); }
+      const delay = this.delays.get(msg.method);
+      if (delay) await new Promise((r) => setTimeout(r, delay));
       const result = session ? await this.onSession(session, msg.method, params) : await this.onBrowser(client, msg.method, params);
       if (msg.sessionId && !this.sessions.has(msg.sessionId)) return; // detached meanwhile: Chrome sends no reply
       if (result === undefined) return fail(`'${msg.method}' wasn't found`, -32601);
@@ -1028,7 +1034,7 @@ export class FakeChrome {
         if (params.enabled) page.focusEmulated.add(s.id); else page.focusEmulated.delete(s.id);
         page.update();
         return {};
-      case "Page.bringToFront": this.activateTab(page, "bringToFront"); return {};
+      case "Page.bringToFront": if (!this.stayBehind.has(page.targetId)) this.activateTab(page, "bringToFront"); return {};
       case "Page.enable": case "Fetch.disable": case "Network.disable":
       case "Runtime.runIfWaitingForDebugger": return {};
       case "Target.setAutoAttach":
