@@ -251,6 +251,8 @@ export function watcherProblems(events: readonly WatchEvent[], bad: readonly num
   if (states.some((e) => e.onConsole === false)) p.push("the session was not on the console during the run (another user's session was in front)");
   const moves = events.filter((e) => e.ev === "pointer" && e.t >= from && e.t <= to).length;
   if (moves) p.push(`the pointer moved (${moves} times): a person used the Mac, so a change of the front app can be theirs`);
+  const input = events.filter((e) => e.ev === "input" && e.t >= from && e.t <= to);
+  if (input.length) p.push(`a person used the keyboard or the mouse (${[...new Set(input.map((e) => e.kind))].join(", ")}): a person used the Mac, so a change of the front app can be theirs`);
   return p;
 }
 
@@ -267,6 +269,8 @@ export const OPEN_TAKE_MS = 1500;
 export function stopReason(events: readonly WatchEvent[], steps: readonly Step[], now: number, o: { t0: number; limitMs: number; measureEnd?: number }): string | undefined {
   if (o.measureEnd !== undefined) return undefined;
   if (events.some((e) => e.ev === "pointer")) return "the pointer moved: a person uses the Mac (the watcher stopped its give-back)";
+  const input = events.find((e) => e.ev === "input");
+  if (input) return `a person used the keyboard or the mouse (${input.kind}): a person uses the Mac (the watcher stopped its give-back)`;
   const states = events.filter((e) => e.ev === "alive");
   if (states.some((e) => e.locked)) return "the screen locked";
   if (states.some((e) => e.asleep)) return "the display slept";
@@ -280,6 +284,44 @@ export function stopReason(events: readonly WatchEvent[], steps: readonly Step[]
   if (now - (events.at(-1)?.t ?? 0) > 3000) return "the watcher logged nothing for 3 s";
   if (now - o.t0 > o.limitMs) return `the run's time limit (${o.limitMs / 60_000} minutes)`;
   return undefined;
+}
+
+/** The agent Chrome as ps shows it on the run's own profile: its pid, null (none), or undefined (ps failed: not known). */
+export type ChromeState = number | null | undefined;
+
+/**
+ * The end of the run: Browser.close, then SIGTERM, then SIGKILL, each to the pid that `check` shows at that moment
+ * (ps on the run's own profile), with a look again right before each signal. running: false (it quit), true (it
+ * still runs) or null (ps cannot tell). A SIGKILL, a Chrome that still runs, and a quit that ps cannot confirm are
+ * problems (exit 1); the caller keeps the profile unless running is false.
+ */
+export async function quitAgentChrome(d: {
+  check: () => ChromeState; close: () => Promise<unknown>; signal: (pid: number, sig: "SIGTERM" | "SIGKILL") => void; sleep: (ms: number) => Promise<unknown>;
+  waits?: { close: number; term: number; kill: number };
+}): Promise<{ lines: string[]; problem?: string; running: boolean | null }> {
+  const w = d.waits ?? { close: 10_000, term: 5000, kill: 3000 };
+  const wait = async (ms: number): Promise<ChromeState> => {
+    for (let i = 0; i < ms / 100; i++) { if (d.check() === null) return null; await d.sleep(100); }
+    return d.check();
+  };
+  const blind = (after: string) => {
+    const problem = `the quit of the agent Chrome is not confirmed: ps failed ${after} (see stop-chrome.txt in the run folder)`;
+    return { lines: [problem], problem, running: null };
+  };
+  await d.close().catch(() => {});
+  const closed = await wait(w.close);
+  if (closed === null) return { lines: ["the agent Chrome quit (Browser.close)"], running: false };
+  if (closed === undefined) return blind("after Browser.close");
+  d.signal(closed, "SIGTERM");
+  const termed = await wait(w.term);
+  const now = termed === null ? null : d.check(); // a look again right before the SIGKILL
+  if (now === null) return { lines: [`the agent Chrome quit at SIGTERM (pid ${closed}), not at Browser.close`], running: false };
+  if (now === undefined) return blind("after the SIGTERM");
+  d.signal(now, "SIGKILL");
+  const killed = await wait(w.kill);
+  const tail = killed === null ? "" : killed === undefined ? ", and ps cannot confirm that it quit (see stop-chrome.txt in the run folder)" : ", and it still runs: stop it by hand (see stop-chrome.txt in the run folder)";
+  const problem = `the agent Chrome did not quit at Browser.close or SIGTERM: SIGKILL to pid ${now}${tail}`;
+  return { lines: [problem], problem, running: killed === null ? false : killed === undefined ? null : true };
 }
 
 // ------------------------------------------------------------------------------------------------ windows
@@ -470,8 +512,8 @@ export function summary(r: MacResult): string {
     `${r.startedAt}, ${r.seconds} s; ${r.product} (${r.chrome}); run folder ${r.run}`,
     `Agent flags: ${r.flags.join(" ")}`,
     "",
-    `## Result: ${r.ok ? "exit 0: the check never took the operator's focus or Space" : "exit 1"}`,
-    ...(r.popupOnly ? ["- Only popup steps took the front: an expected result (Chrome can activate itself when it shows a popup), and the watcher gave the front back each time. The rest of the run kept off the operator's focus and Space."] : []),
+    `## Result: ${r.ok ? "exit 0: the check never took the operator's focus or Space"
+      : r.popupOnly ? "exit 1, an expected result: only popup steps took the front (Chrome can activate itself when it shows a popup), and the watcher gave it back each time" : "exit 1"}`,
     ...r.problems.map((p) => `- ${p}`),
     "",
     "## The front app and the Space",

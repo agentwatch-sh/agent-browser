@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   agentWindowsOf, coveredFraction, ffmpegSearchPath, frontAt, frontTakes, isOperatorWindow, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement,
-  placementText, realPointer, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
+  placementText, quitAgentChrome, realPointer, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
   type CgWin, type MacResult, type Step, type WatchEvent,
 } from "./live/anti-detect/mac-rules.ts";
 import type { Rec } from "./live/anti-detect/probe.ts";
@@ -162,6 +162,8 @@ test("stopReason: the stop rules during the measurement, and none after its end 
   assert.equal(stopReason(live(), steps, 5000, o), undefined);
   assert.match(stopReason(live([{ t: 4600, ev: "pointer", x: 1, y: 2 }]), steps, 5000, o) ?? "", /the pointer moved: a person uses the Mac/);
   assert.equal(stopReason(live([{ t: 4600, ev: "pointer", x: 1, y: 2 }]), steps, 5000, { ...o, measureEnd: 4000 }), undefined, "after the measurement a pointer move is the operator's look");
+  for (const kind of ["keyDown", "leftMouseDown", "scrollWheel"])
+    assert.match(stopReason(live([{ t: 4600, ev: "input", kind, agoMs: 20 }]), steps, 5000, o) ?? "", new RegExp(`a person used the keyboard or the mouse \\(${kind}\\): a person uses the Mac`));
   assert.match(stopReason(live([{ t: 4600, ev: "alive", locked: true }]), steps, 4700, o) ?? "", /the screen locked/);
   assert.match(stopReason(live([{ t: 4600, ev: "alive", asleep: true }]), steps, 4700, o) ?? "", /the display slept/);
   assert.match(stopReason(live([{ t: 4600, ev: "alive", onConsole: false }]), steps, 4700, o) ?? "", /another user's session/);
@@ -194,6 +196,7 @@ test("watcherProblems: a silence, an early end, a bad line, a locked or sleeping
   assert.match(all.join("\n"), /slept/);
   assert.match(all.join("\n"), /not on the console/);
   assert.match(all.join("\n"), /the pointer moved \(1 times\): a person used the Mac/);
+  assert.match(watcherProblems([ready(), alive(1500), { t: 1600, ev: "input", kind: "keyDown" }], [], 500, 2000).join("\n"), /a person used the keyboard or the mouse \(keyDown\): a person used the Mac/);
 });
 
 const win = (pid: number, n: number, x: number, y: number, w: number, h: number, a = 100): number[] => [pid, n, x, y, w, h, a];
@@ -285,8 +288,40 @@ test("the summary names the result first, and every part of the measurement", ()
   assert.match(s, /WA: 1 event\(s\) at the real pointer's point, first mouseover at 1,2/);
   assert.match(summary({ ...r, ok: true, problems: [], dryRun: true }), /DRY RUN on Linux[\s\S]*exit 0: the check never took the operator's focus or Space/);
   assert.doesNotMatch(s, /an expected result/);
-  assert.match(summary({ ...r, popupOnly: true }), /## Result: exit 1\n- Only popup steps took the front: an expected result/);
+  assert.match(summary({ ...r, popupOnly: true }), /## Result: exit 1, an expected result: only popup steps took the front \(Chrome can activate itself when it shows a popup\), and the watcher gave it back each time\n/);
   assert.match(summary({ ...r, end: ["the agent Chrome quit (Browser.close)", "removed the profile"] }), /## The end\n- the agent Chrome quit \(Browser\.close\)\n- removed the profile/);
+});
+
+test("quitAgentChrome: Browser.close, then SIGTERM, then SIGKILL, each to the pid on the run's own profile; a quit that ps cannot confirm is a problem", async () => {
+  const run = async (states: (number | null | undefined)[]) => {
+    const signals: string[] = [];
+    let i = 0, closed = 0;
+    const r = await quitAgentChrome({
+      check: () => states[Math.min(i++, states.length - 1)], close: async () => { closed++; }, signal: (pid, sig) => { signals.push(`${sig} ${pid}`); }, sleep: async () => {},
+      waits: { close: 300, term: 200, kill: 200 },
+    });
+    return { ...r, signals, closed };
+  };
+  const quick = await run([null]);
+  assert.deepEqual([quick.lines, quick.problem, quick.running, quick.signals, quick.closed], [["the agent Chrome quit (Browser.close)"], undefined, false, [], 1]);
+  const term = await run([9, 9, 9, 9, 9, null]);
+  assert.deepEqual([term.lines, term.problem, term.running, term.signals], [["the agent Chrome quit at SIGTERM (pid 9), not at Browser.close"], undefined, false, ["SIGTERM 9"]]);
+  const late = await run([9, 9, 9, 9, 9, 9, 9, null]); // 4 checks in the close wait, 3 in the SIGTERM wait, then the look before the SIGKILL
+  assert.equal(late.problem, undefined, "it quit just after the SIGTERM wait: no SIGKILL to an undefined pid");
+  assert.deepEqual([late.signals, late.running], [["SIGTERM 9"], false]);
+  assert.match(late.lines[0], /quit at SIGTERM \(pid 9\)/);
+  const kill = await run([9, 9, 9, 9, 9, 9, 9, 9, null]);
+  assert.deepEqual([kill.signals, kill.running], [["SIGTERM 9", "SIGKILL 9"], false]);
+  assert.equal(kill.problem, "the agent Chrome did not quit at Browser.close or SIGTERM: SIGKILL to pid 9");
+  const stays = await run([9]);
+  assert.deepEqual([stays.running, stays.signals], [true, ["SIGTERM 9", "SIGKILL 9"]]);
+  assert.match(stays.problem ?? "", /SIGKILL to pid 9, and it still runs: stop it by hand/);
+  const blind = await run([undefined]);
+  assert.deepEqual([blind.running, blind.signals], [null, []]);
+  assert.match(blind.problem ?? "", /the quit of the agent Chrome is not confirmed: ps failed/);
+  const blindLater = await run([9, 9, 9, 9, undefined]);
+  assert.equal(blindLater.running, null);
+  assert.match(blindLater.problem ?? "", /not confirmed/);
 });
 
 test("the dry run's stand-in watcher speaks the watcher's protocol: ready, snaps, agent, quit", async () => {
@@ -306,8 +341,12 @@ test("the dry run's stand-in watcher speaks the watcher's protocol: ready, snaps
 
 test("the watcher reads only: it sends no input, moves no pointer, sends no Apple Event, and asks only for the give-back's activation", () => {
   const swift = readFileSync(join(DIR, "mac-watch.swift"), "utf8").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-  assert.match(swift.slice(swift.indexOf("func checkPointer()"), swift.indexOf("func checkSpace(")), /armed = false[\s\S]*emit\("disarmed", \["why": "pointer"\]\)/,
-    "at the first pointer move the watcher stops its give-back by itself: a person uses the Mac");
+  const person = swift.slice(swift.indexOf("func checkPerson()"), swift.indexOf("func checkSpace("));
+  assert.match(person, /emit\("pointer"[\s\S]*personSeen\(why: "pointer"\)/, "at the first pointer move the watcher stops its give-back by itself");
+  assert.match(person, /CGEventSource\.secondsSinceLastEventType\(\.hidSystemState, eventType: type\)[\s\S]*personSeen\(why: "input"\)/, "and at a key press, a click or a scroll of the hardware");
+  for (const type of [".keyDown", ".flagsChanged", ".leftMouseDown", ".rightMouseDown", ".otherMouseDown", ".scrollWheel"]) assert.ok(swift.includes(type), type);
+  assert.match(swift.slice(swift.indexOf("func personSeen("), swift.indexOf("func checkPerson()")), /armed = false[\s\S]*emit\("disarmed", \["why": why\]\)/);
+  assert.match(swift.slice(swift.indexOf("func checkFront("), swift.indexOf("func personSeen(")), /checkPerson\(\)[\s\S]*guard armed/, "it reads the person's input before it acts on a front change");
   for (const forbidden of [/CGEventPost/, /CGWarpMouseCursorPosition/, /CGEvent\(mouseEventSource/, /CGEvent\(keyboardEventSource/, /NSAppleScript/, /AXUIElement/, /\.hide\(\)/, /terminate\(/, /kill\(/, /CGDisplayMoveCursor/])
     assert.doesNotMatch(swift, forbidden);
   const activations = swift.match(/\.activate\(/g) ?? [];
@@ -323,7 +362,7 @@ test("the Mac check never activates a window or brings a page forward, and sends
   assert.match(ts, /"-sdk", swift\.sdk/, "swiftc gets the SDK, so it never starts xcrun");
   // It removes only the throwaway profile and the watcher that it compiled, both inside its own run folder, after its Chrome quit.
   assert.deepEqual(ts.match(/rmSync\([^)]*\)/g), ["rmSync(profile, { recursive: true, maxRetries: 3 })", "rmSync(watcherBin)"]);
-  assert.match(ts, /if \(chromePid !== undefined && ownChrome\(\)\) endLines\.push\(`kept the profile[\s\S]*else if \(inRun\(profile\)/);
+  assert.match(ts, /if \(quit\.running !== false\) endLines\.push\(`kept the profile[\s\S]*else if \(inRun\(profile\)/, "the profile stays while the agent Chrome runs or ps cannot tell");
   assert.match(ts, /!O\.dryRun && !O\.watcher && watcher\.exitCode !== null && inRun\(watcherBin\)/);
   assert.match(ts, /startGiveBack\(bundle!/);
 });

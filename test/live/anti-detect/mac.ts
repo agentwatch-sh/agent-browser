@@ -23,9 +23,11 @@
 // A watcher (mac-watch.swift, compiled into the run folder with the Xcode Command Line Tools' swiftc; or --watcher
 // BIN) logs the front app, the pointer, the Space, the on-screen window order (CGWindowList) and the lock state,
 // and gives the front back: each time the agent Chrome is the front app, it asks macOS to activate the operator's
-// app again. At the first pointer move the watcher stops that by itself (a person uses the Mac). The check never
-// moves the pointer and sends no OS input. It stops early (skips the steps left and quits its Chrome) when the pointer
-// moves, the screen locks, the display sleeps, the Space changes, or the front does not come back (stopReason).
+// app again. At the first sign of a person (a pointer move, or the hardware's key press, modifier, click or scroll)
+// the watcher stops that by itself. The check never moves the pointer and sends no OS input. It stops early (skips the
+// steps left and quits its Chrome) when a person uses the Mac (a pointer move or such input), the screen locks, the
+// display sleeps, another user's session comes to the front, the Space changes, the front does not come back in
+// 1.5 s, the watcher ends or goes silent for 3 s, or the run reaches its time limit (stopReason in mac-rules.ts).
 //
 // What it measures, in the order it runs (each step's page signals come from the probe page, probe.ts):
 //   start   the agent Chrome's start: the front app before and after (the give-back), where its first window comes
@@ -47,7 +49,8 @@
 //
 // It writes DIR/run-XXXXXX/results.json (every step, the watcher's log, the probe's log, the analysis) and
 // summary.md, and prints the summary. At the end it quits its Chrome (Browser.close, else SIGTERM, else SIGKILL, each
-// to the pid on its own profile) and removes the throwaway profile and the compiled watcher. `open` starts Chrome
+// to the pid on its own profile, looked up again right before it: quitAgentChrome) and removes the throwaway profile
+// (only when ps shows that its Chrome quit) and the compiled watcher. `open` starts Chrome
 // under launchd, so a kill -9 of node leaves it running: the check prints at the start, and writes to
 // DIR/run-XXXXXX/stop-chrome.txt, how to stop it by hand.
 //   exit 0  every phase ran; the start's take of the front, if any, followed agent-browser's give-back rule (at most
@@ -84,7 +87,7 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settin
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg } from "../../../src/record.ts";
 import {
-  agentWindowsOf, ffmpegSearchPath, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, realPointer, realPointerEvents,
+  agentWindowsOf, ffmpegSearchPath, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, realPointer, realPointerEvents,
   screenProblem, snapOf, spaceChanges, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
   type DriveRow, type MacResult, type PopupRow, type RecordRow, type Step, type WatchEvent, type WindowRow,
 } from "./mac-rules.ts";
@@ -115,11 +118,16 @@ if (!O.skip.includes("record")) {
 const children: ChildProcess[] = [];
 let settings: Settings | undefined;
 let chromePid: number | undefined;
-/** Our agent Chrome's pid, only while ps still shows it on our own profile (a pid can be given to another process). */
-const ownChrome = (): number | undefined => {
-  if (!settings) return undefined;
-  try { const pid = agentChromePid(settings); return pid !== undefined && (chromePid === undefined || pid === chromePid) ? pid : undefined; } catch { return undefined; }
+/**
+ * Our agent Chrome as ps shows it on our own profile: its pid, null (none: a pid can be given to another process, so
+ * a pid is ours only while ps shows it there), or undefined (ps failed: not known).
+ */
+const chromeNow = (): number | null | undefined => {
+  if (!settings) return null;
+  try { const pid = agentChromePid(settings); return pid !== undefined && (chromePid === undefined || pid === chromePid) ? pid : null; } catch { return undefined; }
 };
+/** Our agent Chrome's pid, or undefined (none, or not known). */
+const ownChrome = (): number | undefined => chromeNow() ?? undefined;
 process.on("exit", () => {
   if (settings) { try { stopProxy(settings); } catch { /* not started */ } }
   const pid = ownChrome();
@@ -285,15 +293,21 @@ await step("start", "agent Chrome start", async () => {
       if (code !== 0) throw new Error(`open exited with ${code}`);
     }
     endpoint = await devtoolsEndpoint(30_000);
-  } finally { await guard?.finish(endpoint ? GIVE_BACK_GRACE_MS : 0); }
+  } finally {
+    await guard?.finish(endpoint ? GIVE_BACK_GRACE_MS : 0);
+    // From now on the watcher gives the front back (agent-browser's own guard ended with the start). Until it knows the
+    // pid, a new instance of the agent's app bundle counts as the agent Chrome.
+    tell("arm");
+  }
   for (let i = 0; i < 50 && !chromePid; i++, await sleep(100)) chromePid = ownChrome();
-  if (!chromePid) throw new Error("the agent Chrome's pid was not found on its profile");
-  tell(`agent ${chromePid}`);
-  tell("arm"); // from now on the watcher gives the front back (agent-browser's own guard ended with the start)
   // `open` starts Chrome under launchd, not as this process's child: if this process is killed (kill -9), Chrome stays.
-  const help = `If this check ends without quitting its agent Chrome (kill -9 of node), stop that Chrome by hand: check that \`ps -o command= -p ${chromePid}\` shows --user-data-dir=${profile}, then run \`kill ${chromePid}\` (the pid is also in the "agent" line of ${watchFile}).`;
+  const help = chromePid
+    ? `If this check ends without quitting its agent Chrome (kill -9 of node), stop that Chrome by hand: check that \`ps -o command= -p ${chromePid}\` shows --user-data-dir=${profile}, then run \`kill ${chromePid}\` (the pid is also in the "agent" line of ${watchFile}).`
+    : `The check did not find its agent Chrome's pid (ps). If that Chrome still runs after the check, find it with \`ps axww -o pid,command | grep -F -- '--user-data-dir=${profile}'\` and stop its main process (the line with no --type=) with kill PID.`;
   writeFileSync(join(RUN, "stop-chrome.txt"), `${help}\n`);
   say(help);
+  if (!chromePid) throw new Error("the agent Chrome's pid was not found on its profile (ps)");
+  tell(`agent ${chromePid}`);
   await loaded("F0");
 }, { limitMs: 45_000, snap: true });
 
@@ -478,20 +492,21 @@ if (O.look && browser && !aborted) {
 // ------------------------------------------------------------------ the end: our Chrome, our proxy, the watcher
 const endLines: string[] = [];
 let quitProblem: string | undefined;
+// running: false when ps shows that the Chrome quit; true or null (ps cannot tell) keep the profile.
+let quit: { running: boolean | null } = { running: null };
 await step("end", "quit the agent Chrome", async () => {
-  const gone = async (ms: number) => { for (const end = Date.now() + ms; Date.now() < end && ownChrome(); ) await sleep(100); return !ownChrome(); };
-  if (raw) await raw.send("Browser.close", {}, undefined, 5000).catch(() => {});
-  if (await gone(10_000)) { endLines.push("the agent Chrome quit (Browser.close)"); return; }
-  // Each signal goes only to the pid that ps shows on this run's own profile (ownChrome), checked again before it.
-  const term = ownChrome();
-  if (term) { try { process.kill(term, "SIGTERM"); } catch { /* gone */ } }
-  if (await gone(5000)) { endLines.push(`the agent Chrome quit at SIGTERM (pid ${term}), not at Browser.close`); return; }
-  const kill = ownChrome();
-  if (kill) { try { process.kill(kill, "SIGKILL"); } catch { /* gone */ } }
-  const dead = await gone(3000);
-  quitProblem = `the agent Chrome did not quit at Browser.close or SIGTERM: SIGKILL to pid ${kill}${dead ? "" : `, and it still runs: stop it by hand (${join(RUN, "stop-chrome.txt")})`}`;
-  endLines.push(quitProblem);
+  if (chromePid === undefined && chromeNow() === null) { quit = { running: false }; endLines.push("no agent Chrome ran on the run's profile"); return; }
+  // Each signal goes only to the pid that ps shows on this run's own profile at that moment (chromeNow).
+  const q = await quitAgentChrome({
+    check: chromeNow, close: async () => { if (raw) await raw.send("Browser.close", {}, undefined, 5000); },
+    signal: (pid, sig) => { try { process.kill(pid, sig); } catch { /* gone */ } }, sleep,
+  });
+  quit = q;
+  quitProblem = q.problem;
+  endLines.push(...q.lines);
 }, { limitMs: 45_000, tailMs: 1500, always: true });
+const endStep = steps.at(-1);
+if (endStep?.phase === "end" && !endStep.ok && !quitProblem) quitProblem = `the quit of the agent Chrome did not finish (${endStep.error}); see stop-chrome.txt in the run folder`;
 await browser?.disconnect().catch(() => {});
 try { stopProxy(settings!); } catch { /* none */ }
 measureEnd ??= Date.now();
@@ -501,7 +516,7 @@ server.close();
 // The run folder keeps the logs, the shots and the records; the throwaway profile and the compiled watcher go, once
 // nothing uses them: only paths that this run made inside its own run folder.
 const inRun = (p: string) => { try { return realpathSync(p).startsWith(`${realpathSync(RUN)}/`); } catch { return false; } };
-if (chromePid !== undefined && ownChrome()) endLines.push(`kept the profile: the agent Chrome still runs (${profile})`);
+if (quit.running !== false) endLines.push(`kept the profile: ${quit.running ? "the agent Chrome still runs" : "ps cannot confirm that the agent Chrome quit"} (${profile})`);
 else if (inRun(profile) && statSync(profile).isDirectory()) {
   try { rmSync(profile, { recursive: true, maxRetries: 3 }); endLines.push(`removed the agent Chrome's throwaway profile (${profile})`); }
   catch (e) { endLines.push(`could not remove the profile ${profile}: ${(e as Error).message.split("\n")[0]}`); }

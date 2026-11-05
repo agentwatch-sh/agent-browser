@@ -1226,10 +1226,11 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   empty throwaway profile in its run folder, with no network, on 127.0.0.1 only, for the few minutes
   of the run; the check quits that Chrome at its end (SIGKILL when it must) and removes the profile.
   Its watcher (`mac-watch.swift`, compiled by the check) gives the front back, and stops doing so at
-  the first pointer move; the check exits 0 only when it never took the operator's focus or Space.
-  It needs ffmpeg with libx264 (or `--skip record`). No other agent session may use the Mac's agent
-  browser during the run. `--dry-run` runs it on Linux in a private Xvfb with a stand-in watcher.
-  Not part of `npm test`; `test/mac-measure.test.ts` tests its pure parts (`mac-rules.ts`).
+  the first sign of a person (a pointer move, or a key press, a click or a scroll of the hardware);
+  the check exits 0 only when it never took the operator's focus or Space. It needs ffmpeg with
+  libx264 (or `--skip record`). No other agent session may use the Mac's agent browser during the
+  run. `--dry-run` runs it on Linux in a private Xvfb with a stand-in watcher. Not part of `npm
+  test`; `test/mac-measure.test.ts` tests its pure parts (`mac-rules.ts`).
 - `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
   specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
 - `test/parity-server.test.ts`: the probe's server against Node's own clients: a TLS client that ends

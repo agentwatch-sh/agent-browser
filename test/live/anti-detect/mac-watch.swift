@@ -8,6 +8,7 @@
 //   ready     once, when it watches: the front app, the pointer, the Space, the displays, the lock state
 //   front     the front app changed (also from NSWorkspace's activation news, so a change under 100 ms shows)
 //   pointer   the pointer moved (the check never moves it: a move is a person at the Mac)
+//   input     the hardware's key, modifier, button or scroll input after the watcher's start (once; a person at the Mac)
 //   space     the active Space changed: NSWorkspace's news ("via": "news"), or a new id from CGSGetActiveSpace
 //             ("via": "id"; a private CoreGraphics call, found with dlsym, read only; no id when it is missing)
 //   windows   the on-screen windows of layer 0 changed (front to back: [pid, number, x, y, w, h, alpha x 100]),
@@ -24,8 +25,12 @@
 // that was in front before (NSRunningApplication.activate(options: [])), the same call as
 // test/live/takeover/giveback.swift and src/giveback.ts, at once and again every 250 ms, at most 6 times for one
 // take. When another app comes to the front while no take is in progress, that app is the one to give back to.
-// At the first pointer move (a person uses the Mac) it stops the give-back for good, before it acts on the front
-// again, and logs "disarmed" with "why": "pointer": a person's own switch to an app is never undone.
+// At the first sign of a person it stops the give-back for good and logs "disarmed" with a "why": a pointer move
+// ("pointer"), or a key press, a modifier key, a click or a scroll of the hardware after the watcher's start ("input":
+// CGEventSource.secondsSinceLastEventType of the HID state, read only; the check sends no OS input, so such input is
+// a person's). It reads both before it acts on a front change, so a switch that a person makes with the keyboard, the
+// mouse or the trackpad (Cmd-Tab, a click on a window) is not undone. A switch with no hardware input (Voice Control,
+// a script, another app) is not seen as a person's.
 // It reads only, apart from that request: no input, no Apple Event, no pointer move, and no Accessibility,
 // Automation or Screen Recording grant. It logs no window title (macOS gives none of other apps without Screen
 // Recording), only the owner app's name.
@@ -112,7 +117,13 @@ final class Watcher {
   var lastWindows = ""
   var lastSpace: UInt64?
   var lastAlive = 0.0
-  var personSeen = false
+  var personFound = false
+  var personWhy = ""
+  var inputLogged = false
+  var readyAt = 0.0
+  /// The hardware's input that only a person makes here (the HID state has no app's posted events).
+  let personTypes: [(CGEventType, String)] = [(.keyDown, "keyDown"), (.flagsChanged, "flagsChanged"), (.leftMouseDown, "leftMouseDown"),
+    (.rightMouseDown, "rightMouseDown"), (.otherMouseDown, "otherMouseDown"), (.scrollWheel, "scrollWheel")]
 
   init(bundle: String, seconds: Double) {
     self.bundle = bundle
@@ -171,6 +182,7 @@ final class Watcher {
   }
 
   func ready() {
+    readyAt = Date().timeIntervalSince1970 * 1000
     before = NSWorkspace.shared.frontmostApplication
     lastFront = before?.processIdentifier ?? 0
     lastPoint = pointer()
@@ -193,7 +205,7 @@ final class Watcher {
       lastFront = pid
       emit("front", appInfo(app))
     }
-    checkPointer() // a person's move first: then no give-back acts on their own switch
+    checkPerson() // a person's input first: then no give-back acts on their own switch
     guard armed, let app = app, let b = before else { return }
     let t = nowMs()
     if isAgent(app) {
@@ -213,16 +225,32 @@ final class Watcher {
     }
   }
 
-  func checkPointer() {
+  /// A person at the Mac: the give-back stops for good.
+  func personSeen(why: String) {
+    if personFound { return }
+    personFound = true
+    personWhy = why
+    armed = false
+    takeAt = nil
+    emit("disarmed", ["why": why])
+  }
+
+  func checkPerson() {
     let p = pointer()
     if abs(p.x - lastPoint.x) + abs(p.y - lastPoint.y) >= 1 {
       lastPoint = p
       emit("pointer", ["x": Double(p.x), "y": Double(p.y)])
-      if !personSeen {
-        personSeen = true
-        armed = false
-        takeAt = nil
-        emit("disarmed", ["why": "pointer"])
+      personSeen(why: "pointer")
+    }
+    if inputLogged || readyAt == 0 { return }
+    let now = Date().timeIntervalSince1970 * 1000
+    for (type, name) in personTypes {
+      let at = now - CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: type) * 1000
+      if at > readyAt + 5 {
+        inputLogged = true
+        emit("input", ["kind": name, "agoMs": Int((now - at).rounded())])
+        personSeen(why: "input")
+        return
       }
     }
   }
@@ -264,7 +292,7 @@ final class Watcher {
   func tick() {
     let t = nowMs()
     checkFront(NSWorkspace.shared.frontmostApplication)
-    checkPointer()
+    checkPerson()
     checkSpace(news: false)
     checkWindows(force: nil, label: nil)
     if t - lastAlive >= 1000 {
@@ -281,7 +309,7 @@ final class Watcher {
     guard let verb = parts.first else { return }
     switch verb {
     case "arm":
-      if personSeen { emit("disarmed", ["why": "pointer"]); return }
+      if personFound { emit("disarmed", ["why": personWhy]); return }
       armed = true
       emit("armed")
       checkFront(NSWorkspace.shared.frontmostApplication)
