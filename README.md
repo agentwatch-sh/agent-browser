@@ -321,17 +321,17 @@ person's input**) and `log` (progress lines; default standard error).
     a command whose page holds the focus behind another window at its end (keys gave it that focus with
     no window switch) brings its window forward again, so that the page loses the focus with a `blur` at
     the next switch and never holds it beside a later page of its own site. Measured on taylor (`run.ts
-    --only design-two,design-two-sites`, 3 runs each on 2026-11-05; two agents, 6 typings of "hello"
+    --only design-two,design-two-sites`, 5 runs each on 2026-11-05; two agents, 6 typings of "hello"
     each; then a third agent on the first page's site):
 
     | | one site (`design-two`) | two sites (`design-two-sites`) |
     | --- | --- | --- |
-    | the work of both agents at once | 9.8 to 10.5 s | 8.4 to 8.5 s |
+    | the work of both agents at once | 9.8 to 10.5 s | 8.2 to 8.5 s |
     | against one agent alone | 40 to 68 % longer | 20 to 28 % longer |
     | both pages focused | 0 to 100 ms | 4.4 to 4.8 s |
     | `blur` events inside a page's own commands (6 commands) | 0 | 6 or 7 |
     | a third agent on the first site: two focused pages of that site | 0 ms | 0 ms (3.4 to 3.6 s of 3.5 to 3.7 s without the second rule, 2 runs) |
-    | pointer jumps in each page | 0 | 1 (without the first rule: 0 to 2) |
+    | pointer jumps in each page | 0 | 1 or 2 (without the first rule: 0 to 2, 3 runs) |
 
     So **one site in two pages** still cannot see two focused pages of its own, as with one lock for
     every site: one focused page at a time, each page's own sequence a person's (`[F k k k k k B]`: the window's `focus`, the keys, a
@@ -344,8 +344,8 @@ person's input**) and `log` (progress lines; default standard error).
     that `focus` comes with no press and no window switch (a key gives it); no key came while the page
     had no focus. And the X pointer: with two sites at once a page's window is seldom in front at the end
     of its path, so the X pointer seldom moves, and each window that comes forward gets the X pointer's
-    same point (10 or 11 entries at an earlier entry's point in each page in each run, and 1 jump at the
-    first one), as over the relay (`design-no-x`).
+    same point (10 or 11 entries at an earlier entry's point in each page in each run, and 1 or 2 jumps),
+    as over the relay (`design-no-x`).
   - **A person's input.** A pointer path of ghost-cursor's curve (as `record`'s cursor: an overshoot past
     500 px, a time of 300 to 1000 ms by Fitts's law), 12 to 60 moves in whole pixels (no move without
     movement) to a point in the middle 40% of the element, a pause of 80 to 150 ms, then a press of 70 to
@@ -421,10 +421,11 @@ person's input**) and `log` (progress lines; default standard error).
     review-47c's runs); no jump; 1 position change in one page that the movement does not explain, where
     its window came forward under the pointer that the other agent's path left (one pointer for both
     windows, as for a person who switches windows); every typing arrived whole ("hello" 12 times in each
-    field). After one lock per site (ab-v16.46, 3 runs of `design,design-two,design-two-sites`): `design`
-    the same (no jump, no position change that the movement does not explain, both pages focused for 0
-    to 100 ms, a click in 1.22 to 1.24 s, every step worked); `design-two` both pages focused for 0 to
-    100 ms, 0 or 1 position change; `design-two-sites` in the item **Two sites at once** above.
+    field). After one lock per site (ab-v16.46, 5 runs of `design,design-two,design-two-sites`, and 3
+    runs of `design` on main and on the branch in turn): `design` the same (no jump, no position change
+    that the movement does not explain, both pages focused for 0 to 200 ms, every step worked; a click in
+    1.22 to 1.38 s, main's 1.23 to 1.31 s in the same hour); `design-two` both pages focused for 0 to 100
+    ms, 0 to 2 position changes; `design-two-sites` in the item **Two sites at once** above.
   - **The cost.** Input: a click took 1.20 to 1.33 s with an activation and a path of some hundred
     pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s; the path here takes 300 to
     1000 ms by Fitts's law, as `record`'s cursor), `type --into` with 5 characters 1.25 to 1.30 s, a click
