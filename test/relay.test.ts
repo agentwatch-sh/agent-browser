@@ -1,5 +1,5 @@
 // The relay (agent mode's CDP endpoint) end to end: real CDP clients on its Unix socket, and the fake receiver of
-// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension 5021038).
+// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension ffaf794).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +13,7 @@ import { startRelay } from "../src/relay/endpoint.ts";
 import { harness, raw, UA, until, type Harness } from "./fake-bridge.ts";
 import { BIN_JS } from "./helpers.ts";
 
-const endpointV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-5021038/endpoint.json", import.meta.url), "utf8"));
+const endpointV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-ffaf794/endpoint.json", import.meta.url), "utf8"));
 
 /** A tab of the connection's own, opened with auto-attach on: its target id, its session and the fake's tab. */
 async function page(h: Harness, c: CDPConnection, wait = false) {

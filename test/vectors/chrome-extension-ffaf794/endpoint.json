@@ -38,6 +38,8 @@
     {"session": "page", "method": "Page.navigate", "params": {"url": "javascript:void(0)"}, "error": "Not available in the agent browser: javascript: URLs (Page.navigate). Agent mode opens web pages only."},
     {"session": "root", "method": "Target.createTarget", "params": {"url": "about:settings"}, "error": "Not available in the agent browser: about: URLs (Target.createTarget). Agent mode opens web pages only."},
     {"session": "root", "method": "Target.createTarget", "params": {"url": "chrome-extension://abcdefghijklmnopabcdefghijklmnop/page.html"}, "error": "Not available in the agent browser: chrome-extension: URLs (Target.createTarget). Agent mode opens web pages only."},
+    {"session": "page", "method": "Page.navigate", "params": {"url": "blob:chrome-extension://abcdefghijklmnopabcdefghijklmnop/1b2c-3d"}, "note": "A blob: URL passes only with an http(s) inner origin.", "error": "Not available in the agent browser: blob: URLs (Page.navigate). Agent mode opens web pages only."},
+    {"session": "page", "method": "Page.navigate", "params": {"url": "blob:null/1b2c-3d"}, "note": "An opaque origin: refused too.", "error": "Not available in the agent browser: blob: URLs (Page.navigate). Agent mode opens web pages only."},
     {"session": "page", "method": "Page.navigate", "params": {"url": "file:///tmp/x.html"}, "error": "Not available in the agent browser: file: URLs (Page.navigate). Agent mode opens web pages only."},
     {"session": "page", "method": "Page.navigate", "params": {"url": "x/y.html"}, "error": "Not available in the agent browser: relative URLs (Page.navigate). Agent mode opens web pages only."},
     {"session": "root", "method": "Target.createTarget", "params": {"url": "data:text/html,x"}, "note": "A new tab opens only about:blank or http(s); the client navigates it after.", "error": "Not available in the agent browser: data: URLs (Target.createTarget). Agent mode opens web pages only."},
@@ -71,7 +73,7 @@
     {"session": "page", "method": "Runtime.evaluate", "params": {"expression": "1"}, "example": true, "note": "A sessionId that the connection does not hold.", "error": "Session with given id not found."},
     {"session": "page", "method": "Page.captureScreenshot", "params": {"captureBeyondViewport": true}, "example": true, "note": "The receiver answered too large.", "error": "The answer of Page.captureScreenshot is larger than the agent browser's link allows (128 MiB)."},
     {"session": "page", "method": "Runtime.callFunctionOn", "params": {"functionDeclaration": "(b) => b", "arguments": [{"value": "a very long string"}]}, "example": true, "note": "The bridge request would be above MAX_REQUEST.", "error": "The command is too large for the agent browser: Runtime.callFunctionOn."},
-    {"session": "page", "method": "Runtime.evaluate", "params": {"expression": "new Promise(() => {})", "awaitPromise": true}, "example": true, "note": "The receiver answered timeout; the model then detaches the tab.", "error": "The agent browser did not answer Runtime.evaluate in 600 s."}
+    {"session": "page", "method": "Runtime.evaluate", "params": {"expression": "new Promise(() => {})", "awaitPromise": true}, "example": true, "note": "The receiver answered timeout. The model gives the client the timeout error and leaves the tab as it is (C10: no detach).", "error": "The agent browser did not answer Runtime.evaluate in 600 s."}
   ],
   "passes": [
     {"session": "page", "method": "Page.addScriptToEvaluateOnNewDocument", "params": {"source": "", "worldName": "__playwright_utility_world_0a1b2c3d"}, "note": "Playwright sends it on each page and each frame; it must work."},
@@ -83,6 +85,7 @@
     {"session": "page", "method": "Fetch.fulfillRequest", "params": {"requestId": "interception-job-1.0", "responseCode": 200, "responseHeaders": [{"name": "Content-Type", "value": "text/plain"}], "body": "bW9ja2Vk"}},
     {"session": "page", "method": "Page.navigate", "params": {"url": "https://a.example/"}},
     {"session": "page", "method": "Page.navigate", "params": {"url": "about:blank"}},
+    {"session": "page", "method": "Page.navigate", "params": {"url": "blob:https://a.example/1b2c-3d"}, "note": "A blob: URL with an http(s) inner origin."},
     {"session": "page", "method": "Page.navigate", "params": {"url": "data:text/html,<p>x</p>"}, "note": "Measured: the tab stays on about:blank (two-modes design, section 5, row 42)."},
     {"session": "root", "method": "Target.createTarget", "params": {"url": ""}, "note": "An empty or missing url is about:blank."},
     {"session": "root", "method": "Target.createTarget", "params": {"url": "about:blank"}},
