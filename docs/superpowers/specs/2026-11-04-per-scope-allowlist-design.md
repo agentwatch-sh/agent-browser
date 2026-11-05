@@ -720,9 +720,11 @@ aw-lead's rules for the key (mail m2308f29, 2026-11-05):
   variable, never the key. Both lines are comments, not assignments, so an `eval` of the output sets
   nothing (it can neither empty `AGENTWATCH_BROWSER_CRED` nor give an MCP the keyless URL, which
   gets the 403): `# PLAYWRIGHT_MCP_CDP_ENDPOINT without its key: ws+unix://<socket
-  path>:/devtools/browser/<scope>` and `# The key is in AGENTWATCH_BROWSER_CRED: add it to the URL
-  as ?key=<its value>.` `agentwatch browser <command>` passes the key to agent-browser only in that
-  one variable, from its own environment, never in a URL or an argv.
+  path>:/devtools/browser/<scope>` and `# The key is in AGENTWATCH_BROWSER_CRED. Set
+  PLAYWRIGHT_MCP_CDP_ENDPOINT in the MCP server's environment (never on a command line) to this URL
+  with ?key=, or use agentwatch browser <command>, which passes it for you.` `agentwatch browser
+  <command>` passes the key to agent-browser only in that one variable, from its own environment,
+  never in a URL or an argv.
 - The session's environment is the agent's process environment. The launch line reads the key from
   the token file. agentwatch never sets the key with `tmux -e` or `set-environment`: both put the
   value into tmux's argv.
