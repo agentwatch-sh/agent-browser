@@ -15,7 +15,8 @@
 // Each probe page reports its events to the check's server with navigator.sendBeacon, out of band: a
 // visibilitychange, focus and blur (with document.visibilityState and document.hasFocus()), each trusted
 // click, key and input, a mouseenter, and its animation frames. agent-browser opens tabs a and b in the
-// background (the launch's chrome://inspect tab stays in front) and the check runs each command as the
+// background with `open --tab` (on Linux every other page gets a window of its own, ab-v16.26; the
+// explicit tab keeps these modes) (the launch's chrome://inspect tab stays in front) and the check runs each command as the
 // CLI does (`commands.*`), 2.5 s apart:
 //   on a, hidden:  eval, text, outline, hover, click, type, press, shot, shot --size, shot --full
 //   c, new:        open c in the background, then click (a page that never drew a frame), text, shot
@@ -171,9 +172,9 @@ const BASE = `http://probe.localhost:${(server.address() as { port: number }).po
 
 // The first command launches the agent Chrome and starts the proxy, as an agent's first command does.
 const ids: Record<string, string> = {};
-try { ids.a = (await commands.open(o, { url: `${BASE}/a`, name: "a" })).tab.targetId; }
+try { ids.a = (await commands.open(o, { url: `${BASE}/a`, name: "a", tab: true })).tab.targetId; }
 catch (e) { refuse(`agent-browser could not start its Chrome or connect to it: ${(e as Error).message.split("\n")[0]} (see ${RUN})`); }
-ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b" })).tab.targetId;
+ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b", tab: true })).tab.targetId;
 // The check's own connection, through agent-browser's approved proxy: it only switches the front tab.
 const browser = await AgentBrowser.connect(o);
 const product = browser.product;
@@ -240,12 +241,12 @@ await shot("a", "a");
 await shot("a", "a-size", { size: "800x600" });
 await shot("a", "a-full", { full: true });
 // c: a new background tab, whose page never drew a frame before the first command.
-await measure("open", "c", front, async () => { ids.c = (await commands.open(o, { url: `${BASE}/c`, name: "c" })).tab.targetId; }, () => undefined);
+await measure("open", "c", front, async () => { ids.c = (await commands.open(o, { url: `${BASE}/c`, name: "c", tab: true })).tab.targetId; }, () => undefined);
 await click("c");
 await measure("text", "c", front, () => commands.text(o, { tab: "c" }), (r) => ((r as { text: string }).text.includes("clicks: 1") ? undefined : "no clicks line"));
 await shot("c", "c");
 // d: a new background tab, read and shot at once.
-await measure("open", "d", front, async () => { ids.d = (await commands.open(o, { url: `${BASE}/d`, name: "d" })).tab.targetId; }, () => undefined);
+await measure("open", "d", front, async () => { ids.d = (await commands.open(o, { url: `${BASE}/d`, name: "d", tab: true })).tab.targetId; }, () => undefined);
 await measure("text", "d", front, () => commands.text(o, { tab: "d" }), (r) => ((r as { text: string }).text.includes("clicks: 0") ? undefined : "no clicks line"));
 await shot("d", "d");
 // b: a new page in the hidden tab, then input.

@@ -52,7 +52,7 @@ for (const e of ["freeze", "resume"]) document.addEventListener(e, () => state(e
 addEventListener("resize", () => send("geo", geo()));
 let moves = [];
 const input = (e) => {
-  const r = { type: e.type, trusted: e.isTrusted, ts: Math.round(e.timeStamp), id: e.target && e.target.id || e.target && e.target.nodeName,
+  const r = { type: e.type, trusted: e.isTrusted, ts: Math.round(e.timeStamp), te: Math.round(performance.timeOrigin + e.timeStamp), id: e.target && e.target.id || e.target && e.target.nodeName,
     vis: document.visibilityState, focus: document.hasFocus(), ...ua() };
   if ("clientX" in e) Object.assign(r, { cx: e.clientX, cy: e.clientY, sx: e.screenX, sy: e.screenY, mx: e.movementX, my: e.movementY, b: e.buttons, btn: e.button, det: e.detail });
   if ("pointerType" in e) Object.assign(r, { pt: e.pointerType, pr: e.pressure, pid: e.pointerId, w: e.width });
@@ -198,11 +198,44 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
     // A move of more than 100 px from the last pointer point: the jump from a real pointer event (an activation
     // under the X pointer) to the first CDP move, or a CDP move with no path.
     pointerJumps: ins.filter((e) => (e.type === "mousemove" || e.type === "pointermove") && Math.hypot(e.mx ?? 0, e.my ?? 0) > 100).length / 2 + 0.5 | 0,
+    // A position change that the movement does not explain (ab-v16.26, correction 3b): a real event at the X pointer with
+    // movement 0 after a path that ended elsewhere, or a move whose movement came from another point (pointerSignals).
+    pointerUnexplained: pointerSignals(log, tab, t0, t1 + 200).unexplained,
     // A scroll with no wheel, key or press in the second before it (scrollIntoView), and a field's focus with no press
     // in the second before it (el.focus()).
     scrollsWithoutInput: during.filter((e) => e.ev === "scroll" && !ins.some((i) => ["wheel", "keydown", "pointerdown"].includes(i.type) && i.t <= e.t && e.t - i.t < 1000)).length,
     focusWithoutPress: ins.filter((e) => e.type === "focusin" && e.id === "f" && !ins.some((i) => i.type === "pointerdown" && i.t <= e.t && e.t - i.t < 1000)).length,
   };
+}
+
+/**
+ * The real pointer's traces in a page (ab-v16.26, correction 3b of the research's review): over [from, to], with the
+ * page's activations at `activations` (epoch ms). A person's pointer moves in one piece: each mousemove's movementX/Y
+ * matches the change of its clientX/Y, and the pointer enters a window that comes forward where it is at that time.
+ *   jumps:       mousemoves with a movement of more than 100 px (the first CDP move after a real event elsewhere)
+ *   unexplained: mousemoves whose position changed by more than 20 px more or less than their movement says (a real
+ *                event at the X pointer after a CDP path that ended elsewhere: movement 0, a new position; or a real
+ *                event whose movement comes from another point than the page's last one)
+ *   entries:     the first mousemove after each activation (client x,y and movement); sameEntries counts those at
+ *                the point (within 3 px) of an earlier entry: an X pointer that never moves gives each entry there
+ */
+export function pointerSignals(log: Rec[], tab: string, from: number, to: number, activations: number[] = []) {
+  const moves = inputs(log, tab, from, to).filter((e) => e.type === "mousemove").map((e) => ({ ...e, at: typeof e.te === "number" ? e.te : e.t }))
+    .sort((a, b) => a.at - b.at);
+  let jumps = 0, unexplained = 0;
+  const detail: string[] = [];
+  for (let i = 0; i < moves.length; i++) {
+    const m = moves[i], mv = Math.hypot(m.mx ?? 0, m.my ?? 0);
+    if (mv > 100) { jumps++; detail.push(`jump (${m.cx},${m.cy}) mv(${m.mx},${m.my})`); }
+    if (i === 0) continue;
+    const p = moves[i - 1], dx = m.cx - p.cx, dy = m.cy - p.cy;
+    if (Math.hypot(dx - (m.mx ?? 0), dy - (m.my ?? 0)) > 20) { unexplained++; detail.push(`unexplained (${p.cx},${p.cy})->(${m.cx},${m.cy}) mv(${m.mx},${m.my})`); }
+  }
+  const entries = activations.map((a) => moves.find((m) => m.at >= a)).filter((m): m is (typeof moves)[number] => !!m)
+    .filter((m, i, all) => all.indexOf(m) === i);
+  let sameEntries = 0;
+  entries.forEach((e, i) => { if (entries.slice(0, i).some((x) => Math.abs(x.cx - e.cx) <= 3 && Math.abs(x.cy - e.cy) <= 3)) sameEntries++; });
+  return { moves: moves.length, jumps, unexplained, sameEntries, entries: entries.map((e) => `(${e.cx},${e.cy}) mv(${e.mx},${e.my})`), detail: detail.slice(0, 12) };
 }
 
 /** Milliseconds of [from, to] in which both pages reported document.hasFocus() true (100 ms samples of each page's

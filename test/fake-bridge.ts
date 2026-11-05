@@ -213,12 +213,19 @@ export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Prom
         fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
         return t;
       }
+      // A window of its own (agent-browser's open on Linux, ab-v16.26; the relay's every page, ab-v16.28): the fake Chrome's
+      // new window, which takes the focus only when the call asks for it.
       case "windows.create": {
-        const p = chrome.pages.get((await send("Target.createTarget", { url: args[0].url, newWindow: true })).result.targetId)!;
-        fake.emit("tabs.onCreated", { tab: tab(p), attached: false, held: false });
-        return { id: p.windowId, state: "normal", focused: false, tabs: [tab(p)] };
+        const t = tab(chrome.pages.get((await send("Target.createTarget", { url: args[0].url, newWindow: true, background: args[0].focused === false })).result.targetId)!);
+        fake.emit("tabs.onCreated", { tab: t, attached: false, held: false });
+        return { id: t.windowId, state: "normal", focused: chrome.focusedWindow === t.windowId, tabs: [t] };
       }
-      case "tabs.get": case "tabs.update": return tab(page(args[0]));
+      case "tabs.get": return tab(page(args[0]));
+      // chrome.tabs.update({ active: true }) selects the tab in its window and does not focus the window.
+      case "tabs.update": { const p = page(args[0]); if (args[1]?.active) chrome.selectTab(p); return tab(p); }
+      // One model of the windows (review-45 F3): the receiver's window ops read and change the fake Chrome's.
+      case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: chrome.focusedWindow === args[0] };
+      case "windows.update": if (args[1]?.focused) chrome.focusWindow(args[0], "windows.update"); return { id: args[0], state: "normal", focused: chrome.focusedWindow === args[0] };
       case "tabs.query": return [...chrome.pages.values()].filter((p) => args[0].windowId === undefined || p.windowId === args[0].windowId).map(tab);
       case "tabs.remove":
         page(args[0]);

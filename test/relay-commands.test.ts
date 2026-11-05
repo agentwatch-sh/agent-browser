@@ -52,6 +52,23 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
 
+test("open --tab over the endpoint (Linux): the relay opens a window, so agent-browser records no tab page and drives it as a window (review-45 F8)", async () => {
+  const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer();
+  const end = await backByChrome(h.fake, chrome);
+  try {
+    await h.ready();
+    const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
+    const opened = await commands.open(o, { url: fx.base, name: "t", tab: true });
+    const page = chrome.pages.get(opened.tab.targetId)!;
+    assert.notEqual(page.windowId, 1, "a window of its own");
+    assert.equal(existsSync(join(c.stateDir, "tab-pages.json")), false, "no tab page");
+    await commands.click(o, { tab: "t", target: "#b" });
+    assert.equal(page.title, "clicked");
+    assert.deepEqual(chrome.callsFor(page.targetId).filter((x) => x.method === "Emulation.setFocusEmulationEnabled"), []);
+    await commands.close(o, { tab: "t" });
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
 test("an endpoint that is not ready: status names the endpoint and C11's text, also in --notify; a command fails with that text", async () => {
   const h = await harness(), c = consumer(), sent: string[] = [];
   try {

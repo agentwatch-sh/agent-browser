@@ -108,8 +108,10 @@ class AgentBrowser:
 
     `hidden_drive=True` (`--hidden-drive`) keeps a background tab's page hidden while a command drives
     it: no focus emulation, and click, hover, type, press and shot keep Chrome drawing the hidden page
-    with a hidden capture. By default a command turns on focus emulation, so the page is visible for the
-    command's length. See the README, "A command on a background tab: two modes". Measured on Linux
+    with a hidden capture. Without it a command turns on focus emulation for a background tab, so the
+    page is visible for the command's length. In agent mode on Linux each page has a window of its own
+    and needs neither (README, "One window per agent page"): there the two modes apply only to a tab of
+    `open(..., tab=True)`. See the README, "A command on a background tab: two modes". Measured on Linux
     only. A hidden_drive that is not a bool raises ValueError here, before any call.
 
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
@@ -331,7 +333,12 @@ class AgentBrowser:
         return self._run("tabs", _scope(any_scope), TabsResult.from_json)
 
     def open(self, url: str, name: Optional[str] = None, tab: bool = False) -> OpenResult:
-        """Open an allowlisted URL; `name` remembers the tab; `tab` (personal mode) uses the pinned window."""
+        """Open an allowlisted URL; `name` remembers the tab.
+
+        In agent mode on Linux the page gets a window of its own. `tab=True` opens a tab rather than a
+        window: in personal mode, in the pinned window; in agent mode on Linux, a background tab that
+        keeps the old modes (focus emulation, or hidden_drive), which a site can detect.
+        """
         return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else [])], OpenResult.from_json)
 
     # Each method that takes a `tab` also takes `any_scope`: True reaches a tab outside this tab scope.

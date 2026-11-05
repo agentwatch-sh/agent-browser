@@ -16,8 +16,12 @@
 // Two probe pages: F (the page in front: the operator's tab, or another agent's) and T (the page that is
 // driven). probe.ts logs every signal of each page with timestamps. The scenarios (see SCENARIOS):
 //   person-front, person-tab, person-window         baselines: no CDP message at all for these pages
-//   default, hidden-drive                           agent-browser today (focus emulation on attach / Tab.whileDrawn)
-//   window, window-no-flag, window-default          one window per agent page (candidate 1)
+//   default, hidden-drive                           agent-browser's old modes (focus emulation on attach / Tab.whileDrawn), through
+//                                                   the gate's fallback (display: { own: false }): through cdpUrl every page is a
+//                                                   window page, also with open --tab; activate and emulate-input too
+//   ab-window                                       agent-browser's own open on Linux (ab-v16.26): a window of its own, no focus emulation
+//   window, window-no-flag, window-default          one window per agent page (candidate 1); window-default sends the old
+//                                                   attach's focus emulation itself around each command
 //   window-activate                                 one window per page, Target.activateTarget on it for each input command
 //   activate                                        Target.activateTarget for each input command, then back (2)
 //   emulate-input                                   focus emulation only around each input command (3)
@@ -45,7 +49,7 @@ import { AgentBrowser } from "../../../src/browser.ts";
 import { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
-import { bothFocusedMs, FAR, LAYOUT, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
+import { bothFocusedMs, FAR, LAYOUT, pointerSignals, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
 import { report } from "./report.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, only: { type: "string" }, playwright: { type: "string" } } });
@@ -278,10 +282,10 @@ type Wrap = (fn: () => Promise<unknown>) => Promise<unknown>;
 const plain: Wrap = (fn) => fn();
 
 /** The agent's drive of T: the same commands in each agent scenario; `wrap` is the candidate's input wrapper. */
-async function agentDrive(sc: Scenario, o: BrowserOptions, wrap: Wrap, opt: { shotWrap?: boolean } = {}) {
+async function agentDrive(sc: Scenario, o: BrowserOptions, wrap: Wrap, opt: { shotWrap?: boolean; readWrap?: boolean } = {}) {
   const T = `tab=${sc.T}`;
   await idle(sc, "idle before", 3000);
-  await step(sc, "text", () => commands.text(o, { tab: T }));
+  await step(sc, "text", () => (opt.readWrap ? wrap : plain)(() => commands.text(o, { tab: T })));
   await step(sc, "click", () => wrap(() => commands.click(o, { tab: T, target: "#b" })));
   await step(sc, "type", () => wrap(() => commands.type(o, { tab: T, text: "hello", into: "#f" })));
   await step(sc, "click below the fold", () => wrap(() => commands.click(o, { tab: T, target: "#far" })));
@@ -364,8 +368,10 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, false);
-    await commands.open(o, { url: urlOf(sc.T) });
+    // The old modes: the gate's fallback (review-45b B1). Through cdpUrl the bridge is agent mode's endpoint, where
+    // every page is a window page, also with open --tab (F8); "not a display of its own" gives today's tab and drive.
+    const o: BrowserOptions = { ...opts(c, false), display: { own: false } };
+    await commands.open(o, { url: urlOf(sc.T), tab: true });
     await loaded(sc.T);
     await agentDrive(sc, o, plain);
   },
@@ -373,23 +379,39 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, true);
+    const o: BrowserOptions = { ...opts(c, true), display: { own: false } }; // the old hidden drive, as in default
+    await commands.open(o, { url: urlOf(sc.T), tab: true });
+    await loaded(sc.T);
+    await agentDrive(sc, o, plain);
+  },
+  // ---------------------------------------------------------------- agent-browser's own window per page (ab-v16.26)
+  async "ab-window"(sc) {
+    const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
+    await loaded(sc.F);
+    const wf = windowOf(c.proc.pid!, sc.F);
+    await raiseAndFocus(wf);
+    const o = opts(c, false);
     await commands.open(o, { url: urlOf(sc.T) });
     await loaded(sc.T);
+    await sleep(500);
+    sc.notes.push(`T's window after its open: ${windowOf(c.proc.pid!, sc.T)}; F's window: ${wf}; X focus: ${xdo("getwindowfocus")}`);
+    await raiseAndFocus(wf); // as windowCase: F's window over T's, the case to measure
     await agentDrive(sc, o, plain);
   },
   // ---------------------------------------------------------------- one window per agent page (1)
   async window(sc) { await windowCase(sc, [OCCLUDED], true); },
   async "window-no-flag"(sc) { await windowCase(sc, [], true); },
-  async "window-default"(sc) { await windowCase(sc, [OCCLUDED], false); },
+  // The old default in a window: since ab-v16.26 agent-browser sends no focus emulation to a window page, so the
+  // scenario sends it itself around each command, as the old attach did (review-45 F4).
+  async "window-default"(sc) { await windowCase(sc, [OCCLUDED], false, false, true); },
   async "window-activate"(sc) { await windowCase(sc, [OCCLUDED], true, true); },
   // ---------------------------------------------------------------- activate the tab for input (2)
   async activate(sc) {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, true);
-    const t = (await commands.open(o, { url: urlOf(sc.T) })).tab.targetId;
+    const o: BrowserOptions = { ...opts(c, true), display: { own: false } }; // a background tab with the hidden drive, as in default
+    const t = (await commands.open(o, { url: urlOf(sc.T), tab: true })).tab.targetId;
     await loaded(sc.T);
     const raw = await CDPConnection.connect(c.cdpUrl);
     const f = ((await raw.send("Target.getTargets")).targetInfos as { targetId: string; url: string }[]).find((x) => x.url.includes(`tab=${sc.F}`))!.targetId;
@@ -405,8 +427,8 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
     const c = await startChrome(sc, [OCCLUDED], [urlOf(sc.F)]);
     await loaded(sc.F);
     await raiseAndFocus(windowOf(c.proc.pid!, sc.F));
-    const o = opts(c, true);
-    const t = (await commands.open(o, { url: urlOf(sc.T) })).tab.targetId;
+    const o: BrowserOptions = { ...opts(c, true), display: { own: false } }; // a background tab with the hidden drive, as in default
+    const t = (await commands.open(o, { url: urlOf(sc.T), tab: true })).tab.targetId;
     await loaded(sc.T);
     const raw = await CDPConnection.connect(c.cdpUrl);
     const wrap: Wrap = async (fn) => {
@@ -433,7 +455,7 @@ const SCENARIOS: Record<string, (sc: Scenario) => Promise<void>> = {
 };
 
 /** Candidate 1: T opens in a window of its own (Target.createTarget newWindow, background); F's window stays over it. */
-async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, activate = false) {
+async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, activate = false, emulate = false) {
   const c = await startChrome(sc, flags, [urlOf(sc.F)]);
   await loaded(sc.F);
   const wf = windowOf(c.proc.pid!, sc.F);
@@ -452,8 +474,15 @@ async function windowCase(sc: Scenario, flags: string[], hiddenDrive: boolean, a
   const wrap: Wrap = activate ? async (fn) => {
     await raw.send("Target.activateTarget", { targetId: t }); await sleep(100);
     try { return await fn(); } finally { await raw.send("Target.activateTarget", { targetId: f }); }
+  } : emulate ? async (fn) => {
+    const { sessionId } = await raw.send("Target.attachToTarget", { targetId: t, flatten: true });
+    await raw.send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId);
+    try { return await fn(); } finally {
+      await raw.send("Emulation.setFocusEmulationEnabled", { enabled: false }, sessionId).catch(() => {});
+      await raw.send("Target.detachFromTarget", { sessionId }).catch(() => {});
+    }
   } : plain;
-  await agentDrive(sc, opts(c, hiddenDrive), wrap);
+  await agentDrive(sc, opts(c, hiddenDrive), wrap, { readWrap: emulate });
   await raw.close();
 }
 
@@ -643,6 +672,8 @@ const summary = results.map((sc) => {
     // Up to the record step: record turns focus emulation on for its run, and after it the page keeps the focus with no blur.
     fEvents, bothFocusedMs: bothFocusedMs(log.slice().sort((x, y) => x.t - y.t), sc.F, sc.T, sc.tStart, sc.steps.find((s) => s.name.startsWith("record"))?.t0 ?? end),
     geometry: { F: geo(sc.F), T: geo(sc.T) }, steps,
+    // The pointer over the whole scenario; each focus event of T is an activation of T (ab-v16.26, correction 3b).
+    pointer: pointerSignals(log, sc.T, sc.tStart, end, log.filter((e) => e.tab === sc.T && e.ev === "focus" && e.t >= sc.tStart && e.t <= end).map((e) => e.t)),
   };
 });
 writeFileSync(join(RUN, "results.json"), JSON.stringify({ chrome: product, display: DISPLAY, summary, log }, null, 2) + "\n");
@@ -651,6 +682,7 @@ const rows = summary.flatMap((s) => [
   `- idle before: ${JSON.stringify(s.idleBefore)}; idle after: ${JSON.stringify(s.idleAfter)}`,
   `- lazy request ${s.lazyRequestMs ?? "none"} ms after End; IO ${s.io.join(" ") || "none"}; frame content ${s.rafContent}; F saw ${s.fEvents.join(" ") || "nothing"}; F and T both focused ${s.bothFocusedMs} ms`,
   `- geometry ${JSON.stringify(s.geometry)}`,
+  `- pointer ${JSON.stringify(s.pointer)}`,
   ...s.steps.map((st) => `  - ${st.name}: ${st.ok ? "ok" : `FAIL ${st.error}`} ${st.ms} ms; vis ${st.visBefore} visibleMs ${st.visibleMs} changes [${st.visChanges.join(" ")}] focus [${st.focusEvents.join(" ")}] focusAfter ${st.focusAfter} framesDuring ${st.framesDuring} after ${st.framesAfter}; input ${st.inputSeq || "-"}; hidden-input ${st.inputHidden} unfocused-input ${st.inputUnfocused} untrusted ${st.untrusted} screen-client ${JSON.stringify(st.screenMinusClient)} pressure ${st.pressure} down-up ${st.downUpMs} moves ${st.moves}/${st.movesWithMovement} keydowns ${st.keydowns} inputType ${st.inputTypes}`),
 ]);
 writeFileSync(join(RUN, "steps.md"), `${product}; run ${RUN}\n${rows.join("\n")}\n`);

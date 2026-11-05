@@ -28,7 +28,8 @@
 // visible, for its run. This check runs the default mode, or with --hidden-drive the hidden drive;
 // visibility.ts beside this file measures both modes, per command. The summary gives these spans
 // ("visibleMs") and the state during a command ("during"), as information. agent-browser opens
-// tabs a and b in the background (the chrome://inspect tab of the launch stays in front), and the check
+// tabs a and b in the background with `open --tab` (on Linux every other page gets a window of its own,
+// ab-v16.26; the explicit tab keeps these modes) (the chrome://inspect tab of the launch stays in front), and the check
 // drives each tab by its name with the library's commands (`commands.click`, `type`, `eval`, `text`,
 // `shot`, as the CLI runs them):
 //   p1  front: chrome://inspect. Both timers over --hidden-ms, hidden. Drive a, then b, both hidden.
@@ -203,11 +204,11 @@ const pageState = async (tab: string) => (await commands.eval(o, { tab, expressi
 const launchStart = Date.now();
 let ids: Record<string, string>;
 try {
-  const a = await commands.open(o, { url: `${BASE}/a`, name: "a" });
+  const a = await commands.open(o, { url: `${BASE}/a`, name: "a", tab: true });
   ids = { a: a.tab.targetId };
 } catch (e) { refuse(`agent-browser could not start its Chrome or connect to it: ${(e as Error).message.split("\n")[0]} (see ${RUN})`); }
 const launchMs = Date.now() - launchStart;
-ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b" })).tab.targetId;
+ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b", tab: true })).tab.targetId;
 const listed = (await commands.tabs(o)).tabs.map((t) => t.name ?? t.id);
 // The check's own connection, through agent-browser's approved proxy: it only switches the front tab.
 const browser = await AgentBrowser.connect(o);
@@ -334,7 +335,7 @@ await drive("p4", "a", "b");
 // p5: new tabs, opened in the background behind a, read and shot at once; each closed after its drive.
 for (let i = 1; i <= mode.newTabs; i++) {
   const tab = `n${i}`;
-  ids[tab] = (await commands.open(o, { url: `${BASE}/${tab}`, name: tab })).tab.targetId;
+  ids[tab] = (await commands.open(o, { url: `${BASE}/${tab}`, name: tab, tab: true })).tab.targetId;
   await drive("p5", "a", tab, ["eval", "text", "shot"]);
   await commands.close(o, { tab });
 }

@@ -51,9 +51,9 @@ export const COMMAND_SPECS: CommandSpec[] = [
       { ...ANY_SCOPE, description: "reach tabs outside this tab scope; with a tab scope, pin and unpin need it (the pin confines every scope); no effect without a tab scope" }] },
   { name: "tabs", summary: "List allowlisted tabs (other tabs are never shown); with a tab scope, the scope's tabs and a count of the others", usage: "tabs [--any-scope]",
     params: [ANY_SCOPE] },
-  { name: "open", summary: "Open an allowlisted URL in a new tab", usage: "open <url> [--name N] [--tab]",
+  { name: "open", summary: "Open an allowlisted URL in a new tab (agent mode on Linux: in a window of its own)", usage: "open <url> [--name N] [--tab]",
     params: [p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("name", "string", false, "--name", "remember the tab under this name"),
-      p("tab", "boolean", false, "--tab", "personal mode: a tab in the pinned window rather than a window of its own")] },
+      p("tab", "boolean", false, "--tab", "a tab rather than a window of its own: personal mode, in the pinned window; agent mode on Linux, a background tab with the old modes, which a site can detect")] },
   { name: "goto", summary: "Navigate a tab to an allowlisted URL", usage: "goto <tab> <url>",
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ANY_SCOPE] },
   { name: "outline", summary: "Number the interactive elements on screen (read this before a screenshot)", usage: "outline <tab> [--all]",
@@ -310,6 +310,7 @@ export const commands = {
 
   async outline(o: BrowserOptions | Settings, p: { tab: string; all?: boolean; anyScope?: boolean }): Promise<OutlineResult> {
     return onTab(o, p, async (tab, info, b) => {
+      await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront)
       const elements = await outlineTab(tab, !!p.all);
       await b.markRead(tab.targetId, await tab.url()); // the read-first rule of shot
       return { ok: true, command: "outline", tab: info, elements };
@@ -361,6 +362,7 @@ export const commands = {
     const expression = need(p.expression, "expression");
     return onTab(o, p, async (tab, info) => {
       await tab.assertAllowed();
+      await tab.toFront(); // a hidden window page comes in front of its window (Tab.toFront): an eval can wait for a frame
       const value = await tab.evaluate(expression);
       return { ok: true, command: "eval", tab: info, value: value === undefined ? null : value };
     });
