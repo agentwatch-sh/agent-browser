@@ -100,9 +100,13 @@ early enough (section 5).
   tab has the rules of two lists, or a list has a rule without its frame rule.
 - A failed update fails closed. When `updateSessionRules` fails (the rule limit, a Chrome error),
   the receiver removes every scope rule with a remove-only call and keeps its map: every tab of a
-  scope is then blocked until the next update that succeeds. A failed `set_scopes` answers `ok:
-  false` after the tabs close; a failed `tabs.create` or `windows.create` answers with the error
-  (the tab stays, blocked). An old, wider rule never stays in force after a failure.
+  scope is then blocked until the next update that succeeds, and that next update is a full replace
+  from the map (not only one list's rules). A failed `set_scopes` answers `ok: false` after the tabs
+  close (the closing rule runs with the new lists). A failed `tabs.create` or `windows.create`
+  closes its new tab and answers with the error. If the remove-only call fails too, old rules can
+  stay in force: the guard (section 6) still judges each navigation by the new lists of the map, the
+  closing rule still closes the tabs off their new list, and every later change is a full replace
+  until one succeeds.
 - Rule 5 stays dynamic and global: it names no list. Measured: with a session allow rule at
   priority 2, rule 5 at priority 3 still sets `Sec-Fetch-Site: none` on a `Page.navigate` (20 of 20).
 
@@ -256,10 +260,12 @@ popups-late-retry.json, popups-form-retry.json):
   sign-in-pattern popup that missed its first request loaded after the retry too.
 - A form POST into a new tab: the retry did not load it (0 of 40): Chrome does not send a POST again
   on a reload without a prompt. Such a form fails closed (section 11).
-- What the site sees of the retry (results/popups-retry-*.json): the retried request has the same
-  `Sec-Fetch-Site` (`same-origin`), `Sec-Fetch-User` (`?1`), `Sec-Fetch-Mode`, `Sec-Fetch-Dest` and
-  `Referer` as a popup that needed no retry, and one header more: `Cache-Control: max-age=0` (20 of
-  20), as on any reload. A retry with `tabs.update(url)` in place of the reload was worse: no
+- What the site sees of the retry (results/retry-control.json, with rule 5 on): the control is a
+  `target=_blank` popup that loaded at once under an allow rule with no `tabIds` (as today's rule
+  2). The retried `target=_blank` popup's request has the same `Sec-Fetch-Site` (`same-origin`),
+  `Sec-Fetch-User` (`?1`), `Sec-Fetch-Mode`, `Sec-Fetch-Dest` and `Referer` as the control (10 of
+  10 each), and one header more: `Cache-Control: max-age=0` (10 of 10), as on any reload. The first
+  runs (results/popups-retry-*.json, rule 5 off) gave the same. A retry with `tabs.update(url)` in place of the reload was worse: no
   `Referer`, `Sec-Fetch-Site: cross-site`, no `Sec-Fetch-User`, and `history.length` 2. So the retry
   is a reload. The build can try a one-shot session rule that removes `Cache-Control` from the
   retried request (not measured).
@@ -293,12 +299,13 @@ and `pre.a.localhost` (both on A's list):
 | Worker | In a scope-A tab (its own scope) | In a scope-B tab |
 | --- | --- | --- |
 | `respondWith(fetch(event.request))` | Loaded 5 of 5; DNR matched no rule (the worker's request is not a `main_frame` request of the tab) | Loaded 5 of 5: the page came from the network, through the worker, with A's cookies; DNR matched no rule |
-| Navigation preload, `respondWith(preloadResponse)` | Loaded 5 of 5; the preload request is a `main_frame` request of the tab, allowed by A's rule | Blocked 5 of 5 by rule 1 (`net::ERR_FAILED` in the tab) |
+| Navigation preload, `respondWith(preloadResponse)`, no fall-back to `fetch()` | Loaded 5 of 5; the preload request is a `main_frame` request of the tab, allowed by A's rule | Blocked 5 of 5 by rule 1 (`net::ERR_FAILED` in the tab) |
 
 So no site breaks in its own scope: the per-scope rules need no rule for the requests of no tab (a
 candidate rule for them, `tabIds: [-1]`, changed nothing). But the hole has two forms across scopes:
 a page that the worker makes, and a page from the network that the worker passes on. Navigation
-preload alone is blocked.
+preload alone is blocked; a worker that falls back to `fetch()` after a failed preload (as Workbox
+does) loads the page in the pass-on form (not measured).
 
 The hole matters because the worker's page is a first-party page of A's site in B's tab: its
 same-site requests carry all of A's cookies, and its storage is A's storage. B's client can read
@@ -391,19 +398,26 @@ relay and moves both at once.
 ```
 
 - `lists`: list name to entries. A name matches the scope pattern
-  (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`); a list with another name, or whose value is not an array,
-  applies as absent, and each of its entries counts as refused. Each entry is a C5 entry; an entry
+  (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`); a list with another name applies as absent, and each of its
+  entries counts as refused; a list whose value is not an array applies as absent and counts 1. Each entry is a C5 entry; an entry
   that is not normalized is refused and counted, and the other entries apply.
-- `scopes`: scope to list name. A scope that does not match the scope pattern, or whose value is not
-  a string, applies as absent and counts as refused. A scope whose list is not in `lists` has no
-  list; it does not fall back to `default`.
+- `scopes`: scope to list name, or `null`. A scope with `null`, or whose list is not in `lists`, has
+  no list; it does not fall back to `default`. A scope that does not match the scope pattern, or
+  whose value is neither a string nor `null`, applies as absent and counts as refused.
 - `default`: a list name or `null`: the list of a scope that `scopes` does not name. Any other value
   counts as refused and applies as `null`. With `null`, such a scope has no list: its tabs fail
   closed, and the relay refuses its connections.
 - The daemon names a session's scope in `scopes` before it gives the session its endpoint
   (`agentwatch browser endpoint` waits for the receiver's answer and the `allowlist` line). Else a
   new session could connect in the moment before, and get the default list, which can be another
-  repo's list. With a default list, any scope name that `scopes` does not name gets the default list.
+  repo's list. This also holds for `agentwatch browser env`, and for an endpoint URL that the daemon
+  puts into a session's environment at its launch: the daemon names the scope before the launch. The
+  URL is easy to guess (the socket path and the session name), so with a default list any scope name
+  that `scopes` does not name gets the default list.
+- At a session's end the daemon keeps the scope in `scopes` with `null` (no list), and writes
+  `end_scope` to the relay. So the ended scope's tabs and connections never fall back to the default
+  list: the receiver blocks its tabs, and the relay closes its connections (section 7) and removes
+  its tabs.
 - The object replaces the last one in full. The daemon sends it after each link up (as it sends the
   list today), when a list changes, and when a session starts or ends.
 - The answer: `{"rules":<scope rules in force>,"closed":<tabs closed>,"refused":<entries, list
@@ -478,9 +492,14 @@ Step 2 adds the restore tab's rules 6 and 7 after `tabs.create` (`about:blank`) 
 `tabs.update(R)`. They allow the sent `domain` whatever the lists hold, so the restore page loads and
 step 4's `location.replace(state.url)` is covered. Step 4 starts that navigation in a timer after the
 script returns, so the rules cannot go at the end of the step: the receiver removes them at the
-restore tab's `webNavigation.onCommitted` or `onErrorOccurred` of `state.url`, at most 4 s after
-step 4, and in every failure cleanup. The restore tab is in no scope, as today; after the import its
-page stays while a list covers it (section 7), and it cannot navigate further or load new frames.
+restore tab's first main-frame `webNavigation.onCommitted` or `onErrorOccurred` after step 4 (not
+matched to `state.url`: a redirect commits another URL), at most 4 s after step 4, and in every
+failure cleanup. The import ends (its answer, and the next import of the queue) only after the rules
+are gone, so two imports never share rules 6 and 7; the 4 s fit in the time budget (100 s + 4 s +
+two cleanups of 4 s = 112 s, below the link's 115 s). Until the rules go, the guard judges the tab
+by `domain`, so the sent page is not sent to `about:blank` at its own commit. The restore tab is in
+no scope, as today; after the import its page stays while a list covers it (section 7), and it
+cannot navigate further or load new frames.
 
 ## 9. The scope is advisory (question 6)
 
@@ -619,7 +638,7 @@ rule action ran in the extension. It did not use the agent package, the packed C
 | Frames with `tabIds` | as section 4 | frames.json |
 | The worker hole and the guards | as section 6 | sw-hole.json, sw-guard-*.json |
 | Workers that pass a navigation on, navigation preload | as section 6 | sw-pass.json |
-| What a site sees of the retry | `Cache-Control: max-age=0` more; the other headers as a popup with no retry | popups-retry-*.json |
+| What a site sees of the retry | `Cache-Control: max-age=0` more; the other headers as a popup with no retry | retry-control.json, popups-retry-*.json |
 | Worker scripts in DNR | `tabId` -1, type `script`; a block fails registration only | sw-script.json |
 | Back after a list change | a network navigation, blocked by rule 1, 6 of 6; no cache restore seen | bfcache.json |
 | Session rules after a browser restart | none; dynamic rules 2 and 5 stay | restart.json |

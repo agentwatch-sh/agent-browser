@@ -2,7 +2,7 @@
 // file), the test sites (site.py) and its own Chromium (a throwaway profile, the probe extension
 // ext/ loaded unpacked), runs the cases, writes results/<case>.json and stops what it started.
 //
-//   node probe.mjs [case ...]       cases: limits rules dnrfetch frames popups popupslate retryheaders sw swscript swpass bfcache restart
+//   node probe.mjs [case ...]       cases: limits rules dnrfetch frames popups popupslate retryheaders retrycontrol sw swscript swpass bfcache restart
 //
 // Environment: CHROMIUM (default /usr/bin/chromium), RUN (a scratch folder; default a new folder
 // under the system temp folder), SITE_PORT (default 8795), TRIALS (default 10).
@@ -268,9 +268,10 @@ const KINDS = {
 
 // Popups of a scope-A tab: which source names the opener, whether the popup's rule beats its first
 // request, and what the page sees.
-async function popupRun(name, cfg, kinds = Object.keys(KINDS), background = [false, true]) {
+async function popupRun(name, cfg, kinds = Object.keys(KINDS), background = [false, true], extraRules = []) {
   await call("reset");
   await call("setLists", LISTS, SCOPES);
+  if (extraRules.length) await call("session", extraRules);
   await call("config", cfg);
   await serverLog();
   const rows = [];
@@ -569,6 +570,22 @@ async function caseRetryHeaders() {
   };
 }
 
+// The same comparison with an exact control: target=_blank links both, rule 5 on. The control loads
+// at once under a temporary allow rule with no tabIds (as today's rule 2); the other needs the retry.
+async function caseRetryControl() {
+  await call("reset");
+  const ext = await call("limits");
+  await call("dynamic", [{ id: 5, priority: 3, action: { type: "modifyHeaders", requestHeaders: [{ header: "sec-fetch-site", operation: "set", value: "none" }] },
+    condition: { resourceTypes: ["main_frame"], initiatorDomains: [ext.id], regexFilter: TRUSTWORTHY } }], [5]);
+  const today = [{ id: 9100, priority: 2, action: { type: "allow" }, condition: { requestDomains: ["a.localhost"], resourceTypes: ["main_frame"] } }];
+  const control = await popupRun("retry-control-norule", { inherit: "nav", retry: true }, ["blank"], [false], today);
+  const retried = await popupRun("retry-control-retried", { inherit: "nav", retry: true }, ["blank"], [false]);
+  await call("dynamic", [], [5]);
+  const out = { control, retried };
+  save("retry-control", out);
+  return out;
+}
+
 // A worker that sends a navigation on to the network (fetch(event.request)), and one with navigation
 // preload: what DNR sees of that request, in the worker's own scope and in another scope.
 async function caseSwPass() {
@@ -622,7 +639,7 @@ async function caseSwPass() {
   return out;
 }
 
-const CASES = { limits: caseLimits, rules: caseRules, dnrfetch: caseDnrFetch, frames: caseFrames, popups: casePopups, popupslate: casePopupsLate, sw: caseSw, swpass: caseSwPass, retryheaders: caseRetryHeaders, swscript: () => caseSw("script"), bfcache: caseBfcache, restart: caseRestart };
+const CASES = { limits: caseLimits, rules: caseRules, dnrfetch: caseDnrFetch, frames: caseFrames, popups: casePopups, popupslate: casePopupsLate, sw: caseSw, swpass: caseSwPass, retryheaders: caseRetryHeaders, retrycontrol: caseRetryControl, swscript: () => caseSw("script"), bfcache: caseBfcache, restart: caseRestart };
 
 async function main() {
   const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(CASES);

@@ -16,10 +16,10 @@ probe code, not production code. Nothing in `src/` or `test/` uses it, and `npm 
 | `probe.mjs` | The driver. It starts its own Xvfb (a free display from 150 up, `-nolisten tcp`, an auth file with a random cookie that never enters an argv), `site.py`, and its own Chromium with a throwaway profile and `--load-extension=ext`. It calls the extension's worker through a remote-debugging port of that Chromium only, runs the cases, writes `results/<case>.json` and stops what it started. |
 
 The cases: `limits`, `rules`, `dnrfetch`, `frames`, `popups` (with `popupslate`), `retryheaders`,
-`sw`, `swscript`, `swpass`, `bfcache`, `restart`. Each one writes its own files in `results/`.
-`site.py` serves three workers: one that makes each navigation's page itself (any host), one that
-passes each navigation on with `fetch(event.request)` (`pass.<host>`), and one with navigation
-preload (`pre.<host>`).
+`retrycontrol`, `sw`, `swscript`, `swpass`, `bfcache`, `restart`. Each one writes its own files in
+`results/`. `site.py` serves three workers: one that makes each navigation's page itself (any host),
+one that passes each navigation on with `fetch(event.request)` (`pass.<host>`), and one with
+navigation preload (`pre.<host>`).
 
 ## How to run it
 
@@ -43,5 +43,5 @@ package, its packed CRX or its key.
 
 `results/` holds the runs of 2026-11-04 and 2026-11-05 on taylor (Chromium 156.0.8078.79,
 `TRIALS=10`): every case once, then `limits` and `bfcache` again (with the `sets` measure and the
-rule-1 match of Back), then `swpass` and `retryheaders` after the first review. The design's section
-14 reads them.
+rule-1 match of Back), then `swpass` and `retryheaders` after the first review, and `retrycontrol`
+after the second. The design's section 14 reads them.
