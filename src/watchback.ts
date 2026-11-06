@@ -26,7 +26,9 @@
 // end, AgentBrowser.connect after the proxy is up: ensureWatchBack) starts `agent-browser give-back-watch`, a detached
 // node process (runWatchBack). That process writes give-back-watch.json in the state folder, starts the watcher script
 // (osascript, JavaScript for Automation, as the start guard and `front`: no compiled helper, no Apple Event, no System
-// Events, no input, no new macOS permission) and ends when the agent Chrome quits: it checks the pid every 250 ms with
+// Events, no input; whether macOS asks a permission for its reading of the mouse buttons, the Command key and the HID
+// time is not measured yet: the Mac check's own watcher reads that HID time with none) and ends when the agent Chrome
+// quits: it checks the pid every 250 ms with
 // a signal 0 (and every 5 s that ps still shows that pid as the agent Chrome on this profile). On the Mac run of
 // 2026-11-06 the prototype's own check (AppKit's isTerminated) missed the quit of a second Google Chrome instance for
 // 3.8 s; the signal 0 does not depend on AppKit. The script also looks the agent's pid up again every second. It ends
@@ -64,6 +66,12 @@ export const WATCH_POLL_MS = 250;
 export const WATCH_PS_MS = 5000;
 /** A record whose beat is older than this is a watcher that is gone (its pid can belong to another process now). */
 export const WATCH_STALE_MS = 15_000;
+/**
+ * A watcher that could not watch an agent Chrome (no input reading in JXA, no osascript, a script error): its record of
+ * that (give-back-watch-failed.json, the Chrome's pid and why), so that the commands do not start a new one for the same
+ * Chrome each time (each start costs a node process and osascript); for another Chrome, or after this time, they do.
+ */
+export const WATCH_FAILED_FILE = "give-back-watch-failed.json", WATCH_RETRY_MS = 10 * 60_000;
 
 /**
  * The watcher (JXA). argv: the agent's app bundle path, the agent Chrome's pid, the pid of its node process (runWatchBack)
@@ -272,6 +280,21 @@ function writeWatch(s: Settings, r: WatchRecord) {
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; } };
 
+function readFailed(s: Settings): { chrome: number; at: number; why: string } | undefined {
+  try {
+    const r = JSON.parse(readFileSync(statePath(s, WATCH_FAILED_FILE), "utf8"));
+    return Number.isSafeInteger(r?.chrome) && typeof r?.at === "number" ? r : undefined;
+  } catch { return undefined; }
+}
+
+function writeFailed(s: Settings, chrome: number, why: string) {
+  try {
+    const path = statePath(s, WATCH_FAILED_FILE), tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ chrome, at: Date.now(), why }), { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch { /* the next command starts a watcher again */ }
+}
+
 /** A watcher runs for this state folder: its record's pid lives and beat less than WATCH_STALE_MS ago. */
 export function watchRunning(s: Settings, now = Date.now()): WatchRecord | undefined {
   const r = readWatch(s);
@@ -305,6 +328,8 @@ export async function ensureWatchBack(s: Settings, deps: { spawn?: SpawnLike; pi
       if (watchRunning(s)) return "running" as const;
       const chromePid = (deps.pid ?? (() => agentChromePid(s)))();
       if (!chromePid) return "no-chrome" as const;
+      const failed = readFailed(s);
+      if (failed && failed.chrome === chromePid && Date.now() - failed.at < WATCH_RETRY_MS) return "failed" as const;
       const fd = openSync(statePath(s, "launches.log"), "a");
       try {
         const child = (deps.spawn ?? (spawn as unknown as SpawnLike))(process.execPath, watchProcessArgs(s, chromePid), { detached: true, stdio: ["ignore", "ignore", fd] });
@@ -375,11 +400,11 @@ export async function runWatchBack(s: Settings, chromePid: number, deps: WatchDe
   if (s.watchBackCommand) [bin, ...pre] = s.watchBackCommand;
   else bin = OSASCRIPT;
   const removeRecord = () => { try { if (readWatch(s)?.pid === process.pid) rmSync(statePath(s, WATCH_FILE), { force: true }); } catch { /* gone */ } };
-  if (!bundle || (!s.watchBackCommand && !existsSync(OSASCRIPT))) { line(`end=no-osascript chrome=${chromePid}`); removeRecord(); return; }
+  if (!bundle || (!s.watchBackCommand && !existsSync(OSASCRIPT))) { line(`end=no-osascript chrome=${chromePid}`); removeRecord(); writeFailed(s, chromePid, "no-osascript"); return; }
   let child: ChildProcess;
   const fd = openSync(logFile, "a");
   try { child = spawn(bin, [...pre, ...watchBackArgs(bundle, chromePid, process.pid, s.stateDir)], { stdio: ["ignore", "pipe", fd] }); }
-  catch (e) { line(`end=error ${JSON.stringify(String((e as Error).message))}`); removeRecord(); return; }
+  catch (e) { line(`end=error ${JSON.stringify(String((e as Error).message))}`); removeRecord(); writeFailed(s, chromePid, "spawn"); return; }
   finally { closeSync(fd); }
   child.on("error", () => {});
   // Its later lines are empty beats: keep reading them, so that the pipe always has a reader while this process lives
@@ -406,4 +431,6 @@ export async function runWatchBack(s: Settings, chromePid: number, deps: WatchDe
   if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   line(`end=${why} by=node`);
   removeRecord();
+  // A script that ended while its agent Chrome runs could not watch it (no input reading, an error): no new one for that Chrome for a while.
+  if (why.startsWith("script-ended")) writeFailed(s, chromePid, why);
 }

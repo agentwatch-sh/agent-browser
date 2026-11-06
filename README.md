@@ -449,8 +449,9 @@ person's input**) and `log` (progress lines; default standard error).
   - **A person's input**, as on Linux (**A person's input**; the same `inputTiming`), with one
     difference: each pointer path starts at the page's last point (`pointer.json`), and never at the
     real pointer, which agent-browser never reads or moves on the Mac. The fixed start point of the Mac
-    check of 2026-11-05 gave the probe page a jump of 553 px; a path from the page's last point gives
-    none. The first path in a page starts at a point in its middle (the page saw no pointer before).
+    check of 2026-11-05 gave the probe page a jump of 553 px; a path from the page's last point gave
+    none in the dry run on taylor (the Mac run of this build measures it on the Mac). The first path in a
+    page starts at a point in its middle (the page saw no pointer before).
   - **Two agent windows can both have the focus** (the operator's answer ab-or9, 2026-11-06: "Accept it
     and write it down"). A click in one agent window gives its page the focus, and the page that had it
     gets no `blur`: no activation sends one on the Mac. In the Mac runs two agent pages had the focus at
@@ -458,8 +459,9 @@ person's input**) and `log` (progress lines; default standard error).
     own pages at once (`BroadcastChannel`, `localStorage`, its servers), or an anti-bot vendor across
     sites, and only while two agents work at once. The input lock (one input at a time) stays.
   - **The popup rule.** A `target=_blank` link or `window.open()` with no features opens a tab in the
-    opener's window, in front, with no focus; the opener goes `hidden` and keeps its focus, with no
-    `blur`. agent-browser drives the new tab where the site put it. The way back to the opener is only
+    opener's window, in front, with no focus; the opener goes `hidden` (on 2026-11-06 it kept its focus
+    behind a `target=_blank` tab, with no `blur`, and got a `blur` behind a `window.open()` tab).
+    agent-browser drives the new tab where the site put it. The way back to the opener is only
     the popup's close (`close`, or the page's own `window.close()`): CDP has no tab switch without an
     activation on the Mac, so agent-browser never switches tabs there. After the close the opener shows
     `visible` again about 1.0 s later (1006 to 1012 ms in the run of 2026-11-06). So an input command, a
@@ -474,8 +476,8 @@ person's input**) and `log` (progress lines; default standard error).
     (`src/giveback.ts`). While the agent Chrome is the front app, the operator's keys go to it. So for as
     long as the agent Chrome runs, a watcher records the operator's front app and asks macOS to activate
     it again each time the agent Chrome takes the front, as the start's guard does (`osascript`,
-    JavaScript for Automation, AppKit's `activateWithOptions`: no Apple Event, no System Events, no input
-    and no new macOS permission; 3 asks 250 ms apart for each take). A take still lasts some milliseconds
+    JavaScript for Automation, AppKit's `activateWithOptions`: no Apple Event, no System Events and no
+    input; 3 asks 250 ms apart for each take). A take still lasts some milliseconds
     (the start guard's takes ended after 79 and 132 ms), and a key typed in it can still reach the agent
     Chrome. When another app comes to the front, that app is the one to give the front back to.
     - **It never fights the operator.** A take of the front is the operator's own, and the watcher
@@ -502,14 +504,18 @@ person's input**) and `log` (progress lines; default standard error).
       (in the run of 2026-11-06 the prototype's own check, AppKit's `isTerminated`, missed the quit of a
       second Google Chrome instance for 3.8 s). The script ends when its node process is gone (its parent
       pid, used only when its first value is that process, and a beat every 250 ms on a pipe that only
-      that process reads). `quit` stops it at once. Its lines go to `launches.log`:
+      that process reads). `quit` stops it at once. A watcher that could not watch (its script ended while
+      the agent Chrome runs: no reading of the person's input, an error) is not started again for that
+      agent Chrome for 10 minutes (`give-back-watch-failed.json`). Its lines go to `launches.log`:
       `watch-back watch agent=PID before=PID ... input=nsevent+cg`, `took=PID from=PID [own=click|command|front|approval|start]`,
       `asked=PID n=N sent=BOOL`, `back=PID after-ms=N asks=N`, `refused=PID asks=N`, `before=PID`,
       `end=WHY` (the script's) and `end=WHY by=node` (its node process's).
     - **Not measured yet**: the watcher as built runs on the Mac only in the next Mac check (`mac.ts`
       runs it; ab-v16.27's Mac run). Its rule is tested against a fake AppKit bridge
       (`test/watchback.test.ts`); whether the JavaScript bridge gives AppKit's input state and
-      CoreGraphics' time on the Mac is not measured (its `watch` line says which it has).
+      CoreGraphics' time on the Mac is not measured (its `watch` line says which it has), nor whether
+      macOS asks for a permission for them (the check's own watcher, a compiled Swift program, reads the
+      same CoreGraphics time with no prompt; the start guard and `front` need none).
   - **What a site can still see** on the Mac: two focused agent pages (above), a covered agent window that
     draws at 60 frames a second, and the items of Linux's list that do not depend on Xvfb (the pace,
     `history.length` 2 for a page that `open` opened, `record`'s and `eval`'s signals).

@@ -15,7 +15,7 @@ import vm from "node:vm";
 import { resolveOptions, type BrowserOptions, type Settings } from "../src/options.ts";
 import {
   ensureWatchBack, holdForApproval, holdGiveBack, holdNow, HOLD_FILES, parseWatchLines, parseWatchReady, readWatch, releaseGiveBack, runWatchBack, stopWatchBack,
-  WATCH_BACK_SCRIPT, WATCH_FILE, watchBackArgs, watchProcessArgs, watchRunning,
+  WATCH_BACK_SCRIPT, WATCH_FAILED_FILE, WATCH_FILE, WATCH_RETRY_MS, watchBackArgs, watchProcessArgs, watchRunning,
 } from "../src/watchback.ts";
 import { commands } from "../src/commands.ts";
 import { stopProxy } from "../src/proxy.ts";
@@ -465,6 +465,29 @@ test("ensureWatchBack: only for the Mac's design, never under node --test withou
   writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
   assert.equal(watchRunning(s), undefined);
   assert.equal(stopWatchBack(s, () => "/bin/sleep 1"), false, "stop signals only this state folder's watcher");
+  // A watcher that could not watch this Chrome (its script ended while the Chrome runs): no new one for it each command.
+  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
+  writeFileSync(join(c.stateDir, WATCH_FAILED_FILE), JSON.stringify({ chrome: 4321, at: Date.now(), why: "script-ended code=0" }));
+  const before = spawned.length;
+  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "failed");
+  assert.equal(spawned.length, before, "nothing started");
+  assert.equal(await ensureWatchBack(s, { pid: () => 4322, spawn: spawnStub }), "started", "another agent Chrome gets one");
+  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
+  writeFileSync(join(c.stateDir, WATCH_FAILED_FILE), JSON.stringify({ chrome: 4321, at: Date.now() - WATCH_RETRY_MS - 1, why: "script-ended code=0" }));
+  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "started", "and the same one after WATCH_RETRY_MS");
+});
+
+test("the watcher's node process: a script that ends while its agent Chrome runs (it could not watch) is recorded, so that the commands start no new one for that Chrome each time", async () => {
+  const chrome = fakeChrome();
+  process.env.MAC_STANDIN_WATCHBACK_END_MS = "100";
+  try {
+    const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
+    await runWatchBack(s, chrome.pid, { cmdline: chrome.cmdline, pollMs: 50 });
+    const f = JSON.parse(readFileSync(join(c.stateDir, WATCH_FAILED_FILE), "utf8"));
+    assert.equal(f.chrome, chrome.pid);
+    assert.match(f.why, /^script-ended code=0$/);
+    assert.ok(launches().some((l) => l.text === "end=script-ended code=0 by=node"));
+  } finally { delete process.env.MAC_STANDIN_WATCHBACK_END_MS; chrome.child.kill(); }
 });
 
 test("on the Mac `launch` and each command that connects make sure the watcher runs for the agent Chrome (one watcher), and it ends with that Chrome", async () => {
