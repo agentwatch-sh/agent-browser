@@ -3,8 +3,8 @@
 // dropped before the first frame, mouse moves held, captures that wait), and the pure parts of the live
 // check (test/live/background-tabs/spans.ts).
 //   default        focus emulation while a command is attached: the page is visible for the command;
-//                  a shot under Tab.whileDrawn too (ab-b84.17): alone, its capture would wait for ever
-//   hiddenDrive    no focus emulation; input and shots under Tab.whileDrawn: the page stays hidden
+//                  a shot under Tab.whileDrawnForShot too (ab-b84.17): alone, its capture would wait for ever
+//   hiddenDrive    no focus emulation; input under Tab.whileDrawn, shots under Tab.whileDrawnForShot: the page stays hidden
 // Each hidden-mode command gets a new tab whose page never drew a frame, so no earlier command drew it.
 
 import { test, before, after } from "node:test";

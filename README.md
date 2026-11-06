@@ -515,7 +515,7 @@ person's input**) and `log` (progress lines; default standard error).
     a page that does not change, only a later capture does, and Chrome then ends every earlier capture
     with it. But two captures sent before Chrome draws a frame share the frame that they force, and
     nothing replaces it: then both wait. So a lone capture waits for ever, also in the default mode,
-    where the page is `visible`. A shot therefore keeps one capture in flight (`Tab.whileDrawn`), waits
+    where the page is `visible`. A shot therefore keeps one capture in flight (`Tab.whileDrawnForShot`), waits
     for two frames, and then takes its own capture: the frame between the two captures is what ends
     both. Without the wait, 8 of 8 default-mode shots and 4 of 4 `--hidden-drive` shots failed after
     30 s (review-41 on taylor). The second frame also makes the picture complete: a frame that Chrome
@@ -555,8 +555,9 @@ person's input**) and `log` (progress lines; default standard error).
     for its own capture (1 to 2 s). A second shot right after the first one took 0.1 s (2026-11-04).
   - **`hiddenDrive`** (CLI `--hidden-drive`, Python `hidden_drive=True`; ab-v16.15). No focus
     emulation. For `click`, `hover`, `type`, `press`, `Tab.clickAt` and `shot` in a background tab,
-    agent-browser keeps one `Page.captureScreenshot` in flight (`Tab.whileDrawn`): while it waits,
-    Chrome draws the tab, and the page stays `hidden` (a hidden capture). A last capture ends them
+    agent-browser keeps one `Page.captureScreenshot` in flight (`Tab.whileDrawn`; for a shot
+    `Tab.whileDrawnForShot`): while it waits, Chrome draws the tab, and the page stays `hidden` (a
+    hidden capture). A last capture ends them
     all, and after it Chrome draws nothing again. A tab in front needs none. `record` turns focus
     emulation on for its run only. Measured on taylor in 7 runs: eval, text, outline, hover, click,
     type, press, shot, `shot --size`, `shot --full`, open and goto (also in a new tab and after a
