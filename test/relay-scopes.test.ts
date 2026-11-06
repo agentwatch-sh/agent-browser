@@ -3,7 +3,7 @@
 // its tabs, the scope arg of tabs.create and windows.create, a tab's scope from bridge.tabScope only (with the 500 ms
 // wait), the order of bridge.tabScope and tabs.onReplaced, the receiver's map at each link up (bridge.tabScopes), the
 // refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4, C10 and C11 of
-// chrome-extension's docs/protocol.md (main c99bebb); the vectors are copies of its test/vectors/ at that commit. The
+// chrome-extension's docs/protocol.md (main 40c2d93); the vectors are copies of its test/vectors/ at that commit. The
 // fake receiver of fake-bridge.ts stands in for the receiver of chrome-extension 0.3.x.
 
 import { test } from "node:test";
@@ -16,7 +16,7 @@ import { covers, normalizeEntry, parseScopes } from "../src/relay/scopes.ts";
 import WebSocket from "ws";
 import { harness, LINE, raw, until, type Harness } from "./fake-bridge.ts";
 
-const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-c99bebb/${name}.json`, import.meta.url), "utf8"));
+const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-40c2d93/${name}.json`, import.meta.url), "utf8"));
 const scopesV = vectors("scopes"), endpointV = vectors("endpoint"), bridgeV = vectors("bridge");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
