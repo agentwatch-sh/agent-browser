@@ -48,6 +48,11 @@ export class FakeReceiver {
   geometry: (tabId: number) => FakeGeo = () => GEO;
   /** The isolated worlds that Page.createIsolatedWorld made: context id -> tab. */
   readonly worlds = new Map<number, number>();
+  /**
+   * Context ids that name a page's own world now (Chromium reuses ids in a new renderer process after a cross-site
+   * navigation): an evaluate with such an id runs in the page's world and gets the page's own values.
+   */
+  readonly pageWorlds = new Map<number, FakeGeo>();
   private nextContext = 100;
   readonly tabs = new Map<number, FakeTab>();
   readonly attached = new Set<number>();
@@ -146,6 +151,8 @@ export class FakeReceiver {
         // The relay's geometry read (pointer.ts): its own isolated world on the main frame, then one evaluate in it.
         if (method === "Page.createIsolatedWorld" && !target.sessionId) { const id = this.nextContext++; this.worlds.set(id, t.id); return { executionContextId: id }; }
         if (method === "Runtime.evaluate" && params?.contextId !== undefined) {
+          const reused = this.pageWorlds.get(params.contextId);
+          if (reused) return { result: { type: "object", value: reused } };
           if (this.worlds.get(params.contextId) !== t.id) return { error: JSON.stringify({ code: -32000, message: "Cannot find context with specified id" }) };
           return { result: { type: "object", value: this.geometry(t.id) } };
         }

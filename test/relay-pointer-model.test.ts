@@ -879,6 +879,7 @@ test("the cached geometry goes at Browser.setWindowBounds, a device-metrics over
       const daemon = h.fake.daemon;
       let busy = true;
       h.fake.daemon = (r) => (r.op === "daemon.pointerAt" && busy ? (busy = false, { error: "busy" }) : daemon(r));
+      h.fake.focusedWindow = 1; // another window has the focus: the relay raises B's window (a front page only by a raise)
       await click(c2, B, 700, 300);
       assert.equal(h.relay.model.pointerState().front, B.tab.id);
     }],
@@ -941,4 +942,183 @@ test("the catch-up is clamped to the content box too; the event's own point stay
     for (const p of moves.slice(0, -1)) assert.ok(p.x <= 1262 && p.y <= 791, `${p.x},${p.y} over a scrollbar`);
     assert.deepEqual([moves.at(-1).x, moves.at(-1).y, sent.at(-1).type], [1272, 790, "mousePressed"], "the path ends with a move at the press's own point");
   } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ review-68 (B1-B3, N1-N4, a minimized window)
+
+test("review-68 B1: each geometry read makes the relay's world first and evaluates in the id that it returns; an old id that now names a page's world is never read, and its events reach the client", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await c.send("Runtime.enable", {}, A.sessionId);
+    const seen: string[] = [];
+    c.on("Debugger.scriptParsed", (p: any) => seen.push(`scriptParsed ${p.executionContextId}`));
+    c.on("Runtime.executionContextDestroyed", (p: any) => seen.push(`destroyed ${p.executionContextId}`));
+    await click(c, A, 100, 100); // a path from B to A: one world and one read for each page
+    const worldOf = (tabId: number) => h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").filter((r) => r.args[0].tabId === tabId).length;
+    const old = [...h.fake.worlds].filter(([, tab]) => tab === A.tab.id).map(([id]) => id).at(-1)!;
+    // A cross-site navigation of A with no Runtime events: Chromium gives the old id to a page's own world, whose
+    // screenX getter lies (4242).
+    h.fake.pageWorlds.set(old, { ...GEO, sx: 4242 });
+    const n = worldOf(A.tab.id);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, B, 700, 300); // a path from A to B: A's read makes a world again
+    assert.equal(worldOf(A.tab.id), n + 1, "Page.createIsolatedWorld before the read");
+    const evals = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === A.tab.id && r.args[2].contextId !== undefined);
+    assert.notEqual(evals.at(-1)!.args[2].contextId, old, "the read names the id that the new world got");
+    assert.equal(d.moves.length, 2);
+    assert.deepEqual(d.moves[1].from, { x: 100, y: 100 + OFFSET }, "S mapped with the honest geometry, not the page's 4242");
+    // The old id's events are the page's now: the client gets them.
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Debugger.scriptParsed", params: { scriptId: "9", url: "", executionContextId: old } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextDestroyed", params: { executionContextId: old, executionContextUniqueId: "page-u" } });
+    await until(() => seen.length >= 2, "the page's events");
+    assert.deepEqual(seen, [`scriptParsed ${old}`, `destroyed ${old}`]);
+  } finally { await h.close(); }
+});
+
+test("review-68 B2: a press on a frame's (child) session is a held button of its page: no path while it holds", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const c = await h.connect(), c2 = await h.connect("s2");
+    const A = await page(h, c2), B = await page(h, c);
+    h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+      targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://a.example/f", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    await sleep(30);
+    await mouse(c2, A, "mouseMoved", 100, 100);
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 5, y: 5, button: "left", clickCount: 1 }, "FR1");
+    await mouse(c, B, "mouseMoved", 700, 300);
+    assert.deepEqual(state(h).pressed, [B.tab.id]);
+    const t0 = Date.now();
+    const step = mouse(c2, A, "mousePressed", 100, 100);
+    await sleep(300);
+    assert.equal(d.moves.length, 0, "no path while the frame holds the button");
+    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 5, y: 5, button: "left", clickCount: 1 }, "FR1");
+    await step;
+    assert.ok(Date.now() - t0 >= 280, "A's step waited for the frame's release");
+    // The frame's release is a child session's input: B's point is unknown then, so that step plays no path.
+    assert.equal(d.moves.length, 0);
+  } finally { await h.close(); }
+});
+
+test("review-68 B3: a client's Browser.setWindowBounds waits for a step that plays a path; the window moves after the path", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const c = await h.connect(), c2 = await h.connect("s2");
+    const A = await page(h, c2), B = await page(h, c);
+    await mouse(c2, A, "mouseMoved", 100, 100);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    const seq: string[] = [];
+    const op = h.fake.op;
+    h.fake.op = (r) => { if (r.op === "windows.update") seq.push(`windows.update ${r.args[1].left !== undefined ? "bounds" : "focus"}`); return op(r); };
+    d.answer = (move) => { seq.push("path"); const last = move.path.at(-1); d.pos = { x: last.x, y: last.y };
+      return new Promise((r) => setTimeout(() => { seq.push("path end"); r({ ...d.pos, views: 0 }); }, 400)); };
+    const a = mouse(c2, A, "mousePressed", 100, 100);
+    await until(() => d.moves.length === 1, "the path");
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: B.targetId });
+    await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 300, top: 200 } });
+    await a;
+    assert.deepEqual(seq, ["path", "path end", "windows.update focus", "windows.update bounds"]);
+  } finally { await h.close(); }
+});
+
+test("review-68 N1: with the front page unknown, a page whose window has the focus gets no raise and does not become the front page; the next step plays no path", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const c = await h.connect();
+    const A = await page(h, c);
+    await click(c, A, 100, 100); // A's window gets the focus (front unknown? A was the newest window: the front page)
+    const B = await page(h, c);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    const W = await page(h, c); // the newest window: on top, no focus
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: W.targetId });
+    await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 0, top: 0 } });
+    assert.equal(state(h).front, null);
+    const from = h.fake.requests.length;
+    await click(c, A, 100, 100);
+    assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "windows.update" || r.op === "tabs.update").length, 0, "no raise: A's window has the focus");
+    assert.equal(state(h).front, null, "no raise that the relay sent: the front page stays unknown");
+    await click(c, B, 700, 300);
+    assert.equal(d.moves.length, 0, "no path over A's area, where W's window can be on top");
+    assert.equal(state(h).front, B.tab.id, "B's window got windows.update: B is the front page");
+  } finally { await h.close(); }
+});
+
+test("review-68 N2 and a minimized or hidden page: a read that is not usable drops the kept geometry, and such a read is never kept", async () => {
+  const cases: [string, (h: Harness, B: Page) => void][] = [
+    ["a scale of 2", (h, B) => { h.fake.geometry = (id) => (id === B.tab.id ? { ...GEO, scale: 2 } : GEO); }],
+    ["a hidden page", (h, B) => { h.fake.geometry = (id) => (id === B.tab.id ? { ...GEO, vis: "hidden" } : GEO); }],
+    ["a minimized window", (h, B) => { const op = h.fake.op; h.fake.op = (r) => (r.op === "windows.get" && r.args[0] === B.tab.windowId ? { id: r.args[0], left: 0, top: 0, width: 1280, height: 800, state: "minimized", type: "normal", focused: false } : op(r)); }],
+  ];
+  for (const [name, spoil] of cases) {
+    const { h, d } = await onHarness();
+    try {
+      const c = await h.connect(), c2 = await h.connect("s2");
+      const A = await page(h, c2), B = await page(h, c);
+      await mouse(c2, A, "mouseMoved", 100, 100);
+      await mouse(c, B, "mouseMoved", 700, 300);
+      await click(c2, A, 100, 100); // a path from B to A: B's usable geometry is kept
+      assert.equal(d.moves.length, 1);
+      spoil(h, B);
+      await mouse(c, B, "mouseMoved", 650, 300);
+      await click(c, B, 650, 300); // B's step: its read is not usable (no path), and B is the front page
+      const n = d.moves.length;
+      await c.close();
+      await until(() => !h.fake.attached.has(B.tab.id), "B detached");
+      await mouse(c2, A, "mouseMoved", 300, 300);
+      await mouse(c2, A, "mousePressed", 300, 300);
+      assert.equal(d.moves.length, n, `${name}: the older geometry was dropped: no path`);
+    } finally { await h.close(); }
+  }
+});
+
+test("review-68 N3: when the step's first reads fail, Target.activateTarget's tabs.update has the step's 2 s limit too", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A } = await twoPages(h);
+    let open!: () => void;
+    const never = new Promise<void>((r) => (open = r));
+    h.fake.op = async ({ op, args }) => { if ((op === "tabs.get" || op === "tabs.update") && args[0] === A.tab.id) await never; return undefined; };
+    const t0 = Date.now();
+    await c.send("Target.activateTarget", { targetId: A.targetId });
+    const ms = Date.now() - t0;
+    assert.ok(ms >= 3900 && ms < 5500, `${ms} ms: 2 s for the reads, 2 s for the tabs.update`);
+    open();
+  } finally { await h.close(); }
+});
+
+test("review-68 N4: step 3's wait for a release keeps one wait at a time on the front page", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await mouse(c, B, "mousePressed", 700, 300); // B, the front page, holds its button
+    const step = mouse(c, A, "mousePressed", 100, 100);
+    let most = 0;
+    for (let i = 0; i < 20; i++) { await sleep(30); most = Math.max(most, state(h).releaseWaits); }
+    await mouse(c, B, "mouseReleased", 700, 300);
+    await step;
+    assert.ok(most <= 1, `${most} waits at once`);
+    assert.equal(state(h).releaseWaits, 0);
+  } finally { await h.close(); }
+});
+
+test("review-68 N1: with the front page unknown, a tab switch in a focused window (an input, or Target.activateTarget) raises no window: no record, and the front page stays unknown", async () => {
+  for (const how of ["input", "activateTarget"] as const) {
+    const { h } = await onHarness();
+    try {
+      const c = await h.connect();
+      const A = await page(h, c);
+      await click(c, A, 100, 100); // A's window has the focus
+      const popup = h.fake.newTab("https://a.example/popup", A.tab, A.tab.windowId); // a popup tab in front of A in A's window
+      await until(() => h.fake.attached.has(popup.id), "the popup");
+      const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: A.targetId });
+      await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 0, top: 0 } });
+      assert.equal(state(h).front, null);
+      const reads = h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt").length, from = h.fake.requests.length;
+      if (how === "input") await c.send("Input.insertText", { text: "x" }, A.sessionId);
+      else await c.send("Target.activateTarget", { targetId: A.targetId });
+      assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "tabs.update" || r.op === "windows.update").map((r) => r.op), ["tabs.update"], how);
+      assert.equal(state(h).front, null, `${how}: a tab switch raises no window`);
+      assert.equal(h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt").length, reads, `${how}: no record`);
+    } finally { await h.close(); }
+  }
 });

@@ -99,8 +99,11 @@ type Tab = {
   unanswered: number;
   /** Its calls that wait in the activation chain (or run there). */
   chainSteps: number;
-  /** The relay's isolated world (its context id), and every context id that the relay's world had in the tab. */
-  world: number | null;
+  /**
+   * The context ids of the relay's isolated world in the tab: the id that its last Page.createIsolatedWorld returned,
+   * and the ids of Runtime.executionContextCreated with its name. Each read makes the world again and keeps only the
+   * new id: Chromium reuses context ids in a new renderer process, so an old id can name a page's context (review-68 B1).
+   */
   worldIds: Set<number>;
   /** A geometry read of the relay is in flight. */
   geoReading: boolean;
@@ -259,7 +262,7 @@ export class Model {
   pointerState() {
     return { paths: this.paths, offFor60s: this.paths === "off" && this.offUntil > 0, at: this.at, display: this.display, views: this.views,
       front: this.front?.id ?? null, points: Object.fromEntries(this.points), pressed: [...this.tabs.values()].filter((t) => t.pressed).map((t) => t.id),
-      catchUpStops: this.catchUpStops };
+      catchUpStops: this.catchUpStops, releaseWaits: [...this.tabs.values()].reduce((n, t) => n + t.released.length, 0) };
   }
 
   /** Why a new connection is refused (C11's 503 texts), or null when the endpoint is ready. */
@@ -652,6 +655,20 @@ export class Model {
   }
 
   /**
+   * A client's window change (Browser.setWindowBounds) with the paths on: in the activation chain, so behind the step
+   * that runs (its path plays at the window's old place), and behind the catch-ups that run in the window's pages
+   * (review-68 B3). The client gets the error of its windows.update.
+   */
+  private afterSteps(tabIds: number[], change: () => Promise<void>): Promise<void> {
+    const run = this.activations.then(async () => {
+      for (const id of tabIds) { const t = this.tabs.get(id); if (t?.catchUp) await t.catchUp.catch(() => {}); }
+      await change();
+    });
+    this.activations = run.then(() => {}, () => {});
+    return run;
+  }
+
+  /**
    * Bring the page forward for an input that starts an action, as a person does (with the paths off: today's way,
    * activateToday), or run the activation step of the pointer design (with the paths on: step()).
    */
@@ -804,7 +821,6 @@ export class Model {
   private detached(tab: Tab): void {
     this.endHold(tab);
     tab.metrics = false;
-    tab.world = null;
   }
 
   /** A new tab that opens a window, or that becomes the active tab of the front page's window, is the front page: it comes on top (C11). */
@@ -829,6 +845,9 @@ export class Model {
     if (!child && VIEWPORT_CALLS.has(method)) tab.geo = null;
     if (TOUCH_INPUT.has(method)) { this.setPoint(tab, null); return; }
     if (!POINTER_INPUT.has(method)) return;
+    // A held button counts on any session of the page, a frame's too (review-68 B2): mousePressed until Chrome answered its mouseReleased.
+    if (method === "Input.dispatchMouseEvent" && p.type === "mousePressed") tab.pressed = true;
+    if (method === "Input.dispatchMouseEvent" && p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
     if (child) { this.setPoint(tab, null); return; }
     tab.pointerSent.add(call);
     const done = () => { tab.pointerSent.delete(call); };
@@ -838,29 +857,32 @@ export class Model {
       if (method === "Input.dispatchMouseEvent" && p.type === "mouseWheel") this.setPoint(tab, cur && near(cur, p, POINTER.POINTER_NEAR_PX) ? { x: cur.x, y: cur.y, x11: false } : null);
       else this.setPoint(tab, { x: p.x, y: p.y, x11: false });
     }
-    if (method !== "Input.dispatchMouseEvent") return;
-    if (p.type === "mousePressed") tab.pressed = true;
-    if (p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
   }
 
   /** The relay's world's events (its context, its scripts): no client sees them. True when the relay drops the event. */
   private worldEvent(tab: Tab, method: string, params: any): boolean {
     if (method === "Runtime.executionContextCreated" && params?.context?.name === this.worldName) { tab.worldIds.add(params.context.id); return true; }
     const id = params?.executionContextId;
-    if (method === "Runtime.executionContextDestroyed" && tab.worldIds.has(id)) { tab.worldIds.delete(id); if (tab.world === id) tab.world = null; return true; }
+    if (method === "Runtime.executionContextDestroyed" && tab.worldIds.has(id)) { tab.worldIds.delete(id); return true; }
     if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldIds.has(id)) return true;
-    if (method === "Runtime.executionContextsCleared") tab.world = null;
+    if (method === "Runtime.executionContextsCleared") tab.worldIds.clear();
     // A window event that the relay sees: the page's cached geometry goes.
     if (method === "Page.frameResized") tab.geo = null;
     return false;
   }
 
   /**
-   * The geometry read (section 3): one Runtime.evaluate in the relay's own isolated world (Page.createIsolatedWorld on
-   * the main frame), only for a bridge tab, one in flight per tab, with no enable and with C10's default wait; the world
-   * again when its context is gone. The relay waits GEOMETRY_WAIT_MS and drops a late answer. null: no read, or none in time.
+   * The geometry read (section 3): one Runtime.evaluate in the relay's own isolated world, only for a bridge tab, one in
+   * flight per tab, with no enable and with C10's default wait. Each read first sends Page.createIsolatedWorld on the
+   * main frame and evaluates in the id that it returns (review-68 B1: after a cross-site navigation Chromium can give an
+   * old id to a page's own world, and the relay sees no context event while no client has Runtime on); when the evaluate
+   * names an unknown context (a navigation between the two calls), once more. The relay waits GEOMETRY_WAIT_MS and drops
+   * a late answer. The relay keeps a read only when it is usable as a front page's geometry (usable(), no device-metrics
+   * override, not minimized, not hidden); any other read, a failed one too, drops the kept one (review-68 N2). A catch-up's
+   * own read (`keep` false: the relay does not know its window's state) changes no kept geometry. For a tab that is no
+   * bridge tab: the kept geometry, or none. null: no read, or none in time.
    */
-  private async geometry(tab: Tab): Promise<Geo | null> {
+  private async geometry(tab: Tab, o: { minimized?: boolean; keep?: boolean } = {}): Promise<Geo | null> {
     if (!tab.targetId || this.tabs.get(tab.id) !== tab) return null;
     // No read of a tab that is no bridge tab (no attach of the relay's own): its last usable geometry, or none.
     if (!tab.attached) return tab.geo;
@@ -869,25 +891,23 @@ export class Model {
     const target = { tabId: tab.id };
     const read = (async () => {
       for (let tryNo = 0; tryNo < 2; tryNo++) {
-        if (tab.world === null) {
-          const w = await this.bridge.call("debugger.sendCommand", [target, "Page.createIsolatedWorld", { frameId: tab.targetId, worldName: this.worldName, grantUniversalAccess: false }]);
-          if (!Number.isInteger(w?.executionContextId)) return null;
-          tab.world = w.executionContextId as number;
-          tab.worldIds.add(tab.world);
-        }
+        const w = await this.bridge.call("debugger.sendCommand", [target, "Page.createIsolatedWorld", { frameId: tab.targetId, worldName: this.worldName, grantUniversalAccess: false }]);
+        if (!Number.isInteger(w?.executionContextId)) return null;
+        const id = w.executionContextId as number;
+        tab.worldIds = new Set([id]);
         try {
-          const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: tab.world, returnByValue: true }]);
-          const g = geoOf(r?.result?.value);
-          if (g && usable(g, this.display) && !tab.metrics) tab.geo = g;
-          return g;
+          const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: id, returnByValue: true }]);
+          return geoOf(r?.result?.value);
         } catch (e) {
-          // A navigation took the world: an evaluate that names an unknown context. The world again, once.
+          // A navigation between the two calls took the world: an evaluate that names an unknown context. Once more.
           if (!/context/i.test((e as Error).message)) throw e;
-          tab.world = null;
         }
       }
       return null;
-    })().catch(() => null).finally(() => { tab.geoReading = false; });
+    })().catch(() => null).then((g) => {
+      if (o.keep !== false) tab.geo = g && this.usableFor(g, tab, { minimized: o.minimized, front: true }) ? g : null;
+      return g;
+    }).finally(() => { tab.geoReading = false; });
     const r = await this.within(GEOMETRY_WAIT_MS, read);
     return r === TIMEOUT ? null : r;
   }
@@ -940,15 +960,19 @@ export class Model {
       this.front = null; this.frontWindow = null;
       // The client's own call still goes, as with the paths off.
       if (kind === "bringToFront") void bring!().catch(() => {});
-      if (kind === "activateTarget") await this.bridge.call("tabs.update", [tab.id, { active: true }]);
+      // Step 7's one ACTIVATE_MAX_MS (review-68 N3): a receiver that does not answer holds the chain no longer.
+      if (kind === "activateTarget" && await this.within(ACTIVATE_MAX_MS, this.bridge.call("tabs.update", [tab.id, { active: true }])) === TIMEOUT)
+        this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
       return;
     }
     const { t, w } = read;
     if (Number.isInteger(t.windowId)) tab.windowId = t.windowId;
     const front = this.front && this.tabs.get(this.front.id) === this.front ? this.front : null;
     const comes = !!front && (kind === "activateTarget" ? !t.active && t.windowId === this.frontWindow : front !== tab);
-    // With the front page unknown, today's focus rule decides, with no path; a page that it raises gets a record.
-    const raises = front ? comes : kind === "input" ? !t.active || !w.focused : kind === "bringToFront" || !t.active;
+    // With the front page unknown, today's focus rule decides, with no path. A page becomes the front page (and gets a
+    // record) only by a raise that the relay sends: windows.update for an input, the client's Page.bringToFront. A
+    // window that has the focus can lie under a newer window (review-68 N1), and a tab switch raises no window.
+    const raises = front ? comes : kind === "input" ? !w.focused : kind === "bringToFront";
     // A path can play when a page comes under the pointer and both last points are known; S and T are read again after step 3.
     const canPlay = comes && !!this.pointOf(front!) && !!this.pointOf(tab);
     let release: (() => void) | null = null, why = !front ? "the front page is unknown" : !canPlay ? "a last point is unknown" : "";
@@ -983,10 +1007,10 @@ export class Model {
         }
       }
       // Step 6: the X records.
-      if (comes || (!front && raises)) await this.record(tab, front, outcome, gF, gT);
+      if (comes || (!front && raises)) await this.record(tab, front, outcome, gF, gT, w?.state === "minimized");
       // Step 7.
       const raised = await this.raise(tab, kind, t, w, comes, bring);
-      if (raised && (comes || !front)) { this.front = tab; this.frontWindow = tab.windowId; }
+      if (raised && (comes || (!front && raises))) { this.front = tab; this.frontWindow = tab.windowId; }
       else if (!raised) { this.front = null; this.frontWindow = null; }
     } finally {
       release?.();
@@ -1011,7 +1035,12 @@ export class Model {
       if (front.pressed && gated()) return { ok: false, why: "the front page holds a button and its next call waits in the activation chain", release: null };
       if (Date.now() >= end) return { ok: false, why: "step 3 reached its limit", release: null };
       if (front.pressed) {
-        await new Promise<void>((r) => { const timer = setTimeout(done, Math.min(25, end - Date.now())); function done() { clearTimeout(timer); r(); } front.released.push(done); });
+        // One wait on the page at a time (review-68 N4): a wait that ends by its time takes itself out.
+        await new Promise<void>((r) => {
+          const done = () => { clearTimeout(timer); const i = front.released.indexOf(done); if (i >= 0) front.released.splice(i, 1); r(); };
+          const timer = setTimeout(done, Math.min(25, end - Date.now()));
+          front.released.push(done);
+        });
         continue;
       }
       if (front.catchUp) {
@@ -1031,14 +1060,14 @@ export class Model {
 
   /** Step 4: both geometries, `at` when it is unknown, the mapping, the checks, and the path from S to T. */
   private async plan(front: Tab, tab: Tab, S: Pt, T: Pt, w: any): Promise<Plan> {
-    const [gF, gT] = await Promise.all([this.geometry(front), this.geometry(tab)]);
+    const [gF, gT] = await Promise.all([this.geometry(front), this.geometry(tab, { minimized: w?.state === "minimized" })]);
     const base = { gF, gT };
     if (!this.usableFor(gF, front, { front: true })) return { ...base, why: `the front page's geometry is not usable (${this.unusable(gF, front, { front: true })})` };
     if (!this.usableFor(gT, tab, { minimized: w?.state === "minimized" })) return { ...base, why: `the entering page's geometry is not usable (${this.unusable(gT, tab, { minimized: w?.state === "minimized" })})` };
     if (!this.at) await this.readPointer();
     if (!this.at || !this.display) return { ...base, why: "the pointer's place is unknown" };
     const rect = clampRect(gF), Sd = toDisplay(gF, S), Td = toDisplay(gT, T);
-    if (!insideRect(rect, Sd) || !insideRect(rect, Td)) return { ...base, why: "S or T is outside the front page's viewport" };
+    if (!insideRect(rect, Sd) || !insideRect(rect, Td)) return { ...base, why: "S or T is outside the front page's content box" };
     // Build point 2: with at already at T no op runs, so once the live view exists (views above 0) the pointer is read first.
     if (this.at.x === Td.x && this.at.y === Td.y && this.views > 0) await this.readPointer();
     if (!this.at) return { ...base, why: "the pointer's place is unknown" };
@@ -1083,7 +1112,7 @@ export class Model {
    * every not now), and in each other step that brings a page under the pointer with no path, a read of the pointer
    * gives at and the entering page's point, and after a failed path the front page's too; a failed read leaves them unknown.
    */
-  private async record(tab: Tab, front: Tab | null, o: Outcome, gF: Geo | null, gT: Geo | null): Promise<void> {
+  private async record(tab: Tab, front: Tab | null, o: Outcome, gF: Geo | null, gT: Geo | null, minimized = false): Promise<void> {
     if (o.kind === "ok") { if (front) this.mark(front, gF, o.end); this.mark(tab, gT, o.end); return; }
     if (o.kind === "atIsT") { this.setPoint(tab, { x: o.T.x, y: o.T.y, x11: true }); return; }
     if (o.kind === "moved") { this.mark(tab, gT, o.end); if (front) this.setPoint(front, null); return; }
@@ -1091,7 +1120,7 @@ export class Model {
     const work = (async () => {
       const p = await this.readPointer();
       if (!p) { this.setPoint(tab, null); if (failed && front) this.setPoint(front, null); return; }
-      const [ft, tt] = await Promise.all([failed && front ? (gF ? Promise.resolve(gF) : this.geometry(front)) : Promise.resolve(null), gT ? Promise.resolve(gT) : this.geometry(tab)]);
+      const [ft, tt] = await Promise.all([failed && front ? (gF ? Promise.resolve(gF) : this.geometry(front)) : Promise.resolve(null), gT ? Promise.resolve(gT) : this.geometry(tab, { minimized })]);
       this.mark(tab, tt, p);
       if (failed && front) this.mark(front, ft, p);
     })();
@@ -1146,7 +1175,7 @@ export class Model {
     const t0 = Date.now();
     // The page's content box (its last usable geometry, else a read now): no catch-up move over a scrollbar.
     let g: Geo | null = tab.geo;
-    if (!g) try { g = await this.geometry(tab); } catch { g = null; }
+    if (!g) try { g = await this.geometry(tab, { keep: false }); } catch { g = null; }
     const clamp = usable(g, this.display) ? contentRect(g) : null;
     let path: PathPoint[] | null = null;
     try { path = await planPath(from, to, { random: this.random, clamp, keepEnd: true }); } catch { path = null; }
@@ -1179,7 +1208,7 @@ export class Model {
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
     if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false,
-      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, world: null, worldIds: new Set(), geoReading: false, metrics: false, geo: null }));
+      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), geoReading: false, metrics: false, geo: null }));
     return tab;
   }
 
@@ -1642,10 +1671,11 @@ export class Model {
   }
 
   /** A window call acts only on a window that holds a tab of the connection's scope. */
-  private async windowInScope(c: Conn, windowId: unknown): Promise<any> {
+  private async windowInScope(c: Conn, windowId: unknown, tabIds: number[] = []): Promise<any> {
     if (typeof windowId !== "number") throw new Error(TEXT.noWindow);
     const inWindow = await this.bridge.call<any[]>("tabs.query", [{ windowId }]);
     if (!inWindow.some((t) => this.tabs.get(t.id)?.scope === c.scope)) throw new Error(TEXT.noWindow);
+    tabIds.push(...inWindow.map((t) => t.id));
     return this.bridge.call("windows.get", [windowId]);
   }
 
@@ -1709,15 +1739,22 @@ export class Model {
       return { bounds: { left: w.left, top: w.top, width: w.width, height: w.height, windowState: w.state } };
     },
     "Browser.setWindowBounds": async (c, p) => {
-      // Any client's window change can change which window is on top (a "normal" state brings a minimized one up): the front page is unknown (C11).
-      // It can move or resize a window: no cached geometry stays.
-      this.front = null; this.frontWindow = null;
-      for (const t of this.tabs.values()) t.geo = null;
-      await this.windowInScope(c, p.windowId);
+      const tabIds: number[] = [];
+      await this.windowInScope(c, p.windowId, tabIds);
       const b = p.bounds ?? {}, update: Record<string, unknown> = {};
       for (const k of ["left", "top", "width", "height"]) if (b[k] !== undefined) update[k] = b[k];
       if (b.windowState) update.state = b.windowState;
-      if (Object.keys(update).length) await this.bridge.call("windows.update", [p.windowId, update]);
+      const change = async () => {
+        // Any client's window change can change which window is on top (a "normal" state brings a minimized one up):
+        // the front page is unknown (C11). It can move or resize a window: no kept geometry stays.
+        this.front = null; this.frontWindow = null;
+        for (const t of this.tabs.values()) t.geo = null;
+        if (Object.keys(update).length) await this.bridge.call("windows.update", [p.windowId, update]);
+      };
+      // With the paths on, the window moves only after the activation step that runs (a path that plays) and after the
+      // catch-ups of its pages (review-68 B3).
+      if (this.windowPerPage && this.paths === "on") await this.afterSteps(tabIds, change);
+      else await change();
       return {};
     },
     "Target.setAutoAttach": async (c, p, sid) => {
