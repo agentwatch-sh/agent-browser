@@ -17,6 +17,10 @@ import type { PeerGate } from "../src/relay/peer.ts";
 import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 
 export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string; active: boolean };
+/** A page's geometry as the relay's read gives it (src/relay/pointer.ts, Geo). */
+export type FakeGeo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; dpr: number; scale: number; sw: number; sh: number; vis: string };
+/** Each window at 0,0 on a 1280 x 900 display, its content 1280 x 809 from y 91 (Chrome's own frame on a display with no window manager). */
+export const GEO: FakeGeo = { sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
 /** A test's answer: a value is the data, { error } a bridge error text, undefined the default answer. */
 type Override = (req: { op: string; args: any[] }) => any;
 
@@ -30,6 +34,18 @@ export class FakeReceiver {
   readonly input = new PassThrough();
   readonly output = new PassThrough();
   readonly requests: { op: string; args: any[]; id: string; wait: number }[] = [];
+  /**
+   * The daemon's own ops (C10, the daemon's own ops; board ab-v16.71): they never reach the receiver, so they are not in
+   * `requests`. `daemon` answers them: a value is the data, { error, data? } an error, undefined no answer (the relay's
+   * timer ends the wait). The default is a daemon from before those ops, whose receiver answers `unknown op`.
+   */
+  readonly daemonRequests: { op: string; args: any[]; id: string; wait: number }[] = [];
+  daemon: (req: { op: string; args: any[] }) => any = () => ({ error: "unknown op" });
+  /** The geometry that a read in the relay's isolated world gives, by tab. */
+  geometry: (tabId: number) => FakeGeo = () => GEO;
+  /** The isolated worlds that Page.createIsolatedWorld made: context id -> tab. */
+  readonly worlds = new Map<number, number>();
+  private nextContext = 100;
   readonly tabs = new Map<number, FakeTab>();
   readonly attached = new Set<number>();
   /** The receiver's tab-to-scope map (C10, each tab's scope): bridge.tabScopes answers it. */
@@ -93,6 +109,13 @@ export class FakeReceiver {
   chromeTab(t: FakeTab) { return { id: t.id, windowId: t.windowId, index: 0, active: t.active, url: t.url, title: t.title, status: "complete" }; }
 
   private async handle(req: { id: string; op: string; args: any[]; wait: number }): Promise<void> {
+    if (req.op.startsWith("daemon.")) {
+      this.daemonRequests.push(req);
+      const r = await this.daemon({ op: req.op, args: req.args });
+      if (r === undefined) return;
+      if (r && typeof r === "object" && typeof r.error === "string") return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: r.error, ...(r.data ? { data: r.data } : {}) });
+      return this.line({ t: "res", ch: "bridge", id: req.id, ok: true, data: r });
+    }
     this.requests.push(req);
     let data: any;
     try { data = await this.answer(req.op, req.args); } catch (e) { return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: (e as Error).message }); }
@@ -117,6 +140,12 @@ export class FakeReceiver {
         const r = await this.command(target, method, params);
         if (r !== undefined) return r;
         const t = tab(target.tabId);
+        // The relay's geometry read (pointer.ts): its own isolated world on the main frame, then one evaluate in it.
+        if (method === "Page.createIsolatedWorld" && !target.sessionId) { const id = this.nextContext++; this.worlds.set(id, t.id); return { executionContextId: id }; }
+        if (method === "Runtime.evaluate" && params?.contextId !== undefined) {
+          if (this.worlds.get(params.contextId) !== t.id) return { error: JSON.stringify({ code: -32000, message: "Cannot find context with specified id" }) };
+          return { result: { type: "object", value: this.geometry(t.id) } };
+        }
         if (method === "Target.getTargetInfo") return { targetInfo: { targetId: t.targetId, type: "page", title: t.title, url: t.url, attached: true, browserContextId: "C1D2", ...(t.openerId ? { openerId: t.openerId } : {}) } };
         return {};
       }

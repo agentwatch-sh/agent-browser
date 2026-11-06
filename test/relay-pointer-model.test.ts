@@ -1,0 +1,823 @@
+// The relay plays a person-shaped pointer path at each activation through the daemon (board ab-v16.71; the agent
+// pointer design, docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 3 and 7; contract C11 "The
+// pointer at an activation" in chrome-extension's docs/protocol.md). The fake receiver of fake-bridge.ts stands in for
+// Chrome and, with `fake.daemon`, for the daemon's two ops (its default is a daemon from before them: `unknown op`).
+// Each window of the fake is at 0,0 on a 1280 x 900 display with its content from y 91 (GEO), so a page's point (x, y)
+// is the display point (x, y + 91).
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import type { CDPConnection } from "../src/cdp.ts";
+import { RELAY_TIMER } from "../src/relay/bridge.ts";
+import { moveProblem, monotonicMs, moveWait, type Pt } from "../src/relay/pointer.ts";
+import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
+const ops = (h: Harness, from = 0) => h.fake.requests.slice(from).map((r) => (r.op !== "debugger.sendCommand" ? r.op : r.args[2]?.type ? `${r.args[1]} ${r.args[2].type}` : r.args[1]));
+const OFFSET = GEO.oh - GEO.ih; // 91: a page's y on the display is y + 91
+
+/** A daemon with both ops: it answers daemon.pointerAt with the pointer and plays each path to its last point. */
+function newDaemon(h: Harness, pos: Pt = { x: 640, y: 500 }, size = { width: 1280, height: 900 }) {
+  const d = { pos, views: 0, moves: [] as any[], answer: undefined as undefined | ((move: any) => any) };
+  h.fake.daemon = ({ op, args }) => {
+    if (op === "daemon.pointerAt") return { ...d.pos, ...size, views: d.views };
+    if (op === "daemon.movePointer") {
+      d.moves.push(args[0]);
+      if (d.answer) return d.answer(args[0]);
+      const last = args[0].path.at(-1);
+      d.pos = { x: last.x, y: last.y };
+      return { ...d.pos, views: d.views };
+    }
+    return { error: "unknown op" };
+  };
+  return d;
+}
+
+/** The relay with a daemon of both ops, ready, with the paths on. */
+async function onHarness(pos?: Pt) {
+  const h = await harness();
+  const d = newDaemon(h, pos);
+  await h.ready();
+  await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
+  return { h, d };
+}
+
+/** A page of the connection's own (a window of its own), with auto-attach on. */
+async function page(h: Harness, c: CDPConnection) {
+  await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  const attached = c.waitForEvent("Target.attachedToTarget");
+  const { targetId } = await c.send("Target.createTarget", { url: "about:blank" });
+  const ev = await attached;
+  return { targetId, sessionId: ev.sessionId as string, tab: [...h.fake.tabs.values()].find((t) => t.targetId === targetId)! };
+}
+type Page = Awaited<ReturnType<typeof page>>;
+const mouse = (c: CDPConnection, p: Page, type: string, x: number, y: number, extra: object = {}) =>
+  c.send("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" || type === "mouseWheel" ? "none" : "left", clickCount: 1, ...extra }, p.sessionId);
+const click = async (c: CDPConnection, p: Page, x: number, y: number) => { await mouse(c, p, "mousePressed", x, y); await mouse(c, p, "mouseReleased", x, y); };
+const state = (h: Harness) => h.relay.model.pointerState();
+const pointOf = (h: Harness, p: Page) => state(h).points[p.targetId] ?? null;
+
+/** Two pages A and B of one client; B (made last) is the front page; each has a last point. */
+async function twoPages(h: Harness, a: Pt = { x: 100, y: 100 }, b: Pt = { x: 700, y: 300 }) {
+  const c = await h.connect();
+  const A = await page(h, c), B = await page(h, c);
+  assert.equal(state(h).front, B.tab.id, "a new window is the front page");
+  await mouse(c, A, "mouseMoved", a.x, a.y);
+  await mouse(c, B, "mouseMoved", b.x, b.y);
+  return { c, A, B };
+}
+
+/** The order of the ops of the receiver and the daemon from now on, by name. */
+function sequence(h: Harness): string[] {
+  const seq: string[] = [];
+  const op = h.fake.op, daemon = h.fake.daemon;
+  h.fake.op = (r) => { seq.push(r.op !== "debugger.sendCommand" ? r.op : r.args[2]?.type ? `${r.args[1]} ${r.args[2].type}` : r.args[1]); return op(r); };
+  h.fake.daemon = (r) => { seq.push(r.op); return daemon(r); };
+  return seq;
+}
+
+// ------------------------------------------------------------------ the path at an activation
+
+test("a page that comes under the pointer: the relay plays a path from the front page's last point S to the entering page's T, then the window comes forward, then the input", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    const { c, A, B } = await twoPages(h);
+    const seq = sequence(h);
+    const t0 = monotonicMs();
+    await click(c, A, 100, 100);
+    assert.equal(d.moves.length, 1);
+    const move = d.moves[0], req = h.fake.daemonRequests.find((r) => r.op === "daemon.movePointer")!;
+    assert.deepEqual([move.at, move.from, move.path.at(-1).x, move.path.at(-1).y], [{ x: 640, y: 500 }, { x: 700, y: 300 + OFFSET }, 100, 100 + OFFSET]);
+    assert.deepEqual([move.width, move.height, move.views], [1280, 900, 0]);
+    assert.ok(move.notAfter >= t0 + 300 && move.notAfter <= monotonicMs() + 300, "notAfter: CLOCK_MONOTONIC + POINTER_START_MS");
+    assert.equal(moveProblem([move], monotonicMs()), null, "the move passes C10's checks");
+    assert.equal(req.wait, moveWait(move.path), "the request's wait");
+    const at = (name: string) => seq.indexOf(name);
+    assert.deepEqual(seq.slice(0, 2), ["tabs.get", "windows.get"]);
+    assert.ok(at("Runtime.evaluate") < at("daemon.movePointer") && at("daemon.movePointer") < at("windows.update") && at("windows.update") < at("Input.dispatchMouseEvent mousePressed"), seq.join(" "));
+    assert.ok(!seq.includes("Page.enable") && !seq.includes("Runtime.enable") && !seq.includes("debugger.attach"), "no enable and no attach of the relay's own");
+    // The X records: the answered end is both pages' last point; the entering page is the front page now.
+    assert.equal(state(h).front, A.tab.id);
+    assert.deepEqual(pointOf(h, B), { x: 100, y: 100, x11: true });
+    assert.deepEqual(state(h).at, { x: 100, y: 100 + OFFSET });
+    // The client's own press and release set A's point again (no X record).
+    assert.deepEqual(pointOf(h, A), { x: 100, y: 100, x11: false });
+  } finally { await h.close(); }
+});
+
+test("the front page decides, not the focus: the raise sends windows.update with focused true also to a focused window; the same page again plays no path", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A } = await twoPages(h);
+    h.fake.focusedWindow = A.tab.windowId; // A's window has the focus, under B's newer window
+    let from = h.fake.requests.length;
+    await click(c, A, 100, 100);
+    assert.equal(d.moves.length, 1);
+    assert.deepEqual(h.fake.sent("windows.update").at(-1)!.args, [A.tab.windowId, { focused: true }]);
+    assert.ok(ops(h, from).includes("windows.update"));
+    // A is the front page now: its next press is today's activation (focused: no update), with no path.
+    from = h.fake.requests.length;
+    await click(c, A, 120, 110);
+    assert.equal(d.moves.length, 1);
+    assert.deepEqual(ops(h, from), ["tabs.get", "windows.get", "Input.dispatchMouseEvent mousePressed", "Input.dispatchMouseEvent mouseReleased"]);
+  } finally { await h.close(); }
+});
+
+test("Page.bringToFront and Target.activateTarget go through the step with the paths on: behind their tab's gate, a path first, the answer after the step", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    const seq = sequence(h);
+    assert.deepEqual(await c.send("Page.bringToFront", {}, A.sessionId), {});
+    assert.equal(d.moves.length, 1, "a path for Page.bringToFront");
+    assert.ok(seq.indexOf("daemon.movePointer") < seq.indexOf("Page.bringToFront"), seq.join(" "));
+    assert.ok(!seq.includes("windows.update"), "the client's own Page.bringToFront raises the window");
+    assert.equal(state(h).front, A.tab.id);
+    // Target.activateTarget: a path only for a tab that is not active in the front page's window.
+    const popup = h.fake.newTab("https://a.example/popup", A.tab, A.tab.windowId);
+    await until(() => state(h).front === popup.id, "the popup tab, active in the front page's window, is the front page");
+    await mouse(c, A, "mouseMoved", 50, 60);
+    await until(() => h.fake.attached.has(popup.id) && state(h).points[popup.targetId] === undefined, "the popup");
+    seq.length = 0;
+    await c.send("Target.activateTarget", { targetId: A.targetId });
+    assert.ok(seq.includes("tabs.update"), seq.join(" "));
+    // The popup has no last point: no path, and the read of the pointer records A's point.
+    assert.equal(d.moves.length, 1);
+    assert.ok(seq.includes("daemon.pointerAt"), seq.join(" "));
+    assert.equal(state(h).front, A.tab.id);
+    // An active tab's Target.activateTarget: no page comes under the pointer, no path, no read.
+    seq.length = 0;
+    await c.send("Target.activateTarget", { targetId: A.targetId });
+    assert.deepEqual(seq.filter((s) => s.startsWith("daemon.")), []);
+    void B;
+  } finally { await h.close(); }
+});
+
+test("with an old daemon (unknown op) the relay is exactly as today: no path, no read, no catch-up; Page.bringToFront and Target.activateTarget go as today", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    await until(() => state(h).paths === "off", "the probe's unknown op turns the paths off");
+    assert.deepEqual(h.fake.daemonRequests.map((r) => [r.op, r.args, r.wait]), [["daemon.pointerAt", [], 1200]], "one probe at the link up");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    await mouse(c, A, "mouseMoved", 100, 100);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    let from = h.fake.requests.length;
+    await click(c, A, 600, 500);
+    assert.deepEqual(ops(h, from), ["tabs.get", "windows.get", "windows.update", "Input.dispatchMouseEvent mousePressed", "Input.dispatchMouseEvent mouseReleased"]);
+    from = h.fake.requests.length;
+    await c.send("Page.bringToFront", {}, B.sessionId);
+    await c.send("Target.activateTarget", { targetId: A.targetId });
+    assert.deepEqual(ops(h, from), ["Page.bringToFront", "tabs.update"]);
+    assert.equal(h.fake.daemonRequests.length, 1, "no daemon op after the probe");
+    assert.ok(!h.fake.requests.some((r) => r.args?.[1] === "Page.createIsolatedWorld"), "no geometry read");
+  } finally { await h.close(); }
+});
+
+test("the probe's states: unknown before its first answer; busy, too many moves and the relay's timer leave them unknown and the next step probes again; an answer turns them on", async () => {
+  const h = await harness();
+  try {
+    const answers: any[] = [{ error: "busy" }, { error: "too many moves" }, undefined, { x: 640, y: 500, width: 1280, height: 900, views: 0 }];
+    h.fake.daemon = ({ op }) => (op === "daemon.pointerAt" ? answers.shift() : { error: "unknown op" });
+    await h.ready();
+    await until(() => h.fake.daemonRequests.length === 1, "the probe");
+    await sleep(30);
+    assert.equal(state(h).paths, "unknown");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    await mouse(c, A, "mouseMoved", 100, 100);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, A, 100, 100); // unknown: no path; the step probes again (too many moves)
+    await until(() => h.fake.daemonRequests.length === 2, "the second probe");
+    assert.equal(state(h).paths, "unknown");
+    await click(c, B, 700, 300); // the third probe gets no answer: the relay's timer
+    await until(() => h.fake.daemonRequests.length === 3, "the third probe");
+    await sleep(1300);
+    assert.equal(state(h).paths, "unknown");
+    await click(c, A, 100, 100);
+    await until(() => state(h).paths === "on", "the fourth probe's answer");
+    assert.equal(state(h).front, null, "the front page is unknown each time the paths turn on");
+    assert.ok(!h.fake.daemonRequests.some((r) => r.op === "daemon.movePointer"));
+  } finally { await h.close(); }
+});
+
+test("unknown op, wrong display and not connected turn the paths off until the next link up; no display for 60 s", async () => {
+  for (const [error, until60] of [["unknown op", false], ["wrong display", false], ["not connected", false], ["no display", true]] as const) {
+    const h = await harness();
+    try {
+      h.fake.daemon = () => ({ error });
+      await h.ready();
+      await until(() => state(h).paths === "off", `${error}: off`);
+      assert.equal(state(h).offFor60s, until60, error);
+      // The next link up probes again.
+      h.fake.daemon = () => ({ x: 1, y: 1, width: 1280, height: 900, views: 0 });
+      h.fake.line({ t: "link", up: false });
+      await h.ready();
+      await until(() => state(h).paths === "on", `${error}: on after the next link up`);
+    } finally { await h.close(); }
+  }
+});
+
+// ------------------------------------------------------------------ the records of step 6
+
+test("the records: ok (both pages, the answered position), at is T (no op), pointer moved (at and the entering page; the front page unknown)", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    const { c, A, B } = await twoPages(h);
+    // ok, with an end 1 px off T: the answered position is the record, and a log line names it (no point).
+    d.answer = (move) => { const last = move.path.at(-1); d.pos = { x: last.x + 1, y: last.y }; return { ...d.pos, views: 0 }; };
+    await mouse(c, A, "mousePressed", 100, 100);
+    assert.deepEqual([pointOf(h, A), pointOf(h, B)], [{ x: 100, y: 100, x11: false }, { x: 101, y: 100, x11: true }]);
+    assert.ok(h.logs.some((l) => /ended .* from its target/.test(l) && !/\d+,\d+/.test(l)), h.logs.join("\n"));
+    await mouse(c, A, "mouseReleased", 100, 100);
+    // at is T: B's point is where the pointer is; no op, and B's record is T.
+    d.answer = undefined;
+    await mouse(c, B, "mouseMoved", 101, 100);
+    await click(c, B, 101, 100);
+    assert.equal(d.moves.length, 1, "no path when at is T");
+    assert.equal(state(h).front, B.tab.id);
+    // pointer moved: someone moved the pointer; its data is at and the entering page's point; the front page's is unknown.
+    await mouse(c, A, "mouseMoved", 300, 200);
+    d.answer = () => ({ error: "pointer moved", data: { x: 900, y: 431, views: 2 } });
+    await mouse(c, A, "mousePressed", 300, 200);
+    assert.deepEqual(state(h).at, { x: 900, y: 431 });
+    assert.equal(state(h).views, 2);
+    assert.equal(pointOf(h, B), null, "the front page saw the other mover's moves");
+    assert.equal(state(h).front, A.tab.id);
+  } finally { await h.close(); }
+});
+
+test("a failed path (no display, not now, the relay's timer): the relay reads the pointer and records it as at and as both pages' points; a failed read leaves them unknown", async () => {
+  for (const fail of ["no display", "not now", "timer"]) {
+    const { h, d } = await onHarness({ x: 640, y: 500 });
+    try {
+      const { c, A, B } = await twoPages(h);
+      d.answer = (move) => {
+        d.pos = { x: move.path[1].x, y: move.path[1].y }; // the path played a part
+        return fail === "timer" ? undefined : { error: fail };
+      };
+      const t0 = Date.now();
+      await mouse(c, A, "mousePressed", 100, 100);
+      if (fail === "timer") assert.ok(Date.now() - t0 >= moveWait(d.moves[0].path) - 50, "the relay's timer ended the wait");
+      const reads = h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt");
+      assert.equal(reads.length, 2, `${fail}: the probe and the read after the failed path`);
+      assert.deepEqual(state(h).at, d.pos, fail);
+      assert.deepEqual(pointOf(h, B), { x: d.pos.x, y: d.pos.y - OFFSET, x11: true }, `${fail}: the front page saw a part of the path`);
+      assert.equal(state(h).front, A.tab.id);
+      if (fail === "no display") assert.equal(state(h).paths, "off", "no display: off for 60 s");
+    } finally { await h.close(); }
+  }
+  // A failed read after the failed path: the place and both points are unknown.
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    d.answer = () => ({ error: "not now" });
+    const daemon = h.fake.daemon;
+    h.fake.daemon = (r) => (r.op === "daemon.pointerAt" ? { error: "busy" } : daemon(r));
+    await mouse(c, A, "mousePressed", 100, 100);
+    assert.deepEqual([state(h).at, pointOf(h, B)], [null, null]);
+    assert.equal(pointOf(h, A)?.x11, false, "A's own press set its point after the step");
+  } finally { await h.close(); }
+});
+
+test("a step with no path that brings a page under the pointer reads the pointer and records it for the entering page (an X record: the press gets a catch-up from it)", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c); // B is the front page, with no last point
+    void B;
+    const reads = h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt").length;
+    const from = h.fake.requests.length;
+    await mouse(c, A, "mousePressed", 30, 30);
+    assert.equal(d.moves.length, 0, "S is unknown: no path");
+    assert.equal(h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt").length, reads + 1, "one read of the pointer");
+    assert.equal(state(h).front, A.tab.id);
+    // A's record was the pointer (640, 409): the press 600 px from it gets a catch-up of CDP moves first.
+    const seq = ops(h, from), press = seq.indexOf("Input.dispatchMouseEvent mousePressed");
+    assert.ok(seq.slice(0, press).filter((o) => o === "Input.dispatchMouseEvent mouseMoved").length >= 5, seq.join(" "));
+    const moves = h.fake.sent("debugger.sendCommand", "Input.dispatchMouseEvent").slice(0, -1).map((r) => r.args[2]);
+    assert.ok(Math.hypot(moves[0].x - 640, moves[0].y - 409) <= 50, "the catch-up starts at the record");
+    assert.deepEqual([moves.at(-1).x, moves.at(-1).y], [30, 30], "a press's catch-up ends with a move at its point");
+  } finally { await h.close(); }
+});
+
+/** A second client after a link change: its sessions on the scope's tabs (auto-attach), by target id. */
+async function reattach(h: Harness, n: number) {
+  const c = await h.connect();
+  const sessions = new Map<string, string>();
+  c.on("Target.attachedToTarget", (p: any) => sessions.set(p.targetInfo.targetId, p.sessionId));
+  await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  await until(() => sessions.size >= n, "the sessions of the scope's tabs");
+  return { c, sessions };
+}
+
+test("a link change: the points of the targets that step 3 lists again stay; at and the front page are unknown; the first activation after it has no path, the next one plays", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    const { A, B } = await twoPages(h);
+    h.fake.line({ t: "link", up: false });
+    await h.ready();
+    await until(() => state(h).paths === "on", "on again");
+    assert.deepEqual([state(h).front, state(h).at && "known"], [null, "known"], "the probe gave at; the front page is unknown");
+    assert.deepEqual([pointOf(h, A), pointOf(h, B)], [{ x: 100, y: 100, x11: false }, { x: 700, y: 300, x11: false }]);
+    const { c, sessions } = await reattach(h, 2);
+    const PA = { ...A, sessionId: sessions.get(A.targetId)! }, PB = { ...B, sessionId: sessions.get(B.targetId)! };
+    await mouse(c, PA, "mousePressed", 100, 100);
+    await mouse(c, PA, "mouseReleased", 100, 100);
+    assert.equal(d.moves.length, 0, "the front page was unknown");
+    assert.equal(state(h).front, A.tab.id);
+    await mouse(c, PB, "mousePressed", 700, 300);
+    assert.equal(d.moves.length, 1, "from its record on, the front page is known");
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ when no path plays
+
+test("no path when S or T is unknown, outside the front page's viewport, a geometry is not usable, or the path does not fit", async () => {
+  const cases: [string, (h: Harness, x: { c: CDPConnection; A: Page; B: Page }) => Promise<void> | void][] = [
+    ["T unknown (a child session's input)", async (h, { A }) => {
+      h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+        targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://a.example/f", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+      await sleep(20);
+      await (h as any).c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5, button: "none" }, "FR1");
+    }],
+    ["S outside the front page's viewport", async (_h, { c, B }) => { await mouse(c, B, "mouseMoved", 1500, 300); }],
+    ["T outside the front page's viewport (A's window moved down)", (h, { A }) => { h.fake.geometry = (id) => (id === A.tab.id ? { ...GEO, sy: 750 } : GEO); }],
+    ["a device pixel ratio of 2", (h) => { h.fake.geometry = () => ({ ...GEO, dpr: 2 }); }],
+    ["a page scale of 1.5", (h) => { h.fake.geometry = () => ({ ...GEO, scale: 1.5 }); }],
+    ["a screen that is not the display's size", (h) => { h.fake.geometry = () => ({ ...GEO, sw: 1920, sh: 1080 }); }],
+    ["a device-metrics override on the front page", async (_h, { c, B }) => { await c.send("Emulation.setDeviceMetricsOverride", { width: 600, height: 400, deviceScaleFactor: 1, mobile: false }, B.sessionId); }],
+  ];
+  for (const [name, setUp] of cases) {
+    const { h, d } = await onHarness({ x: 640, y: 500 });
+    try {
+      const x = await twoPages(h);
+      (h as any).c = x.c;
+      await setUp(h, x);
+      await mouse(x.c, x.A, "mousePressed", 100, 100);
+      assert.equal(d.moves.length, 0, name);
+      assert.equal(state(h).front, x.A.tab.id, `${name}: the entering page is the front page`);
+    } finally { await h.close(); }
+  }
+});
+
+test("no path when it does not fit the limits (more than 1500 ms: a far target on a large display)", async () => {
+  const h = await harness();
+  try {
+    const d = newDaemon(h, { x: 100, y: 100 }, { width: 3840, height: 2160 });
+    h.fake.geometry = () => ({ ...GEO, ow: 3840, oh: 2160, iw: 3840, ih: 2069, sw: 3840, sh: 2160 });
+    await h.ready();
+    await until(() => state(h).paths === "on", "on");
+    const { c, A } = await twoPages(h, { x: 3830, y: 2060 }, { x: 5, y: 5 });
+    await mouse(c, A, "mousePressed", 3830, 2060);
+    assert.equal(d.moves.length, 0);
+  } finally { await h.close(); }
+});
+
+test("S equal to T and at elsewhere: a short out-and-back of 2 to 4 px", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    const { c, A } = await twoPages(h, { x: 300, y: 200 }, { x: 300, y: 200 });
+    await mouse(c, A, "mousePressed", 300, 200);
+    assert.equal(d.moves.length, 1);
+    const path = d.moves[0].path;
+    assert.equal(path.length, 2);
+    const out = Math.hypot(path[0].x - 300, path[0].y - (200 + OFFSET));
+    assert.ok(out >= 2 && out <= 4, String(out));
+    assert.deepEqual([path[1].x, path[1].y], [300, 200 + OFFSET]);
+  } finally { await h.close(); }
+});
+
+test("at unknown (a failed path whose read failed): the next step reads it first (step 4), then plays", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    const { c, A, B } = await twoPages(h);
+    d.answer = () => ({ error: "not now" });
+    const daemon = h.fake.daemon;
+    let busy = true;
+    h.fake.daemon = (r) => (r.op === "daemon.pointerAt" && busy ? { error: "busy" } : daemon(r));
+    await click(c, A, 100, 100);
+    assert.equal(state(h).at, null);
+    busy = false; d.answer = undefined;
+    await mouse(c, B, "mouseMoved", 700, 300);
+    const seq = sequence(h);
+    await mouse(c, B, "mousePressed", 700, 300);
+    assert.ok(seq.indexOf("daemon.pointerAt") >= 0 && seq.indexOf("daemon.pointerAt") < seq.indexOf("daemon.movePointer"), seq.join(" "));
+    assert.deepEqual(d.moves.at(-1).at, { x: 640, y: 500 });
+  } finally { await h.close(); }
+});
+
+test("at already equal to T: no path; once the live view exists (views above 0) the relay reads the pointer first (build point 2)", async () => {
+  const reads = (h: Harness) => h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt").length;
+  // No live view (views 0): no read, no path; T is the record.
+  {
+    const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET });
+    try {
+      const { c, A } = await twoPages(h);
+      const n = reads(h);
+      await mouse(c, A, "mousePressed", 100, 100);
+      assert.deepEqual([d.moves.length, reads(h)], [0, n]);
+      assert.equal(state(h).front, A.tab.id);
+    } finally { await h.close(); }
+  }
+  // The live view exists and the pointer did not move: one read, no path.
+  for (const moved of [false, true]) {
+    const h = await harness();
+    try {
+      const d = newDaemon(h, { x: 100, y: 100 + OFFSET });
+      d.views = 1;
+      await h.ready();
+      await until(() => state(h).paths === "on", "on");
+      const { c, A } = await twoPages(h);
+      const n = reads(h);
+      if (moved) d.pos = { x: 500, y: 500 }; // the operator's live-view input moved the pointer
+      await mouse(c, A, "mousePressed", 100, 100);
+      assert.equal(reads(h), n + 1, "a read first");
+      assert.equal(d.moves.length, moved ? 1 : 0, moved ? "the pointer moved: a path from the read place" : "still at T: no path");
+      if (moved) assert.deepEqual(d.moves[0].at, { x: 500, y: 500 });
+    } finally { await h.close(); }
+  }
+});
+
+// ------------------------------------------------------------------ what the relay keeps: the last points, the front page, the held buttons
+
+test("the last points: both methods set it when sent, on the tab's own session only; a far wheel, a child session's and touch input make it unknown; a near wheel keeps it", async () => {
+  const { h } = await onHarness();
+  try {
+    const c = await h.connect();
+    const A = await page(h, c);
+    await mouse(c, A, "mouseMoved", 10.5, 20);
+    assert.deepEqual(pointOf(h, A), { x: 10.5, y: 20, x11: false });
+    await c.send("Input.dispatchDragEvent", { type: "dragOver", x: 30, y: 40, data: { items: [], dragOperationsMask: 1 } }, A.sessionId);
+    assert.deepEqual(pointOf(h, A), { x: 30, y: 40, x11: false });
+    await mouse(c, A, "mouseWheel", 31, 41, { deltaX: 0, deltaY: 100 });
+    assert.deepEqual(pointOf(h, A), { x: 30, y: 40, x11: false }, "a wheel within 2 px keeps the point");
+    await mouse(c, A, "mouseWheel", 33, 40, { deltaX: 0, deltaY: 100 });
+    assert.equal(pointOf(h, A), null, "a wheel 3 px away: unknown");
+    await mouse(c, A, "mouseMoved", 50, 50);
+    await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 5, y: 5 }] }, A.sessionId);
+    assert.equal(pointOf(h, A), null, "touch input: unknown");
+    for (const [method, params] of [["Input.emulateTouchFromMouseEvent", { type: "mousePressed", x: 5, y: 5, button: "left" }], ["Input.synthesizeTapGesture", { x: 5, y: 5 }]] as const) {
+      await mouse(c, A, "mouseMoved", 50, 50);
+      await c.send(method, params, A.sessionId);
+      assert.equal(pointOf(h, A), null, method);
+    }
+    await mouse(c, A, "mouseMoved", 50, 50);
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+      targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://a.example/f", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    await sleep(20);
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5, button: "none" }, "FR1");
+    assert.equal(pointOf(h, A), null, "a child session's input (a frame's own space): unknown");
+  } finally { await h.close(); }
+});
+
+test("a point goes at tabs.onRemoved and tabs.onReplaced; the front page is unknown then, and after any Browser.setWindowBounds", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    assert.equal(state(h).front, B.tab.id);
+    const replaced = h.fake.replace(B.tab);
+    await until(() => state(h).points[B.targetId] === undefined, "the replaced tab's point goes");
+    assert.equal(state(h).front, null);
+    await click(c, A, 100, 100);
+    assert.equal(state(h).front, A.tab.id);
+    await c.send("Target.closeTarget", { targetId: A.targetId });
+    await until(() => state(h).points[A.targetId] === undefined, "the removed tab's point goes");
+    assert.equal(state(h).front, null);
+    const C = await page(h, c);
+    assert.equal(state(h).front, C.tab.id);
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: C.targetId });
+    await c.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+    assert.equal(state(h).front, null, "a normal state can bring a minimized window on top");
+    void replaced;
+  } finally { await h.close(); }
+});
+
+test("the held buttons: a press holds until Chrome answered its release; the hold also ends at tabs.onRemoved, the connection's close, debugger.onDetach and a link change", async () => {
+  const { h } = await onHarness();
+  try {
+    const c = await h.connect();
+    const A = await page(h, c);
+    let open!: () => void;
+    const late = new Promise<void>((r) => (open = r));
+    h.fake.command = async (_t, method, params) => { if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") await late; return undefined; };
+    await mouse(c, A, "mousePressed", 5, 5);
+    assert.deepEqual(state(h).pressed, [A.tab.id]);
+    const released = mouse(c, A, "mouseReleased", 5, 5);
+    await sleep(30);
+    assert.deepEqual(state(h).pressed, [A.tab.id], "the release is sent, not answered");
+    open();
+    await released;
+    assert.deepEqual(state(h).pressed, []);
+    h.fake.command = () => undefined;
+    // debugger.onDetach.
+    await mouse(c, A, "mousePressed", 5, 5);
+    h.fake.emit("debugger.onDetach", { source: { tabId: A.tab.id }, reason: "target_closed" });
+    await until(() => !state(h).pressed.length, "the hold ends at debugger.onDetach");
+    // The connection's close.
+    const c2 = await h.connect();
+    const B = await page(h, c2);
+    await mouse(c2, B, "mousePressed", 5, 5);
+    await c2.close();
+    await until(() => !state(h).pressed.length, "the hold ends when the client's connection closes");
+    // tabs.onRemoved and a link change.
+    const C = await page(h, c);
+    await mouse(c, C, "mousePressed", 5, 5);
+    h.fake.emit("tabs.onRemoved", { tabId: C.tab.id, removeInfo: { windowId: 1, isWindowClosing: true } });
+    await until(() => !state(h).pressed.length, "the hold ends at tabs.onRemoved");
+    const D = await page(h, c);
+    await mouse(c, D, "mousePressed", 5, 5);
+    h.fake.line({ t: "link", up: false });
+    await until(() => !state(h).pressed.length, "the hold ends at a link change");
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ step 3: wait and hold
+
+test("step 3: the step waits for the front page's release, then plays; a button of another page does not count", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const c = await h.connect();
+    const X = await page(h, c);
+    await mouse(c, X, "mouseMoved", 5, 5);
+    await mouse(c, X, "mousePressed", 5, 5); // X holds a button; it is not the front page after A and B open
+    const A = await page(h, c), B = await page(h, c);
+    await mouse(c, A, "mouseMoved", 100, 100);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await mouse(c, B, "mousePressed", 700, 300); // the front page B holds a button (its own step: no path)
+    const step = mouse(c, A, "mousePressed", 100, 100);
+    await sleep(200);
+    assert.equal(d.moves.length, 0, "no path while the front page holds a button");
+    await mouse(c, X, "mouseReleased", 5, 5);
+    await sleep(100);
+    assert.equal(d.moves.length, 0, "another page's release changes nothing");
+    await mouse(c, B, "mouseReleased", 700, 300);
+    await step;
+    assert.equal(d.moves.length, 1, "the path after the front page's release");
+  } finally { await h.close(); }
+});
+
+test("step 3's limit: a front page that holds its button for 3 s gets no path at 2 s, and the input goes on; no real move comes between its press and release", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await mouse(c, B, "mousePressed", 700, 300);
+    const t0 = Date.now();
+    await mouse(c, A, "mousePressed", 100, 100);
+    const waited = Date.now() - t0;
+    assert.ok(waited >= 1900 && waited < 3500, `${waited} ms`);
+    assert.equal(d.moves.length, 0, "no path at the limit");
+    assert.equal(state(h).front, A.tab.id);
+  } finally { await h.close(); }
+});
+
+test("step 3: no path when the front page's tab has a call that waits in the activation chain (its gate is set, or becomes set during the wait); the chain goes on at once", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    // B holds a button; its release would wait behind B's next press in the chain, which waits behind A's step.
+    await mouse(c, B, "mousePressed", 700, 300);
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let first = true;
+    h.fake.op = async ({ op }) => { if (op === "tabs.get" && first) { first = false; await gate; } return undefined; };
+    const t0 = Date.now();
+    const a = click(c, A, 100, 100);
+    await until(() => h.fake.sent("tabs.get").length, "A's step");
+    const b = c.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }, B.sessionId); // B's call waits in the chain
+    const rel = mouse(c, B, "mouseReleased", 700, 300);
+    open();
+    await Promise.all([a, b, rel]);
+    assert.ok(Date.now() - t0 < 1500, "the step did not wait for a release that waits behind it");
+    assert.equal(d.moves.filter((m) => m.path.at(-1).x === 100 && m.path.at(-1).y === 100 + OFFSET).length, 0, "A's step played no path (B's own step after it may)");
+  } finally { await h.close(); }
+});
+
+test("step 3: the front page's later calls wait behind the step (its gate chained on its old gate), and both pages' pointer input in flight is answered first; a page that holds that answer: no path at 2 s, and the chain goes on", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    // B's move during A's path waits until after the raise.
+    const seq = sequence(h);
+    d.answer = (move) => { const last = move.path.at(-1); d.pos = { x: last.x, y: last.y }; return new Promise((r) => setTimeout(() => r({ ...d.pos, views: 0 }), 150)); };
+    const a = mouse(c, A, "mousePressed", 100, 100);
+    await until(() => seq.includes("daemon.movePointer"), "the path");
+    const b = mouse(c, B, "mouseMoved", 690, 300);
+    await Promise.all([a, b]);
+    assert.ok(seq.lastIndexOf("Input.dispatchMouseEvent mouseMoved") > seq.indexOf("windows.update"), seq.join(" "));
+    await mouse(c, A, "mouseReleased", 100, 100);
+    d.answer = undefined;
+    // A's move that Chrome does not answer (a mousemove handler that opens a dialog): A is the front page; B's step waits 2 s, no path.
+    h.fake.command = async (_t, method, params) => (method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && params.x === 77 ? new Promise(() => {}) : undefined);
+    void mouse(c, A, "mouseMoved", 77, 77).catch(() => {});
+    await sleep(20);
+    const t0 = Date.now();
+    await mouse(c, B, "mousePressed", 690, 300);
+    assert.ok(Date.now() - t0 >= 1900, "the step waited for the in-flight answer up to its limit");
+    assert.equal(d.moves.length, 1, "no path at the limit");
+    assert.equal(state(h).front, B.tab.id, "the chain went on");
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ the geometry read
+
+test("the geometry read: the relay's own isolated world on the main frame, one evaluate, no enable; the world again when its context is gone; no client sees the world's events", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await c.send("Runtime.enable", {}, A.sessionId);
+    const seen: string[] = [];
+    for (const m of ["Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Debugger.scriptParsed"]) c.on(m, (p: any) => seen.push(`${m} ${JSON.stringify(p)}`));
+    await click(c, A, 100, 100);
+    const worlds = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld");
+    assert.deepEqual(worlds.map((r) => [r.args[0], r.args[2].frameId]).sort(), [[{ tabId: A.tab.id }, A.targetId], [{ tabId: B.tab.id }, B.targetId]].sort());
+    const name = worlds[0].args[2].worldName;
+    const evals = h.fake.sent("debugger.sendCommand", "Runtime.evaluate");
+    assert.ok(evals.every((r) => r.args[2].returnByValue === true && r.args[2].contextId !== undefined && r.wait === 600_000), "C10's default wait");
+    // Chrome's events of the world (as with Runtime.enable): the relay drops them.
+    const ctx = worlds.find((r) => r.args[0].tabId === A.tab.id)!;
+    const id = [...h.fake.worlds].find(([, tab]) => tab === A.tab.id)![0];
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id, origin: "", name, uniqueId: "u1", auxData: { frameId: A.targetId, isDefault: false, type: "isolated" } } } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Debugger.scriptParsed", params: { scriptId: "9", url: "", executionContextId: id } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextDestroyed", params: { executionContextId: id, executionContextUniqueId: "u1" } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id: 5, origin: "https://a.example", name: "", uniqueId: "u5", auxData: { frameId: A.targetId, isDefault: true, type: "default" } } } });
+    await until(() => seen.length, "the page's own context");
+    await sleep(30);
+    assert.deepEqual(seen.map((s) => s.split(" ")[0]), ["Runtime.executionContextCreated"], seen.join("\n"));
+    assert.ok(!seen[0].includes(name));
+    void ctx;
+    // A navigation took the world: the next read gets "Cannot find context" and makes the world again.
+    h.fake.worlds.clear();
+    await mouse(c, B, "mouseMoved", 700, 300);
+    const n = worlds.length;
+    await click(c, B, 700, 300);
+    assert.equal(d.moves.length, 2);
+    assert.ok(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length >= n + 1, "the world again");
+    assert.ok(!h.fake.requests.some((r) => r.args?.[1] === "Page.enable" || (r.args?.[1] === "Runtime.enable" && r.args?.[0].tabId !== A.tab.id)));
+  } finally { await h.close(); }
+});
+
+test("the geometry read: only for a bridge tab, one in flight per tab, its own 200 ms", async () => {
+  const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET }); // the pointer at A's point: no catch-up after the step
+  try {
+    const { c, A, B } = await twoPages(h);
+    // B's evaluate never answers: the step stops waiting after 200 ms, and plays no path.
+    h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && params.contextId !== undefined && _t.tabId === B.tab.id ? new Promise(() => {}) : undefined);
+    const t0 = Date.now();
+    await click(c, A, 100, 100);
+    assert.ok(Date.now() - t0 < 1200, `${Date.now() - t0} ms`);
+    assert.equal(d.moves.length, 0);
+    // A second step with B: its read is still in flight, so no second evaluate goes to B.
+    const evals = () => h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === B.tab.id).length;
+    const n = evals();
+    await click(c, B, 700, 300);
+    assert.equal(evals(), n, "one read in flight per tab");
+    assert.equal(d.moves.length, 0);
+    // A front page that is no bridge tab (its client detached): no read, no path.
+    h.fake.command = () => undefined;
+    const c2 = await h.connect("s2");
+    const X = await page(h, c2);
+    await mouse(c2, X, "mouseMoved", 50, 50);
+    await c2.close();
+    await until(() => !h.fake.attached.has(X.tab.id), "X detached");
+    const worlds = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length;
+    await click(c, A, 100, 100);
+    assert.equal(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").filter((r) => r.args[0].tabId === X.tab.id).length, 0);
+    assert.ok(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length >= worlds);
+    assert.equal(d.moves.length, 0);
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ the catch-up
+
+test("the catch-up: after an X record, a client's move more than 50 px from it gets CDP moves along a path first, the client's move as its last step; once only", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100); // a path from B to A: B's point is an X record at (100, 100); A is the front page
+    let from = h.fake.requests.length;
+    await mouse(c, B, "mouseMoved", 140, 120); // 45 px: no catch-up
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
+    // A path from A to B makes A's point an X record at B's point (140, 120); then A's client moves far.
+    await c.send("Page.bringToFront", {}, B.sessionId);
+    assert.deepEqual(pointOf(h, A), { x: 140, y: 120, x11: true });
+    from = h.fake.requests.length;
+    const t0 = Date.now();
+    await mouse(c, A, "mouseMoved", 600, 500);
+    const sent = h.fake.requests.slice(from).map((r) => r.args[2]);
+    assert.ok(sent.length >= 6, `${sent.length} moves`);
+    assert.deepEqual([sent.at(-1).x, sent.at(-1).y], [600, 500], "the client's move is the last step");
+    let last = { x: 140, y: 120 };
+    for (const m of sent) { assert.ok(Math.hypot(m.x - last.x, m.y - last.y) <= 50, "steps of 50 px at most"); assert.equal(m.type, "mouseMoved"); last = m; }
+    assert.ok(Math.hypot(sent[0].x - 140, sent[0].y - 120) >= 2, "a first step of 2 px or more");
+    assert.ok(Date.now() - t0 >= 250, "the catch-up takes the path's time");
+    // Once only: the next far move is the client's own.
+    from = h.fake.requests.length;
+    await mouse(c, A, "mouseMoved", 100, 100);
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
+  } finally { await h.close(); }
+});
+
+test("the catch-up's thresholds: a press or a wheel more than 2 px away (the path ends with a move at its point), never a release or while a button is held", async () => {
+  for (const [type, x, want] of [["mousePressed", 103, true], ["mousePressed", 102, false], ["mouseWheel", 103, true], ["mouseReleased", 300, false]] as const) {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      await click(c, A, 100, 100); // B's point is an X record at (100, 100)
+      const from = h.fake.requests.length;
+      await mouse(c, B, type, x, 100, type === "mouseWheel" ? { deltaX: 0, deltaY: 100 } : {});
+      const seq = ops(h, from).filter((o) => o.startsWith("Input."));
+      const moves = seq.filter((o) => o === "Input.dispatchMouseEvent mouseMoved").length;
+      assert.equal(moves > 0, want, `${type} at ${x}: ${seq.join(" ")}`);
+      if (want) assert.deepEqual([h.fake.requests.at(-2)!.args[2].x, h.fake.requests.at(-2)!.args[2].type], [x, "mouseMoved"], "the last move is at the event's point");
+    } finally { await h.close(); }
+  }
+  // While a button is held: no catch-up.
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100);
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 100, y: 100, button: "left", clickCount: 1 }, B.sessionId);
+    const from = h.fake.requests.length;
+    await mouse(c, B, "mouseMoved", 400, 400, { buttons: 1 });
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
+  } finally { await h.close(); }
+});
+
+test("the catch-up is decided when the event leaves the tab's gate (a move that waited behind a step starts at its record), and it is a step of the gate: later calls wait behind it", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    const seq = sequence(h);
+    // A's press: a path from B to A. B's client sends a far move during the path: it waits behind the step, then the
+    // catch-up from B's record (100, 100) runs, then B's move, then B's evaluate.
+    const a = mouse(c, A, "mousePressed", 100, 100);
+    await until(() => seq.includes("daemon.movePointer"), "the path");
+    const b = mouse(c, B, "mouseMoved", 600, 600);
+    const e = c.send("Runtime.evaluate", { expression: "1" }, B.sessionId);
+    await Promise.all([a, b, e]);
+    const after = seq.slice(seq.indexOf("windows.update"));
+    const moves = after.filter((o) => o === "Input.dispatchMouseEvent mouseMoved").length;
+    assert.ok(moves >= 6, after.join(" "));
+    assert.equal(after.at(-1), "Runtime.evaluate", "the evaluate waited behind the catch-up");
+  } finally { await h.close(); }
+});
+
+/** The order of the ops, with the tab of each CDP command. */
+function sequenceByTab(h: Harness): string[] {
+  const seq: string[] = [];
+  const op = h.fake.op, daemon = h.fake.daemon;
+  h.fake.op = (r) => { seq.push(r.op !== "debugger.sendCommand" ? r.op : `${r.args[1]} ${r.args[2]?.type ?? ""} tab ${r.args[0].tabId}`); return op(r); };
+  h.fake.daemon = (r) => { seq.push(r.op); return daemon(r); };
+  return seq;
+}
+
+test("a step waits for a catch-up that runs in its front page: the two never overlap on one page", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await c.send("Page.bringToFront", {}, A.sessionId); // a path from B to A: A is the front page, its point an X record
+    assert.equal(d.moves.length, 1);
+    await mouse(c, B, "mouseMoved", 130, 100); // 30 px from B's record: no catch-up; B's point is not at
+
+    const seq = sequenceByTab(h);
+    const a = mouse(c, A, "mouseMoved", 700, 600); // a catch-up in the front page A
+    await until(() => seq.filter((o) => o.startsWith(`Input.dispatchMouseEvent mouseMoved tab ${A.tab.id}`)).length >= 2, "the catch-up runs");
+    const b = mouse(c, B, "mousePressed", 130, 100); // B's step: it waits for A's catch-up
+    await Promise.all([a, b]);
+    const lastA = seq.lastIndexOf(`Input.dispatchMouseEvent mouseMoved tab ${A.tab.id}`);
+    assert.ok(seq.indexOf("daemon.movePointer") > lastA, seq.join("\n"));
+    assert.equal(d.moves.length, 2);
+    assert.deepEqual(d.moves[1].from, { x: 700, y: 600 + OFFSET }, "S is the client's move after the catch-up");
+  } finally { await h.close(); }
+});
+
+test("a page that answers no move: the catch-up stops at 4 unanswered moves (per tab), the client's event goes, and its Page.handleJavaScriptDialog reaches Chrome; the stops are counted and logged", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100); // B's point is an X record at (100, 100)
+    // B's page has an open dialog: Chrome answers none of its moves.
+    h.fake.command = (t, method, params) => (t.tabId === B.tab.id && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" ? new Promise(() => {}) : undefined);
+    const from = h.fake.requests.length;
+    void mouse(c, B, "mouseMoved", 900, 700).catch(() => {}); // over 800 px: a catch-up of more than 4 moves
+    await until(() => h.fake.requests.slice(from).filter((r) => r.args?.[2]?.x === 900).length, "the client's move");
+    const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent");
+    assert.equal(moves.length, 5, "4 catch-up moves, then the client's move");
+    assert.equal(state(h).catchUpStops, 1);
+    assert.ok(h.logs.some((l) => /catch-up .* stopped at 4 unanswered moves/.test(l)), h.logs.join("\n"));
+    assert.deepEqual(await c.send("Page.handleJavaScriptDialog", { accept: true }, B.sessionId), {});
+    // Per tab (review-63e note E): while its 4 moves wait, no catch-up starts. B comes forward with no path (its moves in
+    // flight hold step 3 to its limit), and the read gives it a new X record; B's next far move goes as it is.
+    await c.send("Page.bringToFront", {}, B.sessionId);
+    assert.equal(pointOf(h, B)?.x11, true);
+    const at = h.fake.requests.length;
+    void mouse(c, B, "mouseMoved", 10, 10).catch(() => {});
+    await until(() => h.fake.requests.length > at, "B's move");
+    await sleep(100);
+    assert.deepEqual(ops(h, at), ["Input.dispatchMouseEvent mouseMoved"]);
+    void A;
+  } finally { await h.close(); }
+});
