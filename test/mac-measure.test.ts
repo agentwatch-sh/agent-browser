@@ -593,10 +593,12 @@ test("ab-v16.68: the time with no give-back is bounded and gives the front back 
   assert.match(ts, /finally \{[\s\S]{0,200}if \(p\.hold && !aborted\) tell\("arm"\);/);
   assert.match(ts, /stopReason\(events, steps, Date\.now\(\), \{ t0: T0, limitMs: LIMIT_MS, measureEnd, holds \}\)/);
   assert.equal((ts.match(/tell\("disarm"\)/g) ?? []).length, 5, "a stop, the hold, the prototype's start, the fallback's end, the look");
+  assert.equal((ts.match(/tell\("arm"\)/g) ?? []).length, 4, "the start, the hold's end, the fallback, a prototype that ended by itself");
   // A stop ends agent-browser's give-back watcher at once (it cannot tell a person's own switch to the agent Chrome), and so does the look.
   assert.match(ts, /tell\("disarm"\);\s+tell\("giveback"\);\s+stopWatchBack\(\);/);
   assert.match(ts, /measureEnd = Date\.now\(\);\s+clearInterval\(stopPoll\);\s+stopWatchBack\(\);/);
   assert.match(ts, /wb\.kill\("SIGTERM"\)/, "it ends only the process that it started");
+  assert.match(ts, /child\.once\("exit", \(\) => \{\s+if \(!protoOn \|\| wb !== child\) return;\s+protoOn = false;[\s\S]{0,120}if \(!aborted\) \{ tell\("arm"\);/, "a prototype that ends by itself hands the give-back back to the check's watcher");
   // The fallback arms the check's watcher only while the prototype runs and the agent Chrome still has the front.
   assert.match(ts, /if \(!protoOn \|\| aborted \|\| frontAt\(events, Date\.now\(\)\)\?\.pid !== chromePid\) return;\s+fallbackArmed = true;/);
   // The stable part: only Google Chrome stable in /Applications, never installed, and only after a first part that ran to its end and quit its Chrome.

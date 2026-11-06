@@ -551,6 +551,15 @@ async function startWatchBack(): Promise<string> {
   children.push(child);
   wb = child;
   child.on("error", () => {});
+  // A prototype that ends while it gives the front back (its error, or the agent Chrome quit): the check's watcher gives it back again at once.
+  child.once("exit", () => {
+    if (!protoOn || wb !== child) return;
+    protoOn = false;
+    clearTimeout(fallbackTimer);
+    fallbackTimer = undefined;
+    fallbackArmed = false;
+    if (!aborted) { tell("arm"); say("agent-browser's give-back watcher ended; the check's watcher gives the front back again"); }
+  });
   const line = await new Promise<string | undefined>((res) => {
     let buf = "";
     const timer = setTimeout(() => res(undefined), 5000);
