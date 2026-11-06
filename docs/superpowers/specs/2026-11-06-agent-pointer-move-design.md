@@ -238,7 +238,12 @@ answer after the step.
    now` after a kill, the relay's timer) and in every other step that brings a page under the pointer
    with no path (with the paths on): read the pointer (`daemon.pointerAt`) and record its position as
    `at`, for the entering page, and for the front page after a failed path (it saw a part of the path);
-   a failed read leaves them unknown. The entering page is the front page now.
+   a failed read leaves them unknown. The entering page is the front page when step 7's raise succeeds
+   and either a page came under the pointer (the front page was known) or the relay sent the raise
+   (step 2, review-68 N1). A new tab that comes on top is the front page with no raise (section 3, what
+   the relay keeps). The front page is unknown after failed reads of step 1 and after a raise that reached
+   its limit or failed for an input or a `Page.bringToFront`; a failed `tabs.update` of
+   `Target.activateTarget` gives the client the error and keeps the front page as it was.
 7. **Bring the page forward:** `tabs.update` and `windows.update`, or the client's own
    `Page.bringToFront`, or the `tabs.update` of `Target.activateTarget`; then open the front page's gate.
    Each within one `ACTIVATE_MAX_MS`, also `Target.activateTarget`'s `tabs.update` after the reads of
@@ -250,9 +255,11 @@ The limits of the step: one `ACTIVATE_MAX_MS` for steps 1 and 2, one for step 3,
 step 4 (the geometry's 200 ms, and `daemon.pointerAt` when `at` is unknown), the path's wait (at most
 3 s), 1.2 s for the read after a failed path, and one `ACTIVATE_MAX_MS` for step 7 (after it, no
 `tabs.update` and no `windows.update`, as today). A client's `Browser.setWindowBounds` (with the paths on)
-waits in the activation chain: behind the step that runs, whose path plays at the window's old place, and
-behind the catch-ups that run in that window's pages; then the front page is unknown and the kept geometries
-go, and the window changes (review-68 B3). The worst case of faults is about 11.4 s (10.4 s when
+waits in the activation chain: behind every step already in the chain (one runs: its path plays at the
+window's old place), and behind the catch-ups that run in that window's pages; then the front page is unknown,
+the kept geometries go, and the window changes (review-68 B3). Later steps wait behind it. The window's scope
+check (a window that holds no tab of the client's scope: `Browser window not found`) runs first, and a refused
+call changes nothing. With the paths off or unknown it goes at once, as before. The worst case of faults is about 11.4 s (10.4 s when
 `at` is known); the normal case is the path's time plus some 30 to 60 ms. A path takes 0.3 to 1.5 s at
 each activation that brings a page under the pointer, also for agent-browser's reads that bring a hidden
 window page forward (`Tab.toFront` for `text`, `outline`, `eval` and waits).
@@ -337,18 +344,28 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   (and the ids of `Runtime.executionContextCreated` with its world's name) for the events below; an old id
   leaves that set, so the page's own events with it reach the client. The window between the two calls of
   one read stays (a navigation that commits in it can give the new id to another context; a few ms);
-- the relay drops the world's `Runtime.executionContextCreated` (by its name), and
-  `Runtime.executionContextDestroyed` and `Debugger.scriptParsed` of its ids, so no client sees it; no page
-  script sees its reads. `Runtime.executionContextsCleared` empties the set of ids.
+- on the tab's own session only, the relay drops the world's `Runtime.executionContextCreated` (by the
+  world's name, for any id; the id joins the set), and `Runtime.executionContextDestroyed`,
+  `Debugger.scriptParsed` and `Debugger.scriptFailedToParse` of the ids in the set, so no client sees the
+  world; no page script sees its reads. Each read replaces the set with its new id.
+  `Runtime.executionContextsCleared` empties the set and still goes to the client. An id that stays in the
+  set until the next read can name a page's context after a navigation and drop that page's own
+  `Debugger` events of that id (ab-lead's note on round 3);
+- a read keeps or drops the kept geometry only when it answers within `GEOMETRY_WAIT_MS` and no drop event of
+  the page came after the read started (the relay counts the drop events of each page); a late answer is
+  dropped and changes nothing (round 3 of PR #68).
 
 The read also gives the content box: `visualViewport.width` and `height` (the viewport less its
 scrollbars, at a scale of 1; else `documentElement.clientWidth` and `clientHeight`). A geometry is not usable
 when the ratio or the scale is not 1, the window is minimized, the screen size is not the display's, a read
 is in flight, the front page reports `document.visibilityState` "hidden" (a page under the pointer is
-visible: a hidden front page is not on top), or a device-metrics override is in force on the tab (a client's
-`Emulation.setDeviceMetricsOverride` until its `clearDeviceMetricsOverride`: Playwright's
-`setViewportSize`, agent-browser's `record`): then `innerWidth` and `innerHeight` do not give the window's
-real viewport. Not taken: `windows.get` with `Page.getLayoutMetrics` and no page read: those metrics leave
+visible: a hidden front page is not on top), a width or a height of the viewport or of the content box is
+4 px or less, the content box is wider or taller than the viewport, or a device-metrics override is in force
+on the tab (a client's `Emulation.setDeviceMetricsOverride` until its `clearDeviceMetricsOverride`:
+Playwright's `setViewportSize`, agent-browser's `record`: then `innerWidth` and `innerHeight` do not give the
+window's real viewport). The minimized test is only for the entering page (step 1 reads its window); the hidden
+test covers the front page. The catch-up's clamp uses only the read's own rules (the ratio, the scale, the
+screen and the sizes), not the relay's (an override, a minimized window, a hidden page). Not taken: `windows.get` with `Page.getLayoutMetrics` and no page read: those metrics leave
 out the scrollbars (about 7 px off with a vertical scrollbar).
 
 **C11's new paragraph** (in "One window per page"): the steps above, with the paths on; the catch-up;
@@ -383,7 +400,7 @@ no client method reaches a `daemon.` op.
 | --- | --- | --- | --- |
 | the page that comes forward | its entry at the X pointer: where the last path of any page ended | its entry at its own last point, movement 0 | its entry at the X pointer, wherever it is |
 | unexplained position changes there | 0 (`design`); 1 with two agents (`design-two`) | 0 expected, with two agents too, after each page's first activation | 5 in 6 activations (`design-no-x`) |
-| the page that leaves (under the pointer during the path) | nothing: the X move was its own path's last step | a path of real moves from its own last point, inside its viewport, at most 50 px and 16 ms apart, then its `blur`; when its own client goes on in it, a CDP catch-up path first | nothing |
+| the page that leaves (under the pointer during the path) | nothing: the X move was its own path's last step | a path of real moves from its own last point, inside its content box, at most 50 px and 16 ms apart, then its `blur`; when its own client goes on in it, a CDP catch-up path first | nothing |
 
 - **agent-browser's commands:** the path of `Hands` starts at the entry (`input.ts`), now the page's last
   point, so it needs no catch-up: 0 jumps and 0 unexplained changes expected in both pages. Only
@@ -412,7 +429,7 @@ could switch the agent extension off, and its allowlist rules with it), and X ac
 screenshots of the whole display (other scopes' pages, the operator's tabs). Both break the rule that
 agents reach the agent browser only through the relay and its refusals (C11, the peer check, the
 per-scope lists). Here no agent makes an X call: the daemon moves the pointer along a checked path that
-the relay computed from the pages' own input, inside a page's viewport, and reads its position; never a
+the relay computed from the pages' own input, inside a page's content box, and reads its position; never a
 click, a key or a read of pixels. A raw-X way (the Xvfb's `DISPLAY` and `XAUTHORITY` for agent sessions)
 would change the trust boundary, which only the operator can decide; its reason would be the measured 5
 unexplained changes in 6 activations. This design is expected to remove them with no raw X, so ab-lead
@@ -564,7 +581,7 @@ The limits:
   point, and a page that enters with no path enters at the last path's end. So the pages of one scope can
   learn where a page of another scope last saw the pointer: a position only, no content. Today over the
   relay the X pointer never moves. Not taken: paths only between two pages of one scope.
-- A path gives the page under the pointer real moves and hovers inside its own viewport at points that
+- A path gives the page under the pointer real moves and hovers inside its own content box at points that
   the pages' input chose: at most 5 paths a second, no click, key or read.
 - Where the relay cannot know a page's point (section 3), that one activation is as today.
 - **Movement 0 after the page loses the pointer** (measured, board ab-v16.71; a follow-up, board ab-v16.76):
