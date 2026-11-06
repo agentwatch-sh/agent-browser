@@ -950,6 +950,12 @@ export class Tab {
     await this.send("Emulation.clearDeviceMetricsOverride");
   }
 
+  /** The tab's URL as Chrome lists it (Target.getTargets): it runs nothing in the page, which can be off the allowlist. */
+  private async listedUrl(): Promise<string | undefined> {
+    const { targetInfos } = await this.browser.conn.send("Target.getTargets");
+    return (targetInfos as TargetInfo[]).find((t) => t.targetId === this.targetId)?.url;
+  }
+
   /** Two animation frames of the page, at most `ms`: the number that came (whileDrawn, whileDrawnForShot). */
   private twoFrames(ms: number): Promise<number> {
     return this.evaluate((ms: number) => new Promise<number>((r) => {
@@ -1382,7 +1388,9 @@ export class Tab {
     }
     const cleanupErrors = await runCleanup([["clear the device metrics override", () => this.send("Emulation.clearDeviceMetricsOverride")]]);
     if (failure) {
-      const after = await size();
+      // The page's size, but only on a page that is still on the allowlist (review-41e: Chrome's list, no read in the page).
+      const url = await this.listedUrl().catch(() => undefined);
+      const after = url !== undefined && isAllowedUrl(url, this.browser.allow) ? await size() : undefined;
       if (before && after && after !== before)
         log(`agent-browser shot: after the failed shot the page of tab ${tab} is ${after}, not ${before} as before the size override`);
       throw withCleanupErrors(failure, cleanupErrors);

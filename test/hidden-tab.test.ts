@@ -553,6 +553,22 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name }).catch(() => {});
   });
 
+  test(`${label}: shot --size whose tab is off the allowlist when its own capture ends: refused, the override cleared, and no page code in the off-list page after the failure`, async () => {
+    // review-41e note 1: the page-size read after the failure ran in the off-list page (Page.createIsolatedWorld,
+    // Runtime.evaluate; 1 of 3 default-mode runs, 6 of 6 hidden-drive runs).
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.url = "https://off-the-list.example/"; };
+    const path = join(c.dir, `${name}.png`);
+    const { calls } = await callsOf(page, () => assert.rejects(commands.shot(mode(), { tab: name, path, size: "800x600" }), /off-the-list\.example is not on the allowlist/));
+    page.onCapture = undefined;
+    const m = methodsOf(calls), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.ok(clear > 0, "cleared");
+    assert.deepEqual(m.slice(clear).filter((x) => x === "Runtime.evaluate" || x === "Page.createIsolatedWorld"), [], "no page code after the failure");
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name }).catch(() => {});
+  });
+
   test(`${label}: shot --full whose first capture ends during the frame wait: one more first capture and two frames come before the full-page capture`, async () => {
     // No capture may go out while a full-page capture waits: it changes the device emulation, and a
     // capture sent then would set that emulation again when it ends.
