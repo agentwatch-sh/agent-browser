@@ -3,7 +3,10 @@
 Date: 2026-11-06. Status: **reviewed and merged** (agent-browser PR #63, merge `6bb6838`): revision 5,
 after five fresh reviews (review-63, 63b, 63c and 63d at `b340c26`, `1d29201`, `f42f714` and `19307c0`,
 and review-63e at `cd415cb`) and aw-lead's answers (mails mb5c6cbf, m98c6f1f, m2933af4 and md133a6e),
-with aw-lead's yes to sections 2 and 4 (mail mbf51aeb); review-63e's doc notes A to C are in the text.
+with aw-lead's yes to sections 2 and 4 (mail mbf51aeb); review-63e's doc notes A to C are in the text. The
+build (board ab-v16.71, agent-browser PR #68) added ab-lead's decisions on its five points: the cached
+geometry of a front page that is no bridge tab, the content box as the clamp, the text on a jump with no path,
+the limit of movement 0 (board ab-v16.76), the hover dialog's pass condition, and the gate rule's sentence.
 Its contract text is chrome-extension PR #29 (board ab-v16.70: C10 and C11, with the vectors); its build
 is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: taylor session
 `pointer-design`, a subagent of `ab-lead` (board task ab-v16.37). Sources: agent-browser main `6e51439`
@@ -46,8 +49,8 @@ measured here), so the limit is on what one frame can hold, not only on one step
 4. **The checks (section 4):** the relay's pipe, the unit's Xvfb and its size, each point inside it, steps
    of at most 50 px 16 ms apart, the pointer at `at`, one X call at a time, 5 paths a second, a deadline.
 5. **What a site sees (section 5):** both pages see a person's input. When the relay cannot know a
-   page's point, it sends no path, and that one activation is as today (no jump; one unexplained change
-   at most). With the paths off (an older daemon) the relay is exactly as today. On the Mac nothing moves.
+   page's point, it sends no path, and that one activation is as today (one unexplained change or one
+   jump at most: section 3, "When the relay sends no path"). With the paths off (an older daemon) the relay is exactly as today. On the Mac nothing moves.
 6. **No raw X (section 6)** for any agent.
 
 ## 2. The messages (C10)
@@ -197,21 +200,23 @@ answer after the step.
    unknown, today's focus rule decides, and no path plays. A path can play when a page comes under the
    pointer and the relay knows both last points: S of the front page and T of the entering page.
 3. **Wait and hold** (only when a path can play), all within one `ACTIVATE_MAX_MS` (2 s); at the limit,
-   no path. When the front page holds a button, wait for its release; no path when its tab's next call
-   waits in the activation chain (its gate is set), also when the gate becomes set during the wait (its
-   release then waits behind this step). No other page's button counts: the X pointer reaches only the
-   page under it. Wait for the end of a catch-up that runs in the front page. Then chain the front page's
+   no path. When the front page holds a button, wait for its release. The rule "no path when the front
+   page's tab's next call waits in the activation chain (its gate is set, also when it becomes set during
+   the wait)" applies only while the front page holds a button, because only then does the release wait
+   behind this step (ab-lead's decision on PR #68). No other page's button counts: the X pointer reaches
+   only the page under it. Wait for the end of a catch-up that runs in the front page. Then chain the front page's
    gate on its old gate (`behind()` alone would replace it), so that its later calls, its pointer input
    among them, wait behind the step in order (C10, the order of requests). Last, wait for the answers of
    the pointer input of both pages that already went to Chrome, so that S and T are Chrome's points (a
    page whose `mousemove` handler opens a dialog holds that answer up to 600 s; the limit keeps the chain
    going).
 4. **Plan.** Read both geometries (below; at most `GEOMETRY_WAIT_MS = 200`). Map S and T to display px.
-   Read `at` too when it is unknown. When S or T is outside the front page's viewport (2 px inside its
-   edges), no path. When `at` is T, no path is needed: the entry comes at T (step 6 records it). Take the
+   Read `at` too when it is unknown. When S or T is outside the front page's content box (its viewport less
+   its scrollbars, 2 px inside its edges; ab-lead's decision on point 5 of PR #68), no path. When `at` is T, no path is needed: the entry comes at T (step 6 records it). Take the
    legs of `src/input.ts`'s generator from S to T (`planMove`'s curve and times, an overshoot leg past
    500 px, the default target width 24) and sample them every 16 ms (`pointAt`; `input.ts` samples 12 to
-   60 points). Clamp each point 2 px inside the front page's viewport, in whole pixels; drop a point that
+   60 points). Clamp each point 2 px inside the front page's content box, in whole pixels (a page gets no
+   mouse event over its scrollbars, so a path over one gave an unexplained change live); drop a point that
    does not move, and cap each `dt` at 250 ms. While a step is over 50 px, stretch the time of all legs by
    one factor, and sample and clamp again. The first step of a path (and of a catch-up) is at least 2 px
    from the rounded start, so that no real move has movement 0. When S equals T and `at` does not, the
@@ -248,7 +253,9 @@ when a client's next `Input.dispatchMouseEvent` or `Input.dispatchDragEvent` for
 X record is a move more than 50 px from it, or a press or a wheel more than 2 px from it, the relay first
 sends CDP `mouseMoved` events (no button) along a path of the same generator from the recorded point to
 the event's point, with the path's limits (steps of at most 50 px, `dt` 16 to 250 ms, at most 1500 ms;
-else no catch-up). The relay decides it when the event leaves the tab's gate, against the page's point at
+else no catch-up), each point clamped 2 px inside the page's content box as in step 4 (from the page's last
+usable geometry, else a read; with neither, no clamp), except the event's own point, which stays where the
+client sent it. The relay decides it when the event leaves the tab's gate, against the page's point at
 that time, so a move that waited behind a step starts at that step's record. For a move, the client's
 move is the path's last step; for another event, the path ends with a move at its point. Then the
 client's event goes, and the page's point is the client's again, so the catch-up applies only once after
@@ -270,8 +277,13 @@ page, a last point or `at` is unknown; a geometry is not usable; S or T is outsi
 viewport; the path does not fit the limits; step 3 found a gate or reached its limit; or the daemon
 refused. A page
 that never had a pointer event then enters with its first pointer event, which is no position change; a
-page whose point was known or became unknown enters at the X pointer: one unexplained change at most,
-never a jump. The first activation after the relay's start, after a link change, or after the paths
+page whose point was known or became unknown enters at the X pointer: one unexplained change at most, or
+one jump. The entry carries the movement from the page's last point when Chrome still has that point as the
+base of the movement (the page got pointer input since its window last lost the pointer), and so it is a
+jump when the X pointer is more than 100 px from that point (measured, board ab-v16.71, section 7.1: a
+press held 3 s, whose step ended at its limit with no path, gave the entering page a jump of 304 px; the
+first step after a `Browser.setWindowBounds` gave one of 100.5 px; a step with no path in the first live run
+gave A's page two jumps of 233 px). The first activation after the relay's start, after a link change, or after the paths
 turn on has no path, because the front page is unknown (review-63e note C); from its record on, the
 front page is known.
 
@@ -288,7 +300,16 @@ innerWidth) / 2)`: display `x = round(screenX + side + px)`, `y = round(screenY 
 innerHeight - side + py)`; the inverse maps a display point into a page. The rules of the read:
 
 - only for a bridge tab, with no attach and no `Page.enable` or `Runtime.enable` of the relay's own (they
-  would change the client's domain state);
+  would change the client's domain state). The relay keeps each page's last usable geometry from its own
+  reads (ab-lead's decision on point 1 of PR #68): a front page that is no bridge tab (agent-browser's CLI
+  ends its connection after each command, and the relay then detaches its page) uses it. The relay drops
+  it at every window event that it sees: any client's `Browser.setWindowBounds`, a viewport call on the
+  page's own session (`Emulation.setDeviceMetricsOverride` and its clear, `setVisibleSize`,
+  `setPageScaleFactor`, `setScrollbarsHidden`), the page's `Page.frameResized`, its `tabs.onReplaced` (the
+  new tab has none) and a link change. With no cached geometry, no path (as today). The limit: a window
+  that moves or changes its size with no event that the relay sees gives a wrong mapping, and a page that
+  got or lost a scrollbar since the read has an old content box (on the agent browser's Xvfb only the relay
+  and the receiver place windows);
 - one read in flight per tab (a page that holds a dialog keeps a read up to 600 s; more reads would fill
   its in-flight key in front of the client's `Page.handleJavaScriptDialog`);
 - C10's default wait (a short one would time out, and C10 then detaches the tab); the relay stops waiting
@@ -297,8 +318,10 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
 - the relay drops the world's `Runtime.executionContextCreated`, `Runtime.executionContextDestroyed` and
   `Debugger.scriptParsed` events, so no client sees it; no page script sees its reads.
 
-A geometry is not usable when the ratio or the scale is not 1, the window is minimized, the screen size is
-not the display's, a read is in flight, or a device-metrics override is in force on the tab (a client's
+The read also gives the content box: `visualViewport.width` and `height` (the viewport less its
+scrollbars, at a scale of 1; else `documentElement.clientWidth` and `clientHeight`). A geometry is not usable
+when the ratio or the scale is not 1, the window is minimized, the screen size is not the display's, a read
+is in flight, or a device-metrics override is in force on the tab (a client's
 `Emulation.setDeviceMetricsOverride` until its `clearDeviceMetricsOverride`: Playwright's
 `setViewportSize`, agent-browser's `record`): then `innerWidth` and `innerHeight` do not give the window's
 real viewport. Not taken: `windows.get` with `Page.getLayoutMetrics` and no page read: those metrics leave
@@ -420,7 +443,10 @@ checks of section 4, the read before the play and the `xdotool -` script. Throug
   front page while another client activates (review-63c B2); one client holds a press (once for 3 s,
   for the limit) while the other activates: no real move between its `mousedown` and `mouseup`; a page
   whose `mousemove` handler opens a dialog: the step ends at its limit with no path, and a far catch-up
-  (over 700 px) into it stops and lets the client close the dialog; an active tab's
+  (over 700 px) into it lets the client close the dialog (the pass condition: the client closes the dialog
+  and the page answers; measured, board ab-v16.71: Chromium answers the moves after the one whose handler
+  opened the dialog, so the catch-up never had 4 unanswered moves and did not stop; the bound of 4 stays as
+  the guard for a page that answers none); an active tab's
   `Target.activateTarget`: no path;
 - a focused window under a newer unfocused window: the raise brings it up (and a CDP press into it: does
   Chrome raise it?);
@@ -498,6 +524,14 @@ The limits:
 - A path gives the page under the pointer real moves and hovers inside its own viewport at points that
   the pages' input chose: at most 5 paths a second, no click, key or read.
 - Where the relay cannot know a page's point (section 3), that one activation is as today.
+- **Movement 0 after the page loses the pointer** (measured, board ab-v16.71; a follow-up, board ab-v16.76):
+  when another window comes over a page under the pointer, the page gets `mouseout`, and Chrome then gives
+  its next pointer event a movement of 0. A client's raw move into such a page (Playwright sends its move
+  before its press, so its move reaches a page that is still behind another window) is then an unexplained
+  position change when the page's point is no X record (the catch-up covers it only after an X record). In
+  the live check it showed as Playwright's own raw moves (2 in each page of the two-client case).
+- **A cached geometry** (section 3, the geometry): a window that moves or changes its size with no event
+  that the relay sees gives a wrong mapping of a front page that is no bridge tab.
 
 ## 9. Questions for aw-lead (the daemon side)
 

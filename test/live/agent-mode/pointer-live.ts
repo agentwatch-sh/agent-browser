@@ -89,6 +89,12 @@ export async function pointerCases(o: PointerContext): Promise<void> {
     }));
   });
   const allDt: { seen: number; planned: number }[] = [];
+  /**
+   * The steps that brought a page under the pointer after its first activation and played no path although one was
+   * needed: every such step must play a path, or need none (at was T already: the page enters at its own last point).
+   */
+  const missedPaths = (d: any) => Object.entries(d.pages as Record<string, any>).flatMap(([tab, v]) => (v.activations as string[]).slice(1)
+    .filter((a) => / no path: /.test(a)).map((a) => `${tab}: ${a}`));
   const caseOut: any[] = [];
 
   /**
@@ -157,15 +163,17 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       await must("open ab2", cli("ptr-ab", "open", pageUrl("AB2"), "--name", "ab2"));
       await loaded("AB1"); await loaded("AB2");
       const t0 = Date.now();
-      for (let r = 0; r < 3; r++) for (const name of ["ab1", "ab2"]) {
-        await must(`click ${name}`, cli("ptr-ab", "click", name, r === 1 ? "#r" : "#b"));
+      // Each page clicks other targets than the other page in the same round, so that the two last points differ.
+      const targets = ["#b", "#r", "#far"];
+      for (let r = 0; r < 3; r++) for (const [i, name] of ["ab1", "ab2"].entries()) {
+        await must(`click ${name}`, cli("ptr-ab", "click", name, targets[(r + i) % 3]));
         await sleep(300);
       }
       await must("type ab1", cli("ptr-ab", "type", "ab1", "hi", "--into", "#f"));
       await must("type ab2", cli("ptr-ab", "type", "ab2", "hi", "--into", "#f"));
       const t1 = Date.now();
       await measure("agent-browser over --cdp-url (design): two pages in two windows in turn, 3 rounds", ["AB1", "AB2"], t0, t1,
-        { extra: (d) => (d.stepsWithPath < 4 ? [`only ${d.stepsWithPath} steps with a path`] : []) });
+        { extra: (d) => [...missedPaths(d), ...(d.stepsWithPath < 1 ? ["no step with a path"] : [])] });
     });
     await guard("agent-browser over --cdp-url (design-two): two agents at once, one input lock", async () => {
       await must("open tw1", cli("ptr-ab", "open", pageUrl("TW1"), "--name", "tw1"));
@@ -176,7 +184,7 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       await Promise.all([agent("tw1", 0), agent("tw2", 400)]);
       const t1 = Date.now();
       await measure("agent-browser over --cdp-url (design-two): two agents at once, one input lock", ["TW1", "TW2"], t0, t1,
-        { extra: (d) => (d.stepsWithPath < 3 ? [`only ${d.stepsWithPath} steps with a path`] : []) });
+        { extra: (d) => [...missedPaths(d), ...(d.stepsWithPath < 1 ? ["no step with a path"] : [])] });
     });
     for (const name of ["ab1", "ab2", "tw1", "tw2"]) await cli("ptr-ab", "close", name);
 
@@ -193,7 +201,7 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         const own = { PW1: [{ x: 70, y: 280 }, { x: 400, y: 200 }, { x: 600, y: 420 }], PW2: [{ x: 300, y: 350 }, { x: 120, y: 345 }, { x: 500, y: 150 }] };
         for (let r = 0; r < 3; r++) for (const [p, tab] of [[p1, "PW1"], [p2, "PW2"]] as const) { const q = own[tab][r]; await p.mouse.click(q.x, q.y); await sleep(300); }
         const t1 = Date.now();
-        await measure("Playwright: two pages in two windows in turn, 3 rounds", ["PW1", "PW2"], t0, t1, { own, extra: (d) => (d.stepsWithPath < 4 ? [`only ${d.stepsWithPath} steps with a path`] : []) });
+        await measure("Playwright: two pages in two windows in turn, 3 rounds", ["PW1", "PW2"], t0, t1, { own, extra: (d) => [...missedPaths(d), ...(d.stepsWithPath < 4 ? [`only ${d.stepsWithPath} steps with a path`] : [])] });
       } finally { await browser.close().catch(() => {}); }
     });
 

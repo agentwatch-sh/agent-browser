@@ -1089,13 +1089,17 @@ a second; no client method reaches these ops). The relay (`src/relay/model.ts`, 
 - The activation step, one at a time for all clients, also for a client's `Page.bringToFront` and
   `Target.activateTarget`: when a page comes under the pointer and both last points are known, the relay
   waits for the front page's release (at most 2 s), holds the front page's later calls, reads both pages'
-  geometry (one `Runtime.evaluate` in the relay's own isolated world; no client sees it), plans a path with
-  `src/input.ts`'s generator from the front page's last point to the entering page's, clamped 2 px inside the
-  front page's viewport, and has the daemon play it before the window comes forward. The entering page then
+  geometry (one `Runtime.evaluate` in the relay's own isolated world; no client sees it; for a front page
+  that no client holds, as after each command of agent-browser's CLI, the last geometry of the relay's own
+  reads, which goes at every window event that the relay sees), plans a path with `src/input.ts`'s generator
+  from the front page's last point to the entering page's, clamped 2 px inside the front page's content box
+  (the viewport less its scrollbars: a page gets no mouse event over its scrollbars), and has the daemon play
+  it before the window comes forward. The entering page then
   enters at its own last point; the leaving page sees real moves of at most 50 px, 16 ms apart.
 - The catch-up: after a path, a client's next pointer event far from the page's recorded point (a move more
   than 50 px away, a press or a wheel more than 2 px away) gets CDP moves along a path of the same generator
-  first, so Playwright's next raw move after an activation is no jump. At most 4 of a tab's catch-up moves
+  first (clamped to the page's content box too), so Playwright's next raw move after an activation is no
+  jump. At most 4 of a tab's catch-up moves
   wait for an answer; then the catch-up stops (a page with an open dialog), and the relay logs it.
 - With `AGENT_BROWSER_POINTER_LOG=1` the relay logs each step and catch-up (times and counts, never a
   point; the live check uses it).
@@ -1127,7 +1131,9 @@ not usable: a device-metrics override, a ratio or a scale that is not 1); its en
 the page's last point, a jump when that is more than 100 px away. The page that leaves sees a path to the
 point where another scope's page last saw the pointer (a position only). Each activation that brings a page
 under the pointer costs its path, and a catch-up costs as long once after it. A client's raw move into a page
-that lost the pointer to another window (Chrome then reports a movement of 0) is the client's own.
+that lost the pointer to another window (Chrome then reports a movement of 0) is the client's own (board task
+ab-v16.76). A window that moves with no event that the relay sees gives a wrong mapping of a front page that
+no client holds (on the agent browser's Xvfb only the relay and the extension place windows).
 
 **On the Mac** the relay keeps its tabs until the Mac build (board task ab-v16.27; the measurement:
 **One window per agent page on the Mac**): `Target.createTarget`
