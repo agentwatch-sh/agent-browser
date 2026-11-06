@@ -6,7 +6,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { lutimesSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { lutimesSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
@@ -19,6 +19,7 @@ import {
   type FrontDeps, type FrontRun,
 } from "../src/front.ts";
 import { resolveOptions, type Settings } from "../src/options.ts";
+import { holdNow, HOLD_FILES } from "../src/watchback.ts";
 import * as trials from "./live/function-keys/trials.ts";
 import { cli } from "./helpers.ts";
 
@@ -141,6 +142,22 @@ test("macOS: front unhides and activates the agent Chrome that holds this consum
   assert.deepEqual(calls.filter((c) => c[0] !== OSASCRIPT).map((c) => c.slice(0, 4)),
     [[LSAPPINFO, "front"], [LSAPPINFO, "info", "-only", "pid"], [LSAPPINFO, "front"], [LSAPPINFO, "info", "-only", "pid"], [LSAPPINFO, "front"], [LSAPPINFO, "info", "-only", "pid"]],
     "it reads the front app until it is the agent Chrome; no sw_vers on success");
+});
+
+test("macOS: front holds the Mac's give-back watcher off for its request, so the watcher leaves the agent Chrome in front (ab-v16.27); after it the hold ends within 3 s", async () => {
+  const s = settings("hold", {}, 4100);
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4100)].join("\n");
+  const seen: (string | null)[] = [];
+  const { run } = stand({ activate: ok() }, [4100]);
+  const r = await bringToFront(s, onMac(ps, async (argv, ms) => { if (argv[0] === OSASCRIPT) seen.push(holdNow(s)); return run(argv, ms); }));
+  assert.equal(r.via, "activate");
+  assert.deepEqual(seen, ["front"], "the hold is in force when the request goes out");
+  const until = JSON.parse(readFileSync(join(s.stateDir, HOLD_FILES.front), "utf8")).until;
+  assert.ok(until > Date.now() && until <= Date.now() + 3000, `the hold ends ${until - Date.now()} ms from now`);
+  // A refusal before any request (Linux) writes no hold.
+  const linux = settings("hold-linux", {}, 4100);
+  await assert.rejects(bringToFront(linux, { platform: "linux" }));
+  assert.equal(holdNow(linux), null);
 });
 
 test("a Chrome on this profile that agent-browser did not start, while an agent-browser proxy of this user drives it, is this consumer's agent Chrome (as `chromes` lists it)", async () => {

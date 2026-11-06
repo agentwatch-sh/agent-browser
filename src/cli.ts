@@ -12,6 +12,7 @@ import { errorCode, UsageError } from "./errors.ts";
 import { resolveOptions, type BrowserOptions, type Settings } from "./options.ts";
 import { outlineText, type NetEntry } from "./outline.ts";
 import { runProxy } from "./proxy.ts";
+import { runWatchBack } from "./watchback.ts";
 import { startRelay } from "./relay/endpoint.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
@@ -45,6 +46,8 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
 const PROXY_FLAGS: Record<string, Flag> = { attempt: { type: "string" }, "timeout-ms": { type: "string" } };
 /** The flag of the internal `relay` command (the agentwatch daemon starts it): the peer check (C11; board ab-v16.51). */
 const RELAY_FLAGS: Record<string, Flag> = { "peer-check": { type: "boolean" } };
+/** Flags of the internal `give-back-watch` command, which a command on the Mac starts in the background (watchback.ts). */
+const WATCH_FLAGS: Record<string, Flag> = { "chrome-pid": { type: "string" }, "watch-back-command": { type: "string" } };
 
 /** The command flags in the spec (`--name`), plus --stdin for a command with a parameter that can come from stdin. */
 function commandFlags(spec: CommandSpec): Record<string, Flag> {
@@ -56,7 +59,7 @@ function commandFlags(spec: CommandSpec): Record<string, Flag> {
   return out;
 }
 
-const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS, RELAY_FLAGS,
+const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS, RELAY_FLAGS, WATCH_FLAGS,
   Object.fromEntries(Object.entries(GLOBAL_FLAGS).map(([k, { type, short }]) => [k, short ? { type, short } : { type }])));
 
 export const USAGE = `agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
@@ -137,12 +140,16 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     inputTiming = t as BrowserOptions["inputTiming"];
   }
   const idle = str("proxy-idle-ms");
+  let watchBackCommand: string[] | undefined;
+  if (str("watch-back-command")) {
+    try { watchBackCommand = JSON.parse(str("watch-back-command")!); } catch { throw new UsageError("--watch-back-command must be a JSON array of strings"); }
+  }
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"), cdpUrl: str("cdp-url"),
     personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"),
-    hiddenDrive: !!v["hidden-drive"], inputTiming, log,
+    hiddenDrive: !!v["hidden-drive"], inputTiming, log, watchBackCommand,
   });
 }
 
@@ -264,6 +271,13 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       const timeout = typeof values["timeout-ms"] === "string" ? Number(values["timeout-ms"]) : undefined;
       await runProxy(optionsFromFlags(values, log), rest[0], { attempt: values.attempt as string | undefined, timeoutMs: timeout });
       return "serve";
+    }
+    if (name === "give-back-watch") {
+      // The Mac's give-back watcher (watchback.ts), for as long as the agent Chrome of --profile runs.
+      const pid = Number(values["chrome-pid"]);
+      if (!Number.isSafeInteger(pid) || pid < 1 || rest.length) throw new UsageError("usage: agent-browser give-back-watch --state-dir DIR --profile DIR --chrome-pid PID (started by a command on the Mac, not by hand)");
+      await runWatchBack(optionsFromFlags(values, log), pid);
+      return 0;
     }
     if (name === "relay") {
       // Agent mode's CDP endpoint. Its standard output is the bridge to the daemon, so it prints nothing else there.

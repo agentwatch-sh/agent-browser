@@ -28,6 +28,7 @@ import { hasUserDataDir } from "./agent.ts";
 import { listAgentChromes, parseUserPs, readUserPs, type AgentChrome, type StatLike } from "./chromes.ts";
 import { UsageError } from "./errors.ts";
 import type { Settings } from "./options.ts";
+import { holdGiveBack } from "./watchback.ts";
 
 export const OSASCRIPT = "/usr/bin/osascript";
 export const LSAPPINFO = "/usr/bin/lsappinfo";
@@ -35,6 +36,8 @@ export const SW_VERS = "/usr/bin/sw_vers";
 
 /** The whole of front, from the first request to the failure: under the Python adapter's default timeout (120 s). */
 export const FRONT_LIMIT_MS = 60_000;
+/** After front, how long the Mac's give-back watcher still takes a take of the front as the operator's (a late activation). */
+export const FRONT_HOLD_TAIL_MS = 3000;
 
 /**
  * The two requests: "activate" is -[NSRunningApplication activateWithOptions:] (macOS 10.6 and later);
@@ -220,33 +223,41 @@ export async function bringToFront(s: Settings, deps: FrontDeps = {}): Promise<{
     const info = await step([LSAPPINFO, "info", "-only", "pid", asn], 5_000);
     return info.ok ? lsappinfoPid(info.stdout) : undefined;
   };
-  for (const how of ["activate", "activate-from"] as const) {
-    if (how === "activate-from" && !(darwin >= 23)) { asked.push("activate-from not sent (macOS before 14)"); continue; }
-    const r = await step(osascriptFront(how, chrome.pid, bin, start), OSASCRIPT_TIMEOUT_MS);
-    if (!r.ok) throw new Error(`osascript failed (${how}, pid ${chrome.pid}): ${r.stderr.trim().slice(0, 300)}`);
-    const answer = reply(r.stdout, how, chrome.pid);
-    if (!answer.found) {
-      throw new Error(`this login session has no app with pid ${chrome.pid}: the agent Chrome has quit, or it runs in another login session; nothing was brought forward`);
+  // The Mac's give-back watcher (watchback.ts) leaves the agent Chrome in front when front brings it there: a hold for
+  // the whole of front, then FRONT_HOLD_TAIL_MS for a late take (ab-v16.27: the watcher never fights the operator).
+  holdGiveBack(s, "front", Date.now() + FRONT_LIMIT_MS + FRONT_HOLD_TAIL_MS);
+  try {
+    return await requests();
+  } finally { holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS); }
+  async function requests(): Promise<{ chrome: AgentChrome; via: FrontHow }> {
+    for (const how of ["activate", "activate-from"] as const) {
+      if (how === "activate-from" && !(darwin >= 23)) { asked.push("activate-from not sent (macOS before 14)"); continue; }
+      const r = await step(osascriptFront(how, chrome.pid, bin, start), OSASCRIPT_TIMEOUT_MS);
+      if (!r.ok) throw new Error(`osascript failed (${how}, pid ${chrome.pid}): ${r.stderr.trim().slice(0, 300)}`);
+      const answer = reply(r.stdout, how, chrome.pid);
+      if (!answer.found) {
+        throw new Error(`this login session has no app with pid ${chrome.pid}: the agent Chrome has quit, or it runs in another login session; nothing was brought forward`);
+      }
+      if (answer.path !== bin) {
+        throw new Error(`refusing: pid ${chrome.pid} is now ${answer.path ?? "an app with no executable"}, not the agent Chrome ${bin}; nothing was brought forward`);
+      }
+      if (typeof answer.launched === "number" && !(Math.abs(answer.launched - start) <= 5)) {
+        throw new Error(`refusing: pid ${chrome.pid} is now an app that started at ${new Date(answer.launched * 1000).toISOString()}, not the agent Chrome that started at ${new Date(start * 1000).toISOString()}; nothing was brought forward`);
+      }
+      before ??= answer.before || undefined;
+      asked.push(`${how} ${answer.sent ? "sent" : "not sent"}`);
+      if (!answer.sent) continue;
+      for (let i = 0; i < FRONT_READS; i++) {
+        front = await frontPid();
+        if (front === chrome.pid) return { chrome, via: how };
+        await sleep(FRONT_READ_MS);
+      }
     }
-    if (answer.path !== bin) {
-      throw new Error(`refusing: pid ${chrome.pid} is now ${answer.path ?? "an app with no executable"}, not the agent Chrome ${bin}; nothing was brought forward`);
-    }
-    if (typeof answer.launched === "number" && !(Math.abs(answer.launched - start) <= 5)) {
-      throw new Error(`refusing: pid ${chrome.pid} is now an app that started at ${new Date(answer.launched * 1000).toISOString()}, not the agent Chrome that started at ${new Date(start * 1000).toISOString()}; nothing was brought forward`);
-    }
-    before ??= answer.before || undefined;
-    asked.push(`${how} ${answer.sent ? "sent" : "not sent"}`);
-    if (!answer.sent) continue;
-    for (let i = 0; i < FRONT_READS; i++) {
-      front = await frontPid();
-      if (front === chrome.pid) return { chrome, via: how };
-      await sleep(FRONT_READ_MS);
-    }
+    const version = await run([SW_VERS, "-productVersion"], 5_000); // outside the limit (5 s at most): the failure names the version
+    const macos = version.ok && /^\d+(\.\d+)*$/.test(version.stdout.trim()) ? `macOS ${version.stdout.trim()}` : `macOS (Darwin ${darwin})`;
+    const inFront = front === undefined ? "unknown" : front === before ? `pid ${front}, as before` : `pid ${front} (before the request: ${before === undefined ? "unknown" : `pid ${before}`})`;
+    throw new Error(`${macos} did not bring the agent browser to the front (pid ${chrome.pid}, profile ${chrome.profileDir}): ${asked.join(", ")}; the app in front is ${inFront}. `
+      + "macOS 14 and later can refuse an activation that the app in front did not yield. "
+      + `Find the window in the Dock: Control-click the icon of the agent browser's Chrome and choose ${chrome.windowName === null ? "its window" : `the window ${JSON.stringify(chrome.windowName)}`}`);
   }
-  const version = await run([SW_VERS, "-productVersion"], 5_000); // outside the limit (5 s at most): the failure names the version
-  const macos = version.ok && /^\d+(\.\d+)*$/.test(version.stdout.trim()) ? `macOS ${version.stdout.trim()}` : `macOS (Darwin ${darwin})`;
-  const inFront = front === undefined ? "unknown" : front === before ? `pid ${front}, as before` : `pid ${front} (before the request: ${before === undefined ? "unknown" : `pid ${before}`})`;
-  throw new Error(`${macos} did not bring the agent browser to the front (pid ${chrome.pid}, profile ${chrome.profileDir}): ${asked.join(", ")}; the app in front is ${inFront}. `
-    + "macOS 14 and later can refuse an activation that the app in front did not yield. "
-    + `Find the window in the Dock: Control-click the icon of the agent browser's Chrome and choose ${chrome.windowName === null ? "its window" : `the window ${JSON.stringify(chrome.windowName)}`}`);
 }

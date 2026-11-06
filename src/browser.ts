@@ -19,6 +19,7 @@ import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
 import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
+import { ensureWatchBack } from "./watchback.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -153,8 +154,11 @@ export class AgentBrowser {
       try { return await AgentBrowser.over(s.cdpUrl, s, allow); }
       catch (e) { throw new ChromeUnreachableError(`agent mode's endpoint did not answer (${(e as Error).message})`, { cause: e }); }
     }
+    // On the Mac the give-back watcher runs for as long as the agent Chrome does (watchback.ts): each command that connects
+    // makes sure of it, after the proxy is up (so after an approval that a new connection needed). Not for a diagnosis.
+    const watch = async (b: AgentBrowser) => { if (!opts.existingOnly && macWindows(s)) await ensureWatchBack(s); return b; };
     if (existsSync(s.socketPath) && await socketAlive(s.socketPath)) {
-      try { return await AgentBrowser.fromProxy(s, allow); } catch { /* stale or broken proxy */ }
+      try { return await watch(await AgentBrowser.fromProxy(s, allow)); } catch { /* stale or broken proxy */ }
     }
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
     // Checked before any launch: a new Chrome needs a new approval too.
@@ -171,7 +175,7 @@ export class AgentBrowser {
       try {
         await startProxy(s, c.ws);
         if (s.mode === "personal" && c.source !== "cache") rememberEndpoint(s, c.ws);
-        return await AgentBrowser.fromProxy(s, allow);
+        return await watch(await AgentBrowser.fromProxy(s, allow));
       } catch (e) { lastErr = e; }
     }
     // Chrome's instant refusal, and a prompt that nobody answered, are their own causes: remote debugging is on there, so the general help would mislead.

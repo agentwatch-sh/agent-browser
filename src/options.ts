@@ -166,6 +166,12 @@ export type BrowserOptions = {
   inputTiming?: Partial<InputTiming>;
   /** @internal The agent Chrome's display, for the tests (DisplayOption). Default: found (display.ts, displayOf). */
   display?: DisplayOption;
+  /**
+   * @internal The argv that runs in place of /usr/bin/osascript for the Mac's give-back watcher (watchback.ts), for the
+   * tests and the Mac check's dry run on Linux: a stand-in that gets the watcher's arguments. With it the watcher also
+   * starts under node --test and off the Mac. Never set by the CLI's users.
+   */
+  watchBackCommand?: string[];
 };
 
 export type Settings = {
@@ -192,6 +198,7 @@ export type Settings = {
   platform: NodeJS.Platform;
   inputTiming: InputTiming;
   display?: DisplayOption;
+  watchBackCommand?: string[];
 };
 
 /**
@@ -340,6 +347,8 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     throw new UsageError("chromeArgs must be an array of non-empty strings"); // a remote-debugging, automation, headless or profile switch among them is refused at launch (assertSafeChromeArgs), in any dash/case form
   if (o.tabScope !== undefined && (typeof o.tabScope !== "string" || !TAB_SCOPE_RE.test(o.tabScope)))
     throw new UsageError(`tabScope must be 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or a digit, not ${JSON.stringify(o.tabScope)}`);
+  if (o.watchBackCommand !== undefined && (!Array.isArray(o.watchBackCommand) || !o.watchBackCommand.length || !o.watchBackCommand.every((x) => typeof x === "string" && x.length > 0)))
+    throw new UsageError("watchBackCommand must be a non-empty array of non-empty strings");
   const proxyIdleMs = o.proxyIdleMs ?? DEFAULT_PROXY_IDLE_MS;
   if (!Number.isFinite(proxyIdleMs) || proxyIdleMs <= 0) throw new UsageError("proxyIdleMs must be a positive number");
   return {
@@ -366,6 +375,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     platform: o.platform ?? process.platform,
     inputTiming: resolveInputTiming(o.inputTiming),
     display: o.display,
+    watchBackCommand: o.watchBackCommand,
   };
 }
 
