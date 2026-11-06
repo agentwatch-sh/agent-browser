@@ -912,6 +912,22 @@ its parents to the session's **root**, its tmux pane's process, by pid and start
   has not run yet (board task ab-v16.52). The Mac has no cgroups: there the walk alone decides, so a job
   that leaves the tool's shell is refused.
 
+Measured live on taylor on 2026-11-05 (Linux 6.12.115, Node 26.12.0, tmux 3.5a, Chromium 156 with the agent
+package of chrome-extension main 40c2d93, 0.3.2; `CASES=peer` of `test/live/agent-mode/run.ts`, two runs, 30
+of 30 cases each). The relay's self-test chose the pidfd form. Each pane of the run's own tmux server got its
+own `tmux-spawn-<uuid>.scope`. Under pane A a Playwright script, `agent-browser tabs --cdp-url` and the
+Playwright MCP (a stdio child of an agent-like process, with `--cdp-endpoint`) were admitted to scope `pa`
+(the walk), and so were pane A's background job (the walk), its `nohup` job whose shell exited and its
+double-forked job (both re-parented to `systemd --user`: the pane's cgroup). Pane B's Playwright script and
+agent-browser that named `pa` got the session's 403, and the test's own process (in no pane) too. A
+`tmux -L <server> run-shell` from pane B through a tmux server that pane A started was admitted to `pa` (the
+stated limit of the pane's cgroup), and refused for `pb`. After session A's end (its pane ended) its jobs got
+the session's 403 for `pa` and `pb`, and their open connections stayed open; at the line that dropped `pa`
+(5 a) those connections closed with the no-list 1008, and the jobs got the no-list 503 for `pa` and the
+session's 403 for `pb`. After `tmux respawn-pane -k` of pane B the old pane's `nohup` job's open connection
+closed with `The session of this scope has a new process: connect again.`, its new connection got the
+session's 403, and a Playwright script in the new pane was admitted. Codex was not run.
+
 **On Linux, one window per page** (board task ab-v16.28; the anti-detect design of
 `docs/research/2026-11-05-anti-detect-drive.md`, "The answer" steps 1, 2 and 5):
 

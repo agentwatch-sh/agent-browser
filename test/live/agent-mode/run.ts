@@ -1428,7 +1428,7 @@ async function peerCases() {
     const nohup = await connector("pa", "a-nohup", (c) => `bash -c 'nohup ${c} > /dev/null 2>&1 < /dev/null &'`);
     const dfork = await connector("pa", "a-dfork", (c) => `( setsid ${c} > /dev/null 2>&1 < /dev/null & )`);
     await keys("pa", `env -u TMUX tmux -L ${NESTED} -f /dev/null new-session -d -s n`);
-    const nestedPid = Number(await until(() => { try { return execFileSync("tmux", ["-L", NESTED, "display-message", "-p", "#{pid}"], { env: tmuxEnv, encoding: "utf8" }).trim(); } catch { return null; } }, "the nested tmux server", 15_000));
+    const nestedPid = Number(await until(() => { try { return execFileSync("tmux", ["-L", NESTED, "display-message", "-p", "#{pid}"], { env: tmuxEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } }, "the nested tmux server", 15_000));
     const rshell = await connector("pb", "b-runshell", (c) => `env -u TMUX tmux -L ${NESTED} run-shell -b '${c} > /dev/null 2>&1 < /dev/null'`);
     const shapes = { tool, nohup, dfork, rshell };
     await step(G, "the jobs' shapes: the tool command's parent is pane A; the nohup job, the double fork and the nested server left the tree and kept pane A's cgroup", async () => {
