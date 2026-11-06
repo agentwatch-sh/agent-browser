@@ -994,7 +994,7 @@ test("review-68 B2: a press on a frame's (child) session is a held button of its
     assert.equal(d.moves.length, 0, "no path while the frame holds the button");
     await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 5, y: 5, button: "left", clickCount: 1 }, "FR1");
     await step;
-    assert.ok(Date.now() - t0 >= 280, "A's step waited for the frame's release");
+    assert.ok(Date.now() - t0 >= 280 && Date.now() - t0 < 1500, "A's step waited for the frame's release, and the release ended its wait (not step 3's limit)");
     // The frame's release is a child session's input: B's point is unknown then, so that step plays no path.
     assert.equal(d.moves.length, 0);
   } finally { await h.close(); }
@@ -1121,4 +1121,169 @@ test("review-68 N1: with the front page unknown, a tab switch in a focused windo
       assert.equal(h.fake.daemonRequests.filter((r) => r.op === "daemon.pointerAt").length, reads, `${how}: no record`);
     } finally { await h.close(); }
   }
+});
+
+// ------------------------------------------------------------------ round 3 (review-68c)
+
+test("round 3: a read keeps or drops the kept geometry only when it answers within its wait and no drop event came after it started; a late answer changes nothing", async () => {
+  // A drop event (Page.frameResized) while B's read runs: the read answers within its wait, but nothing is kept.
+  {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      h.fake.command = async (t, method, params) => {
+        if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) {
+          await sleep(60);
+          h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Page.frameResized", params: {} });
+          await sleep(60);
+        }
+        return undefined;
+      };
+      await click(c, A, 100, 100); // A's step reads B, the front page
+      assert.equal(state(h).kept[B.tab.id], undefined, "a drop event after the read started: the read keeps nothing");
+      assert.ok(state(h).kept[A.tab.id], "A's own read is kept");
+    } finally { await h.close(); }
+  }
+  // A late answer: B's kept geometry stays as it was (sx 0), also when the late read gives another one (sx 50).
+  {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      await click(c, A, 100, 100); // B's read is kept (sx 0)
+      assert.equal(state(h).kept[B.tab.id]?.sx, 0);
+      h.fake.geometry = (id) => (id === B.tab.id ? { ...GEO, sx: 50 } : GEO);
+      h.fake.command = async (t, method, params) => { if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) await sleep(350); return undefined; };
+      await mouse(c, B, "mouseMoved", 700, 300);
+      await click(c, B, 700, 300); // B's step reads B (the entering page): its answer comes after 200 ms
+      await sleep(400);
+      assert.equal(state(h).kept[B.tab.id]?.sx, 0, "the late answer changed nothing");
+    } finally { await h.close(); }
+  }
+});
+
+test("round 3: the one more try: when the first evaluate names an unknown context, the relay makes its world again and reads once more", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    let failed = false;
+    h.fake.command = (t, method, params) => {
+      if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === A.tab.id && !failed) {
+        failed = true;
+        return { error: JSON.stringify({ code: -32000, message: "Cannot find context with specified id" }) };
+      }
+      return undefined;
+    };
+    await click(c, A, 100, 100);
+    assert.ok(failed);
+    assert.equal(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").filter((r) => r.args[0].tabId === A.tab.id).length, 2, "a world again for the second try");
+    assert.equal(d.moves.length, 1, "the second read gave the geometry: the path plays");
+    void B;
+  } finally { await h.close(); }
+});
+
+test("round 3: Runtime.executionContextsCleared empties the set of the world's ids and still goes to the client", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A } = await twoPages(h);
+    await c.send("Runtime.enable", {}, A.sessionId);
+    const seen: string[] = [];
+    c.on("Runtime.executionContextsCleared", () => seen.push("cleared"));
+    c.on("Debugger.scriptParsed", (p: any) => seen.push(`scriptParsed ${p.executionContextId}`));
+    await click(c, A, 100, 100); // A's read: its world's id is in the set
+    const id = [...h.fake.worlds].filter(([, tab]) => tab === A.tab.id).map(([i]) => i).at(-1)!;
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Debugger.scriptParsed", params: { scriptId: "1", url: "", executionContextId: id } });
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextsCleared", params: {} });
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Debugger.scriptParsed", params: { scriptId: "2", url: "", executionContextId: id } });
+    await until(() => seen.length >= 2, "the events");
+    await sleep(30);
+    assert.deepEqual(seen, ["cleared", `scriptParsed ${id}`], "the world's script is dropped before the clear; after it the id is the page's");
+  } finally { await h.close(); }
+});
+
+test("round 3: B3's wait behind the window's catch-ups: a client's Browser.setWindowBounds moves the window after the catch-up in its page", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100); // a path from B to A: B's point is an X record at (100, 100)
+    const seq: string[] = [];
+    const op = h.fake.op;
+    h.fake.op = (r) => {
+      if (r.op === "windows.update") seq.push(`windows.update ${r.args[1].left !== undefined ? "bounds" : "focus"}`);
+      if (r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent" && r.args[0].tabId === B.tab.id) seq.push(`move ${r.args[2].x}`);
+      return op(r);
+    };
+    const far = mouse(c, B, "mouseMoved", 900, 600); // a catch-up in B
+    await until(() => seq.filter((x) => x.startsWith("move")).length >= 2, "the catch-up");
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: B.targetId });
+    await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 300 } });
+    await far;
+    assert.equal(seq.at(-1), "windows.update bounds", seq.join(" "));
+    assert.equal(seq.at(-2), "move 900", "the client's own move, the catch-up's last step, came first");
+  } finally { await h.close(); }
+});
+
+test("round 3: a failed read drops the kept geometry", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100);
+    assert.ok(state(h).kept[B.tab.id], "B's read is kept");
+    h.fake.command = (t, method, params) => (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id ? { error: JSON.stringify({ code: -32000, message: "Target closed" }) } : undefined);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, B, 700, 300);
+    assert.equal(state(h).kept[B.tab.id], undefined);
+  } finally { await h.close(); }
+});
+
+test("round 3: a catch-up's own read keeps no geometry", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100); // a path from B to A: B's point is an X record; B's read is kept
+    h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Page.frameResized", params: {} });
+    await until(() => state(h).kept[B.tab.id] === undefined, "the drop");
+    const reads = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === B.tab.id).length;
+    await mouse(c, B, "mouseMoved", 900, 600); // a catch-up in B: it reads B's geometry for its clamp
+    assert.equal(h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === B.tab.id).length, reads + 1, "the catch-up read");
+    assert.equal(state(h).kept[B.tab.id], undefined, "and kept nothing");
+  } finally { await h.close(); }
+});
+
+test("round 3: the record's read of a minimized window keeps no geometry (step 6, the front page unknown)", async () => {
+  const { h } = await onHarness();
+  try {
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: A.targetId });
+    await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 0 } }); // the front page is unknown
+    const op = h.fake.op;
+    h.fake.op = (r) => (r.op === "windows.get" && r.args[0] === B.tab.windowId ? { id: r.args[0], left: 0, top: 0, width: 1280, height: 800, state: "minimized", type: "normal", focused: false } : op(r));
+    await click(c, B, 700, 300); // the raise of B (windows.update) and the record's read of B's minimized window
+    assert.ok(h.fake.sent("debugger.sendCommand", "Runtime.evaluate").some((r) => r.args[0].tabId === B.tab.id), "the record read B");
+    assert.equal(state(h).kept[B.tab.id], undefined);
+  } finally { await h.close(); }
+});
+
+test("round 3: with an old daemon (paths off) a client's Browser.setWindowBounds goes at once, as before (no wait behind an activation)", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    await until(() => state(h).paths === "off", "off");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: B.targetId });
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    h.fake.op = async ({ op, args }) => { if (op === "tabs.get" && args[0] === A.tab.id) await gate; return undefined; };
+    const n = h.fake.sent("tabs.get").length;
+    const press = mouse(c, A, "mousePressed", 100, 100); // A's activation waits for its tabs.get
+    await until(() => h.fake.sent("tabs.get").length > n, "A's activation");
+    const t0 = Date.now();
+    await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 300 } });
+    assert.ok(Date.now() - t0 < 500, `${Date.now() - t0} ms: no wait for A's activation (its limit is 2 s)`);
+    assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), [[windowId, { left: 300 }]], "it went while A's activation waits");
+    open();
+    await press;
+  } finally { await h.close(); }
 });

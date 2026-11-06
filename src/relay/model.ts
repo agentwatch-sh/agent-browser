@@ -113,6 +113,8 @@ type Tab = {
    * at every window event that the relay sees: Browser.setWindowBounds, a viewport override, Page.frameResized.
    */
   geo: Geo | null;
+  /** The drop events of the kept geometry so far: a read that started before one keeps and drops nothing. */
+  geoDrops: number;
   /** A client's device-metrics override is in force (Emulation.setDeviceMetricsOverride until its clear). */
   metrics: boolean;
 };
@@ -262,7 +264,8 @@ export class Model {
   pointerState() {
     return { paths: this.paths, offFor60s: this.paths === "off" && this.offUntil > 0, at: this.at, display: this.display, views: this.views,
       front: this.front?.id ?? null, points: Object.fromEntries(this.points), pressed: [...this.tabs.values()].filter((t) => t.pressed).map((t) => t.id),
-      catchUpStops: this.catchUpStops, releaseWaits: [...this.tabs.values()].reduce((n, t) => n + t.released.length, 0) };
+      catchUpStops: this.catchUpStops, releaseWaits: [...this.tabs.values()].reduce((n, t) => n + t.released.length, 0),
+      kept: Object.fromEntries([...this.tabs.values()].filter((t) => t.geo).map((t) => [t.id, t.geo!])) as Record<number, Geo> };
   }
 
   /** Why a new connection is refused (C11's 503 texts), or null when the endpoint is ready. */
@@ -842,7 +845,7 @@ export class Model {
     const p = params ?? {};
     if (!child && method === "Emulation.setDeviceMetricsOverride") tab.metrics = true;
     if (!child && method === "Emulation.clearDeviceMetricsOverride") tab.metrics = false;
-    if (!child && VIEWPORT_CALLS.has(method)) tab.geo = null;
+    if (!child && VIEWPORT_CALLS.has(method)) this.dropGeo(tab);
     if (TOUCH_INPUT.has(method)) { this.setPoint(tab, null); return; }
     if (!POINTER_INPUT.has(method)) return;
     // A held button counts on any session of the page, a frame's too (review-68 B2): mousePressed until Chrome answered its mouseReleased.
@@ -867,7 +870,7 @@ export class Model {
     if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldIds.has(id)) return true;
     if (method === "Runtime.executionContextsCleared") tab.worldIds.clear();
     // A window event that the relay sees: the page's cached geometry goes.
-    if (method === "Page.frameResized") tab.geo = null;
+    if (method === "Page.frameResized") this.dropGeo(tab);
     return false;
   }
 
@@ -877,7 +880,8 @@ export class Model {
    * main frame and evaluates in the id that it returns (review-68 B1: after a cross-site navigation Chromium can give an
    * old id to a page's own world, and the relay sees no context event while no client has Runtime on); when the evaluate
    * names an unknown context (a navigation between the two calls), once more. The relay waits GEOMETRY_WAIT_MS and drops
-   * a late answer. The relay keeps a read only when it is usable as a front page's geometry (usable(), no device-metrics
+   * a late answer, which then changes no kept geometry. The relay keeps a read (within the wait, and with no drop event
+   * since it started) only when it is usable as a front page's geometry (usable(), no device-metrics
    * override, not minimized, not hidden); any other read, a failed one too, drops the kept one (review-68 N2). A catch-up's
    * own read (`keep` false: the relay does not know its window's state) changes no kept geometry. For a tab that is no
    * bridge tab: the kept geometry, or none. null: no read, or none in time.
@@ -888,7 +892,7 @@ export class Model {
     if (!tab.attached) return tab.geo;
     if (tab.geoReading) return null;
     tab.geoReading = true;
-    const target = { tabId: tab.id };
+    const target = { tabId: tab.id }, drops = tab.geoDrops;
     const read = (async () => {
       for (let tryNo = 0; tryNo < 2; tryNo++) {
         const w = await this.bridge.call("debugger.sendCommand", [target, "Page.createIsolatedWorld", { frameId: tab.targetId, worldName: this.worldName, grantUniversalAccess: false }]);
@@ -904,12 +908,18 @@ export class Model {
         }
       }
       return null;
-    })().catch(() => null).then((g) => {
-      if (o.keep !== false) tab.geo = g && this.usableFor(g, tab, { minimized: o.minimized, front: true }) ? g : null;
-      return g;
-    }).finally(() => { tab.geoReading = false; });
+    })().catch(() => null).finally(() => { tab.geoReading = false; });
     const r = await this.within(GEOMETRY_WAIT_MS, read);
-    return r === TIMEOUT ? null : r;
+    if (r === TIMEOUT) return null; // a late answer changes nothing (it is dropped)
+    // The read keeps or drops the kept geometry only when no drop event came after it started (round 3 of PR #68).
+    if (o.keep !== false && drops === tab.geoDrops) tab.geo = r && this.usableFor(r, tab, { minimized: o.minimized, front: true }) ? r : null;
+    return r;
+  }
+
+  /** A drop event of the kept geometry (a window event that the relay sees): it goes, and a read in flight keeps nothing. */
+  private dropGeo(tab: Tab): void {
+    tab.geo = null;
+    tab.geoDrops++;
   }
 
   /** The geometry gives the window's real viewport (section 3): no device-metrics override, not minimized; the front page not hidden. */
@@ -1208,7 +1218,7 @@ export class Model {
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
     if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false,
-      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), geoReading: false, metrics: false, geo: null }));
+      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
     return tab;
   }
 
@@ -1748,7 +1758,7 @@ export class Model {
         // Any client's window change can change which window is on top (a "normal" state brings a minimized one up):
         // the front page is unknown (C11). It can move or resize a window: no kept geometry stays.
         this.front = null; this.frontWindow = null;
-        for (const t of this.tabs.values()) t.geo = null;
+        for (const t of this.tabs.values()) this.dropGeo(t);
         if (Object.keys(update).length) await this.bridge.call("windows.update", [p.windowId, update]);
       };
       // With the paths on, the window moves only after the activation step that runs (a path that plays) and after the
