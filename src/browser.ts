@@ -829,8 +829,10 @@ export class Tab {
       .then(() => { navigatedNow = true; throw navError(); }, () => new Promise<never>(() => {}));
     navigated.catch(() => {}); // handled: a navigation when nothing waits on it is no unhandled rejection
     const framesForShot = async () => {
+      // A navigation can give Chrome's own error before Page.frameNavigated: the isolated world of the frame wait
+      // is gone ("Cannot find context with specified id", review-41e), or the target is.
       const n = await Promise.race([navigated, this.twoFrames(framesMs).catch((e) => {
-        throw e instanceof CDPError && /Inspected target navigated or closed/.test(e.message) ? navError() : e;
+        throw e instanceof CDPError && /Inspected target navigated or closed|Cannot find context with specified id/.test(e.message) ? navError() : e;
       })]);
       if (n === 2) return;
       log(`agent-browser shot: tab ${tab} drew ${n} of 2 frames in ${framesMs / 1000} s after a capture of its shot; ${n ? "the shot goes on" : "the shot fails"}`);

@@ -506,6 +506,26 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
+  test(`${label}: shot whose frame wait gets Chrome's "Cannot find context with specified id" before Page.frameNavigated: the clear navigation error, not CDP's raw text`, async () => {
+    // review-41e note 4: a navigation destroys the isolated world of the frame wait, and a new world can fail the same way.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let first = true;
+    page.onCapture = (p) => {
+      if (!first || p.format !== "jpeg") return;
+      first = false;
+      fake.failOnce.set("Runtime.evaluate", "Cannot find context with specified id");
+      fake.failOnce.set("Page.createIsolatedWorld", "Cannot find context with specified id");
+    };
+    const path = join(c.dir, `${name}.png`);
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot/);
+    page.onCapture = undefined;
+    fake.failOnce.delete("Runtime.evaluate");
+    fake.failOnce.delete("Page.createIsolatedWorld");
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name });
+  });
+
   test(`${label}: shot --size whose own capture times out and whose override clear fails: the error keeps the cleanup note and gives the whole time`, async () => {
     // review-41c: gaveUpAfter built the message again from its parts and dropped the note. Chrome draws again at
     // the shot's first last capture, so that the shot clears the override (ab-b84.18).
