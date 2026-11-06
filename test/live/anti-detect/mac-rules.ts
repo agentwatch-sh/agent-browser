@@ -9,8 +9,11 @@ import { appBundle } from "../../../src/agent.ts";
 import { isChromeForTesting } from "../../../src/options.ts";
 import { inputs, type Rec } from "./probe.ts";
 
-/** The parts of the check that --skip can leave out (each needs no consent of its own; popups are the most likely to take the front). */
-export const SKIPPABLE = ["record", "popups", "person"] as const;
+/**
+ * The parts of the check that --skip can leave out (each needs no consent of its own; popups are the most likely to take
+ * the front; stable is the short second part in Google Chrome stable, a second agent Chrome after the first one quit).
+ */
+export const SKIPPABLE = ["record", "popups", "person", "stable"] as const;
 export type Skip = (typeof SKIPPABLE)[number];
 
 export type MacOptions = {
@@ -28,16 +31,30 @@ export type MacOptions = {
   display: number;
   /** An ffmpeg with libx264 for the records (else ffmpeg on PATH, /opt/homebrew/bin or /usr/local/bin). */
   ffmpeg?: string;
+  /**
+   * "stable": the short second part, which the check runs itself in Google Chrome stable after its first part (a
+   * start, one window, the popups from it and the way back to the opener; no records, so no ffmpeg).
+   */
+  part?: "stable";
+  /**
+   * The stable part only: what the first part hands it (review-66, B1), --quiet-since MS --pointer X,Y. Between the two
+   * parts no watcher runs; the stable part refuses before its Chrome starts when its watcher's ready line shows a
+   * person in that gap (gapProblem).
+   */
+  handover?: Handover;
 };
 
 export const USAGE = `usage (macOS; the operator agrees, and nobody uses the Mac during the run):
-  node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]
+  node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person,stable]
   Before the run: leave the Mac unlocked and awake, with no full-screen app in front, for about 3 minutes; no other
   agent session may use the Mac's agent browser. Quit the apps that post keyboard or mouse events (remote-desktop apps,
   Karabiner, a mouse jiggler, Universal Control): the check takes their events as a person's, so they stop it (exit 1),
   or it refuses before its Chrome starts (exit 2). A key, a click, a scroll or a pointer move of a person stops it at once.
+  One popup step lets the agent Chrome keep the front for up to 2 s with no give-back. When Google Chrome (stable) is
+  installed and is not the agent Chrome, a short second part runs in it after the first agent Chrome quit (--part stable;
+  --skip stable leaves it out). Do not touch the Mac until the summary prints.
 dry run (Linux, in a private Xvfb, with a stand-in watcher; not a Mac result):
-  node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]`;
+  node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person,stable]`;
 
 /**
  * The check's argv, or why it refuses (exit 2, before anything starts). On macOS it starts an agent Chrome on the
@@ -50,7 +67,8 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
   try {
     v = parseArgs({ args: argv, strict: true, allowPositionals: false, options: {
       "on-my-screen": { type: "boolean" }, "dry-run": { type: "boolean" }, "out-dir": { type: "string" }, "chrome-bin": { type: "string" }, chrome: { type: "string" },
-      watcher: { type: "string" }, look: { type: "string" }, skip: { type: "string" }, display: { type: "string" }, ffmpeg: { type: "string" },
+      watcher: { type: "string" }, look: { type: "string" }, skip: { type: "string" }, display: { type: "string" }, ffmpeg: { type: "string" }, part: { type: "string" },
+      "quiet-since": { type: "string" }, pointer: { type: "string" },
     } }).values;
   } catch (e) { return { ok: false, message: `${(e as Error).message}\n${USAGE}` }; }
   const no = (message: string) => ({ ok: false as const, message });
@@ -73,7 +91,21 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
   }
   const look = Number(v.look ?? 0);
   if (typeof v.look === "string" && !/^\d+$/.test(v.look) || !Number.isInteger(look) || look < 0 || look > 300) return no(`--look is a whole number of seconds from 0 to 300: ${v.look}`);
-  const both = { look, skip, ...(typeof ffmpeg === "string" ? { ffmpeg } : {}) };
+  if (v.part !== undefined && v.part !== "stable") return no(`--part takes stable, not ${JSON.stringify(v.part)}`);
+  const part = v.part === "stable" ? { part: "stable" as const } : {};
+  if (part.part && look) return no("--look is for the first part, not --part stable");
+  // The stable part never starts without the first part's handover (B1 of review-66), and only the stable part takes it.
+  const qs = v["quiet-since"], pt = v.pointer;
+  if (!part.part && (qs !== undefined || pt !== undefined)) return no("--quiet-since and --pointer are for --part stable (the first part gives them)");
+  let handover: { handover: Handover } | Record<string, never> = {};
+  if (part.part) {
+    if (typeof qs !== "string" || typeof pt !== "string") return no("--part stable needs --quiet-since and --pointer (the first part gives them; run the check without --part)");
+    if (!/^[1-9]\d{0,15}$/.test(qs)) return no(`--quiet-since is a time in whole ms since 1970: ${qs}`);
+    const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(pt);
+    if (!m) return no(`--pointer is X,Y (points): ${pt}`);
+    handover = { handover: { quietSince: Number(qs), pointer: { x: Number(m[1]), y: Number(m[2]) } } };
+  }
+  const both = { look, skip, ...(typeof ffmpeg === "string" ? { ffmpeg } : {}), ...part, ...handover };
   if (dryRun) {
     for (const f of ["chrome-bin", "watcher"]) if (v[f] !== undefined) return no(`--${f} is for the Mac run, not --dry-run`);
     const display = Number(v.display ?? 123);
@@ -261,6 +293,48 @@ export function readyText(ready: WatchEvent): string {
     + `and so do ${HID_APPS}: quit them first.`;
 }
 
+/**
+ * How much earlier than the first part's watcher's last line the handover counts its last look at the input: the
+ * watcher reads it every 100 ms (and at each front change), so its last look can come up to 100 ms before its last line.
+ */
+export const HANDOVER_SLACK_MS = 200;
+
+/** What the first part hands the stable part (review-66, B1): the time from which no watcher read the input, and the pointer's point. */
+export type Handover = { quietSince: number; pointer: { x: number; y: number } };
+
+/**
+ * The first part's handover, from its watcher's whole log once that watcher ended, or why the stable part must not
+ * start: a person's input or a pointer move after the measurement's end (the stop rules end there), or no pointer.
+ * quietSince: HANDOVER_SLACK_MS before the watcher's last line; from then until the stable part's watcher is ready, no
+ * watcher reads the input, so the stable part reads it from its HID readings and its pointer (gapProblem).
+ */
+export function handover(events: readonly WatchEvent[], measureEnd: number): { ok: true; handover: Handover } | { ok: false; why: string } {
+  const person = events.find((e) => (e.ev === "input" || e.ev === "pointer") && e.t > measureEnd);
+  if (person) return { ok: false, why: `a person used the Mac (${person.ev === "pointer" ? "a pointer move" : person.kind}) after the first part's measurement, before the stable part` };
+  const pointer = realPointer(events);
+  if (!pointer) return { ok: false, why: "the first part's watcher gave no pointer point" };
+  return { ok: true, handover: { quietSince: Math.max(...events.map((e) => e.t)) - HANDOVER_SLACK_MS, pointer } };
+}
+
+/**
+ * Why the stable part refuses (exit 2, before its Chrome starts), from its watcher's ready line and the first part's
+ * handover: a HID reading (seconds since the hardware's last key, modifier, click or scroll) shorter than the time
+ * since the first part's last look at the input, or a pointer that is not where the first part's watcher saw it (a
+ * move of 1 point or more, as the watcher's own rule). Then a person used the Mac in the gap between the two parts.
+ */
+export function gapProblem(ready: WatchEvent, h: Handover): string | null {
+  const gap = ready.t - h.quietSince;
+  for (const name of HID_TYPES) {
+    const s = ready.hid?.[name];
+    if (typeof s !== "number" || !Number.isFinite(s)) return `the HID reading of ${name} is ${s ?? "none"}: the stable part cannot tell whether a person used the Mac between the two parts`;
+    if (s * 1000 < gap) return `the HID reading of ${name} is ${s} s, shorter than the ${(gap / 1000).toFixed(1)} s since the first part's watcher last read the input: a person used the Mac between the two parts`;
+  }
+  const p = ready.pointer;
+  if (!Array.isArray(p) || p.length !== 2 || !p.every((x) => Number.isFinite(Number(x)))) return "the stable part's watcher gave no pointer point";
+  if (Math.abs(Number(p[0]) - h.pointer.x) + Math.abs(Number(p[1]) - h.pointer.y) >= 1) return `the pointer moved between the two parts (from ${h.pointer.x},${h.pointer.y} to ${p[0]},${p[1]})`;
+  return null;
+}
+
 /** The longest silence of the watcher (it logs once a second) that still counts as a working watcher. */
 export const MAX_WATCH_GAP_MS = 2000;
 
@@ -296,14 +370,84 @@ export function watcherProblems(events: readonly WatchEvent[], bad: readonly num
 export const OPEN_TAKE_MS = 1500;
 
 /**
+ * The one popup step with no give-back (a popup from a background tab, ab-v16.68): from the click, how long the check
+ * lets the agent Chrome keep the front before its watcher gives it back. A take that begins in that time may stay open
+ * until OPEN_TAKE_MS after its end (stopReason).
+ */
+export const NO_GIVE_BACK_MS = 2000;
+
+/** A time with no give-back (epoch ms): the hold of the step above. */
+export type Hold = { from: number; until: number };
+
+/**
+ * The step with no give-back (review-66, N1a): the hold goes into `holds` (the stop rules read it) before the check's
+ * watcher stops giving the front back ("disarm"); `open` makes the popup; a snap 1 s after the start shows the window
+ * order while the agent Chrome has the front; at the hold's end, never later, the watcher gives the front back again
+ * ("arm"). At a stop (`aborted`), the check's stop gave the front back itself (checkHarm), and the step never arms the
+ * watcher again. `pause` ends at once at a stop.
+ */
+export async function noGiveBackStep(d: {
+  now: () => number; pause: (ms: number) => Promise<unknown>; tell: (cmd: string) => void; aborted: () => boolean; holds: Hold[];
+  open: () => Promise<unknown>; snap: () => Promise<unknown>;
+}): Promise<void> {
+  const from = d.now(), hold = { from, until: from + NO_GIVE_BACK_MS };
+  d.holds.push(hold);
+  d.tell("disarm");
+  try {
+    await d.open();
+    await d.pause(Math.max(0, from + 1000 - d.now()));
+    await d.snap();
+    await d.pause(Math.max(0, hold.until - d.now()));
+  } finally {
+    if (!d.aborted()) d.tell("arm");
+  }
+}
+
+/**
+ * While agent-browser's give-back watcher (the prototype, mac-watchback.ts) runs, the check's own watcher only logs.
+ * When a take of the agent Chrome is still open this long after it began, the check arms its own watcher again, which
+ * gives the front back at once (a fallback, so that a slow or failed prototype never stops the run).
+ */
+export const FALLBACK_MS = 800;
+
+/**
+ * The check's fallback while agent-browser's give-back watcher (the prototype) runs (review-66, N1c). `line` reads each
+ * watcher line: a front line of the agent Chrome starts one timer of FALLBACK_MS (one for a take); at its end, while
+ * `active` (the prototype runs and the check did not stop) and the agent Chrome still has the front, it arms the
+ * check's watcher. A front line of any other app ends the timer, and disarms the watcher if the fallback armed it.
+ * `reset`: the prototype ended (the check's watcher stays armed then) or stopped.
+ */
+export function makeFallback<T>(d: {
+  active: () => boolean; frontIsAgent: () => boolean; arm: () => void; disarm: () => void;
+  setTimer: (fn: () => void, ms: number) => T; clearTimer: (timer: T) => void;
+}): { line: (e: WatchEvent) => void; reset: () => void; readonly armed: boolean } {
+  let timer: T | undefined, armed = false;
+  const clear = () => { if (timer !== undefined) d.clearTimer(timer); timer = undefined; };
+  return {
+    line(e) {
+      if (e.ev !== "front" || !d.active()) return;
+      if (e.agent) {
+        timer ??= d.setTimer(() => { timer = undefined; if (!d.active() || !d.frontIsAgent()) return; armed = true; d.arm(); }, FALLBACK_MS);
+        return;
+      }
+      clear();
+      if (armed) { armed = false; d.disarm(); }
+    },
+    reset() { clear(); armed = false; },
+    get armed() { return armed; },
+  };
+}
+
+/**
  * Why the check must stop now (it ends the step in progress at once, asks for one last give-back, skips the steps
  * left, and quits its Chrome), or undefined: a pointer move or a person's input (a key press, a modifier key, a
  * click or a scroll of the hardware: a person, or an app that posts HID events, uses the Mac), a locked screen, a
  * display that slept, another user's session in front, a Space change, a take of the front that did not come back
- * in OPEN_TAKE_MS, a watcher that ended or went silent for 3 s, or the run's time limit. After `measureEnd` (the look
- * and the end) no rule applies: the operator's own clicks then are not the check's.
+ * in OPEN_TAKE_MS (a take that began in a hold, the step with no give-back: OPEN_TAKE_MS after the hold's end), a
+ * watcher that ended or went silent for 3 s, or the run's time limit. After `measureEnd` (the look and the end) no
+ * rule applies: the operator's own clicks then are not the check's.
  */
-export function stopReason(events: readonly WatchEvent[], steps: readonly Step[], now: number, o: { t0: number; limitMs: number; measureEnd?: number }): string | undefined {
+export function stopReason(events: readonly WatchEvent[], steps: readonly Step[], now: number, o: { t0: number; limitMs: number; measureEnd?: number; holds?: readonly Hold[] }): string | undefined {
   if (o.measureEnd !== undefined) return undefined;
   if (events.some((e) => e.ev === "pointer")) return "the pointer moved: a person uses the Mac (the watcher stopped its give-back)";
   const input = events.find((e) => e.ev === "input");
@@ -314,7 +458,9 @@ export function stopReason(events: readonly WatchEvent[], steps: readonly Step[]
   if (states.some((e) => e.onConsole === false)) return "another user's session came to the front";
   const sp = spaceChanges(events, steps);
   if (sp.length) return `the Space changed in ${sp[0].step}`;
-  const open = frontTakes(events, steps).takes.find((t) => t.t1 === null && now - t.t0 > OPEN_TAKE_MS);
+  // A take that began in a time with no give-back (holds) may stay open until OPEN_TAKE_MS after that time's end.
+  const until = (t: Take) => { const h = (o.holds ?? []).find((x) => t.t0 >= x.from && t.t0 <= x.until); return (h ? h.until : t.t0) + OPEN_TAKE_MS; };
+  const open = frontTakes(events, steps).takes.find((t) => t.t1 === null && now > until(t));
   if (open) return `the front app did not come back to the operator's app (it went to ${open.to.join(", ")})`;
   const end = events.find((e) => e.ev === "end");
   if (end) return `the watcher ended (${end.why})`;
@@ -568,6 +714,78 @@ export function verdict(p: { takes: readonly Take[]; spaces: readonly SpaceChang
   return { ok: problems.length === 0, problems, popupOnly: problems.length > 0 && problems.length === popupTakes };
 }
 
+export type Verdict = { ok: boolean; problems: string[]; popupOnly: boolean };
+
+/**
+ * The verdict of the whole run with its second part (Google Chrome stable, a run of its own): its problems join the
+ * first part's, each with the part's name. popupOnly: each part passed or had only popup takes that came back. A part
+ * with no results (it refused, or failed) gives its own problem.
+ */
+export function joinVerdicts(main: Verdict, part: { ok: boolean; problems: readonly string[]; popupOnly?: boolean } | null, label: string): Verdict {
+  if (!part) return main;
+  const ok = main.ok && part.ok;
+  return { ok, problems: [...main.problems, ...part.problems.map((p) => `${label}: ${p}`)], popupOnly: !ok && (main.ok || main.popupOnly) && (part.ok || !!part.popupOnly) };
+}
+
+// ------------------------------------------------------------------------------------------------ who gave the front back
+
+/** One line of agent-browser's give-back watcher, the prototype (mac-watchback.ts, parseWatchBack). */
+export type BackLine = { t: number; text: string; kv: Record<string, string> };
+
+/**
+ * One take of the front, and who gave it back (ab-v16.68): agent-browser's start guard (the start), agent-browser's
+ * give-back watcher (the prototype that runs for as long as the agent Chrome runs), the check's own watcher (before the
+ * prototype runs, and as its fallback), or nobody (the step with no give-back). ms: the take as the check's watcher
+ * saw it (NSWorkspace's news), null when it did not come back. The prototype's own view: seenMs from the take to its
+ * took line (its 25 ms poll), its asks, and ownMs (its back line's after-ms). `fallbacks`: the times at which the check
+ * armed its own watcher because a take was still open (FALLBACK_MS); the note names them.
+ */
+export type GiveBackRow = { step: string; ms: number | null; by: string; seenMs: number | null; asks: number; ownMs: number | null; note: string };
+
+export function giveBackRows(takes: readonly Take[], back: readonly BackLine[], holds: readonly Hold[], fallbacks: readonly number[] = []): GiveBackRow[] {
+  return takes.map((t) => {
+    const end = t.t1 ?? Number.POSITIVE_INFINITY;
+    const near = (l: BackLine) => l.t >= t.t0 - 200 && l.t <= end + 200;
+    const took = back.find((l) => "took" in l.kv && near(l));
+    const asks = back.filter((l) => "asked" in l.kv && near(l)).length;
+    const backLine = back.find((l) => "back" in l.kv && l.t >= (took?.t ?? t.t0) && l.t <= end + 300);
+    const refused = back.find((l) => "refused" in l.kv && near(l));
+    const hold = holds.find((h) => t.t0 >= h.from && t.t0 <= h.until);
+    const self = t.t1 !== null && !t.asks && !asks;
+    let by: string;
+    if (t.start) by = "agent-browser's start guard (launches.log)";
+    else if (hold) by = t.t1 !== null && t.t1 < hold.until ? "nobody: it came back by itself in the time with no give-back"
+      : `nobody for ${hold.until - t.t0} ms (no give-back), then ${t.asks ? "the check's watcher" : asks ? "agent-browser's give-back watcher" : "nobody"}`;
+    else if (asks && t.asks) by = "agent-browser's give-back watcher, then the check's watcher (its fallback)";
+    else if (asks) by = "agent-browser's give-back watcher (the prototype)";
+    else if (t.asks) by = "the check's watcher";
+    else by = self ? "nobody: it came back by itself" : "nobody: it did not come back";
+    const ownMs = backLine ? Number(backLine.kv["after-ms"]) : null;
+    const fell = fallbacks.find((f) => f >= t.t0 && f <= end);
+    return {
+      step: t.step, ms: t.t1 === null ? null : t.ms, by, seenMs: took ? took.t - t.t0 : null, asks, ownMs: Number.isFinite(ownMs) ? ownMs : null,
+      note: [refused ? `the prototype's 3 asks were spent (refused=${refused.kv.refused})` : "", took?.kv.gone ? "the app to give the front back to had quit" : "",
+        fell !== undefined ? `the check armed its watcher ${fell - t.t0} ms after the take (its fallback)` : ""].filter(Boolean).join("; "),
+    };
+  });
+}
+
+/**
+ * The prototype's run in a few lines: its ready line (the app it gives the front back to), how many takes it saw and
+ * gave back, and its end (why, and when against the agent Chrome's quit).
+ */
+export function watchBackText(back: readonly BackLine[], o: { started?: string; quitAt?: number }): string[] {
+  if (!back.length) return [o.started ?? "agent-browser's give-back watcher did not run"];
+  const watch = back.find((l) => "watch" in l.kv), end = back.find((l) => "end" in l.kv);
+  const tooks = back.filter((l) => "took" in l.kv).length, backs = back.filter((l) => "back" in l.kv).length, refused = back.filter((l) => "refused" in l.kv).length;
+  return [
+    ...(o.started ? [o.started] : []),
+    watch ? `It watched the agent Chrome (pid ${watch.kv.agent}) and gave the front back to pid ${watch.kv.before}.` : "It never watched (no watch line).",
+    `It saw ${tooks} take(s) of the front by the agent Chrome and saw the front come back ${backs} time(s)${refused ? `; its 3 asks were spent ${refused} time(s)` : ""}.`,
+    end ? `Its end: ${end.kv.end}${end.kv.by ? ` (by the ${end.kv.by})` : ""}${o.quitAt !== undefined && end.kv.end === "agent-gone" ? `, ${end.t - o.quitAt} ms after the check's quit of the agent Chrome began` : ""}.` : "No end line (it was still running when the check read its log).",
+  ];
+}
+
 // ------------------------------------------------------------------------------------------------ the summary
 
 /** One row of a drive table: the step, and what the driven page (and the other pages) showed. */
@@ -575,6 +793,10 @@ export type DriveRow = { step: string; ok: boolean; ms: number; error?: string; 
 export type RecordRow = { where: string; fps?: number; frames?: number; seconds?: number; maxFrameGapMs?: number; covered?: string; error?: string; skipped?: string };
 export type WindowRow = { step: string; how: string; cg: string; placement: Placement | null; onscreen: string; space: string; front: string };
 export type PopupRow = { kind: string; asked: string; where: string; outer: string; popup: string; opener: string; front: string; placement: Placement | null };
+/** A popup from a page in a background tab (today's agent mode on the Mac): who gave the front back, the take, and the window order while the agent Chrome had the front. */
+export type BgPopupRow = { step: string; giveBack: string; where: string; popup: string; opener: string; take: string; during: string; front: string };
+/** One way back to the opener with no activation (the popup closes, or a click in the popup): what the opener page and the operator's screen showed. */
+export type BackRow = { step: string; how: string; ok: boolean; ms: number; error?: string; opener: string; after: string; front: string; space: string; order: string };
 
 export type MacResult = {
   ok: boolean; problems: string[];
@@ -588,6 +810,10 @@ export type MacResult = {
   windows: WindowRow[]; tabDrive: DriveRow[]; windowDrive: DriveRow[]; records: RecordRow[];
   focus: string[]; popups: PopupRow[]; pointer: { at: { x: number; y: number } | null; real: Record<string, RealEvent[]> };
   apis: string[]; look: string[]; notMeasured: string[];
+  /** "stable": the short second part in Google Chrome stable (a run of its own). */
+  part?: "stable";
+  /** Popups from a page in a background tab, the ways back to the opener, who gave each take back, agent-browser's give-back watcher (the prototype), and the Google Chrome stable part (ab-v16.68). */
+  bgPopups?: BgPopupRow[]; back?: BackRow[]; giveBack?: GiveBackRow[]; watchBack?: string[]; stable?: string[];
 };
 
 const cell = (s: unknown) => String(s ?? "").replace(/\|/g, "/").replace(/\n/g, " ");
@@ -599,13 +825,13 @@ export const placementText = (p: Placement | null) => p
 /** The summary (Markdown) of one run: the pass rule first, then each measurement. */
 export function summary(r: MacResult): string {
   const lines = [
-    `# macOS check of drive, record and one window per page${r.dryRun ? " (DRY RUN on Linux: not a Mac result)" : ""}`,
+    `# macOS check of drive, record and one window per page${r.part === "stable" ? ": the Google Chrome stable part" : ""}${r.dryRun ? " (DRY RUN on Linux: not a Mac result)" : ""}`,
     "",
     `${r.startedAt}, ${r.seconds} s; ${r.product} (${r.chrome}); run folder ${r.run}`,
     `Agent flags: ${r.flags.join(" ")}`,
     "",
     `## Result: ${r.ok ? "exit 0: the check never took the operator's focus or Space"
-      : r.popupOnly ? "exit 1, an expected result: only popup steps took the front (Chrome can activate itself when it shows a popup), and the watcher gave it back each time" : "exit 1"}`,
+      : r.popupOnly ? "exit 1, an expected result: only popup steps took the front (Chrome can activate itself when it shows a popup), and a watcher gave it back each time (in the step with no give-back, after it)" : "exit 1"}`,
     ...r.problems.map((p) => `- ${p}`),
     "",
     "## The front app and the Space",
@@ -630,8 +856,24 @@ export function summary(r: MacResult): string {
     "## Focus between agent windows, and keys into an inactive window",
     ...(r.focus.length ? r.focus.map((f) => `- ${f}`) : ["(none)"]),
     "",
+    "## Popups from a background tab (today's agent mode on the Mac)",
+    ...table(["step", "give-back", "opened in", "popup page", "opener page", "the take", "window order while the agent Chrome had the front", "front app"],
+      (r.bgPopups ?? []).map((p) => [p.step, p.giveBack, p.where, p.popup, p.opener, p.take, p.during, p.front])),
+    "",
     "## Popups (from a page in a window of its own)",
     ...table(["kind", "asked", "opened in", "outer size", "popup page", "opener page", "front app", "place"], r.popups.map((p) => [p.kind, p.asked, p.where, p.outer, p.popup, p.opener, p.front, placementText(p.placement)])),
+    "",
+    "## The way back to the opener (no activation: no Page.bringToFront, Target.activateTarget or windows.update)",
+    ...table(["step", "how", "ok", "ms", "opener page", "opener after", "front app", "Space", "opener's window"],
+      (r.back ?? []).map((b) => [b.step, b.how, b.ok ? "ok" : `FAIL ${b.error ?? ""}`, b.ms, b.opener, b.after, b.front, b.space, b.order])),
+    "",
+    "## Who gave the front back (each take; agent-browser's give-back watcher is a prototype in the check)",
+    ...(r.watchBack ?? []).map((a) => `- ${a}`),
+    ...table(["step", "away (ms, the check's watcher)", "given back by", "prototype saw it after (ms)", "prototype asks", "prototype's own after-ms", "note"],
+      (r.giveBack ?? []).map((g) => [g.step, g.ms ?? "did not come back", g.by, g.seenMs ?? "-", g.asks, g.ownMs ?? "-", g.note])),
+    "",
+    "## Google Chrome (stable)",
+    ...(r.stable?.length ? r.stable.map((a) => `- ${a}`) : ["(none)"]),
     "",
     "## The real pointer",
     `- At ${r.pointer.at ? `${r.pointer.at.x},${r.pointer.at.y}` : "unknown"} (the check never moves it).`,
