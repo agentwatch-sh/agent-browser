@@ -126,7 +126,7 @@ test("the suite refuses the live daemon's socket before it makes its run folder 
   const uid = process.getuid!();
   const r = spawnSync(process.execPath, [join(ROOT, "test/live/agent-mode/run.ts")], {
     encoding: "utf8", timeout: 30_000,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, RUN: run, RELAY_SOCK: `/run/user/${uid}/agentwatch/browser-cdp.sock`, CONTROL: "/bin/true" },
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, RUN: run, RELAY_SOCK: `/run/user/${uid}/agentwatch/browser-cdp.sock`, CONTROL: "/bin/true", SITE_PORT: "0" },
   });
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /^refused: .* is in the live daemon's socket folder/);
@@ -144,7 +144,7 @@ test("the own mode refuses a RUN that the ws+unix URL changes, before it makes t
     writeFileSync(join(ext, "test/live/host.py"), "");
     const run = join(dir, "a b", "run");
     const r = spawnSync(process.execPath, [join(ROOT, "test/live/agent-mode/run.ts")], {
-      encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, CHROME_EXTENSION: ext, RUN: run },
+      encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, CHROME_EXTENSION: ext, RUN: run, SITE_PORT: "0" },
     });
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, /^RUN=".*\/a b\/run": use a path of letters, digits and \._-\/ only/);

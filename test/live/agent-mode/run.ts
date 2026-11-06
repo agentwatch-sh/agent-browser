@@ -32,23 +32,30 @@
 // Environment: CHROME_EXTENSION (required in the own mode: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
 // DISPLAY_N (default 118), RUN (an empty folder; default, also for an empty RUN, a new one in the temp folder; in the own mode its path must
-// have plain characters only, because the relay's socket is in it and the ws+unix URL changes other characters),
-// KEEP_RUN (1: the run removes nothing, below), CASES (default all:
+// have plain characters only, because the relay's socket is in it and the ws+unix URL changes other characters; the run
+// gives mode 0700 only to a RUN that it made itself), KEEP_RUN (1: the run removes nothing, below), SITE_PORT (the
+// probe's site; default 8781, which the cases need; 0 only for the spawn tests of `npm test`: a free port, and no
+// check), CASES (default all:
 // playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone) runs some groups only. The agent
 // package must be chrome-extension main c99bebb (0.3.1) or later: the per-scope receiver (parts 1a and 1b: set_scopes,
 // the tab-to-scope map, bridge.tabScope and bridge.tabScopes, the removal queue and its window rule, the retry of a
 // popup). It uses port 8781 (the probe's site), a free port of its own for the popup site of the group `scopes`, and
 // *.localhost hosts only. It drives no Chrome that it did not start (in the external mode only the one whose socket
 // RELAY_SOCK names, below) and stops no Chrome that it did not start; it opens no debugging port, and no prompt can
-// appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails.
+// appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. A taken display or
+// site port stops it with exit 2 before it makes anything or calls CONTROL.
 //
 // At its end, after it stopped its children and wrote results.json, the run removes the large parts that it made in
 // RUN (run-folder.ts; board ab-v16.64): install/ (the scratch npm install, about 47 MB), pack/ (the package tarball),
 // home/ and profile/ (Chromium's; the profile is 7-99 MB) and agent/ (the copy of the agent package). logs/, results.json and the small
 // outputs stay. When the run made RUN itself (no RUN in the environment), no case failed and the run was not aborted,
-// it removes the whole RUN folder and prints that it did. KEEP_RUN=1 keeps everything, and so does a child of the run
-// that still runs after the stop. The run removes only paths that it recorded when it made them (a path that was there
-// before stays), never from a listing of the folder, and never RUN itself when RUN came from the environment.
+// it removes the whole RUN folder and prints that it did. KEEP_RUN=1 keeps everything, and so does a process of the run
+// that still runs after the stop (a child, a short call such as CONTROL or the agent-browser CLI, or the group peer's
+// tmux servers). The run records a part only after its own mkdir of that path succeeded, a mkdir that fails when
+// anything is at the path: a folder that was there before, or that another run in the same RUN made, is never
+// recorded (an install/, pack/, agent/ or profile/ that is there stops the run; a home/ that is there is used). It
+// removes only the recorded paths, never from a listing of the folder, and never RUN itself when RUN came from the
+// environment.
 //
 // The external mode (boards ab-v16.57 and ab-v16.60) connects to an agent browser that runs already, for example
 // agentwatch's test browser (agentwatch tests/live/browser_test_unit.py), and starts no Xvfb, Chromium, stand-in daemon
@@ -63,7 +70,7 @@
 // drop, a relay stop) use the endpoint, the probe site's log or CONTROL instead, or they are skipped with the reason:
 // each such result says so ("adapted" or "skip"). The group `scopes` needs two lists, so it is skipped; the group
 // `peer` is refused. The run ends every scope that it used through CONTROL, before the first relay restart and at its
-// end, as a session end does. A socket in a socket folder of agentwatch (/run/user/<uid>/agentwatch/, also through a
+// end, as a session end does (a run that stopped before its first client used no scope, and ends none). A socket in a socket folder of agentwatch (/run/user/<uid>/agentwatch/, also through a
 // link; /run/agentwatch; ~/.cache/agentwatch), or a hard link to a socket there, is refused before the run makes its
 // folder or connects (external.ts): the suite never runs in the operator's agent browser. The socket must exist when
 // the run starts, its path must have plain characters only (the ws+unix URL changes others), and the run connects to its
@@ -73,7 +80,7 @@
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, appendFileSync, chmodSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
@@ -87,6 +94,10 @@ import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+/** True when nothing listens on 127.0.0.1:`port`. */
+function portFree(port: number): Promise<boolean> {
+  return new Promise((r) => { const s = connect(port, "127.0.0.1"); s.once("connect", () => { s.destroy(); r(false); }); s.once("error", () => r(true)); });
+}
 const PROBE = join(ROOT, "docs/superpowers/specs/2026-11-03-two-modes-probe");
 const EXT = process.env.CHROME_EXTENSION ? resolve(process.env.CHROME_EXTENSION) : "";
 /** The external mode: the socket of an endpoint that runs already, and its control (external.ts refuses the live one). */
@@ -107,15 +118,26 @@ if (!EXTERNAL && (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !exis
 }
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
-/** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
-const OWN_RUN = !process.env.RUN;
-const RUN = resolve(process.env.RUN || mkdtempSync(join(tmpdir(), "ab-agent-live-")));
-// The own mode's relay socket is in RUN, and the client URL must keep its path (external.ts, wsPathKept).
-if (!EXTERNAL && !wsPathKept(join(RUN, "relay.sock"))) { process.stderr.write(`RUN=${JSON.stringify(RUN)}: use a path of letters, digits and ._-/ only (the ws+unix URL changes other characters)\n`); process.exit(2); }
+/** The port of the probe's site (site.mjs reads SITE_PORT too). The cases need 8781; 0 is for the spawn tests of
+ *  `npm test` (test/agent-live-run-folder.test.ts): the site takes a free port, and the run checks no port. */
+const SITE_PORT = Number(process.env.SITE_PORT || 8781);
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up").split(",");
 /** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
 const PEER = CASES.includes("peer");
 if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
+/** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
+const OWN_RUN = !process.env.RUN;
+/** The own mode's relay socket is in RUN, and the client URL must keep its path (external.ts, wsPathKept). */
+function runChecked(run: string): string {
+  if (EXTERNAL || wsPathKept(join(run, "relay.sock"))) return run;
+  process.stderr.write(`RUN=${JSON.stringify(run)}: use a path of letters, digits and ._-/ only (the ws+unix URL changes other characters)\n`);
+  process.exit(2);
+}
+if (!OWN_RUN) runChecked(resolve(process.env.RUN!));
+// The early stops: before the run makes anything or calls CONTROL.
+if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) { process.stderr.write(`display :${DISPLAY_N} is taken; set DISPLAY_N\n`); process.exit(2); }
+if (SITE_PORT !== 0 && !(await portFree(SITE_PORT))) { process.stderr.write(`port ${SITE_PORT} is taken (the probe's site needs it)\n`); process.exit(2); }
+const RUN = runChecked(resolve(process.env.RUN || mkdtempSync(join(tmpdir(), "ab-agent-live-"))));
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 /** The relay's refusal of a navigation off the scope's list (C11, layer 1). */
 const OFF_LIST = (host: string) => new RegExp(`Not allowed: ${host.replace(/\./g, "\\.")} is not on the allowlist`);
@@ -126,10 +148,29 @@ const RELAY_SOCK = EXTERNAL || join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, 
 /** The scopes of this run's clients: the external mode ends each through CONTROL (the probe's concurrency script uses s1 to s3). */
 const USED = new Set<string>(["s1", "s2", "s3"]);
 const url = (scope: string) => { USED.add(scope); return wsUrl(RELAY_SOCK, scope); };
-/** The large parts of RUN that this run made, recorded as it makes them; the run removes them at its end (run-folder.ts). */
+/** The large parts of RUN that this run made; the run removes them at its end (run-folder.ts). */
 const made: string[] = [];
-/** A large part of RUN that the run makes now: recorded only when nothing is at its path yet, also no link. */
-const part = (p: string) => { try { lstatSync(p); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") made.push(p); } return p; };
+/**
+ * Make the folder `p` of RUN, a large part, and record it: mkdirSync with no `recursive` fails (EEXIST) when anything
+ * is at `p`, also a link or the folder of another run in the same RUN, so the run records only a folder that its own
+ * mkdir made. With `reuse`, a folder that is there already is used, and the run does not record it.
+ */
+function makePart(p: string, reuse = false): string {
+  try { mkdirSync(p); } catch (e) { if (reuse && (e as NodeJS.ErrnoException).code === "EEXIST") return p; throw e; }
+  made.push(p);
+  return p;
+}
+/** The run's own short processes (execFile: CONTROL, the agent-browser CLI, tmux), until each one exits: a case that
+ *  timed out, or a signal, can leave one running at the cleanup, and then the run removes nothing. */
+const calls = new Set<ChildProcess>();
+function tracked(c: ChildProcess): ChildProcess {
+  if (c.pid !== undefined) { calls.add(c); c.once("exit", () => calls.delete(c)); }
+  return c;
+}
+/** True while the group peer's tmux servers (not children of the run: tmux makes its server a daemon) can run. */
+let peerUp = false;
+/** True once the run's first client can connect (after the ready wait): before it, the run used no scope. */
+let clientsStarted = false;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The value of `p`, or null when it has none in `ms`. */
 const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).then(() => null)]);
@@ -151,11 +192,11 @@ function skip(group: string, name: string, why: string) { record({ group, case: 
 function control(...args: string[]): Promise<any> {
   return new Promise((done) => {
     const t0 = Date.now();
-    execFile(CONTROL, args, { encoding: "utf8", timeout: 120_000 }, (e, stdout, stderr) => {
+    tracked(execFile(CONTROL, args, { encoding: "utf8", timeout: 120_000 }, (e, stdout, stderr) => {
       const exit = e ? ((e as any).code ?? e.message) : 0;
       appendFileSync(join(RUN, "logs/control.log"), `${new Date(t0).toISOString()} ${args.join(" ")}: exit ${exit} after ${Date.now() - t0} ms\n${stdout}${stderr}\n`);
       done(controlAnswer(stdout, exit));
-    });
+    }));
   });
 }
 
@@ -190,7 +231,6 @@ function start(bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; log
   children.push(child);
   return child;
 }
-const portFree = (port: number) => new Promise<boolean>((r) => { const s = connect(port, "127.0.0.1"); s.once("connect", () => { s.destroy(); r(false); }); s.once("error", () => r(true)); });
 const status = (path: string) => new Promise<number>((r) => { get({ socketPath: RELAY_SOCK, path }, (res) => { res.resume(); r(res.statusCode ?? 0); }).once("error", () => r(0)); });
 /** The relay's HTTP answer to a plain request of `path`: its status and body (404 means that the relay would admit the scope). */
 const answerOf = (path: string) => new Promise<[number, string]>((r) => {
@@ -206,9 +246,11 @@ function extensionId(manifest: { key: string }): string {
 
 // ---------------------------------------------------------------- setup
 
-mkdirSync(join(RUN, "logs"), { recursive: true });
-mkdirSync(part(join(RUN, "home")), { recursive: true });
-chmodSync(RUN, 0o700);
+// The first folder that this mkdir made: RUN (or a folder above it) when the run made RUN.
+const first = mkdirSync(join(RUN, "logs"), { recursive: true });
+// Only a RUN that the run made itself gets 0700 (a RUN from the environment, for example ., keeps its mode).
+if (OWN_RUN || (first !== undefined && first !== join(RUN, "logs"))) chmodSync(RUN, 0o700);
+makePart(join(RUN, "home"), true);
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
 // The endpoint: the client URL of scope s1 (the concurrency script's first scope). Every client URL of the run differs
 // from it in its scope only; in the external mode it names the real path that the guard checked (external.ts).
@@ -238,18 +280,19 @@ function cleanup(): Promise<void> {
     if (daemon) record({ group: "relay", case: "the relay ends with its standard input and removes its socket", status: relayExit === 0 && !existsSync(RELAY_SOCK) ? "pass" : "fail", ms: 0, detail: { exit: relayExit } });
     if (EXTERNAL) {
       skip("relay", "the relay ends with its standard input and removes its socket", "external endpoint: the run does not own the relay, and it stops nothing of that browser");
-      await endRunScopes("at the end");
+      // A run that stopped before its first client used no scope, so it ends none.
+      if (clientsStarted) await endRunScopes("at the end");
     }
     for (const c of [...children].reverse()) await stopChild(c);
     if (daemon) writeFileSync(join(RUN, "logs/daemon.log"), [...daemon.log, ...daemon.waiting().map((w) => `still waiting: ${w}`)].join("\n") + "\n");
     const count = (st: Result["status"]) => results.filter((r) => r.status === st).length;
-    writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, ...(aborted ? { aborted } : {}), results }, null, 2) + "\n");
-    console.log(`\n${aborted ? `ABORTED (${aborted}): ` : ""}${results.length} cases: ${count("pass")} pass, ${count("fail")} fail, ${count("skip")} skipped, ${results.filter((r) => r.adapted).length} adapted; ${join(RUN, "results.json")}`);
-    process.exitCode = aborted || count("fail") ? 1 : 0;
+    writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, ...(aborted !== undefined ? { aborted } : {}), results }, null, 2) + "\n");
+    console.log(`\n${aborted !== undefined ? `ABORTED (${aborted}): ` : ""}${results.length} cases: ${count("pass")} pass, ${count("fail")} fail, ${count("skip")} skipped, ${results.filter((r) => r.adapted).length} adapted; ${join(RUN, "results.json")}`);
+    process.exitCode = aborted !== undefined || count("fail") ? 1 : 0;
     // The large parts that this run made (run-folder.ts), now that its children stopped and results.json is written.
-    const alive = (c: ChildProcess) => c.exitCode === null && c.signalCode === null;
+    const alive = (c: ChildProcess) => c.pid !== undefined && c.exitCode === null && c.signalCode === null;
     const end = runFolderEnd({ run: RUN, ownRun: OWN_RUN, made, keep: process.env.KEEP_RUN, failed: count("fail"), aborted,
-      running: [...children, ...(daemon ? [daemon.relay] : [])].filter(alive).length });
+      running: [...children, ...(daemon ? [daemon.relay] : [])].filter(alive).length + calls.size + (peerUp ? 1 : 0) });
     // force: a part whose make failed (an abort) may not be there.
     const notRemoved = end.remove.flatMap((p) => { try { rmSync(p, { recursive: true, force: true, maxRetries: 5 }); return []; } catch (e) { return [`could not remove ${p}: ${(e as Error).message}`]; } });
     console.log([end.line, ...notRemoved].join("\n"));
@@ -258,11 +301,9 @@ function cleanup(): Promise<void> {
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(sig, () => { aborted ??= `signal ${sig}`; void cleanup().then(() => process.exit(1)); });
 
 try {
-  if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) throw new Error(`display :${DISPLAY_N} is taken; set DISPLAY_N`);
-  if (!(await portFree(8781))) throw new Error("port 8781 is taken (the probe's site needs it)");
   // The scratch install: this checkout as a package (its tarball in pack/), and the clients that the probe used.
-  mkdirSync(part(INSTALL));
-  mkdirSync(part(PACK));
+  makePart(INSTALL);
+  makePart(PACK);
   const npm = (args: string[], cwd: string) => execFileSync("npm", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
   const tarball = join(PACK, npm(["pack", "--silent", "--pack-destination", PACK], ROOT).split("\n").pop()!);
   npm(["init", "-y"], INSTALL);
@@ -283,6 +324,8 @@ try {
     if (ready !== 404) throw new Error(`the endpoint did not get ready (HTTP ${ready}); see ${RUN}/logs`);
   }
 
+  // From here the run's clients connect to scopes; the external mode ends them at the run's end.
+  clientsStarted = true;
   const pw = createRequire(join(INSTALL, "package.json"))("playwright-core");
   const WS = createRequire(join(INSTALL, "package.json"))("ws");
   if (CASES.includes("playwright")) await playwrightCases(pw);
@@ -308,7 +351,8 @@ try {
     { want: up, adapted: "the control's status (running, receiver, endpoint) and a plain request (404)" });
   else record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium!.exitCode === null ? "pass" : "fail", ms: 0 });
 } catch (err) {
-  aborted = String((err as Error)?.message ?? err).split("\n")[0];
+  // A signal's reason stays (??=), and an error with no message is an abort too.
+  aborted ??= String((err as Error)?.message ?? err).split("\n")[0] || "an error with no message";
 } finally {
   await cleanup();
 }
@@ -317,10 +361,10 @@ process.exit(process.exitCode);
 
 /** The own mode: the agent package, its native host, the profile, the stand-in daemon with its relay, Xvfb and Chromium. */
 async function startOwnBrowser() {
-  cpSync(join(EXT, "agent"), part(join(RUN, "agent")), { recursive: true });
+  cpSync(join(EXT, "agent"), makePart(join(RUN, "agent")), { recursive: true });
   const id = extensionId(JSON.parse(readFileSync(join(RUN, "agent/manifest.json"), "utf8")));
   const PROFILE = join(RUN, "profile");
-  mkdirSync(join(part(PROFILE), "NativeMessagingHosts"), { recursive: true });
+  mkdirSync(join(makePart(PROFILE), "NativeMessagingHosts"));
   const hostSh = join(RUN, "host.sh");
   writeFileSync(hostSh, `#!/bin/sh\nexec /usr/bin/python3 ${join(EXT, "test/live/host.py")} --socket ${DAEMON_SOCK} --log ${join(RUN, "logs/host.log")} "$@"\n`, { mode: 0o700 });
   writeFileSync(join(PROFILE, "NativeMessagingHosts/sh.agentwatch.browser.json"),
@@ -736,9 +780,9 @@ async function agentBrowserCases() {
   writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
   // Not execFileSync: the stand-in daemon runs in this process, and a blocked event loop would hold every bridge message.
   const cli = (...args: string[]) => new Promise<any>((resolve) => {
-    execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("ab-cli"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
+    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("ab-cli"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
       try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
-    });
+    }));
   });
   const run = (name: string, args: string[], want: (r: any) => boolean) => step(G, name, async () => cli(...args), { want: (r) => r.ok !== false && want(r) });
   await run("open", ["open", A + "/", "--name", "main"], (r) => r.tab.name === "main");
@@ -1189,9 +1233,9 @@ async function scopeCases(pw: any, WebSocket: any) {
     const state = join(RUN, "ab-scopes-state"), allow = join(RUN, "allow-both.json");
     writeFileSync(allow, JSON.stringify({ allow: ["a.localhost", "b.localhost"] }));
     const cli = (scope: string, ...args: string[]) => new Promise<any>((resolve) => {
-      execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url(scope), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
+      tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url(scope), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
         try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
-      });
+      }));
     });
     await step(G, "agent-browser: each scope opens and reads a page of its own list", async () => {
       const a = await cli("ab-a", "open", SA + "/", "--name", "main"), b = await cli("ab-b", "open", SB + "/", "--name", "main");
@@ -1660,7 +1704,7 @@ async function peerCases() {
   const tmuxEnv = { HOME: process.env.HOME!, PATH: process.env.PATH!, TERM: "xterm-256color", LANG: "C.UTF-8", SHELL: "/bin/bash",
     XDG_RUNTIME_DIR: `/run/user/${uid}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus` };
   const tmux = (...args: string[]) => new Promise<string>((resolve, reject) => {
-    execFile("tmux", ["-L", TMUX, "-f", "/dev/null", ...args], { env: tmuxEnv, encoding: "utf8" }, (e, out, err) => (e ? reject(new Error(`tmux ${args[0]}: ${err || e.message}`)) : resolve(out.trim())));
+    tracked(execFile("tmux", ["-L", TMUX, "-f", "/dev/null", ...args], { env: tmuxEnv, encoding: "utf8" }, (e, out, err) => (e ? reject(new Error(`tmux ${args[0]}: ${err || e.message}`)) : resolve(out.trim()))));
   });
   const read = (path: string) => { try { return readFileSync(path, "latin1"); } catch { return null; } };
   const stat = (pid: number) => { const raw = read(`/proc/${pid}/stat`); if (!raw) return null; const f = raw.slice(raw.lastIndexOf(")") + 2).split(" "); return { state: f[0], ppid: Number(f[1]), start: Number(f[19]) }; };
@@ -1710,6 +1754,7 @@ async function peerCases() {
   let paPid = 0, pbPid = 0, server = 0;
   try {
     await step(G, "the relay's self-test passed: the peer check runs (pidfd)", async () => relayLog().split("\n").filter((l) => /peer check/.test(l)), { want: (x) => x.includes("relay: the peer check runs (pidfd)") });
+    peerUp = true;
     await tmux("new-session", "-d", "-s", "pa", "-x", "200", "-y", "50", "/bin/bash --noprofile --norc");
     await tmux("new-session", "-d", "-s", "pb", "-x", "200", "-y", "50", "/bin/bash --noprofile --norc");
     server = Number(await tmux("display-message", "-p", "#{pid}"));
@@ -1809,6 +1854,7 @@ async function peerCases() {
     for (const c of connectors) if (stat(c.pid)) { try { process.kill(c.pid, "SIGKILL"); } catch {} }
     try { execFileSync("tmux", ["-L", NESTED, "kill-server"], { env: tmuxEnv, stdio: "ignore" }); } catch {}
     try { execFileSync("tmux", ["-L", TMUX, "kill-server"], { env: tmuxEnv, stdio: "ignore" }); } catch {}
+    peerUp = false;
   }
 
   /** A raw upgrade from this process, for scope pa: its HTTP answer. */
