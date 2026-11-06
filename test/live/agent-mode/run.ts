@@ -18,14 +18,21 @@
 // because it closes every other tab: after a relay restart with no link change no CDP state of the old client stays on
 // its tab and a client of its scope sees it again, a session that ends while no relay runs loses its tabs, a scope's
 // tabs stay over a link drop, and no end_scope, Target.closeTarget or Page.close of the browser's only tabs ends
-// Chromium (also two removals at once).
+// Chromium (also two removals at once). The group `peer` (ab-v16.51) runs alone (CASES=peer): the stand-in daemon
+// starts the relay with --peer-check and sends the roots of two panes of the run's own tmux server (with the user's
+// D-Bus, so that each pane gets its own systemd scope). Playwright, agent-browser and the Playwright MCP under pane A
+// connect to scope A; a process of pane B that names scope A is refused; a nohup job and a double fork of pane A are
+// admitted by the pane's cgroup while the session lives, and so is a run-shell from pane B through a tmux server that
+// pane A started (the stated limit of P2); after the session's end they are refused (the session's 403 before the
+// line that drops the scope, the no-list 503 after it, and their open connections close with 1008); a respawned
+// pane's old job is refused and its connection closes (1008), while the new pane's process is admitted.
 //
 //   CHROME_EXTENSION=<a detached worktree of chrome-extension> npm run test:live:agent
 //
 // Environment: CHROME_EXTENSION (required: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
 // DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), CASES (default all:
-// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up) runs some groups only. The agent
+// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone) runs some groups only. The agent
 // package must be chrome-extension main c99bebb (0.3.1) or later: the per-scope receiver (parts 1a and 1b: set_scopes,
 // the tab-to-scope map, bridge.tabScope and bridge.tabScopes, the removal queue and its window rule, the retry of a
 // popup). It uses port 8781 (the probe's site), a free port of its own for the popup site of the group `scopes`, and
@@ -57,11 +64,15 @@ const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up").split(",");
+/** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
+const PEER = CASES.includes("peer");
+if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 /** The relay's refusal of a navigation off the scope's list (C11, layer 1). */
 const OFF_LIST = (host: string) => new RegExp(`Not allowed: ${host.replace(/\./g, "\\.")} is not on the allowlist`);
 /** The stand-in daemon's lists: list a is the default (every scope that `scopes` does not name), list b for the group `scopes`. */
-const SCOPES = { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scopes: { "sc-b": "b", "sc-b2": "b", "ab-b": "b", "mcp-b": "b" } as Record<string, string | null>, default: "a" };
+const SCOPES = PEER ? { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scopes: { pa: "a", pb: "b" } as Record<string, string | null>, default: null }
+  : { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scopes: { "sc-b": "b", "sc-b2": "b", "ab-b": "b", "mcp-b": "b" } as Record<string, string | null>, default: "a" };
 const RELAY_SOCK = join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 const url = (scope: string) => `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -170,7 +181,7 @@ try {
   writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
 
   start(process.execPath, [join(PROBE, "site.mjs")], { env: { ...process.env, SITE_LOG: join(RUN, "site-log.jsonl") }, log: "site.log" });
-  daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES,
+  daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
     relayLog: (l) => appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`) });
   // A private display: one MIT-MAGIC-COOKIE-1 entry from randomBytes in a 0600 file; the cookie never enters an argv.
   const field = (b: Buffer) => Buffer.concat([Buffer.from([b.length >> 8, b.length & 255]), b]);
@@ -182,10 +193,17 @@ try {
     `--load-extension=${join(RUN, "agent")}`, "--silent-debugger-extension-api", "--enable-unsafe-swiftshader", "--lang=en-US",
     "--disable-backgrounding-occluded-windows", "--window-position=0,0", "--window-size=1280,900", "about:blank"],
   { env: { PATH: "/usr/bin:/bin", HOME: join(RUN, "home"), LANG: "en_US.UTF-8", DISPLAY: `:${DISPLAY_N}`, XAUTHORITY: xauth }, log: "chromium.log" });
-  // Ready: a plain request gets 404 once the endpoint takes connections (503 before).
+  // Ready: a plain request gets 404 once the endpoint takes connections (503 before). With the peer check the scope
+  // `probe` is in no line, so the ready relay answers it with the no-list 503 (step 5) in place of the "not ready" ones.
   let ready = 0;
-  for (let i = 0; i < 120 && (ready = await status("/devtools/browser/probe")) !== 404; i++) await sleep(500);
-  if (ready !== 404) throw new Error(`the endpoint did not get ready (HTTP ${ready}); see ${RUN}/logs`);
+  if (PEER) {
+    let a: [number, string] = [0, ""];
+    for (let i = 0; i < 120 && (a = await answerOf("/devtools/browser/probe"))[1] !== NO_LIST; i++) await sleep(500);
+    if (a[1] !== NO_LIST) throw new Error(`the endpoint did not get ready (HTTP ${a[0]} ${a[1]}); see ${RUN}/logs`);
+  } else {
+    for (let i = 0; i < 120 && (ready = await status("/devtools/browser/probe")) !== 404; i++) await sleep(500);
+    if (ready !== 404) throw new Error(`the endpoint did not get ready (HTTP ${ready}); see ${RUN}/logs`);
+  }
 
   const pw = createRequire(join(INSTALL, "package.json"))("playwright-core");
   if (CASES.includes("playwright")) await playwrightCases(pw);
@@ -203,6 +221,7 @@ try {
   if (CASES.includes("scopes")) await scopeCases(pw, createRequire(join(INSTALL, "package.json"))("ws"));
   // Last: it closes every other tab of the browser.
   if (CASES.includes("link-up")) await linkUpCases(pw, createRequire(join(INSTALL, "package.json"))("ws"));
+  if (PEER) await peerCases();
   record({ group: "browser", case: "the agent Chromium still runs after every client left", status: chromium.exitCode === null ? "pass" : "fail", ms: 0 });
 } catch (err) {
   aborted = String((err as Error)?.message ?? err).split("\n")[0];
@@ -1301,4 +1320,184 @@ async function linkUpCases(pw: any, WebSocket: any) {
       return { before, err, chromium: chrome(), after: await after(), pages: browser.contexts()[0]?.pages().length ?? null };
     } finally { await browser.close().catch(() => {}); }
   }, { want: (x) => x.before.length === 1 && x.err === null && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.pages === 0, ms: 40_000 });
+}
+
+// ---------------------------------------------------------------- the peer check (ab-v16.51)
+
+/**
+ * The group `peer`: the relay runs with --peer-check, and the stand-in daemon sends the roots of two panes (pa, pb)
+ * of this run's own tmux server. Every process of this group is the run's own: its tmux servers, its panes and their
+ * jobs. It reads /proc of those processes only, and it stops each by the pid that it recorded.
+ */
+async function peerCases() {
+  const G = "peer", d = daemon!;
+  const H = join(RUN, "peer"), HERE = join(ROOT, "test/live/agent-mode/peer");
+  mkdirSync(H);
+  const NODE = process.execPath, WS_MODULE = join(INSTALL, "node_modules/ws"), PW_MODULE = join(INSTALL, "node_modules/playwright-core");
+  const MCP_CLI = join(INSTALL, "node_modules/@playwright/mcp/cli.js");
+  const TMUX = `ab-peer-${randomBytes(4).toString("hex")}`, NESTED = `${TMUX}-nested`;
+  const uid = process.getuid!();
+  // The tmux server gets the user's D-Bus, so that tmux puts each new pane into its own systemd scope (the design, section 5).
+  const tmuxEnv = { HOME: process.env.HOME!, PATH: process.env.PATH!, TERM: "xterm-256color", LANG: "C.UTF-8", SHELL: "/bin/bash",
+    XDG_RUNTIME_DIR: `/run/user/${uid}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus` };
+  const tmux = (...args: string[]) => new Promise<string>((resolve, reject) => {
+    execFile("tmux", ["-L", TMUX, "-f", "/dev/null", ...args], { env: tmuxEnv, encoding: "utf8" }, (e, out, err) => (e ? reject(new Error(`tmux ${args[0]}: ${err || e.message}`)) : resolve(out.trim())));
+  });
+  const read = (path: string) => { try { return readFileSync(path, "latin1"); } catch { return null; } };
+  const stat = (pid: number) => { const raw = read(`/proc/${pid}/stat`); if (!raw) return null; const f = raw.slice(raw.lastIndexOf(")") + 2).split(" "); return { state: f[0], ppid: Number(f[1]), start: Number(f[19]) }; };
+  const cgroupOf = (pid: number) => read(`/proc/${pid}/cgroup`)?.split("\n").find((l) => l.startsWith("0::"))?.slice(3) ?? null;
+  const rootOf = (pid: number) => ({ pid, start: stat(pid)!.start });
+  const panePid = async (s: string) => Number(await tmux("list-panes", "-t", s, "-F", "#{pane_pid}"));
+  const keys = (s: string, line: string) => tmux("send-keys", "-t", s, line, "Enter");
+  const until = async <T>(fn: () => T | null | undefined | false, what: string, ms = 30_000): Promise<T> => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) { const v = fn(); if (v) return v; }
+    throw new Error(`no ${what} in ${ms / 1000} s`);
+  };
+  const json = (path: string) => until(() => { const t = read(path); if (!t) return null; try { return JSON.parse(t); } catch { return null; } }, path);
+  let n = 0;
+  const out = (name: string) => join(H, `${name}-${++n}.json`);
+  /** The pane's scope wait of C11: the pane's process is in a tmux-spawn scope that is not the server's cgroup. */
+  const scopeWait = async (pid: number, server: number) => {
+    try { return await until(() => { const cg = cgroupOf(pid); return cg && /\/tmux-spawn-[^/]+\.scope$/.test(cg) && cg !== cgroupOf(server) ? cg : null; }, "pane scope", 5000); }
+    catch { return null; }
+  };
+  const pw = (s: string, scope: string, page: string) => { const o = out(`pw-${s}-${scope}`); return keys(s, `${NODE} ${HERE}/pw.mjs ${PW_MODULE} '${url(scope)}' ${page}/ ${o}`).then(() => json(o)); };
+  const ab = (s: string, scope: string) => {
+    const o = out(`ab-${s}-${scope}`);
+    writeFileSync(join(H, "allow.json"), JSON.stringify({ allow: ["a.localhost"] }));
+    return keys(s, `${NODE} ${RELAY_BIN} tabs --cdp-url '${url(scope)}' --state-dir ${H}/ab-${s} --allowlist ${H}/allow.json --no-launch --json > ${o}`).then(() => json(o));
+  };
+  const SESSION = /The agent browser admits a connection only from a program of the agentwatch session of its scope\. This program \(pid \d+\) is not in it/;
+  /** A connector's control socket: one command, one answer. */
+  const ask = (ctl: string, msg: object) => new Promise<any>((resolve, reject) => {
+    const s = connect(ctl);
+    let buf = "";
+    s.setEncoding("utf8");
+    s.on("data", (x) => { buf += x; const i = buf.indexOf("\n"); if (i >= 0) { s.destroy(); resolve(JSON.parse(buf.slice(0, i))); } });
+    s.on("error", reject);
+    s.write(`${JSON.stringify(msg)}\n`);
+  });
+  const connectors: { name: string; ctl: string; pid: number }[] = [];
+  const connector = async (s: string, name: string, shape: (cmd: string) => string) => {
+    const ctl = join(H, `${name}.sock`);
+    await keys(s, shape(`${NODE} ${HERE}/connector.mjs ${ctl} ${WS_MODULE} ${RELAY_SOCK}`));
+    const pid = Number(await until(() => read(`${ctl}.pid`), `${name}'s pid`, 15_000));
+    connectors.push({ name, ctl, pid });
+    return { ctl, pid };
+  };
+  const refused = (r: any, re: RegExp, status: number) => r.status === status && re.test(r.body);
+  const relayLog = () => read(join(RUN, "logs/relay.log")) ?? "";
+
+  let paPid = 0, pbPid = 0, server = 0;
+  try {
+    await step(G, "the relay's self-test passed: the peer check runs (pidfd)", async () => relayLog().split("\n").filter((l) => /peer check/.test(l)), { want: (x) => x.includes("relay: the peer check runs (pidfd)") });
+    await tmux("new-session", "-d", "-s", "pa", "-x", "200", "-y", "50", "/bin/bash --noprofile --norc");
+    await tmux("new-session", "-d", "-s", "pb", "-x", "200", "-y", "50", "/bin/bash --noprofile --norc");
+    server = Number(await tmux("display-message", "-p", "#{pid}"));
+    paPid = await panePid("pa"); pbPid = await panePid("pb");
+    let cgA: string | null = null, cgB: string | null = null;
+    await step(G, "each pane of the run's tmux server is in a systemd scope of its own (the scope wait)", async () => {
+      cgA = await scopeWait(paPid, server); cgB = await scopeWait(pbPid, server);
+      return { server: cgroupOf(server), a: cgA, b: cgB };
+    }, { want: (x) => !!x.a && !!x.b && x.a !== x.b });
+    // The daemon reads each pane's pid and start after the scope wait, and its line carries the roots at once.
+    d.setRoots({ pa: [rootOf(paPid)], pb: [rootOf(pbPid)] });
+    await sleep(300);
+    const A_ = A, B_ = B;
+
+    // Pane A's own tools, for its own scope.
+    await step(G, "a Playwright script in pane A connects to scope pa and loads a page of its list", () => pw("pa", "pa", A_), { want: (r) => r.ok && r.title === "probe a" });
+    await step(G, "agent-browser in pane A (tabs --cdp-url) is admitted to scope pa", () => ab("pa", "pa"), { want: (r) => r.ok !== false && Array.isArray(r.tabs) });
+    await step(G, "the Playwright MCP, a stdio child of an agent in pane A, is admitted to scope pa (browser_navigate)", async () => {
+      const o = out("mcp-pa");
+      await keys("pa", `${NODE} ${HERE}/mcp-agent.mjs ${MCP_CLI} '${url("pa")}' ${A_}/ ${o} ${H}/mcp-out`);
+      return json(o);
+    }, { want: (r) => r.ok && /probe a/.test(r.text), ms: 45_000 });
+    // Another pane's processes, for scope pa.
+    await step(G, "a Playwright script in pane B that names scope pa gets the session's 403", () => pw("pb", "pa", A_), { want: (r) => !r.ok && SESSION.test(r.error) });
+    await step(G, "agent-browser in pane B that names scope pa gets the session's 403", () => ab("pb", "pa"), { want: (r) => r.ok === false && SESSION.test(r.error?.message ?? "") });
+    await step(G, "pane B's own Playwright script is admitted to its own scope pb", () => pw("pb", "pb", B_), { want: (r) => r.ok && r.title === "probe b" });
+    // The test process itself is in no session.
+    await step(G, "the live test's own process (no agentwatch pane) gets the session's 403", async () => {
+      const r = await new Promise<any>((resolve) => { pwClient(resolve); });
+      return r;
+    }, { want: (r) => r.status === 403 && SESSION.test(r.body) });
+
+    // Jobs of pane A in several shapes, and a run-shell through a tmux server that pane A started.
+    const tool = await connector("pa", "a-tool", (c) => `${c} > /dev/null 2>&1 &`);
+    const nohup = await connector("pa", "a-nohup", (c) => `bash -c 'nohup ${c} > /dev/null 2>&1 < /dev/null &'`);
+    const dfork = await connector("pa", "a-dfork", (c) => `( setsid ${c} > /dev/null 2>&1 < /dev/null & )`);
+    await keys("pa", `env -u TMUX tmux -L ${NESTED} -f /dev/null new-session -d -s n`);
+    const nestedPid = Number(await until(() => { try { return execFileSync("tmux", ["-L", NESTED, "display-message", "-p", "#{pid}"], { env: tmuxEnv, encoding: "utf8" }).trim(); } catch { return null; } }, "the nested tmux server", 15_000));
+    const rshell = await connector("pb", "b-runshell", (c) => `env -u TMUX tmux -L ${NESTED} run-shell -b '${c} > /dev/null 2>&1 < /dev/null'`);
+    const shapes = { tool, nohup, dfork, rshell };
+    await step(G, "the jobs' shapes: the tool command's parent is pane A; the nohup job, the double fork and the nested server left the tree and kept pane A's cgroup", async () => {
+      const st: any = {};
+      for (const [k, v] of Object.entries(shapes)) { const s = await ask(v.ctl, { state: true }); st[k] = { pid: s.pid, ppid: s.ppid, inPaneA: s.cgroup === cgA }; }
+      st.nested = { pid: nestedPid, ppid: stat(nestedPid)?.ppid, inPaneA: cgroupOf(nestedPid) === cgA };
+      return st;
+    }, { want: (x) => x.tool.ppid === paPid && x.tool.inPaneA && [x.nohup, x.dfork, x.nested].every((j: any) => j.ppid !== paPid && j.inPaneA) && x.rshell.inPaneA && x.nested.ppid !== paPid });
+    await step(G, "pane A's tool command (a background job of its shell) is admitted to pa: the walk", () => ask(tool.ctl, { connect: "pa" }), { want: (r) => r.open });
+    await step(G, "pane A's nohup job whose shell exited is admitted to pa: the pane's cgroup (P2)", () => ask(nohup.ctl, { connect: "pa" }), { want: (r) => r.open });
+    await step(G, "pane A's double-forked job is admitted to pa: the pane's cgroup (P2)", () => ask(dfork.ctl, { connect: "pa" }), { want: (r) => r.open });
+    await step(G, "the stated limit of P2: a run-shell from pane B through the tmux server that pane A started is admitted to pa", () => ask(rshell.ctl, { connect: "pa" }), { want: (r) => r.open });
+    await step(G, "the same run-shell job is refused for pane B's own scope pb (its cgroup is pane A's)", () => ask(rshell.ctl, { connect: "pb" }), { want: (r) => refused(r, SESSION, 403) });
+    await step(G, "pane A's jobs that name scope pb get the session's 403", async () => Promise.all([tool, nohup, dfork].map((j) => ask(j.ctl, { connect: "pb" }))), { want: (rs) => rs.every((r: any) => refused(r, SESSION, 403)) });
+
+    // The end of session A: its pane ends; its nohup job, its double fork and the run-shell job still run.
+    await tmux("kill-session", "-t", "pa");
+    await until(() => !stat(paPid), "the end of pane A", 10_000);
+    await sleep(300);
+    const survivors = [nohup, dfork, rshell];
+    await step(G, "after the session's end, before the line that drops pa: its jobs get the session's 403 for pa", async () =>
+      Promise.all(survivors.map((j) => ask(j.ctl, { connect: "pa" }))), { want: (rs) => rs.every((r: any) => refused(r, SESSION, 403)) });
+    await step(G, "after the session's end: its jobs get the session's 403 for pb", async () =>
+      Promise.all(survivors.map((j) => ask(j.ctl, { connect: "pb" }))), { want: (rs) => rs.every((r: any) => refused(r, SESSION, 403)) });
+    await step(G, "before that line, the jobs' open connections to pa are still open (the check runs once, at the upgrade)", async () =>
+      Promise.all(survivors.map(async (j) => (await ask(j.ctl, { state: true })).conns.filter((c: any) => c.scope === "pa" && c.close === null).length)), { want: (ns) => ns.every((x: number) => x === 1) });
+    // The daemon's line that drops the scope (choice 5 a: pa leaves scopes) drops its roots too.
+    d.setRoots({ pb: [rootOf(pbPid)] }, { send: false });
+    await step(G, "the daemon drops scope pa with its roots (set_scopes without pa, 5 a)", () => d.setScopes({ ...SCOPES, scopes: { pb: "b" } }), { want: (a) => a.ok });
+    await sleep(300);
+    await step(G, "at that line the jobs' open connections to pa close with 1008 (no list any more)", async () =>
+      Promise.all(survivors.map(async (j) => (await ask(j.ctl, { state: true })).conns.find((c: any) => c.scope === "pa")?.close)), { want: (cs) => cs.every((c: any) => c?.[0] === 1008 && c[1] === "The allowlist has no list for this scope any more") });
+    await step(G, "after that line the jobs get the no-list 503 for pa (step 5)", async () =>
+      Promise.all(survivors.map((j) => ask(j.ctl, { connect: "pa" }))), { want: (rs) => rs.every((r: any) => r.status === 503 && r.body === NO_LIST) });
+    await step(G, "after that line the jobs still get the session's 403 for pb", async () =>
+      Promise.all(survivors.map((j) => ask(j.ctl, { connect: "pb" }))), { want: (rs) => rs.every((r: any) => refused(r, SESSION, 403)) });
+
+    // A respawn of pane B: its old job is refused, its open connection closes with the root's 1008, the new pane works.
+    const bNohup = await connector("pb", "b-nohup", (c) => `bash -c 'nohup ${c} > /dev/null 2>&1 < /dev/null &'`);
+    await step(G, "pane B's nohup job is admitted to pb (its cgroup)", () => ask(bNohup.ctl, { connect: "pb" }), { want: (r) => r.open });
+    await tmux("respawn-pane", "-k", "-t", "pb", "/bin/bash --noprofile --norc");
+    let newPb = 0;
+    await step(G, "the respawned pane B has a new process and a new scope", async () => {
+      newPb = await panePid("pb");
+      const cg = await scopeWait(newPb, server);
+      return { old: pbPid, new: newPb, oldScope: cgB, newScope: cg };
+    }, { want: (x) => x.new !== x.old && !!x.newScope && x.newScope !== x.oldScope });
+    d.setRoots({ pb: [rootOf(newPb)] });
+    await sleep(300);
+    await step(G, "after the respawn, the old pane's job's open connection closes with 1008 (a new process)", async () => (await ask(bNohup.ctl, { state: true })).conns.find((c: any) => c.scope === "pb")?.close,
+      { want: (c) => c?.[0] === 1008 && c[1] === "The session of this scope has a new process: connect again." });
+    await step(G, "after the respawn, the old pane's job gets the session's 403", () => ask(bNohup.ctl, { connect: "pb" }), { want: (r) => refused(r, SESSION, 403) });
+    await step(G, "after the respawn, the new pane's Playwright script is admitted to pb", () => pw("pb", "pb", B_), { want: (r) => r.ok && r.title === "probe b" });
+  } catch (e) {
+    record({ group: G, case: "the group ran to its end", status: "fail", ms: 0, error: String((e as Error)?.message ?? e).slice(0, 300) });
+  } finally {
+    for (const c of connectors) { await ask(c.ctl, { exit: true }).catch(() => {}); }
+    await sleep(200);
+    for (const c of connectors) if (stat(c.pid)) { try { process.kill(c.pid, "SIGKILL"); } catch {} }
+    try { execFileSync("tmux", ["-L", NESTED, "kill-server"], { env: tmuxEnv, stdio: "ignore" }); } catch {}
+    try { execFileSync("tmux", ["-L", TMUX, "kill-server"], { env: tmuxEnv, stdio: "ignore" }); } catch {}
+  }
+
+  /** A raw upgrade from this process, for scope pa: its HTTP answer. */
+  function pwClient(done: (r: any) => void) {
+    const WebSocket = createRequire(join(INSTALL, "package.json"))("ws");
+    const ws = new WebSocket(url("pa"));
+    ws.once("open", () => { ws.close(); done({ open: true }); });
+    ws.once("unexpected-response", (_q: any, res: any) => { let b = ""; res.setEncoding("utf8"); res.on("data", (x: string) => (b += x)).on("end", () => done({ status: res.statusCode, body: b })); });
+    ws.on("error", () => {});
+  }
 }

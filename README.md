@@ -768,7 +768,7 @@ fail-safe button-name targeting, and the Linux mechanism was verified on a live 
 
 ## Agent mode's endpoint (`agent-browser relay`)
 
-The agentwatch daemon starts `agent-browser relay --socket <path>` with the agent Chrome's unit. The relay
+The agentwatch daemon starts `agent-browser relay --socket <path> [--peer-check]` with the agent Chrome's unit. The relay
 serves agent mode's CDP endpoint (contract C11 of chrome-extension's `docs/protocol.md`) to Playwright, the
 Playwright MCP and agent-browser's commands with `--cdp-url`. It drives the agent Chrome through the agent
 extension's bridge (contract C10).
@@ -829,7 +829,7 @@ daemon must send `set_scopes` (part 3): there is no backward compatibility.
   a later line names the scope again (in `scopes`), also over a link change and also when the `default`
   list would cover it. This is stricter than the contract text of chrome-extension main c99bebb; board
   task ab-v16.55 adds the matching C11 sentence.
-- A line with `roots`. This relay runs without the peer check, so it applies no list of a line that has a
+- A line with `roots`. A relay that runs without `--peer-check` applies no list of a line that has a
   `roots` field (any value), as if no line had come: every open connection closes (1008), and each upgrade
   gets the 503 `The agent browser is not ready: the allowlist has session roots, but the relay was started
   without --peer-check.`, until a line without `roots` comes. So a daemon and a relay that disagree fail
@@ -839,9 +839,78 @@ daemon must send `set_scopes` (part 3): there is no backward compatibility.
   with no `beforeunload`) and a client's `Page.close` as they are, with no query, window or queue of its
   own. A late `end_scope`, whose tab the extension's sweep took out of its scope, gets `not an agent tab`:
   for the relay that removal is done.
-- Not in this part: the peer check (`--peer-check` and the check of the session roots; board task
-  ab-v16.51). Until then the scope is advisory: any process of the daemon's user can connect with any
+- Without `--peer-check` the scope is advisory: any process of the daemon's user can connect with any
   scope and get that scope's list.
+
+**The peer check** (`--peer-check`; board task ab-v16.51; C11, "The scope's session (the peer check)"; the
+design: `docs/superpowers/specs/2026-11-05-peer-admission-design.md`). With it the relay admits a connection
+of a scope only from a process of the agentwatch session of that scope. There is no key, no token file and
+no secret in the URL: the relay asks the kernel which process connected, and walks from that process through
+its parents to the session's **root**, its tmux pane's process, by pid and start time
+(`src/relay/peer.ts`).
+
+- The roots. The daemon puts each live session's roots into every `allowlist` line:
+  `"roots":{"<scope>":[{"pid":<pane pid>,"start":<pane start>}]}` (Linux: field 22 of `/proc/<pid>/stat`;
+  the Mac: `pbi_start_tvsec * 1000000 + pbi_start_tvusec`). A `roots` that is not an object applies as an
+  empty object, an entry of a bad scope or with a value that is not a list as absent, and an item that is
+  not an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1 is
+  dropped. A line with no `roots` field gives every scope no root. With the peer check, a scope that the
+  line does not name has no list, whatever `default` says.
+- The self-test. At its start, before its socket listens, the relay loads its reader (a dynamic
+  `import("node:ffi")`, then libc's `getsockopt`, `poll` and `close`), listens on a socket in a 0700 folder
+  of its own next to the endpoint socket, and starts a child process that connects to it. It compares the
+  peer with the child's pid, its own uid, the child's parent (the relay) and start time, and with a pidfd
+  the pid that the pidfd names and a poll of 0. The whole test has 5 s (`SELF_TEST_MS`), and the child
+  stops and the folder goes in every path. The relay logs `relay: the peer check runs (pidfd)` (or
+  `(stat)` on a Linux kernel before 6.5, `(mac)` on the Mac), or `relay: the peer check cannot run:
+  <reason>`. Then it admits no connection, and every upgrade gets the 503 `The agent browser is not ready:
+  the relay cannot read the program of a connection.` `node:ffi` is experimental in Node 26: its import
+  prints one `ExperimentalWarning` on the relay's standard error (`--disable-warning=ExperimentalWarning`
+  hides it). No other command loads it, so none prints the warning or fails on a Node without it.
+- The peer read, at each accept: `SO_PEERCRED` (pid and uid) and `SO_PEERPIDFD` (a pidfd of the same
+  process) on Linux; in the stat form the peer's start time instead of the pidfd. Every read that fails, no
+  pid, or another uid gives the 403 `The agent browser cannot tell which program connects, so it refuses
+  the connection.` The relay closes each pidfd once: after the upgrade's check, or with the socket.
+- The order of the checks: the `Origin` 403, the 404, the self-test's 503 or the peer's 403, the "not
+  ready" 503s, the no-list 503 of a scope that the line does not name (a just-launched session connects
+  again), the session check, then the no-list 503 of a named scope with no list.
+- The session check. The peer must be alive (a pidfd that does not poll readable, whose `fdinfo` pid is
+  the peer's, and a state that is not `Z`; in the stat form the start time of the accept). The walk goes
+  from the peer to its parent, and on: it stops at the first process that matches a root of the line, of
+  any scope, at pid 1, at a pid that has gone, at a parent that started after its child, or after 32
+  parents. It admits only at a root of the scope that counts. When it stops at no root, on Linux, the
+  peer's cgroup may count: it must be the pane's own systemd scope (`tmux-spawn-<uuid>.scope`) of a root of
+  the scope, or under it. So a `nohup` job whose shell exited and a double-forked job of the session are
+  admitted while the session lives (the operator's ab-6gs answer). The peer must still be alive after the
+  walk. Else: the 403 `The agent browser admits a connection only from a program of the agentwatch session
+  of its scope. This program (pid <pid>) is not in it: ...`.
+- The defensive root rules, at each line: a root counts only while its process lives with its start time;
+  a root that two scopes name counts for neither; a root that is an ancestor of another root (the tmux
+  server, say) counts for neither the walk nor the cgroup; a root's cgroup counts only when it is not its
+  parent's cgroup, no live root of another scope has it, and no other root's cgroup is under it. At a
+  check the relay reads only the scope's own roots again. These rules catch the usual mistakes of a line,
+  not every wrong line.
+- A root change. At each line the relay closes every connection of a scope whose root (the one that
+  admitted it) is no longer one of the scope's roots (a respawned pane), with 1008 `The session of this
+  scope has a new process: connect again.` A connection whose scope loses its list gets the no-list 1008
+  first. A connection stays while its root stays, also when another scope names the same root.
+- The session's end. The pane ends first, so its jobs (a `nohup` job, a double fork, a command through a
+  tmux server that the session started) match no live root and its cgroup counts for no one: for their own
+  scope they get the session's 403 until the line that drops the scope, and the no-list 503 after it
+  (with choice 5 b, the session's 403); their open connections close at that line (1008), or at the
+  `end_scope` (1000). An `end_scope` keeps a new connection of the scope out until a line names the scope
+  again; with the peer check that refusal comes after the session check (the session's 403 first).
+- A session that agentwatch only stops (its agent ends, its pane stays) keeps its pane and its root until
+  agentwatch ends the session: its jobs can still connect until then.
+- The limit. The check stops mistakes, an agent that names another session's scope, and an injected
+  instruction that only names a scope. It does not stop a hostile process of the same OS user: such a
+  process can join another session's cgroup with one write, or run a command through a server that another
+  session left running (`tmux -L <server> run-shell`: by the server's cgroup it counts as that session;
+  measured live, below), and it can type into another session's pane. A process that no agentwatch session
+  started (a plain terminal, `systemd-run --user`, cron outside agentwatch) cannot connect.
+- The Mac reader (`LOCAL_PEERPID`, `LOCAL_PEERCRED` and `proc_pidinfo`) is built from the documentation and
+  has not run yet (board task ab-v16.52). The Mac has no cgroups: there the walk alone decides, so a job
+  that leaves the tool's shell is refused.
 
 **On Linux, one window per page** (board task ab-v16.28; the anti-detect design of
 `docs/research/2026-11-05-anti-detect-drive.md`, "The answer" steps 1, 2 and 5):
@@ -1621,11 +1690,17 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
   (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
   scope): the policy and the allowlist line against the contracts' vectors (copied in
-  `test/vectors/chrome-extension-c99bebb/`; the vectors of the peer check itself wait for board task
-  ab-v16.51), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
+  `test/vectors/chrome-extension-40c2d93/`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver. Over the endpoint the fixture site
   is `fixture.localhost` (a list entry is never an IP address; the fake Chrome reaches it on 127.0.0.1).
+- `test/relay-peer.test.ts`: the peer check (`--peer-check`). The contract's peer vectors (`upgradeChecks`,
+  `lineCloses` and `lines` with the peer check: each gives the peer and a fake process table) run through
+  the relay with a fake reader behind the reader interface. On Linux the real reader runs too: the
+  self-test from a child process, its kernel branch (`ENOPROTOOPT` selects the stat form), its compares and
+  its time limit; the relay with real processes of the test (a client under its scope's root admitted,
+  others refused, a re-parented job refused where the root has no cgroup of its own, the 1008 of a root
+  change); and a check that no other command loads `node:ffi` (they run with `--no-experimental-ffi`).
 - `test/live/agent-mode/` (Linux, in a private Xvfb; see the head of `run.ts`): agent mode live. A
   Chromium of its own loads chrome-extension's agent package; a stand-in for the daemon's bridge side
   and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
@@ -1640,8 +1715,10 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   ten times each keep their opener's scope, and `end_scope` and a `set_scopes` without the scope close
   its tabs and connections while the browser's last window stays. Its group `link-up` checks a relay
   restart, a session that ends while no relay runs, a link drop, and the closes of the browser's only
-  tabs. Chromium gets `--disable-backgrounding-occluded-windows`. `CHROME_EXTENSION=<a detached worktree
-  of chrome-extension at main c99bebb (0.3.1) or later> npm run test:live:agent`. Not part of `npm test`.
+  tabs. Chromium gets `--disable-backgrounding-occluded-windows`. Its group `peer` (`CASES=peer`, alone)
+  runs the relay with `--peer-check` and two panes of the run's own tmux server as the roots (see **The
+  peer check**). `CHROME_EXTENSION=<a detached worktree of chrome-extension at main c99bebb (0.3.1) or
+  later> npm run test:live:agent`. Not part of `npm test`.
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.

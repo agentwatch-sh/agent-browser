@@ -9,7 +9,9 @@
 // A receiver whose hello has no `scopes` gets the old set_allowlist with no domain, and the relay no line (C4, the
 // rollout: fail closed). It logs ops, ids and sizes only. It can restart the relay with no link change, as
 // agentwatch's backoff restart does (board ab-v16.40), stop the relay for a while, drop the link to the receiver, and
-// write end_scope.
+// write end_scope. With `peerCheck` (board ab-v16.51) it starts the relay with --peer-check and puts each session's
+// roots into every allowlist line; a root change writes a line with the new roots and the last confirmed object at
+// once, with no set_scopes (C10, C11: the roots' life).
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, rmSync } from "node:fs";
@@ -29,7 +31,11 @@ export type ScopesAnswer = { ok: boolean; data?: { rules: number; closed: number
 export class StandInDaemon {
   relay: ChildProcess;
   private readonly server: Server;
-  private readonly o: { relaySocket: string; relayBin: string; relayLog: (line: string) => void };
+  private readonly o: { relaySocket: string; relayBin: string; relayLog: (line: string) => void; peerCheck?: boolean };
+  /** With the peer check: each session's roots, in every allowlist line. */
+  private roots: Record<string, { pid: number; start: number }[]> = {};
+  /** The last object that the receiver confirmed on the current connection (the line of a root change carries it). */
+  private confirmed: Scopes | null = null;
   private version = "";
   private host: Socket | null = null;
   private bridgeUp = false;
@@ -48,7 +54,7 @@ export class StandInDaemon {
   /** Each set_scopes answer, in order (the live test reads `closed`). */
   readonly answers: { at: number; obj: Scopes; answer: ScopesAnswer }[] = [];
 
-  constructor(o: { daemonSocket: string; relaySocket: string; relayBin: string; scopes: Scopes; relayLog: (line: string) => void }) {
+  constructor(o: { daemonSocket: string; relaySocket: string; relayBin: string; scopes: Scopes; relayLog: (line: string) => void; peerCheck?: boolean }) {
     this.o = o;
     this.current = o.scopes;
     rmSync(o.daemonSocket, { force: true });
@@ -59,7 +65,7 @@ export class StandInDaemon {
   }
 
   private spawnRelay(): ChildProcess {
-    const relay = spawn(process.execPath, [this.o.relayBin, "relay", "--socket", this.o.relaySocket], { stdio: ["pipe", "pipe", "pipe"] });
+    const relay = spawn(process.execPath, [this.o.relayBin, "relay", "--socket", this.o.relaySocket, ...(this.o.peerCheck ? ["--peer-check"] : [])], { stdio: ["pipe", "pipe", "pipe"] });
     createInterface({ input: relay.stdout! }).on("line", (line) => this.fromRelay(line));
     createInterface({ input: relay.stderr! }).on("line", this.o.relayLog);
     return relay;
@@ -96,8 +102,24 @@ export class StandInDaemon {
     this.answers.push({ at: Date.now(), obj: req.obj, answer });
     this.note(`set_scopes ${m.id} ${m.ok ? `ok ${JSON.stringify(m.data)}` : `failed: ${m.error}`}`);
     // The relay applies C4's rules to the line, as the receiver did to set_scopes (C10).
-    if (m.ok) this.toRelay({ t: "allowlist", ...req.obj });
+    if (m.ok) { this.confirmed = req.obj; this.toRelay(this.lineOf(req.obj)); }
     req.done(answer);
+  }
+
+  /** The allowlist line of a confirmed object: with the peer check, with every session's roots. */
+  private lineOf(obj: Scopes): object {
+    return { t: "allowlist", ...obj, ...(this.o.peerCheck ? { roots: this.roots } : {}) };
+  }
+
+  /**
+   * With the peer check: new roots (a launch, a respawned pane, a session's end). The line with them and the last
+   * confirmed object goes at once, with no set_scopes round trip; before the first `ok` on the current connection the
+   * roots go into the line that follows it (C11, the roots' life).
+   */
+  setRoots(roots: Record<string, { pid: number; start: number }[]>, o: { send?: boolean } = {}): void {
+    this.roots = roots;
+    // send false: the roots go with the next set_scopes's line (a session's end drops its scope and its roots in one line).
+    if ((o.send ?? true) && this.confirmed && this.bridgeUp) this.toRelay(this.lineOf(this.confirmed));
   }
 
   /** A message to the receiver as C4 parts of its compact UTF-8 JSON. */
@@ -185,6 +207,7 @@ export class StandInDaemon {
       if (this.bridgeUp) this.toRelay({ t: "link", up: false });
       this.bridgeUp = false;
       this.speaksScopes = false;
+      this.confirmed = null;
     });
   }
 

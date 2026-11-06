@@ -460,7 +460,8 @@ export async function selfTest(endpointSocket: string, o: SelfTestOptions = {}):
     if (Buffer.byteLength(path) > 103) fail(`the self-test's socket path is longer than 103 bytes: ${path}`);
     const srv = (server = createServer());
     await new Promise<void>((resolve, reject) => { srv.once("error", reject); srv.listen(path, resolve); });
-    check();
+    // The time limit can pass during the listen: then the cleanup has run already, so this path closes its own server.
+    if (over) { srv.close(); check(); }
     const accepted = new Promise<Socket>((resolve) => srv.once("connection", resolve));
     const c = (child = spawn(process.execPath, ["-e", o.childScript ?? CHILD, path], { stdio: "ignore" }));
     o.onChild?.(c);
