@@ -673,7 +673,12 @@ test("the Mac check never activates a window or brings a page forward, and sends
   assert.match(ts, /\["-n", "-g", "-a", bundle!/);
   assert.match(ts, /"-sdk", swift\.sdk/, "swiftc gets the SDK, so it never starts xcrun");
   // It removes only the throwaway profile and the watcher that it compiled, both inside its own run folder, after its Chrome quit.
-  assert.deepEqual(ts.match(/rmSync\([^)]*\)/g), ["rmSync(profile, { recursive: true, maxRetries: 3 })", "rmSync(watcherBin)"]);
+  assert.deepEqual(ts.match(/rmSync\([^)]*\)/g), ["rmSync(compiled)", "rmSync(profile, { recursive: true, maxRetries: 3 })", "rmSync(watcherBin)"]);
+  // The compiled watcher also goes after a refusal (exit 2; the Mac run of 2026-11-06, run 1, kept it): the exit handler
+  // removes the file that this run compiled, only inside its own run folder; the end removes it once the stable part is done.
+  assert.match(ts, /process\.on\("exit", \(\) => \{[\s\S]{0,600}if \(compiled\) \{ try \{ if \(realpathSync\(compiled\)\.startsWith\(`\$\{realpathSync\(RUN\)\}\/`\)\) rmSync\(compiled\); \} catch/);
+  assert.match(ts, /execFileSync\(swift\.swiftc, \[[^\]]*\][^;]*;\s*compiled = watcherBin;/, "only a watcher that this run compiled");
+  assert.match(ts, /try \{ rmSync\(watcherBin\); compiled = undefined;/);
   assert.match(ts, /if \(quit\.running !== false\) endLines\.push\(`kept the profile[\s\S]*else if \(inRun\(profile\)/, "the profile stays while the agent Chrome runs or ps cannot tell");
   assert.match(ts, /!O\.dryRun && !O\.watcher && watcher\.exitCode !== null && inRun\(watcherBin\)/);
   assert.match(ts, /startGiveBack\(bundle!/);

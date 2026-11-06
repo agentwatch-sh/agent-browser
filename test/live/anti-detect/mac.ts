@@ -84,7 +84,7 @@
 // It writes DIR/run-XXXXXX/results.json (every step, the watcher's log, the probe's log, the analysis) and
 // summary.md, and prints the summary. At the end it quits its Chrome (Browser.close, else SIGTERM, else SIGKILL, each
 // to the pid on its own profile, looked up again right before it: quitAgentChrome) and removes the throwaway profile
-// (only when ps shows that its Chrome quit) and the compiled watcher. `open` starts Chrome
+// (only when ps shows that its Chrome quit) and the compiled watcher (also after a refusal, exit 2). `open` starts Chrome
 // under launchd, so a kill -9 of node leaves it running: the check prints at the start, and writes to
 // DIR/run-XXXXXX/stop-chrome.txt, how to stop it by hand.
 //   exit 0  every phase ran; the start's take of the front, if any, followed agent-browser's give-back rule (at most
@@ -170,11 +170,15 @@ const chromeNow = (): number | null | undefined => {
 };
 /** Our agent Chrome's pid, or undefined (none, or not known). */
 const ownChrome = (): number | undefined => chromeNow() ?? undefined;
+/** The watcher binary that this run compiled into its run folder: it goes at the end, and also after a refusal (exit 2). */
+let compiled: string | undefined;
 process.on("exit", () => {
   if (settings) { try { stopProxy(settings); } catch { /* not started */ } }
   const pid = ownChrome();
   if (pid) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
   for (const c of children.slice().reverse()) if (c.exitCode === null && c.signalCode === null) c.kill("SIGTERM");
+  // Only the file that this run compiled, only inside its own run folder (the run of 2026-11-06 kept it after a refusal).
+  if (compiled) { try { if (realpathSync(compiled).startsWith(`${realpathSync(RUN)}/`)) rmSync(compiled); } catch { /* gone, or not made */ } }
 });
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => process.exit(130));
 
@@ -220,6 +224,7 @@ else {
     try {
       execFileSync(swift.swiftc, ["-sdk", swift.sdk, "-swift-version", "5", "-O", join(HERE, "mac-watch.swift"), "-o", watcherBin],
         { stdio: ["ignore", "pipe", "pipe"], timeout: 300_000, env: { ...process.env, SDKROOT: swift.sdk } });
+      compiled = watcherBin;
     }
     catch (e) {
       const err = e as { stderr?: Buffer; message: string };
@@ -881,7 +886,7 @@ if (!stableWhyNot && hand.ok) {
   }
 }
 if (!O.dryRun && !O.watcher && watcher.exitCode !== null && inRun(watcherBin)) {
-  try { rmSync(watcherBin); endLines.push(`removed the compiled watcher (${watcherBin})`); } catch (e) { endLines.push(`could not remove ${watcherBin}: ${(e as Error).message}`); }
+  try { rmSync(watcherBin); compiled = undefined; endLines.push(`removed the compiled watcher (${watcherBin})`); } catch (e) { endLines.push(`could not remove ${watcherBin}: ${(e as Error).message}`); }
 }
 
 // ------------------------------------------------------------------ analysis
