@@ -493,6 +493,33 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
+  test(`${label}: shot whose own capture gets Chrome's "Not attached to an active page" before Page.frameNavigated: the clear navigation error`, async () => {
+    // review-41e note 6: no test for this mapping (review-41d F2: Chrome's own error in 4 of 56 hidden-drive runs).
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") throw new Error("Not attached to an active page"); };
+    const path = join(c.dir, `${name}.png`);
+    await assert.rejects(commands.shot(mode(), { tab: name, path }), /shot: tab \w+ went to a new page during the shot/);
+    page.onCapture = undefined;
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size whose own capture Chrome refuses and whose override clear fails: a log line gives the page's size after the shot and before the override`, async () => {
+    // review-41e note 6: no test for this log line.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") throw new Error("refused by the test"); };
+    fake.failOnce.set("Emulation.clearDeviceMetricsOverride", "clear refused by the test");
+    const lines: string[] = [];
+    await withTiming({ underMs: 300 }, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }),
+      /refused by the test.*; cleanup also failed: clear the device metrics override: .*clear refused by the test/));
+    page.onCapture = undefined;
+    fake.failOnce.delete("Emulation.clearDeviceMetricsOverride");
+    assert.ok(lines.some((l) => /after the failed shot the page of tab \w+ is 800x600, not 1280x800 as before the size override/.test(l)), JSON.stringify(lines));
+    await commands.close(mode(), { tab: name });
+  });
+
   test(`${label}: shot whose page goes to a new page during the frame wait, before its own capture: the same clear error at once, not CDP's raw text`, async () => {
     const { name, page } = await backgroundTab("/", mode);
     await commands.text(mode(), { tab: name });
