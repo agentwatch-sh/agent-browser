@@ -1734,7 +1734,10 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   tabs. Chromium gets `--disable-backgrounding-occluded-windows`. Its group `peer` (`CASES=peer`, alone)
   runs the relay with `--peer-check` and two panes of the run's own tmux server as the roots (see **The
   peer check**). `CHROME_EXTENSION=<a detached worktree of chrome-extension at main c99bebb (0.3.1) or
-  later> npm run test:live:agent`. Not part of `npm test`.
+  later> npm run test:live:agent`. Not part of `npm test`. At its end it removes the large parts that it
+  made in its run folder (the scratch install, the tarball, Chromium's home and profile, the agent copy),
+  and the whole folder when it made that folder itself and no case failed; `KEEP_RUN=1` keeps everything
+  (`test/live/agent-mode/run-folder.ts`, checked by `test/agent-live-run-folder.test.ts`).
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.

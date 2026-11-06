@@ -1,9 +1,10 @@
 // Test helpers: a fixture HTTP server on 127.0.0.1, the fixture site the fake Chrome shows, a
-// private consumer (its own temp state folder and allowlist), and a runner for the real CLI.
+// private consumer (its own temp state folder and allowlist), a runner for the real CLI, and a stand-in endpoint for
+// spawn tests of the agent-mode live suite.
 
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,4 +114,46 @@ export function cli(args: string[], opts: { input?: string; cwd?: string; env?: 
 /** The global flags of one consumer for the CLI. */
 export function flags(c: Consumer, endpoint: string, extra: string[] = []): string[] {
   return ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", endpoint, "--no-launch", ...extra];
+}
+
+export type SuiteStandIn = { dir: string; link: string; real: string; run: (env: NodeJS.ProcessEnv) => Promise<CliRun>; remove: () => Promise<void> };
+
+/** The stand-in npm of suiteStandIn: it fails, or with STAND_IN_NPM=install it makes the two modules that the run loads. */
+const STAND_IN_NPM = `#!/bin/sh
+[ "$STAND_IN_NPM" = install ] || { echo "the stand-in npm fails: $*" >&2; exit 1; }
+case "$1" in
+  pack) echo agent-browser-0.0.0.tgz ;;
+  install) mkdir -p node_modules/playwright-core node_modules/ws || exit 1
+    echo 'module.exports = {};' > node_modules/playwright-core/index.js
+    echo 'module.exports = {};' > node_modules/ws/index.js ;;
+esac
+`;
+
+/**
+ * A stand-in endpoint for spawn tests of the agent-mode live suite (test/live/agent-mode/run.ts) in its external mode:
+ * a Unix socket of the test's own that answers every request with 404 (a ready endpoint; no agent browser is behind
+ * it) and a link to it, a CONTROL whose answer says that the browser runs, and an npm that fails, so that the run
+ * stops at its scratch install, before it starts or connects anything. With STAND_IN_NPM=install and CASES=none the
+ * run passes with no group. `run` gives RELAY_SOCK the link.
+ */
+export async function suiteStandIn(): Promise<SuiteStandIn> {
+  const dir = mkdtempSync(join(tmpdir(), "ab-suite-"));
+  mkdirSync(join(dir, "real"));
+  mkdirSync(join(dir, "bin"));
+  const sock = join(dir, "real/relay.sock"), link = join(dir, "link.sock"), control = join(dir, "control");
+  const server = createServer((_req, res) => { res.statusCode = 404; res.end(); });
+  await new Promise<void>((r) => server.listen(sock, r));
+  symlinkSync(sock, link);
+  writeFileSync(control, `#!/bin/sh\necho '{"ok": true, "running": true, "receiver": true, "endpoint": {"state": "ready"}}'\n`, { mode: 0o755 });
+  writeFileSync(join(dir, "bin/npm"), STAND_IN_NPM, { mode: 0o755 });
+  return {
+    dir, link, real: realpathSync(sock),
+    run: (env) => new Promise((resolve) => {
+      execFile(process.execPath, [join(ROOT, "test/live/agent-mode/run.ts")], {
+        encoding: "utf8", timeout: 60_000,
+        env: { PATH: `${join(dir, "bin")}:${process.env.PATH}`, HOME: process.env.HOME, RELAY_SOCK: link, CONTROL: control, ...env },
+      }, (error, stdout, stderr) => resolve({ status: error ? (typeof error.code === "number" ? error.code : null) : 0, stdout, stderr, json: undefined }));
+    }),
+    remove: async () => { server.closeAllConnections(); await new Promise<void>((r) => server.close(() => r())); rmSync(dir, { recursive: true, force: true }); },
+  };
 }

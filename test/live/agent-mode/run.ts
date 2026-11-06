@@ -31,15 +31,24 @@
 //
 // Environment: CHROME_EXTENSION (required in the own mode: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
-// DISPLAY_N (default 118), RUN (an empty folder; default a new one in the temp folder), CASES (default all:
+// DISPLAY_N (default 118), RUN (an empty folder; default, also for an empty RUN, a new one in the temp folder; in the own mode its path must
+// have plain characters only, because the relay's socket is in it and the ws+unix URL changes other characters),
+// KEEP_RUN (1: the run removes nothing, below), CASES (default all:
 // playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone) runs some groups only. The agent
 // package must be chrome-extension main c99bebb (0.3.1) or later: the per-scope receiver (parts 1a and 1b: set_scopes,
 // the tab-to-scope map, bridge.tabScope and bridge.tabScopes, the removal queue and its window rule, the retry of a
 // popup). It uses port 8781 (the probe's site), a free port of its own for the popup site of the group `scopes`, and
 // *.localhost hosts only. It drives no Chrome that it did not start (in the external mode only the one whose socket
 // RELAY_SOCK names, below) and stops no Chrome that it did not start; it opens no debugging port, and no prompt can
-// appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. It
-// deletes nothing.
+// appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails.
+//
+// At its end, after it stopped its children and wrote results.json, the run removes the large parts that it made in
+// RUN (run-folder.ts; board ab-v16.64): install/ (the scratch npm install, about 47 MB), pack/ (the package tarball),
+// home/ and profile/ (Chromium's; the profile is 7-99 MB) and agent/ (the copy of the agent package). logs/, results.json and the small
+// outputs stay. When the run made RUN itself (no RUN in the environment), no case failed and the run was not aborted,
+// it removes the whole RUN folder and prints that it did. KEEP_RUN=1 keeps everything, and so does a child of the run
+// that still runs after the stop. The run removes only paths that it recorded when it made them (a path that was there
+// before stays), never from a listing of the folder, and never RUN itself when RUN came from the environment.
 //
 // The external mode (boards ab-v16.57 and ab-v16.60) connects to an agent browser that runs already, for example
 // agentwatch's test browser (agentwatch tests/live/browser_test_unit.py), and starts no Xvfb, Chromium, stand-in daemon
@@ -57,14 +66,14 @@
 // end, as a session end does. A socket in a socket folder of agentwatch (/run/user/<uid>/agentwatch/, also through a
 // link; /run/agentwatch; ~/.cache/agentwatch), or a hard link to a socket there, is refused before the run makes its
 // folder or connects (external.ts): the suite never runs in the operator's agent browser. The socket must exist when
-// the run starts, its path must have plain characters only (the ws+unix URL changes others; RUN too, in both modes),
-// and the run connects to its real path. agentwatch's
+// the run starts, its path must have plain characters only (the ws+unix URL changes others), and the run connects to its
+// real path. The external mode does not check RUN: it puts no socket of a ws+unix URL in RUN. agentwatch's
 // relay restart has a backoff (1 s, doubled up to 60 s; a relay that ran 300 s resets it), and the link-up group
 // restarts the relay twice: a second run of that group within 5 minutes waits longer for each restart.
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, appendFileSync, chmodSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
@@ -75,6 +84,7 @@ import { TEXT } from "../../../src/relay/policy.ts";
 import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../anti-detect/probe.ts";
 import { StandInDaemon } from "./daemon.ts";
 import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
+import { runFolderEnd } from "./run-folder.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const PROBE = join(ROOT, "docs/superpowers/specs/2026-11-03-two-modes-probe");
@@ -97,7 +107,9 @@ if (!EXTERNAL && (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !exis
 }
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
-const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
+/** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
+const OWN_RUN = !process.env.RUN;
+const RUN = resolve(process.env.RUN || mkdtempSync(join(tmpdir(), "ab-agent-live-")));
 // The own mode's relay socket is in RUN, and the client URL must keep its path (external.ts, wsPathKept).
 if (!EXTERNAL && !wsPathKept(join(RUN, "relay.sock"))) { process.stderr.write(`RUN=${JSON.stringify(RUN)}: use a path of letters, digits and ._-/ only (the ws+unix URL changes other characters)\n`); process.exit(2); }
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up").split(",");
@@ -114,6 +126,10 @@ const RELAY_SOCK = EXTERNAL || join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, 
 /** The scopes of this run's clients: the external mode ends each through CONTROL (the probe's concurrency script uses s1 to s3). */
 const USED = new Set<string>(["s1", "s2", "s3"]);
 const url = (scope: string) => { USED.add(scope); return wsUrl(RELAY_SOCK, scope); };
+/** The large parts of RUN that this run made, recorded as it makes them; the run removes them at its end (run-folder.ts). */
+const made: string[] = [];
+/** A large part of RUN that the run makes now: recorded only when nothing is at its path yet, also no link. */
+const part = (p: string) => { try { lstatSync(p); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") made.push(p); } return p; };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The value of `p`, or null when it has none in `ms`. */
 const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).then(() => null)]);
@@ -191,17 +207,17 @@ function extensionId(manifest: { key: string }): string {
 // ---------------------------------------------------------------- setup
 
 mkdirSync(join(RUN, "logs"), { recursive: true });
-mkdirSync(join(RUN, "home"), { recursive: true });
+mkdirSync(part(join(RUN, "home")), { recursive: true });
 chmodSync(RUN, 0o700);
-if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) throw new Error(`display :${DISPLAY_N} is taken; set DISPLAY_N`);
-if (!(await portFree(8781))) throw new Error("port 8781 is taken (the probe's site needs it)");
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
-const env = EXTERNAL ? { run: RUN, external: { socket: EXTERNAL, control: CONTROL, status: await control("status") }, agentBrowser: git(ROOT, "rev-parse", "HEAD") }
-  : { run: RUN, extension: { dir: EXT, commit: git(EXT, "rev-parse", "HEAD") }, agentBrowser: git(ROOT, "rev-parse", "HEAD"),
+// The endpoint: the client URL of scope s1 (the concurrency script's first scope). Every client URL of the run differs
+// from it in its scope only; in the external mode it names the real path that the guard checked (external.ts).
+const env = EXTERNAL ? { run: RUN, endpoint: url("s1"), external: { socket: EXTERNAL, control: CONTROL, status: await control("status") }, agentBrowser: git(ROOT, "rev-parse", "HEAD") }
+  : { run: RUN, endpoint: url("s1"), extension: { dir: EXT, commit: git(EXT, "rev-parse", "HEAD") }, agentBrowser: git(ROOT, "rev-parse", "HEAD"),
     chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim() };
 console.log(`run ${RUN}\n${JSON.stringify(env)}`);
 
-const INSTALL = join(RUN, "install");
+const INSTALL = join(RUN, "install"), PACK = join(RUN, "pack");
 const RELAY_BIN = join(INSTALL, "node_modules/agent-browser/bin/agent-browser.js");
 let daemon: StandInDaemon | undefined, chromium: ChildProcess | undefined, aborted: string | undefined, cleaning: Promise<void> | undefined;
 
@@ -230,15 +246,25 @@ function cleanup(): Promise<void> {
     writeFileSync(join(RUN, "results.json"), JSON.stringify({ env, ...(aborted ? { aborted } : {}), results }, null, 2) + "\n");
     console.log(`\n${aborted ? `ABORTED (${aborted}): ` : ""}${results.length} cases: ${count("pass")} pass, ${count("fail")} fail, ${count("skip")} skipped, ${results.filter((r) => r.adapted).length} adapted; ${join(RUN, "results.json")}`);
     process.exitCode = aborted || count("fail") ? 1 : 0;
+    // The large parts that this run made (run-folder.ts), now that its children stopped and results.json is written.
+    const alive = (c: ChildProcess) => c.exitCode === null && c.signalCode === null;
+    const end = runFolderEnd({ run: RUN, ownRun: OWN_RUN, made, keep: process.env.KEEP_RUN, failed: count("fail"), aborted,
+      running: [...children, ...(daemon ? [daemon.relay] : [])].filter(alive).length });
+    // force: a part whose make failed (an abort) may not be there.
+    const notRemoved = end.remove.flatMap((p) => { try { rmSync(p, { recursive: true, force: true, maxRetries: 5 }); return []; } catch (e) { return [`could not remove ${p}: ${(e as Error).message}`]; } });
+    console.log([end.line, ...notRemoved].join("\n"));
   })();
 }
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(sig, () => { aborted ??= `signal ${sig}`; void cleanup().then(() => process.exit(1)); });
 
 try {
-  // The scratch install: this checkout as a package, and the clients that the probe used.
-  mkdirSync(INSTALL);
+  if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) throw new Error(`display :${DISPLAY_N} is taken; set DISPLAY_N`);
+  if (!(await portFree(8781))) throw new Error("port 8781 is taken (the probe's site needs it)");
+  // The scratch install: this checkout as a package (its tarball in pack/), and the clients that the probe used.
+  mkdirSync(part(INSTALL));
+  mkdirSync(part(PACK));
   const npm = (args: string[], cwd: string) => execFileSync("npm", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
-  const tarball = join(RUN, npm(["pack", "--silent", "--pack-destination", RUN], ROOT).split("\n").pop()!);
+  const tarball = join(PACK, npm(["pack", "--silent", "--pack-destination", PACK], ROOT).split("\n").pop()!);
   npm(["init", "-y"], INSTALL);
   npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball, "playwright-core@1.64.1", "@playwright/mcp@0.0.84"], INSTALL);
 
@@ -291,10 +317,10 @@ process.exit(process.exitCode);
 
 /** The own mode: the agent package, its native host, the profile, the stand-in daemon with its relay, Xvfb and Chromium. */
 async function startOwnBrowser() {
-  cpSync(join(EXT, "agent"), join(RUN, "agent"), { recursive: true });
+  cpSync(join(EXT, "agent"), part(join(RUN, "agent")), { recursive: true });
   const id = extensionId(JSON.parse(readFileSync(join(RUN, "agent/manifest.json"), "utf8")));
   const PROFILE = join(RUN, "profile");
-  mkdirSync(join(PROFILE, "NativeMessagingHosts"), { recursive: true });
+  mkdirSync(join(part(PROFILE), "NativeMessagingHosts"), { recursive: true });
   const hostSh = join(RUN, "host.sh");
   writeFileSync(hostSh, `#!/bin/sh\nexec /usr/bin/python3 ${join(EXT, "test/live/host.py")} --socket ${DAEMON_SOCK} --log ${join(RUN, "logs/host.log")} "$@"\n`, { mode: 0o700 });
   writeFileSync(join(PROFILE, "NativeMessagingHosts/sh.agentwatch.browser.json"),
