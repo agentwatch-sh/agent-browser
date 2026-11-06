@@ -10,10 +10,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
-  agentWindowsOf, coveredFraction, FALLBACK_MS, ffmpegSearchPath, frontAt, frontTakes, giveBackRows, isOperatorWindow, joinVerdicts, macArgs, matchWindow, newAgentWindows, NO_GIVE_BACK_MS, OPEN_TAKE_MS,
-  orderOf, parseWatchLog, placement, fieldText, placementText, probeRecord, quitAgentChrome, readyText, realPointer, runStep, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt,
-  STOP_POLL_MS, stopReason, summary, swiftTools, USAGE, verdict, watchBackText, watcherProblems, windowsOf,
-  type CgWin, type MacResult, type Step, type Take, type WatchEvent,
+  agentWindowsOf, coveredFraction, FALLBACK_MS, ffmpegSearchPath, frontAt, frontTakes, gapProblem, giveBackRows, handover, HANDOVER_SLACK_MS, isOperatorWindow, joinVerdicts, macArgs, makeFallback,
+  matchWindow, newAgentWindows, NO_GIVE_BACK_MS, noGiveBackStep, OPEN_TAKE_MS, orderOf, parseWatchLog, placement, fieldText, placementText, probeRecord, quitAgentChrome, readyText, realPointer, runStep,
+  realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, STOP_POLL_MS, stopReason, summary, swiftTools, USAGE, verdict, watchBackText, watcherProblems, windowsOf,
+  type CgWin, type Hold, type MacResult, type Step, type Take, type WatchEvent,
 } from "./live/anti-detect/mac-rules.ts";
 import { parseWatchBack } from "./live/anti-detect/mac-watchback.ts";
 import { startServer, type Rec } from "./live/anti-detect/probe.ts";
@@ -66,15 +66,25 @@ test("--look is 0 to 300 whole seconds, --skip names known parts, and the dry ru
 });
 
 test("--part stable is the short second part (no --look in it), and --skip stable leaves it out", () => {
+  const hand = ["--quiet-since=1793954298896", "--pointer=-1000,-1000.5"];
   assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o"]).part, undefined);
-  assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable"]).part, "stable");
-  assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--part", "stable"], linux).part, "stable");
+  assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o"]).handover, undefined);
+  const o = options(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", ...hand]);
+  assert.equal(o.part, "stable");
+  assert.deepEqual(o.handover, { quietSince: 1793954298896, pointer: { x: -1000, y: -1000.5 } }, "the first part's handover: the time from which no watcher read the input, and the pointer's point");
+  assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--part", "stable", ...hand], linux).part, "stable");
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable"]), /--part stable needs --quiet-since and --pointer/, "the stable part never starts without the first part's handover");
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", "--quiet-since=1793954298896"]), /--part stable needs --quiet-since and --pointer/);
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", ...hand]), /--quiet-since and --pointer are for --part stable/);
+  for (const bad of ["--quiet-since=12.5", "--quiet-since=0", "--quiet-since=x"]) assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", bad, hand[1]]), /--quiet-since/, bad);
+  for (const bad of ["--pointer=1", "--pointer=1,2,3", "--pointer=a,b", "--pointer=1,"]) assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", hand[0], bad]), /--pointer/, bad);
   assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "beta"]), /--part takes stable, not "beta"/);
-  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", "--look", "60"]), /--look is for the first part/);
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", ...hand, "--look", "60"]), /--look is for the first part/);
   assert.deepEqual(options(["--on-my-screen", "--out-dir", "/tmp/o", "--skip", "stable,record"]).skip, ["stable", "record"]);
   assert.match(USAGE, /--skip record,popups,person,stable/);
   assert.match(USAGE, /keep the front for up to 2 s with no give-back/);
   assert.match(USAGE, /Google Chrome \(stable\) is\s+installed/);
+  assert.match(USAGE, /Do not touch the Mac until the summary prints/);
 });
 
 test("--ffmpeg takes an absolute path that exists, on the Mac and in the dry run", () => {
@@ -206,6 +216,103 @@ test("stopReason: a take that begins in the time with no give-back may stay open
   assert.match(stopReason(later, steps, 8001, { ...o, holds: [hold] }) ?? "", /did not come back/, "a take that begins after the hold has the 1.5 s rule");
   const before = live([front(3900, AG)]);
   assert.match(stopReason(before, steps, 5401, { ...o, holds: [hold] }) ?? "", /did not come back/, "and one that began before it");
+});
+
+test("stopReason: in the time with no give-back, a key, a click, a scroll or a pointer move still stops the check at once", () => {
+  const o = { t0: 0, limitMs: 540_000, holds: [{ from: 4000, until: 4000 + NO_GIVE_BACK_MS }] };
+  const live = (extra: WatchEvent[]) => [ready(), front(4100, AG), ...extra, { t: 4800, ev: "alive", locked: false, asleep: false, onConsole: true }];
+  assert.equal(stopReason(live([]), steps, 4900, o), undefined, "the take alone does not stop the check in the hold");
+  for (const kind of ["keyDown", "flagsChanged", "leftMouseDown", "scrollWheel"])
+    assert.match(stopReason(live([{ t: 4500, ev: "input", kind, agoMs: 1 }]), steps, 4501, o) ?? "", new RegExp(`a person used the keyboard or the mouse \\(${kind}\\)`), kind);
+  assert.match(stopReason(live([{ t: 4500, ev: "pointer", x: 1, y: 2 }]), steps, 4501, o) ?? "", /the pointer moved/);
+  assert.match(stopReason(live([{ t: 4500, ev: "alive", locked: true }]), steps, 4501, o) ?? "", /the screen locked/);
+  assert.match(stopReason(live([{ t: 4500, ev: "space", via: "news", space: 2 }]), steps, 4501, o) ?? "", /the Space changed/);
+});
+
+test("noGiveBackStep: the check's watcher only logs from the click on, a snap at 1 s, and it gives the front back at exactly NO_GIVE_BACK_MS; at a stop it does not arm again", async () => {
+  const run = async (o: { openMs?: number; stopAt?: number; fails?: boolean } = {}) => {
+    let clock = 10_000;
+    const tells: [string, number][] = [], holds: Hold[] = [], snaps: number[] = [];
+    const sleep = async (ms: number) => { clock += ms; };
+    const r = await noGiveBackStep({
+      now: () => clock, pause: sleep, tell: (cmd) => tells.push([cmd, clock - 10_000]), aborted: () => o.stopAt !== undefined && clock - 10_000 >= o.stopAt, holds,
+      open: async () => { await sleep(o.openMs ?? 300); if (o.fails) throw new Error("no popup"); }, snap: async () => { snaps.push(clock - 10_000); },
+    }).then(() => "ok", (e: Error) => e.message);
+    return { r, tells, holds, snaps };
+  };
+  const a = await run();
+  assert.deepEqual(a.tells, [["disarm", 0], ["arm", NO_GIVE_BACK_MS]], "the give-back is off from the click, and on again at exactly the end of the time with no give-back");
+  assert.deepEqual(a.holds, [{ from: 10_000, until: 10_000 + NO_GIVE_BACK_MS }], "the hold is recorded before the give-back stops (the stop rules read it)");
+  assert.deepEqual(a.snaps, [1000]);
+  assert.equal(a.r, "ok");
+  const slow = await run({ openMs: 2600 });
+  assert.deepEqual(slow.tells, [["disarm", 0], ["arm", 2600]], "a popup that loads after the 2 s: the give-back is on again at once, never later");
+  assert.deepEqual(slow.snaps, [2600]);
+  const stopped = await run({ stopAt: 500, openMs: 600 });
+  assert.deepEqual(stopped.tells, [["disarm", 0]], "at a stop the check gave the front back itself (checkHarm); the step never arms the watcher again");
+  const failed = await run({ fails: true });
+  assert.deepEqual([failed.r, failed.tells], ["no popup", [["disarm", 0], ["arm", 300]]], "a failed click or load ends the time with no give-back at once");
+});
+
+test("makeFallback: while the prototype runs, a take of the agent Chrome that is still open after FALLBACK_MS arms the check's watcher, and the front's return disarms it", () => {
+  const run = (lines: { at: number; e?: WatchEvent; active?: boolean }[], o: { agentInFront?: (t: number) => boolean } = {}) => {
+    let clock = 0, active = true;
+    const timers: { at: number; fn: () => void; id: number }[] = [], log: string[] = [];
+    let n = 0;
+    const fb = makeFallback({
+      active: () => active, frontIsAgent: () => o.agentInFront ? o.agentInFront(clock) : true,
+      arm: () => log.push(`arm@${clock}`), disarm: () => log.push(`disarm@${clock}`),
+      setTimer: (fn, ms) => { const id = ++n; timers.push({ at: clock + ms, fn, id }); return id; }, clearTimer: (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); },
+    });
+    for (const l of lines) {
+      for (let t = timers.filter((x) => x.at <= l.at).sort((a, b) => a.at - b.at)[0]; t; t = timers.filter((x) => x.at <= l.at).sort((a, b) => a.at - b.at)[0]) { timers.splice(timers.indexOf(t), 1); clock = t.at; t.fn(); }
+      clock = l.at;
+      if (l.active !== undefined) active = l.active;
+      if (l.e) fb.line(l.e);
+    }
+    return { log, armed: fb.armed, timers: timers.length };
+  };
+  const take = (t: number) => front(t, AG), back = (t: number) => front(t, OP);
+  assert.deepEqual(run([{ at: 0, e: take(0) }, { at: 100, e: back(100) }, { at: 5000 }]).log, [], "a take that the prototype gave back: nothing");
+  assert.deepEqual(run([{ at: 0, e: take(0) }, { at: FALLBACK_MS + 400, e: back(FALLBACK_MS + 400) }]).log, [`arm@${FALLBACK_MS}`, `disarm@${FALLBACK_MS + 400}`], "armed at FALLBACK_MS, disarmed when the front is back");
+  assert.deepEqual(run([{ at: 0, e: back(0) }, { at: 5000 }]).log, [], "a front change to another app never arms it");
+  assert.deepEqual(run([{ at: 0, e: front(0, { pid: 77, name: "SecurityAgent", agent: false }) }, { at: 5000 }]).log, []);
+  assert.deepEqual(run([{ at: 0, e: take(0) }, { at: 5000 }], { agentInFront: () => false }).log, [], "at the timer the agent Chrome no longer has the front: no arm");
+  assert.deepEqual(run([{ at: 0, e: take(0) }, { at: 300, active: false }, { at: 5000 }]).log, [], "the prototype ended or the check stopped: no arm");
+  assert.deepEqual(run([{ at: 0, e: take(0), active: false }, { at: 5000 }]).log, [], "not active: a take starts no timer");
+  assert.deepEqual(run([{ at: 0, e: take(0) }, { at: 300, e: take(300) }, { at: FALLBACK_MS + 100 }]).log, [`arm@${FALLBACK_MS}`], "one timer for one take, from its first line");
+  assert.deepEqual(run([{ at: 0, e: { t: 0, ev: "alive" } }, { at: 5000 }]).log, [], "other lines change nothing");
+  const reset = makeFallback({ active: () => true, frontIsAgent: () => true, arm: () => {}, disarm: () => {}, setTimer: (fn) => { fn(); return 1; }, clearTimer: () => {} });
+  reset.line(take(0));
+  assert.equal(reset.armed, true);
+  reset.reset();
+  assert.equal(reset.armed, false, "reset: the prototype ended, the check's watcher stays armed and the fallback forgets it");
+});
+
+test("handover: the first part hands the stable part the time from which no watcher read the input and the pointer's point, or why the stable part must not start", () => {
+  const evs: WatchEvent[] = [ready(), { t: 9000, ev: "alive" }, { t: 9400, ev: "end", why: "quit" }];
+  assert.deepEqual(handover(evs, 9000), { ok: true, handover: { quietSince: 9400 - HANDOVER_SLACK_MS, pointer: { x: 100, y: 200 } } });
+  assert.ok(HANDOVER_SLACK_MS >= 100, "the watcher reads the input every 100 ms: its last look can be up to 100 ms before its last line");
+  const key = handover([...evs, { t: 9200, ev: "input", kind: "keyDown", agoMs: 3 }], 9000);
+  assert.deepEqual(key, { ok: false, why: "a person used the Mac (keyDown) after the first part's measurement, before the stable part" });
+  assert.match((handover([...evs, { t: 9300, ev: "pointer", x: 1, y: 2 }], 9000) as { why: string }).why, /a person used the Mac \(a pointer move\)/);
+  assert.equal(handover([...evs, { t: 8000, ev: "pointer", x: 1, y: 2 }], 9000).ok, true, "a move before the measurement's end is the first part's own stop");
+  assert.match((handover([ready({ pointer: undefined }), { t: 9400, ev: "end", why: "quit" }], 9000) as { why: string }).why, /no pointer point/);
+});
+
+test("gapProblem: the stable part refuses before its Chrome starts when a HID reading or the pointer shows a person in the gap between the two parts", () => {
+  const h = { quietSince: 10_000, pointer: { x: 100, y: 200 } };
+  const at = (t: number, extra: Record<string, unknown> = {}) => ready({ t, ...extra });
+  assert.equal(gapProblem(at(10_800), h), null, "HID readings of 4 s and more, the pointer where it was");
+  const key = gapProblem(at(10_800, { hid: { ...HID, keyDown: 0.5 } }), h) ?? "";
+  assert.match(key, /the HID reading of keyDown is 0\.5 s, shorter than the 0\.8 s since the first part's watcher last read the input: a person used the Mac between the two parts/);
+  for (const name of ["flagsChanged", "leftMouseDown", "rightMouseDown", "otherMouseDown", "scrollWheel"])
+    assert.match(gapProblem(at(10_800, { hid: { ...HID, [name]: 0.79 } }), h) ?? "", new RegExp(`the HID reading of ${name} is 0\\.79 s`), name);
+  assert.equal(gapProblem(at(10_800, { hid: { ...HID, keyDown: 0.81 } }), h), null, "an event before the first part's last look: the first part saw it (and did not start this part)");
+  assert.match(gapProblem(at(10_800, { pointer: [101, 200] }), h) ?? "", /the pointer moved between the two parts \(from 100,200 to 101,200\)/);
+  assert.equal(gapProblem(at(10_800, { pointer: [100.4, 200.4] }), h), null, "less than a point, as the watcher's own rule");
+  assert.match(gapProblem(at(10_800, { pointer: undefined }), h) ?? "", /no pointer/);
+  assert.match(gapProblem(at(10_800, { hid: { ...HID, scrollWheel: undefined } }), h) ?? "", /the HID reading of scrollWheel is none/);
 });
 
 test("runStep: a stop rule ends the running step at once (the rules are read every 100 to 250 ms), and the step's own end or time limit else", async () => {
@@ -562,7 +669,7 @@ test("the Mac check never activates a window or brings a page forward, and sends
     assert.doesNotMatch(ts, forbidden);
   // Its one osascript run is agent-browser's give-back watcher, the prototype: a constant script (mac-watchback.ts), only its arguments change.
   assert.equal((ts.match(/spawn\(OSASCRIPT/g) ?? []).length, 1);
-  assert.match(ts, /spawn\(OSASCRIPT, watchBackArgs\(bundle!, chromePid, bound\), /);
+  assert.match(ts, /spawn\(OSASCRIPT, watchBackArgs\(bundle!, chromePid, bound, process\.pid\), /);
   assert.match(ts, /\["-n", "-g", "-a", bundle!/);
   assert.match(ts, /"-sdk", swift\.sdk/, "swiftc gets the SDK, so it never starts xcrun");
   // It removes only the throwaway profile and the watcher that it compiled, both inside its own run folder, after its Chrome quit.
@@ -589,23 +696,35 @@ test("the Mac check never activates a window or brings a page forward, and sends
 test("ab-v16.68: the time with no give-back is bounded and gives the front back at its end, the prototype ends at a stop, and the stable part runs only after a whole first part", () => {
   const ts = readFileSync(join(DIR, "mac.ts"), "utf8").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   // The hold: recorded for the stop rules before the check's watcher stops giving the front back, and ended by it (not after a stop: checkHarm gave the front back then).
-  assert.match(ts, /if \(p\.hold\) \{ holds\.push\(\{ from, until: from \+ NO_GIVE_BACK_MS \}\); tell\("disarm"\); \}/);
-  assert.match(ts, /finally \{[\s\S]{0,200}if \(p\.hold && !aborted\) tell\("arm"\);/);
+  // (noGiveBackStep in mac-rules.ts, tested above: the hold before the disarm, the arm at its end, none after a stop.)
+  assert.match(ts, /await noGiveBackStep\(\{ now: Date\.now, pause, tell, aborted: \(\) => !!aborted, holds, open, snap: \(\) => snap\(`during \$\{label\}`\) \}\);/);
   assert.match(ts, /stopReason\(events, steps, Date\.now\(\), \{ t0: T0, limitMs: LIMIT_MS, measureEnd, holds \}\)/);
-  assert.equal((ts.match(/tell\("disarm"\)/g) ?? []).length, 5, "a stop, the hold, the prototype's start, the fallback's end, the look");
-  assert.equal((ts.match(/tell\("arm"\)/g) ?? []).length, 4, "the start, the hold's end, the fallback, a prototype that ended by itself");
+  assert.equal((ts.match(/tell\("disarm"\)/g) ?? []).length, 4, "a stop, the prototype's start, the fallback's end, the look (the hold's: noGiveBackStep)");
+  assert.equal((ts.match(/tell\("arm"\)/g) ?? []).length, 3, "the start, the fallback, a prototype that ended by itself (the hold's end: noGiveBackStep)");
   // A stop ends agent-browser's give-back watcher at once (it cannot tell a person's own switch to the agent Chrome), and so does the look.
   assert.match(ts, /tell\("disarm"\);\s+tell\("giveback"\);\s+stopWatchBack\(\);/);
   assert.match(ts, /measureEnd = Date\.now\(\);\s+clearInterval\(stopPoll\);\s+stopWatchBack\(\);/);
   assert.match(ts, /wb\.kill\("SIGTERM"\)/, "it ends only the process that it started");
   assert.match(ts, /child\.once\("exit", \(\) => \{\s+if \(!protoOn \|\| wb !== child\) return;\s+protoOn = false;[\s\S]{0,120}if \(!aborted\) \{ tell\("arm"\);/, "a prototype that ends by itself hands the give-back back to the check's watcher");
   // The fallback arms the check's watcher only while the prototype runs and the agent Chrome still has the front.
-  assert.match(ts, /if \(!protoOn \|\| aborted \|\| frontAt\(events, Date\.now\(\)\)\?\.pid !== chromePid\) return;\s+fallbackArmed = true;/);
+  assert.match(ts, /active: \(\) => protoOn && !aborted, frontIsAgent: \(\) => frontAt\(events, Date\.now\(\)\)\?\.pid === chromePid,/);
+  assert.match(ts, /if \(e\) fallback\.line\(e\);/);
   // The stable part: only Google Chrome stable in /Applications, never installed, and only after a first part that ran to its end and quit its Chrome.
   assert.match(ts, /!O\.dryRun && !existsSync\(CHROME_STABLE_BIN\) \? `Not measured: Google Chrome \(stable\) is not installed/);
   assert.match(ts, /aborted \? "Not run: the first part stopped early\." : fatal \? "Not run: the first part failed\." : quit\.running !== false \?/);
   assert.match(ts, /"--on-my-screen", "--part", "stable", "--out-dir", dir, "--chrome-bin", CHROME_STABLE_BIN, "--watcher", watcherBin/);
-  assert.match(ts, /filter\(\(\[k\]\) => !k\.startsWith\("MAC_STANDIN_"\)\)/);
+  // B1 of review-66: the first part hands the stable part its last look at the input and the pointer's point, and the stable part checks them before its Chrome starts.
+  assert.match(ts, /const hand = handover\(events, measureEnd!?\)/);
+  assert.match(ts, /: !hand\.ok \? `Not run: \$\{hand\.why\}\.`/);
+  assert.match(ts, /filter\(\(\[k\]\) => !k\.startsWith\("MAC_STANDIN_"\) \|\| k\.startsWith\("MAC_STANDIN_STABLE_"\)\)/, "the first part's stand-in settings stay out of the stable part");
+  // N2 of review-66: the prototype gets the check's own pid, and stop-chrome.txt names it.
+  assert.match(ts, /watchBackArgs\(bundle!, chromePid, bound, process\.pid\)/);
+  assert.match(ts, /appendFileSync\(join\(RUN, "stop-chrome\.txt"\), `\$\{help\}\\n`\);/);
+  assert.match(ts, /`--quiet-since=\$\{hand\.handover\.quietSince\}`, `--pointer=\$\{hand\.handover\.pointer\.x\},\$\{hand\.handover\.pointer\.y\}`/);
+  assert.match(ts, /if \(O\.handover\) \{ const gap = gapProblem\(ready, O\.handover\); if \(gap\) refuse\(`refusing, nothing started: \$\{gap\}`\); \}/);
+  assert.ok(ts.indexOf("gapProblem(ready, O.handover)") < ts.indexOf('await step("start", "agent Chrome start"'), "the gap check comes before the Chrome start");
+  assert.match(ts, /noGiveBackStep\(\{/);
+  assert.match(ts, /const fallback = makeFallback\(\{/);
   // The way back sends no activation: a CDP click, Target.closeTarget, or the page's own window.close().
   assert.match(ts, /evaluate\(sid, "window\.close\(\), true"\)/);
   assert.equal((ts.match(/cdp\("Target\.closeTarget"/g) ?? []).length, 3, "the way back, its fallback when the page does not close itself, and the background tab's popups");

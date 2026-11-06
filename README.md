@@ -1882,8 +1882,9 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
     `src/giveback.ts` (`osascript`, its 25 ms poll and its one activation call), with 3 asks for each
     take, until the agent Chrome quits. From the background tab's second popup to the end it gives
     the front back, and the check's own watcher only logs (it arms again only when a take is still
-    open after 800 ms, `FALLBACK_MS`). The summary gives each take as both saw it, and who gave the
-    front back.
+    open after 800 ms, `FALLBACK_MS`, or at once when the prototype ends). The prototype ends when the
+    check's node process is gone (its parent pid, and a beat on its pipe to the check), and
+    `stop-chrome.txt` names it. The summary gives each take as both saw it, and who gave the front back.
   - **The way back to the opener with no activation** (no `Page.bringToFront`,
     `Target.activateTarget` or `windows.update`), from the page in a window of its own: a CDP click in
     the `target=_blank` popup tab, then `Target.closeTarget` of it; the `window.open()` popup closes
@@ -1895,8 +1896,11 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
     agent Chrome: after the first agent Chrome quit, a short second run of the check in it (`--part
     stable`, in its own run folder `run-XXXXXX/stable/`, with a new empty profile): its start, the
     give-back watcher, one window and the popups from it with the way back. It runs only when the
-    first part ran to its end, and not after `--look`; `--skip stable` leaves it out. When Google
-    Chrome is not installed, the summary says so: the check installs nothing.
+    first part ran to its end, and not after `--look`; `--skip stable` leaves it out. No watcher runs
+    between the two parts, so the first part hands the stable part its watcher's last look at the input
+    and the pointer's point (`--quiet-since`, `--pointer`), and the stable part refuses before its Chrome
+    starts when its own watcher's HID readings or pointer show a person in that gap. When Google Chrome is
+    not installed, the summary says so: the check installs nothing.
 
   As `test/live/function-keys/` is, it is an exception to the rule against `--remote-debugging-port`
   (Hard rules): its agent Chrome gets

@@ -10,10 +10,13 @@
 //
 // To test the check's stop rules, its refusals and its analysis, these variables make it log what a Mac can show:
 // MAC_STANDIN_TAKE_MS=N (N ms after its start, the agent Chrome takes the front for 120 ms, or for
-// MAC_STANDIN_TAKE_LEN_MS, and the front comes back),
+// MAC_STANDIN_TAKE_LEN_MS, and the front comes back; MAC_STANDIN_TAKE_AFTER_DISARM_MS=N: the same take, N ms after
+// the check's first "disarm", the start of its time with no give-back),
 // MAC_STANDIN_POINTER_MS=N (N ms after its start, the pointer moves: a person at the Mac), MAC_STANDIN_INPUT_MS=N
 // (N ms after its start, a key press of the hardware: a person at the Mac), and MAC_STANDIN_HID=NAME=S[,NAME=S]
-// (the ready line's HID reading of NAME is S seconds; the others are 3600: a reading of 0 makes the check refuse).
+// (the ready line's HID reading of NAME is S seconds; the others are 3600: a reading of 0 makes the check refuse), and
+// MAC_STANDIN_READY_POINTER=X,Y (the pointer of its ready line; else -1000,-1000). The first part passes each
+// MAC_STANDIN_STABLE_X to the stable part as MAC_STANDIN_X (a person in the gap between the two parts).
 
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -42,17 +45,21 @@ function xWindows(): number[][] {
   } catch { return []; }
 }
 
-emit("ready", { ...state, front, pointer: [-1000, -1000], space: null, spaceReader: false, displays: [], old: [], hid });
+const pointer = (process.env.MAC_STANDIN_READY_POINTER ?? "-1000,-1000").split(",").map(Number);
+emit("ready", { ...state, front, pointer, space: null, spaceReader: false, displays: [], old: [], hid });
 emit("windows", { why: "ready", list: [], owners: {} });
 setInterval(() => emit("alive", { ...state, space: null }), 1000);
 const takeAt = Number(process.env.MAC_STANDIN_TAKE_MS ?? 0), pointerAt = Number(process.env.MAC_STANDIN_POINTER_MS ?? 0), inputAt = Number(process.env.MAC_STANDIN_INPUT_MS ?? 0);
 // As mac-watch.swift: the first sign of a person stops the give-back for good.
 const personSeen = (why: string) => { if (personWhy) return; personWhy = why; armed = false; emit("disarmed", { why }); };
-if (takeAt > 0) setTimeout(() => {
+const take = () => {
   emit("front", { pid: agentPid, name: "agent Chrome (stand-in)", bundle: null, agent: true });
   inFront = true;
   setTimeout(() => { inFront = false; emit("front", front); }, Number(process.env.MAC_STANDIN_TAKE_LEN_MS ?? 120));
-}, takeAt);
+};
+if (takeAt > 0) setTimeout(take, takeAt);
+const afterDisarm = Number(process.env.MAC_STANDIN_TAKE_AFTER_DISARM_MS ?? 0);
+let disarms = 0;
 if (pointerAt > 0) setTimeout(() => { emit("pointer", { x: 1, y: 2 }); personSeen("pointer"); }, pointerAt);
 if (inputAt > 0) setTimeout(() => { emit("input", { kind: "keyDown", agoMs: 0 }); personSeen("input"); }, inputAt);
 setTimeout(() => finish("limit"), seconds * 1000);
@@ -60,7 +67,7 @@ const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   const [verb, rest = ""] = line.trim().split(/ (.*)/s);
   if (verb === "arm") { if (personWhy) emit("disarmed", { why: personWhy }); else { armed = true; emit("armed"); } }
-  else if (verb === "disarm") { armed = false; emit("disarmed"); }
+  else if (verb === "disarm") { armed = false; emit("disarmed"); if (afterDisarm > 0 && ++disarms === 1) setTimeout(take, afterDisarm); }
   // As mac-watch.swift: one last request, only while the agent Chrome is in front (on Linux the stand-in asks nobody).
   else if (verb === "giveback") emit("giveback", { asked: inFront, front: inFront ? { pid: agentPid, name: "agent Chrome (stand-in)", agent: true } : front });
   else if (verb === "agent") { agentPid = Number(rest) || 0; emit("agent", { pid: agentPid }); }

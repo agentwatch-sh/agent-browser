@@ -36,6 +36,12 @@ export type MacOptions = {
    * start, one window, the popups from it and the way back to the opener; no records, so no ffmpeg).
    */
   part?: "stable";
+  /**
+   * The stable part only: what the first part hands it (review-66, B1), --quiet-since MS --pointer X,Y. Between the two
+   * parts no watcher runs; the stable part refuses before its Chrome starts when its watcher's ready line shows a
+   * person in that gap (gapProblem).
+   */
+  handover?: Handover;
 };
 
 export const USAGE = `usage (macOS; the operator agrees, and nobody uses the Mac during the run):
@@ -46,7 +52,7 @@ export const USAGE = `usage (macOS; the operator agrees, and nobody uses the Mac
   or it refuses before its Chrome starts (exit 2). A key, a click, a scroll or a pointer move of a person stops it at once.
   One popup step lets the agent Chrome keep the front for up to 2 s with no give-back. When Google Chrome (stable) is
   installed and is not the agent Chrome, a short second part runs in it after the first agent Chrome quit (--part stable;
-  --skip stable leaves it out).
+  --skip stable leaves it out). Do not touch the Mac until the summary prints.
 dry run (Linux, in a private Xvfb, with a stand-in watcher; not a Mac result):
   node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123] [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person,stable]`;
 
@@ -62,6 +68,7 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
     v = parseArgs({ args: argv, strict: true, allowPositionals: false, options: {
       "on-my-screen": { type: "boolean" }, "dry-run": { type: "boolean" }, "out-dir": { type: "string" }, "chrome-bin": { type: "string" }, chrome: { type: "string" },
       watcher: { type: "string" }, look: { type: "string" }, skip: { type: "string" }, display: { type: "string" }, ffmpeg: { type: "string" }, part: { type: "string" },
+      "quiet-since": { type: "string" }, pointer: { type: "string" },
     } }).values;
   } catch (e) { return { ok: false, message: `${(e as Error).message}\n${USAGE}` }; }
   const no = (message: string) => ({ ok: false as const, message });
@@ -87,7 +94,18 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
   if (v.part !== undefined && v.part !== "stable") return no(`--part takes stable, not ${JSON.stringify(v.part)}`);
   const part = v.part === "stable" ? { part: "stable" as const } : {};
   if (part.part && look) return no("--look is for the first part, not --part stable");
-  const both = { look, skip, ...(typeof ffmpeg === "string" ? { ffmpeg } : {}), ...part };
+  // The stable part never starts without the first part's handover (B1 of review-66), and only the stable part takes it.
+  const qs = v["quiet-since"], pt = v.pointer;
+  if (!part.part && (qs !== undefined || pt !== undefined)) return no("--quiet-since and --pointer are for --part stable (the first part gives them)");
+  let handover: { handover: Handover } | Record<string, never> = {};
+  if (part.part) {
+    if (typeof qs !== "string" || typeof pt !== "string") return no("--part stable needs --quiet-since and --pointer (the first part gives them; run the check without --part)");
+    if (!/^[1-9]\d{0,15}$/.test(qs)) return no(`--quiet-since is a time in whole ms since 1970: ${qs}`);
+    const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(pt);
+    if (!m) return no(`--pointer is X,Y (points): ${pt}`);
+    handover = { handover: { quietSince: Number(qs), pointer: { x: Number(m[1]), y: Number(m[2]) } } };
+  }
+  const both = { look, skip, ...(typeof ffmpeg === "string" ? { ffmpeg } : {}), ...part, ...handover };
   if (dryRun) {
     for (const f of ["chrome-bin", "watcher"]) if (v[f] !== undefined) return no(`--${f} is for the Mac run, not --dry-run`);
     const display = Number(v.display ?? 123);
@@ -275,6 +293,48 @@ export function readyText(ready: WatchEvent): string {
     + `and so do ${HID_APPS}: quit them first.`;
 }
 
+/**
+ * How much earlier than the first part's watcher's last line the handover counts its last look at the input: the
+ * watcher reads it every 100 ms (and at each front change), so its last look can come up to 100 ms before its last line.
+ */
+export const HANDOVER_SLACK_MS = 200;
+
+/** What the first part hands the stable part (review-66, B1): the time from which no watcher read the input, and the pointer's point. */
+export type Handover = { quietSince: number; pointer: { x: number; y: number } };
+
+/**
+ * The first part's handover, from its watcher's whole log once that watcher ended, or why the stable part must not
+ * start: a person's input or a pointer move after the measurement's end (the stop rules end there), or no pointer.
+ * quietSince: HANDOVER_SLACK_MS before the watcher's last line; from then until the stable part's watcher is ready, no
+ * watcher reads the input, so the stable part reads it from its HID readings and its pointer (gapProblem).
+ */
+export function handover(events: readonly WatchEvent[], measureEnd: number): { ok: true; handover: Handover } | { ok: false; why: string } {
+  const person = events.find((e) => (e.ev === "input" || e.ev === "pointer") && e.t > measureEnd);
+  if (person) return { ok: false, why: `a person used the Mac (${person.ev === "pointer" ? "a pointer move" : person.kind}) after the first part's measurement, before the stable part` };
+  const pointer = realPointer(events);
+  if (!pointer) return { ok: false, why: "the first part's watcher gave no pointer point" };
+  return { ok: true, handover: { quietSince: Math.max(...events.map((e) => e.t)) - HANDOVER_SLACK_MS, pointer } };
+}
+
+/**
+ * Why the stable part refuses (exit 2, before its Chrome starts), from its watcher's ready line and the first part's
+ * handover: a HID reading (seconds since the hardware's last key, modifier, click or scroll) shorter than the time
+ * since the first part's last look at the input, or a pointer that is not where the first part's watcher saw it (a
+ * move of 1 point or more, as the watcher's own rule). Then a person used the Mac in the gap between the two parts.
+ */
+export function gapProblem(ready: WatchEvent, h: Handover): string | null {
+  const gap = ready.t - h.quietSince;
+  for (const name of HID_TYPES) {
+    const s = ready.hid?.[name];
+    if (typeof s !== "number" || !Number.isFinite(s)) return `the HID reading of ${name} is ${s ?? "none"}: the stable part cannot tell whether a person used the Mac between the two parts`;
+    if (s * 1000 < gap) return `the HID reading of ${name} is ${s} s, shorter than the ${(gap / 1000).toFixed(1)} s since the first part's watcher last read the input: a person used the Mac between the two parts`;
+  }
+  const p = ready.pointer;
+  if (!Array.isArray(p) || p.length !== 2 || !p.every((x) => Number.isFinite(Number(x)))) return "the stable part's watcher gave no pointer point";
+  if (Math.abs(Number(p[0]) - h.pointer.x) + Math.abs(Number(p[1]) - h.pointer.y) >= 1) return `the pointer moved between the two parts (from ${h.pointer.x},${h.pointer.y} to ${p[0]},${p[1]})`;
+  return null;
+}
+
 /** The longest silence of the watcher (it logs once a second) that still counts as a working watcher. */
 export const MAX_WATCH_GAP_MS = 2000;
 
@@ -320,11 +380,63 @@ export const NO_GIVE_BACK_MS = 2000;
 export type Hold = { from: number; until: number };
 
 /**
+ * The step with no give-back (review-66, N1a): the hold goes into `holds` (the stop rules read it) before the check's
+ * watcher stops giving the front back ("disarm"); `open` makes the popup; a snap 1 s after the start shows the window
+ * order while the agent Chrome has the front; at the hold's end, never later, the watcher gives the front back again
+ * ("arm"). At a stop (`aborted`), the check's stop gave the front back itself (checkHarm), and the step never arms the
+ * watcher again. `pause` ends at once at a stop.
+ */
+export async function noGiveBackStep(d: {
+  now: () => number; pause: (ms: number) => Promise<unknown>; tell: (cmd: string) => void; aborted: () => boolean; holds: Hold[];
+  open: () => Promise<unknown>; snap: () => Promise<unknown>;
+}): Promise<void> {
+  const from = d.now(), hold = { from, until: from + NO_GIVE_BACK_MS };
+  d.holds.push(hold);
+  d.tell("disarm");
+  try {
+    await d.open();
+    await d.pause(Math.max(0, from + 1000 - d.now()));
+    await d.snap();
+    await d.pause(Math.max(0, hold.until - d.now()));
+  } finally {
+    if (!d.aborted()) d.tell("arm");
+  }
+}
+
+/**
  * While agent-browser's give-back watcher (the prototype, mac-watchback.ts) runs, the check's own watcher only logs.
  * When a take of the agent Chrome is still open this long after it began, the check arms its own watcher again, which
  * gives the front back at once (a fallback, so that a slow or failed prototype never stops the run).
  */
 export const FALLBACK_MS = 800;
+
+/**
+ * The check's fallback while agent-browser's give-back watcher (the prototype) runs (review-66, N1c). `line` reads each
+ * watcher line: a front line of the agent Chrome starts one timer of FALLBACK_MS (one for a take); at its end, while
+ * `active` (the prototype runs and the check did not stop) and the agent Chrome still has the front, it arms the
+ * check's watcher. A front line of any other app ends the timer, and disarms the watcher if the fallback armed it.
+ * `reset`: the prototype ended (the check's watcher stays armed then) or stopped.
+ */
+export function makeFallback<T>(d: {
+  active: () => boolean; frontIsAgent: () => boolean; arm: () => void; disarm: () => void;
+  setTimer: (fn: () => void, ms: number) => T; clearTimer: (timer: T) => void;
+}): { line: (e: WatchEvent) => void; reset: () => void; readonly armed: boolean } {
+  let timer: T | undefined, armed = false;
+  const clear = () => { if (timer !== undefined) d.clearTimer(timer); timer = undefined; };
+  return {
+    line(e) {
+      if (e.ev !== "front" || !d.active()) return;
+      if (e.agent) {
+        timer ??= d.setTimer(() => { timer = undefined; if (!d.active() || !d.frontIsAgent()) return; armed = true; d.arm(); }, FALLBACK_MS);
+        return;
+      }
+      clear();
+      if (armed) { armed = false; d.disarm(); }
+    },
+    reset() { clear(); armed = false; },
+    get armed() { return armed; },
+  };
+}
 
 /**
  * Why the check must stop now (it ends the step in progress at once, asks for one last give-back, skips the steps

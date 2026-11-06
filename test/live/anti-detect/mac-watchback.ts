@@ -10,18 +10,24 @@
 // runs this one. The build decides its own: a person's own switch to the agent Chrome (this prototype sends them back,
 // as the start guard does for its time), Chrome's approval prompt and `front`, which must stay in front.
 //
-//   osascript -l JavaScript -e WATCH_BACK_SCRIPT BUNDLE_PATH AGENT_PID BOUND_MS     (watchBackArgs)
+//   osascript -l JavaScript -e WATCH_BACK_SCRIPT BUNDLE_PATH AGENT_PID BOUND_MS PARENT_PID     (watchBackArgs)
 //
 // Standard output: one JSON line once it watches, {"before": pid, "bundle": id, "agent": pid} (before 0: it does not
-// watch, and it ends). Standard error (the check's watch-back.log): "<ISO time> watch-back <what>", one line each:
-//   watch agent=PID before=PID       it watches
+// watch, and it ends); then an empty line every 250 ms (BEAT_POLLS), to the pipe that only the check's node process
+// reads. It ends when that process is gone (review-66, N2: after a kill -9 of node it must not stay): its parent pid
+// (getppid, when JXA can import it from unistd) is not PARENT_PID any more, or the write to that pipe fails (with no
+// reader: SIGPIPE ends osascript at once, or the write throws). Standard error (the check's watch-back.log):
+// "<ISO time> watch-back <what>", one line each:
+//   watch agent=PID before=PID parent=PID ppid=yes|no    it watches (ppid=no: only the pipe tells it that the check is gone)
 //   took=PID from=PID                the agent Chrome took the front from the app to give it back to
 //   asked=PID n=N sent=BOOL          one activation request for that app (at most 3 for one take, 250 ms apart)
 //   back=PID after-ms=N asks=N       that app is in front again (after-ms: from the take, as this watcher saw it)
 //   refused=PID asks=N               the 3 asks of the take are spent: it asks no more until the front leaves the agent
 //   before=PID [after-ms=N]          another app came to the front: the app to give the front back to from now on
-//   end=WHY                          agent-gone (the agent Chrome quit), bound (its time limit), no-agent, no-front,
-//                                    agent-in-front, usage or error; the check adds "end=stopped by=check" at its SIGTERM
+//   end=WHY                          agent-gone (the agent Chrome quit), parent-gone (the check's node process is
+//                                    gone), bound (its time limit), no-agent, no-front, agent-in-front, usage or error
+//                                    (also a failed write to the check's pipe); the check adds "end=stopped by=check"
+//                                    at its SIGTERM
 // It sends no Apple Event and no input, uses no System Events, and needs no Accessibility, Automation or Screen
 // Recording grant (as the start guard). The script is a constant: its only inputs are its arguments.
 
@@ -29,7 +35,8 @@
 export const WATCH_BACK_MAX_MS = 900_000;
 
 /**
- * The prototype (JXA). argv: the agent's app bundle path, the agent Chrome's pid, and the time limit in ms. The agent
+ * The prototype (JXA). argv: the agent's app bundle path, the agent Chrome's pid, the time limit in ms, and the check's
+ * own pid (its parent: it ends when that process is gone, see the head of this file). The agent
  * Chrome is that pid, and only while it is an instance of that bundle (checked at the start; a quit ends the watcher,
  * so a pid that another process takes later is never the agent). It polls the front app every 25 ms, spinning the run
  * loop as the start guard does. Each time the agent Chrome takes the front, it asks macOS to activate the app that was
@@ -39,7 +46,7 @@ export const WATCH_BACK_MAX_MS = 900_000;
  */
 export const WATCH_BACK_SCRIPT = String.raw`ObjC.import("AppKit");
 
-const POLL_S = 0.025, RETRY_MS = 250, MAX_ASKS = 3;
+const POLL_S = 0.025, RETRY_MS = 250, MAX_ASKS = 3, BEAT_POLLS = 10;
 
 // One step of the watcher: from its state, the time, the app in front (null: none for a moment; else its pid, and
 // whether it is the agent Chrome), whether the agent Chrome has quit and whether the app to give the front back to
@@ -72,7 +79,7 @@ function run(argv) {
   const write = (handle, line) => handle.writeData($(line + "\n").dataUsingEncoding($.NSUTF8StringEncoding));
   const log = (text) => write(err, new Date().toISOString() + " watch-back " + text);
   try {
-    if (argv.length !== 3 || !/^\/.*[^\/]\.app$/.test(argv[0]) || !/^[1-9][0-9]{0,6}$/.test(argv[1]) || !/^[1-9][0-9]{3,5}$/.test(argv[2])) { log("end=usage"); return; }
+    if (argv.length !== 4 || !/^\/.*[^\/]\.app$/.test(argv[0]) || !/^[1-9][0-9]{0,6}$/.test(argv[1]) || !/^[1-9][0-9]{3,5}$/.test(argv[2]) || !/^[1-9][0-9]{0,6}$/.test(argv[3])) { log("end=usage"); return; }
     const nil = (o) => o === undefined || o === null || (typeof o.isNil === "function" && o.isNil());
     const text = (o) => { if (nil(o)) return null; const v = ObjC.unwrap(o); return typeof v === "string" ? v : null; };
     const pathOf = (url) => (nil(url) ? null : text(url.URLByStandardizingPath.path));
@@ -91,14 +98,23 @@ function run(argv) {
     if (!isAgent) { log("end=no-agent"); return; }
     if (!beforePid) { log("end=no-front"); return; }
     if (beforePid === agentPid) { log("end=agent-in-front"); return; }
-    log("watch agent=" + agentPid + " before=" + beforePid);
+    // The check's node process: getppid where JXA can import it (unistd), and the pipe of standard output in any case.
+    const parentPid = Number(argv[3]);
+    let ppid = null;
+    try { ObjC.import("unistd"); if (typeof $.getppid === "function") ppid = () => $.getppid(); } catch (e) { ppid = null; }
+    log("watch agent=" + agentPid + " before=" + beforePid + " parent=" + parentPid + " ppid=" + (ppid ? "yes" : "no"));
     let st = { before: beforePid, startedAt: Date.now(), boundMs: Number(argv[2]), took: null, asks: 0, askedAt: 0, spent: false };
-    for (;;) {
+    for (let polls = 1; ; polls++) {
       // The run loop delivers AppKit's news of the front app; with no input source it returns at once.
       const spun = Date.now();
       $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(POLL_S));
       const rest = POLL_S - (Date.now() - spun) / 1000;
       if (rest > 0.002) $.NSThread.sleepForTimeInterval(rest);
+      if (polls % BEAT_POLLS === 0) {
+        // With no reader (the check's node process is gone) this write ends the watcher: SIGPIPE, or an error (caught below).
+        write($.NSFileHandle.fileHandleWithStandardOutput, "");
+        if (ppid && ppid() !== parentPid) { log("end=parent-gone"); return; }
+      }
       const app = workspace.frontmostApplication, pid = pidOf(app);
       const r = step(st, Date.now(), pid ? { pid: pid, agent: pid === agentPid } : null, !!agent.isTerminated, !!before.isTerminated);
       if (r.st.before !== st.before) before = app;
@@ -113,12 +129,13 @@ function run(argv) {
 }
 `;
 
-/** osascript's argv for the prototype: the constant script, then the bundle, the agent Chrome's pid and the time limit as arguments. */
-export function watchBackArgs(bundle: string, agentPid: number, boundMs: number): string[] {
+/** osascript's argv for the prototype: the constant script, then the bundle, the agent Chrome's pid, the time limit and the check's own pid as arguments. */
+export function watchBackArgs(bundle: string, agentPid: number, boundMs: number, parentPid: number): string[] {
   if (!/^\/.*[^/]\.app$/.test(bundle) || /[\0\n]/.test(bundle)) throw new Error(`the give-back watcher needs an absolute app bundle path (/X.app): ${JSON.stringify(bundle)}`);
   if (!Number.isSafeInteger(agentPid) || agentPid < 1 || agentPid > 9_999_999) throw new Error(`the give-back watcher needs the agent Chrome's pid: ${agentPid}`);
   if (!Number.isInteger(boundMs) || boundMs < 1000 || boundMs > WATCH_BACK_MAX_MS) throw new Error(`the give-back watcher's time limit must be a whole number of ms from 1000 to ${WATCH_BACK_MAX_MS}: ${boundMs}`);
-  return ["-l", "JavaScript", "-e", WATCH_BACK_SCRIPT, bundle, String(agentPid), String(boundMs)];
+  if (!Number.isSafeInteger(parentPid) || parentPid < 1 || parentPid > 9_999_999) throw new Error(`the give-back watcher needs the check's own pid: ${parentPid}`);
+  return ["-l", "JavaScript", "-e", WATCH_BACK_SCRIPT, bundle, String(agentPid), String(boundMs), String(parentPid)];
 }
 
 /** The prototype's ready line: the app it gives the front back to (0: it does not watch), or undefined when the line is none. */

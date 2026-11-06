@@ -56,8 +56,9 @@
 //   giveback (ab-v16.68) agent-browser's give-back watcher as agent-browser would run it for as long as the agent
 //           Chrome runs (the operator's answer ab-or9): a prototype in this check (mac-watchback.ts, osascript), not
 //           agent-browser's code. From here to the end it gives the front back, the check's watcher only logs (and
-//           arms again as a fallback when a take is still open after FALLBACK_MS), and the summary gives each take's
-//           times as both saw them
+//           arms again as a fallback when a take is still open after FALLBACK_MS, or at once when the prototype ends),
+//           and the summary gives each take's times as both saw them. It ends when this node process is gone (its
+//           parent pid, and a beat on its pipe to this process), and stop-chrome.txt names it
 //   facts   what an API gives of Mission Control, App Expose, the Dock menu and Cmd-` (the agent app's windows, on
 //           and off screen, its activation policy, the window titles); before the popups, which can take the front
 //   popup   from a page in its own window: a target=_blank link, window.open() with no features, and window.open()
@@ -73,7 +74,11 @@
 //           run folder DIR/run-XXXXXX/stable/run-YYYYYY, its own watcher process from the same compiled watcher, a new
 //           empty profile): its start, agent-browser's give-back watcher, one window (WA) and the popups from it with
 //           the way back. It runs only when the first part ran to its end. Else the summary says why not (not installed:
-//           the check reads /Applications and installs nothing)
+//           the check reads /Applications and installs nothing). Between the two parts no watcher runs (review-66, B1):
+//           the first part hands the stable part its watcher's last look at the input and the pointer's point
+//           (--quiet-since, --pointer; after a person's input or pointer move after its measurement it starts no
+//           stable part), and the stable part refuses (exit 2, before its Chrome starts) when a HID reading of its own
+//           watcher is shorter than that gap or the pointer moved (gapProblem)
 // The real pointer: every probe event at the real pointer's point (macOS gave it, not the check's CDP input).
 //
 // It writes DIR/run-XXXXXX/results.json (every step, the watcher's log, the probe's log, the analysis) and
@@ -118,7 +123,8 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settin
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg } from "../../../src/record.ts";
 import {
-  agentWindowsOf, FALLBACK_MS, ffmpegSearchPath, fieldText, giveBackRows, joinVerdicts, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, NO_GIVE_BACK_MS, orderOf,
+  agentWindowsOf, FALLBACK_MS, ffmpegSearchPath, fieldText, gapProblem, giveBackRows, handover, joinVerdicts, makeFallback, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow,
+  newAgentWindows, NO_GIVE_BACK_MS, noGiveBackStep, orderOf,
   parseWatchLog, placement, placementText, probeRecord, readyText, realPointer, realPointerEvents, runStep, screenProblem, snapOf, spaceChanges, STOP_POLL_MS, stopReason, summary, swiftTools,
   verdict, watchBackText, watcherProblems, windowsOf,
   type BackRow, type BgPopupRow, type DriveRow, type Hold, type MacResult, type PopupRow, type RecordRow, type Step, type Verdict, type WatchEvent, type WindowRow,
@@ -233,7 +239,7 @@ createInterface({ input: watcher.stdout! }).on("line", (line) => {
   let e: WatchEvent | undefined;
   try { const x = JSON.parse(line); if (typeof x?.t === "number" && typeof x.ev === "string") { events.push(x); e = x; } } catch { /* counted as bad in the analysis */ }
   if (watching) checkHarm();
-  if (e?.ev === "front") fallback(e);
+  if (e) fallback.line(e);
 });
 const tell = (cmd: string) => { if (watcher.stdin?.writable) watcher.stdin.write(`${cmd}\n`); };
 async function waitEvent(pred: (e: WatchEvent) => boolean, ms: number): Promise<WatchEvent | undefined> {
@@ -277,32 +283,24 @@ let wb: ChildProcess | undefined, wbStarted: string | undefined;
 /**
  * True while the prototype gives the front back: the check's own watcher then only logs (disarmed). When a take of the
  * agent Chrome is still open FALLBACK_MS after the watcher's line of it, the check arms its watcher (it gives the front
- * back at once), and disarms it again when the front is back: a fallback, measured apart (the takes table names it).
+ * back at once), and disarms it again when the front is back: a fallback (makeFallback), measured apart (the takes
+ * table names it).
  */
-let protoOn = false, fallbackArmed = false, fallbackTimer: NodeJS.Timeout | undefined;
+let protoOn = false;
 const fallbacks: { t: number; step: string }[] = [];
-function fallback(e: WatchEvent): void {
-  if (!protoOn || aborted) return;
-  if (e.agent) {
-    fallbackTimer ??= setTimeout(() => {
-      fallbackTimer = undefined;
-      if (!protoOn || aborted || frontAt(events, Date.now())?.pid !== chromePid) return;
-      fallbackArmed = true;
-      fallbacks.push({ t: Date.now(), step: current ?? "between steps" });
-      tell("arm");
-      say(`fallback: the agent Chrome still had the front ${FALLBACK_MS} ms after it took it; the check's watcher gives it back`);
-    }, FALLBACK_MS);
-    return;
-  }
-  clearTimeout(fallbackTimer);
-  fallbackTimer = undefined;
-  if (fallbackArmed) { fallbackArmed = false; tell("disarm"); }
-}
+const fallback = makeFallback({
+  active: () => protoOn && !aborted, frontIsAgent: () => frontAt(events, Date.now())?.pid === chromePid,
+  arm: () => {
+    fallbacks.push({ t: Date.now(), step: current ?? "between steps" });
+    tell("arm");
+    say(`fallback: the agent Chrome still had the front ${FALLBACK_MS} ms after it took it; the check's watcher gives it back`);
+  },
+  disarm: () => tell("disarm"), setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t),
+});
 /** Ends the prototype (SIGTERM to the process that this check started), and the check's fallback with it. */
 function stopWatchBack(): void {
   protoOn = false;
-  clearTimeout(fallbackTimer);
-  fallbackTimer = undefined;
+  fallback.reset();
   if (wb && wb.exitCode === null && wb.signalCode === null) {
     wb.kill("SIGTERM");
     try { appendFileSync(wbLog, `${new Date().toISOString()} watch-back end=stopped by=check\n`); } catch { /* the log is for the analysis only */ }
@@ -322,6 +320,9 @@ await sleep(400);
 // start (also in the dry run, with the stand-in's lines). The start step looks again right before its launch.
 const problem = screenProblem(events);
 if (problem) refuse(`refusing, nothing started: ${problem}`);
+// The stable part (review-66, B1): no watcher read the input between the two parts; its own watcher's HID readings and
+// pointer show whether a person used the Mac in that gap.
+if (O.handover) { const gap = gapProblem(ready, O.handover); if (gap) refuse(`refusing, nothing started: ${gap}`); }
 // The display and the system stay awake for the run (an assertion that ends with this process).
 if (!O.dryRun) children.push(spawn("/usr/bin/caffeinate", ["-d", "-i", "-w", String(process.pid)], { stdio: "ignore" }));
 say(readyText(ready));
@@ -501,21 +502,13 @@ let bgTarget: string | undefined;
  */
 async function bgPopup(p: (typeof BG_POPUPS)[number]): Promise<void> {
   if (!bgTarget) throw new Error("no background tab with the links");
-  const label = current ?? `popup: ${p.name}`, from = Date.now();
-  if (p.hold) { holds.push({ from, until: from + NO_GIVE_BACK_MS }); tell("disarm"); }
-  try {
-    await commands.click(oTab, { tab: "bg", target: `#${p.id}` });
-    await loaded(p.tab, 8000);
-    if (p.hold) {
-      await pause(Math.max(0, from + 1000 - Date.now()));
-      await snap(`during ${label}`);
-      await pause(Math.max(0, from + NO_GIVE_BACK_MS - Date.now()));
-    } else await pause(1000);
-  } finally {
-    // The time with no give-back ends: the check's watcher gives the front back (at a stop, checkHarm did it already).
-    if (p.hold && !aborted) tell("arm");
-  }
-  if (p.hold) await frontBack(1200);
+  const label = current ?? `popup: ${p.name}`;
+  const open = async () => { await commands.click(oTab, { tab: "bg", target: `#${p.id}` }); await loaded(p.tab, 8000); };
+  if (p.hold) {
+    // The time with no give-back (mac-rules.ts, noGiveBackStep): it ends with the check's watcher's give-back at NO_GIVE_BACK_MS.
+    await noGiveBackStep({ now: Date.now, pause, tell, aborted: () => !!aborted, holds, open, snap: () => snap(`during ${label}`) });
+    await frontBack(1200);
+  } else { await open(); await pause(1000); }
   bgInfo[p.tab] = await popupState(p.tab, bgTarget!);
 }
 if (browser && FULL && !O.skip.includes("popups")) {
@@ -545,8 +538,8 @@ async function startWatchBack(): Promise<string> {
   let child: ChildProcess;
   try {
     child = O.dryRun
-      ? spawn(process.execPath, [join(HERE, "mac-standin-watchback.ts"), String(chromePid), String(bound), String(operatorPid)], { stdio: ["ignore", "pipe", fd] })
-      : spawn(OSASCRIPT, watchBackArgs(bundle!, chromePid, bound), { stdio: ["ignore", "pipe", fd] });
+      ? spawn(process.execPath, [join(HERE, "mac-standin-watchback.ts"), String(chromePid), String(bound), String(operatorPid), String(process.pid)], { stdio: ["ignore", "pipe", fd] })
+      : spawn(OSASCRIPT, watchBackArgs(bundle!, chromePid, bound, process.pid), { stdio: ["ignore", "pipe", fd] });
   } finally { closeSync(fd); }
   children.push(child);
   wb = child;
@@ -555,9 +548,7 @@ async function startWatchBack(): Promise<string> {
   child.once("exit", () => {
     if (!protoOn || wb !== child) return;
     protoOn = false;
-    clearTimeout(fallbackTimer);
-    fallbackTimer = undefined;
-    fallbackArmed = false;
+    fallback.reset();
     if (!aborted) { tell("arm"); say("agent-browser's give-back watcher ended; the check's watcher gives the front back again"); }
   });
   const line = await new Promise<string | undefined>((res) => {
@@ -567,7 +558,9 @@ async function startWatchBack(): Promise<string> {
     child.stdout!.on("data", (b) => { buf += b; const i = buf.indexOf("\n"); if (i >= 0) done(buf.slice(0, i)); });
     child.once("close", () => done(undefined));
   });
-  child.stdout!.destroy(); // it writes nothing more there
+  // Its later lines are empty beats: the check keeps reading them, so that the pipe has a reader for as long as this
+  // process lives (with no reader, the prototype ends: review-66, N2).
+  child.stdout!.resume();
   const r = line === undefined ? undefined : parseWatchBackReady(line);
   if (!r || r.agent !== chromePid || r.before !== operatorPid) {
     stopWatchBack();
@@ -576,6 +569,10 @@ async function startWatchBack(): Promise<string> {
   if (aborted) { stopWatchBack(); throw new Error("stopped"); }
   tell("disarm");
   protoOn = true;
+  // stop-chrome.txt names it too (review-66, N2): after a kill -9 of node it ends by itself within about 0.25 s.
+  const help = `agent-browser's give-back watcher (${O.dryRun ? "the dry run's stand-in" : OSASCRIPT}, pid ${child.pid}) ends by itself when this check's node process is gone (within about 0.25 s), when the agent Chrome quits, or at its time limit; to stop it at once, check that \`ps -o comm= -p ${child.pid}\` shows ${O.dryRun ? process.execPath : OSASCRIPT}, then run \`kill ${child.pid}\`.`;
+  appendFileSync(join(RUN, "stop-chrome.txt"), `${help}\n`);
+  say(help);
   return `${O.dryRun ? "The dry run's stand-in (mac-standin-watchback.ts; it sees no take on Linux)" : `${OSASCRIPT} (JavaScript for Automation), a prototype in this check (mac-watchback.ts), not agent-browser's code`}, pid ${child.pid}, `
     + `ready in ${Date.now() - t0} ms: it gives the front back to pid ${r.before}${r.bundle ? ` (${r.bundle})` : ""}; from then on the check's watcher only logs, and arms again only when a take is still open after ${FALLBACK_MS} ms (fallbacks: see the takes table).`;
 }
@@ -835,6 +832,10 @@ else if (inRun(profile) && statSync(profile).isDirectory()) {
 // A run of its own (this script with --part stable), after the first agent Chrome quit, with the same compiled watcher.
 // Only when Google Chrome stable is installed (the check reads /Applications and installs nothing), is not the first
 // part's agent Chrome, and the first part ran to its end. The dry run runs it with its own Chromium on the next display.
+// The first part's handover (review-66, B1): its watcher's last look at the input, and the pointer's point. A person's
+// input or a pointer move after the measurement's end (the stop rules end there) keeps the stable part from starting;
+// from that last look to the stable part's watcher, no watcher runs, and the stable part checks that gap (gapProblem).
+const hand = handover(events, measureEnd!);
 const stable: string[] = [];
 let stablePart: { ok: boolean; problems: string[]; popupOnly?: boolean } | null = null, stableResult: Record<string, any> | undefined;
 const stableWhyNot = !FULL ? "this run is the stable part"
@@ -843,17 +844,20 @@ const stableWhyNot = !FULL ? "this run is the stable part"
   : !O.dryRun && !existsSync(CHROME_STABLE_BIN) ? `Not measured: Google Chrome (stable) is not installed (no ${CHROME_STABLE_BIN}). The check installs nothing.`
   : !O.dryRun && O.chromeBin === CHROME_STABLE_BIN ? `Measured in the first part: Google Chrome (stable) was this run's agent Chrome (${CHROME_STABLE_BIN}).`
   : aborted ? "Not run: the first part stopped early." : fatal ? "Not run: the first part failed." : quit.running !== false ? "Not run: the first part's agent Chrome did not quit (or ps cannot confirm it)."
+  : !hand.ok ? `Not run: ${hand.why}.`
   : O.dryRun && O.display >= 9999 ? "Not run: no display after --display for the dry run's second part." : undefined;
 if (stableWhyNot && FULL) stable.push(stableWhyNot);
-if (!stableWhyNot) {
+if (!stableWhyNot && hand.ok) {
   const dir = join(RUN, "stable");
   mkdirSync(dir);
   const args = O.dryRun
     ? ["--dry-run", "--part", "stable", "--out-dir", dir, "--chrome", O.chromeBin, "--display", String(O.display + 1)]
     : ["--on-my-screen", "--part", "stable", "--out-dir", dir, "--chrome-bin", CHROME_STABLE_BIN, "--watcher", watcherBin];
+  args.push(`--quiet-since=${hand.handover.quietSince}`, `--pointer=${hand.handover.pointer.x},${hand.handover.pointer.y}`);
   if (O.skip.includes("popups")) args.push("--skip", "popups");
-  // Its own stand-in settings stay out: MAC_STANDIN_* are for the first part's test runs.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("MAC_STANDIN_")));
+  // The first part's stand-in settings (MAC_STANDIN_*) stay out; MAC_STANDIN_STABLE_X becomes the stable part's MAC_STANDIN_X (a dry run's test of the gap).
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("MAC_STANDIN_") || k.startsWith("MAC_STANDIN_STABLE_"))
+    .map(([k, v]) => [k.replace(/^MAC_STANDIN_STABLE_/, "MAC_STANDIN_"), v]));
   say(`stable: the second part runs in ${O.dryRun ? `the dry run's Chromium (${O.chromeBin})` : CHROME_STABLE_BIN}: node ${join(HERE, "mac.ts")} ${args.join(" ")}`);
   const t0 = Date.now();
   const child = spawn(process.execPath, [join(HERE, "mac.ts"), ...args], { stdio: ["ignore", "inherit", "inherit"], env });
