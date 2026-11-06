@@ -1,12 +1,16 @@
 # The agent display's pointer, moved by the daemon at the relay's request — design
 
-Date: 2026-11-06. Status: **DRAFT, revision 5** (after review-63, 63b, 63c and 63d at `b340c26`,
-`1d29201`, `f42f714` and `19307c0`, and aw-lead's answers, mails mb5c6cbf, m98c6f1f, m2933af4 and
-md133a6e; waits for a fresh review). Author: taylor session `pointer-design`, a subagent of `ab-lead`
-(board task ab-v16.37). Sources: agent-browser main `6e51439` (`src/input.ts`, `src/record.ts`,
-`src/relay/`, the README), chrome-extension main `37b5647` (`docs/protocol.md` C4, C10, C11), agentwatch
-main `18609d80` (read only: `agentwatch/daemon/browser/`, the agent-browser design's section 5.6). No
-browser ran for this task. The numbers are those of ab-v16.26 (PR #47) and ab-v16.28 (PR #44).
+Date: 2026-11-06. Status: **reviewed and merged** (agent-browser PR #63, merge `6bb6838`): revision 5,
+after five fresh reviews (review-63, 63b, 63c and 63d at `b340c26`, `1d29201`, `f42f714` and `19307c0`,
+and review-63e at `cd415cb`) and aw-lead's answers (mails mb5c6cbf, m98c6f1f, m2933af4 and md133a6e),
+with aw-lead's yes to sections 2 and 4 (mail mbf51aeb); review-63e's doc notes A to C are in the text.
+Its contract text is chrome-extension PR #29 (board ab-v16.70: C10 and C11, with the vectors); its build
+is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: taylor session
+`pointer-design`, a subagent of `ab-lead` (board task ab-v16.37). Sources: agent-browser main `6e51439`
+(`src/input.ts`, `src/record.ts`, `src/relay/`, the README), chrome-extension main `37b5647`
+(`docs/protocol.md` C4, C10, C11), agentwatch main `18609d80` (read only: `agentwatch/daemon/browser/`,
+the agent-browser design's section 5.6). No browser ran for this task. The numbers are those of
+ab-v16.26 (PR #47) and ab-v16.28 (PR #44).
 
 **The problem.** When a window comes forward, the X server gives its page a real pointer event, with no
 movement, at the X pointer. CDP input never moves the X pointer. Where agent-browser owns the display,
@@ -247,9 +251,10 @@ that time, so a move that waited behind a step starts at that step's record. For
 move is the path's last step; for another event, the path ends with a move at its point. Then the
 client's event goes, and the page's point is the client's again, so the catch-up applies only once after
 each X record: never between a client's own events, and never while the page holds a button. That rule
-wins over a release far from the point: a release comes only while a button is held, and a page that
-holds a button gets no X record (no path plays under it, step 3). The catch-up is a step of the tab's
-gate: the client's event and the tab's later calls wait behind it, in the client's order. It keeps at
+wins over a release far from the point: a release comes only while a button is held, and no path plays
+under a page that holds a button (step 3); a page that comes forward while it holds one is as today
+(step 6 can record it; review-63e note A). The catch-up is a step of the tab's gate: the client's event
+and the tab's later calls wait behind it, in the client's order. It keeps at
 most 4 of its moves without an answer: when a move is due while 4 wait (a page with an open dialog
 answers none), it stops, and the client's event goes as it goes today, so the tab's 64 in-flight requests
 (`MAX_IN_FLIGHT_PER_TAB`) never fill in front of the client's `Page.handleJavaScriptDialog`; the page's
@@ -264,8 +269,9 @@ viewport; the path does not fit the limits; step 3 found a gate or reached its l
 refused. A page
 that never had a pointer event then enters with its first pointer event, which is no position change; a
 page whose point was known or became unknown enters at the X pointer: one unexplained change at most,
-never a jump. The first activation after the relay's start or a link change has no path, because the
-front page is unknown; from its record on, the front page is known.
+never a jump. The first activation after the relay's start, after a link change, or after the paths
+turn on has no path, because the front page is unknown (review-63e note C); from its record on, the
+front page is known.
 
 **Why the path starts at S, not at `at`:** the leaving page usually got CDP input after it came forward,
 so S is no longer where the pointer is. By fact (2) a first real move from `at` would have its movement
@@ -394,7 +400,8 @@ asks the operator only if the live check of section 7 fails.
 
 **Contract vectors (chrome-extension `test/vectors/bridge.json`):** both ops, valid; `bad args` for each
 limit (points, `dt`, total, a step over 50 px, a negative, non-integer or too far `notAfter`, a missing or
-extra key, a float, a missing `at` or one outside the display); `out of bounds` (a point or `from`);
+extra key, a float, a missing `at` or one outside the request's `width` and `height`, as in section 2);
+`out of bounds` (a point or `from`);
 `wrong display`; `too late`; `busy`; `pointer moved` (the read more than 2 px from `at`, with `data`; a
 read 1 px from `at` and far from `from` plays); 6 paths and 11 reads in a second; an unknown `daemon.`
 op; a `daemon.` op at the receiver gets `unknown op`. The relay's tests and aw-lead's daemon tests use
