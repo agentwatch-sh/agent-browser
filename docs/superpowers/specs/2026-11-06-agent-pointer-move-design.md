@@ -110,8 +110,10 @@ finds that standard input fails): `sleep <dt1/1000>`, `mousemove <x1> <y1>`, ...
 The timeout is the path's total time plus `POINTER_KILL_MS = 1000`; at the timeout the daemon kills the
 call and answers `no display`. The operator's live-view input kills a playing path too, which answers
 `not now`. The ok answer comes after the last point: `{"x":<int>,"y":<int>,"views":<int>}`, the pointer's
-position read at the end. The live check measures how well `xdotool sleep` keeps `dt`, and the build adds
-the numbers here.
+position read at the end. The live check measures how well `xdotool sleep` keeps `dt` (section 7.1, board
+ab-v16.71): the leaving page's event times kept the planned `dt` to within 1 ms (median 0 ms, p90 1 ms over
+2388 pairs of moves in three runs; once 116 ms, under the load of the whole live suite), and one script's start
+on `xdotool -` costs 20 to 25 ms (median). Standard input works: no argv is needed.
 
 The answers have C10's `res` shape. C10 gets a general rule: an error `res` of a `daemon.` op may carry
 `data` (an object), and a reader ignores `data` on an error that it does not know; the daemon sends `data`
@@ -435,6 +437,43 @@ each activation, 0 zero-movement moves in each path, the leaving page's moves li
 review-63b's two-client case 0 jumps and 0 presses away from the last move in A's page; Playwright's own
 raw moves are counted apart. `test/live/agent-mode/` passes in full. Then agentwatch's live test with the
 real daemon (aw-lead's task age-0kh.28, on the age-cqd test browser).
+
+### 7.1 Measured by the build (board ab-v16.71)
+
+On taylor, Chromium 156 in the live test's own Xvfb (1280 x 900), chrome-extension main `8a3b66f`, through the
+real relay and the stand-in daemon, whose `daemon.movePointer` plays each path on `xdotool -` on that Xvfb only
+(the live group `pointer` of `test/live/agent-mode/run.ts`; three runs on 2026-11-06: one before two build
+fixes, which gives the `dt` numbers only, then the group alone and the whole suite).
+
+**`xdotool sleep`.** For each played path, the moves that the leaving page saw (matched by their screen point
+to the path's points; Chrome merges the moves of one frame, so some points have no event of their own), the
+time between two seen moves against the sum of the planned `dt` between them:
+
+| run | pairs | the error, median / p90 / max (ms) | the planned `dt`, median / max (ms) | one script's start (ms): median / p90 / max |
+| --- | --- | --- | --- | --- |
+| 1 (the group) | 697 | 0 / 1 / 1 | 16 / 96 | 20 / - / - |
+| 2 (the group) | 821 | 0 / 1 / 1 | 16 / 64 | 20 / 28 / 30 |
+| 3 (the whole suite) | 870 | 0 / 1 / 116 (one stall) | 16 / 64 | 25 / 50 / 149 |
+
+**The paths** (runs 2 and 3, after each page's first activation): every path move that a leaving page saw had a
+movement (0 zero-movement moves); 33 to 61 moves per path (the median of each case; the xdotool person of the
+research: 20; agent-browser's own CDP paths: 50 to 55), a median speed of 0.5 to 0.9 px/ms, the largest movement
+74 px (two steps that Chrome merged into one frame). A step with a path took 0.66 to 0.82 s (median of each
+case; at most 1.27 s), a catch-up 0.48 to 1.12 s. Playwright (two pages in turn, 3 rounds): 5 of 6 steps with a
+path, 0 jumps and 0 unexplained changes in both pages. Review-63b's two clients: 4 of 6 and 5 of 8 steps with a
+path, 0 jumps, 0 unexplained changes and 0 presses away from the last move in A's page and in B's (Playwright's
+own raw moves counted apart: 2 in each page). A catch-up in the front page while the other client activated:
+the step waited for it, 0 jumps. A press held 3 s: no path at step 3's limit (2.02 s), and no real move between
+its `mousedown` and `mouseup`; held 0.5 s: the path after the release. The hover dialog: the step ended at its
+limit with no path (2.03 s). A focused window under a newer unfocused window: `windows.update` with
+`{"focused":true}` raised it; a CDP press into it with no activation did not. The mapping and the clamp (a
+vertical and a horizontal scrollbar, targets 3 px inside the display's edge, a popup of 600 x 420 at another
+place, a moved window): 8 of 9 and 3 of 4 steps with a path, 0 jumps; run 2 had 1 unexplained change, a
+catch-up that crossed the horizontal scrollbar. A device-metrics override: no path into or out of that page.
+agent-browser's own commands over `--cdp-url` (`design`, `design-two`): no path, because the front page is no
+bridge tab there (each CLI command ends its connection, and the relay detaches its page), so the relay cannot
+read its geometry: each activation enters at the X pointer, as before (3 and 1 unexplained changes in each
+page).
 
 ## 8. The build split and the limits
 

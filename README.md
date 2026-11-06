@@ -367,7 +367,9 @@ person's input**) and `log` (progress lines; default standard error).
     commands have its `DISPLAY` and `XAUTHORITY`, or the display of an agent Chrome that agent-browser
     started. When the method is off for any reason (no `DISPLAY` over the relay, no xdotool, a device
     pixel ratio that is not 1, a display that cannot be verified, another program's window), a log line
-    says why, at most once in 5 minutes for each reason. The two ways of the research, measured on taylor (`extra.ts --exp pointer`: three windows
+    says why, at most once in 5 minutes for each reason. Over agentwatch's relay agent-browser reaches no X:
+    there the relay has agentwatch's daemon move the X pointer at each activation (**The pointer at an
+    activation**, under agent mode's endpoint). The two ways of the research, measured on taylor (`extra.ts --exp pointer`: three windows
     at one place, two agents and the operator's page in turn, 3 activations of each agent window):
 
     | the pointer at each activation | jumps over 100 px | position changes that the movement does not explain |
@@ -1032,9 +1034,9 @@ see of a Playwright client (section 8 of the research):
   takes 70 to 90 ms), `fill` as one `insertText` with no key event, a field's focus with no press
   (`el.focus()`), and a scroll with no wheel or key (`scrollIntoViewIfNeeded`). The relay does not shape
   a client's input.
-- The pointer at each activation. When the relay focuses a window, the page gets a real pointer event
-  at the X pointer's point, and the next CDP move starts at another point (a jump). The relay cannot read
-  or move the X pointer.
+- The pointer at each activation: with an agentwatch daemon that has the pointer ops, see **The pointer at
+  an activation** below. With an older daemon: when the relay focuses a window, the page gets a real pointer
+  event at the X pointer's point, and the next CDP move starts at another point (a jump).
 - The first activation of a new window gives the page two `focus` events (a person's click gives one).
 - Two agents at once. The relay brings one page forward for each press or key, but it cannot lock a
   client's whole action. Two Playwright clients that typed 43 characters each at the same time had the
@@ -1067,6 +1069,65 @@ if a later Playwright renames them, the caret moves to the start again, and noth
 Playwright's `expect(locator).toBeFocused()` also reads `document.hasFocus()`. After another window took
 the focus, it fails for a field that is the page's active element, until the page's window has the focus
 again (with focus emulation every page had the focus). The relay cannot see such a check.
+
+**The pointer at an activation** (board task ab-v16.71; the agent pointer design,
+`docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md`; C10 "The daemon's own ops" and C11 "The
+pointer at an activation"). When a window comes forward, the X server gives its page a real pointer event at
+the X pointer, and CDP input never moves the X pointer. The agentwatch daemon owns the agent display (its
+Xvfb), so on Linux the relay asks it to move the X pointer: `daemon.pointerAt` reads the pointer, and
+`daemon.movePointer` plays a person-shaped path with `xdotool` (C10: the daemon checks each point, each step
+of at most 50 px and 16 to 250 ms, at most 1500 ms, the display, the pointer's place before the play, 5 paths
+a second; no client method reaches these ops). The relay (`src/relay/model.ts`, `src/relay/pointer.ts`):
+
+- At each link up it sends `daemon.pointerAt` as a probe. Its answer turns the paths on; `unknown op`
+  (an agentwatch daemon from before these ops), `wrong display` and `not connected` turn them off until the
+  next link up, `no display` for 60 s. While the paths are off the relay is as before (no read, no path, no
+  catch-up), also on the Mac, where it sends no `daemon.` op.
+- It keeps each page's last point (the point that Chrome last saw: each client's `Input.dispatchMouseEvent`
+  and `Input.dispatchDragEvent` on the page's own session), the page under the pointer (the front page:
+  the page of the last activation step, or a new window), and each page's held button.
+- The activation step, one at a time for all clients, also for a client's `Page.bringToFront` and
+  `Target.activateTarget`: when a page comes under the pointer and both last points are known, the relay
+  waits for the front page's release (at most 2 s), holds the front page's later calls, reads both pages'
+  geometry (one `Runtime.evaluate` in the relay's own isolated world; no client sees it), plans a path with
+  `src/input.ts`'s generator from the front page's last point to the entering page's, clamped 2 px inside the
+  front page's viewport, and has the daemon play it before the window comes forward. The entering page then
+  enters at its own last point; the leaving page sees real moves of at most 50 px, 16 ms apart.
+- The catch-up: after a path, a client's next pointer event far from the page's recorded point (a move more
+  than 50 px away, a press or a wheel more than 2 px away) gets CDP moves along a path of the same generator
+  first, so Playwright's next raw move after an activation is no jump. At most 4 of a tab's catch-up moves
+  wait for an answer; then the catch-up stops (a page with an open dialog), and the relay logs it.
+- With `AGENT_BROWSER_POINTER_LOG=1` the relay logs each step and catch-up (times and counts, never a
+  point; the live check uses it).
+
+Measured on taylor (Chromium 156, chrome-extension main 8a3b66f, the live group `pointer` of
+`test/live/agent-mode/run.ts` in the harness's own Xvfb, with the stand-in daemon's ops on that Xvfb;
+two runs on 2026-11-06, the group alone and the whole suite; the design's section 7.1 has the details):
+
+| case | steps with a path | jumps / unexplained changes after each page's first activation |
+| --- | --- | --- |
+| Playwright, two pages in two windows in turn, 3 rounds | 5 of 6, 5 of 6 | 0 / 0 in both pages |
+| two clients: A clicks while B activates another page | 4 of 6, 5 of 8 | 0 / 0 and 0 presses away from the last move in both pages (Playwright's own raw moves apart: 2 in each page) |
+| a catch-up in the front page while the other client activates | 1 of 1 | 0 / 0 |
+| a press held 3 s, and 0.5 s, while the other client activates | 0 of 1 (step 3's limit, 2.02 s), 1 of 1 | no real move between `mousedown` and `mouseup`; 1 jump at the entry with no path (3 s) |
+| a page whose `mousemove` handler opens a dialog | no path: the step ends at its limit (2.03 s) | the client closes the dialog |
+| scrollbars, targets 3 px inside the display's edge, a popup of another size | 8 of 9 | 0 / 0 (once 1 unexplained: a catch-up over the horizontal scrollbar) |
+| a moved window (`Browser.setWindowBounds`) | 3 of 4 | 1 jump at the first entry after it (no path) |
+| a device-metrics override | 0: no path into or out of that page | as before |
+| agent-browser's own commands (`design`, `design-two`) | 0: each CLI command detaches its page at its end, so the relay cannot read the front page's geometry | 0 jumps; 3 and 1 unexplained changes in each page (as before) |
+
+The leaving page's moves: each with a movement, 33 to 61 moves per path, at most 74 px (two steps in one
+frame). `xdotool sleep` kept the planned `dt` to within 1 ms in the page (p90; once 116 ms under the whole
+suite's load). A step with a path took 0.66 to 0.82 s (median; at most 1.27 s), a catch-up 0.48 to 1.12 s.
+
+What a site can still see over the relay (the design, section 5): an activation with no path enters at the X
+pointer (the first activation after the relay's start, a link change or a client's `Browser.setWindowBounds`;
+a front page that holds its button for 2 s; a page whose pointer input waits for an answer; a geometry that is
+not usable: a device-metrics override, a ratio or a scale that is not 1); its entry then has the movement from
+the page's last point, a jump when that is more than 100 px away. The page that leaves sees a path to the
+point where another scope's page last saw the pointer (a position only). Each activation that brings a page
+under the pointer costs its path, and a catch-up costs as long once after it. A client's raw move into a page
+that lost the pointer to another window (Chrome then reports a movement of 0) is the client's own.
 
 **On the Mac** the relay keeps its tabs until the Mac build (board task ab-v16.27; the measurement:
 **One window per agent page on the Mac**): `Target.createTarget`
@@ -1757,7 +1818,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Beta) exited 1, as expected: its `record` and `press` trials were not measured. The head of
   `check.ts` gives these results and the Linux results of 2026-11-03.
 - `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-scopes.test.ts`, `test/relay-link-up.test.ts`,
-  `test/relay-commands.test.ts`, `test/relay-windows.test.ts`: agent mode's relay (`agent-browser relay`,
+  `test/relay-commands.test.ts`, `test/relay-windows.test.ts`, `test/relay-pointer.test.ts`,
+  `test/relay-pointer-model.test.ts`: agent mode's relay (`agent-browser relay`,
   contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
   (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
   scope): the policy and the allowlist line against the contracts' vectors (copied in
@@ -1786,7 +1848,13 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   ten times each keep their opener's scope, and `end_scope` and a `set_scopes` without the scope close
   its tabs and connections while the browser's last window stays. Its group `link-up` checks a relay
   restart, a session that ends while no relay runs, a link drop, and the closes of the browser's only
-  tabs. Chromium gets `--disable-backgrounding-occluded-windows`. Its group `peer` (`CASES=peer`, alone)
+  tabs. Its group `pointer` (board ab-v16.71) is the agent pointer design's live check: the stand-in daemon
+  answers `daemon.pointerAt` and `daemon.movePointer` itself with xdotool on the run's own Xvfb only
+  (`test/live/agent-mode/pointer-ops.ts`; `test/pointer-daemon.test.ts` runs every contract vector p1-p108
+  against it), and the group counts jumps, unexplained position changes, zero-movement path moves and the
+  `xdotool sleep` dt in both pages of each activation (`pointer-live.ts`, `pointer-measure.ts`;
+  `POINTER_DAEMON=old` runs the stand-in as a daemon from before those ops).
+  Chromium gets `--disable-backgrounding-occluded-windows`. Its group `peer` (`CASES=peer`, alone)
   runs the relay with `--peer-check` and two panes of the run's own tmux server as the roots (see **The
   peer check**). `CHROME_EXTENSION=<a detached worktree of chrome-extension at main c99bebb (0.3.1) or
   later> npm run test:live:agent`. Not part of `npm test`. At its end it removes the large parts that it

@@ -380,7 +380,7 @@ export async function pointerCases(o: PointerContext): Promise<void> {
     const single = allDt.filter((d) => d.planned <= 40).map((d) => d.seen - d.planned);
     const plays: Played[] = o.daemon.played();
     const overhead = plays.filter((p) => p.answer === "ok").map((p) => p.endedAt - p.startedAt - p.path.reduce((s, q) => s + q.dt, 0));
-    const dtMeasure = { pairs: allDt.length, errorMs: stats(err.map(Math.abs)), signedErrorMs: { median: stats(err).median }, singleStepErrorMs: stats(single.map(Math.abs)),
+    const dtMeasure = { pairs: allDt.length, errorMs: stats(err.map(Math.abs)), over2ms: err.filter((e) => Math.abs(e) > 2).length, signedErrorMs: { median: stats(err).median }, singleStepErrorMs: stats(single.map(Math.abs)),
       plannedMs: stats(allDt.map((d) => d.planned)), seenMs: stats(allDt.map((d) => d.seen)), playOverheadMs: stats(overhead), plays: plays.length, answers: o.daemon.pointerCounts() };
     o.record({ group: G, case: "the measure of xdotool sleep: the dt that the leaving page saw against the planned dt", status: allDt.length >= 20 ? "pass" : "fail", ms: 0, detail: dtMeasure });
     writeFileSync(join(o.run, "pointer.json"), JSON.stringify({ cases: caseOut, dt: dtMeasure, steps: steps(), log }, null, 1) + "\n");
