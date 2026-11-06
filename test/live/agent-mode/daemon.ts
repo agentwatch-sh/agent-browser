@@ -11,18 +11,23 @@
 // agentwatch's backoff restart does (board ab-v16.40), stop the relay for a while, drop the link to the receiver, and
 // write end_scope. With `peerCheck` (board ab-v16.51) it starts the relay with --peer-check and puts each session's
 // roots into every allowlist line; a root change writes a line with the new roots and the last confirmed object at
-// once, with no set_scopes (C10, C11: the roots' life).
+// once, with no set_scopes (C10, C11: the roots' life). It answers the two daemon ops itself (board ab-v16.71; C10, the
+// daemon's own ops; pointer-ops.ts): before its link checks, with xdotool on the harness's own private Xvfb only; with
+// `pointer: "old"` it forwards them to the receiver, which answers `unknown op`, as a daemon from before that build.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { createInterface } from "node:readline";
+import { PointerOps, xdotoolWorld, type Played } from "./pointer-ops.ts";
 
 const PART_BYTES = 700_000;
 const WAIT_SLACK_MS = 2000;
 /** The daemon waits 10 s for a set_scopes answer (C4). */
 const SET_SCOPES_WAIT_MS = 10_000;
 
+/** The daemon ops: xdotool on the harness's own Xvfb (its display, its X auth file and its size), or "old": a daemon from before them. */
+export type PointerOption = { display: string; xauth: string; size: { width: number; height: number } } | "old";
 /** The fields of a set_scopes request (C4): lists by name, each scope's list name or null, and the default list. */
 export type Scopes = { lists: Record<string, string[]>; scopes: Record<string, string | null>; default: string | null };
 /** The receiver's answer to set_scopes: the scope rules in force, the tabs closed, the entries and names refused. */
@@ -31,7 +36,11 @@ export type ScopesAnswer = { ok: boolean; data?: { rules: number; closed: number
 export class StandInDaemon {
   relay: ChildProcess;
   private readonly server: Server;
-  private readonly o: { relaySocket: string; relayBin: string; relayLog: (line: string) => void; peerCheck?: boolean };
+  private readonly o: { relaySocket: string; relayBin: string; relayLog: (line: string) => void; peerCheck?: boolean; pointer?: PointerOption };
+  /** The daemon's own pointer ops on the harness's Xvfb (null: a daemon from before them, or no Xvfb of the harness). */
+  private readonly pointer: { ops: PointerOps; world: ReturnType<typeof xdotoolWorld> } | null;
+  /** The ids of the daemon ops that run (the duplicate-id check, C10). */
+  private readonly daemonOps = new Set<string>();
   /** With the peer check: each session's roots, in every allowlist line. */
   private roots: Record<string, { pid: number; start: number }[]> = {};
   /** The last object that the receiver confirmed on the current connection (the line of a root change carries it). */
@@ -54,9 +63,11 @@ export class StandInDaemon {
   /** Each set_scopes answer, in order (the live test reads `closed`). */
   readonly answers: { at: number; obj: Scopes; answer: ScopesAnswer }[] = [];
 
-  constructor(o: { daemonSocket: string; relaySocket: string; relayBin: string; scopes: Scopes; relayLog: (line: string) => void; peerCheck?: boolean }) {
+  constructor(o: { daemonSocket: string; relaySocket: string; relayBin: string; scopes: Scopes; relayLog: (line: string) => void; peerCheck?: boolean; pointer?: PointerOption }) {
     this.o = o;
     this.current = o.scopes;
+    const world = o.pointer && o.pointer !== "old" ? xdotoolWorld(o.pointer) : null;
+    this.pointer = world ? { ops: new PointerOps(world), world } : null;
     rmSync(o.daemonSocket, { force: true });
     this.server = createServer((sock) => this.onHost(sock));
     const umask = process.umask(0o077);
@@ -144,6 +155,9 @@ export class StandInDaemon {
     let req: any;
     try { req = JSON.parse(line); } catch { this.note(`dropped a relay line of ${line.length} bytes`); return; }
     if (req?.t !== "req" || typeof req.id !== "string" || typeof req.op !== "string") { this.note(`dropped a relay line of ${line.length} bytes`); return; }
+    if (this.pending.has(req.id) || this.daemonOps.has(req.id)) { this.note(`dropped a relay line of ${line.length} bytes (its id waits)`); return; }
+    // The daemon's own ops (C10): after the parse and the duplicate-id check, before the link checks, never to the receiver.
+    if (req.op.startsWith("daemon.") && this.o.pointer !== "old") { this.daemonOp(req); return; }
     if (!this.bridgeUp) { this.toRelay({ t: "res", ch: "bridge", id: req.id, ok: false, error: "not connected" }); return; }
     const what = req.op === "debugger.sendCommand" ? `${req.op} ${req.args?.[1]} tab ${req.args?.[0]?.tabId}` : `${req.op}`;
     this.sent.set(req.id, { op: what, at: Date.now() });
@@ -151,6 +165,27 @@ export class StandInDaemon {
     this.pending.set(req.id, setTimeout(() => { this.note(`timeout ${req.op} ${req.id}`); this.answer(req.id, "timeout"); }, (req.wait ?? 30_000) + WAIT_SLACK_MS));
     this.toReceiver("bridge", req);
   }
+
+  /**
+   * A daemon op (pointer-ops.ts): its answer goes to the relay that sent it, never to a relay that started after it (a
+   * relay end kills the play: no answer). With no Xvfb of the harness: `no display`. It logs the op and the answer's
+   * text, never a point.
+   */
+  private daemonOp(req: { id: string; op: string; args?: unknown; wait?: number }): void {
+    const relay = this.relay, t0 = Date.now();
+    this.daemonOps.add(req.id);
+    const answer = this.pointer ? this.pointer.ops.answer(req as any) : Promise.resolve({ t: "res", ch: "bridge", id: req.id, ok: false, error: req.op === "daemon.pointerAt" || req.op === "daemon.movePointer" ? "no display" : "unknown op" });
+    void answer.then((res) => {
+      this.daemonOps.delete(req.id);
+      this.note(`daemon ${req.op} ${req.id} ${res ? (res.ok ? "ok" : res.error) : "no answer"} after ${Date.now() - t0} ms`);
+      if (res && this.relay === relay) this.toRelay(res);
+    }, (e) => { this.daemonOps.delete(req.id); this.note(`daemon ${req.op} ${req.id} failed: ${(e as Error).message}`); });
+  }
+
+  /** The paths that the stand-in played (in memory only), for the live check's measure. */
+  played(): Played[] { return this.pointer?.ops.played ?? []; }
+  /** The count of each answer text of the daemon ops. */
+  pointerCounts(): Record<string, number> { return Object.fromEntries(this.pointer?.ops.counts ?? []); }
 
   /** A res of channel bridge for the relay: the daemon passes it on unchanged, once. */
   private bridgeRes(line: string, id: string): void {
@@ -201,6 +236,8 @@ export class StandInDaemon {
       this.note("host disconnected");
       if (this.host !== sock) return;
       this.host = null;
+      // A link change kills a playing path: disconnected (C10, the kills).
+      this.pointer?.world.kill("linkChange");
       for (const id of [...this.pending.keys()]) this.answer(id, "disconnected");
       // The answers of the old connection never come: the next connection's first set_scopes sends the current object.
       for (const [id, r] of this.scopesReqs) { clearTimeout(r.timer); this.scopesReqs.delete(id); r.done({ ok: false, error: "disconnected" }); }
@@ -228,6 +265,7 @@ export class StandInDaemon {
   async restartRelay(whileDown?: () => Promise<void>): Promise<number | null> {
     const old = this.relay;
     const exited = new Promise<number | null>((r) => { if (old.exitCode !== null) r(old.exitCode); else old.once("exit", (code) => r(code)); });
+    this.pointer?.world.kill("relayEnd"); // a relay end kills a playing path: no answer (C10)
     old.stdin!.end();
     const code = await Promise.race([exited, new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
     for (const id of [...this.pending.keys()]) { clearTimeout(this.pending.get(id)); this.pending.delete(id); this.sent.delete(id); }
@@ -265,6 +303,7 @@ export class StandInDaemon {
   async stop(): Promise<number | null> {
     const exited = new Promise<number | null>((r) => { if (this.relay.exitCode !== null) r(this.relay.exitCode); else this.relay.once("exit", (code) => r(code)); });
     const within = (ms: number) => Promise.race([exited, new Promise<undefined>((r) => setTimeout(() => r(undefined), ms))]);
+    this.pointer?.world.kill("daemonStop");
     this.relay.stdin!.end();
     let code = await within(5000);
     // A relay that does not end with its standard input: SIGTERM, then SIGKILL.
