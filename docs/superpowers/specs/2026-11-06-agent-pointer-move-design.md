@@ -1,12 +1,12 @@
 # The agent display's pointer, moved by the daemon at the relay's request — design
 
-Date: 2026-11-06. Status: **DRAFT, revision 4** (after review-63, 63b and 63c at `b340c26`, `1d29201`
-and `f42f714`, and aw-lead's answers, mails mb5c6cbf, m98c6f1f, m2933af4 and md133a6e; waits for a fresh
-review). Author: taylor session `pointer-design`, a subagent of `ab-lead` (board task ab-v16.37). Sources:
-agent-browser main `6e51439` (`src/input.ts`, `src/record.ts`, `src/relay/`, the README), chrome-extension
-main `37b5647` (`docs/protocol.md` C4, C10, C11), agentwatch main `18609d80` (read only:
-`agentwatch/daemon/browser/`, the agent-browser design's section 5.6). No browser ran for this task. The
-numbers are those of ab-v16.26 (PR #47) and ab-v16.28 (PR #44).
+Date: 2026-11-06. Status: **DRAFT, revision 5** (after review-63, 63b, 63c and 63d at `b340c26`,
+`1d29201`, `f42f714` and `19307c0`, and aw-lead's answers, mails mb5c6cbf, m98c6f1f, m2933af4 and
+md133a6e; waits for a fresh review). Author: taylor session `pointer-design`, a subagent of `ab-lead`
+(board task ab-v16.37). Sources: agent-browser main `6e51439` (`src/input.ts`, `src/record.ts`,
+`src/relay/`, the README), chrome-extension main `37b5647` (`docs/protocol.md` C4, C10, C11), agentwatch
+main `18609d80` (read only: `agentwatch/daemon/browser/`, the agent-browser design's section 5.6). No
+browser ran for this task. The numbers are those of ab-v16.26 (PR #47) and ab-v16.28 (PR #44).
 
 **The problem.** When a window comes forward, the X server gives its page a real pointer event, with no
 movement, at the X pointer. CDP input never moves the X pointer. Where agent-browser owns the display,
@@ -78,18 +78,19 @@ there is no live view). The relay also sends it at each link up as a probe.
 ```
 
 - `at` (required): the X pointer's place as the relay last learned it (its last `ok` answer, `pointer
-  moved` data or `daemon.pointerAt` answer): integers inside the display, else `bad args`. A relay that
+  moved` data or `daemon.pointerAt` answer): integers in `0..width-1` and `0..height-1` of the request's
+  `width` and `height`, else `bad args`. A relay that
   does not know the place (its start, a link change, a failed or killed path) sends `daemon.pointerAt`
   first.
 - `from`: the path's start, the point where the page under the pointer last saw it (section 3). It is
   not played; the first step is measured from it. The first move warps the pointer from `at`, which no
   page sees (fact 2).
 - `path`: 1 to `POINTER_PATH_MAX_POINTS = 120` points `{x, y, dt}`, integers (120 is the parse bound;
-  with `dt` of 16 ms or more and 1500 ms at most, a path holds at most 94). `dt` is the wait in ms
-  before that point's move, `POINTER_DT_MIN_MS = 16` to `POINTER_DT_MAX_MS = 250`; the sum of the `dt`
-  is at most `POINTER_PATH_MAX_MS = 1500`. Each step (from `from` to the first point, then point to
-  point) is at most `POINTER_STEP_MAX_PX = 50` px, so that two steps that Chrome merges into one frame
-  (fact 3) stay within the probe's jump rule (100 px). Every point is inside the display.
+  with `dt` of 16 ms or more and 1500 ms at most, a path holds at most 93: 93 x 16 = 1488 ms). `dt` is
+  the wait in ms before that point's move, `POINTER_DT_MIN_MS = 16` to `POINTER_DT_MAX_MS = 250`; the sum
+  of the `dt` is at most `POINTER_PATH_MAX_MS = 1500`. Each step (from `from` to the first point, then
+  point to point) is at most `POINTER_STEP_MAX_PX = 50` px, so that two steps that Chrome merges into one
+  frame (fact 3) stay within the probe's jump rule (100 px). Every point is inside the display.
 - `width`, `height`: the screen size that the relay used (the pages' `screen.width`, `screen.height`).
 - `notAfter`: integer ms on `CLOCK_MONOTONIC`, which every process of the box shares, so a wall-clock
   step does not change it. The relay reads it with `process.hrtime.bigint()` (Linux), never
@@ -115,7 +116,7 @@ only with `pointer moved` (`{"x","y","views"}`). The errors, in the order of the
 | Text | Op | When | The pointer |
 | --- | --- | --- | --- |
 | `unknown op` | both | a daemon from before this change (its receiver answers it), or an unknown `daemon.` op | not moved |
-| `bad args` | both | not exactly the fields above, a limit above broken, `at` outside the display, a bad `notAfter` | not moved |
+| `bad args` | both | not exactly the fields above, a limit above broken, `at` outside the request's `width` and `height`, a bad `notAfter` | not moved |
 | `no display` | both | no unit Xvfb (also on the Mac), no `xdotool`, or an X call failed or was killed | place unknown |
 | `wrong display` | move | `width`, `height` are not the running Xvfb's size | not moved |
 | `out of bounds` | move | a point or `from` outside `0..width-1`, `0..height-1` | not moved |
@@ -167,7 +168,9 @@ sees every client's input. No client method reaches a `daemon.` op.
   and `views`. `unknown op`, `wrong display` and a link-down error of an older daemon (`not connected`)
   turn them off until the next link up; `no display` for 60 s. `busy`, `too many moves`, `disconnected`
   and the relay's own timer leave the state unknown, and the next step that needs the paths probes again
-  (after a link drop the daemon can still play the last path while `Bridge.dropAll` answered it). **While
+  (after a link drop the daemon can still play the last path while `Bridge.dropAll` answered it). Each
+  time the paths turn on, the front page is unknown: while they were off or unknown, raises went as
+  today. **While
   the paths are off, the relay is exactly as today**: no world, no geometry read, no wait, no catch-up, no
   path, and `Page.bringToFront` and `Target.activateTarget` go as they go today.
 
@@ -221,8 +224,7 @@ answer after the step.
 7. **Bring the page forward:** `tabs.update` and `windows.update`, or the client's own
    `Page.bringToFront`, or the `tabs.update` of `Target.activateTarget`; then open the front page's gate.
 8. The input that needed the activation goes (after a `Page.bringToFront`, the client sends its input
-   after the answer). When it is a press, its catch-up (if any) is decided as it goes, after step 6's
-   record, so it runs inside the chain step and starts at the entry point.
+   after the answer). A press's catch-up (if any) then runs inside its chain step, from step 6's record.
 
 The limits of the step: one `ACTIVATE_MAX_MS` for steps 1 and 2, one for step 3, 1.2 s for the reads of
 step 4 (the geometry's 200 ms, and `daemon.pointerAt` when `at` is unknown), the path's wait (at most
@@ -233,19 +235,25 @@ each activation that brings a page under the pointer, also for agent-browser's r
 window page forward (`Tab.toFront` for `text`, `outline`, `eval` and waits).
 
 **The catch-up (continuity of each page's pointer events).** After an X record set a page's point, the
-client's next pointer event for that page may not start there: client A's moves that waited behind a
-path in its page, or Playwright's next move, which goes from Playwright's own idea of the point.
-Chrome would give that event its movement from the X record (fact 2): a jump, or a press away from the
-last move. So, when a client's next `Input.dispatchMouseEvent` or `Input.dispatchDragEvent` for a page
-whose point is an X record is a move more than 50 px from it, or a press, a release or a wheel more than
-2 px from it, the relay first sends CDP `mouseMoved` events (no button) along a path of the same
-generator from the recorded point to the event's point (16 ms apart, steps of at most 50 px). For a
-move, the client's move is the path's last step; for another event, the path ends with a move at its
-point. Then the client's event goes, and the page's point is the client's again, so the catch-up applies
-only once after each X record: never between a client's own events, and never while the page holds a
-button (no path plays under a page that holds one). The catch-up is a step of the tab's gate: the
-client's event and the tab's later calls wait behind it, in the client's order. It does not wait for
-the answers of its own moves. It never starts while a step holds its page (it waits behind
+client's next pointer event for that page may not start there: client A's moves that waited behind a path
+in its page, or Playwright's next move, which goes from Playwright's own idea of the point. Chrome would
+give that event its movement from the X record (fact 2): a jump, or a press away from the last move. So,
+when a client's next `Input.dispatchMouseEvent` or `Input.dispatchDragEvent` for a page whose point is an
+X record is a move more than 50 px from it, or a press or a wheel more than 2 px from it, the relay first
+sends CDP `mouseMoved` events (no button) along a path of the same generator from the recorded point to
+the event's point, with the path's limits (steps of at most 50 px, `dt` 16 to 250 ms, at most 1500 ms;
+else no catch-up). The relay decides it when the event leaves the tab's gate, against the page's point at
+that time, so a move that waited behind a step starts at that step's record. For a move, the client's
+move is the path's last step; for another event, the path ends with a move at its point. Then the
+client's event goes, and the page's point is the client's again, so the catch-up applies only once after
+each X record: never between a client's own events, and never while the page holds a button. That rule
+wins over a release far from the point: a release comes only while a button is held, and a page that
+holds a button gets no X record (no path plays under it, step 3). The catch-up is a step of the tab's
+gate: the client's event and the tab's later calls wait behind it, in the client's order. It keeps at
+most 4 of its moves without an answer: when a move is due while 4 wait (a page with an open dialog
+answers none), it stops, and the client's event goes as it goes today, so the tab's 64 in-flight requests
+(`MAX_IN_FLIGHT_PER_TAB`) never fill in front of the client's `Page.handleJavaScriptDialog`; the page's
+point is then what the last sent move set. It never starts while a step holds its page (it waits behind
 the gate), and a step waits for a catch-up that runs in its front page (step 3): the two never overlap on
 one page. Its cost: 0.3 to 1.5 s before that one event. It removes review-63b's two-client jump and its
 press away from the last move, and Playwright's jump at its next raw move after an activation.
@@ -378,8 +386,9 @@ asks the operator only if the live check of section 7 fails.
   many moves`, `disconnected` and the timer leave it unknown); a late answer is dropped; any
   `Browser.setWindowBounds` makes the front page unknown;
 - the catch-up: when (each event type and threshold, once after an X record, not between a client's own
-  events, not while a button is held, a press after its own step's record), its shape, its moves not
-  waiting for answers, its order behind the gate, no overlap with a step;
+  events, not while a button is held, decided when the event leaves the gate), its shape and limits, its
+  order behind the gate, no overlap with a step; a page that does not answer: the catch-up stops at 4
+  unanswered moves, and the client's `Page.handleJavaScriptDialog` reaches Chrome;
 - the geometry read: one in flight per tab, bridge tabs only, no enables, the world again, no client sees
   its context or `Debugger.scriptParsed` events, its own 200 ms.
 
@@ -401,7 +410,8 @@ checks of section 4, the read before the play and the `xdotool -` script. Throug
   A's page is counted apart (jumps, and presses away from the last move); a catch-up that runs in the
   front page while another client activates (review-63c B2); one client holds a press (once for 3 s,
   for the limit) while the other activates: no real move between its `mousedown` and `mouseup`; a page
-  whose `mousemove` handler opens a dialog: the step ends at its limit with no path; an active tab's
+  whose `mousemove` handler opens a dialog: the step ends at its limit with no path, and a far catch-up
+  (over 700 px) into it stops and lets the client close the dialog; an active tab's
   `Target.activateTarget`: no path;
 - a focused window under a newer unfocused window: the raise brings it up (and a CDP press into it: does
   Chrome raise it?);
@@ -425,7 +435,10 @@ The build: (1) chrome-extension: the C10 text (the two ops, their rows, waits an
 daemon's checks, the rule for `data` on an error) and C11's paragraph, with the vectors; their commit
 goes to aw-lead. (2) agentwatch (aw-lead, task age-0kh.28 after age-0kh.27): the daemon side; it can ship
 first. (3) agent-browser: the relay, the stand-in daemon's ops, the shared generator, the README rows and
-the live check; agentwatch's relay pin moves after this merges and its live check passes.
+the live check; agentwatch's relay pin moves after this merges and its live check passes. Two build
+points: `Bridge.answer` drops `data` on an error answer today, and the relay needs `pointer moved`'s
+`data`; and the "`at` is T, no path" rule sends no op, so the daemon's `pointer moved` and `not now`
+checks do not run: once the live view exists, the relay reads the pointer first in that case.
 
 The limits:
 
