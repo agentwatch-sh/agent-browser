@@ -6,7 +6,7 @@
 //
 //   node test/live/anti-detect/mac-standin.ts SECONDS
 //
-// (mac-standin-watchback.ts stands in for agent-browser's give-back watcher, the prototype of mac-watchback.ts.)
+// (mac-standin-watchback.ts stands in for the osascript of agent-browser's give-back watcher, src/watchback.ts.)
 //
 // To test the check's stop rules, its refusals and its analysis, these variables make it log what a Mac can show:
 // MAC_STANDIN_TAKE_MS=N (N ms after its start, the agent Chrome takes the front for 120 ms, or for
