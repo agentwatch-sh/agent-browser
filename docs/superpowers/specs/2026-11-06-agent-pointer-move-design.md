@@ -1,12 +1,16 @@
 # The agent display's pointer, moved by the daemon at the relay's request — design
 
-Date: 2026-11-06. Status: **DRAFT, revision 5** (after review-63, 63b, 63c and 63d at `b340c26`,
-`1d29201`, `f42f714` and `19307c0`, and aw-lead's answers, mails mb5c6cbf, m98c6f1f, m2933af4 and
-md133a6e; waits for a fresh review). Author: taylor session `pointer-design`, a subagent of `ab-lead`
-(board task ab-v16.37). Sources: agent-browser main `6e51439` (`src/input.ts`, `src/record.ts`,
-`src/relay/`, the README), chrome-extension main `37b5647` (`docs/protocol.md` C4, C10, C11), agentwatch
-main `18609d80` (read only: `agentwatch/daemon/browser/`, the agent-browser design's section 5.6). No
-browser ran for this task. The numbers are those of ab-v16.26 (PR #47) and ab-v16.28 (PR #44).
+Date: 2026-11-06. Status: **reviewed and merged** (agent-browser PR #63, merge `6bb6838`): revision 5,
+after five fresh reviews (review-63, 63b, 63c and 63d at `b340c26`, `1d29201`, `f42f714` and `19307c0`,
+and review-63e at `cd415cb`) and aw-lead's answers (mails mb5c6cbf, m98c6f1f, m2933af4 and md133a6e),
+with aw-lead's yes to sections 2 and 4 (mail mbf51aeb); review-63e's doc notes A to C are in the text.
+Its contract text is chrome-extension PR #29 (board ab-v16.70: C10 and C11, with the vectors); its build
+is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: taylor session
+`pointer-design`, a subagent of `ab-lead` (board task ab-v16.37). Sources: agent-browser main `6e51439`
+(`src/input.ts`, `src/record.ts`, `src/relay/`, the README), chrome-extension main `37b5647`
+(`docs/protocol.md` C4, C10, C11), agentwatch main `18609d80` (read only: `agentwatch/daemon/browser/`,
+the agent-browser design's section 5.6). No browser ran for this task. The numbers are those of
+ab-v16.26 (PR #47) and ab-v16.28 (PR #44).
 
 **The problem.** When a window comes forward, the X server gives its page a real pointer event, with no
 movement, at the X pointer. CDP input never moves the X pointer. Where agent-browser owns the display,
