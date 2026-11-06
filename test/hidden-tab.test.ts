@@ -710,32 +710,77 @@ for (const drive of ["window", "hidden"] as const) {
     });
 }
 
-test("hiddenDrive: Tab.setFiles on a tab kept attached, after a Tab.screenshot with a size left the override set: it first ends the captures sent under it, then clears it", async () => {
-  // review-65 B1: setFiles goes neither to whileDrawn nor, out of a window of its own, to byHand.
-  const { b, tab, page, name } = await withSizeLeft("hidden");
-  const file = join(c.dir, `${name}.txt`);
-  writeFileSync(file, "x");
-  try {
-    const { calls } = await callsOf(page, () => tab.setFiles("#f", [file]));
-    endedFirst(page, calls, (x) => x.method === "DOM.setFileInputFiles");
-    assert.equal(page.override, undefined);
-  } finally { await b.disconnect(); }
-  await commands.close(h(), { tab: name });
-});
+for (const drive of ["window", "hidden"] as const) {
+  const label = drive === "window" ? "a window of its own" : "hiddenDrive";
+  const mode = drive === "window" ? w : h;
 
-test("hiddenDrive: recordTab on a tab kept attached, after a Tab.screenshot with a size left the override set: the record first ends the captures sent under it and clears it, before its own override", needsFfmpeg, async () => {
-  // review-65: record set and cleared its own override while those captures were in flight; one that ends after
-  // that clear sets 800x600 again.
-  const { b, tab, page, name } = await withSizeLeft("hidden");
-  try {
-    const plan = planRecording({ out: join(c.dir, `${name}.mp4`), size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG }, b.allow);
-    const { calls } = await callsOf(page, () => recordTab(tab, plan));
-    assert.deepEqual(calls.filter((x) => x.method === "Emulation.setDeviceMetricsOverride").map((x) => x.params.width), [320], "the record's own override only");
-    endedFirst(page, calls, (x) => x.method === "Emulation.setDeviceMetricsOverride");
-    assert.equal(page.override, undefined, "the record cleared its own");
-  } finally { await b.disconnect(); }
-  await commands.close(h(), { tab: name });
-});
+  test(`${label}: Tab.setFiles on a tab kept attached, after a Tab.screenshot with a size left the override set: it first ends the captures sent under it, then clears it`, async () => {
+    // review-65 B1: out of a window of its own, setFiles goes neither to whileDrawn nor to byHand (review-65b N4: both drives).
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    const file = join(c.dir, `${name}.txt`);
+    writeFileSync(file, "x");
+    try {
+      const { calls } = await callsOf(page, () => tab.setFiles("#f", [file]));
+      endedFirst(page, calls, (x) => x.method.startsWith("Input.") || x.method === "DOM.setFileInputFiles");
+      assert.equal(page.override, undefined);
+      assert.ok(calls.some((x) => x.method === "DOM.setFileInputFiles"), "the files reached the input");
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: recordTab on a tab kept attached, after a Tab.screenshot with a size left the override set: the record first ends the captures sent under it and clears it, before its own override`, needsFfmpeg, async () => {
+    // review-65: record set and cleared its own override while those captures were in flight; one that ends after
+    // that clear sets 800x600 again (review-65b N4: both drives; around the take, Tab.withInput, as the record command).
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      const plan = planRecording({ out: join(c.dir, `${name}.mp4`), size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG }, b.allow);
+      const { calls } = await callsOf(page, () => recordTab(tab, plan, (take) => tab.withInput(take)));
+      assert.deepEqual(calls.filter((x) => x.method === "Emulation.setDeviceMetricsOverride").map((x) => x.params.width), [320], "the record's own override only");
+      endedFirst(page, calls, (x) => x.method === "Emulation.setDeviceMetricsOverride");
+      assert.equal(page.override, undefined, "the record cleared its own");
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: two clicks at the same time on a tab kept attached, after a Tab.screenshot with a size left the override set: one ending of those captures and one clear, which the second click waits for`, async () => {
+    // review-65b B1: each call of endSizeLeft sent its own captures and its own clear; a capture of the second ended
+    // after the first's clear, and the view kept 800x600 (9 of 24 cases of its probe). The second click comes while
+    // the first one's last capture under the override is in flight.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      let second: Promise<void> | undefined;
+      page.onCapture = (p) => { if (!second && p.format === "jpeg" && page.override) second = tab.click("#b"); };
+      const { calls } = await callsOf(page, async () => {
+        const first = tab.click("#b");
+        await first.finally(() => { page.onCapture = undefined; });
+        assert.ok(second, "the second click came during the first one's ending of those captures");
+        await second;
+      });
+      const m = methodsOf(calls), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+      assert.equal(m.filter((x) => x === "Emulation.clearDeviceMetricsOverride").length, 1, `one clear: ${JSON.stringify(m)}`);
+      assert.deepEqual(captures(calls.slice(0, clear)).map((x) => x.params), [HOLD], "one last capture under the override, for both clicks");
+      await new Promise((r) => setTimeout(r, 100)); // a frame after the clear
+      assert.equal(page.stuck, undefined, "no capture sent under the override ended after the clear");
+      assert.equal(page.override, undefined);
+      assert.deepEqual(page.heldCaptures, []);
+      assert.equal(page.title, "clicked");
+    } finally { page.onCapture = undefined; await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: Tab.goto on a tab kept attached, after a Tab.screenshot with a size left the override set: it first ends the captures sent under it and clears it, so the new page loads at the tab's own size`, async () => {
+    // review-65b N1: after goto the new page loaded at the shot's size. The reads (text, outline, eval, waitFor)
+    // still see the shot's size until the next input, shot, record or goto.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
+      endedFirst(page, calls, (x) => x.method === "Page.navigate");
+      assert.equal(page.override, undefined);
+      assert.equal(await tab.evaluate(() => `${innerWidth}x${innerHeight}`), "1280x800");
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+}
 
 test("default: record keeps the attach's focus emulation and turns none on or off itself", needsFfmpeg, async () => {
   const { name, page } = await backgroundTab("/", o);

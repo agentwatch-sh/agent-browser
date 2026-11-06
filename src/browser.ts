@@ -936,19 +936,27 @@ export class Tab {
    * A shot with a size override left it set (screenshotNow): captures that went out under it may still end, and one
    * that ends after a clear sets the view to the shot's size for good. Chrome clears it at the end of the tab's
    * session (AgentBrowser.disconnect, at the end of each command), and drops those captures with it. On a tab that
-   * stays attached, its next input, shot or record first ends them under the override, then clears it (endSizeLeft);
-   * a read before that sees the shot's size.
+   * stays attached, its next input, shot, record or goto first ends them under the override, then clears it
+   * (endSizeLeft); a read (text, outline, eval, waitFor) before that sees the shot's size.
    */
   private sizeLeft = false;
+  /** The endSizeLeft that runs now: a later caller waits for it, and sends no captures and no clear of its own. */
+  private endingSize?: Promise<void>;
 
   /**
    * When a shot left its size override set (sizeLeft): last captures under it; when the last one ended, every earlier
    * one did: then the clear. Each input runs it first (whileDrawn; byHand, also for record in a window of its own;
-   * setFiles), and so do a shot (whileDrawnForShot) and recordTab, which sets an override of its own (review-65).
+   * setFiles), and so do a shot (whileDrawnForShot), recordTab, which sets an override of its own (review-65), and
+   * goto, whose new page would load at the shot's size (review-65b). One at a time (review-65b): two calls at the same
+   * time each sent captures and a clear, and a capture of one ended after the clear of the other.
    * @internal
    */
-  async endSizeLeft(): Promise<void> {
-    if (!this.sizeLeft) return;
+  endSizeLeft(): Promise<void> {
+    if (!this.sizeLeft) return Promise.resolve();
+    return this.endingSize ??= this.endSizeLeftNow().finally(() => { this.endingSize = undefined; });
+  }
+
+  private async endSizeLeftNow(): Promise<void> {
     await this.assertAllowed();
     const r = await new HeldCaptures(this).chain(Tab.shotTiming.lastMs, true);
     if (r !== true) {
@@ -1021,6 +1029,7 @@ export class Tab {
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     assertAllowedUrl(url, this.browser.allow);
+    await this.endSizeLeft();
     const loaded = this.browser.conn.waitForEvent("Page.loadEventFired", {
       sessionId: this.sessionId,
       timeoutMs: opts.timeoutMs ?? 45_000,
@@ -1389,11 +1398,12 @@ export class Tab {
     // So the shot's last captures go out under the override first (underLeft), and the override is cleared only when
     // none of its captures sent under it is left in flight. Else it stays set: Chrome clears it at the end of the
     // tab's session and drops those captures with the session (6 of 6: the view had its own size again, and their
-    // late end changed nothing); on a tab that stays attached, its next input, shot or record clears it (sizeLeft).
+    // late end changed nothing); on a tab that stays attached, its next input, shot, record or goto clears it
+    // (sizeLeft).
     const left = await shot.underLeft();
     if (left) {
       this.sizeLeft = true;
-      log(`agent-browser shot: ${left} capture${left > 1 ? "s" : ""} of tab ${tab} sent under the size override may still end, and one that ends after a clear sets the shot's size again for good; the override stays set until the tab's session ends (at the end of a command) or its next input, shot or record ends them`);
+      log(`agent-browser shot: ${left} capture${left > 1 ? "s" : ""} of tab ${tab} sent under the size override may still end, and one that ends after a clear sets the shot's size again for good; the override stays set until the tab's session ends (at the end of a command) or its next input, shot, record or goto ends them`);
       if (failure) throw failure;
       return path;
     }
