@@ -241,6 +241,62 @@ test("the fake ends earlier captures with a later one only when Chrome drew a fr
   await commands.close(o(), { tab: name });
 });
 
+test("the fake models Chrome's size override per session, as measured on Chromium 156 (shot-tidy): a capture that found it and ends after the clear sets the view size for good; a session's end clears its override, and its captures change nothing when they end later", async () => {
+  const size = { width: 800, height: 600, deviceScaleFactor: 1, mobile: false }, set = { width: 800, height: 600, deviceScaleFactor: 1 };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** A background tab, a session that sets the override and sends a capture that waits under it, then `rest` in that session. */
+  async function heldUnder(mode: typeof o, rest: (tab: Tab, held: Promise<unknown>) => Promise<void>): Promise<FakePage> {
+    const { page, name } = await backgroundTab("/", mode);
+    const b = await AgentBrowser.connect(mode());
+    try {
+      const tab = await b.find(name);
+      await tab.send("Emulation.setDeviceMetricsOverride", size);
+      const held = tab.send("Page.captureScreenshot", HOLD);
+      held.catch(() => {}); // a capture of a session that ended gets no reply
+      await sleep(100);
+      assert.equal(page.heldCaptures.length, 1, "a lone capture waits");
+      await rest(tab, held);
+    } finally { await b.disconnect(); }
+    return page;
+  }
+  /** A capture of a new session: it ends every earlier one. */
+  async function laterSession(page: FakePage, mode: typeof o) {
+    const b = await AgentBrowser.connect(mode());
+    try { await (await b.attach(page.targetId)).send("Page.captureScreenshot", HOLD); } finally { await b.disconnect(); }
+    assert.deepEqual(page.heldCaptures, []);
+  }
+  // The same session (test/live/background-tabs/override.ts): a later capture after the clear ends it (3 of 3, the page
+  // visible), and so does the clear's relayout of a hidden page (6 of 6).
+  let page = await heldUnder(o, async (tab, held) => {
+    await tab.send("Emulation.clearDeviceMetricsOverride");
+    await tab.send("Page.captureScreenshot", HOLD);
+    await held;
+  });
+  assert.deepEqual(page.stuck, { width: 800, height: 600 }, "a later capture of the session: the view keeps the shot's size");
+  await commands.close(o(), { tab: page.targetId });
+  page = await heldUnder(h, async (tab, held) => {
+    await tab.send("Emulation.clearDeviceMetricsOverride");
+    await held;
+  });
+  assert.deepEqual(page.stuck, { width: 800, height: 600 }, "the clear's relayout of the hidden page ended it");
+  await commands.close(h(), { tab: page.targetId });
+  // The session ends with the override set (6 of 6), or after it cleared it (3 of 3, the page visible): a later session
+  // ends the capture, with no effect.
+  page = await heldUnder(o, async () => {});
+  assert.deepEqual(page.metrics, set, "left set by the session");
+  assert.equal(page.override, undefined, "the session's end cleared it");
+  assert.equal(page.width, 1280);
+  await laterSession(page, o);
+  assert.equal(page.override, undefined);
+  assert.equal(page.stuck, undefined, "the late end changed nothing");
+  await commands.close(o(), { tab: page.targetId });
+  page = await heldUnder(o, async (tab) => { await tab.send("Emulation.clearDeviceMetricsOverride"); });
+  await laterSession(page, o);
+  assert.equal(page.override, undefined);
+  assert.equal(page.stuck, undefined, "the late end changed nothing");
+  await commands.close(o(), { tab: page.targetId });
+});
+
 for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
   test(`${label}: shot of a tab of which Chrome draws no frame: a clear error at the frame limit and a log line, not a silent 30 s wait`, async () => {
     const { name, page } = await backgroundTab("/", mode);
@@ -327,7 +383,9 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 
-  test(`${label}: shot --size when Chrome stops drawing after the two frames: no last captures while the override is set, the override is cleared, and the log says it can come back`, async () => {
+  test(`${label}: shot --size when Chrome stops drawing after the two frames and draws no more: its last captures go out under the override, which stays set while captures sent under it may still end; the session's end clears it, and a later command ends them with no change of the size`, async () => {
+    // The rest of review-41b's N3 (ab-b84.18): the shot cleared the override with those captures in flight, and its
+    // last captures went out after the clear; a capture that ends after the clear sets the view to 800x600 for good.
     const { name, page } = await backgroundTab("/", mode);
     await commands.text(mode(), { tab: name });
     page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
@@ -335,11 +393,70 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
       () => callsOf(page, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /the shot gave up after/)));
     page.onCapture = undefined;
-    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
-    assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [...(mode === h ? [HOLD] : []), { format: "png" }, HOLD, HOLD, HOLD], "the new first capture (the hidden drive), the own one and 3 extra; no last captures before the clear");
-    assert.equal(page.metrics, undefined, "cleared");
-    assert.ok(lines.some((l) => /Chrome can set the shot's size again, and the tab can keep that size/.test(l)), JSON.stringify(lines));
+    const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride");
+    assert.equal(m.indexOf("Emulation.clearDeviceMetricsOverride"), -1, "no clear while captures sent under the override may still end");
+    const under = captures(calls.slice(set)).map((x) => x.params), own = mode === h ? 5 : 4;
+    assert.deepEqual(under.slice(0, own), [...(mode === h ? [HOLD] : []), { format: "png" }, HOLD, HOLD, HOLD], "the new first capture (the hidden drive), the own one and 3 extra");
+    assert.deepEqual(under.slice(own), [HOLD, HOLD, HOLD, HOLD], "then one chain of last captures, under the override");
+    assert.ok(lines.some((l) => /\d+ captures of tab \w+ sent under the size override may still end, .*; the override stays set until the tab's session ends/.test(l)), JSON.stringify(lines));
+    assert.ok(lines.some((l) => /stay in flight \(the last captures did not end\).*; \d+ of them went out under the size override/.test(l)), JSON.stringify(lines));
+    assert.deepEqual(page.metrics, { width: 800, height: 600, deviceScaleFactor: 1 }, "left set by the shot");
+    assert.equal(page.override, undefined, "the end of the command's session cleared it");
+    // Chrome draws again: the tab's next commands end those captures, which Chrome dropped with their session.
     page.noFrames = false;
+    assert.equal((await commands.eval(mode(), { tab: name, expression: "`${innerWidth}x${innerHeight}`" })).value, "1280x800");
+    await commands.shot(mode(), { tab: name, path: join(c.dir, `${name}-2.png`) });
+    assert.deepEqual(page.heldCaptures, []);
+    assert.equal(page.override, undefined);
+    assert.equal(page.stuck, undefined, "no capture set the view size again");
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: shot --size when Chrome stops drawing during its own capture and draws again at its last captures: they go out under the override and end every capture sent under it; then the override is cleared, and the size stays cleared`, async () => {
+    // review-41e note 2: after the own capture's timeout the last captures went out after the clear, and ended
+    // the captures sent under the override then: the view kept 800x600.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    let after = 0;
+    page.onCapture = (p) => {
+      if (p.format === "png") { page.noFrames = true; after = 0; }
+      else if (page.noFrames && ++after === 4) page.noFrames = false; // the 3 extra captures, then the first last one
+    };
+    const lines: string[] = [];
+    const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+      () => callsOf(page, () => assert.rejects(commands.shot(logged(mode, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /the shot gave up after/)));
+    page.onCapture = undefined;
+    await new Promise((r) => setTimeout(r, 100)); // a frame after the clear
+    assert.equal(page.stuck, undefined, "no capture sent under the override ended after the clear");
+    assert.equal(page.metrics, undefined);
+    assert.deepEqual(page.heldCaptures, []);
+    const m = methodsOf(calls), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+    assert.ok(clear > 0, "cleared");
+    assert.deepEqual(captures(calls.slice(clear)), [], "no capture after the clear");
+    assert.deepEqual(lines.filter((l) => /stays? set|in flight/.test(l)), [], JSON.stringify(lines));
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: Tab.screenshot with a size when Chrome stops drawing, on a tab that stays attached: the override stays set; the tab's next shot first ends the captures sent under it, then clears it`, async () => {
+    const { name, page } = await backgroundTab("/", mode);
+    const b = await AgentBrowser.connect(mode());
+    try {
+      const tab = await b.find(name);
+      page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+      await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+        () => assert.rejects(tab.screenshot(join(c.dir, `${name}.png`), { viewport: { width: 800, height: 600, scale: 1 } }), /the shot gave up after/));
+      page.onCapture = undefined;
+      assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "set while captures sent under it may still end");
+      page.noFrames = false;
+      const { calls } = await callsOf(page, () => tab.screenshot(join(c.dir, `${name}-2.png`)));
+      const m = methodsOf(calls), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+      const own = calls.findIndex((x) => x.method === "Page.captureScreenshot" && x.params.format === "png");
+      assert.ok(clear >= 0 && clear < own, `cleared before the shot's own capture: ${JSON.stringify(m)}`);
+      assert.deepEqual(captures(calls.slice(0, clear)).map((x) => x.params), [HOLD], "a last capture under the override ended them all");
+      assert.equal(page.override, undefined);
+      assert.equal(page.stuck, undefined);
+      assert.deepEqual(page.heldCaptures, []);
+    } finally { await b.disconnect(); }
     await commands.close(mode(), { tab: name });
   });
 
@@ -390,10 +507,15 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
   });
 
   test(`${label}: shot --size whose own capture times out and whose override clear fails: the error keeps the cleanup note and gives the whole time`, async () => {
-    // review-41c: gaveUpAfter built the message again from its parts and dropped the note.
+    // review-41c: gaveUpAfter built the message again from its parts and dropped the note. Chrome draws again at
+    // the shot's first last capture, so that the shot clears the override (ab-b84.18).
     const { name, page } = await backgroundTab("/", mode);
     await commands.text(mode(), { tab: name });
-    page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+    let after = 0;
+    page.onCapture = (p) => {
+      if (p.format === "png") { page.noFrames = true; after = 0; }
+      else if (page.noFrames && ++after === 4) page.noFrames = false;
+    };
     fake.failOnce.set("Emulation.clearDeviceMetricsOverride", "clear refused by the test");
     await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
       () => assert.rejects(commands.shot(mode(), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }),
@@ -460,19 +582,43 @@ test("default: record keeps the attach's focus emulation and turns none on or of
 
 // ---------- the hidden drive ----------
 
-test("hiddenDrive: shot --size whose new first capture, sent under the override, gets no frame: the shot fails at the limit, and the log says the size override can come back", async () => {
+test("hiddenDrive: shot --size whose new first capture, sent under the override, gets no frame: the shot fails at the limit, and the override stays set while that capture may still end; the session's end clears it", async () => {
   // review-41c: that step ran outside the own capture's try, so nothing said that the override can
-  // come back when the capture ends after the clear.
+  // come back when the capture ends after the clear. ab-b84.18: no clear while it may still end.
   const { name, page } = await backgroundTab();
   await commands.text(h(), { tab: name });
-  page.onCapture = (p) => { if (p.format === "jpeg" && page.metrics) page.noFrames = true; };
+  page.onCapture = (p) => { if (p.format === "jpeg" && page.override) page.noFrames = true; };
   const lines: string[] = [];
-  await withTiming({ framesMs: 300 },
-    () => assert.rejects(commands.shot(logged(h, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /shot: Chrome drew no frame of tab \w+ in 0\.3 s/));
+  const { calls } = await withTiming({ framesMs: 300, underMs: 300 },
+    () => callsOf(page, () => assert.rejects(commands.shot(logged(h, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /shot: Chrome drew no frame of tab \w+ in 0\.3 s/)));
   page.onCapture = undefined;
-  assert.equal(page.metrics, undefined, "cleared after the failure");
-  assert.ok(lines.some((l) => /stays? in flight \(Chrome drew no frame\).*Chrome can set the shot's size again, and the tab can keep that size/.test(l)), JSON.stringify(lines));
+  assert.equal(methodsOf(calls).indexOf("Emulation.clearDeviceMetricsOverride"), -1, "no clear");
+  assert.deepEqual(page.metrics, { width: 800, height: 600, deviceScaleFactor: 1 }, "left set by the shot");
+  assert.equal(page.override, undefined, "the end of the command's session cleared it");
+  assert.ok(lines.some((l) => /1 capture of tab \w+ sent under the size override may still end/.test(l)), JSON.stringify(lines));
+  assert.ok(lines.some((l) => /stays? in flight \(Chrome drew no frame\).*; 1 of them went out under the size override/.test(l)), JSON.stringify(lines));
   page.noFrames = false;
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: shot --size whose own capture Chrome refuses while the new first capture waits under the override: a log line when it did not end in the wait (underMs); a last capture under the override ends it, and only then the override is cleared", async () => {
+  // review-41e note 6: no test for that log line. Before ab-b84.18 the shot cleared the override next, and the
+  // clear's relayout (or the last capture after it) ended that capture: the view kept 800x600.
+  const { name, page } = await backgroundTab();
+  await commands.text(h(), { tab: name });
+  page.onCapture = (p) => { if (p.format === "png") throw new Error("refused by the test"); };
+  const lines: string[] = [];
+  const { calls } = await withTiming({ underMs: 300 },
+    () => callsOf(page, () => assert.rejects(commands.shot(logged(h, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600" }), /refused by the test/)));
+  page.onCapture = undefined;
+  await new Promise((r) => setTimeout(r, 100)); // a frame after the clear
+  assert.equal(page.stuck, undefined, "no capture sent under the override ended after the clear");
+  assert.equal(page.metrics, undefined);
+  assert.deepEqual(page.heldCaptures, []);
+  assert.ok(lines.some((l) => /the captures of tab \w+ sent under the size override did not end in 0\.3 s after the shot failed/.test(l)), JSON.stringify(lines));
+  const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride"), clear = m.indexOf("Emulation.clearDeviceMetricsOverride");
+  assert.deepEqual(captures(calls.slice(set, clear)).map((x) => x.params), [HOLD, { format: "png" }, HOLD], "the new first capture, the own one, a last one");
+  assert.deepEqual(captures(calls.slice(clear)), [], "no capture after the clear");
   await commands.close(h(), { tab: name });
 });
 

@@ -577,8 +577,14 @@ function notEmpty(path: string, method: string): void {
 /** An exact page size for a screenshot or a recording: CSS pixels and a device pixel ratio. */
 export type Viewport = { width: number; height: number; scale: number };
 
-/** The capture of a shot's picture (Tab.whileDrawnForShot gives it to the shot). */
+/** The capture of a shot's picture (Tab.whileDrawnForShot gives it to the shot); `resized`: under the shot's size override. */
 type OwnCapture = (params: Record<string, unknown>, resized?: boolean) => Promise<{ data: string }>;
+/**
+ * What Tab.whileDrawnForShot gives the shot: its own capture, and `underLeft`, for a shot with a size override, before
+ * the override is cleared: last captures go out under the override, when Chrome can still end them, and it gives the
+ * number of the shot's captures sent under the override that Chrome may still hold.
+ */
+type ShotCaptures = { own: OwnCapture; underLeft: () => Promise<number> };
 /** The cheapest capture, with no clip: for Tab.whileDrawn and Tab.whileDrawnForShot, which do not use its picture. */
 const HOLD_CAPTURE = { format: "jpeg", quality: 1, optimizeForSpeed: true };
 
@@ -616,16 +622,19 @@ async function late(p: Promise<unknown>, ms: number): Promise<boolean> {
  * capture with a later one). A capture that timed out is not done: Chrome may still hold it.
  */
 class HeldCaptures {
-  private readonly sent: { done: boolean }[] = [];
+  private readonly sent: { done: boolean; under: boolean }[] = [];
   private readonly tab: Tab;
   constructor(tab: Tab) { this.tab = tab; }
 
   /** The captures in flight. */
   held(): number { return this.sent.filter((c) => !c.done).length; }
 
-  /** Track a capture (of any params): when it ends, it and every earlier one are done. */
-  track<R>(p: Promise<R>): Promise<R> {
-    const me = { done: false };
+  /** The captures in flight that went out under a size override (`under`): each sets it again when it ends. */
+  heldUnder(): number { return this.sent.filter((c) => !c.done && c.under).length; }
+
+  /** Track a capture (any params; `under`: sent under a size override): when it ends, it and every earlier one are done. */
+  track<R>(p: Promise<R>, under = false): Promise<R> {
+    const me = { done: false, under };
     this.sent.push(me);
     return p.then((v) => { for (const c of this.sent.slice(0, this.sent.indexOf(me) + 1)) c.done = true; return v; },
       (e) => { if (e instanceof CDPError && e.code !== undefined) me.done = true; throw e; });
@@ -635,8 +644,8 @@ class HeldCaptures {
    * The cheapest capture, with no clip (a clip resizes the page for the capture). Its picture is not
    * used. True when it ended, else why not: a timeout, or Chrome's own error.
    */
-  capture(timeoutMs: number): Promise<true | string> {
-    return this.track(this.tab.send("Page.captureScreenshot", HOLD_CAPTURE, timeoutMs)).then(() => true as const, (e) =>
+  capture(timeoutMs: number, under = false): Promise<true | string> {
+    return this.track(this.tab.send("Page.captureScreenshot", HOLD_CAPTURE, timeoutMs), under).then(() => true as const, (e) =>
       e instanceof CDPError && /no response after/.test(e.message) ? `did not end in ${timeoutMs / 1000} s` : `failed (${(e as Error).message})`);
   }
 
@@ -646,12 +655,16 @@ class HeldCaptures {
    * When it waits too (the earlier ones ended just before it was sent, on a page that draws nothing new), it holds
    * the page drawing, so one more ends it: at most three more.
    */
-  async last(timeoutMs: number): Promise<true | string> {
-    if (!this.held()) return true;
-    let last = this.capture(timeoutMs);
+  async last(timeoutMs: number, under = false): Promise<true | string> {
+    return this.held() ? this.chain(timeoutMs, under) : true;
+  }
+
+  /** The chain of last(), also when this object sent no capture: a later capture ends every earlier one (Tab.endSizeLeft). */
+  async chain(timeoutMs: number, under = false): Promise<true | string> {
+    let last = this.capture(timeoutMs, under);
     for (let more = 0; more < 3; more++) {
       if (!(await late(last, 250))) break;
-      last = this.capture(timeoutMs);
+      last = this.capture(timeoutMs, under);
     }
     return last;
   }
@@ -688,8 +701,8 @@ export class Tab {
    * frames after the shot's first capture. `lateMs`: when the shot's own capture has not ended after
    * this long, one more capture goes out to end it. `ownMs`: the timeout of the shot's own capture.
    * `lastMs`: the timeout of each last capture (also after input). `underMs`: how long a failed shot
-   * that changed the size waits for its captures sent under the size override, before the override is
-   * cleared. Static, so that a test can make them shorter.
+   * that changed the size waits for its captures sent under the size override to end by themselves, before its last
+   * captures go out under it. Static, so that a test can make them shorter.
    * Measured on taylor with Chromium 156 (2026-11-05, 12 shots in the default mode and 6 with
    * hiddenDrive; README, **A shot, in both modes**): the two frames came in 0.02 to 2.03 s in the
    * default mode (a background tab draws about once a second there), and in 0.02 s with hiddenDrive;
@@ -725,6 +738,7 @@ export class Tab {
    * a frame).
    */
   private async whileDrawn<T>(fn: () => Promise<T>, opts: { repeat?: boolean } = {}): Promise<T> {
+    if (this.sizeLeft) await this.endSizeLeft();
     if (this.drive !== "hidden") { await this.toFront(); return fn(); }
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return fn();
@@ -774,9 +788,10 @@ export class Tab {
    * size override is cleared: a capture sent while the override is set sets it again when it ends
    * (Chromium's PageHandler::ScreenshotCaptured restores the emulation that it found). When a capture
    * of the shot failed (its timeout), Chrome may still hold it, and the last captures end it: one
-   * chain, after the size override is cleared (when they end the captures that found the override,
-   * the shot clears it again); when they do not end, no more go out (review-41b: two chains took
-   * 42 s and left 13 captures). After a failed full-page capture, or with no frame, a log line says
+   * chain; when they do not end, no more go out (review-41b: two chains took 42 s and left 13
+   * captures). With a size override, they go out under it, before it is cleared (`underLeft`), and the
+   * override is cleared only when no capture sent under it is left in flight; else it stays set
+   * (screenshotNow, sizeLeft). After a failed full-page capture, or with no frame, a log line says
    * that captures stay in flight instead. The error of a capture that timed out gives the shot's
    * whole time.
    *
@@ -787,20 +802,20 @@ export class Tab {
    *
    * Only the first capture goes out, not one each time one ends (whileDrawn's `repeat`): the shot's own capture can
    * change the device emulation (a clip, a size); a capture sent during that change would set it again when it ends.
-   * `fn` gets the capture for the shot's own picture (`own`): the one described above.
+   * `fn` gets the capture for the shot's own picture (`own`): the one described above; and `underLeft` (ShotCaptures).
    */
-  private async whileDrawnForShot<T>(fn: (own: OwnCapture) => Promise<T>): Promise<T> {
+  private async whileDrawnForShot<T>(fn: (shot: ShotCaptures) => Promise<T>): Promise<T> {
+    if (this.sizeLeft) await this.endSizeLeft();
     const hidden = this.drive === "hidden", log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
     await this.assertAllowed();
     if (hidden && await this.evaluate(() => document.visibilityState) !== "hidden")
-      return fn((params) => this.send("Page.captureScreenshot", params, Tab.shotTiming.ownMs));
+      return fn({ own: (params) => this.send("Page.captureScreenshot", params, Tab.shotTiming.ownMs), underLeft: async () => 0 });
     const { framesMs, lateMs, ownMs, lastMs } = Tab.shotTiming, t0 = Date.now();
     // drew: false when Chrome drew no frame in the wait: then no capture can end. ownClip: a full-page
-    // capture of the shot failed: Chrome may still hold it, and its emulation. resizedFailed: the own
-    // capture of a shot that changed the size failed: Chrome may still hold captures that found the
-    // size override, and each sets it again when it ends. chainFailed: the last captures did not end:
-    // Chrome draws nothing now, and more captures would only wait too.
-    let drew = true, ownClip = false, resizedFailed = false, chainFailed = false;
+    // capture of the shot failed: Chrome may still hold it, and its emulation. chainFailed: the last
+    // captures did not end: Chrome draws nothing now, and more captures would only wait too. The
+    // captures that went out under a size override: caps.heldUnder().
+    let drew = true, ownClip = false, chainFailed = false;
     const caps = new HeldCaptures(this);
     // When the main frame goes to a new page during a shot, Chrome may not end the captures of the old
     // page (review-41b on taylor, default mode: the shot's own capture failed after 30 s, though later
@@ -823,47 +838,47 @@ export class Tab {
       drew = false;
       throw new Error(`shot: Chrome drew no frame of tab ${tab} in ${framesMs / 1000} s after the shot's first capture. Chrome ends a capture only after it draws a frame, so the shot's capture would wait for ever (a loaded machine, or a page that hangs). Try the shot again.`);
     };
-    const resizedNote = () => resizedFailed ? "; when they end, Chrome can set the shot's size again, and the tab can keep that size" : "";
-    const lastCaptures = async () => {
+    // A log line's note, only when captures that went out under the size override stay in flight.
+    const underNote = () => { const u = caps.heldUnder(); return u ? `; ${u} of them went out under the size override` : ""; };
+    const lastCaptures = async (under = false) => {
       const n = caps.held();
       if (!n) return;
       if (!drew || ownClip || chainFailed) {
         // With no frame, no capture can end now; the tab's next command ends them all. After a failed
         // full-page capture, a capture sent now would set that capture's emulation again when it ends.
         const cause = ownClip ? "a full-page capture failed" : chainFailed ? "the last captures did not end" : "Chrome drew no frame";
-        log(`agent-browser shot: ${n} capture${n > 1 ? "s" : ""} of tab ${tab} stay${n > 1 ? "" : "s"} in flight (${cause}); Chrome can keep drawing that background tab until its next capture${resizedNote()}`);
+        log(`agent-browser shot: ${n} capture${n > 1 ? "s" : ""} of tab ${tab} stay${n > 1 ? "" : "s"} in flight (${cause}); Chrome can keep drawing that background tab until its next capture${underNote()}`);
         return;
       }
-      const r = await caps.last(lastMs);
+      const r = await caps.last(lastMs, under);
       if (r === true) return;
       chainFailed = true;
-      log(stayLine(this.targetId, hidden, r, caps.held(), resizedNote()));
+      log(stayLine(this.targetId, hidden, r, caps.held(), underNote()));
     };
     const own: OwnCapture = async (params, resized = false) => {
       const clip = "clip" in params, rearm: Promise<true | string>[] = [];
       // A navigation in the settle: send nothing under the size override.
-      if (navigatedNow) { if (resized) resizedFailed = true; throw navError(); }
-      // The captures sent under a size override: each found it, and sets it again when it ends; one
-      // that ended after the clear set the view to 800x600 again for good (review-41d on taylor: 25 ms
-      // to 1.1 s after the clear, after a navigation during the shot; a later shot --size did not undo
-      // it). So a failed shot clears the override only after they ended, or after underMs.
+      if (navigatedNow) throw navError();
+      // The captures sent under a size override: each found it, and sets it again when it ends (see screenshotNow).
+      // After a failure the shot waits for them to end by themselves, at most underMs (after a navigation during the
+      // shot they ended 25 ms to 1.1 s later, review-41d on taylor), before its last captures go out under it.
       const under: Promise<unknown>[] = [];
       const afterUnder = async () => {
         if (!resized || !under.length || !(await late(Promise.allSettled(under), Tab.shotTiming.underMs))) return;
-        log(`agent-browser shot: the captures of tab ${tab} sent under the size override did not end in ${Tab.shotTiming.underMs / 1000} s; the override is cleared now, and when they end, Chrome can set the shot's size again`);
+        log(`agent-browser shot: the captures of tab ${tab} sent under the size override did not end in ${Tab.shotTiming.underMs / 1000} s after the shot failed`);
       };
       if ((clip || resized) && !caps.held()) {
-        rearm.push(caps.capture(10 * 60_000));
+        rearm.push(caps.capture(10 * 60_000, resized));
         if (resized) under.push(rearm[0]);
-        try { await framesForShot(); } catch (e) { if (resized) { resizedFailed = true; await afterUnder(); } throw e; }
+        try { await framesForShot(); } catch (e) { await afterUnder(); throw e; }
       }
-      const shot = caps.track(this.send<{ data: string }>("Page.captureScreenshot", params, ownMs));
+      const shot = caps.track(this.send<{ data: string }>("Page.captureScreenshot", params, ownMs), resized);
       if (resized) under.push(shot);
       const result = Promise.race([shot, navigated]);
       const kicks: Promise<true | string>[] = [];
       while (!clip && kicks.length < 3 && await late(result, lateMs)) {
         log(`agent-browser shot: the shot's capture of tab ${tab} did not end in ${((kicks.length + 1) * lateMs) / 1000} s; one more capture goes out to end it`);
-        kicks.push(caps.capture(10 * 60_000));
+        kicks.push(caps.capture(10 * 60_000, resized));
         if (resized) under.push(kicks.at(-1)!);
       }
       let ok = false;
@@ -873,7 +888,6 @@ export class Tab {
         return r;
       } catch (e) {
         if (clip) ownClip = true;
-        if (resized) resizedFailed = true;
         const timedOut = e instanceof CDPError && /no response after/.test(e.message);
         // Not after a timeout: Chrome then drew no frame for ownMs, and the captures would only wait too.
         if (!timedOut) await afterUnder();
@@ -886,28 +900,54 @@ export class Tab {
       } finally {
         // Before a size override is cleared: a capture sent while it is set sets it again when it ends.
         // The new first capture ends with the shot's own, just before it; an extra one just after it.
-        // After a failure, no last captures here: Chrome drew no frame for the whole timeout, and the
-        // ones here would find the override too; the shot's last captures come after the clear.
+        // After a failure, the last captures come later: under the size override (underLeft), or after the shot.
         if (ok && (rearm.length || kicks.length)) {
           await late(Promise.all([...rearm, ...kicks]), 250);
-          await lastCaptures();
+          await lastCaptures(resized);
         }
       }
+    };
+    // The shot's last captures under its size override, before screenshotNow clears it: they end the captures that
+    // went out under it while it is still set. Not when no capture can end now (as in lastCaptures).
+    const underLeft = async () => {
+      if (caps.heldUnder() && drew && !ownClip && !chainFailed) await lastCaptures(true);
+      return caps.heldUnder();
     };
     void caps.capture(10 * 60_000);
     let failure: unknown;
     try {
       await framesForShot();
-      return await fn(own);
+      return await fn({ own, underLeft });
     } catch (e) {
       failure = e;
       throw e;
     } finally {
+      // After the size override was cleared, no capture that went out under it is in flight (screenshotNow).
       await lastCaptures();
       stopNav.abort();
       // The shot's true time, with its last captures.
       if (failure instanceof ShotTimeout) failure.gaveUpAfter(Date.now() - t0);
     }
+  }
+
+  /**
+   * A shot with a size override left it set (screenshotNow): captures that went out under it may still end, and one
+   * that ends after a clear sets the view to the shot's size for good. Chrome clears it at the end of the tab's
+   * session (AgentBrowser.disconnect, at the end of each command), and drops those captures with it. On a tab that
+   * stays attached, its next input or shot first ends them under the override, then clears it (endSizeLeft).
+   */
+  private sizeLeft = false;
+
+  /** See sizeLeft: last captures under the override; when the last one ended, every earlier one did: then the clear. */
+  private async endSizeLeft(): Promise<void> {
+    await this.assertAllowed();
+    const r = await new HeldCaptures(this).chain(Tab.shotTiming.lastMs, true);
+    if (r !== true) {
+      this.browser.settings.log(`agent-browser: the last capture of tab ${this.targetId.slice(0, 8)} under the size override that a shot left set ${r}; the override stays set`);
+      return;
+    }
+    this.sizeLeft = false;
+    await this.send("Emulation.clearDeviceMetricsOverride");
   }
 
   /** Two animation frames of the page, at most `ms`: the number that came (whileDrawn, whileDrawnForShot). */
@@ -1302,33 +1342,49 @@ export class Tab {
   /**
    * A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort.
    * With a viewport, the page is laid out at exactly that size for the shot (so the PNG is
-   * width x scale by height x scale), and the override is cleared afterwards. A failure to clear it
-   * never hides the shot's own error. Under whileDrawnForShot, in both modes (ab-b84.17): its first capture
-   * comes before the override, and the shot's own capture, two frames later, ends it. whileDrawnForShot checks
+   * width x scale by height x scale), and the override is cleared afterwards, but only when no capture that went
+   * out under it is left in flight: else it stays set until the tab's session ends (screenshotNow; sizeLeft). A
+   * failure to clear it never hides the shot's own error. Under whileDrawnForShot, in both modes (ab-b84.17): its
+   * first capture comes before the override, and the shot's own capture, two frames later, ends it. whileDrawnForShot checks
    * the allowlist, before that first capture.
    */
   async screenshot(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number } = {}): Promise<string> {
     notEmpty(path, "screenshot");
-    return this.whileDrawnForShot((own) => this.screenshotNow(path, opts, own));
+    return this.whileDrawnForShot((shot) => this.screenshotNow(path, opts, shot));
   }
 
-  private async screenshotNow(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number }, own: OwnCapture): Promise<string> {
-    if (!opts.viewport) return this.capture(path, !!opts.fullPage, own, false);
-    const { width, height, scale } = opts.viewport;
+  private async screenshotNow(path: string, opts: { fullPage?: boolean; viewport?: Viewport; settleMs?: number }, shot: ShotCaptures): Promise<string> {
+    if (!opts.viewport) return this.capture(path, !!opts.fullPage, shot.own, false);
+    const { width, height, scale } = opts.viewport, log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
     const size = () => this.evaluate(() => `${innerWidth}x${innerHeight}`).catch(() => undefined);
     const before = await size();
     await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
     let failure: unknown;
     try {
       await new Promise((r) => setTimeout(r, opts.settleMs ?? 500)); // the page lays itself out again at the new size
-      await this.capture(path, !!opts.fullPage, own, true);
+      await this.capture(path, !!opts.fullPage, shot.own, true);
     } catch (e) { failure = e; }
+    // A capture that went out under the override sets it again when it ends, and one that ends after the clear sets
+    // the view to the shot's size for good (review-41d). Measured on taylor with Chromium 156 (2026-11-06,
+    // test/live/background-tabs/override.ts): after the clear, a later capture of the same session ended such a capture
+    // and left the view at the shot's size (3 of 3, the page visible); with the page hidden, the clear's own relayout
+    // ended it 33 to 43 ms later (6 of 6).
+    // So the shot's last captures go out under the override first (underLeft), and the override is cleared only when
+    // none of its captures sent under it is left in flight. Else it stays set: Chrome clears it at the end of the
+    // tab's session and drops those captures with the session (6 of 6: the view had its own size again, and their
+    // late end changed nothing); on a tab that stays attached, its next input or shot clears it (sizeLeft).
+    const left = await shot.underLeft();
+    if (left) {
+      this.sizeLeft = true;
+      log(`agent-browser shot: ${left} capture${left > 1 ? "s" : ""} of tab ${tab} sent under the size override may still end, and one that ends after a clear sets the shot's size again for good; the override stays set until the tab's session ends (at the end of a command) or its next input or shot ends them`);
+      if (failure) throw failure;
+      return path;
+    }
     const cleanupErrors = await runCleanup([["clear the device metrics override", () => this.send("Emulation.clearDeviceMetricsOverride")]]);
     if (failure) {
-      // A capture sent under the override that ends after the clear sets the size again (whileDrawnForShot).
       const after = await size();
       if (before && after && after !== before)
-        this.browser.settings.log(`agent-browser shot: after the failed shot the page of tab ${this.targetId.slice(0, 8)} is ${after}, not ${before} as before the size override`);
+        log(`agent-browser shot: after the failed shot the page of tab ${tab} is ${after}, not ${before} as before the size override`);
       throw withCleanupErrors(failure, cleanupErrors);
     }
     if (cleanupErrors.length) throw new Error(`the screenshot was saved to ${path}, but the tab keeps the emulated size: ${cleanupErrors.join("; ")}`);

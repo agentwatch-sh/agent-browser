@@ -532,7 +532,18 @@ person's input**) and `log` (progress lines; default standard error).
     again when it ends. When the tab goes to a new page during the shot, Chrome may not end a capture
     of the old page (in the default mode the shot's own capture waited 30 s; after a same-site
     navigation one ended 50 ms after the shot failed): the shot fails at once with a clear error. After
-    its own capture, the shot checks the allowlist again, and it writes no file for a tab that left it. In the default mode every page is `visible`, so a tab in front gets the capture
+    its own capture, the shot checks the allowlist again, and it writes no file for a tab that left it.
+    `shot --size` clears its size override only when none of its captures sent under the override is
+    still in flight: such a capture sets the override again when it ends, and one that ends after the
+    clear leaves the view at the shot's size (measured on taylor with Chromium 156 on 2026-11-06 with
+    `test/live/background-tabs/override.ts`, a tab with a capture under the override in flight: 3 of
+    3 when a later capture of the same session ended it after the clear, and 6 of 6 with the page
+    hidden, where the clear's own relayout ended it). So after a failure its last captures go out under the override, before the clear. When they
+    do not end either (Chrome draws nothing), the override stays set, with a log line, until the
+    command ends: Chrome then clears it at the end of the command's session and drops those captures
+    (6 of 6: the view had its own size again, and their late end changed nothing). On a `Tab` that a
+    program keeps attached, the tab's next input or shot ends them under the override, then clears it.
+    In the default mode every page is `visible`, so a tab in front gets the capture
     in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
     mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of
     2 s) and in 0.02 s with `--hidden-drive`; the shot's own capture then ended in 1.07 to 2.10 s and
@@ -1769,6 +1780,12 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   background tab the page must also have no visible time and no `visibilitychange` (a record's span is
   reported), and no frame in the second after the command. Not part of `npm test`. Measured on taylor on
   2026-11-04; see **A command on a background tab: two modes**.
+- `test/live/background-tabs/override.ts` (`node test/live/background-tabs/override.ts --out-dir DIR
+  [--display 96] [--trials 3]`; Linux only, in a private Xvfb, with its own Chromium and a debugging
+  port that only it uses; see its head): what Chrome does with a capture sent under a size override that
+  is still in flight at the clear or at the end of its session, with the page hidden and visible. It
+  gives the trials whose view kept the override's size. Not part of `npm test`; the fake Chrome models
+  what it measured (`FakePage.metrics`). Measured on taylor on 2026-11-06; see **A shot, in both modes**.
 - `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, pid and
   clock: the windows check, a Wayland session and a window manager (not own), the answer of one minute
   for the same Chrome pid (with `/proc/<pid>/cmdline` in place of `ps`), the log line at most once in 5

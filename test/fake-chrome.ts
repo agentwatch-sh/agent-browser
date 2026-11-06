@@ -294,8 +294,8 @@ export class FakePage {
   /** Listeners that page code added to the document (an isolated world's too): the fake sends them the real pointer event of an activation. */
   listeners = new Map<string, Set<(e: object) => void>>();
   /** The view size, as innerWidth and innerHeight give it. */
-  get width() { return this.metrics?.width ?? this.stuck?.width ?? 1280; }
-  get height() { return this.metrics?.height ?? this.stuck?.height ?? 800; }
+  get width() { return this.override?.width ?? this.stuck?.width ?? 1280; }
+  get height() { return this.override?.height ?? this.stuck?.height ?? 800; }
   /** The page's own height: below its lowest element, at least 2400 px. */
   get scrollHeight() { return Math.max(2400, ...this.elements.map((e) => e.rect[1] + e.rect[3] + 100)); }
   scrollTo(x: number, y: number) {
@@ -316,8 +316,18 @@ export class FakePage {
    * undid it (review-41d on taylor, 3 of 3).
    */
   stuck: { width: number; height: number } | undefined;
-  /** The device metrics override, while one is set. */
+  /**
+   * The device metrics override that a session set and did not clear, and that session (`metricsBy`). Chrome applies
+   * it only while that session is attached (`override`): at the session's end Chrome clears it, and the view comes back
+   * to its own size (EmulationHandler::Disable; measured on Chromium 156 by shot-tidy, ab-b84.18, in
+   * test/live/background-tabs/override.ts: 6 of 6 sessions that
+   * ended with the override set and a capture under it in flight). The fake keeps it here after the session's end, so
+   * that a test sees an override that agent-browser left set.
+   */
   metrics: { width: number; height: number; deviceScaleFactor: number } | undefined;
+  metricsBy: string | undefined;
+  /** The device metrics override that Chrome applies now: `metrics`, while the session that set it is attached. */
+  get override() { return this.metrics && this.metricsBy !== undefined && this.fake.attached(this.metricsBy) ? this.metrics : undefined; }
   /** Nodes page code appended to the document element (the recording overlay), and its animations. */
   appended: FakeNode[] = [];
   animations = 0;
@@ -448,16 +458,22 @@ export class FakePage {
    * and nothing replaces it, so both wait (as measured on Chromium 156 by review-41: with no frame
    * between the two captures, 8 of 8 default-mode and 4 of 4 hidden-drive shots failed after 30 s).
    * A capture sent while a device metrics override is set sets that override again when it ends, as
-   * Chrome's PageHandler::ScreenshotCaptured restores the emulation that the capture found.
+   * Chrome's PageHandler::ScreenshotCaptured restores the emulation that the capture found. But only while the
+   * session that sent it (`sessionId`) is attached: Chrome drops a capture's callback with its session, so one that
+   * ends after its session ended changes nothing and gets no reply (override.ts on Chromium 156: 6 of 6 such captures,
+   * after the session ended with the override set; 3 of 3 after a session that cleared it ended, the page visible).
    */
-  capture<T>(data: T, params: Record<string, unknown> = {}): Promise<T> {
+  capture<T>(data: T, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
     this.onCapture?.(params);
-    const n = this.nextCapture++, found = this.metrics;
+    const n = this.nextCapture++, found = this.override;
     const replaces = this.drawsByItself || this.heldCaptures.some((c) => c.at < this.frames);
     return new Promise((resolve) => {
       this.heldCaptures.push({ n, at: this.frames, found: !!found, end: () => {
-        if (found && !this.metrics) this.stuck = { width: found.width, height: found.height };
-        if (found) this.metrics = found;
+        if (found && (sessionId === undefined || this.fake.attached(sessionId))) {
+          if (!this.override) this.stuck = { width: found.width, height: found.height };
+          this.metrics = found;
+          this.metricsBy = sessionId;
+        }
         resolve(data);
       } });
       this.update();
@@ -487,9 +503,10 @@ export class FakePage {
   }
 
   /**
-   * The page is laid out again (a device metrics override): its next frame changes, and ends the held
-   * captures whose frames Chrome drew already. Seen by review-41b on Chromium 156 with the hidden drive:
-   * the shot's first capture of a still page ended in `shot --size`'s 0.5 s settle. Only for a hidden
+   * The page is laid out again (a device metrics override is set or cleared): its next frame changes, and ends the
+   * held captures whose frames Chrome drew already. Seen by review-41b on Chromium 156 with the hidden drive:
+   * the shot's first capture of a still page ended in `shot --size`'s 0.5 s settle; and by shot-tidy (ab-b84.18): a
+   * capture sent under the override ended 33 to 43 ms after the clear, with no later capture (6 of 6, override.ts). Only for a hidden
    * page (the hidden drive, where a capture in flight makes Chrome draw at once): in the default mode
    * Chrome draws a background tab about once a second, and the relayout's frame came after the shot's
    * own capture (review-41c, 4 of 4 live default-mode `shot --size`: the first capture ended with it).
@@ -719,6 +736,8 @@ export class FakeChrome {
   /** Targets that are not pages (a service worker), to prove they are filtered out. */
   readonly otherTargets: { targetId: string; type: string; url: string; title: string }[] = [];
   private sessions = new Map<string, Session>();
+  /** The session is attached (Target.detachFromTarget and its client's close end it). */
+  attached(sessionId: string): boolean { return this.sessions.has(sessionId); }
   private streams = new Map<string, { data: Buffer; offset: number }>();
   private downloadBehavior: { behavior: string; downloadPath?: string } = { behavior: "default" };
   private wss!: WebSocketServer;
@@ -1005,7 +1024,7 @@ export class FakeChrome {
     this.stopCast(s);
     const cast: Cast = { maxWidth: params.maxWidth ?? 1e9, maxHeight: params.maxHeight ?? 1e9, waiting: false, sent: 0, acked: 0, timer: setInterval(() => {
       if (cast.waiting || !s.page.drawing) return;
-      const m = cast.sent > 0 ? s.page.metrics : undefined;
+      const m = cast.sent > 0 ? s.page.override : undefined;
       let w = m ? Math.round(m.width * m.deviceScaleFactor) : 1280, h = m ? Math.round(m.height * m.deviceScaleFactor) : 800;
       const k = Math.min(1, cast.maxWidth / w, cast.maxHeight / h);
       w = Math.round(w * k); h = Math.round(h * k);
@@ -1052,9 +1071,15 @@ export class FakeChrome {
       case "Target.detachFromTarget": return this.onBrowser(s.client, method, params);
       case "Emulation.setDeviceMetricsOverride":
         page.metrics = { width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor };
+        page.metricsBy = s.id;
         page.relayout();
         return {};
-      case "Emulation.clearDeviceMetricsOverride": page.metrics = undefined; return {};
+      case "Emulation.clearDeviceMetricsOverride": {
+        const had = page.override;
+        page.metrics = page.metricsBy = undefined;
+        if (had) page.relayout();
+        return {};
+      }
       case "Page.startScreencast": this.startCast(s, params); return {};
       case "Page.stopScreencast": this.stopCast(s); return {};
       case "Page.screencastFrameAck": if (s.cast) { s.cast.waiting = false; s.cast.acked++; this.frames.acked++; } return {};
@@ -1135,14 +1160,14 @@ export class FakeChrome {
         el.files = (params.files as string[]).map((f) => ({ name: basename(f) }));
         return {};
       }
-      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.metrics?.width ?? 1280, height: 2400 }, cssVisualViewport: { pageX: 0, pageY: 0 } };
+      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.override?.width ?? 1280, height: 2400 }, cssVisualViewport: { pageX: 0, pageY: 0 } };
       case "Page.captureScreenshot": {
         let data = PNG_1x1;
         if (params.clip) { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
-          const k = page.metrics?.deviceScaleFactor ?? 1, v = page.paint % 256;
+          const k = page.override?.deviceScaleFactor ?? 1, v = page.paint % 256;
           data = rgbaPng(Math.max(1, Math.round(8 * k)), Math.max(1, Math.round(8 * k)), () => [v, 255 - v, 128, 255]).toString("base64");
         } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
-        return page.background ? page.capture({ data }, params) : { data };
+        return page.background ? page.capture({ data }, params, s.id) : { data };
       }
       case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
       case "Network.getResponseBody": {
