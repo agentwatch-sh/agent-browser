@@ -8,12 +8,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
-import { RELAY_TIMER } from "../src/relay/bridge.ts";
 import { moveProblem, monotonicMs, moveWait, type Pt } from "../src/relay/pointer.ts";
 import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
 const ops = (h: Harness, from = 0) => h.fake.requests.slice(from).map((r) => (r.op !== "debugger.sendCommand" ? r.op : r.args[2]?.type ? `${r.args[1]} ${r.args[2].type}` : r.args[1]));
 const OFFSET = GEO.oh - GEO.ih; // 91: a page's y on the display is y + 91
 

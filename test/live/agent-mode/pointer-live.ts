@@ -384,7 +384,6 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       plannedMs: stats(allDt.map((d) => d.planned)), seenMs: stats(allDt.map((d) => d.seen)), playOverheadMs: stats(overhead), plays: plays.length, answers: o.daemon.pointerCounts() };
     o.record({ group: G, case: "the measure of xdotool sleep: the dt that the leaving page saw against the planned dt", status: allDt.length >= 20 ? "pass" : "fail", ms: 0, detail: dtMeasure });
     writeFileSync(join(o.run, "pointer.json"), JSON.stringify({ cases: caseOut, dt: dtMeasure, steps: steps(), log }, null, 1) + "\n");
-    void noPath;
   }
 }
 
