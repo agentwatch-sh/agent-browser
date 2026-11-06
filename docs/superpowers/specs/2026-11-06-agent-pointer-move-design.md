@@ -509,6 +509,9 @@ time between two seen moves against the sum of the planned `dt` between them:
 | 4 (the group) | 901 | 0 / 1 / 5 (1 pair over 2 ms) | 16 / 80 | 21 / 31 / 41 |
 | 5 (the group) | 922 | 0 / 1 / 2 | 16 / 96 | 26 / 36 / 40 |
 | 6 (the whole suite) | 921 | 0 / 1 / 1 | 16 / 80 | 20 / 28 / 40 |
+| 7 (the group, review-68's fixes) | 924 | 0 / 1 / 4 (1 pair over 2 ms) | 16 / 80 | - |
+| 8 (the group, review-68's fixes, after the rebase) | 915 | 0 / 1 / 1 | 16 / 250 | 19 / 27 / 29 |
+| 9 (the whole suite, the same code) | 939 | 0 / 1 / 1 | 16 / 48 | 19 / 27 / 28 |
 
 **The pass mark** (runs 5 and 6; counted from the end of each page's first activation; a jump or an unexplained
 change in the second after the page's own step with no path is as today and counted apart; Playwright's own raw
@@ -534,7 +537,10 @@ mapping cases (the xdotool person of the research: 20; agent-browser's own CDP p
 agent-browser's short paths between its pages' near points; a median speed of 0.5 to 1.1 px/ms; the largest
 movement 76 px (two steps that Chrome merged into one frame). A step with a path took 0.41 to 0.79 s (median of
 each case; at most 1.21 s; 2.1 s when it waited for a catch-up), a catch-up 0.28 to 1.11 s. The whole suite in its
-own mode (run 6): 198 of 198 cases pass. Runs 1 to 3 had no path for agent-browser's own commands (each CLI command
+own mode (run 6): 198 of 198 cases pass. After review-68's fixes (runs 7 to 9): the same steps with a path and the
+same counts in every case (0 jumps and 0 unexplained changes after each page's first activation, 0 zero-movement
+path moves; the as-today entries: 1 jump after the 3 s press, 1 after the moved window); the group alone 16 of 16
+twice, and the whole suite 198 of 198. Runs 1 to 3 had no path for agent-browser's own commands (each CLI command
 ends its connection, so the front page was no bridge tab), and runs 2 and 3 one unexplained change from a
 catch-up over a scrollbar: ab-lead's decisions on points 1 and 5.
 
