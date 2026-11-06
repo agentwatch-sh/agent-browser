@@ -11,6 +11,7 @@ import { parseKey, sendKey } from "../src/record.ts";
 import { NotAllowedError, PinRequiredError, UsageError } from "../src/errors.ts";
 import { resolveOptions } from "../src/options.ts";
 import { proxyInfo, stopProxy } from "../src/proxy.ts";
+import { TEXT } from "../src/relay/policy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
 import { BIN, consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -311,4 +312,27 @@ test("a failed navigation that is not a refusal keeps the tab of open, and a tab
   fake.failOnce.set("Page.navigate", "Not allowed: x.example.org is not on the allowlist");
   await assert.rejects(existing.goto(base), /Not allowed/);
   assert.ok(fake.pages.has(existing.targetId), "goto of an existing tab never closes it");
+});
+
+test("a failed Page.navigate of goto leaves no unseen rejection of the load wait, also after its short timeout (ab-v16.61)", async () => {
+  const tab = await browser.open(base);
+  const unseen: unknown[] = [];
+  const on = (e: unknown) => { unseen.push(e); };
+  process.on("unhandledRejection", on);
+  try {
+    // The command fails at once; the load wait (timeoutMs 40) would reject 40 ms later, with nobody to see it.
+    fake.failOnce.set("Page.navigate", "net::ERR_CONNECTION_REFUSED");
+    await assert.rejects(tab.goto(base, { timeoutMs: 40 }), /ERR_CONNECTION_REFUSED/);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(unseen, [], "no unhandled rejection");
+  } finally { process.off("unhandledRejection", on); }
+  await tab.close();
+});
+
+test("open closes the empty tab for the relay's refusal text TEXT.notAllowed, so a change of that text fails here (ab-v16.61)", async () => {
+  const before = new Set(fake.pages.keys());
+  // The text that the relay sends (src/relay/policy.ts), not a copy of it: open's match must follow it.
+  fake.failOnce.set("Page.navigate", TEXT.notAllowed("other.example.org"));
+  await assert.rejects(browser.open(base), /^Error: Page\.navigate: Not allowed: other\.example\.org/);
+  assert.deepEqual([...fake.pages.keys()].filter((id) => !before.has(id)), [], "the empty tab is closed");
 });
