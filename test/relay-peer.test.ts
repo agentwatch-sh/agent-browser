@@ -208,6 +208,84 @@ test("the link drops the line's roots with the line: after a link change the rel
   } finally { await h.close(); }
 });
 
+// ------------------------------------------------------------------ four rules of the check (ab-v16.61)
+
+test("the session check asks twice whether the peer lives: a process that exits during the walk is refused, by its poll and by its fdinfo pid (ab-v16.61)", () => {
+  // md-lead's process 3102 is admitted by the line `peer`. The reader answers by call number: the check polls once
+  // before the walk (the first alive check) and once after it (the last one).
+  const run = (poll: number[], pids: number[]) => {
+    const reader = fakeReader("pidfd", "linux", { read: true, pid: 3102, uid: "own", pidfd: { poll: 0, fdinfoPid: 3102 } });
+    let p = 0, f = 0;
+    reader.poll = () => poll[Math.min(p++, poll.length - 1)];
+    reader.fdinfoPid = () => pids[Math.min(f++, pids.length - 1)];
+    const gate = new PeerGate({ reader, uid: UID });
+    gate.setRoots(parseRoots(endpointV.lines.peer));
+    const peer = readPeer(reader, 0, UID)!;
+    return { root: gate.check("md-lead", peer), polls: p, infos: f };
+  };
+  assert.deepEqual(run([0, 0], [3102, 3102]), { root: { pid: 3100, start: 6000 }, polls: 2, infos: 2 }, "the baseline: admitted, two alive checks");
+  assert.equal(run([1, 0], [3102, 3102]).root, null, "dead at the first alive check (poll)");
+  assert.equal(run([0, 0], [-1, 3102]).root, null, "dead at the first alive check (fdinfo pid)");
+  assert.equal(run([0, 1], [3102, 3102]).root, null, "exited during the walk (poll)");
+  assert.equal(run([0, 0], [3102, -1]).root, null, "exited during the walk (fdinfo pid: reaped)");
+  assert.equal(run([0, 0], [3102, 4242]).root, null, "the pidfd names another pid at the last check");
+});
+
+test("the self-test compares the pid that the peer's pidfd names with the child's, and the child's parent with the relay's pid (ab-v16.61)", { skip: !linux, timeout: 60_000 }, async () => {
+  const { dir, socket } = endpointPath();
+  const { createServer, connect } = await import("node:net");
+  // A connection from this process to itself: SO_PEERPIDFD on its accepted end gives a pidfd that names this process.
+  const own = join(dir, "own.sock");
+  let ownFd = -1;
+  const server = createServer((s) => { ownFd = (s as any)._handle.fd; });
+  await new Promise<void>((r) => server.listen(own, r));
+  const self = connect(own);
+  await until(() => ownFd >= 0, "the self connection");
+  try {
+    const other = await selfTest(socket, { wrapLibc: (l) => ({ ...l, getsockopt: (fd, level, name, v, len) => l.getsockopt(name === 77 ? ownFd : fd, level, name, v, len) }) });
+    assert.ok("failed" in other && /^the pidfd names pid \d+, not the child's \d+$/.test(other.failed) && other.failed.includes(`pid ${process.pid},`), JSON.stringify(other));
+    // The child's parent is the relay: with another pid for the relay, the compare fails.
+    const real = Object.getOwnPropertyDescriptor(process, "pid")!;
+    Object.defineProperty(process, "pid", { value: process.pid + 1, configurable: true });
+    let moved;
+    try { moved = await selfTest(socket); } finally { Object.defineProperty(process, "pid", real); }
+    assert.ok("failed" in moved && /^the child's parent is \d+, not the relay's \d+$/.test(moved.failed), JSON.stringify(moved));
+    assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith(".peer-test-")), [], "the self-test's folder is gone");
+  } finally { self.destroy(); server.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a relay with the peer check closes a connection of a scope that the line no longer names with 1008, while the line's default has a list (namedOnly) (ab-v16.61)", async () => {
+  const reader = fakeReader("pidfd", "linux", { read: true, pid: 3102, uid: "own", pidfd: { poll: 0, fdinfoPid: 3102 } });
+  const h = await harness({ peerCheck: gateFor("pidfd", reader) });
+  try {
+    await h.ready(endpointV.lines.peer);
+    const c = await raw(h.url("md-lead"));
+    assert.ok(c.ws, c.body);
+    // The scope has gone from the line (and its root); the default names a list. With the peer check a default counts for no scope.
+    h.fake.line({ t: "allowlist", lists: { md: ["a.example"] }, scopes: {}, default: "md", roots: {} });
+    assert.deepEqual(await Promise.race([c.closed, sleep(500).then(() => null)]), CLOSE.noList, "the no-list close, not the root's");
+    assert.equal(h.relay.model.noList("md-lead"), true);
+    assert.deepEqual(await raw(h.url("md-lead")).then((r) => [r.status, r.body]), [503, NOT_READY.noList]);
+  } finally { await h.close(); }
+});
+
+test("an admitted connection holds no pidfd after its upgrade: the relay closes it at the upgrade, once, while the connection stays open (ab-v16.61)", async () => {
+  const reader = fakeReader("pidfd", "linux", { read: true, pid: 3102, uid: "own", pidfd: { poll: 0, fdinfoPid: 3102 } });
+  const h = await harness({ peerCheck: gateFor("pidfd", reader) });
+  try {
+    await h.ready(endpointV.lines.peer);
+    const c = await raw(h.url("md-lead"));
+    assert.ok(c.ws, c.body);
+    await until(() => reader.closed.length === 1, "the close of the pidfd at the upgrade");
+    await sleep(50);
+    assert.deepEqual(reader.closed, [100], "closed while the connection is open");
+    c.ws!.close();
+    await c.closed;
+    await sleep(50);
+    assert.deepEqual(reader.closed, [100], "closed once: its socket's close adds none");
+  } finally { await h.close(); }
+});
+
 // ------------------------------------------------------------------ the readers
 
 test("the stat and cgroup parsers: a process name with spaces and parentheses, field 22, the 0:: line", () => {
