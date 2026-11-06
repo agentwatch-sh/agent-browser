@@ -18,9 +18,12 @@ import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 
 export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string; active: boolean };
 /** A page's geometry as the relay's read gives it (src/relay/pointer.ts, Geo). */
-export type FakeGeo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; dpr: number; scale: number; sw: number; sh: number; vis: string };
-/** Each window at 0,0 on a 1280 x 900 display, its content 1280 x 809 from y 91 (Chrome's own frame on a display with no window manager). */
-export const GEO: FakeGeo = { sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
+export type FakeGeo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; cw: number; ch: number; dpr: number; scale: number; sw: number; sh: number; vis: string };
+/**
+ * Each window at 0,0 on a 1280 x 900 display, its viewport 1280 x 809 from y 91 (Chrome's own frame on a display with no
+ * window manager), with no scrollbar (the content box `cw` x `ch` is the viewport).
+ */
+export const GEO: FakeGeo = { sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, cw: 1280, ch: 809, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
 /** A test's answer: a value is the data, { error } a bridge error text, undefined the default answer. */
 type Override = (req: { op: string; args: any[] }) => any;
 

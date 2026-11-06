@@ -97,7 +97,7 @@ export function moveProblem(args: unknown, now: number): "bad args" | "out of bo
  * sample at the end), in whole pixels, each point clamped into `clamp`; drop a point that does not move (its time goes
  * to the next one) and a first point less than 2 px from the rounded start, and cap each dt at POINTER_DT_MAX_MS.
  */
-export function sampleLegs(from: Pt, to: Pt, legs: Leg[], factor: number, clamp: Rect | null): PathPoint[] {
+export function sampleLegs(from: Pt, to: Pt, legs: Leg[], factor: number, clamp: Rect | null, keepEnd = false): PathPoint[] {
   const legsMs = legs.reduce((a, l) => a + l.ms, 0);
   const total = Math.max(SAMPLE_MS, Math.round(legsMs * factor));
   const n = Math.max(1, Math.floor(total / SAMPLE_MS)), base = Math.floor(total / n), extra = total - base * n;
@@ -111,7 +111,7 @@ export function sampleLegs(from: Pt, to: Pt, legs: Leg[], factor: number, clamp:
   for (let i = 1; i <= n; i++) {
     const dt = base + (i <= extra ? 1 : 0);
     t += dt; wait += dt;
-    const p = i === n ? fit(to) : fit(pointAt(legs, (t / total) * legsMs));
+    const p = i === n ? (keepEnd ? { x: Math.round(to.x), y: Math.round(to.y) } : fit(to)) : fit(pointAt(legs, (t / total) * legsMs));
     if ((p.x === last.x && p.y === last.y) || (!out.length && near(p, start, 1.99))) continue;
     out.push({ x: p.x, y: p.y, dt: Math.min(wait, POINTER.POINTER_DT_MAX_MS) });
     last = p; wait = 0;
@@ -153,9 +153,10 @@ function outAndBack(S: Pt, T: Pt, clamp: Rect | null, random: () => number): Pat
  * of src/input.ts's generator (planMove: its curve and times, an overshoot leg past 500 px, the target width 24),
  * sampled every 16 ms and clamped into `clamp`; while a step is over 50 px, the time of all legs is stretched by one
  * factor and the legs are sampled again. With S equal to T (or within 2 px), a short out-and-back of 2 to 4 px. The
- * catch-up uses it too, in the page's CSS px with no clamp.
+ * catch-up uses it too, in the page's CSS px, clamped to the page's content box with `keepEnd`: its last point is the
+ * client's own event point, also where that is outside the box.
  */
-export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: () => number } = {}): Promise<PathPoint[] | null> {
+export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: () => number; keepEnd?: boolean } = {}): Promise<PathPoint[] | null> {
   const random = o.random ?? Math.random, clamp = o.clamp ?? null;
   const from = { x: Math.round(S.x), y: Math.round(S.y) }, to = { x: Math.round(T.x), y: Math.round(T.y) };
   if (near(from, to, 1.99)) {
@@ -166,7 +167,7 @@ export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: 
   if (!legs.length) return null;
   let factor = 1;
   for (let i = 0; i < 24; i++) {
-    const path = sampleLegs(from, to, legs, factor, clamp);
+    const path = sampleLegs(from, to, legs, factor, clamp, o.keepEnd ?? false);
     if (!path.length) return null;
     const step = Math.sqrt(maxStep2(from, path));
     if (step <= POINTER.POINTER_STEP_MAX_PX) return fits(from, path) ? path : null;
@@ -181,19 +182,25 @@ export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: 
 /**
  * A page's geometry, read in the relay's own isolated world: the 7 values of src/input.ts's mapping (screenX, screenY,
  * outerWidth, outerHeight, innerWidth, innerHeight, devicePixelRatio), visualViewport.scale, screen.width and
- * screen.height, and document.visibilityState.
+ * screen.height, document.visibilityState, and the content box `cw` x `ch`: the viewport less its scrollbars
+ * (visualViewport.width and height, at a scale of 1; else documentElement.clientWidth and clientHeight). A page gets no
+ * mouse event over its scrollbars, so the path and the catch-up stay inside the content box (ab-lead's decision on
+ * point 5 of PR #68).
  */
-export type Geo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; dpr: number; scale: number; sw: number; sh: number; vis: string };
+export type Geo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; cw: number; ch: number; dpr: number; scale: number; sw: number; sh: number; vis: string };
 /** The read's expression: one object by value. */
-export const GEO_EXPRESSION = "({ sx: screenX, sy: screenY, ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, dpr: devicePixelRatio, "
+export const GEO_EXPRESSION = "({ sx: screenX, sy: screenY, ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, "
+  + "cw: window.visualViewport ? visualViewport.width : document.documentElement.clientWidth, "
+  + "ch: window.visualViewport ? visualViewport.height : document.documentElement.clientHeight, dpr: devicePixelRatio, "
   + "scale: window.visualViewport ? visualViewport.scale : 1, sw: screen.width, sh: screen.height, vis: document.visibilityState })";
 
 /** The geometry of a read's value, or null when a value is missing. */
 export function geoOf(v: unknown): Geo | null {
   if (!v || typeof v !== "object") return null;
   const g = v as Record<string, unknown>;
-  for (const k of ["sx", "sy", "ow", "oh", "iw", "ih", "dpr", "scale", "sw", "sh"]) if (typeof g[k] !== "number" || !Number.isFinite(g[k])) return null;
-  return { sx: g.sx, sy: g.sy, ow: g.ow, oh: g.oh, iw: g.iw, ih: g.ih, dpr: g.dpr, scale: g.scale, sw: g.sw, sh: g.sh, vis: String(g.vis) } as Geo;
+  for (const k of ["sx", "sy", "ow", "oh", "iw", "ih", "cw", "ch", "dpr", "scale", "sw", "sh"]) if (typeof g[k] !== "number" || !Number.isFinite(g[k])) return null;
+  return { sx: g.sx, sy: g.sy, ow: g.ow, oh: g.oh, iw: g.iw, ih: g.ih, cw: Math.floor(g.cw as number), ch: Math.floor(g.ch as number), dpr: g.dpr, scale: g.scale,
+    sw: g.sw, sh: g.sh, vis: String(g.vis) } as Geo;
 }
 
 /** The page's content origin on the display (input.ts's origin: Chrome draws its own frame on a display with no window manager). */
@@ -211,10 +218,14 @@ export function toPage(g: Geo, d: Pt): Pt | null {
   const o = originOf(g), p = { x: d.x - o.x, y: d.y - o.y };
   return p.x >= 0 && p.y >= 0 && p.x < g.iw && p.y < g.ih ? p : null;
 }
-/** The page's viewport on the display, 2 px inside its edges: the clamp of a path, and where S and T must be. */
+/** The page's content box on the display (the viewport less its scrollbars), 2 px inside its edges: the clamp of a path, and where S and T must be. */
 export function clampRect(g: Geo): Rect {
   const o = originOf(g);
-  return { x0: o.x + 2, y0: o.y + 2, x1: o.x + g.iw - 3, y1: o.y + g.ih - 3 };
+  return { x0: o.x + 2, y0: o.y + 2, x1: o.x + g.cw - 3, y1: o.y + g.ch - 3 };
+}
+/** The same box in the page's CSS px: the clamp of a catch-up. */
+export function contentRect(g: Geo): Rect {
+  return { x0: 2, y0: 2, x1: g.cw - 3, y1: g.ch - 3 };
 }
 export const insideRect = (r: Rect, p: Pt) => p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
 
@@ -224,5 +235,6 @@ export const insideRect = (r: Rect, p: Pt) => p.x >= r.x0 && p.x <= r.x1 && p.y 
  * in flight, a device-metrics override).
  */
 export function usable(g: Geo | null, display: { width: number; height: number } | null): g is Geo {
-  return !!g && !!display && g.dpr === 1 && g.scale === 1 && g.sw === display.width && g.sh === display.height && g.iw > 4 && g.ih > 4;
+  return !!g && !!display && g.dpr === 1 && g.scale === 1 && g.sw === display.width && g.sh === display.height && g.iw > 4 && g.ih > 4
+    && g.cw > 4 && g.ch > 4 && g.cw <= g.iw && g.ch <= g.ih;
 }

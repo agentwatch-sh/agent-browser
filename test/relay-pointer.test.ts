@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Bridge, BridgeError, MAX_IN_FLIGHT_PER_TAB, POINTER_READ_WAIT_MS, RELAY_TIMER } from "../src/relay/bridge.ts";
-import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, notAfter, planPath, POINTER,
+import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, notAfter, planPath, POINTER,
   sampleLegs, toDisplay, toPage, usable, type Geo, type PathPoint, type Pt, type Rect } from "../src/relay/pointer.ts";
 import { planMove, seededRandom } from "../src/record.ts";
 
@@ -200,8 +200,8 @@ test("the catch-up's path: the same generator and limits in the page's CSS px, w
 
 // ------------------------------------------------------------------ the geometry (section 3, the mapping of src/input.ts)
 
-test("the mapping: display x = round(screenX + side + px), y = round(screenY + outerHeight - innerHeight - side + py); the inverse; the viewport 2 px inside", () => {
-  const g: Geo = { sx: 100, sy: 50, ow: 1100, oh: 700, iw: 1090, ih: 610, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
+test("the mapping: display x = round(screenX + side + px), y = round(screenY + outerHeight - innerHeight - side + py); the inverse; the content box 2 px inside", () => {
+  const g: Geo = { sx: 100, sy: 50, ow: 1100, oh: 700, iw: 1090, ih: 610, cw: 1090, ch: 610, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
   // side = round((1100 - 1090) / 2) = 5: the content's origin is (105, 50 + 700 - 610 - 5) = (105, 135).
   assert.deepEqual(toDisplay(g, { x: 10.4, y: 20.6 }), { x: 115, y: 156 });
   assert.deepEqual(toPage(g, { x: 115, y: 156 }), { x: 10, y: 21 });
@@ -212,7 +212,7 @@ test("the mapping: display x = round(screenX + side + px), y = round(screenY + o
 });
 
 test("a geometry is not usable when the ratio or the scale is not 1, or the screen is not the display's size", () => {
-  const g: Geo = { sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
+  const g: Geo = { sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, cw: 1265, ch: 794, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
   const display = { width: 1280, height: 900 };
   assert.equal(usable(g, display), true);
   assert.equal(usable({ ...g, dpr: 2 }, display), false);
@@ -220,4 +220,24 @@ test("a geometry is not usable when the ratio or the scale is not 1, or the scre
   assert.equal(usable({ ...g, sw: 1920 }, display), false);
   assert.equal(usable({ ...g, sh: 1080 }, display), false);
   assert.equal(usable(null, display), false);
+  assert.equal(usable({ ...g, cw: 1290 }, display), false, "a content box wider than the viewport");
+});
+
+test("the clamp is the page's content box (the viewport less its scrollbars: visualViewport's size), 2 px inside; the read gives it", () => {
+  // A vertical scrollbar of 15 px and a horizontal one of 15 px: the content box is 1265 x 794 of a 1280 x 809 viewport.
+  const g: Geo = { sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, cw: 1265, ch: 794, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" };
+  assert.deepEqual(clampRect(g), { x0: 2, y0: 93, x1: 1262, y1: 91 + 794 - 3 });
+  assert.deepEqual(contentRect(g), { x0: 2, y0: 2, x1: 1262, y1: 791 }, "the same box in the page's CSS px (the catch-up's clamp)");
+  assert.match(GEO_EXPRESSION, /visualViewport\.width/);
+  assert.match(GEO_EXPRESSION, /visualViewport\.height/);
+  assert.deepEqual(geoOf({ sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, cw: 1265.4, ch: 794, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" })?.cw, 1265);
+  assert.equal(geoOf({ sx: 0, sy: 0, ow: 1280, oh: 900, iw: 1280, ih: 809, dpr: 1, scale: 1, sw: 1280, sh: 900, vis: "visible" }), null, "no content box: no geometry");
+});
+
+test("the catch-up's clamp keeps its end: every point inside the content box except the event's own point, which can be outside it", async () => {
+  const clamp = { x0: 2, y0: 2, x1: 1262, y1: 791 };
+  const path = (await planPath({ x: 100, y: 100 }, { x: 1270, y: 400 }, { clamp, keepEnd: true, random: seededRandom(4) }))!;
+  assert.deepEqual([path.at(-1)!.x, path.at(-1)!.y], [1270, 400], "the event's point (over the scrollbar)");
+  for (const p of path.slice(0, -1)) assert.ok(p.x <= 1262 && p.y <= 791 && p.x >= 2 && p.y >= 2, `${p.x},${p.y}`);
+  assert.equal(moveProblem([{ at: { x: 0, y: 0 }, from: { x: 100, y: 100 }, path, width: 1920, height: 1080, notAfter: 1000, views: 0 }], 1000), null);
 });
