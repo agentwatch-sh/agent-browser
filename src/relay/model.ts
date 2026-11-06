@@ -18,7 +18,7 @@ import { copyFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Bridge } from "./bridge.ts";
 import { awaitsPromise, cdpError, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
-import { covers, parseScopes, SCOPE, type ScopeSet } from "./scopes.ts";
+import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
 const PERMISSIONS: Record<string, string> = { geolocation: "location", notifications: "notifications", videoCapture: "camera",
@@ -44,6 +44,8 @@ export const CLOSE = {
   linkDown: [1011, "The agent browser's link went down"],
   stopped: [1001, "The agent browser stopped"],
   noList: [1008, "The allowlist has no list for this scope any more"],
+  /** With the peer check: the root that admitted the connection is no longer one of its scope's roots (C11). */
+  root: [1008, "The session of this scope has a new process: connect again."],
 } as const;
 export const NOT_READY = {
   link: "The agent browser is not ready: its extension is not connected.",
@@ -51,6 +53,8 @@ export const NOT_READY = {
   old: "The agent browser is not ready: its extension is too old for agent mode.",
   noList: "The agent browser is not ready: the allowlist has no list for this scope.",
   roots: "The agent browser is not ready: the allowlist has session roots, but the relay was started without --peer-check.",
+  /** The relay's self-test of its peer reader failed (C11, step 3). */
+  cannotRead: "The agent browser is not ready: the relay cannot read the program of a connection.",
 };
 /** The receiver's answer to an op on a tab that its sweep took out of its scope (C10, the orphan set). */
 const NOT_AN_AGENT_TAB = "not an agent tab";
@@ -81,6 +85,8 @@ export class Conn {
   readonly id: number;
   readonly scope: string;
   readonly socket: Socket;
+  /** With the peer check: the root (pid, start) that admitted the connection, by the walk or by its cgroup; else null. */
+  readonly root: Root | null;
   readonly sessions = new Map<string, Session>();
   readonly browserSessions = new Set<string>();
   autoAttach = false;
@@ -89,7 +95,7 @@ export class Conn {
   discover = false;
   download: { behavior: string; path?: string; events: boolean } | null = null;
   grants: { type: string; pattern: string }[] = [];
-  constructor(id: number, scope: string, socket: Socket) { this.id = id; this.scope = scope; this.socket = socket; }
+  constructor(id: number, scope: string, socket: Socket, root: Root | null = null) { this.id = id; this.scope = scope; this.socket = socket; this.root = root; }
   send(msg: object): void { this.socket.send(JSON.stringify(msg)); }
   event(sessionId: string | undefined, method: string, params: object): void { this.send(sessionId ? { method, params, sessionId } : { method, params }); }
 }
@@ -131,6 +137,15 @@ export class Model {
    */
   private rootsLine = false;
   /**
+   * The relay runs with --peer-check (C11, the scope's session): a line's `roots` apply (parseRoots), a scope that the
+   * line does not name has no list whatever `default` says, and at each line a connection whose root left its scope's
+   * roots closes (1008). `onRoots` gives the peer check each line's roots (the defensive root rules read them then).
+   */
+  readonly peerCheck: boolean;
+  private readonly onRoots: ((roots: Roots) => void) | undefined;
+  /** The roots of the last allowlist line that apply, by scope (with the peer check). */
+  private roots: Roots = new Map();
+  /**
    * The scopes of an end_scope that no later line named again (ab-lead's decision for PR #58; the C11 sentence comes
    * with board ab-v16.55): their new connections get the no-list 503, also over a link change. So no process of an
    * ended session connects again in the moment before the daemon's next line drops its scope, also with a default
@@ -151,9 +166,11 @@ export class Model {
   /** The activations of every tab, in order: each one and its input reach the bridge before the next activation reads a window. */
   private activations: Promise<void> = Promise.resolve();
 
-  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean } = {}) {
+  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
+    this.peerCheck = opts.peerCheck ?? false;
+    this.onRoots = opts.onRoots;
   }
 
   /** Why a new connection is refused (C11's 503 texts), or null when the endpoint is ready. */
@@ -168,7 +185,21 @@ export class Model {
   /** Why a connection of `scope` is refused (C11, the order of the checks without the peer check), or null to admit it. */
   refuse(scope: string): string | null {
     // A scope whose list is empty is admitted: it can open about:blank only.
-    return this.notReady() ?? (this.ended.has(scope) || this.allowlist?.listOf(scope) == null ? NOT_READY.noList : null);
+    return this.notReady() ?? (this.noList(scope) ? NOT_READY.noList : null);
+  }
+
+  /** With the peer check, step 5: the last allowlist line names the scope (in `scopes`, also with null). */
+  named(scope: string): boolean {
+    return this.allowlist?.scopes.has(scope) ?? false;
+  }
+
+  /**
+   * The scope has no list (the no-list 503; with the peer check, step 7): the last line gives it none, or an end_scope
+   * ended it and no later line named it again. With the peer check an ended scope that the line still names counts as
+   * a named scope with no list, so the session check (step 6) comes first.
+   */
+  noList(scope: string): boolean {
+    return this.ended.has(scope) || this.allowlist?.listOf(scope) == null;
   }
 
   /**
@@ -202,7 +233,7 @@ export class Model {
    * compatibility; C4, the rollout).
    */
   private onAllowlist(msg: unknown): void {
-    if (msg && typeof msg === "object" && Object.hasOwn(msg, "roots")) {
+    if (!this.peerCheck && msg && typeof msg === "object" && Object.hasOwn(msg, "roots")) {
       // C11: a relay without --peer-check applies no list of a line with roots (any value), as if no line had come: every
       // open connection closes (1008), and each upgrade gets the roots 503, until a line without roots comes.
       if (!this.rootsLine) this.log("relay: the allowlist line has session roots, but the relay was started without --peer-check: it admits no connection");
@@ -212,16 +243,27 @@ export class Model {
       return;
     }
     this.rootsLine = false;
-    const set = parseScopes(msg);
+    const set = parseScopes(msg, { namedOnly: this.peerCheck });
+    if (this.peerCheck) {
+      // The roots apply before any check of this line: the defensive root rules read every root now (C11).
+      this.roots = parseRoots(msg);
+      this.onRoots?.(this.roots);
+    }
     this.allowlist = set;
     if (set.applied) this.lastApplied = set;
     if (set.refused) this.log(`relay: the allowlist line has ${set.refused} refused item(s)`);
     // A line that names an ended scope again ends its refusal (a later session of that name, after C4's rule 2).
     for (const scope of [...this.ended]) if (set.scopes.has(scope)) this.ended.delete(scope);
-    // C11: every connection of a scope that has no list any more closes; its tabs are detached and freed.
+    // C11: every connection of a scope that has no list any more closes; its tabs are detached and freed. With the peer
+    // check, a connection whose scope keeps a list closes too when the root that admitted it (pid and start) is no
+    // longer one of the scope's roots that apply (a respawned pane), also at a line with no roots field. A root that
+    // another scope names too stays: the check runs once, at the upgrade.
     for (const c of [...this.conns]) {
-      if (set.listOf(c.scope) !== null) continue;
-      c.socket.close(...CLOSE.noList);
+      if (set.listOf(c.scope) === null) { c.socket.close(...CLOSE.noList); void this.close(c); continue; }
+      const root = c.root;
+      if (!this.peerCheck || root === null) continue;
+      if ((this.roots.get(c.scope) ?? []).some((r) => r.pid === root.pid && r.start === root.start)) continue;
+      c.socket.close(...CLOSE.root);
       void this.close(c);
     }
     // C11: at a line whose scopes and lists are objects, the model drops each tab of a scope that the line gives no
@@ -357,6 +399,8 @@ export class Model {
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
     for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
+    // The relay drops its line at each link change (C10), and its roots with it.
+    if (this.peerCheck && this.roots.size) { this.roots = new Map(); this.onRoots?.(this.roots); }
   }
 
   private closeAll([code, reason]: readonly [number, string]): void {
@@ -403,8 +447,8 @@ export class Model {
 
   // ------------------------------------------------------------------ connections
 
-  open(scope: string, socket: Socket): Conn {
-    const c = new Conn(this.nextConn++, scope, socket);
+  open(scope: string, socket: Socket, root: Root | null = null): Conn {
+    const c = new Conn(this.nextConn++, scope, socket, root);
     this.conns.add(c);
     // The receiver attaches and holds each new tab while a connection is open: popups wait for their owner.
     if (this.conns.size === 1) this.bridge.call("bridge.attachNew", [true]).catch((e) => this.log(`relay: bridge.attachNew failed: ${e.message}`));

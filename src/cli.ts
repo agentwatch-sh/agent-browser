@@ -43,6 +43,8 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
 
 /** Flags of the internal `proxy` command, which startProxy runs in the background. */
 const PROXY_FLAGS: Record<string, Flag> = { attempt: { type: "string" }, "timeout-ms": { type: "string" } };
+/** The flag of the internal `relay` command (the agentwatch daemon starts it): the peer check (C11; board ab-v16.51). */
+const RELAY_FLAGS: Record<string, Flag> = { "peer-check": { type: "boolean" } };
 
 /** The command flags in the spec (`--name`), plus --stdin for a command with a parameter that can come from stdin. */
 function commandFlags(spec: CommandSpec): Record<string, Flag> {
@@ -54,7 +56,7 @@ function commandFlags(spec: CommandSpec): Record<string, Flag> {
   return out;
 }
 
-const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS,
+const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS, RELAY_FLAGS,
   Object.fromEntries(Object.entries(GLOBAL_FLAGS).map(([k, { type, short }]) => [k, short ? { type, short } : { type }])));
 
 export const USAGE = `agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
@@ -265,8 +267,10 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     }
     if (name === "relay") {
       // Agent mode's CDP endpoint. Its standard output is the bridge to the daemon, so it prints nothing else there.
-      if (typeof values.socket !== "string" || !values.socket || rest.length) throw new UsageError("usage: agent-browser relay --socket PATH (started by the agentwatch daemon, not by hand)");
-      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log });
+      if (typeof values.socket !== "string" || !values.socket || rest.length) throw new UsageError("usage: agent-browser relay --socket PATH [--peer-check] (started by the agentwatch daemon, not by hand)");
+      // --peer-check: the relay admits a connection only from a process of its scope's agentwatch session. It loads
+      // node:ffi for that (only then), in its self-test.
+      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log, peerCheck: values["peer-check"] === true });
       await relay.closed;
       return 0;
     }

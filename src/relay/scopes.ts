@@ -3,7 +3,8 @@
 // the receiver confirmed as one line: {"t":"allowlist","lists":{...},"scopes":{...},"default":...}. The relay applies
 // the same rules to it as the receiver applies to set_scopes, so both sides have the same lists: the shared vector
 // test/vectors/chrome-extension-<commit>/scopes.json checks both. The port follows chrome-extension's
-// agent/scopes.js and shared/domains.js.
+// agent/scopes.js and shared/domains.js. With the peer check (board ab-v16.51) the line also carries each session's
+// roots: parseRoots applies C11's rules for them (the scope's session, the roots in the line).
 
 /** A scope and a list name: C11's scope pattern. Every agentwatch session name matches it. */
 export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -43,14 +44,16 @@ export class ScopeSet {
   readonly refused: number;
   /** The line's `scopes` and `lists` are objects: only then does the relay drop the tabs of a scope with no list (C11). */
   readonly applied: boolean;
+  /** With the peer check, a scope that `scopes` does not name has no list, whatever `default` says (C11, the scope's list). */
+  readonly namedOnly: boolean;
 
-  constructor(o: { lists: Map<string, string[]>; scopes: Map<string, string | null>; default: string | null; refused: number; applied: boolean }) {
-    this.lists = o.lists; this.scopes = o.scopes; this.default = o.default; this.refused = o.refused; this.applied = o.applied;
+  constructor(o: { lists: Map<string, string[]>; scopes: Map<string, string | null>; default: string | null; refused: number; applied: boolean; namedOnly?: boolean }) {
+    this.lists = o.lists; this.scopes = o.scopes; this.default = o.default; this.refused = o.refused; this.applied = o.applied; this.namedOnly = o.namedOnly ?? false;
   }
 
-  /** A scope's list: its `scopes` entry when it has one (no fall-back to `default`), else `default`; null when that list is not in `lists`. */
+  /** A scope's list: its `scopes` entry when it has one (no fall-back to `default`), else `default` (with the peer check: none); null when that list is not in `lists`. */
   listOf(scope: string): string | null {
-    const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.default;
+    const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly ? null : this.default;
     return name !== null && this.lists.has(name) ? name : null;
   }
 
@@ -68,9 +71,10 @@ export class ScopeSet {
 
 /**
  * C4's rules, applied to one allowlist line (or one set_scopes object). The relay ignores the line's `operator` field
- * (no connection sees a marked tab), and `roots` (the peer check, board ab-v16.51).
+ * (no connection sees a marked tab); `roots` is parseRoots's. `namedOnly`: the relay runs with the peer check, so a
+ * scope that the line does not name gets no list (C11, the scope's list).
  */
-export function parseScopes(msg: unknown): ScopeSet {
+export function parseScopes(msg: unknown, opts: { namedOnly?: boolean } = {}): ScopeSet {
   const m = isObject(msg) ? msg : {};
   let refused = 0;
   const lists = new Map<string, string[]>();
@@ -98,5 +102,36 @@ export function parseScopes(msg: unknown): ScopeSet {
   // No scope gets the default list while the daemon's scopes are not known.
   if (!isObject(m.scopes)) def = null;
   if (Object.hasOwn(m, "operator") && m.operator !== null && m.operator !== "*" && !isName(m.operator)) refused += 1;
-  return new ScopeSet({ lists, scopes, default: def, refused, applied: isObject(m.lists) && isObject(m.scopes) });
+  return new ScopeSet({ lists, scopes, default: def, refused, applied: isObject(m.lists) && isObject(m.scopes), namedOnly: opts.namedOnly });
+}
+
+/** A session's root (C11, the scope's session): the pid of its tmux pane's process and that process's start time. */
+export type Root = { readonly pid: number; readonly start: number };
+/** The roots of one allowlist line that apply, by scope (also of a scope that `scopes` does not name). */
+export type Roots = ReadonlyMap<string, readonly Root[]>;
+
+/**
+ * C11's rules for the line's `roots` (the scope's session, the roots in the line): a `roots` that is not an object
+ * applies as an empty object; an entry whose scope does not match the scope pattern, or whose value is not a list,
+ * applies as absent; an item that is not an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start`
+ * from 0 to 2^53 - 1 is dropped, and the other items of its list apply; the other fields of an item are ignored. A
+ * root that one scope names twice is one root. A line with no `roots` field gives every scope no root.
+ */
+export function parseRoots(msg: unknown): Map<string, Root[]> {
+  const out = new Map<string, Root[]>();
+  const roots = isObject(msg) ? msg.roots : undefined;
+  if (!isObject(roots)) return out;
+  for (const [scope, v] of Object.entries(roots)) {
+    if (!isName(scope) || !Array.isArray(v)) continue;
+    const list: Root[] = [];
+    for (const item of v) {
+      if (!isObject(item)) continue;
+      const { pid, start } = item;
+      if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid < 2) continue;
+      if (typeof start !== "number" || !Number.isSafeInteger(start) || start < 0) continue;
+      if (!list.some((r) => r.pid === pid && r.start === start)) list.push({ pid, start });
+    }
+    out.set(scope, list);
+  }
+  return out;
 }
