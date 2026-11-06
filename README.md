@@ -1105,24 +1105,25 @@ a second; no client method reaches these ops). The relay (`src/relay/model.ts`, 
   point; the live check uses it).
 
 Measured on taylor (Chromium 156, chrome-extension main 8a3b66f, the live group `pointer` of
-`test/live/agent-mode/run.ts` in the harness's own Xvfb, with the stand-in daemon's ops on that Xvfb;
-two runs on 2026-11-06, the group alone and the whole suite; the design's section 7.1 has the details):
+`test/live/agent-mode/run.ts` in the harness's own Xvfb, with the stand-in daemon's ops on that Xvfb; two runs
+on 2026-11-06 with the final code, the group alone and the whole suite; the design's section 7.1 has the
+details). Counted from the end of each page's first activation:
 
-| case | steps with a path | jumps / unexplained changes after each page's first activation |
+| case | steps with a path | jumps / unexplained changes |
 | --- | --- | --- |
-| Playwright, two pages in two windows in turn, 3 rounds | 5 of 6, 5 of 6 | 0 / 0 in both pages |
-| two clients: A clicks while B activates another page | 4 of 6, 5 of 8 | 0 / 0 and 0 presses away from the last move in both pages (Playwright's own raw moves apart: 2 in each page) |
+| agent-browser's own commands over `--cdp-url` (`design`, `design-two`) | 3 of 8, 1 of 6 (the others needed none: the pointer was at the page's own last point) | 0 / 0 in each page |
+| Playwright, two pages in two windows in turn, 3 rounds | 5 of 6 | 0 / 0 in both pages |
+| two clients: A clicks while B activates another page | 5 of 8 | 0 / 0 and 0 presses away from the last move in both pages (Playwright's own raw moves apart: 1 or 2 per page) |
 | a catch-up in the front page while the other client activates | 1 of 1 | 0 / 0 |
-| a press held 3 s, and 0.5 s, while the other client activates | 0 of 1 (step 3's limit, 2.02 s), 1 of 1 | no real move between `mousedown` and `mouseup`; 1 jump at the entry with no path (3 s) |
-| a page whose `mousemove` handler opens a dialog | no path: the step ends at its limit (2.03 s) | the client closes the dialog |
-| scrollbars, targets 3 px inside the display's edge, a popup of another size | 8 of 9 | 0 / 0 (once 1 unexplained: a catch-up over the horizontal scrollbar) |
+| a press held 3 s, and 0.5 s, while the other client activates | 0 of 1 (step 3's limit, 2.04 s), 1 of 1 | no real move between `mousedown` and `mouseup`; 1 jump at the entry with no path (3 s) |
+| a page whose `mousemove` handler opens a dialog | no path: the step ends at its limit (2.04 s) | the client closes the dialog |
+| scrollbars, targets 3 px inside the display's edge, a popup of another size | 7 of 9 | 0 / 0 |
 | a moved window (`Browser.setWindowBounds`) | 3 of 4 | 1 jump at the first entry after it (no path) |
 | a device-metrics override | 0: no path into or out of that page | as before |
-| agent-browser's own commands (`design`, `design-two`) | 0: each CLI command detaches its page at its end, so the relay cannot read the front page's geometry | 0 jumps; 3 and 1 unexplained changes in each page (as before) |
 
-The leaving page's moves: each with a movement, 33 to 61 moves per path, at most 74 px (two steps in one
-frame). `xdotool sleep` kept the planned `dt` to within 1 ms in the page (p90; once 116 ms under the whole
-suite's load). A step with a path took 0.66 to 0.82 s (median; at most 1.27 s), a catch-up 0.48 to 1.12 s.
+The leaving page's moves: each with a movement, at most 76 px (two steps in one frame). `xdotool sleep` kept
+the planned `dt` to within 1 ms in the page (p90 of 1843 pairs; at most 2 ms). A step with a path took 0.41 to
+0.79 s (median), at most 1.21 s; a catch-up 0.28 to 1.11 s.
 
 What a site can still see over the relay (the design, section 5): an activation with no path enters at the X
 pointer (the first activation after the relay's start, a link change or a client's `Browser.setWindowBounds`;
