@@ -26,7 +26,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Tab } from "./browser.ts";
-import { displayOf, onlyWindowsOf, pidOf, type XAccess } from "./display.ts";
+import { displayOf, onlyWindowsOf, pidOf, type DisplayInfo, type XAccess } from "./display.ts";
+import { AgentBrowserError } from "./errors.ts";
 import { withFileLock } from "./lock.ts";
 import { statePath, type InputTiming, type Settings } from "./options.ts";
 import { charKey, parseKey, planMove, pointAt, sendKey, type KeyEvent, type Point } from "./record.ts";
@@ -290,11 +291,20 @@ export class Hands {
    * operator's window or focus is ever touched.
    */
   static async begin(tab: Tab, guard: () => void = () => {}): Promise<Hands> {
-    const s = tab.browser.settings, t = s.inputTiming, state = readPointer(s);
-    const disp = tab.browser.display ?? await displayOf(s);
+    const s = tab.browser.settings, t = s.inputTiming, state = readPointer(s), mac = tab.browser.mac;
+    // On the Mac (ab-v16.27) no window comes forward and no X pointer exists: the display check is Linux's.
+    const disp: DisplayInfo = mac ? { own: false } : tab.browser.display ?? await displayOf(s);
     const { focus, hidden, geo } = await tab.evaluate(arm);
     let entry: Point | null = null;
-    if ((!focus || hidden) && disp.own) {
+    if (mac) {
+      await tab.evaluate(disarm);
+      // A page behind another tab of its window (the opener behind a site's popup tab) gets no input while it is hidden:
+      // a person cannot reach it with no tab switch, and on the Mac every tab switch of CDP activates the agent Chrome.
+      // It shows again about 1.0 s after that popup closed (the popup rule: the way back to the opener is the popup's close).
+      if (hidden && !(await tab.waitShown())) {
+        throw new AgentBrowserError("error", `tab ${tab.targetId.slice(0, 8)} is hidden behind another tab of its window (a site's popup tab?): on macOS agent-browser never switches tabs, because that brings the agent Chrome to the front; close the tab in front of it (${s.commandName} close <tab>), then retry: the page shows again about 1 s after that close`);
+      }
+    } else if ((!focus || hidden) && disp.own) {
       guard();
       await tab.send("Page.bringToFront");
       const deadline = Date.now() + t.activateMs;
@@ -309,10 +319,10 @@ export class Hands {
       entry = await tab.evaluate(disarm);
       if (!focusedAt) s.log(`agent-browser: the page of tab ${tab.targetId.slice(0, 8)} has no focus ${t.activateMs / 1000} s after Page.bringToFront; the input goes on without it (a press activates its window; keys alone can give two pages the focus)`);
     } else if (!focus || hidden) await tab.evaluate(disarm);
-    // Why the X-pointer method is off, for a log line (review-47b note 5); undefined while it is on.
-    let off: string | undefined = !disp.x ? (s.cdpUrl ? "no DISPLAY of the agent browser's Xvfb in this process (over agentwatch's relay)" : "no xdotool on the agent browser's display")
+    // Why the X-pointer method is off, for a log line (review-47b note 5); undefined while it is on. The Mac has none.
+    let off: string | undefined = mac ? undefined : !disp.x ? (s.cdpUrl ? "no DISPLAY of the agent browser's Xvfb in this process (over agentwatch's relay)" : "no xdotool on the agent browser's display")
       : geo.dpr !== 1 ? `a device pixel ratio of ${geo.dpr}` : undefined;
-    let x = off ? undefined : disp.x;
+    let x = off || mac ? undefined : disp.x;
     if (x) {
       try {
         let pid = disp.chromePid === undefined ? undefined : String(disp.chromePid);

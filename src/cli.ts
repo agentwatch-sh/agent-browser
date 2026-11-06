@@ -38,7 +38,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
   "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured); on Linux in agent mode only for a tab of open --tab" },
-  "input-timing": { type: "string", description: 'the shape of a person\'s input on Linux, a JSON object of ms ranges, e.g. {"pressMs":[70,90],"keyMs":[90,150]}' },
+  "input-timing": { type: "string", description: 'the shape of a person\'s input in a window of its own (Linux, macOS), a JSON object of ms ranges, e.g. {"pressMs":[70,90],"keyMs":[90,150]}' },
 };
 
 /** Flags of the internal `proxy` command, which startProxy runs in the background. */

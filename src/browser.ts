@@ -14,7 +14,7 @@ import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
 import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
+import { assertTestStateIsolated, macWindows, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
@@ -111,10 +111,17 @@ export class AgentBrowser {
   readonly allow: string[];
   readonly product: string;
   /**
-   * The design of one window per page applies (ab-v16.26): agent mode on Linux (windowPerPage), with the agent Chrome
-   * on a display of its own (display.ts). Else every page is driven as before, in a background tab.
+   * The design of one window per page applies: agent mode on Linux (windowPerPage; ab-v16.26), with the agent Chrome
+   * on a display of its own (display.ts), and agent mode on the Mac (macWindows; ab-v16.27). Else every page is driven
+   * as before, in a background tab.
    */
   readonly windows: boolean;
+  /**
+   * The Mac's design (macWindows; ab-v16.27): no command ever activates a window (no Page.bringToFront, no
+   * Target.activateTarget). A hidden window page (behind a popup tab in its window) is not brought in front: its input
+   * waits until it shows again, which it does about 1.0 s after that popup closed (Tab.toFront, input.ts).
+   */
+  readonly mac: boolean;
   /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
   readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
@@ -126,7 +133,8 @@ export class AgentBrowser {
     this.allow = allow;
     this.product = product;
     this.display = display;
-    this.windows = !!display?.own;
+    this.mac = macWindows(settings);
+    this.windows = this.mac || !!display?.own;
   }
 
   /**
@@ -178,7 +186,8 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      const display = windowPerPage(s) ? await displayOf(s) : undefined;
+      // The display check is Linux's (an X display of its own); the Mac's design needs none.
+      const display = windowPerPage(s) && !macWindows(s) ? await displayOf(s) : undefined;
       return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
@@ -995,6 +1004,9 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
+   * On the Mac (AgentBrowser.mac; ab-v16.27) no command activates a window, and CDP has no tab switch without an
+   * activation there: such a page only waits until it shows again (waitShown; the opener shows again about 1.0 s after
+   * its popup tab closed), and a read goes on when it does not. Input refuses such a page (input.ts, Hands.begin).
    * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout);
    * `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
    */
@@ -1002,6 +1014,11 @@ export class Tab {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
+    if (this.browser.mac) {
+      if (!(await this.waitShown(opts)) && !opts.signal?.aborted)
+        this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is hidden behind another tab of its window; on macOS agent-browser does not switch tabs (that brings the agent Chrome to the front), so this read goes on in the hidden page`);
+      return;
+    }
     // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
     // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
     // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
@@ -1015,6 +1032,20 @@ export class Tab {
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
     }, opts);
+  }
+
+  /**
+   * On the Mac (ab-v16.27): wait until a hidden window page shows again, with no activation, at most the input timing's
+   * showMs (2.5 s), or until `deadline` (epoch ms) or `signal`. True when the page is visible. After a popup tab in front
+   * of its opener closed, the opener showed again about 1.0 s later (1006 to 1012 ms, the Mac check of 2026-11-06).
+   */
+  async waitShown(opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<boolean> {
+    const end = Math.min(Date.now() + this.browser.settings.inputTiming.showMs, opts.deadline ?? Infinity);
+    for (;;) {
+      if (await this.evaluate(() => document.visibilityState) === "visible") return true;
+      if (Date.now() >= end || opts.signal?.aborted) return false;
+      await new Promise((r) => setTimeout(r, 25));
+    }
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */

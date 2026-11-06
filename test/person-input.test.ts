@@ -103,7 +103,7 @@ const methods = (calls: Call[]) => calls.map((x) => x.method);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
 
 test("the input timing: the defaults of the research, a partial option, and the CLI's --input-timing", () => {
-  assert.deepEqual(INPUT_TIMING, { pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, lockWaitMs: 600_000 });
+  assert.deepEqual(INPUT_TIMING, { pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
   assert.deepEqual(resolveOptions(c.options()).inputTiming, INPUT_TIMING);
   assert.deepEqual(resolveOptions(c.options({ inputTiming: { pressMs: [10, 20] } })).inputTiming, { ...INPUT_TIMING, pressMs: [10, 20] });
   for (const bad of [{ pressMs: [20, 10] }, { keyMs: [-1, 5] }, { moveScale: 0 }, { activateMs: Number.NaN }, { nope: 1 }, { holdMs: [1] }])

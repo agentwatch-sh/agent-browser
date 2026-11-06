@@ -46,13 +46,19 @@ export type InputTiming = {
   moveScale: number;
   /** How long an input command waits for its page's focus after it brings the page's window forward. */
   activateMs: number;
+  /**
+   * On the Mac (ab-v16.27): how long an input command, `record` or a read waits for a hidden window page to show again,
+   * with no activation. After a popup tab in front of its opener closes, the opener showed again about 1.0 s later (1006
+   * to 1012 ms on the Mac, 2026-11-06).
+   */
+  showMs: number;
   /** How long an input command waits for another input command of the same agent browser (the input lock). */
   lockWaitMs: number;
 };
 
 /** The defaults: the research's person-shaped input. A click costs 0.5 to 0.9 s, a typed character about 0.13 s. */
 export const INPUT_TIMING: Readonly<InputTiming> = Object.freeze({
-  pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, lockWaitMs: 600_000,
+  pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000,
 }) as Readonly<InputTiming>;
 
 /** The input timing of a caller's partial option, checked: each range two numbers, 0 <= min <= max; the factor and the waits positive. */
@@ -150,7 +156,7 @@ export type BrowserOptions = {
   log?: (line: string) => void;
   /**
    * @internal The platform whose design applies (default process.platform), for the tests of each
-   * platform's behaviour. On "linux" agent mode gives each page a window of its own (windowPerPage).
+   * platform's behaviour. On "linux" and "darwin" agent mode gives each page a window of its own (windowPerPage).
    */
   platform?: NodeJS.Platform;
   /**
@@ -189,15 +195,28 @@ export type Settings = {
 };
 
 /**
- * Agent mode on Linux (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md): each page that
- * agent-browser opens gets a window of its own and no focus emulation, as a person's page in a window
- * that is not in front. An explicit `open --tab` keeps the old modes for its tab (focus emulation while
- * a command is attached, or hiddenDrive). On the Mac and in personal mode every behaviour stays as it
- * was (the Mac waits for its own measurement, ab-v16.27). This is the first half of the gate: the
+ * Agent mode on Linux (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md) and on the Mac (ab-v16.27): each page
+ * that agent-browser opens gets a window of its own and no focus emulation, as a person's page in a window that is not
+ * in front. An explicit `open --tab` keeps the old modes for its tab (focus emulation while a command is attached, or
+ * hiddenDrive). In personal mode every behaviour stays as it was. On Linux this is the first half of the gate: the
  * design applies only where the agent Chrome also runs on a display of its own (display.ts, displayOf;
- * AgentBrowser.windows), so that it never puts windows on a person's screen or takes their focus.
+ * AgentBrowser.windows), so that it never puts windows on a person's screen or takes their focus. On the Mac it
+ * applies to an agent Chrome that agent-browser reaches itself (macWindows), never behind agent mode's endpoint (the
+ * relay keeps its tabs there).
  */
-export const windowPerPage = (s: Settings): boolean => s.mode === "agent" && s.platform === "linux";
+export const windowPerPage = (s: Settings): boolean => s.mode === "agent" && (s.platform === "linux" || macWindows(s));
+
+/**
+ * The Mac's design (ab-v16.27; the Mac check of 2026-11-05 and 2026-11-06, README **One window per agent page on the
+ * Mac**): agent mode, not behind agent mode's endpoint. Each page gets a window of its own with Target.createTarget
+ * { newWindow: true, background: true }, which comes behind the front window on the current Space, and draws at 60
+ * frames a second (--disable-backgrounding-occluded-windows). No command ever activates a window there (no
+ * Page.bringToFront, no Target.activateTarget): a CDP click gives its page the focus with no activation, and the front
+ * app stays the operator's. Input paths start at the page's last point, never at the real pointer, which never moves.
+ * The give-back watcher (watchback.ts) gives the front back each time the agent Chrome takes it, for as long as that
+ * Chrome runs, except when the operator brought it to the front.
+ */
+export const macWindows = (s: Settings): boolean => s.mode === "agent" && s.platform === "darwin" && !s.cdpUrl;
 
 export const DEFAULT_PROXY_IDLE_MS = 12 * 60 * 60 * 1000;
 
