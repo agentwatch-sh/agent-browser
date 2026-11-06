@@ -110,6 +110,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).then(() => null)]);
 const COOKIES = /Not available in the agent browser: cookies \(/;
 const BLOCKED = /ERR_BLOCKED_BY_CLIENT/;
+/** The URL of a tab that the receiver blocked: DNR's error page, or about:blank, where the guard of receiver 0.3.3 and
+ *  later (contract C5, layers 2 and 3) sends a navigation that the tab's list does not cover. */
+const blockedAt = (u: string) => u.startsWith("chrome-error:") || u === "about:blank";
+/** The probe site's log lines (one JSON object per request). */
+const siteLines = () => (existsSync(join(RUN, "site-log.jsonl")) ? readFileSync(join(RUN, "site-log.jsonl"), "utf8").split("\n").filter(Boolean) : []);
 
 type Result = { group: string; case: string; status: "pass" | "fail" | "skip"; ms: number; detail?: unknown; error?: string; why?: string; adapted?: string };
 const results: Result[] = [];
@@ -381,14 +386,16 @@ async function playwrightCases(pw: any) {
     }
     return n;
   }, { want: (d) => d === 10, ms: 60_000 });
+  const bSawFrom = (from: number) => siteLines().slice(from).some((l) => l.includes('"host":"b.localhost"'));
   await step(G, "an off-list popup is blocked (DNR)", () => onPage(async (p) => {
     await p.goto(A + "/");
+    const from = siteLines().length;
     const [pop] = await Promise.all([p.waitForEvent("popup", { timeout: 8000 }), p.locator("#winopenoff").click()]);
     await pop.waitForTimeout(800);
-    const r = { url: pop.url(), title: await pop.title().catch(() => "") };
+    const r = { url: pop.url(), title: await pop.title().catch(() => ""), bSaw: bSawFrom(from) };
     await pop.close().catch(() => {});
     return r;
-  }), { want: (d) => d.url.startsWith("chrome-error:") && d.title !== "probe b" });
+  }), { want: (d) => blockedAt(d.url) && d.title !== "probe b" && !d.bSaw });
   await step(G, "a dedicated worker (page.on worker)", () => onPage(async (p) => {
     const [w] = await Promise.all([p.waitForEvent("worker", { timeout: 10_000 }), p.goto(A + "/worker")]);
     return w.evaluate(() => 6 * 7);
@@ -404,10 +411,11 @@ async function playwrightCases(pw: any) {
   }), { want: (d) => d === "probe m" });
   await step(G, "an off-list link click stays blocked (DNR)", () => onPage(async (p) => {
     await p.goto(A + "/");
+    const from = siteLines().length;
     await p.locator("#off").click();
     await p.waitForTimeout(1000);
-    return { url: p.url(), title: await p.title() };
-  }), { want: (d) => d.url.startsWith("chrome-error:") && d.title !== "probe b" });
+    return { url: p.url(), title: await p.title(), bSaw: bSawFrom(from) };
+  }), { want: (d) => blockedAt(d.url) && d.title !== "probe b" && !d.bSaw });
   await step(G, "page.route fulfill of an off-list document: the relay refuses the goto", () => onPage(async (p) => {
     await p.route(B + "/**", (r: any) => r.fulfill({ body: "<title>fulfilled</title>", contentType: "text/html" }));
     await p.goto(B + "/x");
@@ -1079,20 +1087,20 @@ async function scopeCases(pw: any, WebSocket: any) {
       await pB.goto(SB + "/");
       const from = site.seen.length;
       await pB.locator("#other").click();
-      await pB.waitForURL(/^chrome-error:/, { timeout: 5000 }).catch(() => {});
+      await pB.waitForURL((u: URL) => blockedAt(u.href), { timeout: 5000 }).catch(() => {});
       const r = { url: pB.url(), aSaw: site.seen.slice(from).some((x) => x.host === "a.localhost") };
       await pB.goto(SB + "/");
       return r;
-    }, { want: (x) => x.url.startsWith("chrome-error:") && !x.aSaw });
+    }, { want: (x) => blockedAt(x.url) && !x.aSaw });
     await step(G, "a link of sc-a's page to b.localhost is blocked by the receiver", async () => {
       await pA.goto(SA + "/");
       const from = site.seen.length;
       await pA.locator("#other").click();
-      await pA.waitForURL(/^chrome-error:/, { timeout: 5000 }).catch(() => {});
+      await pA.waitForURL((u: URL) => blockedAt(u.href), { timeout: 5000 }).catch(() => {});
       const r = { url: pA.url(), bSaw: site.seen.slice(from).some((x) => x.host === "b.localhost") };
       await pA.goto(SA + "/");
       return r;
-    }, { want: (x) => x.url.startsWith("chrome-error:") && !x.bSaw });
+    }, { want: (x) => blockedAt(x.url) && !x.bSaw });
     await step(G, "a popup of sc-b's page to a.localhost stays in sc-b and is blocked", async () => {
       const from = site.seen.length;
       const [pop] = await Promise.all([pB.waitForEvent("popup", { timeout: 8000 }), pB.locator("#otherpop").click()]);
@@ -1100,7 +1108,7 @@ async function scopeCases(pw: any, WebSocket: any) {
       const r = { url: pop.url(), inB: cB.pages().includes(pop), aSaw: site.seen.slice(from).some((x) => x.host === "a.localhost") };
       await pop.close().catch(() => {});
       return r;
-    }, { want: (x) => x.url.startsWith("chrome-error:") && x.inB && !x.aSaw });
+    }, { want: (x) => blockedAt(x.url) && x.inB && !x.aSaw });
     await step(G, "each scope sees only its own pages", async () => ({
       a: cA.pages().map((p: any) => new URL(p.url()).hostname), b: cB.pages().map((p: any) => new URL(p.url()).hostname),
     }), { want: (x) => x.a.length === 1 && x.a[0] === "a.localhost" && x.b.length === 1 && x.b[0] === "b.localhost" });
