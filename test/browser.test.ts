@@ -292,3 +292,23 @@ test("two consumers have their own state, socket, proxy and tab names", async ()
     other.remove();
   }
 });
+
+test("a refused open closes the empty tab that it created, and reports the refusal (ab-v16.59)", async () => {
+  const before = new Set(fake.pages.keys());
+  // The relay refuses an off-list navigation with this CDP error (relay/policy.ts TEXT.notAllowed).
+  fake.failOnce.set("Page.navigate", "Not allowed: other.example.org is not on the allowlist");
+  await assert.rejects(browser.open(base), /Not allowed: other\.example\.org/);
+  assert.deepEqual([...fake.pages.keys()].filter((id) => !before.has(id)), [], "the empty tab is closed: no new tab stays");
+});
+
+test("a failed navigation that is not a refusal keeps the tab of open, and a tab that open did not create stays (ab-v16.59)", async () => {
+  const existing = await browser.open(base);
+  fake.failOnce.set("Page.navigate", "net::ERR_CONNECTION_REFUSED");
+  const ids = new Set(fake.pages.keys());
+  await assert.rejects(browser.open(base), /ERR_CONNECTION_REFUSED/);
+  assert.equal(fake.pages.size, ids.size + 1, "a load error is not a refusal: the new tab stays");
+  assert.ok(fake.pages.has(existing.targetId), "the other tab stays");
+  fake.failOnce.set("Page.navigate", "Not allowed: x.example.org is not on the allowlist");
+  await assert.rejects(existing.goto(base), /Not allowed/);
+  assert.ok(fake.pages.has(existing.targetId), "goto of an existing tab never closes it");
+});

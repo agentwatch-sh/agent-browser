@@ -390,7 +390,16 @@ export class AgentBrowser {
       await this.conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
       throw e;
     }
-    if (url !== "about:blank") await tab.goto(url, { timeoutMs: opts.timeoutMs });
+    if (url !== "about:blank") {
+      try { await tab.goto(url, { timeoutMs: opts.timeoutMs }); }
+      catch (e) {
+        // A refused navigation (the relay's CDP error "Not allowed:" over --cdp-url, or our own allowlist) leaves the empty tab that
+        // this call created: close it (best effort) and report the refusal as before (ab-v16.59). Any other failure keeps the tab.
+        if (e instanceof NotAllowedError || /^Page\.navigate: Not allowed:/.test((e as Error)?.message ?? ""))
+          await this.conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
+        throw e;
+      }
+    }
     return tab;
   }
 
@@ -910,7 +919,8 @@ export class Tab {
       sessionId: this.sessionId,
       timeoutMs: opts.timeoutMs ?? 45_000,
     });
-    const res = await this.send("Page.navigate", { url });
+    // A refused or failed command leaves no load event to wait for: the wait must not reject unseen later.
+    const res = await this.send("Page.navigate", { url }).catch((e) => { loaded.catch(() => {}); throw e; });
     if (res.errorText) { loaded.catch(() => {}); throw new Error(`navigation failed: ${res.errorText}`); }
     await loaded;
   }
