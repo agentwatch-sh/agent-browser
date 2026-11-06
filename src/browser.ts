@@ -93,8 +93,8 @@ const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE =
  * How agent-browser drives a page (ab-v16.26). "window": a page in a window of its own, or a tab that a
  * site or a pinned window put in front of its window, where each page gets a window of its own
  * (windowPerPage): no focus emulation, as a person's page. "focus-emulation": the old default, focus
- * emulation while a command is attached (the Mac, personal mode, and an explicit `open --tab` on
- * Linux). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn and
+ * emulation while a command is attached (personal mode, an explicit `open --tab` in agent mode, a display
+ * that is not the agent browser's own on Linux, and the relay on the Mac). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn and
  * Tab.whileDrawnForShot (the same places, with hiddenDrive).
  */
 export type Drive = "window" | "focus-emulation" | "hidden";
@@ -348,14 +348,14 @@ export class AgentBrowser {
 
   /**
    * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
-   * browser on Linux (windowPerPage, ab-v16.26) it gets a window of its own (Target.createTarget with
-   * newWindow and background: a new window without the focus), driven with no focus emulation: its
-   * page is visible and draws, as a person's window that is not in front, and it gets the focus only
+   * browser on Linux (windowPerPage, ab-v16.26) and on the Mac (macWindows, ab-v16.27) it gets a window of
+   * its own (Target.createTarget with newWindow and background: a new window without the focus; on the Mac
+   * it comes behind the front window, measured 2026-11-05 and 2026-11-06), driven with no focus emulation:
+   * its page is visible and draws, as a person's window that is not in front, and it gets the focus only
    * with the agent's input. An explicit newWindow: false (`open --tab`) opens a background tab there
-   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. On the
-   * Mac the agent browser opens a background tab in the current window, as before: a foreground tab
-   * activates Chrome, which takes the operator's focus and Space (measured 2026-10-30), and a window
-   * of its own is not measured there (ab-v16.27). Between commands that tab is hidden and its timers
+   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. A
+   * foreground tab activated Chrome on the Mac, which took the operator's focus and Space (measured
+   * 2026-10-30). Between commands a background tab is hidden and its timers
    * slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9); during
    * each command its page is visible. Click, type, eval, text, shot and record still work in it
    * (test/live/background-tabs/check.ts; measured on Linux only: on macOS a recording of a background
