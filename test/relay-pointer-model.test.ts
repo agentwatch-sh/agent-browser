@@ -836,3 +836,109 @@ test("a page that answers no move: the catch-up stops at 4 unanswered moves (per
     void A;
   } finally { await h.close(); }
 });
+
+// ------------------------------------------------------------------ the geometry cache (ab-lead's decision on point 1) and the content box (point 5)
+
+test("a front page that is no bridge tab (its client left, as agent-browser's CLI does after each command) uses its last geometry from the relay's own read: the path plays; with no such read, no path", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const c = await h.connect();
+    const A = await page(h, c);
+    const c2 = await h.connect("s2");
+    const B = await page(h, c2);
+    await mouse(c, A, "mouseMoved", 100, 100);
+    await mouse(c2, B, "mouseMoved", 700, 300);
+    // B's step: a path from A (B's geometry is read live: B is a bridge tab); then B's client leaves and B is detached.
+    await click(c2, B, 700, 300);
+    assert.equal(d.moves.length, 0, "A was no front page yet (B, the newer window, was): no path, a read");
+    await click(c, A, 100, 100); // a path from B to A: both geometries read live
+    assert.equal(d.moves.length, 1);
+    await mouse(c2, B, "mouseMoved", 700, 300); // B's point is its client's again (after a catch-up from its record)
+    await click(c2, B, 700, 300); // a path from A to B: B is the front page now, its geometry read
+    assert.equal(d.moves.length, 2);
+    await c2.close();
+    await until(() => !h.fake.attached.has(B.tab.id), "B detached");
+    const reads = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === B.tab.id).length;
+    const attaches = h.fake.sent("debugger.attach").filter((r) => r.args[0] === B.tab.id).length;
+    await mouse(c, A, "mouseMoved", 300, 200);
+    await mouse(c, A, "mousePressed", 300, 200);
+    assert.equal(d.moves.length, 3, "a path from B's last point with B's last geometry");
+    assert.deepEqual(d.moves[2].from, { x: 700, y: 300 + OFFSET });
+    assert.equal(h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === B.tab.id).length, reads, "no read of a tab that is no bridge tab");
+    assert.equal(h.fake.sent("debugger.attach").filter((r) => r.args[0] === B.tab.id).length, attaches, "no attach of the relay's own");
+  } finally { await h.close(); }
+});
+
+test("the cached geometry goes at Browser.setWindowBounds, a device-metrics override and Page.frameResized (a replaced tab and a link change leave no entry of the tab): then no path from that page", async () => {
+  const drops: [string, (h: Harness, x: { c: CDPConnection; c2: CDPConnection; A: Page; B: Page }) => Promise<void>][] = [
+    // Browser.setWindowBounds also makes the front page unknown: B comes forward again with no path, and the read of the
+    // pointer fails, so that step reads no geometry of B; B is the front page with no geometry read since the change.
+    ["Browser.setWindowBounds", async (h, { c, c2, A, B }) => {
+      const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: A.targetId });
+      await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 10 } });
+      const daemon = h.fake.daemon;
+      let busy = true;
+      h.fake.daemon = (r) => (r.op === "daemon.pointerAt" && busy ? (busy = false, { error: "busy" }) : daemon(r));
+      await click(c2, B, 700, 300);
+      assert.equal(h.relay.model.pointerState().front, B.tab.id);
+    }],
+    ["Emulation.setDeviceMetricsOverride", async (_h, { c2, B }) => { await c2.send("Emulation.setDeviceMetricsOverride", { width: 600, height: 400, deviceScaleFactor: 1, mobile: false }, B.sessionId); }],
+    ["Page.frameResized", async (h, { B }) => { h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Page.frameResized", params: {} }); await sleep(20); }],
+  ];
+  for (const [name, drop] of drops) {
+    const { h, d } = await onHarness();
+    try {
+      const c = await h.connect(), c2 = await h.connect("s2");
+      const A = await page(h, c), B = await page(h, c2);
+      await mouse(c, A, "mouseMoved", 100, 100);
+      await mouse(c2, B, "mouseMoved", 700, 300);
+      await click(c, A, 100, 100);
+      await click(c2, B, 700, 300); // B is the front page; its geometry is in the cache
+      const n = d.moves.length;
+      await drop(h, { c, c2, A, B });
+      await c2.close();
+      await until(() => !h.fake.attached.has(B.tab.id), "B detached");
+      await mouse(c, A, "mouseMoved", 300, 200);
+      await mouse(c, A, "mousePressed", 300, 200);
+      assert.equal(d.moves.length, n, `${name}: no cached geometry, no path`);
+    } finally { await h.close(); }
+  }
+});
+
+test("the clamp is the content box: no path point over a scrollbar, and S or T over a scrollbar gives no path", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 });
+  try {
+    // A vertical scrollbar (15 px) and a horizontal one (15 px) in both pages: content 1265 x 794 of a 1280 x 809 viewport.
+    h.fake.geometry = () => ({ ...GEO, cw: 1265, ch: 794 });
+    const { c, A, B } = await twoPages(h, { x: 1255, y: 780 }, { x: 60, y: 60 });
+    for (let i = 0; i < 4; i++) {
+      await mouse(c, A, "mouseMoved", 1255 - i, 780 - i);
+      await click(c, A, 1255 - i, 780 - i);
+      await mouse(c, B, "mouseMoved", 40 + i * 30, 785 - i);
+      await click(c, B, 40 + i * 30, 785 - i);
+    }
+    assert.ok(d.moves.length >= 6, `${d.moves.length} paths`);
+    for (const m of d.moves) for (const p of m.path) assert.ok(p.x <= 1262 && p.y <= OFFSET + 791, `${p.x},${p.y} over a scrollbar`);
+    // T over the vertical scrollbar (x 1270 of 1280): no path.
+    const n = d.moves.length;
+    await mouse(c, A, "mouseMoved", 1270, 300);
+    await click(c, A, 1270, 300);
+    assert.equal(d.moves.length, n, "T over the scrollbar: no path");
+  } finally { await h.close(); }
+});
+
+test("the catch-up is clamped to the content box too; the event's own point stays where the client sent it", async () => {
+  const { h } = await onHarness();
+  try {
+    h.fake.geometry = () => ({ ...GEO, cw: 1265, ch: 794 });
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 600, y: 760 });
+    await click(c, A, 100, 100); // a path from B to A: B's point is an X record at (100, 100)
+    const from = h.fake.requests.length;
+    await mouse(c, B, "mousePressed", 1272, 790); // a press over the vertical scrollbar, far from the record
+    const sent = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
+    const moves = sent.filter((p) => p.type === "mouseMoved");
+    assert.ok(moves.length >= 6, `${moves.length} catch-up moves`);
+    for (const p of moves.slice(0, -1)) assert.ok(p.x <= 1262 && p.y <= 791, `${p.x},${p.y} over a scrollbar`);
+    assert.deepEqual([moves.at(-1).x, moves.at(-1).y, sent.at(-1).type], [1272, 790, "mousePressed"], "the path ends with a move at the press's own point");
+  } finally { await h.close(); }
+});

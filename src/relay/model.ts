@@ -24,7 +24,7 @@ import { randomBytes } from "node:crypto";
 import { copyFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { BridgeError, RELAY_TIMER, type Bridge } from "./bridge.ts";
-import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
+import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { awaitsPromise, cdpError, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
@@ -104,6 +104,12 @@ type Tab = {
   worldIds: Set<number>;
   /** A geometry read of the relay is in flight. */
   geoReading: boolean;
+  /**
+   * The last usable geometry of the relay's own reads (ab-lead's decision on point 1 of PR #68): a front page that is no
+   * bridge tab (agent-browser's CLI ends its connection after each command) has no read, and its path uses this. It goes
+   * at every window event that the relay sees: Browser.setWindowBounds, a viewport override, Page.frameResized.
+   */
+  geo: Geo | null;
   /** A client's device-metrics override is in force (Emulation.setDeviceMetricsOverride until its clear). */
   metrics: boolean;
 };
@@ -119,6 +125,9 @@ const TIMEOUT = Symbol("timeout");
 /** The input methods whose point is the page's last point (C11), and the touch input that makes it unknown. */
 const POINTER_INPUT = new Set(["Input.dispatchMouseEvent", "Input.dispatchDragEvent"]);
 const TOUCH_INPUT = new Set(["Input.dispatchTouchEvent", "Input.emulateTouchFromMouseEvent", "Input.synthesizeTapGesture"]);
+/** A client's calls on a page's own session that change its viewport: the page's cached geometry goes. */
+const VIEWPORT_CALLS = new Set(["Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride", "Emulation.setVisibleSize", "Emulation.setPageScaleFactor",
+  "Emulation.setScrollbarsHidden", "Page.setDeviceMetricsOverride", "Page.clearDeviceMetricsOverride"]);
 /** How long `no display` turns the paths off (C11). */
 const NO_DISPLAY_OFF_MS = 60_000;
 /** A relay log line of the pointer names each text at most once in this time (C10's log rule). */
@@ -817,6 +826,7 @@ export class Model {
     const p = params ?? {};
     if (!child && method === "Emulation.setDeviceMetricsOverride") tab.metrics = true;
     if (!child && method === "Emulation.clearDeviceMetricsOverride") tab.metrics = false;
+    if (!child && VIEWPORT_CALLS.has(method)) tab.geo = null;
     if (TOUCH_INPUT.has(method)) { this.setPoint(tab, null); return; }
     if (!POINTER_INPUT.has(method)) return;
     if (child) { this.setPoint(tab, null); return; }
@@ -840,6 +850,8 @@ export class Model {
     if (method === "Runtime.executionContextDestroyed" && tab.worldIds.has(id)) { tab.worldIds.delete(id); if (tab.world === id) tab.world = null; return true; }
     if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldIds.has(id)) return true;
     if (method === "Runtime.executionContextsCleared") tab.world = null;
+    // A window event that the relay sees: the page's cached geometry goes.
+    if (method === "Page.frameResized") tab.geo = null;
     return false;
   }
 
@@ -849,7 +861,10 @@ export class Model {
    * again when its context is gone. The relay waits GEOMETRY_WAIT_MS and drops a late answer. null: no read, or none in time.
    */
   private async geometry(tab: Tab): Promise<Geo | null> {
-    if (!tab.attached || tab.geoReading || !tab.targetId || this.tabs.get(tab.id) !== tab) return null;
+    if (!tab.targetId || this.tabs.get(tab.id) !== tab) return null;
+    // No read of a tab that is no bridge tab (no attach of the relay's own): its last usable geometry, or none.
+    if (!tab.attached) return tab.geo;
+    if (tab.geoReading) return null;
     tab.geoReading = true;
     const target = { tabId: tab.id };
     const read = (async () => {
@@ -862,7 +877,9 @@ export class Model {
         }
         try {
           const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: tab.world, returnByValue: true }]);
-          return geoOf(r?.result?.value);
+          const g = geoOf(r?.result?.value);
+          if (g && usable(g, this.display) && !tab.metrics) tab.geo = g;
+          return g;
         } catch (e) {
           // A navigation took the world: an evaluate that names an unknown context. The world again, once.
           if (!/context/i.test((e as Error).message)) throw e;
@@ -882,7 +899,7 @@ export class Model {
 
   /** Why a geometry is not usable, for the step's log line (sizes and ratios only, never a point). */
   private unusable(g: Geo | null, tab: Tab, o: { minimized?: boolean; front?: boolean } = {}): string {
-    if (!g) return tab.geoReading ? "a read in flight" : "no read";
+    if (!g) return tab.geoReading ? "a read in flight" : tab.attached ? "no read" : "no bridge tab, and no cached geometry";
     if (tab.metrics) return "a device-metrics override";
     if (o.minimized) return "minimized";
     if (o.front && g.vis === "hidden") return "hidden";
@@ -1127,8 +1144,12 @@ export class Model {
    */
   private async catchUp(tab: Tab, from: Pt, to: Pt, move: boolean): Promise<void> {
     const t0 = Date.now();
+    // The page's content box (its last usable geometry, else a read now): no catch-up move over a scrollbar.
+    let g: Geo | null = tab.geo;
+    if (!g) try { g = await this.geometry(tab); } catch { g = null; }
+    const clamp = usable(g, this.display) ? contentRect(g) : null;
     let path: PathPoint[] | null = null;
-    try { path = await planPath(from, to, { random: this.random }); } catch { path = null; }
+    try { path = await planPath(from, to, { random: this.random, clamp, keepEnd: true }); } catch { path = null; }
     if (!path) { this.notice("catch-up limits", "relay: a catch-up does not fit the path's limits; the event goes as it is"); return; }
     const moves = move ? path.slice(0, -1) : path;
     let t = 0, sent = 0;
@@ -1158,7 +1179,7 @@ export class Model {
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
     if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false,
-      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, world: null, worldIds: new Set(), geoReading: false, metrics: false }));
+      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, world: null, worldIds: new Set(), geoReading: false, metrics: false, geo: null }));
     return tab;
   }
 
@@ -1689,7 +1710,9 @@ export class Model {
     },
     "Browser.setWindowBounds": async (c, p) => {
       // Any client's window change can change which window is on top (a "normal" state brings a minimized one up): the front page is unknown (C11).
+      // It can move or resize a window: no cached geometry stays.
       this.front = null; this.frontWindow = null;
+      for (const t of this.tabs.values()) t.geo = null;
       await this.windowInScope(c, p.windowId);
       const b = p.bounds ?? {}, update: Record<string, unknown> = {};
       for (const k of ["left", "top", "width", "height"]) if (b[k] !== undefined) update[k] = b[k];
