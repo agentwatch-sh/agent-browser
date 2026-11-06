@@ -1099,6 +1099,10 @@ export type TakeAround = <T>(take: (hands?: Hands) => Promise<T>) => Promise<T>;
 export async function recordTab(tab: Tab, plan: RecordPlan, around: TakeAround = (take) => take(undefined)): Promise<RecordOutcome> {
   const s = tab.browser.settings;
   await tab.assertAllowed();
+  // A size override that a failed shot left set on this session, with captures under it in flight (Tab.sizeLeft):
+  // they end first, under it, and it is cleared. The run sets an override of its own and clears it at its end; a
+  // capture that ended after that clear would set the shot's size again (review-65).
+  await tab.endSizeLeft();
   const recordings = statePath(s, "recordings");
   mkdirSync(recordings, { recursive: true, mode: 0o700 });
   const framesDir = mkdtempSync(join(recordings, "frames-"));

@@ -542,7 +542,7 @@ person's input**) and `log` (progress lines; default standard error).
     do not end either (Chrome draws nothing), the override stays set, with a log line, until the
     command ends: Chrome then clears it at the end of the command's session and drops those captures
     (6 of 6: the view had its own size again, and their late end changed nothing). On a `Tab` that a
-    program keeps attached, the tab's next input or shot ends them under the override, then clears it.
+    program keeps attached, the tab's next input, shot or record ends them under the override, then clears it.
     In the default mode every page is `visible`, so a tab in front gets the capture
     in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
     mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of

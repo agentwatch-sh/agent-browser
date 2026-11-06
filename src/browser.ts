@@ -738,7 +738,7 @@ export class Tab {
    * a frame).
    */
   private async whileDrawn<T>(fn: () => Promise<T>, opts: { repeat?: boolean } = {}): Promise<T> {
-    if (this.sizeLeft) await this.endSizeLeft();
+    await this.endSizeLeft();
     if (this.drive !== "hidden") { await this.toFront(); return fn(); }
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return fn();
@@ -805,7 +805,7 @@ export class Tab {
    * `fn` gets the capture for the shot's own picture (`own`): the one described above; and `underLeft` (ShotCaptures).
    */
   private async whileDrawnForShot<T>(fn: (shot: ShotCaptures) => Promise<T>): Promise<T> {
-    if (this.sizeLeft) await this.endSizeLeft();
+    await this.endSizeLeft();
     const hidden = this.drive === "hidden", log = this.browser.settings.log, tab = this.targetId.slice(0, 8);
     await this.assertAllowed();
     if (hidden && await this.evaluate(() => document.visibilityState) !== "hidden")
@@ -936,12 +936,19 @@ export class Tab {
    * A shot with a size override left it set (screenshotNow): captures that went out under it may still end, and one
    * that ends after a clear sets the view to the shot's size for good. Chrome clears it at the end of the tab's
    * session (AgentBrowser.disconnect, at the end of each command), and drops those captures with it. On a tab that
-   * stays attached, its next input or shot first ends them under the override, then clears it (endSizeLeft).
+   * stays attached, its next input, shot or record first ends them under the override, then clears it (endSizeLeft);
+   * a read before that sees the shot's size.
    */
   private sizeLeft = false;
 
-  /** See sizeLeft: last captures under the override; when the last one ended, every earlier one did: then the clear. */
-  private async endSizeLeft(): Promise<void> {
+  /**
+   * When a shot left its size override set (sizeLeft): last captures under it; when the last one ended, every earlier
+   * one did: then the clear. Each input runs it first (whileDrawn; byHand, also for record in a window of its own;
+   * setFiles), and so do a shot (whileDrawnForShot) and recordTab, which sets an override of its own (review-65).
+   * @internal
+   */
+  async endSizeLeft(): Promise<void> {
+    if (!this.sizeLeft) return;
     await this.assertAllowed();
     const r = await new HeldCaptures(this).chain(Tab.shotTiming.lastMs, true);
     if (r !== true) {
@@ -1128,6 +1135,7 @@ export class Tab {
    * the agent browser's input lock (one input at a time, across processes), after the page's window came forward.
    */
   private async byHand<T>(fn: (h: Hands) => Promise<T>): Promise<T> {
+    await this.endSizeLeft();
     await this.assertAllowed();
     const { withInputLock, Hands } = await import("./input.ts");
     return withInputLock(this.browser.settings, async () => {
@@ -1328,6 +1336,7 @@ export class Tab {
    */
   async setFiles(selector: string, files: string[]): Promise<void> {
     if (files.some((f) => f === "")) throw new UsageError("setFiles: a file path is empty");
+    await this.endSizeLeft(); // out of a window of its own, setFiles goes neither to whileDrawn nor to byHand
     if (this.drive === "window") return this.byHand(async (h) => {
       if (await h.setFiles(selector, files)) return;
       await this.assertAllowed();
@@ -1380,11 +1389,11 @@ export class Tab {
     // So the shot's last captures go out under the override first (underLeft), and the override is cleared only when
     // none of its captures sent under it is left in flight. Else it stays set: Chrome clears it at the end of the
     // tab's session and drops those captures with the session (6 of 6: the view had its own size again, and their
-    // late end changed nothing); on a tab that stays attached, its next input or shot clears it (sizeLeft).
+    // late end changed nothing); on a tab that stays attached, its next input, shot or record clears it (sizeLeft).
     const left = await shot.underLeft();
     if (left) {
       this.sizeLeft = true;
-      log(`agent-browser shot: ${left} capture${left > 1 ? "s" : ""} of tab ${tab} sent under the size override may still end, and one that ends after a clear sets the shot's size again for good; the override stays set until the tab's session ends (at the end of a command) or its next input or shot ends them`);
+      log(`agent-browser shot: ${left} capture${left > 1 ? "s" : ""} of tab ${tab} sent under the size override may still end, and one that ends after a clear sets the shot's size again for good; the override stays set until the tab's session ends (at the end of a command) or its next input, shot or record ends them`);
       if (failure) throw failure;
       return path;
     }

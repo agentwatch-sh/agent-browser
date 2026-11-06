@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { AgentBrowser, Tab } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
-import { resolveOptions } from "../src/options.ts";
+import { resolveOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
-import { findFfmpeg, pngPixels } from "../src/record.ts";
+import { findFfmpeg, planRecording, pngPixels, recordTab } from "../src/record.ts";
 import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./live/background-tabs/spans.ts";
 import { FakeChrome, SHOT_COLOUR, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
@@ -633,6 +633,109 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name });
   });
 }
+
+test("default: shot --size --full whose full-page capture never ends, the only capture under the override: no clear while it may still end; the session's end clears the override", async () => {
+  // review-65 N1: when the shot's own capture was not marked as sent under the override, no test failed; here it is
+  // the only one (a full-page capture gets no extra capture), and the shot would clear the override while it is in flight.
+  const { name, page } = await backgroundTab("/", o);
+  await commands.text(o(), { tab: name });
+  page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+  const lines: string[] = [];
+  const { calls } = await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300, underMs: 300 },
+    () => callsOf(page, () => assert.rejects(commands.shot(logged(o, lines), { tab: name, path: join(c.dir, `${name}.png`), size: "800x600", full: true }), /the shot gave up after/)));
+  page.onCapture = undefined;
+  const m = methodsOf(calls), set = m.indexOf("Emulation.setDeviceMetricsOverride");
+  assert.deepEqual(captures(calls.slice(set)).map((x) => !!x.params.clip), [true], "the full-page capture alone under the override");
+  assert.equal(m.indexOf("Emulation.clearDeviceMetricsOverride"), -1, "no clear while it may still end");
+  assert.ok(lines.some((l) => /1 capture of tab \w+ sent under the size override may still end/.test(l)), JSON.stringify(lines));
+  assert.deepEqual(page.metrics, { width: 800, height: 600, deviceScaleFactor: 1 }, "left set by the shot");
+  assert.equal(page.override, undefined, "the end of the command's session cleared it");
+  page.noFrames = false;
+  await commands.close(o(), { tab: name });
+});
+
+// ---------- a size override that a shot left set, on a Tab kept attached ----------
+
+/** A page in a window of its own (Linux, on a display of the agent browser's own; ab-v16.26), with fast input. */
+const FAST_INPUT: Partial<InputTiming> = { pressMs: [6, 9], keyMs: [6, 9], holdMs: [1, 2], settleMs: [1, 3], wheelMs: [1, 3], moveScale: 0.05, activateMs: 300 };
+const w = () => c.options({ endpoint: fake.ws, platform: "linux", display: { own: true }, inputTiming: FAST_INPUT });
+
+/**
+ * A Tab kept attached (a program's, not the CLI's), whose Tab.screenshot with a size failed while Chrome drew nothing:
+ * the shot left the override set, with captures sent under it in flight. Then Chrome draws again. In a window of its
+ * own the page is behind another tab of its window, so that it holds captures (review-65's probe).
+ */
+async function withSizeLeft(drive: "window" | "hidden"): Promise<{ b: AgentBrowser; tab: Tab; page: FakePage; name: string }> {
+  const mode = drive === "window" ? w : h, name = `s${++tabs}`;
+  const r = await commands.open(mode(), { url: fx.base + "/", name, ...(drive === "window" ? {} : { tab: true }) });
+  const page = fake.pages.get(r.tab.targetId)!;
+  const b = await AgentBrowser.connect(mode());
+  const tab = await b.find(name);
+  assert.equal(tab.drive, drive);
+  if (drive === "window") { page.background = true; page.update(); }
+  page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
+  await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
+    () => assert.rejects(tab.screenshot(join(c.dir, `${name}.png`), { viewport: { width: 800, height: 600, scale: 1 } }), /the shot gave up after/));
+  page.onCapture = undefined;
+  assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "left set");
+  assert.ok(page.heldCaptures.length > 0, "captures sent under it are in flight");
+  page.noFrames = false;
+  return { b, tab, page, name };
+}
+
+/** The next command ended the captures under the override and cleared it before its own work (`own`); no size stuck. */
+function endedFirst(page: FakePage, calls: Call[], own: (x: Call) => boolean) {
+  const clear = calls.findIndex((x) => x.method === "Emulation.clearDeviceMetricsOverride"), first = calls.findIndex(own);
+  assert.ok(clear >= 0 && first > clear, `the clear before the command's own work: ${JSON.stringify(methodsOf(calls))}`);
+  assert.deepEqual(captures(calls.slice(0, clear)).map((x) => x.params), [HOLD], "a last capture under the override ended them");
+  assert.equal(page.stuck, undefined, "no capture sent under the override ended after the clear");
+  assert.deepEqual(page.heldCaptures, []);
+}
+
+for (const drive of ["window", "hidden"] as const) {
+  const label = drive === "window" ? "a window of its own" : "hiddenDrive";
+  for (const [input, run] of [["click", (tab: Tab) => tab.click("#b")], ["type", (tab: Tab) => tab.type("abc", "#i")]] as const)
+    test(`${label}: Tab.${input} on a tab kept attached, after a Tab.screenshot with a size left the override set: the input first ends the captures sent under it, then clears it`, async () => {
+      // review-65 B1: in a window of its own, input goes to Tab.byHand, which did not end them: after a click the
+      // override was still 800x600, with 9 captures held.
+      const { b, tab, page, name } = await withSizeLeft(drive);
+      try {
+        const { calls } = await callsOf(page, () => run(tab));
+        endedFirst(page, calls, (x) => x.method.startsWith("Input."));
+        assert.equal(page.override, undefined);
+        if (input === "click") assert.equal(page.title, "clicked");
+        else assert.equal(page.select("#i")[0].value, "abc");
+      } finally { await b.disconnect(); }
+      await commands.close(drive === "window" ? w() : h(), { tab: name });
+    });
+}
+
+test("hiddenDrive: Tab.setFiles on a tab kept attached, after a Tab.screenshot with a size left the override set: it first ends the captures sent under it, then clears it", async () => {
+  // review-65 B1: setFiles goes neither to whileDrawn nor, out of a window of its own, to byHand.
+  const { b, tab, page, name } = await withSizeLeft("hidden");
+  const file = join(c.dir, `${name}.txt`);
+  writeFileSync(file, "x");
+  try {
+    const { calls } = await callsOf(page, () => tab.setFiles("#f", [file]));
+    endedFirst(page, calls, (x) => x.method === "DOM.setFileInputFiles");
+    assert.equal(page.override, undefined);
+  } finally { await b.disconnect(); }
+  await commands.close(h(), { tab: name });
+});
+
+test("hiddenDrive: recordTab on a tab kept attached, after a Tab.screenshot with a size left the override set: the record first ends the captures sent under it and clears it, before its own override", needsFfmpeg, async () => {
+  // review-65: record set and cleared its own override while those captures were in flight; one that ends after
+  // that clear sets 800x600 again.
+  const { b, tab, page, name } = await withSizeLeft("hidden");
+  try {
+    const plan = planRecording({ out: join(c.dir, `${name}.mp4`), size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG }, b.allow);
+    const { calls } = await callsOf(page, () => recordTab(tab, plan));
+    assert.deepEqual(calls.filter((x) => x.method === "Emulation.setDeviceMetricsOverride").map((x) => x.params.width), [320], "the record's own override only");
+    endedFirst(page, calls, (x) => x.method === "Emulation.setDeviceMetricsOverride");
+    assert.equal(page.override, undefined, "the record cleared its own");
+  } finally { await b.disconnect(); }
+  await commands.close(h(), { tab: name });
+});
 
 test("default: record keeps the attach's focus emulation and turns none on or off itself", needsFfmpeg, async () => {
   const { name, page } = await backgroundTab("/", o);
