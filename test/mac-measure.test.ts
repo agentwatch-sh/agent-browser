@@ -10,10 +10,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
-  agentWindowsOf, coveredFraction, ffmpegSearchPath, frontAt, frontTakes, isOperatorWindow, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement,
-  fieldText, placementText, probeRecord, quitAgentChrome, readyText, realPointer, runStep, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt, STOP_POLL_MS, stopReason, summary, swiftTools, USAGE, verdict, watcherProblems, windowsOf,
-  type CgWin, type MacResult, type Step, type WatchEvent,
+  agentWindowsOf, coveredFraction, FALLBACK_MS, ffmpegSearchPath, frontAt, frontTakes, giveBackRows, isOperatorWindow, joinVerdicts, macArgs, matchWindow, newAgentWindows, NO_GIVE_BACK_MS, OPEN_TAKE_MS,
+  orderOf, parseWatchLog, placement, fieldText, placementText, probeRecord, quitAgentChrome, readyText, realPointer, runStep, realPointerEvents, screenProblem, spaceChanges, START_MAX_AWAY_MS, stepAt,
+  STOP_POLL_MS, stopReason, summary, swiftTools, USAGE, verdict, watchBackText, watcherProblems, windowsOf,
+  type CgWin, type MacResult, type Step, type Take, type WatchEvent,
 } from "./live/anti-detect/mac-rules.ts";
+import { parseWatchBack } from "./live/anti-detect/mac-watchback.ts";
 import { startServer, type Rec } from "./live/anti-detect/probe.ts";
 import { ROOT } from "./helpers.ts";
 
@@ -61,6 +63,18 @@ test("--look is 0 to 300 whole seconds, --skip names known parts, and the dry ru
   assert.match(refused(["--dry-run", "--out-dir", "/tmp/o", "--chrome", "/nope"], linux), /no such file/);
   assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--look", "5"], linux).look, 5);
   assert.match(refused(["--dry-run", "--out-dir", "/tmp/o", "--watcher", "/tmp/mac-watch"], linux), /for the Mac run/);
+});
+
+test("--part stable is the short second part (no --look in it), and --skip stable leaves it out", () => {
+  assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o"]).part, undefined);
+  assert.equal(options(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable"]).part, "stable");
+  assert.equal(options(["--dry-run", "--out-dir", "/tmp/o", "--part", "stable"], linux).part, "stable");
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "beta"]), /--part takes stable, not "beta"/);
+  assert.match(refused(["--on-my-screen", "--out-dir", "/tmp/o", "--part", "stable", "--look", "60"]), /--look is for the first part/);
+  assert.deepEqual(options(["--on-my-screen", "--out-dir", "/tmp/o", "--skip", "stable,record"]).skip, ["stable", "record"]);
+  assert.match(USAGE, /--skip record,popups,person,stable/);
+  assert.match(USAGE, /keep the front for up to 2 s with no give-back/);
+  assert.match(USAGE, /Google Chrome \(stable\) is\s+installed/);
 });
 
 test("--ffmpeg takes an absolute path that exists, on the Mac and in the dry run", () => {
@@ -176,6 +190,22 @@ test("stopReason: the stop rules during the measurement, and none after its end 
   assert.match(stopReason(live([{ t: 4600, ev: "end", why: "limit" }]), steps, 4700, o) ?? "", /the watcher ended \(limit\)/);
   assert.match(stopReason(live(), steps, 8000, o) ?? "", /the watcher logged nothing for 3 s/);
   assert.match(stopReason(live([{ t: 600_000, ev: "alive" }]), steps, 600_001, o) ?? "", /time limit/);
+});
+
+test("stopReason: a take that begins in the time with no give-back may stay open until OPEN_TAKE_MS after that time, no longer; other takes keep the 1.5 s rule", () => {
+  const o = { t0: 0, limitMs: 540_000 };
+  const hold = { from: 4000, until: 4000 + NO_GIVE_BACK_MS };
+  assert.equal(NO_GIVE_BACK_MS, 2000);
+  const live = (extra: WatchEvent[]) => [ready(), ...extra, { t: 7000, ev: "alive", locked: false, asleep: false, onConsole: true }];
+  const held = live([front(4100, AG)]);
+  assert.match(stopReason(held, steps, 5700, o) ?? "", /did not come back/, "without the hold: 1.5 s");
+  assert.equal(stopReason(held, steps, 5700, { ...o, holds: [hold] }), undefined, "in the hold");
+  assert.equal(stopReason(held, steps, hold.until + OPEN_TAKE_MS, { ...o, holds: [hold] }), undefined, "until OPEN_TAKE_MS after the hold's end");
+  assert.match(stopReason(held, steps, hold.until + OPEN_TAKE_MS + 1, { ...o, holds: [hold] }) ?? "", /did not come back/, "then it stops");
+  const later = live([front(6500, AG)]);
+  assert.match(stopReason(later, steps, 8001, { ...o, holds: [hold] }) ?? "", /did not come back/, "a take that begins after the hold has the 1.5 s rule");
+  const before = live([front(3900, AG)]);
+  assert.match(stopReason(before, steps, 5401, { ...o, holds: [hold] }) ?? "", /did not come back/, "and one that began before it");
 });
 
 test("runStep: a stop rule ends the running step at once (the rules are read every 100 to 250 ms), and the step's own end or time limit else", async () => {
@@ -340,6 +370,68 @@ test("realPointerEvents: a probe page's events at the real pointer's point, whic
   assert.deepEqual(realPointerEvents(log, null, ["WA"], steps), {});
 });
 
+test("joinVerdicts: the stable part's problems join the first part's with its name; an expected result only when each part passed or had only popup takes", () => {
+  const ok = { ok: true, problems: [], popupOnly: false }, popup = { ok: false, problems: ["a step took the operator's front: popup: x"], popupOnly: true };
+  const bad = { ok: false, problems: ["the check stopped early: the pointer moved"], popupOnly: false };
+  assert.deepEqual(joinVerdicts(ok, null, "stable"), ok);
+  assert.deepEqual(joinVerdicts(ok, ok, "stable"), { ok: true, problems: [], popupOnly: false });
+  assert.deepEqual(joinVerdicts(popup, ok, "stable"), { ok: false, problems: popup.problems, popupOnly: true });
+  assert.deepEqual(joinVerdicts(ok, popup, "the Google Chrome stable part"), { ok: false, problems: ["the Google Chrome stable part: a step took the operator's front: popup: x"], popupOnly: true });
+  assert.deepEqual(joinVerdicts(popup, popup, "s").popupOnly, true);
+  assert.deepEqual(joinVerdicts(popup, bad, "s"), { ok: false, problems: [...popup.problems, "s: the check stopped early: the pointer moved"], popupOnly: false });
+  assert.equal(joinVerdicts(bad, ok, "s").popupOnly, false);
+  assert.equal(joinVerdicts(ok, { ok: false, problems: ["it ended with exit 2 and wrote no results"] }, "s").popupOnly, false);
+});
+
+test("giveBackRows: who gave each take back (the start guard, agent-browser's give-back watcher, the check's watcher, nobody in the hold), with the prototype's own times", () => {
+  const T = Date.parse("2026-11-06T10:00:00.000Z");
+  const iso = (ms: number) => new Date(T + ms).toISOString();
+  const take = (o: Partial<Take>): Take => ({ t0: T, t1: T + 30, ms: 30, to: ["Google Chrome Beta (pid 900, the agent Chrome)"], agentOnly: true, asks: 0, step: "popup: x", start: false, ...o });
+  const back = parseWatchBack([
+    `${iso(5010)} watch-back took=900 from=500`, `${iso(5011)} watch-back asked=500 n=1 sent=true`, `${iso(5052)} watch-back back=500 after-ms=42 asks=1`,
+    `${iso(9010)} watch-back took=900 from=500`, `${iso(9011)} watch-back asked=500 n=1 sent=true`, `${iso(9261)} watch-back asked=500 n=2 sent=true`, `${iso(9511)} watch-back asked=500 n=3 sent=true`,
+    `${iso(9761)} watch-back refused=500 asks=3`, `${iso(9900)} watch-back back=500 after-ms=890 asks=3`,
+  ].join("\n"));
+  const hold = { from: T + 1000, until: T + 3000 };
+  const rows = giveBackRows([
+    take({ t0: T, t1: T + 130, ms: 130, step: "start: agent Chrome start", start: true }),
+    take({ t0: T + 1100, t1: T + 3060, ms: 1960, asks: 1, step: "popup: BG: no give-back" }),
+    take({ t0: T + 5020, t1: T + 5070, ms: 50 }),
+    take({ t0: T + 9000, t1: T + 9900, ms: 900, asks: 1, step: "popup: y" }),
+    take({ t0: T + 12_000, t1: T + 12_020, ms: 20, asks: 1, step: "popup: z" }),
+    take({ t0: T + 14_000, t1: T + 14_020, ms: 20, step: "popup: self" }),
+    take({ t0: T + 1200, t1: T + 1500, ms: 300, step: "popup: BG: no give-back (after it)" }),
+  ], back, [hold]);
+  assert.match(rows[0].by, /agent-browser's start guard/);
+  assert.equal(rows[1].by, "nobody for 1900 ms (no give-back), then the check's watcher");
+  assert.deepEqual([rows[2].by, rows[2].seenMs, rows[2].asks, rows[2].ownMs], ["agent-browser's give-back watcher (the prototype)", -10, 1, 42], "the prototype's took line can come before the watcher's line (a 25 ms poll against NSWorkspace's news and a 100 ms tick)");
+  assert.equal(rows[2].ms, 50);
+  assert.deepEqual([rows[3].by, rows[3].asks, rows[3].ownMs, rows[3].seenMs], ["agent-browser's give-back watcher, then the check's watcher (its fallback)", 3, 890, 10]);
+  assert.match(rows[3].note, /the prototype's 3 asks were spent \(refused=500\)/);
+  assert.doesNotMatch(rows[3].note, /fallback/);
+  assert.match(giveBackRows([take({ t0: T + 9000, t1: T + 9900, ms: 900, asks: 1 })], back, [], [T + 9800])[0].note, /the prototype's 3 asks were spent \(refused=500\); the check armed its watcher 800 ms after the take \(its fallback\)$/);
+  assert.equal(rows[4].by, "the check's watcher");
+  assert.deepEqual([rows[4].seenMs, rows[4].ownMs], [null, null]);
+  assert.equal(rows[5].by, "nobody: it came back by itself");
+  assert.equal(rows[6].by, "nobody: it came back by itself in the time with no give-back");
+  assert.equal(giveBackRows([take({ t1: null, ms: 2000 })], [], [])[0].by, "nobody: it did not come back");
+  assert.equal(giveBackRows([take({ t1: null, ms: 2000 })], [], [])[0].ms, null);
+  assert.ok(FALLBACK_MS >= 500 && FALLBACK_MS < OPEN_TAKE_MS - 500, "the fallback arms the check's watcher well before the stop rule");
+});
+
+test("watchBackText: the prototype's ready, its takes, and its end against the agent Chrome's quit", () => {
+  const T = Date.parse("2026-11-06T10:00:00.000Z"), iso = (ms: number) => new Date(T + ms).toISOString();
+  const back = parseWatchBack([`${iso(0)} watch-back watch agent=900 before=500`, `${iso(100)} watch-back took=900 from=500`, `${iso(140)} watch-back back=500 after-ms=40 asks=1`,
+    `${iso(800)} watch-back took=900 from=500`, `${iso(1600)} watch-back refused=500 asks=3`, `${iso(9300)} watch-back end=agent-gone`].join("\n"));
+  const text = watchBackText(back, { started: "osascript, ready in 300 ms", quitAt: T + 9000 }).join("\n");
+  assert.match(text, /^osascript, ready in 300 ms\nIt watched the agent Chrome \(pid 900\) and gave the front back to pid 500\./);
+  assert.match(text, /It saw 2 take\(s\) of the front by the agent Chrome and saw the front come back 1 time\(s\); its 3 asks were spent 1 time\(s\)\./);
+  assert.match(text, /Its end: agent-gone, 300 ms after the check's quit of the agent Chrome began\./);
+  assert.match(watchBackText(parseWatchBack(`${iso(0)} watch-back end=stopped by=check`), {}).join(" "), /Its end: stopped \(by the check\)/);
+  assert.deepEqual(watchBackText([], { started: "It did not start: boom" }), ["It did not start: boom"]);
+  assert.deepEqual(watchBackText([], {}), ["agent-browser's give-back watcher did not run"]);
+});
+
 test("the summary names the result first, and every part of the measurement", () => {
   const r: MacResult = {
     ok: false, problems: ["a step took the operator's front: popup: x: the front went to Google Chrome Beta for 40 ms"], dryRun: false, run: "/tmp/run-x", startedAt: "2026-11-05T00:00:00.000Z", seconds: 170,
@@ -358,13 +450,26 @@ test("the summary names the result first, and every part of the measurement", ()
   assert.match(s.split("\n")[0], /^# macOS check of drive, record and one window per page$/);
   assert.match(s, /## Result: exit 1\n- a step took the operator's front/);
   for (const part of ["## The front app and the Space", "## Where each new agent window came", "## Drive in a background tab", "## Drive in a window of its own",
-    "## Records", "## Focus between agent windows", "## Popups", "## The real pointer", "## Mission Control", "### For the operator", "## Not measured"]) assert.ok(s.includes(part), part);
+    "## Records", "## Focus between agent windows", "## Popups from a background tab", "## Popups (from a page in a window of its own)", "## The way back to the opener (no activation",
+    "## Who gave the front back", "## Google Chrome (stable)", "## The real pointer", "## Mission Control", "### For the operator", "## Not measured"]) assert.ok(s.includes(part), part);
+  const full = summary({
+    ...r, bgPopups: [{ step: "popup: BG: a link", giveBack: "none for 2 s, then the check's watcher", where: "a tab in the opener's window", popup: "visible, focus false, history.length 1", opener: "BG -", take: "away 2040 ms", during: "front app Google Chrome Beta", front: "Terminal" }],
+    back: [{ step: "popup: back to the opener: Target.closeTarget of PA", how: "Target.closeTarget", ok: true, ms: 760, opener: "WA visible@12", after: "visible, document.hasFocus() true", front: "Terminal", space: "unchanged", order: "WA: behind the front app's window" }],
+    giveBack: [{ step: "popup: x", ms: 14, by: "agent-browser's give-back watcher (the prototype)", seenMs: 3, asks: 1, ownMs: 11, note: "" }], watchBack: ["It watched the agent Chrome (pid 900)"],
+    stable: ["Not measured: Google Chrome (stable) is not installed"],
+  });
+  assert.match(full, /\| popup: BG: a link \| none for 2 s, then the check's watcher \| a tab in the opener's window \|/);
+  assert.match(full, /\| popup: back to the opener: Target\.closeTarget of PA \| Target\.closeTarget \| ok \| 760 \| WA visible@12 \| visible, document\.hasFocus\(\) true \|/);
+  assert.match(full, /- It watched the agent Chrome \(pid 900\)\n\| step \| away/);
+  assert.match(full, /\| popup: x \| 14 \| agent-browser's give-back watcher \(the prototype\) \| 3 \| 1 \| 11 \|/);
+  assert.match(full, /## Google Chrome \(stable\)\n- Not measured: Google Chrome \(stable\) is not installed/);
+  assert.match(summary({ ...r, part: "stable" }).split("\n")[0], /^# macOS check of drive, record and one window per page: the Google Chrome stable part$/);
   assert.match(s, /\| a background tab \| 28\.1 \| 120 \| 4\.27 \| 630 \|/);
   assert.match(s, /FAIL boom/);
   assert.match(s, /WA: 1 event\(s\) at the real pointer's point, first mouseover at 1,2/);
   assert.match(summary({ ...r, ok: true, problems: [], dryRun: true }), /DRY RUN on Linux[\s\S]*exit 0: the check never took the operator's focus or Space/);
   assert.doesNotMatch(s, /an expected result/);
-  assert.match(summary({ ...r, popupOnly: true }), /## Result: exit 1, an expected result: only popup steps took the front \(Chrome can activate itself when it shows a popup\), and the watcher gave it back each time\n/);
+  assert.match(summary({ ...r, popupOnly: true }), /## Result: exit 1, an expected result: only popup steps took the front \(Chrome can activate itself when it shows a popup\), and a watcher gave it back each time \(in the step with no give-back, after it\)\n/);
   assert.match(summary({ ...r, end: ["the agent Chrome quit (Browser.close)", "removed the profile"] }), /## The end\n- the agent Chrome quit \(Browser\.close\)\n- removed the profile/);
 });
 
@@ -455,6 +560,9 @@ test("the Mac check never activates a window or brings a page forward, and sends
   const ts = readFileSync(join(DIR, "mac.ts"), "utf8").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   for (const forbidden of [/"Target\.activateTarget"/, /"Page\.bringToFront"/, /"windows\.update"/, /xdotool/, /osascript/, /cliclick/, /newWindow: true(?!, background: true)/])
     assert.doesNotMatch(ts, forbidden);
+  // Its one osascript run is agent-browser's give-back watcher, the prototype: a constant script (mac-watchback.ts), only its arguments change.
+  assert.equal((ts.match(/spawn\(OSASCRIPT/g) ?? []).length, 1);
+  assert.match(ts, /spawn\(OSASCRIPT, watchBackArgs\(bundle!, chromePid, bound\), /);
   assert.match(ts, /\["-n", "-g", "-a", bundle!/);
   assert.match(ts, /"-sdk", swift\.sdk/, "swiftc gets the SDK, so it never starts xcrun");
   // It removes only the throwaway profile and the watcher that it compiled, both inside its own run folder, after its Chrome quit.
@@ -476,6 +584,29 @@ test("the Mac check never activates a window or brings a page forward, and sends
   // The probe's log keeps no key values, and the field only its length.
   assert.match(ts, /startServer\(log, \{ record: probeRecord \}\)/);
   assert.match(ts, /return fieldText\(before, await evaluate\(sid, FIELD\), text\)/);
+});
+
+test("ab-v16.68: the time with no give-back is bounded and gives the front back at its end, the prototype ends at a stop, and the stable part runs only after a whole first part", () => {
+  const ts = readFileSync(join(DIR, "mac.ts"), "utf8").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  // The hold: recorded for the stop rules before the check's watcher stops giving the front back, and ended by it (not after a stop: checkHarm gave the front back then).
+  assert.match(ts, /if \(p\.hold\) \{ holds\.push\(\{ from, until: from \+ NO_GIVE_BACK_MS \}\); tell\("disarm"\); \}/);
+  assert.match(ts, /finally \{[\s\S]{0,200}if \(p\.hold && !aborted\) tell\("arm"\);/);
+  assert.match(ts, /stopReason\(events, steps, Date\.now\(\), \{ t0: T0, limitMs: LIMIT_MS, measureEnd, holds \}\)/);
+  assert.equal((ts.match(/tell\("disarm"\)/g) ?? []).length, 5, "a stop, the hold, the prototype's start, the fallback's end, the look");
+  // A stop ends agent-browser's give-back watcher at once (it cannot tell a person's own switch to the agent Chrome), and so does the look.
+  assert.match(ts, /tell\("disarm"\);\s+tell\("giveback"\);\s+stopWatchBack\(\);/);
+  assert.match(ts, /measureEnd = Date\.now\(\);\s+clearInterval\(stopPoll\);\s+stopWatchBack\(\);/);
+  assert.match(ts, /wb\.kill\("SIGTERM"\)/, "it ends only the process that it started");
+  // The fallback arms the check's watcher only while the prototype runs and the agent Chrome still has the front.
+  assert.match(ts, /if \(!protoOn \|\| aborted \|\| frontAt\(events, Date\.now\(\)\)\?\.pid !== chromePid\) return;\s+fallbackArmed = true;/);
+  // The stable part: only Google Chrome stable in /Applications, never installed, and only after a first part that ran to its end and quit its Chrome.
+  assert.match(ts, /!O\.dryRun && !existsSync\(CHROME_STABLE_BIN\) \? `Not measured: Google Chrome \(stable\) is not installed/);
+  assert.match(ts, /aborted \? "Not run: the first part stopped early\." : fatal \? "Not run: the first part failed\." : quit\.running !== false \?/);
+  assert.match(ts, /"--on-my-screen", "--part", "stable", "--out-dir", dir, "--chrome-bin", CHROME_STABLE_BIN, "--watcher", watcherBin/);
+  assert.match(ts, /filter\(\(\[k\]\) => !k\.startsWith\("MAC_STANDIN_"\)\)/);
+  // The way back sends no activation: a CDP click, Target.closeTarget, or the page's own window.close().
+  assert.match(ts, /evaluate\(sid, "window\.close\(\), true"\)/);
+  assert.equal((ts.match(/cdp\("Target\.closeTarget"/g) ?? []).length, 3, "the way back, its fallback when the page does not close itself, and the background tab's popups");
 });
 
 test("the help text names the consent limits: the apps that post HID events stop the check", () => {

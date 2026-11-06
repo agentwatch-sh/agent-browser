@@ -3,10 +3,11 @@
 // (mac-rules.ts) are, in test/mac-measure.test.ts.
 //
 //   node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR [--chrome-bin APP_BINARY] [--watcher BIN]
-//        [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person]
+//        [--ffmpeg PATH] [--look SECONDS] [--skip record,popups,person,stable]
 //   node test/live/anti-detect/mac.ts --dry-run --out-dir DIR [--chrome /usr/bin/chromium] [--display 123]   (Linux)
+//   (--part stable: the second part, which the check runs itself; see "stable" below)
 //
-// On the Mac it runs with one command, in about 3 minutes, with nobody at the keyboard: the operator leaves the Mac
+// On the Mac it runs with one command, in about 2 to 3 minutes, with nobody at the keyboard: the operator leaves the Mac
 // unlocked and awake, with no full-screen app in front, does not use it during the run, and first quits the apps that
 // post keyboard or mouse events (remote-desktop apps, Karabiner, a mouse jiggler, Universal Control): the watcher
 // takes their events as a person's, so they stop the check (or make it refuse before its Chrome starts). It starts its own agent
@@ -48,12 +49,31 @@
 //           click in the second window (does the first page get a blur?), keys into the first window with no click
 //           (an inactive window), person-shaped CDP input (from the real pointer, when it is over the page), and a
 //           click back in the first window
+//   popup   (ab-v16.68) from the background tab of today's agent mode, with agent-browser's `click`: a target=_blank
+//           link with no give-back for NO_GIVE_BACK_MS (2 s: the check's watcher only logs, and a snap shows the window
+//           order while the agent Chrome has the front; then the watcher gives the front back), and one more with
+//           agent-browser's give-back watcher (below); each popup's place and state, the opener's, the take
+//   giveback (ab-v16.68) agent-browser's give-back watcher as agent-browser would run it for as long as the agent
+//           Chrome runs (the operator's answer ab-or9): a prototype in this check (mac-watchback.ts, osascript), not
+//           agent-browser's code. From here to the end it gives the front back, the check's watcher only logs (and
+//           arms again as a fallback when a take is still open after FALLBACK_MS), and the summary gives each take's
+//           times as both saw them
 //   facts   what an API gives of Mission Control, App Expose, the Dock menu and Cmd-` (the agent app's windows, on
 //           and off screen, its activation policy, the window titles); before the popups, which can take the front
 //   popup   from a page in its own window: a target=_blank link, window.open() with no features, and window.open()
-//           with "popup,width=500,height=400": a tab or a window, its size, the opener's and the popup's state
+//           with "popup,width=500,height=400": a tab or a window, its size, the opener's and the popup's state; then
+//           (ab-v16.68) the way back to the opener with no activation (no Page.bringToFront, Target.activateTarget or
+//           windows.update): a CDP click in the popup tab, then Target.closeTarget of it; the window.open() popup
+//           closes itself (window.close()); the sized popup gets Target.closeTarget. For each: the opener's visibility,
+//           its focus and blur events and document.hasFocus(), the front app, the Space, the opener window's place
 //   look    only with --look SECONDS: the give-back stops, the agent windows stay open for that long, and the
 //           summary lists the one short look for the operator (Mission Control, the Dock menu, App Expose, Cmd-`)
+//   stable  (ab-v16.68) after the first agent Chrome quit, when Google Chrome (stable) is installed in /Applications
+//           and is not the first part's agent Chrome: a second, short run of this check in it (--part stable, its own
+//           run folder DIR/run-XXXXXX/stable/run-YYYYYY, its own watcher process from the same compiled watcher, a new
+//           empty profile): its start, agent-browser's give-back watcher, one window (WA) and the popups from it with
+//           the way back. It runs only when the first part ran to its end. Else the summary says why not (not installed:
+//           the check reads /Applications and installs nothing)
 // The real pointer: every probe event at the real pointer's point (macOS gave it, not the check's CDP input).
 //
 // It writes DIR/run-XXXXXX/results.json (every step, the watcher's log, the probe's log, the analysis) and
@@ -69,7 +89,7 @@
 //   exit 1  the check took the operator's focus or Space, could not show that it did not, did not finish, or its
 //           Chrome did not quit: summary.md names each problem (a failed step is a measurement, not a problem). When
 //           the only problems are popup takes that came back, the summary says so: an expected result of the design
-//           (Chrome can activate itself when it shows a popup)
+//           (Chrome can activate itself when it shows a popup). The stable part's problems count too, with its name
 //   exit 2  it refused to start, and nothing started on the screen: a usage error, not macOS (or not Linux for
 //           --dry-run), no ffmpeg with libx264 (on PATH, in /opt/homebrew/bin or /usr/local/bin; or --ffmpeg; or
 //           --skip record), no swiftc with a macOS SDK (it compiles with -sdk, so swiftc never starts xcrun), a watcher
@@ -79,29 +99,31 @@
 // (mac-standin.ts: no front app, no Space, no window list): a test of the drive, the stop rules, the refusals and the
 // analysis, not a Mac result.
 // It ends only its own processes, each by the pid that it recorded: the agent Chrome on its own profile, the proxy
-// of its own state folder, the watcher, caffeinate (which keeps the display awake for the run) and, in the dry run,
-// its Xvfb and Chromium.
+// of its own state folder, the watcher, agent-browser's give-back watcher (the prototype), caffeinate (which keeps the
+// display awake for the run), the stable part's node process and, in the dry run, its Xvfb and Chromium.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { AGENT_ARGS, agentChromeBin, agentChromePid, appBundle } from "../../../src/agent.ts";
+import { AGENT_ARGS, agentChromeBin, agentChromePid, appBundle, CHROME_STABLE_BIN } from "../../../src/agent.ts";
 import { AgentBrowser } from "../../../src/browser.ts";
 import type { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
-import { GIVE_BACK_GRACE_MS, giveBackToken, startGiveBack, type GiveBack } from "../../../src/giveback.ts";
+import { GIVE_BACK_GRACE_MS, giveBackToken, OSASCRIPT, startGiveBack, type GiveBack } from "../../../src/giveback.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settings } from "../../../src/options.ts";
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg } from "../../../src/record.ts";
 import {
-  agentWindowsOf, ffmpegSearchPath, fieldText, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, orderOf, parseWatchLog, placement, probeRecord,
-  readyText, realPointer, realPointerEvents, runStep, screenProblem, snapOf, spaceChanges, STOP_POLL_MS, stopReason, summary, swiftTools, verdict, watcherProblems, windowsOf,
-  type DriveRow, type MacResult, type PopupRow, type RecordRow, type Step, type WatchEvent, type WindowRow,
+  agentWindowsOf, FALLBACK_MS, ffmpegSearchPath, fieldText, giveBackRows, joinVerdicts, quitAgentChrome, frontAt, frontTakes, macArgs, matchWindow, newAgentWindows, NO_GIVE_BACK_MS, orderOf,
+  parseWatchLog, placement, placementText, probeRecord, readyText, realPointer, realPointerEvents, runStep, screenProblem, snapOf, spaceChanges, STOP_POLL_MS, stopReason, summary, swiftTools,
+  verdict, watchBackText, watcherProblems, windowsOf,
+  type BackRow, type BgPopupRow, type DriveRow, type Hold, type MacResult, type PopupRow, type RecordRow, type Step, type Verdict, type WatchEvent, type WindowRow,
 } from "./mac-rules.ts";
+import { parseWatchBack, parseWatchBackReady, WATCH_BACK_MAX_MS, watchBackArgs } from "./mac-watchback.ts";
 import { bothFocusedMs, LAYOUT, startServer, stepSignals, type Rec } from "./probe.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -109,6 +131,8 @@ function refuse(message: string): never { process.stderr.write(`${message}\n`); 
 const parsed = macArgs(process.argv.slice(2), { platform: process.platform, exists: existsSync, defaultChrome: agentChromeBin({ chromeBin: undefined }) });
 if (!parsed.ok) refuse(parsed.message);
 const O = parsed.options;
+/** The first part (every phase), or the short second part in Google Chrome stable (--part stable). */
+const FULL = O.part === undefined;
 const OUT = resolve(O.outDir);
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, "run-"));
@@ -117,10 +141,11 @@ const T0 = Date.now();
 const LIMIT_MS = 9 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const say = (line: string) => process.stderr.write(`${new Date().toISOString().slice(11, 23)} ${line}\n`);
-say(`${O.dryRun ? "DRY RUN (Linux): " : ""}run folder ${RUN}`);
+say(`${O.dryRun ? "DRY RUN (Linux): " : ""}${FULL ? "" : "the Google Chrome stable part: "}run folder ${RUN}`);
 // The records need ffmpeg with libx264: without it the run has no record numbers, so it refuses before anything starts.
+// The stable part has no record.
 let ffmpeg: string | undefined;
-if (!O.skip.includes("record")) {
+if (FULL && !O.skip.includes("record")) {
   try { ffmpeg = findFfmpeg(O.ffmpeg, ffmpegSearchPath(process.env.PATH)); }
   catch (e) { refuse(`refusing, nothing started: ${(e as Error).message.split("\n")[0]} (it looked on PATH, in /opt/homebrew/bin and in /usr/local/bin; or pass --skip record)`); }
 }
@@ -205,8 +230,10 @@ watcher.on("error", (e) => say(`watcher: ${e.message}`));
 let watching = false;
 createInterface({ input: watcher.stdout! }).on("line", (line) => {
   appendFileSync(watchFile, `${line}\n`);
-  try { const e = JSON.parse(line); if (typeof e?.t === "number" && typeof e.ev === "string") events.push(e); } catch { /* counted as bad in the analysis */ }
+  let e: WatchEvent | undefined;
+  try { const x = JSON.parse(line); if (typeof x?.t === "number" && typeof x.ev === "string") { events.push(x); e = x; } } catch { /* counted as bad in the analysis */ }
   if (watching) checkHarm();
+  if (e?.ev === "front") fallback(e);
 });
 const tell = (cmd: string) => { if (watcher.stdin?.writable) watcher.stdin.write(`${cmd}\n`); };
 async function waitEvent(pred: (e: WatchEvent) => boolean, ms: number): Promise<WatchEvent | undefined> {
@@ -225,19 +252,61 @@ const steps: Step[] = [];
 /** The end of the measurement: before the look (--look), else after the end step. The stop rules and the analysis cover only the time before it. */
 let measureEnd: number | undefined;
 let current: string | undefined;
+/** The times with no give-back (the popup step of NO_GIVE_BACK_MS): a take that begins in one may stay open until OPEN_TAKE_MS after it (stopReason). */
+const holds: Hold[] = [];
 function checkHarm() {
   if (aborted) return;
-  const why = stopReason(events, steps, Date.now(), { t0: T0, limitMs: LIMIT_MS, measureEnd });
+  const why = stopReason(events, steps, Date.now(), { t0: T0, limitMs: LIMIT_MS, measureEnd, holds });
   if (!why) return;
   aborted = why;
   stopInfo = { why, t: Date.now(), step: current ?? "between steps", cause: events.find((e) => e.ev === "pointer" || e.ev === "input") };
   // The watcher stops its give-back by itself at a person's first sign (a pointer move, a key press, a modifier key,
   // a click or a scroll of the hardware); "disarm" stops it for the other stops. Then one last request, only while
   // the agent Chrome is in front, so that a person's keys go to their own app while the end step quits that Chrome.
+  // agent-browser's give-back watcher (the prototype) ends at once too: it cannot tell a person's own switch to the
+  // agent Chrome from Chrome's own take, so it would send them back.
   tell("disarm");
   tell("giveback");
+  stopWatchBack();
   say(`STOP${stopInfo.cause ? ` (${stopInfo.t - stopInfo.cause.t} ms after the watcher's ${stopInfo.cause.ev} line)` : ""} in ${stopInfo.step}: ${why}`);
   onStop();
+}
+// ------------------------------------------------------------------ agent-browser's give-back watcher (a prototype in this check: mac-watchback.ts)
+const wbLog = join(RUN, "watch-back.log");
+let wb: ChildProcess | undefined, wbStarted: string | undefined;
+/**
+ * True while the prototype gives the front back: the check's own watcher then only logs (disarmed). When a take of the
+ * agent Chrome is still open FALLBACK_MS after the watcher's line of it, the check arms its watcher (it gives the front
+ * back at once), and disarms it again when the front is back: a fallback, measured apart (the takes table names it).
+ */
+let protoOn = false, fallbackArmed = false, fallbackTimer: NodeJS.Timeout | undefined;
+const fallbacks: { t: number; step: string }[] = [];
+function fallback(e: WatchEvent): void {
+  if (!protoOn || aborted) return;
+  if (e.agent) {
+    fallbackTimer ??= setTimeout(() => {
+      fallbackTimer = undefined;
+      if (!protoOn || aborted || frontAt(events, Date.now())?.pid !== chromePid) return;
+      fallbackArmed = true;
+      fallbacks.push({ t: Date.now(), step: current ?? "between steps" });
+      tell("arm");
+      say(`fallback: the agent Chrome still had the front ${FALLBACK_MS} ms after it took it; the check's watcher gives it back`);
+    }, FALLBACK_MS);
+    return;
+  }
+  clearTimeout(fallbackTimer);
+  fallbackTimer = undefined;
+  if (fallbackArmed) { fallbackArmed = false; tell("disarm"); }
+}
+/** Ends the prototype (SIGTERM to the process that this check started), and the check's fallback with it. */
+function stopWatchBack(): void {
+  protoOn = false;
+  clearTimeout(fallbackTimer);
+  fallbackTimer = undefined;
+  if (wb && wb.exitCode === null && wb.signalCode === null) {
+    wb.kill("SIGTERM");
+    try { appendFileSync(wbLog, `${new Date().toISOString()} watch-back end=stopped by=check\n`); } catch { /* the log is for the analysis only */ }
+  }
 }
 /** A sleep that ends at once at a stop. */
 const pause = (ms: number) => Promise.race([sleep(ms), stopped]);
@@ -389,7 +458,7 @@ const evaluate = async (sid: string, expression: string) => (await cdp("Runtime.
 const targetOf = async (tab: string) => ((await cdp("Target.getTargets")).targetInfos as { targetId: string; url: string; type: string }[]).find((t) => t.type === "page" && t.url.includes(`tab=${tab}`))?.targetId;
 
 // ------------------------------------------------------------------ tab: today's agent mode, a background tab
-if (browser) {
+if (browser && FULL) {
   await step("tab", "open a background tab (agent-browser open)", async () => { await commands.open(oTab, { url: urlOf("BG"), name: "bg" }); await loaded("BG"); }, { snap: true });
   await step("tab", "idle 3 s", () => sleep(3000));
   await step("tab", "text", () => commands.text(oTab, { tab: "bg" }));
@@ -398,6 +467,122 @@ if (browser) {
   await step("tab", "press End", () => commands.press(oTab, { tab: "bg", key: "End" }));
   await step("tab", "shot", () => commands.shot(oTab, { tab: "bg", path: join(RUN, "tab-bg.png") }), { limitMs: 40_000 });
   await recordStep("tab", "record 3 s", oTab, "bg", "a background tab in its window (today's agent mode)");
+}
+
+// ------------------------------------------------------------------ popup: from the background tab of today's agent mode (ab-v16.68)
+/** The operator's app, as the watcher saw it at its start. */
+const operatorPid = Number(ready.front?.pid ?? -1);
+/** Waits until the operator's app is the front app again (the watcher's view), at most `ms`; whether it is. */
+async function frontBack(ms: number): Promise<boolean> {
+  for (const end = Date.now() + ms; Date.now() < end && !aborted; await sleep(25)) if (frontAt(events, Date.now())?.pid === operatorPid) return true;
+  return frontAt(events, Date.now())?.pid === operatorPid;
+}
+/** A popup page's place and state: a tab in its opener's window or a window of its own, its bounds, its size, visibility, focus and history.length. */
+async function popupState(tab: string, opener: string): Promise<Record<string, unknown>> {
+  const pt = await targetOf(tab);
+  if (!pt) throw new Error(`no target for ${tab}`);
+  const pw = await cdp("Browser.getWindowForTarget", { targetId: pt }), ow = await cdp("Browser.getWindowForTarget", { targetId: opener });
+  const ps = await attachTo(pt);
+  try {
+    const st = await evaluate(ps, "({ ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, vis: document.visibilityState, focus: document.hasFocus(), hl: history.length })") as Record<string, unknown>;
+    return { target: pt, inOpener: pw.windowId === ow.windowId, bounds: pw.bounds, ...st };
+  } finally { await raw.send("Target.detachFromTarget", { sessionId: ps }).catch(() => {}); }
+}
+const BG_POPUPS = [
+  { id: "lk1", tab: "PD", hold: true, name: `BG: a link with target=_blank, no give-back for ${NO_GIVE_BACK_MS / 1000} s` },
+  { id: "lk2", tab: "PE", hold: false, name: "BG: a link with target=_blank, agent-browser's give-back watcher" },
+] as const;
+const bgInfo: Record<string, Record<string, unknown>> = {};
+let bgTarget: string | undefined;
+/**
+ * A popup from the background tab, with agent-browser's own click (today's agent mode: focus emulation). With `hold`
+ * the check's watcher only logs from the click on, for NO_GIVE_BACK_MS (a snap at 1 s shows the window order while the
+ * agent Chrome has the front), and then gives the front back; else the give-back in force gives it back.
+ */
+async function bgPopup(p: (typeof BG_POPUPS)[number]): Promise<void> {
+  if (!bgTarget) throw new Error("no background tab with the links");
+  const label = current ?? `popup: ${p.name}`, from = Date.now();
+  if (p.hold) { holds.push({ from, until: from + NO_GIVE_BACK_MS }); tell("disarm"); }
+  try {
+    await commands.click(oTab, { tab: "bg", target: `#${p.id}` });
+    await loaded(p.tab, 8000);
+    if (p.hold) {
+      await pause(Math.max(0, from + 1000 - Date.now()));
+      await snap(`during ${label}`);
+      await pause(Math.max(0, from + NO_GIVE_BACK_MS - Date.now()));
+    } else await pause(1000);
+  } finally {
+    // The time with no give-back ends: the check's watcher gives the front back (at a stop, checkHarm did it already).
+    if (p.hold && !aborted) tell("arm");
+  }
+  if (p.hold) await frontBack(1200);
+  bgInfo[p.tab] = await popupState(p.tab, bgTarget!);
+}
+if (browser && FULL && !O.skip.includes("popups")) {
+  await step("popup", "BG: add two links", async () => {
+    bgTarget = await targetOf("BG");
+    if (!bgTarget) throw new Error("no target for BG");
+    const sid = await attachTo(bgTarget);
+    try {
+      await evaluate(sid, `(() => { for (const [id, tab, top] of [["lk1", "PD", 420], ["lk2", "PE", 470]]) { const a = document.createElement("a"); a.id = id; a.href = "/p?tab=" + tab; a.target = "_blank"; a.textContent = id;
+        a.style = "position:fixed;left:300px;top:" + top + "px;width:120px;height:30px;display:block"; document.body.append(a); } })()`);
+    } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
+  });
+  await step("popup", BG_POPUPS[0].name, () => bgPopup(BG_POPUPS[0]), { limitMs: 20_000, snap: true });
+}
+
+// ------------------------------------------------------------------ giveback: agent-browser's give-back watcher, as agent-browser would run it (a prototype)
+/**
+ * Starts the prototype (mac-watchback.ts) with OSASCRIPT (src/giveback.ts), as agent-browser runs its start guard, for the agent
+ * Chrome's pid, until that Chrome quits (or its bound: the rest of the run). Once it names the operator's app as the
+ * app to give the front back to, the check's own watcher only logs (protoOn). In the dry run a stand-in runs instead.
+ */
+async function startWatchBack(): Promise<string> {
+  if (!chromePid) throw new Error("no agent Chrome pid");
+  const bound = Math.max(1000, Math.min(WATCH_BACK_MAX_MS, LIMIT_MS + 60_000 - (Date.now() - T0)));
+  const fd = openSync(wbLog, "a");
+  const t0 = Date.now();
+  let child: ChildProcess;
+  try {
+    child = O.dryRun
+      ? spawn(process.execPath, [join(HERE, "mac-standin-watchback.ts"), String(chromePid), String(bound), String(operatorPid)], { stdio: ["ignore", "pipe", fd] })
+      : spawn(OSASCRIPT, watchBackArgs(bundle!, chromePid, bound), { stdio: ["ignore", "pipe", fd] });
+  } finally { closeSync(fd); }
+  children.push(child);
+  wb = child;
+  child.on("error", () => {});
+  const line = await new Promise<string | undefined>((res) => {
+    let buf = "";
+    const timer = setTimeout(() => res(undefined), 5000);
+    const done = (v: string | undefined) => { clearTimeout(timer); res(v); };
+    child.stdout!.on("data", (b) => { buf += b; const i = buf.indexOf("\n"); if (i >= 0) done(buf.slice(0, i)); });
+    child.once("close", () => done(undefined));
+  });
+  child.stdout!.destroy(); // it writes nothing more there
+  const r = line === undefined ? undefined : parseWatchBackReady(line);
+  if (!r || r.agent !== chromePid || r.before !== operatorPid) {
+    stopWatchBack();
+    throw new Error(`agent-browser's give-back watcher did not start: ${line === undefined ? "no ready line in 5 s" : `its ready line ${line} does not name the operator's app (pid ${operatorPid}) and the agent Chrome (pid ${chromePid})`}`);
+  }
+  if (aborted) { stopWatchBack(); throw new Error("stopped"); }
+  tell("disarm");
+  protoOn = true;
+  return `${O.dryRun ? "The dry run's stand-in (mac-standin-watchback.ts; it sees no take on Linux)" : `${OSASCRIPT} (JavaScript for Automation), a prototype in this check (mac-watchback.ts), not agent-browser's code`}, pid ${child.pid}, `
+    + `ready in ${Date.now() - t0} ms: it gives the front back to pid ${r.before}${r.bundle ? ` (${r.bundle})` : ""}; from then on the check's watcher only logs, and arms again only when a take is still open after ${FALLBACK_MS} ms (fallbacks: see the takes table).`;
+}
+if (browser) {
+  // The operator's app must be in front when the prototype starts: it records the app in front as the app to give the front back to.
+  wbStarted = await step("giveback", "start agent-browser's give-back watcher (a prototype)", async () => {
+    if (!(await frontBack(1500))) throw new Error("the operator's app is not in front");
+    return startWatchBack();
+  }, { tailMs: 500 });
+}
+if (browser && FULL && !O.skip.includes("popups")) {
+  await step("popup", BG_POPUPS[1].name, () => bgPopup(BG_POPUPS[1]), { limitMs: 20_000, snap: true });
+  for (const tab of ["PE", "PD"]) {
+    const pt = bgInfo[tab]?.target as string | undefined;
+    if (pt) await step("popup", `BG: close ${tab}`, () => cdp("Target.closeTarget", { targetId: pt }), { tailMs: 800, snap: true });
+  }
 }
 
 // ------------------------------------------------------------------ window: one window per agent page
@@ -459,13 +644,15 @@ async function personInput(targetId: string): Promise<unknown> {
   } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
 }
 if (browser) {
-  for (const name of ["WA", "WB"]) await step("window", `open window ${name} (Target.createTarget newWindow, background)`, async () => {
+  for (const name of FULL ? ["WA", "WB"] : ["WA"]) await step("window", `open window ${name} (Target.createTarget newWindow, background)`, async () => {
     const { targetId } = await cdp("Target.createTarget", { url: urlOf(name), newWindow: true, background: true });
     wins[name] = { target: targetId };
     await loaded(name);
     const w = await cdp("Browser.getWindowForTarget", { targetId });
     wins[name] = { target: targetId, windowId: w.windowId, bounds: w.bounds };
   }, { snap: true });
+}
+if (browser && FULL) {
   await step("window", "idle 3 s", () => sleep(3000), { snap: true });
   const A = "tab=WA", B = "tab=WB";
   await step("window", "WA: text", () => commands.text(oWin, { tab: A }), { snap: true });
@@ -483,20 +670,61 @@ if (browser) {
 
 // ------------------------------------------------------------------ facts: what an API gives (before the popups, which can take the front)
 const pages: { title: string; url: string; windowId?: number; state?: string }[] = [];
-if (browser) await step("facts", "the agent app's windows", async () => {
+if (browser && FULL) await step("facts", "the agent app's windows", async () => {
   for (const t of ((await cdp("Target.getTargets")).targetInfos as { targetId: string; type: string; title: string; url: string }[]).filter((x) => x.type === "page")) {
     const w = await cdp("Browser.getWindowForTarget", { targetId: t.targetId }).catch(() => undefined);
     pages.push({ title: t.title, url: t.url.replace(/^http:\/\/probe\.localhost:\d+/, ""), windowId: w?.windowId, state: w?.bounds?.windowState });
   }
 }, { snap: true });
 
-// ------------------------------------------------------------------ popup: from a page in its own window
+// ------------------------------------------------------------------ popup: from a page in its own window, and the way back to the opener
 const POPUPS = [
-  { id: "lk", y: 35, tab: "PA", kind: "a link with target=_blank", asked: "a tab" },
-  { id: "o2", y: 85, tab: "PB", kind: "window.open() with no features", asked: "a tab" },
-  { id: "o3", y: 135, tab: "PC", kind: "window.open() with popup,width=500,height=400", asked: "a window, outer 500x400 (inner 500x400 asked)" },
+  { id: "lk", y: 35, tab: "PA", kind: "a link with target=_blank", asked: "a tab", drive: true, back: "close" },
+  { id: "o2", y: 85, tab: "PB", kind: "window.open() with no features", asked: "a tab", drive: false, back: "self" },
+  { id: "o3", y: 135, tab: "PC", kind: "window.open() with popup,width=500,height=400", asked: "a window, outer 500x400 (inner 500x400 asked)", drive: false, back: "close" },
 ] as const;
+/** The step names of the way back (ab-v16.68): a CDP click in the popup tab (the popup rule: drive the new tab), then the popup closes. */
+const backName = (p: (typeof POPUPS)[number], what: "drive" | "back") => what === "drive" ? `${p.tab}: a CDP click in the popup (no activation)`
+  : p.back === "close" ? `back to the opener: Target.closeTarget of ${p.tab}` : `back to the opener: ${p.tab} closes itself (window.close())`;
 const popupInfo: Record<string, Record<string, unknown>> = {};
+/** The opener WA after each way back: its visibility and document.hasFocus(), and whether the popup's target is gone. */
+const backInfo: Record<string, Record<string, unknown>> = {};
+/** The popup and its opener WA right after the CDP click in the popup (the popup rule: drive the new tab). */
+const driveInfo: Record<string, { popup: Record<string, unknown>; opener: Record<string, unknown> }> = {};
+/** A page's visibility and document.hasFocus() now (a CDP read: no activation). */
+async function stateOf(targetId: string): Promise<Record<string, unknown>> {
+  const sid = await attachTo(targetId);
+  try { return await evaluate(sid, "({ vis: document.visibilityState, focus: document.hasFocus() })") as Record<string, unknown>; }
+  finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
+}
+/** A CDP click (moved, pressed, released) at a point of a page: no activation, no OS input. */
+async function cdpClick(targetId: string, x: number, y: number): Promise<void> {
+  const sid = await attachTo(targetId);
+  try {
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1, buttons: type === "mousePressed" ? 1 : 0 }, sid);
+  } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
+}
+/** The way back to the opener with no activation: the popup's target closes (Target.closeTarget, or the page's own window.close()); then the opener's state. */
+async function wayBack(p: (typeof POPUPS)[number]): Promise<Record<string, unknown>> {
+  const pt = popupInfo[p.tab]?.target as string;
+  if (p.back === "close") await cdp("Target.closeTarget", { targetId: pt });
+  else {
+    const sid = await attachTo(pt);
+    // The page closes during the call: its session ends, so the call can fail; the target list below says whether it closed.
+    try { await evaluate(sid, "window.close(), true"); } catch { /* the page went */ } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
+  }
+  const isGone = async () => !((await cdp("Target.getTargets")).targetInfos as { targetId: string }[]).some((t) => t.targetId === pt);
+  let gone = false, closedBy = p.back === "close" ? "Target.closeTarget" : "its own window.close()";
+  for (const end = Date.now() + 3000; Date.now() < end && !gone; await sleep(50)) gone = await isGone();
+  if (!gone && p.back === "self") {
+    // Chrome kept the page (no script close): the check closes it, so that the next popup's opener is in front again.
+    closedBy = "Target.closeTarget (its own window.close() did not close it)";
+    await cdp("Target.closeTarget", { targetId: pt });
+    for (const end = Date.now() + 3000; Date.now() < end && !gone; await sleep(50)) gone = await isGone();
+  }
+  await sleep(700);
+  return { gone, closedBy, ...(await stateOf(wins.WA.target)) };
+}
 if (browser && !O.skip.includes("popups") && !wins.WA) notRun.push(aborted ? "popup: every popup step" : "popup: every popup step (window WA did not open)");
 if (browser && !O.skip.includes("popups") && wins.WA) {
   await step("popup", "WA: add the link and the two buttons", async () => {
@@ -509,23 +737,23 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
   });
   for (const p of POPUPS) {
     await step("popup", p.kind, async () => {
-      const sid = await attachTo(wins.WA.target);
-      try {
-        for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: 360, y: p.y, button: "left", clickCount: 1, buttons: type === "mousePressed" ? 1 : 0 }, sid);
-      } finally { await raw.send("Target.detachFromTarget", { sessionId: sid }).catch(() => {}); }
+      await cdpClick(wins.WA.target, 360, p.y);
       await loaded(p.tab, 8000);
       await sleep(1000);
-      const pt = await targetOf(p.tab);
-      if (!pt) throw new Error(`no target for ${p.tab}`);
-      const pw = await cdp("Browser.getWindowForTarget", { targetId: pt }), ow = await cdp("Browser.getWindowForTarget", { targetId: wins.WA.target });
-      const ps = await attachTo(pt);
-      try {
-        const st = await evaluate(ps, "({ ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, vis: document.visibilityState, focus: document.hasFocus(), hl: history.length })") as Record<string, unknown>;
-        popupInfo[p.tab] = { target: pt, inOpener: pw.windowId === ow.windowId, bounds: pw.bounds, ...st };
-      } finally { await raw.send("Target.detachFromTarget", { sessionId: ps }).catch(() => {}); }
+      popupInfo[p.tab] = await popupState(p.tab, wins.WA.target);
     }, { limitMs: 20_000, snap: true });
-    const pt = popupInfo[p.tab]?.target as string | undefined;
-    if (pt) await step("popup", `close ${p.tab}`, () => cdp("Target.closeTarget", { targetId: pt }), { tailMs: 800, snap: true });
+    if (!popupInfo[p.tab]?.target) continue;
+    if (p.drive) {
+      const d = await step("popup", backName(p, "drive"), async () => {
+        const pt = popupInfo[p.tab].target as string;
+        await cdpClick(pt, LAYOUT.button.x, LAYOUT.button.y);
+        await sleep(500);
+        return { popup: await stateOf(pt), opener: await stateOf(wins.WA.target) };
+      }, { tailMs: 800, snap: true });
+      if (d) driveInfo[p.tab] = d;
+    }
+    const r = await step("popup", backName(p, "back"), () => wayBack(p), { limitMs: 15_000, tailMs: 800, snap: true });
+    if (r) backInfo[p.tab] = r;
   }
 }
 
@@ -540,6 +768,7 @@ const LOOK = [
 if (O.look && browser && !aborted) {
   measureEnd = Date.now();
   clearInterval(stopPoll);
+  stopWatchBack();
   tell("disarm");
   process.stdout.write(`\nLOOK NOW (${O.look} s):\n${LOOK.slice(1).join("\n")}\n\n`);
   say(`LOOK NOW: the agent windows stay open for ${O.look} s`);
@@ -565,6 +794,11 @@ await step("end", "quit the agent Chrome", async () => {
 }, { limitMs: 45_000, tailMs: 1500, always: true });
 clearInterval(stopPoll);
 const endStep = steps.at(-1);
+// agent-browser's give-back watcher ends by itself when the agent Chrome quits (end=agent-gone); else the check ends it.
+if (wb) {
+  for (let i = 0; i < 40 && wb.exitCode === null && wb.signalCode === null; i++) await sleep(50);
+  stopWatchBack();
+}
 if (stopInfo) {
   // How fast the stop was: from the watcher's line of the person's first sign (or the stop) to the end of the step in
   // progress and to the start of the end step.
@@ -587,6 +821,52 @@ else if (inRun(profile) && statSync(profile).isDirectory()) {
   try { rmSync(profile, { recursive: true, maxRetries: 3 }); endLines.push(`removed the agent Chrome's throwaway profile (${profile})`); }
   catch (e) { endLines.push(`could not remove the profile ${profile}: ${(e as Error).message.split("\n")[0]}`); }
 }
+
+// ------------------------------------------------------------------ stable: the second part, in Google Chrome stable (ab-v16.68)
+// A run of its own (this script with --part stable), after the first agent Chrome quit, with the same compiled watcher.
+// Only when Google Chrome stable is installed (the check reads /Applications and installs nothing), is not the first
+// part's agent Chrome, and the first part ran to its end. The dry run runs it with its own Chromium on the next display.
+const stable: string[] = [];
+let stablePart: { ok: boolean; problems: string[]; popupOnly?: boolean } | null = null, stableResult: Record<string, any> | undefined;
+const stableWhyNot = !FULL ? "this run is the stable part"
+  : O.skip.includes("stable") ? "Left out by --skip stable."
+  : O.look ? "Not run: --look (the operator was at the Mac for the look; run the check again without --look for this part)."
+  : !O.dryRun && !existsSync(CHROME_STABLE_BIN) ? `Not measured: Google Chrome (stable) is not installed (no ${CHROME_STABLE_BIN}). The check installs nothing.`
+  : !O.dryRun && O.chromeBin === CHROME_STABLE_BIN ? `Measured in the first part: Google Chrome (stable) was this run's agent Chrome (${CHROME_STABLE_BIN}).`
+  : aborted ? "Not run: the first part stopped early." : fatal ? "Not run: the first part failed." : quit.running !== false ? "Not run: the first part's agent Chrome did not quit (or ps cannot confirm it)."
+  : O.dryRun && O.display >= 9999 ? "Not run: no display after --display for the dry run's second part." : undefined;
+if (stableWhyNot && FULL) stable.push(stableWhyNot);
+if (!stableWhyNot) {
+  const dir = join(RUN, "stable");
+  mkdirSync(dir);
+  const args = O.dryRun
+    ? ["--dry-run", "--part", "stable", "--out-dir", dir, "--chrome", O.chromeBin, "--display", String(O.display + 1)]
+    : ["--on-my-screen", "--part", "stable", "--out-dir", dir, "--chrome-bin", CHROME_STABLE_BIN, "--watcher", watcherBin];
+  if (O.skip.includes("popups")) args.push("--skip", "popups");
+  // Its own stand-in settings stay out: MAC_STANDIN_* are for the first part's test runs.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("MAC_STANDIN_")));
+  say(`stable: the second part runs in ${O.dryRun ? `the dry run's Chromium (${O.chromeBin})` : CHROME_STABLE_BIN}: node ${join(HERE, "mac.ts")} ${args.join(" ")}`);
+  const t0 = Date.now();
+  const child = spawn(process.execPath, [join(HERE, "mac.ts"), ...args], { stdio: ["ignore", "inherit", "inherit"], env });
+  children.push(child);
+  const timer = setTimeout(() => { say("stable: the second part did not end in 5 minutes: the check ends it (SIGTERM to its node process)"); child.kill("SIGTERM"); }, 300_000);
+  const code = await new Promise<number | null>((r) => { child.once("exit", (c) => r(c)); child.once("error", () => r(null)); });
+  clearTimeout(timer);
+  const runs = existsSync(dir) ? readdirSync(dir).filter((n) => n.startsWith("run-")) : [];
+  const file = runs.length === 1 ? join(dir, runs[0], "results.json") : undefined;
+  try { stableResult = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")).result : undefined; } catch { stableResult = undefined; }
+  if (stableResult) {
+    stablePart = { ok: !!stableResult.ok, problems: stableResult.problems ?? [], popupOnly: !!stableResult.popupOnly };
+    stable.push(`Ran as the second part, a run of its own: ${stableResult.product} (${stableResult.chrome}), ${stableResult.seconds} s, exit ${code}${stablePart.popupOnly ? " (an expected result: only popup takes that came back)" : ""}; its summary: ${join(stableResult.run, "summary.md")}.`);
+    for (const g of (stableResult.giveBack ?? []) as { step: string; ms: number | null; by: string; ownMs: number | null }[])
+      stable.push(`A take of the front: ${g.step}: ${g.ms === null ? "did not come back" : `${g.ms} ms`}, given back by ${g.by}${g.ownMs !== null ? ` (the prototype's own after-ms ${g.ownMs})` : ""}.`);
+    for (const b of (stableResult.back ?? []) as BackRow[]) stable.push(`${b.step}: ${b.ok ? "" : `FAIL ${b.error ?? ""}; `}the opener ${b.opener}; after: ${b.after}; the front app ${b.front}; the Space ${b.space}.`);
+    for (const w of ((stableResult.windows ?? []) as WindowRow[]).filter((x) => x.cg !== "no new window")) stable.push(`New window: ${w.step}: ${placementText(w.placement)}; on screen ${w.onscreen}; the Space ${w.space}.`);
+  } else {
+    stablePart = { ok: false, problems: [`it ended with exit ${code ?? "?"} after ${Math.round((Date.now() - t0) / 1000)} s and wrote no results${code === 2 ? " (exit 2: it refused before its Chrome started; see its output above)" : ""}`], popupOnly: false };
+    stable.push(`The second part (${dir}): ${stablePart.problems[0]}.`);
+  }
+}
 if (!O.dryRun && !O.watcher && watcher.exitCode !== null && inRun(watcherBin)) {
   try { rmSync(watcherBin); endLines.push(`removed the compiled watcher (${watcherBin})`); } catch (e) { endLines.push(`could not remove ${watcherBin}: ${(e as Error).message}`); }
 }
@@ -595,10 +875,11 @@ if (!O.dryRun && !O.watcher && watcher.exitCode !== null && inRun(watcherBin)) {
 const watchText = existsSync(watchFile) ? readFileSync(watchFile, "utf8") : "";
 const { bad } = parseWatchLog(watchText);
 const E = events.filter((e) => e.t <= measureEnd!);
+const backLines = existsSync(wbLog) ? parseWatchBack(readFileSync(wbLog, "utf8")) : [];
 const { operator, takes } = frontTakes(E, steps);
 const spaces = spaceChanges(E, steps);
 const wprob = O.dryRun ? [] : watcherProblems(E, bad, ready.t, measureEnd);
-const v = verdict({ takes, spaces, watcher: wprob, missing: notRun, aborted, error: fatal, quit: quitProblem });
+const v: Verdict = joinVerdicts(verdict({ takes, spaces, watcher: wprob, missing: notRun, aborted, error: fatal, quit: quitProblem }), stablePart, "the Google Chrome stable part");
 const sorted = log.slice().sort((a, b) => a.t - b.t);
 const S = (phase: string, name: string) => steps.find((s) => s.phase === phase && s.name === name);
 const after = (label: string) => snapOf(E, `after ${label}`), before = (label: string) => snapOf(E, `before ${label}`);
@@ -679,7 +960,7 @@ const focus = [
   focusLine("WA: click (WB had the focus)", "WA", "WB"),
   (() => { const l = focusLine("WA: person-shaped click and typing", "WA", "WB"); const s = steps.find((x) => x.name === "WA: person-shaped click and typing"); if (!l || !s) return l; const g = stepSignals(sorted, "WA", s.t0, s.t1); return `${l}; input: ${g.moves} moves (${g.movesWithMovement} with movement), press ${g.downUpMs} ms, pressure ${g.pressure}, screen - client ${JSON.stringify(g.screenMinusClient)}, ${g.keydowns} keydown, pointer jumps ${g.pointerJumps}; path from ${JSON.stringify(details.person ?? null)}`; })(),
 ].filter((x): x is string => !!x);
-const popups: PopupRow[] = POPUPS.map((p) => {
+const popups: PopupRow[] = POPUPS.map((p): PopupRow | undefined => {
   const s = S("popup", p.kind), i = popupInfo[p.tab];
   if (!s) return undefined;
   const g = stepSignals(sorted, "WA", s.t0, s.t1);
@@ -692,6 +973,43 @@ const popups: PopupRow[] = POPUPS.map((p) => {
     placement: fresh.length ? placement(windowsOf(after(label(s))), agentPid, fresh[0].n, opPid) : null,
   };
 }).filter((x): x is PopupRow => !!x);
+// ------------------------------------------------------------------ ab-v16.68: popups from a background tab, the way back, who gave the front back
+const bgPopups: BgPopupRow[] = BG_POPUPS.map((p) => {
+  const s = S("popup", p.name), i = bgInfo[p.tab];
+  if (!s) return undefined;
+  const g = stepSignals(sorted, "BG", s.t0, s.t1), h = p.hold ? holds[0] : undefined;
+  const ts = takes.filter((t) => t.step.startsWith(label(s)));
+  const take = ts.length ? ts.map((t) => `${t.t1 === null ? "did not come back" : `away ${t.ms} ms`}${h ? (t.t1 !== null && t.t1 < h.until ? ", back by itself in the time with no give-back" : `, no give-back for the first ${h.until - t.t0} ms`) : ""}`).join("; ") : "no take of the front";
+  const d = p.hold ? snapOf(E, `during ${label(s)}`) : undefined;
+  const during = !p.hold ? "-" : !d ? "no snap" : `front app ${d.front?.name ?? "?"}${d.front?.agent ? " (the agent Chrome)" : ""}; the popup's window (the first window): ${nFirst === undefined ? "?" : placementText(placement(windowsOf(d), agentPid, nFirst, opPid))}`;
+  return {
+    step: label(s), giveBack: p.hold ? `none for ${NO_GIVE_BACK_MS / 1000} s, then the check's watcher` : protoTakes(s) ? "agent-browser's give-back watcher (the prototype)" : wbStarted ? "agent-browser's give-back watcher (the prototype; no ask in this step)" : "the check's watcher (the prototype did not start)",
+    where: i ? (i.inOpener ? "a tab in the opener's window" : "a window of its own") : `- (${s.error ?? "?"})`,
+    popup: i ? `${i.vis}, focus ${i.focus}, history.length ${i.hl}` : "-",
+    opener: `BG ${[...g.focusEvents, ...g.visChanges].join(" ") || "-"}; after: ${g.visAfter}, focus ${g.focusAfter}`,
+    take, during, front: frontName(s.t1 + 1000),
+  };
+}).filter((x): x is BgPopupRow => !!x);
+function protoTakes(s: Step): number { return backLines.filter((l) => "asked" in l.kv && l.t >= s.t0 && l.t <= s.t1 + 1500).length; }
+const back: BackRow[] = POPUPS.flatMap((p) => [p.drive ? backName(p, "drive") : undefined, backName(p, "back")].filter((x): x is string => !!x).map((name) => {
+  const s = S("popup", name);
+  if (!s) return undefined;
+  const g = stepSignals(sorted, "WA", s.t0, s.t1), b = backInfo[p.tab], drive = name === backName(p, "drive"), d = driveInfo[p.tab];
+  const pg = drive ? stepSignals(sorted, p.tab, s.t0, s.t1) : undefined;
+  const snapA = after(label(s)), pa = snapA && nA !== undefined ? placement(windowsOf(snapA), agentPid, nA, opPid) : null;
+  return {
+    step: label(s), how: drive ? `a CDP click in ${p.tab} (the popup rule: drive the new tab); ${p.tab} ${[...pg!.focusEvents, ...pg!.visChanges].join(" ") || "no focus, blur or visibility change"}; after: ${d ? `${d.popup.vis}, document.hasFocus() ${d.popup.focus}` : "not read"}`
+      : String(b?.closedBy ?? (p.back === "close" ? "Target.closeTarget" : "its own window.close()")),
+    ok: s.ok, ms: s.t1 - s.t0, ...(s.error ? { error: s.error } : {}),
+    opener: `WA ${[...g.focusEvents, ...g.visChanges].join(" ") || "-"}`,
+    after: drive ? (d ? `${d.opener.vis}, document.hasFocus() ${d.opener.focus}` : "not read") : b ? `${b.vis}, document.hasFocus() ${b.focus}${b.gone ? "" : `; ${p.tab} did NOT close`}` : "-",
+    front: [frontName(s.t1 + 1000), tookIn(s)].filter(Boolean).join("; "),
+    space: spaces.some((x) => x.step.startsWith(label(s))) ? "CHANGED" : "unchanged",
+    order: nA === undefined ? "?" : `WA: ${placementText(pa)}`,
+  };
+})).filter((x): x is BackRow => !!x);
+const giveBack = giveBackRows(takes, backLines, holds, fallbacks.map((f) => f.t));
+const watchBack = watchBackText(backLines, { started: wbStarted ?? (S("giveback", "start agent-browser's give-back watcher (a prototype)")?.error ? `It did not start: ${S("giveback", "start agent-browser's give-back watcher (a prototype)")!.error}` : undefined), quitAt: endStep?.phase === "end" ? endStep.t0 : undefined });
 const finalSnap = after("facts: the agent app's windows");
 const agentAll = agentWindowsOf(finalSnap), app = finalSnap?.agentApp as { policy?: number; hidden?: boolean; active?: boolean } | undefined;
 const windowIds = [...new Set(pages.map((p) => p.windowId).filter((x) => x !== undefined))];
@@ -701,8 +1019,9 @@ const apis = O.dryRun ? ["(dry run: no macOS window list)"] : [
   `The agent app: activation policy ${app?.policy === 0 ? "regular (a Dock icon and a Cmd-Tab entry of its own)" : app?.policy ?? "?"}, hidden ${app?.hidden}, active ${app?.active}.`,
   "Cmd-` cycles the windows of the app in front only. The agent Chrome is an app of its own (its own pid, Dock icon and Cmd-Tab entry: check 6 of docs/research/2026-11-03-chrome-vs-chrome-beta.md), so Cmd-` in the operator's app does not reach an agent window while the agent Chrome is not in front (from that check, not measured here).",
 ];
-const pointer = { at: realPointer(E), real: realPointerEvents(sorted, realPointer(E), ["F0", "BG", "WA", "WB", "PA", "PB", "PC"], steps) };
+const pointer = { at: realPointer(E), real: realPointerEvents(sorted, realPointer(E), ["F0", "BG", "WA", "WB", "PA", "PB", "PC", "PD", "PE"], steps) };
 const notMeasured = [
+  "A tab switch back to an opener while its popup tab stays open: the check knows no CDP tab switch without an activation (Target.activateTarget and Page.bringToFront activate the window, and the Mac design sends neither). It measures the ways back that need none: the popup closes (Target.closeTarget, or the page's own window.close()).",
   "Window activation (Target.activateTarget, Page.bringToFront, the relay's chrome.windows.update({ focused: true })): the Mac design never activates a window, and the research says that it can bring the agent's app to the front (section 7). The check never sends them.",
   "Target.createTarget with newWindow and no background (a window shown in front): not sent.",
   "The relay's chrome.windows.create({ focused: false }): it needs the agent extension, which Google Chrome on macOS does not load from the command line (the 2026-11-03 report, check 1).",
@@ -718,10 +1037,11 @@ const result: MacResult = {
   chrome: O.chromeBin, product: browser?.product ?? "?", flags: CHROME_ARGS.map((a) => a.startsWith("--user-data-dir=") ? "--user-data-dir=<run>/state/profile" : a.startsWith("--window-name=") ? "--window-name=<name>" : a),
   operator, frontAtEnd: frontAt(E, measureEnd), takes, spaces, startGiveBack: startGB,
   windows: windowRows, tabDrive, windowDrive, records, focus, popups, pointer, apis, look: LOOK, notMeasured,
+  ...(O.part ? { part: O.part } : {}), bgPopups, back, giveBack, watchBack, stable,
 };
 const text = summary(result);
 writeFileSync(join(RUN, "summary.md"), text);
 // The probe's log has no key values (probeRecord), and details.keys only a length (fieldText).
-writeFileSync(join(RUN, "results.json"), `${JSON.stringify({ options: O, result, steps, notRun, stop: stopInfo ?? null, details, popupInfo, pages, wins, watch: events, probe: log }, null, 1)}\n`);
+writeFileSync(join(RUN, "results.json"), `${JSON.stringify({ options: O, result, steps, notRun, stop: stopInfo ?? null, details, popupInfo, bgInfo, backInfo, driveInfo, holds, fallbacks, pages, wins, watch: events, watchBack: backLines, probe: log }, null, 1)}\n`);
 process.stdout.write(`${text}\n(results: ${join(RUN, "results.json")})\n`);
 process.exit(v.ok ? 0 : 1);

@@ -6,8 +6,11 @@
 //
 //   node test/live/anti-detect/mac-standin.ts SECONDS
 //
+// (mac-standin-watchback.ts stands in for agent-browser's give-back watcher, the prototype of mac-watchback.ts.)
+//
 // To test the check's stop rules, its refusals and its analysis, these variables make it log what a Mac can show:
-// MAC_STANDIN_TAKE_MS=N (N ms after its start, the agent Chrome takes the front for 120 ms, and the front comes back),
+// MAC_STANDIN_TAKE_MS=N (N ms after its start, the agent Chrome takes the front for 120 ms, or for
+// MAC_STANDIN_TAKE_LEN_MS, and the front comes back),
 // MAC_STANDIN_POINTER_MS=N (N ms after its start, the pointer moves: a person at the Mac), MAC_STANDIN_INPUT_MS=N
 // (N ms after its start, a key press of the hardware: a person at the Mac), and MAC_STANDIN_HID=NAME=S[,NAME=S]
 // (the ready line's HID reading of NAME is S seconds; the others are 3600: a reading of 0 makes the check refuse).
@@ -48,7 +51,7 @@ const personSeen = (why: string) => { if (personWhy) return; personWhy = why; ar
 if (takeAt > 0) setTimeout(() => {
   emit("front", { pid: agentPid, name: "agent Chrome (stand-in)", bundle: null, agent: true });
   inFront = true;
-  setTimeout(() => { inFront = false; emit("front", front); }, 120);
+  setTimeout(() => { inFront = false; emit("front", front); }, Number(process.env.MAC_STANDIN_TAKE_LEN_MS ?? 120));
 }, takeAt);
 if (pointerAt > 0) setTimeout(() => { emit("pointer", { x: 1, y: 2 }); personSeen("pointer"); }, pointerAt);
 if (inputAt > 0) setTimeout(() => { emit("input", { kind: "keyDown", agoMs: 0 }); personSeen("input"); }, inputAt);
