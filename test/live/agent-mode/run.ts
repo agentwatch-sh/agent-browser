@@ -54,25 +54,27 @@
 // drop, a relay stop) use the endpoint, the probe site's log or CONTROL instead, or they are skipped with the reason:
 // each such result says so ("adapted" or "skip"). The group `scopes` needs two lists, so it is skipped; the group
 // `peer` is refused. The run ends every scope that it used through CONTROL, before the first relay restart and at its
-// end, as a session end does. A socket in the live daemon's folder (/run/user/<uid>/agentwatch/, also through a link)
-// is refused before the run makes its folder or connects (external.ts): the suite never runs in the operator's agent
-// browser. The socket must exist when the run starts, and the run connects to its real path. agentwatch's
+// end, as a session end does. A socket in a socket folder of agentwatch (/run/user/<uid>/agentwatch/, also through a
+// link; /run/agentwatch; ~/.cache/agentwatch), or a hard link to a socket there, is refused before the run makes its
+// folder or connects (external.ts): the suite never runs in the operator's agent browser. The socket must exist when
+// the run starts, its path must have plain characters only (the ws+unix URL changes others; RUN too, in both modes),
+// and the run connects to its real path. agentwatch's
 // relay restart has a backoff (1 s, doubled up to 60 s; a relay that ran 300 s resets it), and the link-up group
 // restarts the relay twice: a second run of that group within 5 minutes waits longer for each restart.
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, appendFileSync, chmodSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TEXT } from "../../../src/relay/policy.ts";
 import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../anti-detect/probe.ts";
 import { StandInDaemon } from "./daemon.ts";
-import { controlAnswer, externalMode } from "./external.ts";
+import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const PROBE = join(ROOT, "docs/superpowers/specs/2026-11-03-two-modes-probe");
@@ -80,8 +82,11 @@ const EXT = process.env.CHROME_EXTENSION ? resolve(process.env.CHROME_EXTENSION)
 /** The external mode: the socket of an endpoint that runs already, and its control (external.ts refuses the live one). */
 const mode = externalMode(process.env, {
   uid: process.getuid!(),
+  home: homedir(),
   realpath: (p) => { try { return realpathSync(p); } catch { return null; } },
   socket: (p) => { try { return statSync(p).isSocket(); } catch { return false; } },
+  id: (p) => { try { const st = statSync(p); return `${st.dev}:${st.ino}`; } catch { return null; } },
+  entries: (d) => { try { return readdirSync(d).map((e) => join(d, e)); } catch { return []; } },
   executable: (p) => { try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; } },
 });
 if (!mode.ok) { process.stderr.write(`${mode.message}\n`); process.exit(2); }
@@ -93,6 +98,8 @@ if (!EXTERNAL && (!EXT || !existsSync(join(EXT, "agent/manifest.json")) || !exis
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 const RUN = resolve(process.env.RUN ?? mkdtempSync(join(tmpdir(), "ab-agent-live-")));
+// The own mode's relay socket is in RUN, and the client URL must keep its path (external.ts, wsPathKept).
+if (!EXTERNAL && !wsPathKept(join(RUN, "relay.sock"))) { process.stderr.write(`RUN=${JSON.stringify(RUN)}: use a path of letters, digits and ._-/ only (the ws+unix URL changes other characters)\n`); process.exit(2); }
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up").split(",");
 /** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
 const PEER = CASES.includes("peer");
@@ -106,7 +113,7 @@ const SCOPES = PEER ? { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scope
 const RELAY_SOCK = EXTERNAL || join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 /** The scopes of this run's clients: the external mode ends each through CONTROL (the probe's concurrency script uses s1 to s3). */
 const USED = new Set<string>(["s1", "s2", "s3"]);
-const url = (scope: string) => { USED.add(scope); return `ws+unix://${RELAY_SOCK}:/devtools/browser/${scope}`; };
+const url = (scope: string) => { USED.add(scope); return wsUrl(RELAY_SOCK, scope); };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The value of `p`, or null when it has none in `ms`. */
 const within = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).then(() => null)]);

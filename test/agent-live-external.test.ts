@@ -8,25 +8,40 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { controlAnswer, externalMode } from "./live/agent-mode/external.ts";
+import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./live/agent-mode/external.ts";
 import { ROOT } from "./helpers.ts";
 
 const UID = 1001;
-const LIVE = `/run/user/${UID}/agentwatch/browser-cdp.sock`;
+const LIVE_DIR = `/run/user/${UID}/agentwatch`;
+const LIVE = `${LIVE_DIR}/browser-cdp.sock`;
+/** Paths that the ws+unix URL parse changes: a space and a non-ASCII letter are percent-encoded, %2e%2e is "..", a TAB
+ *  is removed. Each is a socket on the box below. */
+const ODD = ["/tmp/a b.sock", "/tmp/é.sock", `/tmp/x/%2e%2e/%2e%2e${LIVE}`, "/tmp/a\tb.sock"];
 /** The sockets that exist on the box below (their real paths). */
-const SOCKETS = new Set([LIVE, "/tmp/t/run/browser-cdp.sock", `/run/user/${UID}/agentwatch-test/run/browser-cdp.sock`]);
+const SOCKETS = new Set([LIVE, "/tmp/t/run/browser-cdp.sock", `/run/user/${UID}/agentwatch-test/run/browser-cdp.sock`, "/tmp/hard.sock", "/tmp/hard2.sock", "/tmp/c:d.sock", ...ODD]);
 /** A box where /tmp/link is a link to the live daemon's folder (with no none.sock in it), /tmp/l.sock a link to the
  *  live socket, /tmp/dead.sock a link to a live socket that is gone (so it has no real path), /tmp/t.sock a link to
- *  /tmp/t/run/browser-cdp.sock, /tmp/gone does not exist, and /tmp/ctl is the only executable. */
+ *  /tmp/t/run/browser-cdp.sock, /tmp/colon.sock a link to /tmp/c:d.sock, /tmp/hard.sock a hard link to the live
+ *  socket (the same device and inode), /tmp/hard2.sock one to the live socket of uid 1002, /tmp/file a plain file, /tmp/gone does not exist, and /tmp/ctl is the only
+ *  executable. */
 const box = {
   uid: UID,
+  home: "/home/u",
   realpath: (p: string) => {
     if (p === "/tmp/link/none.sock" || p === "/tmp/dead.sock" || p.startsWith("/tmp/gone")) return null;
     if (p === "/tmp/l.sock") return LIVE;
     if (p === "/tmp/t.sock") return "/tmp/t/run/browser-cdp.sock";
-    return p.startsWith("/tmp/link") ? p.replace("/tmp/link", `/run/user/${UID}/agentwatch`) : p;
+    if (p === "/tmp/colon.sock") return "/tmp/c:d.sock";
+    return p.startsWith("/tmp/link") ? p.replace("/tmp/link", LIVE_DIR) : p;
   },
   socket: (p: string) => { const r = box.realpath(p); return r !== null && SOCKETS.has(r); },
+  id: (p: string) => {
+    const r = box.realpath(p);
+    if (r === null) return null;
+    return r === LIVE || r === "/tmp/hard.sock" ? "1:10" : r === "/run/user/1002/agentwatch/browser-cdp.sock" || r === "/tmp/hard2.sock" ? "1:20" : `1:${r}`;
+  },
+  entries: (d: string) => (d === LIVE_DIR ? [LIVE, `${LIVE_DIR}/browser.sock`, `${LIVE_DIR}/hooks.sock`]
+    : d === "/run/user/1002/agentwatch" ? ["/run/user/1002/agentwatch/browser-cdp.sock"] : d === "/run/user" ? [`/run/user/${UID}`, "/run/user/1002"] : []),
   executable: (p: string) => p === "/tmp/ctl",
 };
 /** The same box, where the live daemon's folder is itself a link to /srv/aw. */
@@ -64,8 +79,28 @@ test("the external mode needs a socket that exists, with no ':' in its path, and
   assert.match(refused({ RELAY_SOCK: "/tmp/dead.sock", CONTROL: "/tmp/ctl" }), /is no socket that exists/);
   assert.match(refused({ RELAY_SOCK: "/tmp/gone/browser-cdp.sock", CONTROL: "/tmp/ctl" }), /is no socket that exists/);
   // ws takes a unix socket's path only up to its first ':', so the guard would check another path than the run uses.
-  assert.match(refused({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock:/devtools/browser/pw", CONTROL: "/tmp/ctl" }), /contains ':'/);
+  assert.match(refused({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock:/devtools/browser/pw", CONTROL: "/tmp/ctl" }), /the ws\+unix URL/);
+  // A plain file is no socket.
+  assert.match(refused({ RELAY_SOCK: "/tmp/file", CONTROL: "/tmp/ctl" }), /is no socket that exists/);
   assert.deepEqual(externalMode({ RELAY_SOCK: "/tmp/t.sock", CONTROL: "/tmp/ctl" }, box), { ok: true, socket: "/tmp/t/run/browser-cdp.sock", control: "/tmp/ctl" });
+});
+
+test("the external mode refuses a path that the ws+unix URL changes, and a hard link to a live socket", () => {
+  // A ':' in the real path only, and each path that the URL parse changes (review-62b, B3).
+  assert.match(refused({ RELAY_SOCK: "/tmp/colon.sock", CONTROL: "/tmp/ctl" }), /the ws\+unix URL/);
+  for (const sock of ODD) assert.match(refused({ RELAY_SOCK: sock, CONTROL: "/tmp/ctl" }), /the ws\+unix URL/, JSON.stringify(sock));
+  // The same device and inode as a socket of the live folder (review-62b, B4).
+  assert.match(refused({ RELAY_SOCK: "/tmp/hard.sock", CONTROL: "/tmp/ctl" }), /^refused: .* is the same file as a socket of the live daemon/);
+  assert.match(refused({ RELAY_SOCK: "/tmp/hard2.sock", CONTROL: "/tmp/ctl" }), /^refused: .* is the same file as a socket of the live daemon/);
+  // agentwatch's other socket folders: the gateway's, and the macOS one (runtime_paths.py).
+  assert.match(refused({ RELAY_SOCK: "/run/agentwatch/x.sock", CONTROL: "/tmp/ctl" }), /^refused: .* live daemon's socket folder/);
+  assert.match(refused({ RELAY_SOCK: "/home/u/.cache/agentwatch/run/browser-cdp.sock", CONTROL: "/tmp/ctl" }), /^refused: .* live daemon's socket folder/);
+});
+
+test("a socket path is kept by the ws+unix URL only when it has plain characters and the URL gives it back", () => {
+  assert.equal(wsUrl("/tmp/t/run/browser-cdp.sock", "s1"), "ws+unix:///tmp/t/run/browser-cdp.sock:/devtools/browser/s1");
+  for (const p of ["/tmp/t/run/relay.sock", "/tmp/ab-agent-live-Xy_9.z/relay.sock", "/tmp/.../relay.sock"]) assert.equal(wsPathKept(p), true, p);
+  for (const p of [...ODD, "/tmp/c:d.sock", "/tmp/a#b.sock", "/tmp/a?b.sock", "/tmp/a\nb.sock", "relative.sock", "/tmp/../x.sock"]) assert.equal(wsPathKept(p), false, JSON.stringify(p));
 });
 
 test("the external mode needs an executable CONTROL, and refuses the group peer, which needs the stand-in daemon", () => {
