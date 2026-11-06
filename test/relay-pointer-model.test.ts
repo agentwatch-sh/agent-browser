@@ -573,7 +573,7 @@ test("step 3's limit: a front page that holds its button for 3 s gets no path at
   } finally { await h.close(); }
 });
 
-test("step 3: no path when the front page's tab has a call that waits in the activation chain (its gate is set, or becomes set during the wait); the chain goes on at once", async () => {
+test("step 3: no path when the front page holds a button and its tab has a call that waits in the activation chain (its gate is set, or becomes set during the wait); the chain goes on at once", async () => {
   const { h, d } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
@@ -592,6 +592,23 @@ test("step 3: no path when the front page's tab has a call that waits in the act
     await Promise.all([a, b, rel]);
     assert.ok(Date.now() - t0 < 1500, "the step did not wait for a release that waits behind it");
     assert.equal(d.moves.filter((m) => m.path.at(-1).x === 100 && m.path.at(-1).y === 100 + OFFSET).length, 0, "A's step played no path (B's own step after it may)");
+  } finally { await h.close(); }
+});
+
+test("step 3: a front page that holds no button plays the path also when its next call waits in the chain (the gate rule is for a held button's release)", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let first = true;
+    h.fake.op = async ({ op }) => { if (op === "tabs.get" && first) { first = false; await gate; } return undefined; };
+    const a = mouse(c, A, "mousePressed", 100, 100);
+    await until(() => h.fake.sent("tabs.get").length, "A's step");
+    const b = c.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }, B.sessionId); // B's call waits in the chain; B holds no button
+    open();
+    await Promise.all([a, b]);
+    assert.equal(d.moves.filter((m) => m.path.at(-1).x === 100 && m.path.at(-1).y === 100 + OFFSET).length, 1, "A's step played its path");
   } finally { await h.close(); }
 });
 

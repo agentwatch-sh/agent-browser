@@ -880,6 +880,17 @@ export class Model {
     return usable(g, this.display) && !tab.metrics && !o.minimized && !(o.front && g.vis === "hidden");
   }
 
+  /** Why a geometry is not usable, for the step's log line (sizes and ratios only, never a point). */
+  private unusable(g: Geo | null, tab: Tab, o: { minimized?: boolean; front?: boolean } = {}): string {
+    if (!g) return tab.geoReading ? "a read in flight" : "no read";
+    if (tab.metrics) return "a device-metrics override";
+    if (o.minimized) return "minimized";
+    if (o.front && g.vis === "hidden") return "hidden";
+    if (g.dpr !== 1 || g.scale !== 1) return `ratio ${g.dpr}, scale ${g.scale}`;
+    if (!this.display || g.sw !== this.display.width || g.sh !== this.display.height) return `screen ${g.sw} x ${g.sh}`;
+    return `viewport ${g.iw} x ${g.ih}`;
+  }
+
   /** A display point recorded as a page's last point (an X record), or unknown when it is outside its viewport. */
   private mark(tab: Tab, g: Geo | null, d: Pt): void {
     const p = this.usableFor(g, tab) ? toPage(g, d) : null;
@@ -971,15 +982,16 @@ export class Model {
   }
 
   /**
-   * Step 3, within one ACTIVATE_MAX_MS: wait for the front page's release (no path when its tab's next call waits in
-   * the activation chain, also when that comes during the wait), wait for a catch-up that runs in it, chain its gate on
-   * its old gate (its later calls wait behind the step), then wait for both pages' pointer input in flight.
+   * Step 3, within one ACTIVATE_MAX_MS: when the front page holds a button, wait for its release (no path when its tab's
+   * next call waits in the activation chain, also when that comes during the wait: its release would wait behind this
+   * step), wait for a catch-up that runs in it, chain its gate on its old gate (its later calls wait behind the step),
+   * then wait for both pages' pointer input in flight.
    */
   private async waitAndHold(front: Tab, tab: Tab): Promise<{ ok: boolean; why?: string; release: (() => void) | null }> {
     const end = Date.now() + ACTIVATE_MAX_MS;
     const gated = () => front.chainSteps > 0;
     for (;;) {
-      if (gated()) return { ok: false, why: "the front page's next call waits in the activation chain", release: null };
+      if (front.pressed && gated()) return { ok: false, why: "the front page holds a button and its next call waits in the activation chain", release: null };
       if (Date.now() >= end) return { ok: false, why: "step 3 reached its limit", release: null };
       if (front.pressed) {
         await new Promise<void>((r) => { const timer = setTimeout(done, Math.min(25, end - Date.now())); function done() { clearTimeout(timer); r(); } front.released.push(done); });
@@ -1004,8 +1016,8 @@ export class Model {
   private async plan(front: Tab, tab: Tab, S: Pt, T: Pt, w: any): Promise<Plan> {
     const [gF, gT] = await Promise.all([this.geometry(front), this.geometry(tab)]);
     const base = { gF, gT };
-    if (!this.usableFor(gF, front, { front: true })) return { ...base, why: "the front page's geometry is not usable" };
-    if (!this.usableFor(gT, tab, { minimized: w?.state === "minimized" })) return { ...base, why: "the entering page's geometry is not usable" };
+    if (!this.usableFor(gF, front, { front: true })) return { ...base, why: `the front page's geometry is not usable (${this.unusable(gF, front, { front: true })})` };
+    if (!this.usableFor(gT, tab, { minimized: w?.state === "minimized" })) return { ...base, why: `the entering page's geometry is not usable (${this.unusable(gT, tab, { minimized: w?.state === "minimized" })})` };
     if (!this.at) await this.readPointer();
     if (!this.at || !this.display) return { ...base, why: "the pointer's place is unknown" };
     const rect = clampRect(gF), Sd = toDisplay(gF, S), Td = toDisplay(gT, T);
