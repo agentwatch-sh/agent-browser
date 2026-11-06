@@ -54,8 +54,9 @@
 // drop, a relay stop) use the endpoint, the probe site's log or CONTROL instead, or they are skipped with the reason:
 // each such result says so ("adapted" or "skip"). The group `scopes` needs two lists, so it is skipped; the group
 // `peer` is refused. The run ends every scope that it used through CONTROL, before the first relay restart and at its
-// end, as a session end does. A socket in the live daemon's folder (/run/user/<uid>/agentwatch/) is refused before the
-// run makes its folder or connects (external.ts): the suite never runs in the operator's agent browser. agentwatch's
+// end, as a session end does. A socket in the live daemon's folder (/run/user/<uid>/agentwatch/, also through a link)
+// is refused before the run makes its folder or connects (external.ts): the suite never runs in the operator's agent
+// browser. The socket must exist when the run starts, and the run connects to its real path. agentwatch's
 // relay restart has a backoff (1 s, doubled up to 60 s; a relay that ran 300 s resets it), and the link-up group
 // restarts the relay twice: a second run of that group within 5 minutes waits longer for each restart.
 
@@ -80,6 +81,7 @@ const EXT = process.env.CHROME_EXTENSION ? resolve(process.env.CHROME_EXTENSION)
 const mode = externalMode(process.env, {
   uid: process.getuid!(),
   realpath: (p) => { try { return realpathSync(p); } catch { return null; } },
+  socket: (p) => { try { return statSync(p).isSocket(); } catch { return false; } },
   executable: (p) => { try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; } },
 });
 if (!mode.ok) { process.stderr.write(`${mode.message}\n`); process.exit(2); }
@@ -387,6 +389,8 @@ async function playwrightCases(pw: any) {
     return n;
   }, { want: (d) => d === 10, ms: 60_000 });
   const bSawFrom = (from: number) => siteLines().slice(from).some((l) => l.includes('"host":"b.localhost"'));
+  // Playwright (1.64) gives the popup event only after the popup's first navigation, so a popup that stays at its
+  // first about:blank (no block, no navigation) times out at 8 s and fails this case (review-62 measured it).
   await step(G, "an off-list popup is blocked (DNR)", () => onPage(async (p) => {
     await p.goto(A + "/");
     const from = siteLines().length;
@@ -1542,7 +1546,9 @@ async function externalLinkUpCases(WebSocket: any) {
     return { listed, href };
   }, { want: (x) => x.listed.length === 1 && x.listed[0][0] === restartTarget && x.listed[0][1] === false && x.href === `${A}/m?lu-restart`, ms: 30_000 });
 
-  await step(G, "a client that connects while the relay restarts gets no connection until the link-up detaches are done", async () => {
+  // review-62: the real daemon shows a client nothing of the link-up detaches, so this case checks the endpoint's
+  // answers only (the own mode's case of the same place checks the hold until the detaches are done).
+  await step(G, "a client that connects while the relay restarts gets 503, and the endpoint answers 404 when the new relay is ready", async () => {
     const c = await rawClient(WebSocket, "lu-hold");
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     const want = `${A}/m?lu-hold`;

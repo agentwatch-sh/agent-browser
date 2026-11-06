@@ -12,14 +12,30 @@ import { controlAnswer, externalMode } from "./live/agent-mode/external.ts";
 import { ROOT } from "./helpers.ts";
 
 const UID = 1001;
-/** A box where /tmp/link is a link to the live daemon's folder (with no none.sock in it), /tmp/gone does not exist,
- *  and /tmp/ctl is the only executable. */
+const LIVE = `/run/user/${UID}/agentwatch/browser-cdp.sock`;
+/** The sockets that exist on the box below (their real paths). */
+const SOCKETS = new Set([LIVE, "/tmp/t/run/browser-cdp.sock", `/run/user/${UID}/agentwatch-test/run/browser-cdp.sock`]);
+/** A box where /tmp/link is a link to the live daemon's folder (with no none.sock in it), /tmp/l.sock a link to the
+ *  live socket, /tmp/dead.sock a link to a live socket that is gone (so it has no real path), /tmp/t.sock a link to
+ *  /tmp/t/run/browser-cdp.sock, /tmp/gone does not exist, and /tmp/ctl is the only executable. */
 const box = {
   uid: UID,
-  realpath: (p: string) => (p === "/tmp/link/none.sock" || p.startsWith("/tmp/gone") ? null : p.startsWith("/tmp/link") ? p.replace("/tmp/link", `/run/user/${UID}/agentwatch`) : p),
+  realpath: (p: string) => {
+    if (p === "/tmp/link/none.sock" || p === "/tmp/dead.sock" || p.startsWith("/tmp/gone")) return null;
+    if (p === "/tmp/l.sock") return LIVE;
+    if (p === "/tmp/t.sock") return "/tmp/t/run/browser-cdp.sock";
+    return p.startsWith("/tmp/link") ? p.replace("/tmp/link", `/run/user/${UID}/agentwatch`) : p;
+  },
+  socket: (p: string) => { const r = box.realpath(p); return r !== null && SOCKETS.has(r); },
   executable: (p: string) => p === "/tmp/ctl",
 };
-const refused = (env: Record<string, string>) => { const r = externalMode(env, box); assert.equal(r.ok, false, JSON.stringify(env)); return (r as { message: string }).message; };
+/** The same box, where the live daemon's folder is itself a link to /srv/aw. */
+const linkedLive = {
+  ...box,
+  realpath: (p: string) => (p.startsWith(`/run/user/${UID}/agentwatch/`) || p === `/run/user/${UID}/agentwatch` ? p.replace(`/run/user/${UID}/agentwatch`, "/srv/aw") : p),
+  socket: (p: string) => p === "/srv/aw/browser-cdp.sock",
+};
+const refused = (env: Record<string, string>, o = box) => { const r = externalMode(env, o); assert.equal(r.ok, false, JSON.stringify(env)); return (r as { message: string }).message; };
 
 test("without RELAY_SOCK the suite runs in its own mode", () => {
   assert.deepEqual(externalMode({ CONTROL: "/tmp/ctl" }, box), { ok: true, socket: null });
@@ -31,19 +47,36 @@ test("the external mode refuses every socket of the live daemon's folder, also t
   assert.match(refused({ RELAY_SOCK: "/xdg/agentwatch/browser-cdp.sock", CONTROL: "/tmp/ctl", XDG_RUNTIME_DIR: "/xdg" }), /^refused: /);
   // A missing socket in a linked folder: the folder's real path counts.
   assert.match(refused({ RELAY_SOCK: "/tmp/link/none.sock", CONTROL: "/tmp/ctl" }), /^refused: /);
+  // A link in another folder to the live socket: the socket's real path counts.
+  assert.match(refused({ RELAY_SOCK: "/tmp/l.sock", CONTROL: "/tmp/ctl" }), /^refused: /);
+  // The path is resolved before the check: as text, this one starts outside the live folder.
+  assert.match(refused({ RELAY_SOCK: `/tmp/../run/user/${UID}/agentwatch/browser-cdp.sock`, CONTROL: "/tmp/ctl" }), /^refused: /);
+  // The live folder of another user (a run as root), and the real path of a live folder that is a link.
+  assert.match(refused({ RELAY_SOCK: "/run/user/0/agentwatch/browser-cdp.sock", CONTROL: "/tmp/ctl" }), /^refused: /);
+  assert.match(refused({ RELAY_SOCK: "/srv/aw/browser-cdp.sock", CONTROL: "/tmp/ctl" }, linkedLive), /^refused: /);
   // Another folder whose name only starts the same way is not the live one.
   assert.deepEqual(externalMode({ RELAY_SOCK: `/run/user/${UID}/agentwatch-test/run/browser-cdp.sock`, CONTROL: "/tmp/ctl" }, box),
     { ok: true, socket: `/run/user/${UID}/agentwatch-test/run/browser-cdp.sock`, control: "/tmp/ctl" });
+});
+
+test("the external mode needs a socket that exists, with no ':' in its path, and connects to its real path", () => {
+  // A link to a live socket that is gone has no real path: the relay could come back at it during the ready wait.
+  assert.match(refused({ RELAY_SOCK: "/tmp/dead.sock", CONTROL: "/tmp/ctl" }), /is no socket that exists/);
+  assert.match(refused({ RELAY_SOCK: "/tmp/gone/browser-cdp.sock", CONTROL: "/tmp/ctl" }), /is no socket that exists/);
+  // ws takes a unix socket's path only up to its first ':', so the guard would check another path than the run uses.
+  assert.match(refused({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock:/devtools/browser/pw", CONTROL: "/tmp/ctl" }), /contains ':'/);
+  assert.deepEqual(externalMode({ RELAY_SOCK: "/tmp/t.sock", CONTROL: "/tmp/ctl" }, box), { ok: true, socket: "/tmp/t/run/browser-cdp.sock", control: "/tmp/ctl" });
 });
 
 test("the external mode needs an executable CONTROL, and refuses the group peer, which needs the stand-in daemon", () => {
   assert.match(refused({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock" }), /^usage: RELAY_SOCK=<socket> CONTROL=/);
   assert.match(refused({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock", CONTROL: "/tmp/other" }), /^usage: /);
   assert.match(refused({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock", CONTROL: "/tmp/ctl", CASES: "peer" }), /group peer .* own mode only/);
-  // The live folder's refusal comes first, also with no CONTROL.
+  // The live folder's refusal comes first, also with no CONTROL, and also before the group peer's.
   assert.match(refused({ RELAY_SOCK: `/run/user/${UID}/agentwatch/browser-cdp.sock` }), /^refused: /);
-  assert.deepEqual(externalMode({ RELAY_SOCK: "/tmp/gone/browser-cdp.sock", CONTROL: "/tmp/ctl", CASES: "playwright,link-up" }, box),
-    { ok: true, socket: "/tmp/gone/browser-cdp.sock", control: "/tmp/ctl" });
+  assert.match(refused({ RELAY_SOCK: `/run/user/${UID}/agentwatch/browser-cdp.sock`, CONTROL: "/tmp/ctl", CASES: "peer" }), /^refused: /);
+  assert.deepEqual(externalMode({ RELAY_SOCK: "/tmp/t/run/browser-cdp.sock", CONTROL: "/tmp/ctl", CASES: "playwright,link-up" }, box),
+    { ok: true, socket: "/tmp/t/run/browser-cdp.sock", control: "/tmp/ctl" });
 });
 
 test("the control's answer is the JSON object in its output, or a failed answer that says why", () => {
