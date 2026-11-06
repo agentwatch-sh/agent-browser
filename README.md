@@ -1085,13 +1085,16 @@ a second; no client method reaches these ops). The relay (`src/relay/model.ts`, 
   catch-up), also on the Mac, where it sends no `daemon.` op.
 - It keeps each page's last point (the point that Chrome last saw: each client's `Input.dispatchMouseEvent`
   and `Input.dispatchDragEvent` on the page's own session), the page under the pointer (the front page:
-  the page of the last activation step, or a new window), and each page's held button.
+  the page of the last activation step whose raise the relay sent, or a new window), and each page's held
+  button (a press on any session of the page). A client's `Browser.setWindowBounds` waits for the step that
+  runs and the window's catch-ups.
 - The activation step, one at a time for all clients, also for a client's `Page.bringToFront` and
   `Target.activateTarget`: when a page comes under the pointer and both last points are known, the relay
   waits for the front page's release (at most 2 s), holds the front page's later calls, reads both pages'
-  geometry (one `Runtime.evaluate` in the relay's own isolated world; no client sees it; for a front page
-  that no client holds, as after each command of agent-browser's CLI, the last geometry of the relay's own
-  reads, which goes at every window event that the relay sees), plans a path with `src/input.ts`'s generator
+  geometry (one `Runtime.evaluate` in the relay's own isolated world, which it makes before each read; no
+  client or page script sees it; for a front page that no client holds, as after each command of
+  agent-browser's CLI, the last usable geometry of the relay's own reads, which goes at every window event
+  that the relay sees and at each read that is not usable), plans a path with `src/input.ts`'s generator
   from the front page's last point to the entering page's, clamped 2 px inside the front page's content box
   (the viewport less its scrollbars: a page gets no mouse event over its scrollbars), and has the daemon play
   it before the window comes forward. The entering page then
