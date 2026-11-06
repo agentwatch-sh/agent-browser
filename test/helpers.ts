@@ -1,9 +1,10 @@
 // Test helpers: a fixture HTTP server on 127.0.0.1, the fixture site the fake Chrome shows, a
-// private consumer (its own temp state folder and allowlist), and a runner for the real CLI.
+// private consumer (its own temp state folder and allowlist), a runner for the real CLI, and a stand-in endpoint for
+// spawn tests of the agent-mode live suite.
 
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,4 +114,115 @@ export function cli(args: string[], opts: { input?: string; cwd?: string; env?: 
 /** The global flags of one consumer for the CLI. */
 export function flags(c: Consumer, endpoint: string, extra: string[] = []): string[] {
   return ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", endpoint, "--no-launch", ...extra];
+}
+
+export type SuiteStandIn = {
+  dir: string; link: string; real: string; hook: string;
+  run: (env: NodeJS.ProcessEnv) => Promise<CliRun>;
+  /** The CONTROL calls of the runs so far, one line each ("status", "end-scope s1"). */
+  calls: () => string[];
+  /** The lines of the hook's log (what the hook did). */
+  hookLog: () => string[];
+  remove: () => Promise<void>;
+};
+
+/** The stand-in npm of suiteStandIn: it fails, or with STAND_IN_NPM=install it makes the two modules that the run loads. */
+const STAND_IN_NPM = `#!/bin/sh
+[ "$STAND_IN_NPM" = install ] || { echo "the stand-in npm fails: $*" >&2; exit 1; }
+case "$1" in
+  pack) echo agent-browser-0.0.0.tgz ;;
+  install) mkdir -p node_modules/playwright-core node_modules/ws || exit 1
+    echo 'module.exports = {};' > node_modules/playwright-core/index.js
+    echo 'module.exports = {};' > node_modules/ws/index.js ;;
+esac
+`;
+
+/** The stand-in CONTROL: it logs each call; its status says that the browser runs (STAND_IN_RUNNING=false: it does not).
+ *  With STAND_IN_CONTROL=signal its second status call sends SIGINT to the run and answers 2 s later. */
+const STAND_IN_CONTROL = `#!/bin/sh
+here=$(dirname "$0")
+echo "$*" >> "$here/control.calls"
+if [ "$1" = status ] && [ "$STAND_IN_CONTROL" = signal ] && [ "$(grep -c '^status' "$here/control.calls")" = 2 ]; then
+  kill -INT "$PPID"; sleep 2
+fi
+echo "{\\"ok\\": true, \\"running\\": \${STAND_IN_RUNNING:-true}, \\"receiver\\": true, \\"endpoint\\": {\\"state\\": \\"ready\\"}}"
+`;
+
+/**
+ * The fault injection of suiteStandIn, for the run only (NODE_OPTIONS=--import=<hook>; STAND_IN_HOOK picks it). Each
+ * action names a path of the run folder (RUN, or a new ab-agent-live-* folder) and goes into hook.log.
+ * - race:<names>: just before the run's mkdirSync of <RUN>/<name>, another "run" makes that folder with theirs.txt.
+ * - empty-error: the run's mkdirSync of <RUN>/install throws an error with an empty message.
+ * - signal-then-error: the probe's site ignores SIGTERM and then sends SIGINT to the run, so that the cleanup that
+ *   the signal starts waits 3 s for the site (then SIGKILL); each HTTP answer to the run waits until the run saw the
+ *   signal; then the run's mkdirSync of <RUN>/mcp-out throws an error, before the cleanup writes results.json.
+ */
+const STAND_IN_HOOK = `import fs from "node:fs";
+import http from "node:http";
+import { syncBuiltinESMExports } from "node:module";
+import { basename, dirname } from "node:path";
+const [mode, arg = ""] = (process.env.STAND_IN_HOOK ?? "").split(":");
+const log = (line) => fs.appendFileSync(new URL("./hook.log", import.meta.url), line + "\\n");
+if (mode === "signal-then-error" && process.argv[1]?.endsWith("/site.mjs")) {
+  process.on("SIGTERM", () => {});
+  log("the site sent SIGINT");
+  process.kill(process.ppid, "SIGINT");
+}
+const inRun = (p, name) => basename(String(p)) === name && (process.env.RUN ? dirname(String(p)) === process.env.RUN : /\\/ab-agent-live-[^/]+$/.test(dirname(String(p))));
+if (mode && process.argv[1]?.endsWith("/test/live/agent-mode/run.ts")) {
+  const mkdir = fs.mkdirSync, write = fs.writeFileSync, get = http.get;
+  let signalled = false;
+  process.on("SIGINT", () => { signalled = true; });
+  const done = new Set();
+  fs.mkdirSync = function (p, ...rest) {
+    if (mode === "race" && arg.split(",").some((n) => inRun(p, n)) && !done.has(String(p))) {
+      done.add(String(p));
+      mkdir(p, { recursive: true });
+      write(String(p) + "/theirs.txt", "made by another run\\n");
+      log("made " + basename(String(p)));
+    }
+    if (mode === "empty-error" && inRun(p, "install")) { log("threw an empty error"); throw new Error(""); }
+    if (mode === "signal-then-error" && inRun(p, "mcp-out") && signalled) { log("threw after the signal"); throw new Error("an error after the signal"); }
+    return mkdir.call(this, p, ...rest);
+  };
+  if (mode === "signal-then-error") {
+    http.get = function (o, cb) { return get.call(this, o, (res) => { const go = () => (signalled ? cb(res) : setTimeout(go, 10)); go(); }); };
+  }
+  syncBuiltinESMExports();
+}
+`;
+
+/**
+ * A stand-in endpoint for spawn tests of the agent-mode live suite (test/live/agent-mode/run.ts) in its external mode:
+ * a Unix socket of the test's own that answers every request with 404 (a ready endpoint; no agent browser is behind
+ * it) and a link to it, a CONTROL stub, an npm that fails, so that the run stops at its scratch install, before it
+ * starts or connects anything, and a hook for fault injection (STAND_IN_HOOK). With STAND_IN_NPM=install and
+ * CASES=none the run passes with no group. `run` gives RELAY_SOCK the link and SITE_PORT=0, so that the run checks no
+ * port and its site takes a free one: no spawn test touches a port of another program.
+ */
+export async function suiteStandIn(): Promise<SuiteStandIn> {
+  const dir = mkdtempSync(join(tmpdir(), "ab-suite-"));
+  mkdirSync(join(dir, "real"));
+  mkdirSync(join(dir, "bin"));
+  const sock = join(dir, "real/relay.sock"), link = join(dir, "link.sock"), control = join(dir, "control"), hook = join(dir, "hook.mjs");
+  const server = createServer((_req, res) => { res.statusCode = 404; res.end(); });
+  await new Promise<void>((r) => server.listen(sock, r));
+  symlinkSync(sock, link);
+  writeFileSync(control, STAND_IN_CONTROL, { mode: 0o755 });
+  writeFileSync(join(dir, "bin/npm"), STAND_IN_NPM, { mode: 0o755 });
+  writeFileSync(hook, STAND_IN_HOOK);
+  const lines = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").split("\n").filter(Boolean) : []);
+  return {
+    dir, link, real: realpathSync(sock), hook,
+    run: (env) => new Promise((resolve) => {
+      execFile(process.execPath, [join(ROOT, "test/live/agent-mode/run.ts")], {
+        encoding: "utf8", timeout: 60_000,
+        env: { PATH: `${join(dir, "bin")}:${process.env.PATH}`, HOME: process.env.HOME, RELAY_SOCK: link, CONTROL: control, SITE_PORT: "0",
+          ...(env.STAND_IN_HOOK ? { NODE_OPTIONS: `--import=${hook}` } : {}), ...env },
+      }, (error, stdout, stderr) => resolve({ status: error ? (typeof error.code === "number" ? error.code : null) : 0, stdout, stderr, json: undefined }));
+    }),
+    calls: () => lines("control.calls"),
+    hookLog: () => lines("hook.log"),
+    remove: async () => { server.closeAllConnections(); await new Promise<void>((r) => server.close(() => r())); rmSync(dir, { recursive: true, force: true }); },
+  };
 }

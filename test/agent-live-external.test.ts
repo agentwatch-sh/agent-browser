@@ -5,11 +5,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./live/agent-mode/external.ts";
-import { ROOT } from "./helpers.ts";
+import { ROOT, suiteStandIn } from "./helpers.ts";
 
 const UID = 1001;
 const LIVE_DIR = `/run/user/${UID}/agentwatch`;
@@ -126,9 +126,41 @@ test("the suite refuses the live daemon's socket before it makes its run folder 
   const uid = process.getuid!();
   const r = spawnSync(process.execPath, [join(ROOT, "test/live/agent-mode/run.ts")], {
     encoding: "utf8", timeout: 30_000,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, RUN: run, RELAY_SOCK: `/run/user/${uid}/agentwatch/browser-cdp.sock`, CONTROL: "/bin/true" },
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, RUN: run, RELAY_SOCK: `/run/user/${uid}/agentwatch/browser-cdp.sock`, CONTROL: "/bin/true", SITE_PORT: "0" },
   });
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /^refused: .* is in the live daemon's socket folder/);
   assert.equal(existsSync(run), false);
+});
+
+test("the own mode refuses a RUN that the ws+unix URL changes, before it makes the run folder", () => {
+  // The own mode first needs CHROME_EXTENSION with agent/manifest.json and test/live/host.py: a stand-in folder.
+  const dir = mkdtempSync(join(tmpdir(), "ab-run-check-"));
+  try {
+    const ext = join(dir, "ext");
+    mkdirSync(join(ext, "agent"), { recursive: true });
+    mkdirSync(join(ext, "test/live"), { recursive: true });
+    writeFileSync(join(ext, "agent/manifest.json"), "{}");
+    writeFileSync(join(ext, "test/live/host.py"), "");
+    const run = join(dir, "a b", "run");
+    const r = spawnSync(process.execPath, [join(ROOT, "test/live/agent-mode/run.ts")], {
+      encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: process.env.HOME, CHROME_EXTENSION: ext, RUN: run, SITE_PORT: "0" },
+    });
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /^RUN=".*\/a b\/run": use a path of letters, digits and \._-\/ only/);
+    assert.equal(existsSync(join(dir, "a b")), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the run's clients connect to the real path that the guard checked, not to RELAY_SOCK as given", async () => {
+  // RELAY_SOCK is a link: the env line's endpoint (url() of scope s1) must name the link's real path.
+  const s = await suiteStandIn();
+  try {
+    const r = await s.run({ RUN: join(s.dir, "run") });
+    assert.equal(r.status, 1, r.stderr);
+    const env = JSON.parse(r.stdout.split("\n")[1]);
+    assert.equal(env.endpoint, wsUrl(s.real, "s1"));
+    assert.notEqual(s.real, s.link);
+    assert.equal(env.external.socket, s.real);
+  } finally { await s.remove(); }
 });
