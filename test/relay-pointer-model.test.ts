@@ -977,7 +977,10 @@ test("review-68 B1: each geometry read makes the relay's world first and evaluat
 });
 
 test("review-68 B2: a press on a frame's (child) session is a held button of its page: no path while it holds", async () => {
+  // The step's log line (times and counts) names why the step played no path: the release, not step 3's limit.
+  process.env.AGENT_BROWSER_POINTER_LOG = "1";
   const { h, d } = await onHarness();
+  delete process.env.AGENT_BROWSER_POINTER_LOG;
   try {
     const c = await h.connect(), c2 = await h.connect("s2");
     const A = await page(h, c2), B = await page(h, c);
@@ -994,8 +997,11 @@ test("review-68 B2: a press on a frame's (child) session is a held button of its
     assert.equal(d.moves.length, 0, "no path while the frame holds the button");
     await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 5, y: 5, button: "left", clickCount: 1 }, "FR1");
     await step;
-    assert.ok(Date.now() - t0 >= 280 && Date.now() - t0 < 1500, "A's step waited for the frame's release, and the release ended its wait (not step 3's limit)");
-    // The frame's release is a child session's input: B's point is unknown then, so that step plays no path.
+    assert.ok(Date.now() - t0 >= 280, "A's step waited for the frame's release");
+    // The release ended the wait, not step 3's limit: the frame's release is a child session's input, so B's point is
+    // unknown after it, and that is the step's reason for no path.
+    const line = h.logs.find((l) => l.startsWith(`relay: step input of tab ${A.tab.id}:`));
+    assert.match(line ?? "", /no path \(a last point is unknown\)/, h.logs.join("\n"));
     assert.equal(d.moves.length, 0);
   } finally { await h.close(); }
 });
@@ -1279,11 +1285,64 @@ test("round 3: with an old daemon (paths off) a client's Browser.setWindowBounds
     const n = h.fake.sent("tabs.get").length;
     const press = mouse(c, A, "mousePressed", 100, 100); // A's activation waits for its tabs.get
     await until(() => h.fake.sent("tabs.get").length > n, "A's activation");
-    const t0 = Date.now();
+    // The cause, by the order of the fake's calls: the window changes while A's activation still waits, before the
+    // activation's limit (its log line) and before A's press.
+    let when: { limit: boolean; presses: number } | null = null;
+    const op = h.fake.op;
+    h.fake.op = async (r) => {
+      if (r.op === "windows.update" && r.args[1]?.left === 300) when = { limit: h.logs.some((l) => /took more than/.test(l)), presses: h.fake.sent("debugger.sendCommand", "Input.dispatchMouseEvent").length };
+      return op(r);
+    };
     await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 300 } });
-    assert.ok(Date.now() - t0 < 500, `${Date.now() - t0} ms: no wait for A's activation (its limit is 2 s)`);
-    assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), [[windowId, { left: 300 }]], "it went while A's activation waits");
+    assert.deepEqual(when, { limit: false, presses: 0 }, "it went while A's activation waits");
+    assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), [[windowId, { left: 300 }]]);
     open();
     await press;
+  } finally { await h.close(); }
+});
+
+test("round 4: a viewport call on the page's own session during a read is a drop event: the read keeps nothing", async () => {
+  // The tab's gate and the activation chain keep a client's calls away from the relay's reads of that page; the
+  // count guards the order anyway, so the test calls the site (the bookkeeping of a call sent to Chrome) while B's read runs.
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    const model = h.relay.model as any;
+    h.fake.command = async (t, method, params) => {
+      if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) {
+        await sleep(60);
+        model.tracked(model.tabs.get(B.tab.id), undefined, "Emulation.setScrollbarsHidden", { hidden: true }, Promise.resolve({}));
+        await sleep(60);
+      }
+      return undefined;
+    };
+    await click(c, A, 100, 100); // A's step reads B, the front page: its answer comes in 120 ms, within its wait
+    assert.equal(state(h).kept[B.tab.id], undefined, "a viewport call after the read started: the read keeps nothing");
+    assert.ok(state(h).kept[A.tab.id], "A's read is kept");
+  } finally { await h.close(); }
+});
+
+test("round 4: a client's Browser.setWindowBounds during a read is a drop event of every page: the read keeps nothing", async () => {
+  // With the paths on, Browser.setWindowBounds waits behind the step, so no step's read runs during it; with the paths
+  // off it goes at once. The test turns the paths off while B's read runs, so that the window change comes during it.
+  const { h } = await onHarness();
+  try {
+    const { c, A, B } = await twoPages(h);
+    const model = h.relay.model as any;
+    const { windowId } = await c.send("Browser.getWindowForTarget", { targetId: B.targetId });
+    let changed = false;
+    h.fake.command = async (t, method, params) => {
+      if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) {
+        await sleep(40);
+        model.paths = "off";
+        await c.send("Browser.setWindowBounds", { windowId, bounds: { left: 30 } });
+        changed = true;
+        await sleep(20);
+      }
+      return undefined;
+    };
+    await click(c, A, 100, 100); // A's step reads B; the window change comes while B's read runs
+    assert.ok(changed);
+    assert.equal(state(h).kept[B.tab.id], undefined, "Browser.setWindowBounds after the read started: the read keeps nothing");
   } finally { await h.close(); }
 });

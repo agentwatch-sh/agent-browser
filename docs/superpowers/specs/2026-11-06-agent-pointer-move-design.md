@@ -349,8 +349,9 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   `Debugger.scriptParsed` and `Debugger.scriptFailedToParse` of the ids in the set, so no client sees the
   world; no page script sees its reads. Each read replaces the set with its new id.
   `Runtime.executionContextsCleared` empties the set and still goes to the client. An id that stays in the
-  set until the next read can name a page's context after a navigation and drop that page's own
-  `Debugger` events of that id (ab-lead's note on round 3);
+  set until the next read can name a page's context after a navigation and drop that page's own events of
+  that id (`Runtime.executionContextDestroyed`, `Debugger.scriptParsed` and `Debugger.scriptFailedToParse`;
+  ab-lead's note on round 3);
 - a read keeps or drops the kept geometry only when it answers within `GEOMETRY_WAIT_MS` and no drop event of
   the page came after the read started (the relay counts the drop events of each page); a late answer is
   dropped and changes nothing (round 3 of PR #68).
@@ -452,7 +453,7 @@ asks the operator only if the live check of section 7 fails.
   `Target.activateTarget` behind their tab's gate; the order of the steps;
 - the path: `at` (known, read first, equal to T: no path), the 16 ms sampling, the clamp, the `dt` cap,
   the stretch, no step over 50 px, a first step of 2 px or more, the out-and-back, S or T outside the
-  viewport, the limits, `notAfter` from `process.hrtime.bigint()`, the per-request wait and the key
+  content box, the limits, `notAfter` from `process.hrtime.bigint()`, the per-request wait and the key
   `pointer`;
 - the answers: each record of step 6; the probe's states (unknown before its first answer; `busy`, `too
   many moves`, `disconnected` and the timer leave it unknown); a late answer is dropped; any
