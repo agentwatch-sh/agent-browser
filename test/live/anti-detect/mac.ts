@@ -202,6 +202,8 @@ if (O.dryRun) {
   await sleep(300);
   if (xvfb.exitCode !== null || !existsSync(`/tmp/.X11-unix/X${O.display}`)) refuse(`Xvfb did not start on :${O.display}`);
   Object.assign(XENV, { DISPLAY: `:${O.display}`, XAUTHORITY: xauth });
+  // The stand-in's "in-gap" reading (a key in the gap between the two parts) is half the time since the first part's last look.
+  if (O.handover) XENV.MAC_STANDIN_QUIET_SINCE = String(O.handover.quietSince);
   delete XENV.WAYLAND_DISPLAY; delete XENV.XDG_SESSION_TYPE;
 }
 

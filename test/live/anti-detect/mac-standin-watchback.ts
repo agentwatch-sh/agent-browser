@@ -10,6 +10,8 @@
 // 0, which sends nothing). MAC_STANDIN_WATCHBACK_END_MS=N: N ms after its start it ends with "end=error" (a watcher
 // that fails). MAC_STANDIN_WATCHBACK_FRONT=PID: the app that it names as the app to give the front back to (default
 // 4242). MAC_STANDIN_WATCHBACK_SEEN=FILE: it appends one line "beat N ok" per beat that it wrote (a test reads it).
+// MAC_STANDIN_WATCHBACK_BLIND=1: it does not look at the agent's pid (as the prototype missed the quit of a second
+// Google Chrome instance on 2026-11-06): only its node process can see the quit.
 
 import { appendFileSync } from "node:fs";
 
@@ -24,12 +26,12 @@ log(`watch agent=${agent} before=${before} parent=${parent} ppid=yes input=stand
 process.stdout.on("error", () => { log("end=error \"Broken pipe\""); process.exit(0); });
 let polls = 0;
 const alive = () => { try { process.kill(agent, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; } };
-const failAt = Number(process.env.MAC_STANDIN_WATCHBACK_END_MS ?? 0), seen = process.env.MAC_STANDIN_WATCHBACK_SEEN;
+const failAt = Number(process.env.MAC_STANDIN_WATCHBACK_END_MS ?? 0), seen = process.env.MAC_STANDIN_WATCHBACK_SEEN, blind = process.env.MAC_STANDIN_WATCHBACK_BLIND === "1";
 setInterval(() => {
   if (failAt > 0 && Date.now() - t0 >= failAt) { log('end=error "stand-in: MAC_STANDIN_WATCHBACK_END_MS"'); process.exit(0); }
   if (++polls % 10 === 0) {
     process.stdout.write("\n", (e) => { if (!e && seen) appendFileSync(seen, `beat ${polls / 10} ok\n`); });
     if (process.ppid !== parent) { log("end=parent-gone"); process.exit(0); }
   }
-  if (!alive()) { log("end=agent-gone"); process.exit(0); }
+  if (!blind && !alive()) { log("end=agent-gone"); process.exit(0); }
 }, 25);

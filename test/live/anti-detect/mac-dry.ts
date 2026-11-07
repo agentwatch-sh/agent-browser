@@ -9,7 +9,8 @@
 //   node test/live/anti-detect/mac-dry.ts --out-dir DIR [--display 211] [CASE ...]
 //     (on taylor under ab-lead's heavy-job lock: flock /home/selden/.cache/ab-lead/heavy.lock timeout 1200 node ...)
 //
-// CASE (default all, in this order): plain, key (a key 20 s in), gap (a key between the two parts), refuse (a HID
+// CASE (default all, in this order): plain, key (a key 20 s in), gap (a key between the two parts: the stable part's
+// stand-in gives a key at the middle of the gap, so it is shorter than the gap for any gap), refuse (a HID
 // reading of 0), front-stop (a key while front reads ps: no front request after it), popup-stop (a key 450 ms into
 // the click on the target=_blank link: no press after it), kill9. Each case gets the display N, N+1 (its stable part).
 // It prints one line per case and writes DIR/dry-runs.json.
@@ -25,7 +26,7 @@ const KILL_AFTER_MS = 25_000;
 const CASES: Record<string, Record<string, string>> = {
   plain: {},
   key: { MAC_STANDIN_INPUT_MS: "20000" },
-  gap: { MAC_STANDIN_STABLE_HID: "keyDown=0.5" },
+  gap: { MAC_STANDIN_STABLE_HID: "keyDown=in-gap" },
   refuse: { MAC_STANDIN_HID: "keyDown=0" },
   "front-stop": { MAC_DRY_STOP_IN: "front: " },
   "popup-stop": { MAC_DRY_STOP_IN: "popup: a link with target=_blank", MAC_DRY_STOP_AFTER_MS: "450" },

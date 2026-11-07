@@ -402,6 +402,27 @@ test("the watcher's node process: it runs the script (a stand-in), keeps reading
   } finally { chrome.child.kill(); delete process.env.MAC_STANDIN_WATCHBACK_SEEN; }
 });
 
+test("the watcher's node process ends with its agent Chrome by its own signal 0 (every 250 ms), also when the script does not see the quit (the second Google Chrome instance of 2026-11-06), before its 5 s ps look", async () => {
+  const chrome = fakeChrome();
+  process.env.MAC_STANDIN_WATCHBACK_BLIND = "1";
+  try {
+    const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
+    const from = launches().length;
+    // ps's look comes every 4 s here: the signal 0 must end it well before that.
+    let killed = false;
+    const run = runWatchBack(s, chrome.pid, { cmdline: (p) => (killed ? undefined : chrome.cmdline(p)), pollMs: 50, psMs: 4000 });
+    await sleep(800);
+    const t0 = Date.now();
+    killed = true;
+    chrome.child.kill("SIGKILL");
+    await run;
+    assert.ok(Date.now() - t0 < 1000, `it ended ${Date.now() - t0} ms after the quit`);
+    const lines = launches().slice(from).map((l) => l.text);
+    assert.ok(lines.includes("end=agent-gone by=node"), lines.join("\n"));
+    assert.ok(!lines.includes("end=agent-gone"), "the blind stand-in did not see the quit itself");
+  } finally { delete process.env.MAC_STANDIN_WATCHBACK_BLIND; chrome.child.kill(); }
+});
+
 test("the watcher's node process: a pid that ps no longer shows as the agent Chrome on this profile ends it; one for a Chrome that another watcher has ends at once; none for a pid that is not the agent Chrome", async () => {
   const chrome = fakeChrome(), other = fakeChrome();
   try {
@@ -510,7 +531,9 @@ test("ensureWatchBack: only for the Mac's design, never under node --test withou
   assert.equal(stopWatchBack(s, () => "/bin/sleep 1"), false, "stop signals only this state folder's watcher");
   // A watcher that could not watch this Chrome (its script ended while the Chrome runs): no new one for it each command.
   writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
-  writeFileSync(join(c.stateDir, WATCH_FAILED_FILE), JSON.stringify({ chrome: 4321, at: Date.now(), why: "script-ended code=0" }));
+  // A record of 5 minutes ago still holds: the back-off is 10 minutes (review-check: its length, not only its check).
+  assert.equal(WATCH_RETRY_MS, 10 * 60_000);
+  writeFileSync(join(c.stateDir, WATCH_FAILED_FILE), JSON.stringify({ chrome: 4321, at: Date.now() - 5 * 60_000, why: "script-ended code=0" }));
   const before = spawned.length;
   assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "failed");
   assert.equal(spawned.length, before, "nothing started");

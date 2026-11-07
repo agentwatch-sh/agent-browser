@@ -684,6 +684,13 @@ test("the dry run's stand-in watcher speaks the watcher's protocol: ready with t
   const zero = await talk({ MAC_STANDIN_HID: "keyDown=0" }, "quit\n");
   assert.equal(zero[0].hid.keyDown, 0);
   assert.match(screenProblem(zero) ?? "", /the HID reading of keyDown is 0/);
+  // review-check: a key in the gap between the two parts, for the stable part's dry run: "in-gap" is a key at the middle
+  // of the gap since the first part's last look (MAC_STANDIN_QUIET_SINCE, which the stable part's dry run gives its
+  // stand-in), so it is shorter than the gap for any gap; a fixed reading (1 s) can be longer than a short gap.
+  const quietSince = Date.now() - 2000;
+  const gap = await talk({ MAC_STANDIN_HID: "keyDown=in-gap", MAC_STANDIN_QUIET_SINCE: String(quietSince) }, "quit\n");
+  assert.ok(gap[0].hid.keyDown > 0.9 && gap[0].hid.keyDown < 1.3, `half the gap: ${gap[0].hid.keyDown} s`);
+  assert.match(gapProblem(gap[0], { quietSince, pointer: { x: -1000, y: -1000 } }) ?? "", /the HID reading of keyDown is [\d.]+ s, shorter than the 2\.\d s since the first part's watcher last read the input/);
 });
 
 test("the watcher reads only: it sends no input, moves no pointer, sends no Apple Event, and asks only for the give-back's activation", () => {
