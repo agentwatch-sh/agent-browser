@@ -325,6 +325,8 @@ export async function ensureWatchBack(s: Settings, deps: { spawn?: SpawnLike; pi
   try {
     if (watchRunning(s)) return "running";
     return await withFileLock(statePath(s, "give-back-watch.lock"), Date.now() + 2000, async () => {
+      // The stop again: it can come while this waits for the lock (review-69d note 2).
+      if (s.stopped?.()) return "off" as const;
       if (watchRunning(s)) return "running" as const;
       const chromePid = (deps.pid ?? (() => agentChromePid(s)))();
       if (!chromePid) return "no-chrome" as const;

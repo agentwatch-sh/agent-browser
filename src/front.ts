@@ -28,7 +28,7 @@ import { hasUserDataDir } from "./agent.ts";
 import { listAgentChromes, parseUserPs, readUserPs, type AgentChrome, type StatLike } from "./chromes.ts";
 import { UsageError } from "./errors.ts";
 import type { Settings } from "./options.ts";
-import { holdGiveBack } from "./watchback.ts";
+import { holdGiveBack, releaseGiveBack } from "./watchback.ts";
 
 export const OSASCRIPT = "/usr/bin/osascript";
 export const LSAPPINFO = "/usr/bin/lsappinfo";
@@ -38,6 +38,8 @@ export const SW_VERS = "/usr/bin/sw_vers";
 export const FRONT_LIMIT_MS = 60_000;
 /** After front, how long the Mac's give-back watcher still takes a take of the front as the operator's (a late activation). */
 export const FRONT_HOLD_TAIL_MS = 3000;
+/** While front runs, how often it renews its hold (each time FRONT_HOLD_TAIL_MS ahead). */
+export const FRONT_HOLD_RENEW_MS = 1000;
 
 /**
  * The two requests: "activate" is -[NSRunningApplication activateWithOptions:] (macOS 10.6 and later);
@@ -122,7 +124,8 @@ export function singletonLock(profileDir: string, uid: number): { pid: number; m
 
 export type FrontRun = (argv: string[], timeoutMs: number) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
 
-const execRun: FrontRun = (argv, timeoutMs) => new Promise((resolve) => {
+/** front's own runner of macOS's tools (osascript, lsappinfo, sw_vers): exported for a caller that counts the requests (the Mac check). */
+export const execRun: FrontRun = (argv, timeoutMs) => new Promise((resolve) => {
   execFile(argv[0], argv.slice(1), { timeout: timeoutMs, encoding: "utf8", maxBuffer: 1 << 20 }, (error, stdout, stderr) => {
     resolve({ ok: !error, stdout: String(stdout), stderr: String(stderr || (error ? error.message : "")) });
   });
@@ -223,12 +226,20 @@ export async function bringToFront(s: Settings, deps: FrontDeps = {}): Promise<{
     const info = await step([LSAPPINFO, "info", "-only", "pid", asn], 5_000);
     return info.ok ? lsappinfoPid(info.stdout) : undefined;
   };
-  // The Mac's give-back watcher (watchback.ts) leaves the agent Chrome in front when front brings it there: a hold for
-  // the whole of front, then FRONT_HOLD_TAIL_MS for a late take (ab-v16.27: the watcher never fights the operator).
-  holdGiveBack(s, "front", Date.now() + FRONT_LIMIT_MS + FRONT_HOLD_TAIL_MS);
+  // The Mac's give-back watcher (watchback.ts) leaves the agent Chrome in front when front brings it there: a hold of
+  // FRONT_HOLD_TAIL_MS, renewed every second while front runs (so a kill -9 of this process leaves it at most that long:
+  // review-69d note 7), then FRONT_HOLD_TAIL_MS for a late take (ab-v16.27: the watcher never fights the operator).
+  // After a caller's stop the hold goes at once (review-69d B1): an activation that lands after the stop is then not
+  // the operator's, and the watcher gives it back.
+  holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS);
+  const renew = setInterval(() => holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS), FRONT_HOLD_RENEW_MS);
   try {
     return await requests();
-  } finally { holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS); }
+  } finally {
+    clearInterval(renew);
+    if (s.stopped?.()) releaseGiveBack(s, "front");
+    else holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS);
+  }
   async function requests(): Promise<{ chrome: AgentChrome; via: FrontHow }> {
     for (const how of ["activate", "activate-from"] as const) {
       if (how === "activate-from" && !(darwin >= 23)) { asked.push("activate-from not sent (macOS before 14)"); continue; }

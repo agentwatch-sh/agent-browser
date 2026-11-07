@@ -122,7 +122,7 @@ import { AGENT_ARGS, agentChromeBin, agentChromePid, appBundle, CHROME_STABLE_BI
 import { AgentBrowser } from "../../../src/browser.ts";
 import type { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
-import { bringToFront, psStartTime, type FrontDeps } from "../../../src/front.ts";
+import { bringToFront, execRun, psStartTime, type FrontDeps } from "../../../src/front.ts";
 import { GIVE_BACK_GRACE_MS, giveBackToken, startGiveBack, type GiveBack } from "../../../src/giveback.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settings } from "../../../src/options.ts";
 import { stopProxy } from "../../../src/proxy.ts";
@@ -179,10 +179,11 @@ const ownChrome = (): number | undefined => chromeNow() ?? undefined;
 let compiled: string | undefined;
 process.on("exit", () => {
   if (settings) { try { stopProxy(settings); } catch { /* not started */ } }
-  // agent-browser's give-back watcher of this run's state folder (it ends with its Chrome too, within about 0.25 s).
-  if (settings) { try { stopBuiltWatcher(settings); } catch { /* none */ } }
   const pid = ownChrome();
   if (pid) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
+  // agent-browser's give-back watcher of this run's state folder, only when no agent Chrome of this run is left (review-69d
+  // note 4): else it gives a take of that Chrome back until it quits, and ends with it (within about 0.25 s).
+  if (settings && chromeNow() === null) { try { stopBuiltWatcher(settings); } catch { /* none */ } }
   for (const c of children.slice().reverse()) if (c.exitCode === null && c.signalCode === null) c.kill("SIGTERM");
   // Only the file that this run compiled, only inside its own run folder (the run of 2026-11-06 kept it after a refusal).
   if (compiled) { try { if (realpathSync(compiled).startsWith(`${realpathSync(RUN)}/`)) rmSync(compiled); } catch { /* gone, or not made */ } }
@@ -700,15 +701,17 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
 // ------------------------------------------------------------------ front: agent-browser's front, on purpose (the watcher leaves it to the operator)
 /** How long the check leaves the agent Chrome in front after agent-browser's front, before it gives the front back itself. */
 const FRONT_STEP_MS = 1500;
-/** The dry run's front requests (osascript's stand-in): their times. */
+/** front's activation requests (its osascript runs; in the dry run its stand-in's): their times. */
 const frontRequests: number[] = [];
+/** On the Mac: front's own runner, with each request counted (review-69d note 1). */
+const macFront: FrontDeps = { run: (argv, ms) => { if (argv[0].endsWith("/osascript")) frontRequests.push(Date.now()); return execRun(argv, ms); } };
 /** The dry run's stand-ins for front (src/front.ts, FrontDeps): macOS's tools answer that the agent Chrome is in front. */
 const dryFront: FrontDeps = {
   platform: "darwin", release: () => "24.1.0", sleep: (ms) => sleep(ms),
   // The start time from ps, as front reads it. With MAC_DRY_STOP_IN on the front step, a person's key comes while front
   // reads ps (its reads block node for about 0.3 s): front must see that stop before its request.
   started: (pid) => {
-    if (DRY_STOP_IN.startsWith("front") && !dryStopSent) {
+    if (DRY_STOP_IN.startsWith("front: ") && !dryStopSent) {
       dryStopSent = true;
       tell("person");
       for (const end = Date.now() + 300; Date.now() < end;) { /* as a slow ps read */ }
@@ -716,7 +719,12 @@ const dryFront: FrontDeps = {
     try { return psStartTime(execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, env: { ...process.env, LC_ALL: "C" } })); } catch { return undefined; }
   },
   run: async (argv) => {
-    if (argv[0] === "/usr/bin/osascript") { frontRequests.push(Date.now()); return { ok: true, stdout: `${JSON.stringify({ found: true, path: argv[7], launched: null, before: operatorPid, sent: true })}\n`, stderr: "" }; }
+    if (argv[0] === "/usr/bin/osascript") {
+      frontRequests.push(Date.now());
+      // review-69d B1: the person's key while osascript starts (MAC_DRY_STOP_IN=front-request): the request is out, and
+      // its activation lands after the stop.
+      if (DRY_STOP_IN === "front-request" && !dryStopSent) { dryStopSent = true; tell("person"); await sleep(300); }
+      return { ok: true, stdout: `${JSON.stringify({ found: true, path: argv[7], launched: null, before: operatorPid, sent: true })}\n`, stderr: "" }; }
     if (argv[0] === "/usr/bin/lsappinfo" && argv[1] === "front") return { ok: true, stdout: "ASN:0x0-0x1:\n", stderr: "" };
     if (argv[0] === "/usr/bin/lsappinfo") return { ok: true, stdout: `"pid"=${chromePid}\n`, stderr: "" };
     return { ok: true, stdout: "15.1\n", stderr: "" };
@@ -734,13 +742,14 @@ if (browser && FULL && !O.skip.includes("front")) {
       // (the stopped option, read right before each request). The dry run gives it a stand-in for osascript and
       // lsappinfo (Linux has neither), which records each request and says that the agent Chrome came to the front.
       abCommands();
-      const r = await bringToFront(resolveOptions(oWin), O.dryRun ? dryFront : {});
+      const r = await bringToFront(resolveOptions(oWin), O.dryRun ? dryFront : macFront);
       await pause(FRONT_STEP_MS);
       return r.via;
     } finally {
-      // The check gives the front back itself (one request of its watcher), and waits for it.
+      // The check gives the front back itself (one request of its watcher), and waits for it; also after a stop (review-69d
+      // B1): a request that went out before the stop can bring the agent Chrome to the front after the stop's own request.
       holds[holds.length - 1].until = Date.now() + 200;
-      if (!aborted) tell("giveback");
+      tell("giveback");
       await frontBack(1500);
       inFront = false;
     }
@@ -788,11 +797,14 @@ const endStep = steps.at(-1);
 // agent-browser's give-back watcher ends by itself when the agent Chrome quits ("end=agent-gone by=node" in
 // launches.log): the check waits WATCH_END_MS and a second for it (the summary names a late end), then ends it.
 const nodeEnd = () => builtLines().some((l) => "end" in l.kv && l.kv.by === "node" && l.t >= (endStep?.t0 ?? 0));
-if (wbStarted) {
+if (wbStarted && quit.running === false) {
   for (const until = Date.now() + WATCH_END_MS + 1000; Date.now() < until && !nodeEnd(); ) await sleep(50);
   if (!nodeEnd()) endLines.push("agent-browser's give-back watcher did not end with its agent Chrome: the check stopped it");
 }
-stopWatchBack();
+// Only after a quit that ps confirmed (review-69d note 4): else the watcher keeps giving a take of that Chrome back, and
+// ends by itself when it quits (stop-chrome.txt names both).
+if (quit.running === false) stopWatchBack();
+else { watchOn = false; fallback.reset(); if (wbStarted) endLines.push("kept agent-browser's give-back watcher: ps does not confirm that the agent Chrome quit; the watcher ends by itself when it does (stop-chrome.txt)"); }
 if (stopInfo) {
   // How fast the stop was: from the watcher's line of the person's first sign (or the stop) to the end of the step in
   // progress and to the start of the end step.
@@ -807,7 +819,9 @@ if (stopInfo) {
   const popups = ["PA", "PB", "PC"].filter((tab) => log.some((e) => e.tab === tab && e.ev === "load" && e.t >= stopInfo!.t));
   const asked = builtLines().filter((l) => "asked" in l.kv && l.t >= stopInfo!.t).length;
   endLines.push(`after the stop: ${late.length} press, click, key or wheel event(s) reached a probe page${late.length ? ` (${late.slice(0, 4).map((e) => `${e.type} in ${e.tab} +${e.t - stopInfo!.t} ms`).join(", ")})` : ""}; ${popups.length ? `popup page(s) ${popups.join(", ")} loaded` : "no popup page loaded"}; `
-    + `${frontRequests.filter((t) => t >= stopInfo!.t).length} front request(s)${O.dryRun ? " (the dry run's stand-in)" : ""}; agent-browser's give-back watcher asked ${asked} time(s) to give the front back`);
+    + `${frontRequests.filter((t) => t >= stopInfo!.t).length} front request(s)${O.dryRun ? " (the dry run's stand-in)" : ""}; agent-browser's give-back watcher asked ${asked} time(s) to give the front back; `
+    + `the check asked its watcher ${events.filter((e) => e.ev === "giveback" && e.t >= stopInfo!.t).length} time(s) for the front (review-69d B1: at the stop, and after a front step); `
+    + `front's hold ${existsSync(join(stateDir, "give-back-hold-front.json")) ? "was still there at the end" : "was gone at the end"}`);
 }
 if (endStep?.phase === "end" && !endStep.ok && !quitProblem) quitProblem = `the quit of the agent Chrome did not finish (${endStep.error}); see stop-chrome.txt in the run folder`;
 await browser?.disconnect().catch(() => {});

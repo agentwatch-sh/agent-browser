@@ -689,8 +689,10 @@ test("the dry run's stand-in watcher speaks the watcher's protocol: ready with t
   // stand-in), so it is shorter than the gap for any gap; a fixed reading (1 s) can be longer than a short gap.
   const quietSince = Date.now() - 2000;
   const gap = await talk({ MAC_STANDIN_HID: "keyDown=in-gap", MAC_STANDIN_QUIET_SINCE: String(quietSince) }, "quit\n");
-  assert.ok(gap[0].hid.keyDown > 0.9 && gap[0].hid.keyDown < 1.3, `half the gap: ${gap[0].hid.keyDown} s`);
-  assert.match(gapProblem(gap[0], { quietSince, pointer: { x: -1000, y: -1000 } }) ?? "", /the HID reading of keyDown is [\d.]+ s, shorter than the 2\.\d s since the first part's watcher last read the input/);
+  // Half the gap at the stand-in's start, which its ready line's time shows (no fixed bound: a loaded machine starts it later).
+  const half = (gap[0].t - quietSince) / 2000;
+  assert.ok(Math.abs(gap[0].hid.keyDown - half) < 0.1, `half the gap: ${gap[0].hid.keyDown} s against ${half} s`);
+  assert.match(gapProblem(gap[0], { quietSince, pointer: { x: -1000, y: -1000 } }) ?? "", /the HID reading of keyDown is [\d.]+ s, shorter than the [\d.]+ s since the first part's watcher last read the input/);
 });
 
 test("the watcher reads only: it sends no input, moves no pointer, sends no Apple Event, and asks only for the give-back's activation", () => {
@@ -766,16 +768,23 @@ test("ab-v16.27: the check runs agent-browser's built design: its open, its comm
   assert.ok(harm.length > 200 && harm.length < 3000, `checkHarm's body: ${harm.length}`);
   assert.match(harm, /tell\("disarm"\);\s+tell\("giveback"\);\s+watchOn = false;\s+fallback\.reset\(\);/);
   assert.doesNotMatch(harm, /stopWatchBack\(|stopBuiltWatcher\(/, "no stop of agent-browser's watcher at a stop");
-  assert.ok(ts.indexOf("stopWatchBack();\nif (stopInfo)") > ts.indexOf('await step("end", "quit the agent Chrome"'), "after the quit");
+  assert.ok(ts.indexOf("if (quit.running === false) stopWatchBack();") > ts.indexOf('await step("end", "quit the agent Chrome"'), "after the quit");
   assert.match(ts, /measureEnd = Date\.now\(\);\s+clearInterval\(stopPoll\);\s+stopWatchBack\(\);/);
   // No agent-browser command after a stop or from the quit on (abCommands); no input event, front request or watcher start then (the stopped option).
   assert.doesNotMatch(ts, /[^.\w]commands\.\w+\(/, "every agent-browser command goes through abCommands()");
   assert.match(ts, /function abCommands\(\): typeof commands \{\s+if \(aborted \|\| quitting\) throw/);
   assert.match(ts, /stopped: \(\) => !!aborted \|\| quitting \};/);
   assert.match(ts, /quitting = true;\nawait step\("end", "quit the agent Chrome"/);
-  assert.match(ts, /abCommands\(\);\s+const r = await bringToFront\(resolveOptions\(oWin\), O\.dryRun \? dryFront : \{\}\);/, "front: the same call as commands.front, with stand-ins only in the dry run");
+  assert.match(ts, /abCommands\(\);\s+const r = await bringToFront\(resolveOptions\(oWin\), O\.dryRun \? dryFront : macFront\);/, "front: the same call as commands.front, with stand-ins only in the dry run");
+  // review-69d note 1: on the Mac front's own runner, with each request counted.
+  assert.match(ts, /const macFront: FrontDeps = \{ run: \(argv, ms\) => \{ if \(argv\[0\]\.endsWith\("\/osascript"\)\) frontRequests\.push\(Date\.now\(\)\); return execRun\(argv, ms\); \} \};/);
+  // review-69d B1: the front step's finally asks for the front back also after a stop.
+  assert.match(ts, /holds\[holds\.length - 1\]\.until = Date\.now\(\) \+ 200;\s+tell\("giveback"\);\s+await frontBack\(1500\);/);
+  // review-69d note 4: agent-browser's watcher stops only after a quit that ps confirmed, and the exit handler only with no Chrome left.
+  assert.match(ts, /if \(quit\.running === false\) stopWatchBack\(\);\s+else \{ watchOn = false; fallback\.reset\(\);/);
+  assert.match(ts, /if \(settings && chromeNow\(\) === null\) \{ try \{ stopBuiltWatcher\(settings\); \} catch/);
   assert.match(ts, /const DRY_STOP_IN = O\.dryRun \? process\.env\.MAC_DRY_STOP_IN \?\? "" : ""/, "the stop inside a step is the dry run's only");
-  assert.match(ts, /if \(settings\) \{ try \{ stopBuiltWatcher\(settings\); \} catch/);
+  assert.match(ts, /if \(settings && chromeNow\(\) === null\) \{ try \{ stopBuiltWatcher\(settings\); \} catch/);
   assert.equal((ts.match(/tell\("disarm"\)/g) ?? []).length, 4, "a stop, the watcher's start, the fallback's end, the look");
   assert.equal((ts.match(/tell\("arm"\)/g) ?? []).length, 2, "the start, the fallback");
   // The fallback arms the check's watcher only while agent-browser's watcher runs, not in the front step, and while the agent Chrome still has the front.
@@ -791,7 +800,8 @@ test("ab-v16.27: the check runs agent-browser's built design: its open, its comm
   // The front step: a hold (the stop rules let that take stay open), no fallback, and the check gives the front back itself.
   assert.match(ts, /holds\.push\(\{ from, until: from \+ 60_000 \+ FRONT_STEP_MS \}\);\s+inFront = true;/);
   assert.match(ts, /const r = await bringToFront\(resolveOptions\(oWin\)/);
-  assert.match(ts, /if \(!aborted\) tell\("giveback"\);\s+await frontBack\(1500\);\s+inFront = false;/);
+  assert.match(ts, /tell\("giveback"\);\s+await frontBack\(1500\);\s+inFront = false;/);
+  assert.doesNotMatch(ts, /if \(!aborted\) tell\("giveback"\);/, "review-69d B1: also after a stop");
   assert.match(ts, /stopReason\(events, steps, Date\.now\(\), \{ t0: T0, limitMs: LIMIT_MS, measureEnd, holds \}\)/);
   assert.match(ts, /if \(browser && FULL && !O\.skip\.includes\("front"\)\)/);
   // The watcher must end with its agent Chrome (WATCH_END_MS), and the verdict names a watcher that fought front or did not end.

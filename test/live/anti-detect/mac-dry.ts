@@ -11,7 +11,9 @@
 //
 // CASE (default all, in this order): plain, key (a key 20 s in), gap (a key between the two parts: the stable part's
 // stand-in gives a key at the middle of the gap, so it is shorter than the gap for any gap), refuse (a HID
-// reading of 0), front-stop (a key while front reads ps: no front request after it), popup-stop (a key 450 ms into
+// reading of 0), front-stop (a key while front reads ps: no front request after it), front-request-stop (a key while
+// front's osascript starts: its request is out; the front step still asks for the front back, and front's hold goes:
+// review-69d B1), popup-stop (a key 450 ms into
 // the click on the target=_blank link: no press after it), kill9. Each case gets the display N, N+1 (its stable part).
 // It prints one line per case and writes DIR/dry-runs.json.
 
@@ -29,6 +31,7 @@ const CASES: Record<string, Record<string, string>> = {
   gap: { MAC_STANDIN_STABLE_HID: "keyDown=in-gap" },
   refuse: { MAC_STANDIN_HID: "keyDown=0" },
   "front-stop": { MAC_DRY_STOP_IN: "front: " },
+  "front-request-stop": { MAC_DRY_STOP_IN: "front-request" },
   "popup-stop": { MAC_DRY_STOP_IN: "popup: a link with target=_blank", MAC_DRY_STOP_AFTER_MS: "450" },
   kill9: {},
 };

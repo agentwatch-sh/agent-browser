@@ -353,8 +353,9 @@ test("the Mac: a caller's stop (the internal stopped option, the Mac check) duri
     const o = mac({ inputTiming: { ...FAST, moveScale: 1 }, stopped: () => stop });
     const { name, page } = await opened(mac({ inputTiming: FAST }));
     const from = fake.calls.length;
-    setTimeout(() => { stop = true; }, 150);
-    await assert.rejects(commands.click(o, { tab: name, target: "#b" }), /stopped/);
+    // The stop at the path's first move (an observed event, not a time: review-69d note 5).
+    const watch = setInterval(() => { if (fake.calls.slice(from).some((x) => x.targetId === page.targetId && x.method === "Input.dispatchMouseEvent")) { stop = true; clearInterval(watch); } }, 1);
+    await assert.rejects(commands.click(o, { tab: name, target: "#b" }), /stopped/).finally(() => clearInterval(watch));
     const ev = fake.calls.slice(from).filter((x) => x.targetId === page.targetId && x.method === "Input.dispatchMouseEvent");
     assert.ok(ev.length >= 1, "the path had begun");
     assert.deepEqual(ev.filter((x) => x.params.type !== "mouseMoved"), [], "no press after the stop");

@@ -224,6 +224,13 @@ test("the 1 s of OWN_MS at its edge: a press that ended 1.0 to 1.3 s before the 
   }
 });
 
+test("OWN_MS at exactly its edge: a button last seen down exactly 1000 ms before the take still makes it the operator's (review-check)", () => {
+  // The fake clock moves 25 ms a poll: the button is down at the poll of 1975 ms and up at 2000; the take is seen at 2975.
+  const at = (take: number) => watchRun(args, { apps: [TERMINAL, AGENT], front: 500, input: { cg: false }, events: [{ at: 1960, mouse: true }, { at: 1990, mouse: false }, { at: take, front: 701 }], grantMs: 40, endAt: 4000 });
+  assert.ok(at(2975).lines.includes("took=701 from=500 own=click"), "1000 ms: the operator's");
+  assert.ok(at(3000).lines.includes("took=701 from=500"), "1025 ms: given back");
+});
+
 test("keys alone do not make a take the operator's: a person who types in their own app gets the front back at once (ab-or9)", () => {
   // Typing gives no mouse button and no Command key; Shift (a capital letter) and the other modifiers are not the Command key.
   const r = watchRun(args, { apps: [TERMINAL, AGENT], front: 500, events: [{ at: 850, shift: true }, { at: 900, front: 701 }, { at: 950, shift: false }], grantMs: 40, endAt: 3000 });
@@ -408,15 +415,16 @@ test("the watcher's node process ends with its agent Chrome by its own signal 0 
   try {
     const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
     const from = launches().length;
-    // ps's look comes every 4 s here: the signal 0 must end it well before that.
+    // ps's look comes after 10 s here: the signal 0 must end it well before that.
     let killed = false;
-    const run = runWatchBack(s, chrome.pid, { cmdline: (p) => (killed ? undefined : chrome.cmdline(p)), pollMs: 50, psMs: 4000 });
+    const run = runWatchBack(s, chrome.pid, { cmdline: (p) => (killed ? undefined : chrome.cmdline(p)), pollMs: 50, psMs: 10_000 });
     await sleep(800);
     const t0 = Date.now();
     killed = true;
     chrome.child.kill("SIGKILL");
     await run;
-    assert.ok(Date.now() - t0 < 1000, `it ended ${Date.now() - t0} ms after the quit`);
+    // The signal 0 every 50 ms here: well before the ps look at 10 s (a wide margin for a loaded machine).
+    assert.ok(Date.now() - t0 < 5000, `it ended ${Date.now() - t0} ms after the quit`);
     const lines = launches().slice(from).map((l) => l.text);
     assert.ok(lines.includes("end=agent-gone by=node"), lines.join("\n"));
     assert.ok(!lines.includes("end=agent-gone"), "the blind stand-in did not see the quit itself");
@@ -502,6 +510,24 @@ test("the CLI takes --watch-back-command and --chrome-pid only in give-back-watc
   }
   // give-back-watch takes it (pid 1 is no agent Chrome: it ends at once with end=no-agent).
   assert.equal(await main(["give-back-watch", "--state-dir", c.stateDir, "--chrome-pid", "1", "--watch-back-command", JSON.stringify([process.execPath, STANDIN])], io), 0);
+});
+
+test("ensureWatchBack reads the caller's stop again inside its lock: a stop during the wait for the lock starts no watcher (review-69d note 2)", async () => {
+  const spawned: string[][] = [];
+  const spawnStub = (_bin: string, a: string[]) => { spawned.push(a); return { pid: process.pid, unref() {}, once() { return this; } } as never; };
+  mkdirSync(c.stateDir, { recursive: true });
+  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 }));
+  // Another command holds the start lock (a live pid in it) for a moment; the stop comes in that wait.
+  const holder = spawn("sleep", ["30"], { stdio: "ignore" });
+  writeFileSync(join(c.stateDir, "give-back-watch.lock"), String(holder.pid), { mode: 0o600 });
+  let stop = false;
+  const s = mac({ watchBackCommand: [process.execPath, STANDIN], stopped: () => stop });
+  setTimeout(() => { stop = true; holder.kill("SIGKILL"); }, 300);
+  try {
+    assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "off");
+    assert.deepEqual(spawned, []);
+  } finally { holder.kill(); }
+  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 }));
 });
 
 test("ensureWatchBack: only for the Mac's design, never under node --test without a stand-in; it starts one detached watcher, and the next command finds it running", async () => {
