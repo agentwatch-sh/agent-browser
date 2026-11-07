@@ -14,6 +14,10 @@ import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 export const GUARD_PY = fileURLToPath(new URL("./harness_guard.py", import.meta.url));
+/** The X displays that no harness takes, whatever its setting is: 0 (a desktop), 90 (agentwatch's agent browser on
+ *  taylor, the operator's), 147, 190, 191, 192 (other programs' displays on taylor). The same list as
+ *  RESERVED_DISPLAYS in harness_guard.py and chrome-extension's run.sh (test/harness-guard.test.ts compares them). */
+export const RESERVED_DISPLAYS: readonly number[] = [0, 90, 147, 190, 191, 192];
 
 export type HarnessGuard = {
   /** The guard's pid (0: no guard, not Linux). */

@@ -7,8 +7,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,10 @@ const chromium = spawn("/bin/sh", ["-c", "sleep 600 & exec sleep 601"], { stdio:
 chromium.unref();
 guard.track(chromium.pid, "Chromium");
 const daemon = spawn("sleep", ["602"], { stdio: "ignore" });
+// OLD: a pid that is not the driver's (the test's own older process): the guard must leave it alone.
+if (process.env.OLD) guard.track(Number(process.env.OLD), "old");
+// LATE: a recorded process that starts a child (sleep LATE) at its SIGTERM, after the driver's end.
+if (process.env.LATE) guard.track(spawn("python3", ["-c", "import signal, subprocess, time; signal.signal(signal.SIGTERM, lambda *a: subprocess.Popen(['sleep', '" + process.env.LATE + "'])); time.sleep(600)"], { stdio: "ignore" }).pid, "late");
 if (process.env.NESTED) spawn(process.execPath, ["-e", process.env.NESTED], { stdio: "inherit", env: { ...process.env, NAME: "nested", NESTED: "" } });
 await new Promise((r) => setTimeout(r, 1500));
 console.log(JSON.stringify({ guard: guard.pid, mode: guard.mode, waitedMs: t0 - Number(process.env.T0), guardMs: t0 - tg, xvfb: xvfb.pid, chromium: chromium.pid, daemon: daemon.pid }));
@@ -92,6 +96,7 @@ test("after a kill -9 of the driver, ps finds no process of the harness (Xvfb, C
   const pids = [...standIns(i), i.guard];
   try {
     assert.equal(i.mode, "locked");
+    assert.match(d.stderr(), /harness-guard: kill9: HARNESS_LOCK names \S+harness\.lock, not the harness lock \S+\/\.cache\/agent-harness\/harness\.lock: this harness waits only for harnesses with the same HARNESS_LOCK/);
     const before = running(standIns(i));
     assert.ok(before.length >= 4, `the stand-ins run (the Chromium with its child): ${before}`);
     d.child.kill("SIGKILL");
@@ -196,4 +201,117 @@ test("every harness under test/live that starts Xvfb takes the harness guard fir
     assert.ok(guard > 0 && guard < xvfb, `${f}: harnessGuard before its Xvfb`);
     assert.match(src, /\.track\(xvfb\.pid, "Xvfb"\)|harness\?\.track\(child\.pid/, `${f}: its Xvfb goes to track() at once`);
   }
+});
+
+test("the reserved displays: guard.ts keeps harness_guard.py's list, and the parity probe's display search skips them", () => {
+  const py = readFileSync(fileURLToPath(new URL("./live/harness_guard.py", import.meta.url)), "utf8");
+  const list = (/^RESERVED_DISPLAYS = \(([^)]*)\)/m.exec(py)?.[1] ?? "").split(",").map((x) => Number(x.trim()));
+  const ts = readFileSync(GUARD_TS, "utf8");
+  assert.deepEqual((/RESERVED_DISPLAYS: readonly number\[\] = \[([^\]]*)\]/.exec(ts)?.[1] ?? "").split(",").map((x) => Number(x.trim())), list);
+  assert.deepEqual(list, [0, 90, 147, 190, 191, 192]);
+  const probe = readFileSync(fileURLToPath(new URL("./live/parity/probe.ts", import.meta.url)), "utf8");
+  assert.match(probe, /let n = 90;\n\s+while \(RESERVED_DISPLAYS\.includes\(n\) \|\| existsSync/);
+});
+
+/** Run `code` in Python with harness_guard importable (no byte code). */
+const py = (code: string) => spawnSync("python3", ["-I", "-B", "-c", `import sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL("./live/", import.meta.url)))})\n${code}`], { encoding: "utf8", timeout: 60_000 });
+
+test("a record whose pid another process took since (another start time) gets no signal; a record with its own start time does", { skip }, () => {
+  const r = py(`
+import argparse, subprocess, harness_guard as h
+a = argparse.Namespace(name="stale", driver=0, pid_dir=None, channel_fd=0, limit=0, wait=1)
+for start_delta in (1, 0):
+    p = subprocess.Popen(["sleep", "30"])
+    g = h.Guard(a)
+    g.rec[p.pid] = [h.stat_of(p.pid)[1] + start_delta, "x", None]  # no pidfd: the start-time check alone
+    g.reason = "the test"
+    g.stop()
+    print("alive" if p.poll() is None else "stopped")
+    p.kill(); p.wait()
+`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split("\n"), ["alive", "stopped"], r.stderr);
+});
+
+test("a pid that the driver names but that is neither in its tree nor started after the guard is left alone", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const old = spawn("sleep", ["606"], { stdio: "ignore", detached: true });
+  old.unref();
+  const pids = [old.pid!];
+  try {
+    await sleep(1100); // the start-time clock counts 1/100 s
+    const d = driver(dir, "old", { OLD: String(old.pid) });
+    const i = await d.info;
+    pids.push(...standIns(i), i.guard);
+    d.child.kill("SIGKILL");
+    assert.deepEqual(await goneWithin(standIns(i), GONE_MS), []);
+    assert.deepEqual(await goneWithin([i.guard], GONE_MS), []);
+    assert.deepEqual(running([old.pid!]), [old.pid], "the older process still runs");
+    assert.ok(await logged(d.stderr, new RegExp(`harness-guard: old: leaves pid ${old.pid} \\(old\\) alone: it is not in the driver's tree and it started before the guard`)), d.stderr());
+  } finally { stopOwn(pids); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a child that a recorded process starts after the driver's end (outside the driver's tree) is stopped too", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const late = `607.${process.pid}${Date.now() % 1000}`;
+  const lateOnes = () => execFileSync("ps", ["-e", "-o", "pid=,args="], { encoding: "utf8" }).split("\n").filter((l) => l.trim().endsWith(`sleep ${late}`)).map((l) => Number(l.trim().split(" ")[0]));
+  const pids: number[] = [];
+  try {
+    const d = driver(dir, "late", { LATE: late });
+    const i = await d.info;
+    pids.push(...standIns(i), i.guard);
+    d.child.kill("SIGKILL");
+    assert.deepEqual(await goneWithin([i.guard], 25_000), [], d.stderr());
+    assert.deepEqual(lateOnes(), [], `the late child is gone: ${d.stderr()}`);
+  } finally { stopOwn([...pids, ...lateOnes()]); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a harness that is not a child of the holder's driver waits for the lock, also with HARNESS_GUARD_HELD naming the holder", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const a = driver(dir, "holder");
+  const i = await a.info;
+  const pids = [...standIns(i), i.guard];
+  try {
+    const x = driver(dir, "unrelated", { HARNESS_GUARD_HELD: String(i.guard), HARNESS_LOCK_WAIT: "1" });
+    assert.equal(await Promise.race([x.exited, sleep(15_000).then(() => "still running after 15 s")]), 2, x.stderr());
+    assert.match(x.stderr(), /unrelated: the harness lock .* is still held after 1 s/);
+    a.child.kill("SIGKILL");
+    assert.deepEqual(await goneWithin([...standIns(i), i.guard], GONE_MS), []);
+  } finally { stopOwn(pids); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the guard closes the fds that it inherited (an outer lock's fd, a caller's pipe), and stops at a missing pipe", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const pids: number[] = [];
+  try {
+    // As under `flock heavy.lock run.sh up`: a shell gives the guard an open fd 7 (the outer lock's) and its stderr
+    // pipe. The call must return at once (the guard keeps no pipe of the caller), and the guard must hold no fd 7.
+    const marker = join(dir, "outer.lock");
+    writeFileSync(marker, "");
+    mkdirSync(join(dir, "pids"));
+    const up = spawnSync("/bin/sh", ["-c", `exec 7<"${marker}"; python3 -I -B "${fileURLToPath(new URL("./live/harness_guard.py", import.meta.url))}" --name fds --driver 0 --limit 60 --pid-dir "${join(dir, "pids")}" --log "${join(dir, "guard.log")}" 2>&1`],
+      { env: { ...process.env, HARNESS_LOCK: join(dir, "harness.lock") }, encoding: "utf8", timeout: 15_000 });
+    assert.equal(up.status, 0, `the call returned (${up.error?.message ?? ""}): ${up.stdout}`);
+    const guardPid = Number(/^locked (\d+) /m.exec(up.stdout)?.[1]);
+    pids.push(guardPid);
+    const links = readdirSync(`/proc/${guardPid}/fd`).map((n) => { try { return readlinkSync(`/proc/${guardPid}/fd/${n}`); } catch { return ""; } });
+    assert.ok(!links.includes(marker), `the guard holds no fd of ${marker}: ${links.join(" ")}`);
+    assert.ok(links.some((l) => l.endsWith("harness.lock")), "it holds the harness lock");
+    assert.equal(readlinkSync(`/proc/${guardPid}/fd/2`), join(dir, "guard.log"), "its stderr is the run's log, not the caller's pipe");
+    process.kill(guardPid, "SIGTERM");
+    assert.deepEqual(await goneWithin([guardPid], GONE_MS), []);
+    // A pipe fd that the driver did not give: the guard sees no end there, so it stops the driver's processes at once.
+    const sh = spawn("/bin/sh", ["-c", "sleep 608 & wait"], { stdio: "ignore" });
+    pids.push(sh.pid!);
+    await sleep(300);
+    const kid = running([sh.pid!]).filter((p) => p !== sh.pid);
+    pids.push(...kid);
+    const g = spawn("python3", ["-I", "-B", fileURLToPath(new URL("./live/harness_guard.py", import.meta.url)), "--name", "nofd", "--driver", String(sh.pid), "--channel-fd", "9"],
+      { env: { ...process.env, HARNESS_LOCK: join(dir, "harness.lock") }, stdio: ["ignore", "pipe", "pipe"] });
+    let err = "";
+    g.stderr!.on("data", (b) => { err += b; });
+    assert.deepEqual(await goneWithin(kid, GONE_MS), [], err);
+    assert.ok(await logged(() => err, /harness-guard: nofd: the driver's pipe \(fd 9\) is missing; it stops 1 processes of the harness: sleep \d+/), err);
+    assert.doesNotMatch(err, /Traceback/);
+  } finally { stopOwn(pids); rmSync(dir, { recursive: true, force: true }); }
 });

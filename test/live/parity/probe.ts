@@ -62,7 +62,7 @@ import { parseArgs } from "node:util";
 import { AGENT_ARGS } from "../../../src/agent.ts";
 import { readPrefs, writeServeColumn, writeSummary } from "./files.ts";
 import { ProbeServer } from "./server.ts";
-import { harnessGuard, type HarnessGuard } from "../guard.ts";
+import { harnessGuard, RESERVED_DISPLAYS, type HarnessGuard } from "../guard.ts";
 
 const HERE = new URL(".", import.meta.url).pathname;
 const LINUX = process.platform === "linux";
@@ -127,8 +127,9 @@ async function startDisplay(): Promise<Display> {
   if (!LINUX) return { env: {}, name: "screen", stop: () => {} };
   // One live harness at a time, and nothing of this probe after its end, also after a kill -9 (test/live/README.md).
   harness = await harnessGuard("parity probe");
+  // From 90 on, never a reserved display (:90 is agentwatch's: its socket and lock file go when it stops).
   let n = 90;
-  while (existsSync(`/tmp/.X11-unix/X${n}`) || existsSync(`/tmp/.X${n}-lock`)) n++;
+  while (RESERVED_DISPLAYS.includes(n) || existsSync(`/tmp/.X11-unix/X${n}`) || existsSync(`/tmp/.X${n}-lock`)) n++;
   const xauth = join(OUT, "xauth");
   writeFileSync(xauth, xauthEntry(String(n), randomBytes(16)), { mode: 0o600 });
   const xvfb = spawn("Xvfb", [`:${n}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1920x1080x24"], { stdio: "ignore" });

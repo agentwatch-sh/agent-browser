@@ -7,18 +7,22 @@ A harness (the driver) starts the guard before it starts Xvfb or Chromium, and s
 "locked" (or "nested"):
 
   python3 -I harness_guard.py --name NAME --driver PID [--wait SECONDS] [--channel-fd N]   (the pipe form)
-  python3 -I harness_guard.py --name NAME --driver PID --pid-dir DIR     (a shell driver: the pid-file form)
-  python3 -I harness_guard.py --name NAME --driver 0 --pid-dir DIR --limit SECONDS   (no driver: run.sh up)
+  python3 -I harness_guard.py --name NAME --driver PID --pid-dir DIR --log FILE   (a shell driver: the pid-file form)
+  python3 -I harness_guard.py --name NAME --driver 0 --pid-dir DIR --log FILE --limit SECONDS   (no driver: run.sh up)
 
 The guard first leaves the driver's process tree (a fork whose parent exits at once, then setsid): a signal to the
-driver's process group or session, or a kill of the driver's tree, does not reach it. It ignores SIGINT and SIGHUP.
+driver's process group or session, or a kill of the driver's tree, does not reach it. It ignores SIGINT and SIGHUP. It
+closes every inherited fd from 3 up but its pipe from the driver (an inherited heavy.lock fd, a caller's pipe), and in
+the pid-file form its stderr after the lock goes to --log, so that a run of `run.sh up` alone holds nothing of its
+caller.
 
 The lock: flock(LOCK_EX) on one file for each user, <home>/.cache/agent-harness/harness.lock (<home> from the
-password database, not from HOME; HARNESS_LOCK names another file, for the tests). The guard waits for it at most
---wait seconds (default: HARNESS_LOCK_WAIT, else 1200), and writes one line on stderr when it has to wait, with the
-holder's line from the file. Then it writes "locked <guard pid> <lock file>" on stdout and closes stdout. If the time
-runs out, it writes "refused <reason>" on stdout and exits 75: the driver must start nothing. The lock is the guard's
-own open file: it goes only when the guard ends, and the guard ends only after the driver's processes are gone.
+password database, not from HOME). HARNESS_LOCK names another file, for the tests only: the guard then says on stderr
+that this harness waits only for harnesses with the same HARNESS_LOCK. The guard waits for the lock at most --wait
+seconds (default: HARNESS_LOCK_WAIT, else 1200), and writes one line on stderr when it has to wait, with the holder's
+line from the file. Then it writes "locked <guard pid> <lock file>" on stdout and closes stdout. If the time runs out,
+it writes "refused <reason>" on stdout and exits 75: the driver must start nothing. The lock is the guard's own open
+file: it goes only when the guard ends, and the guard ends only after the driver's processes are gone.
 
 A harness that a harness started (for example the second part of anti-detect/mac.ts) does not wait for the lock that
 its parent holds: the client sets HARNESS_GUARD_HELD=<guard pid> after "locked", and a guard whose environment names
@@ -28,18 +32,23 @@ The agents' outer lock (/home/selden/.cache/ab-lead/heavy.lock, taken by hand ar
 one: no harness and no guard takes it, so a process that holds the harness lock never waits for heavy.lock, and the
 two locks cannot deadlock.
 
-While the driver runs, the guard records each process of the driver's tree every 0.5 s (its pid and its start time
-from /proc), and each pid that the driver names: "track PID NAME" lines on a pipe from the driver (the pipe form: fd 0,
-or --channel-fd N; Node's client uses fd 3, because Node closes a child's stdin when that child exits, and the guard's
-first process exits at once), or one pid in each file of --pid-dir (the pid-file form). The driver's end: that pipe
-closes (the kernel closes it also at a kill -9 of the driver), the driver's pid is gone or has a new start time, a
-SIGTERM to the guard, or the --limit. Then the guard sends SIGTERM to each recorded process that still runs with its
-recorded start time (a reused pid is never signalled), and to their children; after 5 s it sends SIGKILL to those
-still there; it waits until they are gone (at most 20 s in all), names them on stderr, and only then ends, which frees
-the lock. It signals no process other than those records and their children.
+While the driver runs, the guard records each process of the driver's tree every 0.5 s (from one /proc snapshot: its
+pid and its start time, and a pidfd that it opens and checks against that start time), and each pid that the driver
+names, if that process is in the driver's tree or started after the guard: "track PID NAME" lines on a pipe from the
+driver (the pipe form: fd 0, or --channel-fd N; Node's client uses fd 3, because Node closes a child's stdin when that
+child exits, and the guard's first process exits at once), or one pid in each file of --pid-dir (the pid-file form).
+The driver's end: that pipe closes (the kernel closes it also at a kill -9 of the driver) or is missing, the driver's
+pid is gone or has a new start time, a SIGTERM to the guard, or the --limit. Then the guard sends SIGTERM to each
+recorded process that still runs with its recorded start time, and to their children; after 5 s it sends SIGKILL to
+those still there; it waits until they are gone (at most 20 s in all), names them on stderr, and only then ends,
+which frees the lock. It signals through the record's pidfd, so a process that took a recorded pid later gets no
+signal; only when no pidfd could be opened (no fd left) does it check the start time right before the signal.
+
+The limit: a process that leaves the driver's tree within 0.5 s of its start (a double fork, for example a daemon's
+server or a crash handler such as crashpad) and that the driver does not name escapes the records.
 
 The clients: test/live/guard.ts (agent-browser's Node harnesses), start_guard() below (a Python driver), and the
-pid-file form (chrome-extension's run.sh).
+pid-file form (chrome-extension's run.sh). RESERVED_DISPLAYS below: the X displays that no harness takes.
 """
 
 import argparse
@@ -57,13 +66,22 @@ TERM_S = 5.0
 GONE_S = 20.0
 DEFAULT_WAIT_S = 1200
 REFUSED = 75
+# The X displays that no harness takes, whatever its own setting is: 0 (a desktop), 90 (agentwatch's agent browser on
+# taylor, the operator's), 147, 190, 191, 192 (other programs' displays on taylor). chrome-extension's run.sh and
+# agent-browser's guard.ts keep the same list (their tests compare it with this one).
+RESERVED_DISPLAYS = (0, 90, 147, 190, 191, 192)
+
+
+def default_lock_path():
+    """<home of this uid>/.cache/agent-harness/harness.lock (the home from the password database, not from HOME)."""
+    return os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".cache", "agent-harness", "harness.lock")
 
 
 def lock_path():
-    """The harness lock file: HARNESS_LOCK, else <home of this uid>/.cache/agent-harness/harness.lock."""
+    """The harness lock file: HARNESS_LOCK (for the tests), else the default."""
     if os.environ.get("HARNESS_LOCK"):
         return os.path.abspath(os.environ["HARNESS_LOCK"])
-    return os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".cache", "agent-harness", "harness.lock")
+    return default_lock_path()
 
 
 def say(name, text):
@@ -87,7 +105,7 @@ def stat_of(pid):
 
 
 def table():
-    """{pid: (ppid, start time, state, comm)} of every process."""
+    """{pid: (ppid, start time, state, comm)} of every process: one snapshot."""
     t = {}
     for n in os.listdir("/proc"):
         if n.isdigit():
@@ -151,12 +169,25 @@ def held_by_parent(fd, driver):
     return int(fields["driver"]) in ancestors(table(), driver)
 
 
+def close_inherited(keep):
+    """Close every fd from 3 up but `keep`: an inherited fd (for example heavy.lock's, or a caller's pipe) must not
+    stay open as long as the guard runs."""
+    for n in os.listdir("/proc/self/fd"):
+        fd = int(n)
+        if fd >= 3 and fd not in keep:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 class Guard:
     def __init__(self, a):
         self.a = a
         self.name = a.name
-        self.rec = {}  # pid -> (start time, name)
+        self.rec = {}  # pid -> [start time, name, pidfd or None]
         self.reason = None
+        self.my_start = stat_of(os.getpid())[1]
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, self.on_term)
@@ -166,20 +197,59 @@ class Guard:
     def on_term(self, *_):
         self.reason = self.reason or "the guard got SIGTERM"
 
-    def record(self, pid, name=None):
-        st = stat_of(pid)
+    def record(self, pid, st, name=None):
+        """Record `pid` with the start time of the snapshot `st`, and a pidfd of it: the pidfd is opened, then the
+        start time is read again, so the pidfd is of the process of the snapshot, and a signal through it cannot reach
+        a process that took the pid later."""
         if pid == os.getpid() or st is None or st[2] in ("Z", "X"):
             return
-        if pid not in self.rec or self.rec[pid][0] != st[1]:
-            self.rec[pid] = (st[1], name or st[3])
+        old = self.rec.get(pid)
+        if old and old[0] == st[1]:
+            return
+        if old and old[2] is not None:
+            os.close(old[2])
+        try:
+            fd = os.pidfd_open(pid)
+        except ProcessLookupError:
+            self.rec.pop(pid, None)
+            return
+        except OSError:
+            fd = None  # no fd left: the start time is checked again right before each signal
+        if fd is not None and not same(pid, st[1]):
+            os.close(fd)
+            self.rec.pop(pid, None)
+            return
+        self.rec[pid] = [st[1], name or st[3], fd]
+
+    def accept(self, pid, name):
+        """A pid that the driver names (a track line, a pid file): only a process of the driver's tree, or one that
+        started after the guard, as the harness's own processes did; another pid is named on stderr and left alone."""
+        t = table()
+        st = t.get(pid)
+        if st is None:
+            return
+        if (self.a.driver and pid in tree(t, [self.a.driver])) or st[1] >= self.my_start:
+            self.record(pid, st, name)
+        else:
+            say(self.name, "leaves pid %d (%s) alone: it is not in the driver's tree and it started before the guard" % (pid, name))
+
+    def prune(self):
+        """Drop the records of processes that ended (and close their pidfds), so that the fds stay few."""
+        for pid, v in list(self.rec.items()):
+            if not same(pid, v[0]):
+                if v[2] is not None:
+                    os.close(v[2])
+                del self.rec[pid]
 
     def driver_gone(self):
         return self.a.driver and not same(self.a.driver, self.driver_start)
 
     def lock(self):
         path = lock_path()
+        if path != default_lock_path():
+            say(self.name, "HARNESS_LOCK names %s, not the harness lock %s: this harness waits only for harnesses with the same HARNESS_LOCK (for the tests)" % (path, default_lock_path()))
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
         if self.a.driver and held_by_parent(fd, self.a.driver):
             os.close(fd)
             return "nested %d" % os.getpid()
@@ -218,6 +288,11 @@ class Guard:
             r, _, _ = select.select([self.a.channel_fd], [], [], timeout)
         except InterruptedError:
             return
+        except (OSError, ValueError):
+            # No such fd (EBADF): the driver gave no pipe, so the guard cannot see its end there.
+            self.stdin_open = False
+            self.reason = self.reason or "the driver's pipe (fd %d) is missing" % self.a.channel_fd
+            return
         if not r:
             return
         try:
@@ -233,7 +308,7 @@ class Guard:
             line, self.buf = self.buf.split(b"\n", 1)
             parts = line.decode("utf-8", "replace").split()
             if len(parts) >= 2 and parts[0] == "track" and parts[1].isdigit():
-                self.record(int(parts[1]), parts[2] if len(parts) > 2 else None)
+                self.accept(int(parts[1]), parts[2] if len(parts) > 2 else "process")
 
     def read_pid_dir(self):
         try:
@@ -246,31 +321,47 @@ class Guard:
                     v = f.read().strip()
             except OSError:
                 continue
-            if v.isdigit() and int(v) not in self.rec:
-                self.record(int(v), n)
+            if v.isdigit() and int(v) not in self.rec and int(v) not in self.seen:
+                self.seen.add(int(v))
+                self.accept(int(v), n)
 
     def watch(self):
         t0 = time.monotonic()
+        self.seen = set()
         while self.reason is None:
             self.read_input(POLL_S)
             if self.a.pid_dir:
                 self.read_pid_dir()
             if self.a.driver:
-                for pid in tree(table(), [self.a.driver]):
-                    self.record(pid)
+                t = table()
+                for pid in tree(t, [self.a.driver]):
+                    self.record(pid, t[pid])
                 if self.driver_gone():
                     self.reason = self.reason or "the driver %d is gone" % self.a.driver
             if self.a.limit and time.monotonic() - t0 >= self.a.limit:
                 self.reason = self.reason or "the run reached its limit of %d s" % self.a.limit
+            self.prune()
 
     def alive(self):
         return {p: v for p, v in self.rec.items() if same(p, v[0])}
 
     def add_children(self):
-        """The children that the recorded processes started since the last record."""
+        """The children that the recorded processes started since the last record (also of a recorded process that
+        left the driver's tree when the driver ended)."""
         t = table()
         for pid in tree(t, list(self.alive())):
-            self.record(pid)
+            self.record(pid, t[pid])
+
+    def send(self, pid, v, sig):
+        """A signal through the record's pidfd; with no pidfd, only while the pid has the recorded start time."""
+        try:
+            if v[2] is not None:
+                signal.pidfd_send_signal(v[2], sig)
+            elif same(pid, v[0]):
+                os.kill(pid, sig)
+            return True
+        except OSError:
+            return False
 
     def stop(self):
         self.add_children()
@@ -283,14 +374,10 @@ class Guard:
         while self.alive() and time.monotonic() - t0 < GONE_S:
             self.add_children()
             want = signal.SIGKILL if time.monotonic() - t0 >= TERM_S else signal.SIGTERM
-            for pid, (start, _) in self.alive().items():
-                if sent.get(pid) not in (want, signal.SIGKILL) and same(pid, start):
-                    try:
-                        os.kill(pid, want)
-                        sent[pid] = want
-                        killed = killed or want == signal.SIGKILL
-                    except OSError:
-                        pass
+            for pid, v in self.alive().items():
+                if sent.get(pid) not in (want, signal.SIGKILL) and self.send(pid, v, want):
+                    sent[pid] = want
+                    killed = killed or want == signal.SIGKILL
             time.sleep(0.1)
         left = self.alive()
         if left:
@@ -308,12 +395,16 @@ def main(argv):
     p.add_argument("--driver", type=int, required=True, help="the driver's pid; 0: no driver (with --pid-dir and --limit)")
     p.add_argument("--wait", type=int, default=int(os.environ.get("HARNESS_LOCK_WAIT") or DEFAULT_WAIT_S))
     p.add_argument("--pid-dir", help="the pid-file form: one pid in each file; stdin is not read")
+    p.add_argument("--log", help="the pid-file form: the guard's stderr after the lock (the run's log file)")
     p.add_argument("--channel-fd", type=int, default=0, help="the pipe form's fd (default 0, stdin)")
     p.add_argument("--limit", type=int, default=0, help="the run's limit in seconds (0: none)")
     a = p.parse_args(argv)
     a.name = "".join(c if c.isalnum() or c in "-_.:/" else "-" for c in a.name)[:60] or "harness"
     if a.driver == 0 and not (a.pid_dir and a.limit):
         print("refused --driver 0 needs --pid-dir and --limit", flush=True)
+        return 2
+    if a.pid_dir and not a.log:
+        print("refused --pid-dir needs --log", flush=True)
         return 2
     st = stat_of(a.driver) if a.driver else (0, 0, "R", "")
     if st is None:
@@ -323,6 +414,7 @@ def main(argv):
     if os.fork():
         os._exit(0)
     os.setsid()
+    close_inherited(set() if a.pid_dir else {a.channel_fd})
     g = Guard(a)
     g.driver_start = st[1]
     print(g.lock(), flush=True)
@@ -330,6 +422,11 @@ def main(argv):
     os.dup2(devnull, 1)
     if a.pid_dir:
         os.dup2(devnull, 0)
+        # The caller's stderr goes: `run=$(run.sh up 2>&1)` returns, and an up-alone run holds no pipe of its caller.
+        log = os.open(a.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o600)
+        os.dup2(log, 2)
+        os.close(log)
+    os.close(devnull)
     g.watch()
     g.stop()
     return 0
