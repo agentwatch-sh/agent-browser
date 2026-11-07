@@ -26,7 +26,7 @@ import { basename, join } from "node:path";
 import { BridgeError, RELAY_TIMER, type Bridge } from "./bridge.ts";
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
-import { awaitsPromise, cdpError, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { awaitsPromise, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
@@ -103,6 +103,8 @@ type Tab = {
    * The context ids of the relay's isolated world in the tab: the id that its last Page.createIsolatedWorld returned,
    * and the ids of Runtime.executionContextCreated with its name. Each read makes the world again and keeps only the
    * new id: Chromium reuses context ids in a new renderer process, so an old id can name a page's context (review-68 B1).
+   * A client's call that names one of them is refused (sendNow; board ab-v16.80); an id that Chrome gives to another
+   * world (its Runtime.executionContextCreated, or the answer of a client's Page.createIsolatedWorld) leaves the set.
    */
   worldIds: Set<number>;
   /** A geometry read of the relay is in flight. */
@@ -724,10 +726,22 @@ export class Model {
 
   /** Send one client call to Chrome now; its answer goes to the client. Returns the bridge call. */
   private sendNow(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<unknown> {
+    // A call into the relay's own isolated world (board ab-v16.80; review-68c note 3): it could change what the
+    // geometry read sees there (screenX: the clamp box). Checked here, as the call goes to Chrome, not when it came: a
+    // call that waited behind an activation step can name the world that the step's read made. The tab's own session
+    // only: a child session (a frame of another renderer, a worker) numbers its contexts on its own. Not
+    // Runtime.runIfWaitingForDebugger: it runs no code in a context, and its release of a held tab must go (review-72 note 6).
+    if (!child && tab.worldIds.size && method !== "Runtime.runIfWaitingForDebugger" && contextsNamed(params).some((id) => tab.worldIds.has(id))) {
+      answer({ error: { code: -32000, message: TEXT.relayWorld(method) } });
+      return Promise.resolve();
+    }
     const target = child ? { tabId: tab.id, sessionId: child } : { tabId: tab.id };
     const call = this.bridge.call("debugger.sendCommand", [target, method, withForce(method, params)]);
     this.tracked(tab, child, method, params, call);
     call.then((result) => {
+      // The client's own world: the id that Chrome gave it names no world of the relay's now (an old id of the relay's
+      // world from another renderer process, review-68 B1).
+      if (method === "Page.createIsolatedWorld" && !child) tab.worldIds.delete((result as any)?.executionContextId);
       let r = hidesCookies(method) ? hideCookies(result) : result;
       if (r?.targetInfo) r = { ...r, targetInfo: { ...r.targetInfo, browserContextId: DEFAULT_CONTEXT } };
       answer({ result: r ?? {} });
@@ -869,10 +883,14 @@ export class Model {
   /** The relay's world's events (its context, its scripts): no client sees them. True when the relay drops the event. */
   private worldEvent(tab: Tab, method: string, params: any): boolean {
     if (method === "Runtime.executionContextCreated" && params?.context?.name === this.worldName) { tab.worldIds.add(params.context.id); return true; }
+    // Another world with an id of the set: an old id of the relay's world, which Chromium gave to that world (board ab-v16.80).
+    if (method === "Runtime.executionContextCreated") tab.worldIds.delete(params?.context?.id);
     const id = params?.executionContextId;
     if (method === "Runtime.executionContextDestroyed" && tab.worldIds.has(id)) { tab.worldIds.delete(id); return true; }
     if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldIds.has(id)) return true;
-    if (method === "Runtime.executionContextsCleared") tab.worldIds.clear();
+    // A new document of the main frame: its old contexts are gone, also with Runtime off (no
+    // Runtime.executionContextsCleared then; review-72 note 1).
+    if (method === "Runtime.executionContextsCleared" || (method === "Page.frameNavigated" && !params?.frame?.parentId)) tab.worldIds.clear();
     // A window event that the relay sees: the page's cached geometry goes.
     if (method === "Page.frameResized") this.dropGeo(tab);
     return false;
@@ -904,7 +922,10 @@ export class Model {
         const id = w.executionContextId as number;
         tab.worldIds = new Set([id]);
         try {
-          const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: id, returnByValue: true }]);
+          // disableBreaks: the client and the relay share the tab's debugger session, so a client's breakpoint (its
+          // condition, a logpoint), instrumentation breakpoint or pause would run its code in the relay's world before
+          // the read (review-72 B1).
+          const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: id, returnByValue: true, disableBreaks: true }]);
           return geoOf(r?.result?.value);
         } catch (e) {
           // A navigation between the two calls took the world: an evaluate that names an unknown context. Once more.

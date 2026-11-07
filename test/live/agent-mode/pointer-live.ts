@@ -11,7 +11,8 @@
 //   apart: jumps, and presses away from the last move); a catch-up in the front page while another client activates
 //   (review-63c B2); one client holds a press (3 s: the limit; 0.5 s) while the other activates; a page whose mousemove
 //   handler opens a dialog (the step's limit, and a far catch-up that stops at 4 unanswered moves); an active tab's
-//   Target.activateTarget;
+//   Target.activateTarget; the relay's own world (board ab-v16.80: a client's call into it is refused, the client's own
+//   world works, and an object id names its context; a client's breakpoints do not reach the relay's read);
 // - a focused window under a newer unfocused window (does the raise bring it up; does a CDP press raise it);
 // - the mapping and the clamp: a vertical and a horizontal scrollbar, a target near the display's edge, a popup of
 //   another size, a moved window, a device-metrics override;
@@ -29,6 +30,8 @@ import { writeFileSync } from "node:fs";
 import { page as probePage, type Rec } from "../anti-detect/probe.ts";
 import type { StandInDaemon } from "./daemon.ts";
 import type { Played } from "./pointer-ops.ts";
+import { GEO_EXPRESSION } from "../../../src/relay/pointer.ts";
+import { contextOfObject, TEXT } from "../../../src/relay/policy.ts";
 import { leavingPages, movesOf, movesWhileHeld, noPath, pageCounts, played as playedStep, pressesAway, stats, stepLine, type StepLine } from "./pointer-measure.ts";
 
 export type PointerContext = {
@@ -262,6 +265,78 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         await sleep(300);
         const after = o.daemon.played().length;
         o.record({ group: G, case: "an active tab's Target.activateTarget: no path", status: after === m ? "pass" : "fail", ms: 0, detail: { playedBefore: n, beforeActivate: m, after } });
+      });
+      // The relay's own world (board ab-v16.80): a client's call into it is refused before it reaches Chrome; the
+      // client's own world works, and Chromium's object ids name their context ("<isolate>.<context>.<n>"), which the
+      // relay's check of an object id reads.
+      let relayIds: number[] = []; // the ids of the relay's world in A's page that the world case found
+      const worldCase = "the relay's own world (ab-v16.80): a client's call into it is refused; the client's own world works; an object id names its context";
+      await guard(worldCase, async () => {
+        await pb.mouse.click(600, 420);
+        await pa.mouse.click(200, 200); // a step from B's page to A's: the relay reads A's page in its world
+        const s = await a.contexts()[0].newCDPSession(pa);
+        try {
+          const { frameTree } = await s.send("Page.getFrameTree");
+          const { executionContextId: own } = await s.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "client-world" });
+          const r = await s.send("Runtime.evaluate", { expression: "({ n: 1 })", contextId: own });
+          const objectId = String(r.result.objectId), objectContext = contextOfObject(objectId);
+          const viaObject = await s.send("Runtime.callFunctionOn", { functionDeclaration: "function () { return this.n; }", objectId, returnByValue: true });
+          // The relay's id is not known to a client: try the ids that Chromium gives (small integers).
+          const refused: number[] = [], text = TEXT.relayWorld("Runtime.evaluate");
+          for (let id = 1; id <= 200; id++) {
+            try { await s.send("Runtime.evaluate", { expression: "1", contextId: id, returnByValue: true }); } catch (e) { if (String((e as Error).message).includes(text)) refused.push(id); }
+          }
+          let objectRefused = false;
+          if (refused.length) {
+            try { await s.send("Runtime.callFunctionOn", { functionDeclaration: "function () { return 1; }", objectId: `${objectId.split(".")[0]}.${refused[0]}.1`, returnByValue: true }); }
+            catch (e) { objectRefused = String((e as Error).message).includes(TEXT.relayWorld("Runtime.callFunctionOn")); }
+          }
+          relayIds = refused;
+          const ok = objectContext === own && viaObject?.result?.value === 1 && refused.length >= 1 && !refused.includes(own) && objectRefused;
+          o.record({ group: G, case: worldCase, status: ok ? "pass" : "fail", ms: 0, detail: { own, objectId, objectContext, ownObjectWorks: viaObject?.result?.value === 1, refused, objectRefused } });
+        } finally { await s.detach().catch(() => {}); }
+      });
+      // review-72 B1: the client and the relay share the tab's debugger session, so a client's breakpoint could stop the
+      // relay's read or run its condition in the relay's world before the read (and move the clamp box). Two ways: an
+      // instrumentation breakpoint before each script (a pause whose top frame's `this` is the world's global object,
+      // so its object id names the world), and a breakpoint by the script hash of GEO_EXPRESSION (public text) whose
+      // condition marks the page (data-hit) and sets screenX. With disableBreaks neither reaches the relay's read. The
+      // controls: both reach the client's own evaluate in its own world.
+      const breakCase = "the relay's own world (review-72 B1): a client's breakpoints do not reach the relay's read; they reach the client's own evaluate";
+      await guard(breakCase, async () => {
+        const s = await a.contexts()[0].newCDPSession(pa);
+        const paused: (number | null)[] = [], parsed: { ctx: number; hash: string }[] = [];
+        s.on("Debugger.paused", (ev: any) => { paused.push(contextOfObject(String(ev.callFrames?.[0]?.this?.objectId ?? ""))); void s.send("Debugger.resume").catch(() => {}); });
+        s.on("Debugger.scriptParsed", (ev: any) => parsed.push({ ctx: ev.executionContextId, hash: ev.hash }));
+        const cond = "(document.documentElement.setAttribute('data-hit', String(screenX)), screenX = 10000, screenY = 10000, false)";
+        const hit = async () => (await s.send("Runtime.evaluate", { expression: "document.documentElement.getAttribute('data-hit')", returnByValue: true })).result.value ?? null;
+        try {
+          await s.send("Debugger.enable");
+          const { frameTree } = await s.send("Page.getFrameTree");
+          const { executionContextId: own } = await s.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "client-control" });
+          await s.send("Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: own, returnByValue: true });
+          const hash = parsed.filter((x) => x.ctx === own).at(-1)?.hash;
+          if (!hash) throw new Error("no Debugger.scriptParsed of the client's own evaluate");
+          await s.send("Debugger.setBreakpointByUrl", { lineNumber: 0, scriptHash: hash, condition: cond });
+          await s.send("Debugger.setInstrumentationBreakpoint", { instrumentation: "beforeScriptExecution" });
+          // The controls, in the client's own world.
+          await s.send("Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: own, returnByValue: true });
+          const ownHit = await hit(), ownPaused = paused.includes(own);
+          await s.send("Runtime.evaluate", { expression: "document.documentElement.removeAttribute('data-hit')" });
+          // The relay's reads of A's page.
+          const n = o.daemon.played().length, from = paused.length;
+          await pb.mouse.click(600, 420);
+          await pa.mouse.click(200, 200);
+          await sleep(300);
+          const played = o.daemon.played().length - n, during = paused.slice(from);
+          const relayPaused = during.filter((c) => c !== null && relayIds.includes(c)).length, relayHit = await hit();
+          const ok = relayIds.length > 0 && played >= 1 && relayPaused === 0 && relayHit === null && (ownHit !== null || ownPaused);
+          o.record({ group: G, case: breakCase, status: ok ? "pass" : "fail", ms: 0, detail: { relayIds, played, ownHit, ownPaused, pausesDuringSteps: during, relayPaused, relayHit } });
+        } finally {
+          await s.send("Debugger.removeInstrumentationBreakpoint", { instrumentation: "beforeScriptExecution" }).catch(() => {});
+          await s.send("Debugger.disable").catch(() => {});
+          await s.detach().catch(() => {});
+        }
       });
       // The hover dialog: a page whose mousemove handler opens a dialog holds that move's answer while the dialog is open.
       await guard("a page whose mousemove handler opens a dialog: the step ends at its limit with no path; a far catch-up into it stops at 4 unanswered moves and lets the client close the dialog", async () => {

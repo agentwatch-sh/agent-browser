@@ -25,6 +25,7 @@ export const TEXT = {
   scheme: (scheme: string, method: string) => `${NA}${scheme} URLs (${method}). Agent mode opens web pages only.`,
   notAllowed: (host: string) => `Not allowed: ${host} is not on the allowlist`,
   permission: (name: string) => `${NA}the permission ${name}`,
+  relayWorld: (method: string) => `${NA}the relay's own isolated world (${method} names its execution context, or an object or a call frame in it). Use the page's main world or a world of your own (Page.createIsolatedWorld).`,
 };
 
 /** The calls that the model answers on the root and on a browser session (the design, section 4.3). */
@@ -114,6 +115,38 @@ export function refusal(method: string, params: any, onPage: boolean): string | 
   if (method === "Page.addScriptToEvaluateOnNewDocument" && !p.worldName) return TEXT.mainWorldScript;
   if (method === "Runtime.addBinding" && !p.executionContextName) return TEXT.mainWorldBinding;
   return null;
+}
+
+/**
+ * The execution context of a V8 object id or call-frame id, or null. V8 writes both as "<isolate>.<context>.<n>"
+ * (v8/src/inspector/remote-object-id.cc: the injected script's id is its context's id), so an object's id names its
+ * world.
+ */
+export function contextOfObject(id: string): number | null {
+  const m = /^-?\d+\.(\d+)\.\d+$/.exec(id);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * The execution contexts that a client's call names (board ab-v16.80; review-68c note 3): a contextId or an
+ * executionContextId (Runtime.evaluate, Runtime.callFunctionOn, DOM.resolveNode, Runtime.compileScript, ...), and the
+ * context of each object id and call-frame id (objectId, a name that ends in ObjectId, callFrameId), at the call's top
+ * level and in its objects and lists down to 3 levels (Runtime.callFunctionOn's arguments, Debugger.setVariableValue's
+ * newValue). The model refuses such a call into its own isolated world (Model.sendNow).
+ */
+export function contextsNamed(params: any): number[] {
+  const out: number[] = [];
+  const walk = (v: any, depth: number): void => {
+    if (!v || typeof v !== "object" || depth > 3) return;
+    if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "contextId" || k === "executionContextId") { if (Number.isInteger(x)) out.push(x as number); }
+      else if ((k === "objectId" || k === "callFrameId" || k.endsWith("ObjectId")) && typeof x === "string") { const c = contextOfObject(x); if (c !== null) out.push(c); }
+      else walk(x, depth + 1);
+    }
+  };
+  walk(params, 0);
+  return out;
 }
 
 /** The host of a URL that passed urlRefusal (http:, https:, or blob: with an http(s) inner origin); the URL itself when it does not parse. */

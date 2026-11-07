@@ -1095,7 +1095,8 @@ a second; no client method reaches these ops). The relay (`src/relay/model.ts`, 
   `Target.activateTarget`: when a page comes under the pointer and both last points are known, the relay
   waits for the front page's release (at most 2 s), holds the front page's later calls, reads both pages'
   geometry (one `Runtime.evaluate` in the relay's own isolated world, which it makes before each read; no
-  client or page script sees it; for a front page that no client holds, as after each command of
+  client or page script sees it, and the relay refuses a client's call that names it: its context id, or an
+  object id or a call-frame id in it; for a front page that no client holds, as after each command of
   agent-browser's CLI, the last usable geometry of the relay's own reads, which goes at every window event
   that the relay sees and at each read that is not usable), plans a path with `src/input.ts`'s generator
   from the front page's last point to the entering page's, clamped 2 px inside the front page's content box
