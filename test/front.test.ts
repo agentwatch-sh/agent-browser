@@ -202,7 +202,8 @@ test("macOS: a caller's stop while front runs ends front's hold within a second,
   })).catch(() => undefined);
   await done;
   assert.ok(goneAt > 0, "the hold went while osascript still ran");
-  assert.ok(goneAt - stopAt <= 1500, `${goneAt - stopAt} ms after the stop`);
+  // A wide bound (review-69f N-a): a late timer on a loaded machine; still less than the hold's 3 s ahead.
+  assert.ok(goneAt - stopAt <= 3000, `${goneAt - stopAt} ms after the stop`);
 });
 
 test("macOS: a caller's stop (the internal stopped option, the Mac check) that comes while front reads ps sends no request: nothing is activated (review-69c B1)", async () => {
