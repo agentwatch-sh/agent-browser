@@ -12,7 +12,7 @@
 //   (review-63c B2); one client holds a press (3 s: the limit; 0.5 s) while the other activates; a page whose mousemove
 //   handler opens a dialog (the step's limit, and a far catch-up that stops at 4 unanswered moves); an active tab's
 //   Target.activateTarget; the relay's own world (board ab-v16.80: a client's call into it is refused, the client's own
-//   world works, and an object id names its context);
+//   world works, and an object id names its context; a client's breakpoint condition does not run in the relay's read);
 // - a focused window under a newer unfocused window (does the raise bring it up; does a CDP press raise it);
 // - the mapping and the clamp: a vertical and a horizontal scrollbar, a target near the display's edge, a popup of
 //   another size, a moved window, a device-metrics override;
@@ -292,6 +292,33 @@ export async function pointerCases(o: PointerContext): Promise<void> {
           const ok = objectContext === own && viaObject?.result?.value === 1 && refused.length >= 1 && !refused.includes(own) && objectRefused;
           o.record({ group: G, case: worldCase, status: ok ? "pass" : "fail", ms: 0, detail: { own, objectId, objectContext, ownObjectWorks: viaObject?.result?.value === 1, refused, objectRefused } });
         } finally { await s.detach().catch(() => {}); }
+      });
+      // review-72 B1: the client and the relay share the tab's debugger session, so a client's breakpoint on every script
+      // with no URL (each evaluate's) would run its condition in the relay's world before its read, and move the clamp
+      // box. With disableBreaks the relay's read runs no condition: no data-hit on A's page after its steps. The control:
+      // the same breakpoint runs its condition in the client's own world.
+      const breakCase = "the relay's own world (review-72 B1): a client's breakpoint condition does not run in the relay's read; it runs in the client's own evaluate";
+      await guard(breakCase, async () => {
+        const s = await a.contexts()[0].newCDPSession(pa);
+        const cond = "(document.documentElement.setAttribute('data-hit', String(screenX)), screenX = 10000, screenY = 10000, false)";
+        const hit = async () => (await s.send("Runtime.evaluate", { expression: "document.documentElement.getAttribute('data-hit')", returnByValue: true })).result.value ?? null;
+        try {
+          await s.send("Debugger.enable");
+          let { breakpointId } = await s.send("Debugger.setBreakpointByUrl", { lineNumber: 0, urlRegex: "^$", condition: cond });
+          const n = o.daemon.played().length;
+          await pb.mouse.click(600, 420);
+          await pa.mouse.click(200, 200); // steps between B's page and A's: the relay reads A's page in its world
+          const played = o.daemon.played().length - n;
+          await s.send("Debugger.removeBreakpoint", { breakpointId });
+          const relayHit = await hit();
+          const { frameTree } = await s.send("Page.getFrameTree");
+          const { executionContextId: own } = await s.send("Page.createIsolatedWorld", { frameId: frameTree.frame.id, worldName: "client-control" });
+          ({ breakpointId } = await s.send("Debugger.setBreakpointByUrl", { lineNumber: 0, urlRegex: "^$", condition: cond }));
+          await s.send("Runtime.evaluate", { expression: "1", contextId: own });
+          await s.send("Debugger.removeBreakpoint", { breakpointId });
+          const ownHit = await hit();
+          o.record({ group: G, case: breakCase, status: relayHit === null && ownHit !== null && played >= 1 ? "pass" : "fail", ms: 0, detail: { played, relayHit, ownHit } });
+        } finally { await s.send("Debugger.disable").catch(() => {}); await s.detach().catch(() => {}); }
       });
       // The hover dialog: a page whose mousemove handler opens a dialog holds that move's answer while the dialog is open.
       await guard("a page whose mousemove handler opens a dialog: the step ends at its limit with no path; a far catch-up into it stops at 4 unanswered moves and lets the client close the dialog", async () => {

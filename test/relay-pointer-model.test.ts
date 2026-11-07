@@ -1622,3 +1622,56 @@ test("ab-v16.80: with an old daemon (unknown op) the relay makes no world, and n
     assert.deepEqual(reached(h, A, from), ["Runtime.callFunctionOn", "Runtime.callFunctionOn", "Runtime.callFunctionOn"]);
   } finally { await h.close(); }
 });
+
+test("ab-v16.80 (review-72 B1): the relay's own evaluate in its world sends disableBreaks, so a client's breakpoint, logpoint, instrumentation breakpoint or pause runs no code there", async () => {
+  // The client and the relay share the tab's debugger session: a client's Debugger.setBreakpointByUrl with urlRegex "^$"
+  // and a condition "screenX = 10000, false" hit the relay's Runtime.evaluate, and the condition ran in its world.
+  const { h, c, A, B } = await withWorlds();
+  try {
+    await c.send("Debugger.enable", {}, A.sessionId);
+    await c.send("Debugger.setBreakpointByUrl", { lineNumber: 0, urlRegex: "^$", condition: "screenX = 10000, screenY = 10000, false" }, A.sessionId);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, B, 700, 300); // a path from A to B: the relay reads A again
+    const evals = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[2].expression === GEO_EXPRESSION);
+    assert.ok(evals.length >= 4 && evals.some((r) => r.args[0].tabId === A.tab.id), "reads of both pages");
+    assert.ok(evals.every((r) => r.args[2].disableBreaks === true && r.args[2].returnByValue === true), JSON.stringify(evals.map((r) => r.args[2])));
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80 (review-72 note 1): a main-frame Page.frameNavigated (a new document) empties the set, also with Runtime off; a frame's does not", async () => {
+  // A cross-process navigation with Runtime off: no Runtime.executionContextsCleared; Chromium can give the relay's old
+  // id to a world of the new document, and the client's call there was refused until the relay's next read.
+  const { h, c, A } = await withWorlds();
+  try {
+    const w = relayWorld(h, A);
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Page.frameNavigated", params: { frame: { id: "FR-child", parentId: A.targetId, url: "https://a.example/f", loaderId: "L1" }, type: "Navigation" } });
+    await sleep(20);
+    await refusedAll(h, c, A, [["Runtime.evaluate", { expression: "1", contextId: w }]]);
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Page.frameNavigated", params: { frame: { id: A.targetId, url: "https://a.example/next", loaderId: "L2" }, type: "Navigation" } });
+    await sleep(20);
+    const from = h.fake.requests.length;
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(w) }, A.sessionId);
+    assert.deepEqual(reached(h, A, from), ["Runtime.callFunctionOn"], "the old id names a world of the new document");
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80 (review-72 note 6): Runtime.runIfWaitingForDebugger is not checked (it runs no code in a context): a held tab is released also when the call names an id of the relay's world", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const name = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").find((r) => r.args[2].worldName?.startsWith("agentwatch-relay-"))!.args[2].worldName;
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    const popup = h.fake.newTab("https://a.example/popup", A.tab);
+    const ev = await attached;
+    assert.equal(ev.waitingForDebugger, true);
+    // The relay's world in the held tab (its Runtime.executionContextCreated): the id joins the tab's set.
+    h.fake.emit("debugger.onEvent", { source: { tabId: popup.id }, method: "Runtime.executionContextCreated", params: { context: { id: 900, origin: "", name, uniqueId: "u900", auxData: { frameId: popup.targetId, isDefault: false, type: "isolated" } } } });
+    await sleep(20);
+    const p = { targetId: popup.targetId, sessionId: ev.sessionId as string, tab: popup };
+    await refusedAll(h, c, p, [["Runtime.evaluate", { expression: "1", contextId: 900 }]]);
+    const from = h.fake.requests.length;
+    await c.send("Runtime.runIfWaitingForDebugger", { contextId: 900 }, ev.sessionId);
+    await until(() => h.fake.sent("bridge.release").some((r) => r.args[0] === popup.id), "the release of the held tab");
+    assert.deepEqual(reached(h, p, from), ["Runtime.runIfWaitingForDebugger"]);
+  } finally { await h.close(); }
+});

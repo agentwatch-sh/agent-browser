@@ -360,18 +360,36 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   clamp box). The relay refuses a call on the tab's own session that names an id of the set: a `contextId` or
   an `executionContextId` (`Runtime.evaluate`, `Runtime.callFunctionOn`, `DOM.resolveNode`,
   `Runtime.compileScript`, ...), or an object id or a call-frame id of the world (`objectId`, a name that ends
-  in `ObjectId`, `callFrameId`; also in a call's arguments). V8 writes both ids as
-  `<isolate>.<context>.<n>`, so the id names its world; the relay's own calls give no object
-  (`returnByValue`), and their answers never go to a client. The check runs when the call goes to Chrome,
-  so a call that waited behind a step is checked against the world that the step's read made. An id that
-  Chrome gives to another world leaves the set: a `Runtime.executionContextCreated` of another name, and the
-  answer of a client's own `Page.createIsolatedWorld` (an old id of the relay's world from another renderer),
-  so the client's own worlds stay usable. A child session numbers its contexts on its own, and its calls are
-  not checked. With an old daemon, or on the Mac, the relay makes no world, and nothing is refused. The
-  limits: a call that reaches Chrome between the world's first `Page.createIsolatedWorld` in a document and
-  its answer (a few ms; later reads of the document get the same id, which is in the set then); the world's
-  `uniqueContextId` and its name, which no client sees (the relay drops the world's events) and which are
-  not guessed (the name has 32 random bits);
+  in `ObjectId`, `callFrameId`; also in a call's arguments, down to 3 levels). The relay reads the world of an
+  object id and of a call-frame id from V8's form of both, `<isolate>.<context>.<n>` (measured on Chromium
+  156: an object of context 6 had the id `-5135176979714057620.6.1`); it depends on that form. Another form
+  names no context (the old JSON form, `{"injectedScriptId":...}`, is not parsed), so such an object id is
+  not refused: the context-id refusals stay. The relay's own calls give no object (`returnByValue`), and
+  their answers never go to a client. The check runs when the call goes to Chrome, so a call that waited
+  behind a step is checked against the world that the step's read made. `Runtime.runIfWaitingForDebugger`
+  is not checked: it runs no code in a context, and its release of a held tab must go (review-72 note 6).
+  An id that Chrome gives to another world leaves the set: a `Runtime.executionContextCreated` of another
+  name, and the answer of a client's own `Page.createIsolatedWorld` (an old id of the relay's world from
+  another renderer), so the client's own worlds stay usable. A main-frame `Page.frameNavigated` (a new
+  document) empties the set, also when no client has `Runtime` on (review-72 note 1). A child session
+  numbers its contexts on its own, and its calls are not checked. With an old daemon, or on the Mac, the
+  relay makes no world, and nothing is refused;
+- the relay's evaluate sends `disableBreaks: true` (review-72 B1). The client and the relay share the tab's
+  debugger session, so a client's `Debugger.setBreakpointByUrl` on the scripts with no URL (each
+  evaluate's; or by the `scriptHash` of `GEO_EXPRESSION`, whose text is public) would run its condition or
+  logpoint in the relay's world before the read: such a condition could set `screenX` in the world, for
+  this read and the later reads of the document. An instrumentation breakpoint or `Debugger.pause` would
+  stop the read in the world (a paused frame there, whose call-frame id the relay refuses). With
+  `disableBreaks` V8 does not break during the relay's evaluate, so no condition runs (the live group
+  `pointer` checks it: no condition of a client's breakpoint ran in the relay's read, while the same
+  breakpoint ran in the client's own world). The read throws no exception, so a pause on exceptions does
+  not reach it;
+- the limits of the refusal: a call that reaches Chrome between the world's first `Page.createIsolatedWorld`
+  in a document and its answer (a few ms; later reads of the document get the same id, which is in the set
+  then); after a navigation with neither `Runtime` nor `Page` events (no client has them on), the set keeps
+  the old id until the relay's next read, so a client's call with that id in a world of the new document is
+  refused until then; the world's `uniqueContextId` and its name, which no client sees (the relay drops the
+  world's events) and which are not guessed (the name has 32 random bits);
 - a read keeps or drops the kept geometry only when it answers within `GEOMETRY_WAIT_MS` and no drop event of
   the page came after the read started (the relay counts the drop events of each page); a late answer is
   dropped and changes nothing (round 3 of PR #68).

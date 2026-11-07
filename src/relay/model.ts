@@ -729,8 +729,9 @@ export class Model {
     // A call into the relay's own isolated world (board ab-v16.80; review-68c note 3): it could change what the
     // geometry read sees there (screenX: the clamp box). Checked here, as the call goes to Chrome, not when it came: a
     // call that waited behind an activation step can name the world that the step's read made. The tab's own session
-    // only: a child session (a frame of another renderer, a worker) numbers its contexts on its own.
-    if (!child && tab.worldIds.size && contextsNamed(params).some((id) => tab.worldIds.has(id))) {
+    // only: a child session (a frame of another renderer, a worker) numbers its contexts on its own. Not
+    // Runtime.runIfWaitingForDebugger: it runs no code in a context, and its release of a held tab must go (review-72 note 6).
+    if (!child && tab.worldIds.size && method !== "Runtime.runIfWaitingForDebugger" && contextsNamed(params).some((id) => tab.worldIds.has(id))) {
       answer({ error: { code: -32000, message: TEXT.relayWorld(method) } });
       return Promise.resolve();
     }
@@ -887,7 +888,9 @@ export class Model {
     const id = params?.executionContextId;
     if (method === "Runtime.executionContextDestroyed" && tab.worldIds.has(id)) { tab.worldIds.delete(id); return true; }
     if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldIds.has(id)) return true;
-    if (method === "Runtime.executionContextsCleared") tab.worldIds.clear();
+    // A new document of the main frame: its old contexts are gone, also with Runtime off (no
+    // Runtime.executionContextsCleared then; review-72 note 1).
+    if (method === "Runtime.executionContextsCleared" || (method === "Page.frameNavigated" && !params?.frame?.parentId)) tab.worldIds.clear();
     // A window event that the relay sees: the page's cached geometry goes.
     if (method === "Page.frameResized") this.dropGeo(tab);
     return false;
@@ -919,7 +922,10 @@ export class Model {
         const id = w.executionContextId as number;
         tab.worldIds = new Set([id]);
         try {
-          const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: id, returnByValue: true }]);
+          // disableBreaks: the client and the relay share the tab's debugger session, so a client's breakpoint (its
+          // condition, a logpoint), instrumentation breakpoint or pause would run its code in the relay's world before
+          // the read (review-72 B1).
+          const r = await this.bridge.call("debugger.sendCommand", [target, "Runtime.evaluate", { expression: GEO_EXPRESSION, contextId: id, returnByValue: true, disableBreaks: true }]);
           return geoOf(r?.result?.value);
         } catch (e) {
           // A navigation between the two calls took the world: an evaluate that names an unknown context. Once more.
