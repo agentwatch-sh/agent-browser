@@ -372,7 +372,7 @@ test("the option parsers: a reserved display is refused, its neighbours are not;
   const linux = { platform: "linux", exists: (p: string) => p === "/usr/bin/chromium", defaultChrome: "/x" };
   assert.equal(macArgs(["--dry-run", "--out-dir", "/tmp/o", "--display", "88"], linux).ok, true);
   assert.equal(macArgs(["--dry-run", "--out-dir", "/tmp/o", "--display", "89"], linux).ok, false);
-  const stable = (d: string) => macArgs(["--dry-run", "--part", "stable", "--quiet-since", "1", "--pointer", "1,2", "--out-dir", "/tmp/o", "--display", d], linux);
+  const stable = (d: string) => macArgs(["--dry-run", "--part", "stable", "--quiet-since", "1", "--pointer", "1,2", "--gap-ms", "1000", "--out-dir", "/tmp/o", "--display", d], linux);
   assert.equal(stable("146").ok, true, "the stable part runs on its own display only");
   assert.equal(stable("147").ok, false);
 });

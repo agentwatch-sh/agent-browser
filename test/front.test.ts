@@ -6,7 +6,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { lutimesSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
@@ -19,6 +19,7 @@ import {
   type FrontDeps, type FrontRun,
 } from "../src/front.ts";
 import { resolveOptions, type Settings } from "../src/options.ts";
+import { holdNow, HOLD_FILES } from "../src/watchback.ts";
 import * as trials from "./live/function-keys/trials.ts";
 import { cli } from "./helpers.ts";
 
@@ -141,6 +142,84 @@ test("macOS: front unhides and activates the agent Chrome that holds this consum
   assert.deepEqual(calls.filter((c) => c[0] !== OSASCRIPT).map((c) => c.slice(0, 4)),
     [[LSAPPINFO, "front"], [LSAPPINFO, "info", "-only", "pid"], [LSAPPINFO, "front"], [LSAPPINFO, "info", "-only", "pid"], [LSAPPINFO, "front"], [LSAPPINFO, "info", "-only", "pid"]],
     "it reads the front app until it is the agent Chrome; no sw_vers on success");
+});
+
+test("macOS: front holds the Mac's give-back watcher off for its request, so the watcher leaves the agent Chrome in front (ab-v16.27); after it the hold ends within 3 s", async () => {
+  const s = settings("hold", {}, 4100);
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4100)].join("\n");
+  const seen: (string | null)[] = [];
+  const { run } = stand({ activate: ok() }, [4100]);
+  const r = await bringToFront(s, onMac(ps, async (argv, ms) => { if (argv[0] === OSASCRIPT) seen.push(holdNow(s)); return run(argv, ms); }));
+  assert.equal(r.via, "activate");
+  assert.deepEqual(seen, ["front"], "the hold is in force when the request goes out");
+  const until = JSON.parse(readFileSync(join(s.stateDir, HOLD_FILES.front), "utf8")).until;
+  assert.ok(until > Date.now() && until <= Date.now() + 3000, `the hold ends ${until - Date.now()} ms from now`);
+  // A refusal before any request (Linux) writes no hold.
+  const linux = settings("hold-linux", {}, 4100);
+  await assert.rejects(bringToFront(linux, { platform: "linux" }));
+  assert.equal(holdNow(linux), null);
+});
+
+test("macOS: a caller's stop while front's request runs (osascript's start) releases front's hold, so the give-back watcher gives a late take back (review-69d B1)", async () => {
+  let stop = false;
+  const s = { ...settings("stop-in-request", {}, 4102), stopped: () => stop };
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4102)].join("\n");
+  const { run } = stand({ activate: ok() }, [4102]);
+  // The operator's key comes while osascript starts: the request is out, its activation lands after the stop.
+  await bringToFront(s, onMac(ps, async (argv, ms) => { if (argv[0] === OSASCRIPT) stop = true; return run(argv, ms); })).catch(() => undefined);
+  assert.equal(holdNow(s), null, "no hold after a stop: a take of the agent Chrome is then given back");
+  assert.equal(existsSync(join(s.stateDir, HOLD_FILES.front)), false, "released, not a 3 s tail");
+});
+
+test("macOS: front's hold is short and renewed while front runs, so a kill -9 of its caller leaves it at most 3 s (review-69d note 7)", async () => {
+  const s = settings("hold-renewed", {}, 4103);
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4103)].join("\n");
+  const { run } = stand({ activate: ok() }, [4103]);
+  const looks: number[] = [];
+  const look = setInterval(() => { try { looks.push(JSON.parse(readFileSync(join(s.stateDir, HOLD_FILES.front), "utf8")).until - Date.now()); } catch { /* not yet */ } }, 100);
+  try {
+    // A slow osascript start (4.5 s, longer than the first hold's 3 s: review-69e F1): the hold stays in force all the
+    // time, so it was renewed, and it never reaches more than 3 s ahead.
+    await bringToFront(s, onMac(ps, async (argv, ms) => { if (argv[0] === OSASCRIPT) await new Promise((r) => setTimeout(r, 4500)); return run(argv, ms); }));
+  } finally { clearInterval(look); }
+  assert.ok(looks.length >= 15, `${looks.length} looks`);
+  assert.ok(looks.every((ms) => ms > 0 && ms <= 3000), `the hold's time ahead at each look: ${looks.join(" ")}`);
+});
+
+test("macOS: a caller's stop while front runs ends front's hold within a second, also while osascript still runs (review-69e N1)", async () => {
+  let stop = false;
+  const s = { ...settings("hold-stop-renew", {}, 4104), stopped: () => stop };
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4104)].join("\n");
+  const { run } = stand({ activate: ok() }, [4104]);
+  let goneAt = 0, stopAt = 0;
+  const done = bringToFront(s, onMac(ps, async (argv, ms) => {
+    if (argv[0] === OSASCRIPT) {
+      // The stop 0.5 s into a 4 s osascript start; the hold must go within about a second, before osascript returns.
+      setTimeout(() => { stop = true; stopAt = Date.now(); }, 500);
+      for (const end = Date.now() + 4000; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (stop && !goneAt && !existsSync(join(s.stateDir, HOLD_FILES.front))) goneAt = Date.now();
+    }
+    return run(argv, ms);
+  })).catch(() => undefined);
+  await done;
+  assert.ok(goneAt > 0, "the hold went while osascript still ran");
+  // A wide bound (review-69f N-a): a late timer on a loaded machine; still less than the hold's 3 s ahead.
+  assert.ok(goneAt - stopAt <= 3000, `${goneAt - stopAt} ms after the stop`);
+});
+
+test("macOS: a caller's stop (the internal stopped option, the Mac check) that comes while front reads ps sends no request: nothing is activated (review-69c B1)", async () => {
+  let stop = false;
+  const s = { ...settings("stopped", {}, 4100), stopped: () => stop };
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4100)].join("\n");
+  const { run, calls } = stand({ activate: ok() }, [4100]);
+  await assert.rejects(bringToFront(s, onMac(ps, run, { started: () => { stop = true; return START; } })), /stopped/);
+  assert.deepEqual(osascriptCalls(calls), [], "no activation request after the stop");
+  // A stop that the event loop delivers while front reads ps (its reads block node): front yields before its request, so it sees it.
+  let late = false;
+  const t = { ...settings("stopped-late", {}, 4101), stopped: () => late };
+  const ps2 = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(t, 4101)].join("\n");
+  const two = stand({ activate: ok() }, [4101]);
+  await assert.rejects(bringToFront(t, onMac(ps2, two.run, { started: () => { setImmediate(() => { late = true; }); return START; } })), /stopped/);
+  assert.deepEqual(osascriptCalls(two.calls), []);
 });
 
 test("a Chrome on this profile that agent-browser did not start, while an agent-browser proxy of this user drives it, is this consumer's agent Chrome (as `chromes` lists it)", async () => {
