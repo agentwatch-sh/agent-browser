@@ -178,11 +178,31 @@ test("macOS: front's hold is short and renewed while front runs, so a kill -9 of
   const looks: number[] = [];
   const look = setInterval(() => { try { looks.push(JSON.parse(readFileSync(join(s.stateDir, HOLD_FILES.front), "utf8")).until - Date.now()); } catch { /* not yet */ } }, 100);
   try {
-    // A slow osascript start (2.5 s): the hold stays in force all the time, and never reaches more than 3 s ahead.
-    await bringToFront(s, onMac(ps, async (argv, ms) => { if (argv[0] === OSASCRIPT) await new Promise((r) => setTimeout(r, 2500)); return run(argv, ms); }));
+    // A slow osascript start (4.5 s, longer than the first hold's 3 s: review-69e F1): the hold stays in force all the
+    // time, so it was renewed, and it never reaches more than 3 s ahead.
+    await bringToFront(s, onMac(ps, async (argv, ms) => { if (argv[0] === OSASCRIPT) await new Promise((r) => setTimeout(r, 4500)); return run(argv, ms); }));
   } finally { clearInterval(look); }
   assert.ok(looks.length >= 15, `${looks.length} looks`);
   assert.ok(looks.every((ms) => ms > 0 && ms <= 3000), `the hold's time ahead at each look: ${looks.join(" ")}`);
+});
+
+test("macOS: a caller's stop while front runs ends front's hold within a second, also while osascript still runs (review-69e N1)", async () => {
+  let stop = false;
+  const s = { ...settings("hold-stop-renew", {}, 4104), stopped: () => stop };
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4104)].join("\n");
+  const { run } = stand({ activate: ok() }, [4104]);
+  let goneAt = 0, stopAt = 0;
+  const done = bringToFront(s, onMac(ps, async (argv, ms) => {
+    if (argv[0] === OSASCRIPT) {
+      // The stop 0.5 s into a 4 s osascript start; the hold must go within about a second, before osascript returns.
+      setTimeout(() => { stop = true; stopAt = Date.now(); }, 500);
+      for (const end = Date.now() + 4000; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (stop && !goneAt && !existsSync(join(s.stateDir, HOLD_FILES.front))) goneAt = Date.now();
+    }
+    return run(argv, ms);
+  })).catch(() => undefined);
+  await done;
+  assert.ok(goneAt > 0, "the hold went while osascript still ran");
+  assert.ok(goneAt - stopAt <= 1500, `${goneAt - stopAt} ms after the stop`);
 });
 
 test("macOS: a caller's stop (the internal stopped option, the Mac check) that comes while front reads ps sends no request: nothing is activated (review-69c B1)", async () => {

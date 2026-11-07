@@ -556,10 +556,12 @@ export type ChromeState = number | null | undefined;
 export async function quitAgentChrome(d: {
   check: () => ChromeState; close: () => Promise<unknown>; signal: (pid: number, sig: "SIGTERM" | "SIGKILL") => void; sleep: (ms: number) => Promise<unknown>;
   waits?: { close: number; term: number; kill: number };
+  /** The clock of the waits (default Date.now): each wait ends at its time, however long a ps look takes (review-69e N2). */
+  now?: () => number;
 }): Promise<{ lines: string[]; problem?: string; running: boolean | null }> {
-  const w = d.waits ?? { close: 10_000, term: 5000, kill: 3000 };
+  const w = d.waits ?? { close: 10_000, term: 5000, kill: 3000 }, clock = d.now ?? Date.now;
   const wait = async (ms: number): Promise<ChromeState> => {
-    for (let i = 0; i < ms / 100; i++) { if (d.check() === null) return null; await d.sleep(100); }
+    for (const end = clock() + ms; clock() < end;) { if (d.check() === null) return null; await d.sleep(100); }
     return d.check();
   };
   const blind = (after: string) => {

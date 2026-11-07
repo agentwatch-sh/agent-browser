@@ -628,9 +628,10 @@ test("the summary names the result first, and every part of the measurement", ()
 test("quitAgentChrome: Browser.close, then SIGTERM, then SIGKILL, each to the pid on the run's own profile; a quit that ps cannot confirm is a problem", async () => {
   const run = async (states: (number | null | undefined)[], sent?: false) => {
     const signals: string[] = [];
-    let i = 0, closed = 0, checks = 0;
+    let i = 0, closed = 0, checks = 0, t = 0;
     const r = await quitAgentChrome({
-      check: () => { checks++; return states[Math.min(i++, states.length - 1)]; }, close: async () => { closed++; return sent; }, signal: (pid, sig) => { signals.push(`${sig} ${pid}`); }, sleep: async () => {},
+      check: () => { checks++; return states[Math.min(i++, states.length - 1)]; }, close: async () => { closed++; return sent; }, signal: (pid, sig) => { signals.push(`${sig} ${pid}`); },
+      sleep: async (ms) => { t += ms; }, now: () => t,
       waits: { close: 300, term: 200, kill: 200 },
     });
     return { ...r, signals, closed, checks };
@@ -659,6 +660,17 @@ test("quitAgentChrome: Browser.close, then SIGTERM, then SIGKILL, each to the pi
   const blindLater = await run([9, 9, 9, 9, undefined]);
   assert.equal(blindLater.running, null);
   assert.match(blindLater.problem ?? "", /not confirmed/);
+});
+
+test("quitAgentChrome's waits are bounded by time, not by rounds: with a slow ps (70 ms a look) a Chrome that never quits ends the quit within about 18 s (review-69e N2)", async () => {
+  let t = 0;
+  const r = await quitAgentChrome({
+    check: () => { t += 70; return 9; }, close: async () => {}, signal: () => {}, sleep: async (ms) => { t += Number(ms); }, now: () => t,
+  });
+  assert.equal(r.running, true);
+  // 10 s + 5 s + 3 s, and at most one round (a ps look and a sleep) over each wait, and the looks between them.
+  assert.ok(t <= 18_000 + 1000, `${t} ms of the fake clock`);
+  assert.ok(t >= 18_000, `${t} ms`);
 });
 
 test("the dry run's stand-in watcher speaks the watcher's protocol: ready with the six HID readings, snaps, agent, giveback, quit", async () => {

@@ -492,7 +492,8 @@ person's input**) and `log` (progress lines; default standard error).
       time since the last mouse press, for a quick tap); the Command key was down less than 1 s before
       (Cmd-Tab); `front` asked for the front (a hold file that `front` writes, `give-back-hold-front.json`:
       3 s ahead, renewed each second while `front` runs and for 3 s after it, so a killed `front` leaves it
-      at most 3 s; at a caller's stop, the Mac check's, `front` removes it at once, review-69d);
+      at most 3 s; at a caller's stop, the Mac check's, `front` removes it within a second, also while its
+      request still runs, review-69d and review-69e);
       a proxy of this state folder waits for Chrome's "Allow remote debugging?" answer (a hold for its
       handshake, `give-back-hold-approval.json`), so the prompt can stay in front; or the agent Chrome was
       the front app when the watcher started (a start with no give-back, or `launch --login`). A click or

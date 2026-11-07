@@ -232,7 +232,11 @@ export async function bringToFront(s: Settings, deps: FrontDeps = {}): Promise<{
   // After a caller's stop the hold goes at once (review-69d B1): an activation that lands after the stop is then not
   // the operator's, and the watcher gives it back.
   holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS);
-  const renew = setInterval(() => holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS), FRONT_HOLD_RENEW_MS);
+  const renew = setInterval(() => {
+    // A caller's stop ends the hold at once, also while osascript still runs (review-69e N1).
+    if (s.stopped?.()) { clearInterval(renew); releaseGiveBack(s, "front"); return; }
+    holdGiveBack(s, "front", Date.now() + FRONT_HOLD_TAIL_MS);
+  }, FRONT_HOLD_RENEW_MS);
   try {
     return await requests();
   } finally {
