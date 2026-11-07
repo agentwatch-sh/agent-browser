@@ -1624,12 +1624,13 @@ test("ab-v16.80: with an old daemon (unknown op) the relay makes no world, and n
 });
 
 test("ab-v16.80 (review-72 B1): the relay's own evaluate in its world sends disableBreaks, so a client's breakpoint, logpoint, instrumentation breakpoint or pause runs no code there", async () => {
-  // The client and the relay share the tab's debugger session: a client's Debugger.setBreakpointByUrl with urlRegex "^$"
-  // and a condition "screenX = 10000, false" hit the relay's Runtime.evaluate, and the condition ran in its world.
+  // The client and the relay share the tab's debugger session: a client's Debugger.setBreakpointByUrl by the script hash
+  // of GEO_EXPRESSION with a condition "screenX = 10000, false" hit the relay's Runtime.evaluate, and the condition ran in
+  // its world (measured live on Chromium 156; the fake models no breakpoint, so this test pins the parameter).
   const { h, c, A, B } = await withWorlds();
   try {
     await c.send("Debugger.enable", {}, A.sessionId);
-    await c.send("Debugger.setBreakpointByUrl", { lineNumber: 0, urlRegex: "^$", condition: "screenX = 10000, screenY = 10000, false" }, A.sessionId);
+    await c.send("Debugger.setBreakpointByUrl", { lineNumber: 0, scriptHash: "0".repeat(64), condition: "screenX = 10000, screenY = 10000, false" }, A.sessionId);
     await mouse(c, B, "mouseMoved", 700, 300);
     await click(c, B, 700, 300); // a path from A to B: the relay reads A again
     const evals = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[2].expression === GEO_EXPRESSION);

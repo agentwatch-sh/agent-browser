@@ -375,15 +375,19 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   numbers its contexts on its own, and its calls are not checked. With an old daemon, or on the Mac, the
   relay makes no world, and nothing is refused;
 - the relay's evaluate sends `disableBreaks: true` (review-72 B1). The client and the relay share the tab's
-  debugger session, so a client's `Debugger.setBreakpointByUrl` on the scripts with no URL (each
-  evaluate's; or by the `scriptHash` of `GEO_EXPRESSION`, whose text is public) would run its condition or
-  logpoint in the relay's world before the read: such a condition could set `screenX` in the world, for
-  this read and the later reads of the document. An instrumentation breakpoint or `Debugger.pause` would
-  stop the read in the world (a paused frame there, whose call-frame id the relay refuses). With
-  `disableBreaks` V8 does not break during the relay's evaluate, so no condition runs (the live group
-  `pointer` checks it: no condition of a client's breakpoint ran in the relay's read, while the same
-  breakpoint ran in the client's own world). The read throws no exception, so a pause on exceptions does
-  not reach it;
+  debugger session, so a client's breakpoint reaches the relay's evaluate, with no id named. A
+  `Debugger.setBreakpointByUrl` by the `scriptHash` of `GEO_EXPRESSION` (its text is public; the client
+  gets the hash from its own evaluate of the same text) runs its condition or logpoint in the relay's
+  world before the read: such a condition can set `screenX` in the world, for this read and the later
+  reads of the document. An instrumentation breakpoint (`beforeScriptExecution`) or `Debugger.pause` stops
+  the read in the world (a paused frame there, whose call-frame id the relay refuses; the paused read
+  could get a forged return value). Measured on taylor (Chromium 156, the live group `pointer`, 2026-11-07):
+  without `disableBreaks`, both reads of a step paused in the relay's world, the hash breakpoint's
+  condition ran there (the second read saw `screenX` 10000), and the step played no path; with it, no pause
+  and no condition in the relay's reads, while both breakpoints reached the client's own evaluate in its
+  own world (the controls). A breakpoint by `urlRegex: "^$"` reached not even the client's own evaluate:
+  V8 sets no URL breakpoint on a script with no URL. The read throws no exception, so a pause on exceptions
+  does not reach it;
 - the limits of the refusal: a call that reaches Chrome between the world's first `Page.createIsolatedWorld`
   in a document and its answer (a few ms; later reads of the document get the same id, which is in the set
   then); after a navigation with neither `Runtime` nor `Page` events (no client has them on), the set keeps
