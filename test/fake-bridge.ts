@@ -262,7 +262,7 @@ export async function backByChrome(fake: FakeReceiver, chrome: FakeChrome): Prom
   };
   // One model of the tabs' front state too (review-45b note 9): a tab is active when it is in front of its window in the
   // fake Chrome (not a background tab: FakeChrome.tabSwitches puts the others behind).
-  const tab = (p: FakePage) => ({ id: idOf(p.targetId), windowId: p.windowId, index: 0, active: !p.background, url: p.url, title: p.title, status: "complete" });
+  const tab = (p: FakePage) => ({ id: idOf(p.targetId), windowId: p.windowId, index: 0, active: !p.background, url: p.url, ...(p.listedUrl ? { pendingUrl: p.listedUrl } : {}), title: p.title, status: "complete" });
   const page = (id: number) => {
     const p = chrome.pages.get(targets.get(id) ?? "");
     if (!p) throw new Error(`No tab with id: ${id}.`);

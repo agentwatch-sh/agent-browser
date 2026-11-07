@@ -3,6 +3,7 @@
 // rules. No Chrome, no I/O, so that test/background-tabs.test.ts runs them in `npm test`.
 
 import type { Pixels } from "../../../src/record.ts";
+import { reservedDisplay } from "../guard.ts";
 
 /** The two timer flags that AGENT_ARGS dropped in ab-v16.13. --before adds them back, to measure the launch before. */
 export const TIMER_FLAGS: readonly string[] = ["--disable-renderer-backgrounding", "--disable-background-timer-throttling"];
@@ -19,6 +20,8 @@ export function startMode(platform: string, f: Flags): Mode | { error: string } 
     return { error: `the background-tab check runs on Linux only, in a private Xvfb, so that no window reaches a person's screen (this is ${platform})` };
   const display = Number(f.display ?? 98), hiddenMs = Number(f.hiddenMs ?? 6000), newTabs = Number(f.newTabs ?? 5);
   if (!Number.isInteger(display) || display < 1) return { error: `--display is a whole display number: ${f.display}` };
+  const reserved = reservedDisplay(display, "--display");
+  if (reserved) return { error: reserved };
   if (!Number.isInteger(hiddenMs) || hiddenMs < 2000 || hiddenMs > 60_000) return { error: `--hidden-ms is a whole number of ms from 2000 to 60000: ${f.hiddenMs}` };
   if (!Number.isInteger(newTabs) || newTabs < 0 || newTabs > 50) return { error: `--new-tabs is a whole number from 0 to 50: ${f.newTabs}` };
   return { chrome: f.chrome ?? "/usr/bin/chromium", display, before: !!f.before, hiddenMs, hiddenDrive: !!f.hiddenDrive, newTabs };

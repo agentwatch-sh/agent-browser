@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser, Tab } from "../src/browser.ts";
+import { NotAllowedError } from "../src/errors.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
 import { resolveOptions, type InputTiming } from "../src/options.ts";
@@ -600,6 +601,21 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name }).catch(() => {});
   });
 
+  test(`${label}: shot whose tab is off the allowlist when its own capture ends: the check after the capture reads Chrome's lists and runs no code in the off-list page`, async () => {
+    // review-65 N4 (ab-b84.20): the check after the shot's own capture read location.href with Runtime.evaluate there.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.url = "https://off-the-list.example/"; };
+    const path = join(c.dir, `${name}.png`);
+    const { calls } = await callsOf(page, () => assert.rejects(commands.shot(mode(), { tab: name, path }), /off-the-list\.example is not on the allowlist/));
+    page.onCapture = undefined;
+    const after = calls.slice(calls.findIndex((x) => x.method === "Page.captureScreenshot" && x.params.format === "png") + 1);
+    assert.deepEqual(after.filter((x) => /^Runtime\.(evaluate|callFunctionOn)$|^Page\.createIsolatedWorld$/.test(x.method)).map((x) => x.method), [], "no page code after the capture");
+    assert.ok(after.some((x) => x.method === "Target.getTargetInfo"), `Chrome's target list refused it: ${JSON.stringify(methodsOf(after))}`);
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name }).catch(() => {});
+  });
+
   test(`${label}: shot --size whose tab is off the allowlist when its own capture ends: refused, the override cleared, and no page code in the off-list page after the failure`, async () => {
     // review-41e note 1: the page-size read after the failure ran in the off-list page (Page.createIsolatedWorld,
     // Runtime.evaluate; 1 of 3 default-mode runs, 6 of 6 hidden-drive runs).
@@ -673,6 +689,12 @@ async function withSizeLeft(drive: "window" | "hidden"): Promise<{ b: AgentBrows
   const tab = await b.find(name);
   assert.equal(tab.drive, drive);
   if (drive === "window") { page.background = true; page.update(); }
+  await leaveSize(tab, page, name);
+  return { b, tab, page, name };
+}
+
+/** A Tab.screenshot with a size that fails while Chrome draws nothing: it leaves the override set (withSizeLeft); then Chrome draws again. */
+async function leaveSize(tab: Tab, page: FakePage, name: string) {
   page.onCapture = (p) => { if (p.format === "png") page.noFrames = true; };
   await withTiming({ lateMs: 100, ownMs: 600, lastMs: 300 },
     () => assert.rejects(tab.screenshot(join(c.dir, `${name}.png`), { viewport: { width: 800, height: 600, scale: 1 } }), /the shot gave up after/));
@@ -680,7 +702,6 @@ async function withSizeLeft(drive: "window" | "hidden"): Promise<{ b: AgentBrows
   assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "left set");
   assert.ok(page.heldCaptures.length > 0, "captures sent under it are in flight");
   page.noFrames = false;
-  return { b, tab, page, name };
 }
 
 /** The next command ended the captures under the override and cleared it before its own work (`own`); no size stuck. */
@@ -777,6 +798,65 @@ for (const drive of ["window", "hidden"] as const) {
       endedFirst(page, calls, (x) => x.method === "Page.navigate");
       assert.equal(page.override, undefined);
       assert.equal(await tab.evaluate(() => `${innerWidth}x${innerHeight}`), "1280x800");
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: Tab.goto on a tab kept attached whose page went off the allowlist, after a Tab.screenshot with a size left the override set: it ends those captures and clears the override with no page code there, then leaves the page; input there and a goto to an off-list host stay refused`, async () => {
+    // review-65c N1 (ab-b84.22): goto ran endSizeLeft's page check first, so it refused to leave such a page, and so did
+    // each later goto on that Tab: the program had to attach again.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      page.url = "https://off-the-list.example/"; // for example a redirect
+      const click = await callsOf(page, () => assert.rejects(tab.click("#b"), /off-the-list\.example is not on the allowlist/));
+      assert.deepEqual(captures(click.calls), [], "input on the off-list page: no capture");
+      assert.ok(!methodsOf(click.calls).includes("Emulation.clearDeviceMetricsOverride"), "and no clear");
+      const off = await callsOf(page, () => assert.rejects(tab.goto("https://off-the-list.example/next"), NotAllowedError));
+      assert.deepEqual(off.calls, [], "a goto to an off-list host: refused before anything goes to the page");
+      assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "still left set");
+      const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
+      endedFirst(page, calls, (x) => x.method === "Page.navigate");
+      const nav = methodsOf(calls).indexOf("Page.navigate");
+      assert.deepEqual(methodsOf(calls.slice(0, nav)).filter((x) => x === "Runtime.evaluate" || x === "Page.createIsolatedWorld"), [], "no page code in the off-list page");
+      assert.equal(page.url, fx.base + "/next");
+      assert.equal(page.override, undefined);
+      assert.equal(await tab.evaluate(() => `${innerWidth}x${innerHeight}`), "1280x800");
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: Tab.goto on a tab kept attached that left the pinned window, after a Tab.screenshot with a size left the override set: it ends those captures and clears the override, then navigates; input there stays refused`, async () => {
+    // review-65c N1 (ab-b84.22): as for a page off the allowlist, goto refused, and so did each later goto on that Tab.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    const win = page.windowId;
+    try {
+      await b.pinWindow(win);
+      page.windowId = win + 100; // a person moved the tab to another window
+      const click = await callsOf(page, () => assert.rejects(tab.click("#b"), /moved out of the pinned window/));
+      assert.deepEqual(captures(click.calls), [], "input out of the pinned window: no capture");
+      assert.ok(!methodsOf(click.calls).includes("Emulation.clearDeviceMetricsOverride"), "and no clear");
+      const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
+      endedFirst(page, calls, (x) => x.method === "Page.navigate");
+      assert.equal(page.url, fx.base + "/next");
+      assert.equal(page.override, undefined);
+    } finally { page.windowId = win; await b.pinWindow(undefined); await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: two Tab.screenshot calls with a size that each left the override set on a tab kept attached, each one followed by a click: each click ends the captures sent under it and clears it`, async () => {
+    // review-65c N2 (ab-b84.22): endSizeLeft keeps the promise of the ending that runs (endingSize) and drops it when that
+    // ending is done; a promise that stayed would answer the second click at once, with no captures and no clear.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      for (let round = 1; round <= 2; round++) {
+        if (round === 2) {
+          if (drive === "window") { page.background = true; page.update(); }
+          await leaveSize(tab, page, name);
+        }
+        const { calls } = await callsOf(page, () => tab.click("#b"));
+        endedFirst(page, calls, (x) => x.method.startsWith("Input."));
+        assert.equal(page.override, undefined, `round ${round}: cleared`);
+      }
     } finally { await b.disconnect(); }
     await commands.close(mode(), { tab: name });
   });

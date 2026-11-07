@@ -136,6 +136,7 @@ import {
 } from "./mac-rules.ts";
 import { parseWatchLines, readWatch, stopWatchBack as stopBuiltWatcher } from "../../../src/watchback.ts";
 import { bothFocusedMs, inputs, startServer, stepSignals, type Rec } from "./probe.ts";
+import { harnessGuard } from "../guard.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function refuse(message: string): never { process.stderr.write(`${message}\n`); process.exit(2); }
@@ -193,12 +194,16 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () =
 // ------------------------------------------------------------------ the dry run's private Xvfb
 const XENV: NodeJS.ProcessEnv = { ...process.env };
 if (O.dryRun) {
+  // One live harness at a time, and nothing of this dry run after its end, also after a kill -9 (test/live/README.md);
+  // the stable part, a child of the first part, runs under the first part's lock.
+  const harness = await harnessGuard(`anti-detect mac dry run (${O.part ?? "first"} part)`);
   const field = (b: Buffer) => { const n = Buffer.alloc(2); n.writeUInt16BE(b.length); return Buffer.concat([n, b]); };
   const xauth = join(RUN, "Xauthority");
   writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.alloc(0)), field(Buffer.from(String(O.display))), field(Buffer.from("MIT-MAGIC-COOKIE-1")), field(randomBytes(16))]), { mode: 0o600 });
   if (existsSync(`/tmp/.X11-unix/X${O.display}`)) refuse(`display :${O.display} is in use; pass --display N`);
   const xvfb = spawn("Xvfb", [`:${O.display}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1600x1000x24"], { stdio: "ignore" });
   children.push(xvfb);
+  harness.track(xvfb.pid, "Xvfb");
   for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${O.display}`) && xvfb.exitCode === null; i++) await sleep(100);
   await sleep(300);
   if (xvfb.exitCode !== null || !existsSync(`/tmp/.X11-unix/X${O.display}`)) refuse(`Xvfb did not start on :${O.display}`);

@@ -11,7 +11,7 @@ import { Bridge, BridgeError, MAX_IN_FLIGHT_PER_TAB, MAX_REQUEST, WAIT_DEFAULT_M
 import { SCOPE, NOT_FOUND, FROM_PAGE } from "../src/relay/endpoint.ts";
 import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { PEER_UNREAD, SELF_TEST_MS, sessionRefusal } from "../src/relay/peer.ts";
-import { cdpError, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
+import { cdpError, contextOfObject, contextsNamed, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
 
 const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-40c2d93/${name}.json`, import.meta.url), "utf8"));
 const bridgeV = vectors("bridge"), endpointV = vectors("endpoint");
@@ -128,4 +128,24 @@ test("a request above MAX_REQUEST is never written", async () => {
   await assert.rejects(b.call("debugger.sendCommand", [{ tabId: 7 }, "Runtime.callFunctionOn", { functionDeclaration: "(b) => b", arguments: [{ value: "x".repeat(200) }] }]),
     (e: BridgeError) => cdpError("Runtime.callFunctionOn", e).message === "The command is too large for the agent browser: Runtime.callFunctionOn.");
   assert.equal(lines.length, 0);
+});
+
+test("ab-v16.80 (review-72 note 4): an object id or a call-frame id names its context as V8 writes it, <isolate>.<context>.<n>; any other form names none", () => {
+  assert.equal(contextOfObject("-5135176979714057620.6.1"), 6, "a negative isolate (measured on Chromium 156)");
+  assert.equal(contextOfObject("7383208963520036829.12.40"), 12);
+  assert.equal(contextOfObject("-1.55.1"), 55, "55, not 5: the whole number between the dots");
+  assert.equal(contextOfObject("-1.5.155"), 5);
+  for (const id of ['{"injectedScriptId":5,"id":1}', "5", "1.5", "a.5.1", "1.5.1.2", "", "-1.-5.1", "1.5.x"])
+    assert.equal(contextOfObject(id), null, `not V8's form (the old JSON form is not parsed): ${id}`);
+});
+
+test("ab-v16.80 (review-72 note 4): the contexts that a call names: contextId, executionContextId, the object ids and call-frame ids down to 3 levels", () => {
+  assert.deepEqual(contextsNamed({ expression: "1", contextId: 5 }), [5]);
+  assert.deepEqual(contextsNamed({ functionDeclaration: "f", executionContextId: 7, objectId: "-1.55.1", arguments: [{ value: 5 }, { objectId: "-1.8.2" }] }), [7, 55, 8]);
+  assert.deepEqual(contextsNamed({ promiseObjectId: "-1.3.1", prototypeObjectId: "-1.4.1", errorObjectId: "-1.9.1" }), [3, 4, 9]);
+  assert.deepEqual(contextsNamed({ callFrameId: "-1.6.0", newValue: { objectId: "-1.2.1" } }), [6, 2]);
+  assert.deepEqual(contextsNamed({ contextId: "5", executionContextId: 5.5, objectId: 5, value: { n: 5 } }), [], "no id of another type, no plain value");
+  assert.deepEqual(contextsNamed({ a: { b: { c: { objectId: "-1.4.1" } } } }), [4], "3 levels down");
+  assert.deepEqual(contextsNamed({ a: { b: { c: { d: { objectId: "-1.4.1" } } } } }), [], "not 4");
+  assert.deepEqual(contextsNamed(undefined), []);
 });

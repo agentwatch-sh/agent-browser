@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { appBundle } from "../../../src/agent.ts";
 import { isChromeForTesting } from "../../../src/options.ts";
 import { inputs, type Rec } from "./probe.ts";
+import { reservedDisplay } from "../guard.ts";
 
 /**
  * The parts of the check that --skip can leave out (each needs no consent of its own; popups are the most likely to take
@@ -115,6 +116,9 @@ export function macArgs(argv: string[], env: { platform: string; exists: (p: str
     for (const f of ["chrome-bin", "watcher"]) if (v[f] !== undefined) return no(`--${f} is for the Mac run, not --dry-run`);
     const display = Number(v.display ?? 123);
     if (typeof v.display === "string" && !/^\d+$/.test(v.display) || !Number.isInteger(display) || display < 1 || display > 9999) return no(`--display is a whole display number: ${v.display}`);
+    // The first part's stable part runs on the next display (mac.ts: --display N+1), so both must be free of the list.
+    const reserved = reservedDisplay(display, "--display") ?? (part.part ? null : reservedDisplay(display + 1, `--display ${display} (its stable part takes the next one)`));
+    if (reserved) return no(reserved);
     const chrome = typeof v.chrome === "string" ? v.chrome : "/usr/bin/chromium";
     if (!env.exists(chrome)) return no(`--chrome: no such file: ${chrome}`);
     return { ok: true, options: { dryRun, outDir: out, chromeBin: chrome, display, ...both } };
