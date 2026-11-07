@@ -949,15 +949,23 @@ export class Tab {
    * setFiles), and so do a shot (whileDrawnForShot), recordTab, which sets an override of its own (review-65), and
    * goto, whose new page would load at the shot's size (review-65b). One at a time (review-65b): two calls at the same
    * time each sent captures and a clear, and a capture of one ended after the clear of the other.
+   *
+   * Each caller checks the page first (assertAllowed), outside the shared ending: a page off the allowlist or out of
+   * the pinned window gets no capture for input, a shot or a record. goto alone ends it with no page check
+   * (`leaving`): it leaves the page at once, to a URL that it checked itself, and it must be able to leave a page
+   * that went off the list or out of the pinned window (review-65c N1: it refused there, and so did each later goto on
+   * that Tab). Then only the captures (their pictures dropped) and the clear go to that page, no page code.
    * @internal
    */
-  endSizeLeft(): Promise<void> {
-    if (!this.sizeLeft) return Promise.resolve();
-    return this.endingSize ??= this.endSizeLeftNow().finally(() => { this.endingSize = undefined; });
+  async endSizeLeft(opts: { leaving?: boolean } = {}): Promise<void> {
+    if (!this.sizeLeft) return;
+    if (!opts.leaving) await this.assertAllowed();
+    // The ending that runs now, also when its clear is still on its way; else a new one, if the size is still left.
+    if (this.endingSize) return this.endingSize;
+    if (this.sizeLeft) return this.endingSize = this.endSizeLeftNow().finally(() => { this.endingSize = undefined; });
   }
 
   private async endSizeLeftNow(): Promise<void> {
-    await this.assertAllowed();
     const r = await new HeldCaptures(this).chain(Tab.shotTiming.lastMs, true);
     if (r !== true) {
       this.browser.settings.log(`agent-browser: the last capture of tab ${this.targetId.slice(0, 8)} under the size override that a shot left set ${r}; the override stays set`);
@@ -1029,7 +1037,9 @@ export class Tab {
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     assertAllowedUrl(url, this.browser.allow);
-    await this.endSizeLeft();
+    // With no check of the current page: goto must be able to leave a page that went off the list or out of the
+    // pinned window (endSizeLeft).
+    await this.endSizeLeft({ leaving: true });
     const loaded = this.browser.conn.waitForEvent("Page.loadEventFired", {
       sessionId: this.sessionId,
       timeoutMs: opts.timeoutMs ?? 45_000,
