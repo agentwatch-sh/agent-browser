@@ -165,6 +165,54 @@ test("a tab that wanders off the allowlist is refused before any read or input",
   await tab.close();
 });
 
+/** The calls of `fn` to the page of `targetId` that run code in it (an isolated world, an evaluate, a function call). */
+async function pageCode(targetId: string, fn: () => Promise<unknown>): Promise<string[]> {
+  const from = fake.calls.length;
+  await fn();
+  return fake.calls.slice(from).filter((x) => x.targetId === targetId && /^Runtime\.(evaluate|callFunctionOn|compileScript|runScript)$|^Page\.createIsolatedWorld$/.test(x.method)).map((x) => x.method);
+}
+
+test("ab-b84.20: the allowlist check runs no code in a page that is off the list: each refusal reads Chrome's target list and frame tree", async () => {
+  // review-65 N4, review-70 note 7: assertAllowed read location.href with Runtime.evaluate in our isolated world, also in
+  // an off-list page.
+  const tab = await browser.open(base);
+  await tab.click("#away");
+  await new Promise((r) => setTimeout(r, 50));
+  const from = fake.calls.length;
+  const code = await pageCode(tab.targetId, async () => {
+    for (const run of [() => tab.assertAllowed(), () => tab.text(), () => tab.click("#b"), () => tab.type("x"), () => tab.press("Enter"),
+      () => tab.screenshot(join(c.dir, "off2.png")), () => tab.fetchToFile(`${base}/small.txt`, join(c.dir, "off2.txt"))])
+      await assert.rejects(run(), NotAllowedError);
+  });
+  assert.deepEqual(code, [], "no code in the off-list page");
+  const methods = new Set(fake.calls.slice(from).filter((x) => x.targetId === tab.targetId).map((x) => x.method));
+  assert.ok(methods.has("Target.getTargetInfo"), [...methods].join(" "));
+  assert.equal(await tab.url(), "https://elsewhere.invalid/", "Tab.url reads the frame tree");
+  await tab.close();
+});
+
+test("ab-b84.20: the target list's URL can run ahead of the document (a navigation that the browser started, a new tab's first URL, an error page): the page passes only when both are on the list", async () => {
+  const tab = await browser.open(base);
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    // The document is on the list; the list shows an off-list navigation that has not committed: refused at once.
+    page.listedUrl = "https://elsewhere.invalid/";
+    assert.deepEqual(await pageCode(tab.targetId, () => assert.rejects(tab.assertAllowed(), /elsewhere\.invalid is not on the allowlist/)), []);
+    // An off-list document under an allowlisted listed URL (a navigation from it that the browser started): refused, with
+    // no code in that page.
+    page.url = "https://elsewhere.invalid/";
+    page.listedUrl = `${base}/next`;
+    assert.deepEqual(await pageCode(tab.targetId, () => assert.rejects(tab.click("#b"), /elsewhere\.invalid is not on the allowlist/)), []);
+    // An error page: the list shows the URL that failed, the document is Chrome's own error page.
+    page.url = "chrome-error://chromewebdata/";
+    assert.deepEqual(await pageCode(tab.targetId, () => assert.rejects(tab.text(), NotAllowedError)), []);
+    // Both on the list: the page passes.
+    page.url = `${base}/next`;
+    page.listedUrl = undefined;
+    await tab.assertAllowed();
+  } finally { page.listedUrl = undefined; await tab.close(); }
+});
+
 test("setFiles fills a file input", async () => {
   const tab = await browser.open(base);
   const f = join(c.dir, "up.txt");

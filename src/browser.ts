@@ -975,10 +975,20 @@ export class Tab {
     await this.send("Emulation.clearDeviceMetricsOverride");
   }
 
-  /** The tab's URL as Chrome lists it (Target.getTargets): it runs nothing in the page, which can be off the allowlist. */
-  private async listedUrl(): Promise<string | undefined> {
-    const { targetInfos } = await this.browser.conn.send("Target.getTargets");
-    return (targetInfos as TargetInfo[]).find((t) => t.targetId === this.targetId)?.url;
+  /**
+   * The tab's URL in Chrome's target list (Target.getTargetInfo): Chrome's browser side answers, and nothing reaches the
+   * page, which can be off the allowlist. It is the URL that the tab shows (assertAllowed: how it can differ from the
+   * document's).
+   */
+  private async listedUrl(): Promise<string> {
+    const { targetInfo } = await this.browser.conn.send("Target.getTargetInfo", { targetId: this.targetId });
+    return String(targetInfo?.url ?? "");
+  }
+
+  /** Both URLs of the tab are on the allowlist (assertAllowed's two reads; no pinned-window check): no code runs in the page. */
+  private async onList(): Promise<boolean> {
+    const allow = this.browser.allow;
+    return isAllowedUrl(await this.listedUrl(), allow) && isAllowedUrl(await this.url(), allow);
   }
 
   /** Two animation frames of the page, at most `ms`: the number that came (whileDrawn, whileDrawnForShot). */
@@ -991,8 +1001,13 @@ export class Tab {
     }), ms);
   }
 
+  /**
+   * The URL of the main frame's document (location.href: its URL and its fragment), from Chrome's frame tree
+   * (Page.getFrameTree): no code runs in the page for it (board ab-b84.20), which can be off the allowlist.
+   */
   async url(): Promise<string> {
-    return this.evaluate(() => location.href);
+    const { frameTree } = await this.send("Page.getFrameTree");
+    return `${frameTree.frame.url}${frameTree.frame.urlFragment ?? ""}`;
   }
 
   /**
@@ -1025,14 +1040,36 @@ export class Tab {
     }, opts);
   }
 
-  /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
+  /**
+   * Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. It runs
+   * no code in the page (review-65 N4, review-70 note 7; board ab-b84.20: it read location.href with Runtime.evaluate in
+   * our isolated world, also in a page off the list). Its reads, in this order: the tab's URL in Chrome's target list
+   * and the pinned window, both on Chrome's browser side, so that a tab off the list or out of the window gets no call on
+   * its own session; then the URL of the main frame's document, in Chrome's frame tree (Tab.url), no code either.
+   *
+   * Both URLs must be on the list. The page that a command reaches is the document, so its URL is the one that the
+   * allowlist must hold. The target list gives the URL that the tab shows (Chrome's visible URL), which can run ahead of
+   * the document: a navigation that the browser started (Page.navigate, an address typed by the person) shows its new URL
+   * before it commits, while the old document is still there; a new tab shows its first URL over its first empty
+   * document (about:blank, of its opener's origin for a popup); an error page shows the URL that failed, while the
+   * document is Chrome's own (chrome-error://chromewebdata/). A frame's document is not the tab's: a frame of another
+   * process is a target of its own (type iframe), and the check, as before, covers the main frame only. When the list
+   * shows an off-list navigation over a document that is on the list, the tab is about to leave the list: refused too.
+   * Measured on taylor (Chromium 156, 2026-11-07, a probe with a response held 2 s): during a navigation that the
+   * browser started, Target.getTargetInfo gave the new URL at once, while Page.getFrameTree (and Runtime.evaluate) were
+   * answered only at the commit, with the new document's URL; during one that the page started, the target list still
+   * gave the old URL; on an error page the list gave the failed URL and the frame tree chrome-error://chromewebdata/
+   * (its unreachableUrl the failed one); after history.pushState all three gave the new URL with its fragment.
+   */
   async assertAllowed(): Promise<void> {
-    const url = await this.url();
-    if (!isAllowedUrl(url, this.browser.allow)) throw new NotAllowedError(url);
+    const listed = await this.listedUrl();
+    if (!isAllowedUrl(listed, this.browser.allow)) throw new NotAllowedError(listed);
     this.browser.assertPinned();
     const win = this.browser.pinnedWindow();
     if (win !== undefined && (await this.browser.windowOf(this.targetId)) !== win)
-      throw new NotAllowedError(url, "refusing: this tab has been moved out of the pinned window");
+      throw new NotAllowedError(listed, "refusing: this tab has been moved out of the pinned window");
+    const url = await this.url();
+    if (!isAllowedUrl(url, this.browser.allow)) throw new NotAllowedError(url);
   }
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
@@ -1419,9 +1456,9 @@ export class Tab {
     }
     const cleanupErrors = await runCleanup([["clear the device metrics override", () => this.send("Emulation.clearDeviceMetricsOverride")]]);
     if (failure) {
-      // The page's size, but only on a page that is still on the allowlist (review-41e: Chrome's list, no read in the page).
-      const url = await this.listedUrl().catch(() => undefined);
-      const after = url !== undefined && isAllowedUrl(url, this.browser.allow) ? await size() : undefined;
+      // The page's size, but only on a page that is still on the allowlist (review-41e: Chrome's lists, no read in the page;
+      // both URLs, as assertAllowed: ab-b84.20).
+      const after = await this.onList().catch(() => false) ? await size() : undefined;
       if (before && after && after !== before)
         log(`agent-browser shot: after the failed shot the page of tab ${tab} is ${after}, not ${before} as before the size override`);
       throw withCleanupErrors(failure, cleanupErrors);
