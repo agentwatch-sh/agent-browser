@@ -134,3 +134,18 @@ test("the CLI takes --cdp-url: only agent mode's endpoint, and none of the proxy
     assert.match(r.json.error.message, /none\.sock/);
   } finally { c.remove(); }
 });
+
+test("over the endpoint the X-pointer log line names the relay's way: the relay has the daemon move the X pointer at each activation (ab-v16.71)", async () => {
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
+  const end = await backByChrome(h.fake, chrome);
+  const lines: string[] = [];
+  try {
+    await h.ready(lineOf([FIXTURE_HOST]));
+    const o = c.options({ cdpUrl: h.url("ab-lead"), log: (l: string) => { lines.push(l); } });
+    await commands.open(o, { url: fx.base, name: "main" });
+    await commands.click(o, { tab: "main", target: "#b" });
+    const line = lines.find((l) => /X-pointer method/.test(l));
+    assert.equal(line, "agent-browser: the X-pointer method is off over agentwatch's relay: the relay has the daemon move the X pointer at each activation (a daemon with the pointer ops), along a path from where the page under the pointer last saw it, and each path of agent-browser starts at the page's own pointer event", lines.join("\n"));
+    await commands.close(o, { tab: "main" });
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
