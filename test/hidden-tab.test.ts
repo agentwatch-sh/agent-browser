@@ -601,6 +601,21 @@ for (const [label, mode] of [["default", o], ["hiddenDrive", h]] as const) {
     await commands.close(mode(), { tab: name }).catch(() => {});
   });
 
+  test(`${label}: shot whose tab is off the allowlist when its own capture ends: the check after the capture reads Chrome's lists and runs no code in the off-list page`, async () => {
+    // review-65 N4 (ab-b84.20): the check after the shot's own capture read location.href with Runtime.evaluate there.
+    const { name, page } = await backgroundTab("/", mode);
+    await commands.text(mode(), { tab: name });
+    page.onCapture = (p) => { if (p.format === "png") page.url = "https://off-the-list.example/"; };
+    const path = join(c.dir, `${name}.png`);
+    const { calls } = await callsOf(page, () => assert.rejects(commands.shot(mode(), { tab: name, path }), /off-the-list\.example is not on the allowlist/));
+    page.onCapture = undefined;
+    const after = calls.slice(calls.findIndex((x) => x.method === "Page.captureScreenshot" && x.params.format === "png") + 1);
+    assert.deepEqual(after.filter((x) => /^Runtime\.(evaluate|callFunctionOn)$|^Page\.createIsolatedWorld$/.test(x.method)).map((x) => x.method), [], "no page code after the capture");
+    assert.ok(after.some((x) => x.method === "Target.getTargetInfo"), `Chrome's target list refused it: ${JSON.stringify(methodsOf(after))}`);
+    assert.equal(existsSync(path), false, "no file");
+    await commands.close(mode(), { tab: name }).catch(() => {});
+  });
+
   test(`${label}: shot --size whose tab is off the allowlist when its own capture ends: refused, the override cleared, and no page code in the off-list page after the failure`, async () => {
     // review-41e note 1: the page-size read after the failure ran in the off-list page (Page.createIsolatedWorld,
     // Runtime.evaluate; 1 of 3 default-mode runs, 6 of 6 hidden-drive runs).

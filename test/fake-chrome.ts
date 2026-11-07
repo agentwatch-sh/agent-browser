@@ -268,7 +268,14 @@ export class FakePage {
   readonly fake: FakeChrome;
   readonly targetId: string;
   windowId: number;
+  /** The URL of the main frame's document: location.href, and the frame's url in Page.getFrameTree. */
   url = "about:blank";
+  /**
+   * The URL that Chrome's target list gives when it is not the document's (Target.getTargets, Target.getTargetInfo):
+   * Chrome lists the tab's visible URL, so a navigation that the browser started shows its new URL before it commits,
+   * a new tab its first URL over its first empty document, and an error page the URL that failed. Undefined: `url`.
+   */
+  listedUrl: string | undefined;
   title = "";
   text = "";
   elements: FakeElement[] = [];
@@ -926,7 +933,7 @@ export class FakeChrome {
 
   private info(p: FakePage) {
     const attached = [...this.sessions.values()].some((s) => s.page === p);
-    return { targetId: p.targetId, type: "page", url: p.url, title: p.title, attached, browserContextId: "default" };
+    return { targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
   }
 
   private async onMessage(client: WebSocket, msg: { id: number; method: string; params?: any; sessionId?: string }) {
@@ -959,6 +966,11 @@ export class FakeChrome {
       case "Browser.setDownloadBehavior": this.downloadBehavior = { behavior: params.behavior, downloadPath: params.downloadPath }; return {};
       case "Browser.close": setTimeout(() => void this.close(), 5); return {};
       case "Target.getTargets": return { targetInfos: [...[...this.pages.values()].map((p) => this.info(p)), ...this.otherTargets.map((t) => ({ ...t, attached: false }))] };
+      case "Target.getTargetInfo": {
+        const p = this.pages.get(params.targetId);
+        if (!p) throw new Error("No target with given id found");
+        return { targetInfo: this.info(p) };
+      }
       case "Target.createTarget": {
         const windowId = params.newWindow ? ++this.nextWindow : this.currentWindow;
         const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), windowId);
