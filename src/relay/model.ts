@@ -115,7 +115,10 @@ type Tab = {
   geo: Geo | null;
   /** The drop events of the kept geometry so far: a read that started before one keeps and drops nothing. */
   geoDrops: number;
-  /** A client's device-metrics override is in force (Emulation.setDeviceMetricsOverride until its clear). */
+  /**
+   * A client's device-metrics override is in force: from Emulation.setDeviceMetricsOverride or
+   * Page.setDeviceMetricsOverride until Emulation.clearDeviceMetricsOverride or Page.clearDeviceMetricsOverride.
+   */
   metrics: boolean;
 };
 /** A page's last point: client CSS px, and whether an X record of an activation step set it (the catch-up's condition). */

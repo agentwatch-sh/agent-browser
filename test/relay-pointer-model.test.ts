@@ -984,9 +984,7 @@ test("review-68 B1: each geometry read makes the relay's world first and evaluat
 
 test("review-68 B2: a press on a frame's (child) session is a held button of its page: no path while it holds", async () => {
   // The step's log line (times and counts) names why the step played no path: the release, not step 3's limit.
-  process.env.AGENT_BROWSER_POINTER_LOG = "1";
-  const { h, d } = await onHarness();
-  delete process.env.AGENT_BROWSER_POINTER_LOG;
+  const { h, d } = await onHarnessLogged();
   try {
     const c = await h.connect(), c2 = await h.connect("s2");
     const A = await page(h, c2), B = await page(h, c);
@@ -1398,6 +1396,22 @@ test("round 4: a late read after a drop event keeps and drops nothing; a late re
       assert.deepEqual(state(h).kept[B.tab.id], kept, "the late read dropped nothing");
     } finally { await h.close(); }
   }
+  // Only the late-answer rule decides: B has no kept geometry, no drop event comes, and B's usable read answers late:
+  // it keeps nothing.
+  {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      await click(c, A, 100, 100);
+      h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Page.frameResized", params: {} });
+      await until(() => state(h).kept[B.tab.id] === undefined, "no kept geometry of B");
+      h.fake.command = async (t, method, params) => { if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) await sleep(350); return undefined; };
+      await mouse(c, B, "mouseMoved", 700, 300);
+      await click(c, B, 700, 300);
+      await sleep(400);
+      assert.equal(state(h).kept[B.tab.id], undefined, "the late usable read kept nothing");
+    } finally { await h.close(); }
+  }
   // The count is per tab: a drop event of A while B's read runs changes nothing of B's read.
   {
     const { h } = await onHarness();
@@ -1434,7 +1448,9 @@ test("round 4: Page.setDeviceMetricsOverride and Page.clearDeviceMetricsOverride
     await mouse(c, A, "mouseMoved", 300, 200); // A's point is not where the pointer is
     await click(c, A, 300, 200);
     assert.equal(d.moves.length, n + 1, "after the clear, a path again");
-    await c.send("Page.setDeviceMetricsOverride", { width: 600, height: 400, deviceScaleFactor: 1, mobile: false }, B.sessionId);
+    // A's step read B, the front page, with no override: B's geometry is kept again. A read while an override is in
+    // force keeps nothing, so the clear's own drop shows with a clear that follows no set.
+    assert.ok(state(h).kept[B.tab.id], "B's geometry is kept again");
     await c.send("Page.clearDeviceMetricsOverride", {}, B.sessionId);
     assert.equal(state(h).kept[B.tab.id], undefined, "Page.clearDeviceMetricsOverride drops the kept geometry too");
   } finally { await h.close(); }
