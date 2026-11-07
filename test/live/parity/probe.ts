@@ -62,6 +62,7 @@ import { parseArgs } from "node:util";
 import { AGENT_ARGS } from "../../../src/agent.ts";
 import { readPrefs, writeServeColumn, writeSummary } from "./files.ts";
 import { ProbeServer } from "./server.ts";
+import { harnessGuard, type HarnessGuard } from "../guard.ts";
 
 const HERE = new URL(".", import.meta.url).pathname;
 const LINUX = process.platform === "linux";
@@ -124,11 +125,14 @@ function xauthEntry(display: string, cookie: Buffer): Buffer {
 
 async function startDisplay(): Promise<Display> {
   if (!LINUX) return { env: {}, name: "screen", stop: () => {} };
+  // One live harness at a time, and nothing of this probe after its end, also after a kill -9 (test/live/README.md).
+  harness = await harnessGuard("parity probe");
   let n = 90;
   while (existsSync(`/tmp/.X11-unix/X${n}`) || existsSync(`/tmp/.X${n}-lock`)) n++;
   const xauth = join(OUT, "xauth");
   writeFileSync(xauth, xauthEntry(String(n), randomBytes(16)), { mode: 0o600 });
   const xvfb = spawn("Xvfb", [`:${n}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1920x1080x24"], { stdio: "ignore" });
+  harness.track(xvfb.pid, "Xvfb");
   const env = { DISPLAY: `:${n}`, XAUTHORITY: xauth };
   let up = false;
   for (let i = 0; i < 50 && !up; i++) {
@@ -191,11 +195,14 @@ const PLAIN_ARGS = AGENT_ARGS.filter((a) => a === "--no-first-run" || a === "--n
 const MAC_ARGS = MAC ? ["--use-mock-keychain"] : [];
 
 const RUNNING = new Set<Chrome>();
+/** Linux: the harness guard (startDisplay takes it before its Xvfb); macOS has none. */
+let harness: HarnessGuard | undefined;
 
 function launch(server: ProbeServer, d: Display, bin: string, profile: string, extra: string[], url: string, logFile: string, pipe = false, plain = false): Chrome {
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   const args = [...(plain ? PLAIN_ARGS : AGENT_ARGS), `--user-data-dir=${profile}`, `--proxy-server=${server.proxy}`, ...MAC_ARGS, ...extra, url];
   const proc = spawn(bin, args, { env: chromeEnv(d, join(profile, "..", "home")), stdio: pipe ? ["ignore", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"] });
+  harness?.track(proc.pid, "Chromium");
   const chunks: Buffer[] = [];
   proc.stdout!.on("data", (b) => chunks.push(b));
   proc.stderr!.on("data", (b) => chunks.push(b));

@@ -64,6 +64,7 @@ import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
 import { bothFocusedMs, FAR, LAYOUT, pointerSignals, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
 import { report } from "./report.ts";
+import { harnessGuard } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, only: { type: "string" }, playwright: { type: "string" } } });
 function refuse(message: string): never { process.stderr.write(`${message}\n`); process.exit(2); }
@@ -84,9 +85,12 @@ writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.allo
 const children: ChildProcess[] = [];
 process.on("exit", () => { for (const c of children.reverse()) if (c.exitCode === null) c.kill("SIGTERM"); });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
+// One live harness at a time, and nothing of this run after its end, also after a kill -9 (test/live/README.md).
+const harness = await harnessGuard("anti-detect");
 if (existsSync(`/tmp/.X11-unix/X${DISPLAY}`)) refuse(`display :${DISPLAY} is in use; pass --display N`);
 const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1600x1000x24"], { stdio: "ignore" });
 children.push(xvfb);
+harness.track(xvfb.pid, "Xvfb");
 for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY}`) && xvfb.exitCode === null; i++) await sleep(100);
 await sleep(300);
 if (xvfb.exitCode !== null) refuse(`Xvfb did not start on :${DISPLAY}`);
@@ -138,6 +142,7 @@ class Chromium {
     const fd = openSync(join(RUN, `chrome-${name}.log`), "a");
     this.proc = spawn(CHROME, [...BASE_ARGS, `--user-data-dir=${dir}`, ...flags, ...urls], { env: XENV, stdio: ["ignore", fd, fd, "pipe", "pipe"] });
     children.push(this.proc);
+    harness.track(this.proc.pid, "Chromium");
     const read = this.proc.stdio[4] as Readable;
     read.setEncoding("utf8");
     read.on("data", (d: string) => {

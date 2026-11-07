@@ -28,6 +28,7 @@ import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { bothFocusedMs, LAYOUT, pointerSignals, startServer, type Rec } from "./probe.ts";
+import { harnessGuard } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, display: { type: "string" }, exp: { type: "string" }, n: { type: "string" }, "no-window-size": { type: "boolean" } } });
 if (!values["out-dir"] || process.platform !== "linux") { process.stderr.write("usage (Linux only): node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise|two|two-lock|two-noact|popup|jump|mem|pointer|caret] [--n 8] [--no-window-size]\n"); process.exit(2); }
@@ -47,9 +48,12 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.
 const field = (b: Buffer) => { const n = Buffer.alloc(2); n.writeUInt16BE(b.length); return Buffer.concat([n, b]); };
 const xauth = join(RUN, "Xauthority");
 writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.alloc(0)), field(Buffer.from(String(DISPLAY))), field(Buffer.from("MIT-MAGIC-COOKIE-1")), field(randomBytes(16))]), { mode: 0o600 });
+// One live harness at a time, and nothing of this run after its end, also after a kill -9 (test/live/README.md).
+const harness = await harnessGuard(`anti-detect extra ${EXP}`);
 if (existsSync(`/tmp/.X11-unix/X${DISPLAY}`)) { say(`display ${DISPLAY} in use`); process.exit(2); }
 const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1600x1000x24"], { stdio: "ignore" });
 children.push(xvfb);
+harness.track(xvfb.pid, "Xvfb");
 for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY}`); i++) await sleep(100);
 await sleep(300);
 const XENV: NodeJS.ProcessEnv = { ...process.env, DISPLAY: `:${DISPLAY}`, XAUTHORITY: xauth };
@@ -74,6 +78,7 @@ class Pipe {
     const fd = openSync(join(RUN, `chrome-${name}.log`), "a");
     this.proc = spawn("/usr/bin/chromium", [...ARGS, `--user-data-dir=${this.dir}`, ...urls], { env: XENV, stdio: ["ignore", fd, fd, "pipe", "pipe"] });
     children.push(this.proc);
+    harness.track(this.proc.pid, "Chromium");
     say(`chromium ${name} pid ${this.proc.pid}`);
     const r = this.proc.stdio[4] as Readable; r.setEncoding("utf8");
     r.on("data", (d: string) => { this.buf += d; for (let i; (i = this.buf.indexOf("\0")) >= 0;) { const m = JSON.parse(this.buf.slice(0, i)); this.buf = this.buf.slice(i + 1); if (typeof m.id === "number") this.pend.get(m.id)?.(m); } });

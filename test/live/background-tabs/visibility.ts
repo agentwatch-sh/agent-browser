@@ -70,6 +70,7 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions } from "../.
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg, pngPixels } from "../../../src/record.ts";
 import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./spans.ts";
+import { harnessGuard } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "hidden-drive": { type: "boolean" } } });
 /** A start that the check refuses: one line, exit 2. The exit handler ends the check's own children. */
@@ -114,10 +115,13 @@ process.on("exit", () => {
 });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
 
+// One live harness at a time, and nothing of this check after its end, also after a kill -9 (test/live/README.md).
+const harness = await harnessGuard("background-tabs visibility");
 const socket = `/tmp/.X11-unix/X${DISPLAY}`;
 if (existsSync(socket)) refuse(`display :${DISPLAY} is in use; pass --display N`);
 const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1280x800x24"], { stdio: "ignore" });
 children.push(xvfb);
+harness.track(xvfb.pid, "Xvfb");
 for (let i = 0; i < 50 && !existsSync(socket) && xvfb.exitCode === null; i++) await sleep(100);
 await sleep(200);
 if (!existsSync(socket) || xvfb.exitCode !== null) refuse(`Xvfb did not start on :${DISPLAY}; pass another --display N`);

@@ -43,7 +43,10 @@
 // *.localhost hosts only. It drives no Chrome that it did not start (in the external mode only the one whose socket
 // RELAY_SOCK names, below) and stops no Chrome that it did not start; it opens no debugging port, and no prompt can
 // appear. It prints one line per case and writes <RUN>/results.json; it exits 1 when a case fails. A taken display or
-// site port stops it with exit 2 before it makes anything or calls CONTROL.
+// site port stops it with exit 2 before it makes anything or calls CONTROL. Then the own mode waits for the harness
+// lock (one live harness at a time on the box; test/live/README.md) and starts its harness guard, which stops every
+// process of the run (Xvfb, Chromium, the relay, the site, the clients) when the run ends, also after a kill -9 of
+// the run; a lock that stays taken for HARNESS_LOCK_WAIT seconds (default 1200) stops it with exit 2.
 //
 // At its end, after it stopped its children and wrote results.json, the run removes the large parts that it made in
 // RUN (run-folder.ts; board ab-v16.64): install/ (the scratch npm install, about 47 MB), pack/ (the package tarball),
@@ -93,6 +96,7 @@ import { StandInDaemon } from "./daemon.ts";
 import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
+import { harnessGuard, type HarnessGuard } from "../guard.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 /** True when nothing listens on 127.0.0.1:`port`. */
@@ -225,11 +229,15 @@ async function step(group: string, name: string, fn: () => Promise<unknown>, o: 
 }
 
 const children: ChildProcess[] = [];
+/** The own mode's harness guard (test/live/guard.ts, board ab-v16.78): the harness lock, and no process of the run
+ *  after the run's end, also after a kill -9. The external mode starts no Xvfb or Chromium, and has none. */
+let harness: HarnessGuard | undefined;
 /** A child of this run, its output in <RUN>/logs/<log>; with `pipe`, its standard input and output are pipes (an MCP server). */
 function start(bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; log: string; pipe?: boolean }): ChildProcess {
   const fd = openSync(join(RUN, "logs", opts.log), "a");
   const child = spawn(bin, args, { env: opts.env ?? process.env, stdio: opts.pipe ? ["pipe", "pipe", fd] : ["ignore", fd, fd] });
   children.push(child);
+  harness?.track(child.pid, opts.log.replace(/\.log$/, ""));
   return child;
 }
 const status = (path: string) => new Promise<number>((r) => { get({ socketPath: RELAY_SOCK, path }, (res) => { res.resume(); r(res.statusCode ?? 0); }).once("error", () => r(0)); });
@@ -305,6 +313,8 @@ function cleanup(): Promise<void> {
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(sig, () => { aborted ??= `signal ${sig}`; void cleanup().then(() => process.exit(1)); });
 
 try {
+  // The own mode waits for the harness lock before it makes or starts anything more (one harness at a time).
+  if (!EXTERNAL) harness = await harnessGuard("agent-mode");
   // The scratch install: this checkout as a package (its tarball in pack/), and the clients that the probe used.
   makePart(INSTALL);
   makePart(PACK);
@@ -1770,6 +1780,7 @@ async function peerCases() {
     await tmux("new-session", "-d", "-s", "pa", "-x", "200", "-y", "50", "/bin/bash --noprofile --norc");
     await tmux("new-session", "-d", "-s", "pb", "-x", "200", "-y", "50", "/bin/bash --noprofile --norc");
     server = Number(await tmux("display-message", "-p", "#{pid}"));
+    harness?.track(server, "tmux");
     paPid = await panePid("pa"); pbPid = await panePid("pb");
     let cgA: string | null = null, cgB: string | null = null;
     await step(G, "each pane of the run's tmux server is in a systemd scope of its own (the scope wait)", async () => {
@@ -1805,6 +1816,7 @@ async function peerCases() {
     const dfork = await connector("pa", "a-dfork", (c) => `( setsid ${c} > /dev/null 2>&1 < /dev/null & )`);
     await keys("pa", `env -u TMUX tmux -L ${NESTED} -f /dev/null new-session -d -s n`);
     const nestedPid = Number(await until(() => { try { return execFileSync("tmux", ["-L", NESTED, "display-message", "-p", "#{pid}"], { env: tmuxEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } }, "the nested tmux server", 15_000));
+    harness?.track(nestedPid, "tmux");
     const rshell = await connector("pb", "b-runshell", (c) => `env -u TMUX tmux -L ${NESTED} run-shell -b '${c} > /dev/null 2>&1 < /dev/null'`);
     const shapes = { tool, nohup, dfork, rshell };
     await step(G, "the jobs' shapes: the tool command's parent is pane A; the nohup job, the double fork and the nested server left the tree and kept pane A's cgroup", async () => {

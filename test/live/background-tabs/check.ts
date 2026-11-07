@@ -100,6 +100,7 @@ import {
   BOX_COLOURS, chromeArgs, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, TIMER_MS, timerStats, visibilityIn, visibleSpans,
   type Drive, type Idle, type Recording, type Run, type Step, type StepName, type Timer,
 } from "./rules.ts";
+import { harnessGuard } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, before: { type: "boolean" },
   "hidden-ms": { type: "string" }, "hidden-drive": { type: "boolean" }, "new-tabs": { type: "string" } } });
@@ -144,10 +145,13 @@ process.on("exit", () => {
 });
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => process.exit(130));
 
+// One live harness at a time, and nothing of this check after its end, also after a kill -9 (test/live/README.md).
+const harness = await harnessGuard("background-tabs check");
 const socket = `/tmp/.X11-unix/X${mode.display}`;
 if (existsSync(socket)) refuse(`display :${mode.display} is in use; pass --display N`);
 const xvfb = spawn("Xvfb", [`:${mode.display}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1280x800x24"], { stdio: "ignore" });
 children.push(xvfb);
+harness.track(xvfb.pid, "Xvfb");
 for (let i = 0; i < 50 && !existsSync(socket) && xvfb.exitCode === null; i++) await sleep(100);
 await sleep(200);
 // The socket must be our Xvfb's: another X server that took the display between the check and the spawn
