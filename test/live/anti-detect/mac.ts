@@ -799,9 +799,12 @@ if (stopInfo) {
     + `${cut ? `that step ended ${cut.t1 - from} ms after it; ` : ""}the end step began ${endStep?.phase === "end" ? `${endStep.t0 - from} ms` : "?"} after it`
     + `${endStep?.phase === "end" ? `, and the agent Chrome had quit ${endStep.t1 - from} ms after it` : ""}`);
   // review-69c B1: what of agent-browser still acted after the stop (a command in progress at the stop).
-  const late = ["WA", "WB", "PA", "PB", "PC"].flatMap((tab) => inputs(log, tab, stopInfo!.t, Number.POSITIVE_INFINITY).filter((e) => e.type !== "mousemove" && e.type !== "pointermove").map((e) => ({ tab, t: e.t as number, type: String(e.type) })));
+  // Presses, releases, clicks, keys and wheel (not the pointer's out and leave events of the windows that the quit closes).
+  const PRESSES = ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "dblclick", "auxclick", "contextmenu", "keydown", "keyup", "keypress", "wheel", "input"];
+  const late = ["WA", "WB", "PA", "PB", "PC"].flatMap((tab) => inputs(log, tab, stopInfo!.t, Number.POSITIVE_INFINITY).filter((e) => PRESSES.includes(String(e.type))).map((e) => ({ tab, t: e.t as number, type: String(e.type) })));
+  const popups = ["PA", "PB", "PC"].filter((tab) => log.some((e) => e.tab === tab && e.ev === "load" && e.t >= stopInfo!.t));
   const asked = builtLines().filter((l) => "asked" in l.kv && l.t >= stopInfo!.t).length;
-  endLines.push(`after the stop: ${late.length} input event(s) other than moves reached a probe page${late.length ? ` (${late.slice(0, 4).map((e) => `${e.type} in ${e.tab} +${e.t - stopInfo!.t} ms`).join(", ")})` : ""}; `
+  endLines.push(`after the stop: ${late.length} press, click, key or wheel event(s) reached a probe page${late.length ? ` (${late.slice(0, 4).map((e) => `${e.type} in ${e.tab} +${e.t - stopInfo!.t} ms`).join(", ")})` : ""}; ${popups.length ? `popup page(s) ${popups.join(", ")} loaded` : "no popup page loaded"}; `
     + `${frontRequests.filter((t) => t >= stopInfo!.t).length} front request(s)${O.dryRun ? " (the dry run's stand-in)" : ""}; agent-browser's give-back watcher asked ${asked} time(s) to give the front back`);
 }
 if (endStep?.phase === "end" && !endStep.ok && !quitProblem) quitProblem = `the quit of the agent Chrome did not finish (${endStep.error}); see stop-chrome.txt in the run folder`;
