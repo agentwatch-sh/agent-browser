@@ -18,6 +18,7 @@ import { browserTarget, lastProxyAttempt, promptNotice, proxyLogPath, recordProx
 import { stateDir, statePath, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
 import { withFileLock } from "./lock.ts";
+import { holdForApproval } from "./watchback.ts";
 
 /** The CLI entry the proxy child runs from: plain JavaScript, so it also starts from a node_modules install. */
 export const BIN_PATH = fileURLToPath(new URL("../bin/agent-browser.js", import.meta.url));
@@ -57,8 +58,11 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...(detail ? { detail } : {}), ...(approval ? { approval } : {}) });
   record("child-connect", "upstream handshake starting; approval status unknown");
   let upstream: WebSocket;
+  // On the Mac the give-back watcher leaves the agent Chrome in front while Chrome's prompt waits for the operator (watchback.ts).
+  let releaseApproval = () => {};
   try {
     if (await socketAlive(s.socketPath)) throw new Error(`chrome proxy already running on ${s.socketPath}`);
+    releaseApproval = holdForApproval(s, (opts.timeoutMs ?? 90_000) + 5_000);
     upstream = new WebSocket(upstreamUrl, { perMessageDeflate: false, maxPayload: 512 * 1024 * 1024, handshakeTimeout: opts.timeoutMs ?? 90_000 });
     // The upstream open blocks on Chrome's "Allow?" dialog. If approval is configured, answer that one
     // dialog (the connection we just caused) while we wait. Best-effort: it never rejects this startup.
@@ -69,7 +73,9 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
       upstream.once("error", reject);
       upstream.once("close", (code) => reject(new Error(`upstream closed before ready (code ${code})`)));
     });
+    releaseApproval();
   } catch (e) {
+    releaseApproval();
     const why = handshakeFailure((e as Error).message, s), refused = why !== (e as Error).message;
     const unanswered = /handshake has timed out/i.test(why) ? `; ${UNANSWERED}` : "; approval status unknown";
     record("child-error", `upstream handshake failed: ${why}${refused ? "" : unanswered}`, refused ? "refused" : undefined);

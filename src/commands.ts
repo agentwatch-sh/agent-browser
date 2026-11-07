@@ -10,10 +10,11 @@ import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
 import { isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, operatorSignIn, redirectError } from "./errors.ts";
-import { resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
+import { macWindows, resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
 import { checkScale, parseSize, planRecording, recordTab, type RecordEvent } from "./record.ts";
+import { ensureWatchBack, stopWatchBack } from "./watchback.ts";
 
 // ---------- the spec ----------
 
@@ -210,6 +211,9 @@ export const commands = {
       timeoutMs: 10 * 60_000,
       onWaiting: () => s.log(`waiting for remote debugging: turn it on in ${INSPECT_URL} (Ctrl-C to stop waiting)`),
     });
+    // On the Mac the give-back watcher runs from now on, for as long as this agent Chrome does (watchback.ts): the start's
+    // own guard has ended (launchAgentChrome).
+    if (macWindows(s)) await ensureWatchBack(s);
     const opened: string[] = [], errors: { url: string; error: string }[] = [];
     if (!running) opened.push(...urls); // Chrome opened them at launch
     else if (urls.length) {
@@ -227,6 +231,8 @@ export const commands = {
     if (s.mode !== "agent") throw new UsageError("quit is for the agent browser; it never closes the operator's Chrome");
     if (s.cdpUrl) throw new UsageError("quit: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
     const proxyStopped = await stopProxyAndWait(s);
+    // The Mac's give-back watcher ends with its agent Chrome by itself; quit ends it at once (watchback.ts).
+    stopWatchBack(s);
     // Signal the process rather than connect: a new debugging connection would prompt.
     const pid = agentChromePid(s);
     if (pid) process.kill(pid, "SIGTERM");

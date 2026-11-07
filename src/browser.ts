@@ -13,12 +13,13 @@ import { CDPConnection, CDPError } from "./cdp.ts";
 import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
-import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
+import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
+import { assertTestStateIsolated, macWindows, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
 import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
+import { ensureWatchBack } from "./watchback.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean };
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
@@ -92,8 +93,8 @@ const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE =
  * How agent-browser drives a page (ab-v16.26). "window": a page in a window of its own, or a tab that a
  * site or a pinned window put in front of its window, where each page gets a window of its own
  * (windowPerPage): no focus emulation, as a person's page. "focus-emulation": the old default, focus
- * emulation while a command is attached (the Mac, personal mode, and an explicit `open --tab` on
- * Linux). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn and
+ * emulation while a command is attached (personal mode, an explicit `open --tab` in agent mode, a display
+ * that is not the agent browser's own on Linux, and the relay on the Mac). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn and
  * Tab.whileDrawnForShot (the same places, with hiddenDrive).
  */
 export type Drive = "window" | "focus-emulation" | "hidden";
@@ -111,10 +112,17 @@ export class AgentBrowser {
   readonly allow: string[];
   readonly product: string;
   /**
-   * The design of one window per page applies (ab-v16.26): agent mode on Linux (windowPerPage), with the agent Chrome
-   * on a display of its own (display.ts). Else every page is driven as before, in a background tab.
+   * The design of one window per page applies: agent mode on Linux (windowPerPage; ab-v16.26), with the agent Chrome
+   * on a display of its own (display.ts), and agent mode on the Mac (macWindows; ab-v16.27). Else every page is driven
+   * as before, in a background tab.
    */
   readonly windows: boolean;
+  /**
+   * The Mac's design (macWindows; ab-v16.27): no command ever activates a window (no Page.bringToFront, no
+   * Target.activateTarget). A hidden window page (behind a popup tab in its window) is not brought in front: its input
+   * waits until it shows again, which it does about 1.0 s after that popup closed (Tab.toFront, input.ts).
+   */
+  readonly mac: boolean;
   /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
   readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
@@ -126,7 +134,8 @@ export class AgentBrowser {
     this.allow = allow;
     this.product = product;
     this.display = display;
-    this.windows = !!display?.own;
+    this.mac = macWindows(settings);
+    this.windows = this.mac || !!display?.own;
   }
 
   /**
@@ -145,8 +154,11 @@ export class AgentBrowser {
       try { return await AgentBrowser.over(s.cdpUrl, s, allow); }
       catch (e) { throw new ChromeUnreachableError(`agent mode's endpoint did not answer (${(e as Error).message})`, { cause: e }); }
     }
+    // On the Mac the give-back watcher runs for as long as the agent Chrome does (watchback.ts): each command that connects
+    // makes sure of it, after the proxy is up (so after an approval that a new connection needed). Not for a diagnosis.
+    const watch = async (b: AgentBrowser) => { if (!opts.existingOnly && macWindows(s)) await ensureWatchBack(s); return b; };
     if (existsSync(s.socketPath) && await socketAlive(s.socketPath)) {
-      try { return await AgentBrowser.fromProxy(s, allow); } catch { /* stale or broken proxy */ }
+      try { return await watch(await AgentBrowser.fromProxy(s, allow)); } catch { /* stale or broken proxy */ }
     }
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
     // Checked before any launch: a new Chrome needs a new approval too.
@@ -163,7 +175,7 @@ export class AgentBrowser {
       try {
         await startProxy(s, c.ws);
         if (s.mode === "personal" && c.source !== "cache") rememberEndpoint(s, c.ws);
-        return await AgentBrowser.fromProxy(s, allow);
+        return await watch(await AgentBrowser.fromProxy(s, allow));
       } catch (e) { lastErr = e; }
     }
     // Chrome's instant refusal, and a prompt that nobody answered, are their own causes: remote debugging is on there, so the general help would mislead.
@@ -178,7 +190,8 @@ export class AgentBrowser {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      const display = windowPerPage(s) ? await displayOf(s) : undefined;
+      // The display check is Linux's (an X display of its own); the Mac's design needs none.
+      const display = windowPerPage(s) && !macWindows(s) ? await displayOf(s) : undefined;
       return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
@@ -335,14 +348,14 @@ export class AgentBrowser {
 
   /**
    * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
-   * browser on Linux (windowPerPage, ab-v16.26) it gets a window of its own (Target.createTarget with
-   * newWindow and background: a new window without the focus), driven with no focus emulation: its
-   * page is visible and draws, as a person's window that is not in front, and it gets the focus only
+   * browser on Linux (windowPerPage, ab-v16.26) and on the Mac (macWindows, ab-v16.27) it gets a window of
+   * its own (Target.createTarget with newWindow and background: a new window without the focus; on the Mac
+   * it comes behind the front window, measured 2026-11-05 and 2026-11-06), driven with no focus emulation:
+   * its page is visible and draws, as a person's window that is not in front, and it gets the focus only
    * with the agent's input. An explicit newWindow: false (`open --tab`) opens a background tab there
-   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. On the
-   * Mac the agent browser opens a background tab in the current window, as before: a foreground tab
-   * activates Chrome, which takes the operator's focus and Space (measured 2026-10-30), and a window
-   * of its own is not measured there (ab-v16.27). Between commands that tab is hidden and its timers
+   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. A
+   * foreground tab activated Chrome on the Mac, which took the operator's focus and Space (measured
+   * 2026-10-30). Between commands a background tab is hidden and its timers
    * slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9); during
    * each command its page is visible. Click, type, eval, text, shot and record still work in it
    * (test/live/background-tabs/check.ts; measured on Linux only: on macOS a recording of a background
@@ -995,6 +1008,9 @@ export class Tab {
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
+   * On the Mac (AgentBrowser.mac; ab-v16.27) no command activates a window, and CDP has no tab switch without an
+   * activation there: such a page only waits until it shows again (waitShown; the opener shows again about 1.0 s after
+   * its popup tab closed), and a read goes on when it does not. Input refuses such a page (input.ts, Hands.begin).
    * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout);
    * `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
    */
@@ -1002,6 +1018,11 @@ export class Tab {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
+    if (this.browser.mac) {
+      if (!(await this.waitShown(opts)) && !opts.signal?.aborted)
+        this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is hidden behind another tab of its window; on macOS agent-browser does not switch tabs (that brings the agent Chrome to the front), so this read goes on in the hidden page`);
+      return;
+    }
     // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
     // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
     // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
@@ -1015,6 +1036,20 @@ export class Tab {
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
     }, opts);
+  }
+
+  /**
+   * On the Mac (ab-v16.27): wait until a hidden window page shows again, with no activation, at most the input timing's
+   * showMs (2.5 s), or until `deadline` (epoch ms) or `signal`. True when the page is visible. After a popup tab in front
+   * of its opener closed, the opener showed again about 1.0 s later (1006 to 1012 ms, the Mac check of 2026-11-06).
+   */
+  async waitShown(opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<boolean> {
+    const end = Math.min(Date.now() + this.browser.settings.inputTiming.showMs, opts.deadline ?? Infinity);
+    for (;;) {
+      if (await this.evaluate(() => document.visibilityState) === "visible") return true;
+      if (Date.now() >= end || opts.signal?.aborted) return false;
+      await new Promise((r) => setTimeout(r, 25));
+    }
   }
 
   /** Refuse to act if the tab has wandered off the allowlist (e.g. an OAuth redirect) or out of the pinned window. */
@@ -1170,7 +1205,12 @@ export class Tab {
         if (p.disposition === "currentTab") early(p, sid);
       });
       const off = () => { offNav(); offStart(); offAsk(); };
-      const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
+      // A caller's stop (the internal stopped option: the Mac check after a person's input) ends the input at its next event.
+      const stoppedBy = this.browser.settings.stopped;
+      const guard = () => {
+        if (left !== undefined) throw new NotAllowedError(left);
+        if (stoppedBy?.()) throw new AgentBrowserError("error", "stopped: the caller stopped this input (no more input event)");
+      };
       let h: Hands | undefined;
       try {
         h = await Hands.begin(this, guard);

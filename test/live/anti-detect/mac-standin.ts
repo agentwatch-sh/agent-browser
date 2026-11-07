@@ -6,7 +6,7 @@
 //
 //   node test/live/anti-detect/mac-standin.ts SECONDS
 //
-// (mac-standin-watchback.ts stands in for agent-browser's give-back watcher, the prototype of mac-watchback.ts.)
+// (mac-standin-watchback.ts stands in for the osascript of agent-browser's give-back watcher, src/watchback.ts.)
 //
 // To test the check's stop rules, its refusals and its analysis, these variables make it log what a Mac can show:
 // MAC_STANDIN_TAKE_MS=N (N ms after its start, the agent Chrome takes the front for 120 ms, or for
@@ -14,8 +14,10 @@
 // the check's first "disarm", the start of its time with no give-back),
 // MAC_STANDIN_POINTER_MS=N (N ms after its start, the pointer moves: a person at the Mac), MAC_STANDIN_INPUT_MS=N
 // (N ms after its start, a key press of the hardware: a person at the Mac), and MAC_STANDIN_HID=NAME=S[,NAME=S]
-// (the ready line's HID reading of NAME is S seconds; the others are 3600: a reading of 0 makes the check refuse), and
-// MAC_STANDIN_READY_POINTER=X,Y (the pointer of its ready line; else -1000,-1000). The first part passes each
+// (the ready line's HID reading of NAME is S seconds, or "in-gap": half the time since MAC_STANDIN_QUIET_SINCE; the
+// others are 3600: a reading of 0 makes the check refuse), and
+// MAC_STANDIN_READY_POINTER=X,Y (the pointer of its ready line; else -1000,-1000). Its command "person" gives a key press
+// of the hardware at once (the dry run's stop inside a named step: mac.ts, MAC_DRY_STOP_IN). The first part passes each
 // MAC_STANDIN_STABLE_X to the stable part as MAC_STANDIN_X (a person in the gap between the two parts).
 
 import { execFileSync } from "node:child_process";
@@ -29,7 +31,10 @@ const state = { locked: false, onConsole: true, asleep: false };
 let agentPid = 0, armed = false, personWhy = "", inFront = false;
 /** The six HID readings of mac-watch.swift's ready line (seconds since the hardware's last event of each type). */
 const hid: Record<string, number> = Object.fromEntries(["keyDown", "flagsChanged", "leftMouseDown", "rightMouseDown", "otherMouseDown", "scrollWheel"].map((n) => [n, 3600]));
-for (const pair of (process.env.MAC_STANDIN_HID ?? "").split(",").filter(Boolean)) { const [n, v] = pair.split("="); hid[n] = Number(v); }
+// "in-gap": a key at the middle of the time since the first part's last look at the input (MAC_STANDIN_QUIET_SINCE, which
+// the stable part's dry run gives): a key in the gap between the two parts, shorter than that gap for any gap.
+const inGap = () => Math.max(0.001, Math.round((Date.now() - Number(process.env.MAC_STANDIN_QUIET_SINCE)) / 2) / 1000);
+for (const pair of (process.env.MAC_STANDIN_HID ?? "").split(",").filter(Boolean)) { const [n, v] = pair.split("="); hid[n] = v === "in-gap" ? inGap() : Number(v); }
 const finish = (why: string) => { emit("end", { why }); process.exit(0); };
 /** The agent's visible top-level X windows, top first: [pid, id, x, y, w, h, 100], as mac-watch.swift's list. */
 function xWindows(): number[][] {
@@ -76,6 +81,8 @@ rl.on("line", (line) => {
     emit("windows", { why: "snap", label: rest, list, owners: { [agentPid]: "Chromium (dry run)" }, front, space: null,
       agentAll: list.map(([, n, x, y, w, h]) => ({ n, layer: 0, x, y, w, h, alpha: 1, onscreen: true })), agentApp: { pid: agentPid, policy: 0, hidden: false, active: false } });
   }
+  // The dry run's person (mac.ts, MAC_DRY_STOP_IN): a key press of the hardware now, as MAC_STANDIN_INPUT_MS gives one.
+  else if (verb === "person") { emit("input", { kind: "keyDown", agoMs: 0 }); personSeen("input"); }
   else if (verb === "quit") finish("quit");
   else emit("error", { what: "unknown command", line });
 });

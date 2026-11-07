@@ -1,15 +1,14 @@
 // agent-browser's give-back watcher as the Mac check runs it (test/live/anti-detect/mac-watchback.ts, ab-v16.68): a
 // prototype of the start guard (src/giveback.ts) for as long as the agent Chrome runs. No real osascript and no real
 // AppKit run here: the script runs in a vm context with a fake AppKit bridge (a scripted front app and clock), as in
-// test/giveback.test.ts. Nothing activates a real app. The dry run's stand-in for it runs as a child process.
+// test/giveback.test.ts. Nothing activates a real app. Since ab-v16.27 the Mac check runs agent-browser's own watcher
+// (src/watchback.ts, test/watchback.test.ts), and the dry run's stand-in is that watcher's.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { join, normalize } from "node:path";
+import { normalize } from "node:path";
 import vm from "node:vm";
 import { parseWatchBack, parseWatchBackReady, WATCH_BACK_MAX_MS, WATCH_BACK_SCRIPT, watchBackArgs } from "./live/anti-detect/mac-watchback.ts";
-import { ROOT } from "./helpers.ts";
 
 const BETA = "/Applications/Google Chrome Beta.app";
 const STABLE = "/Applications/Google Chrome.app";
@@ -213,16 +212,4 @@ test("the ready line and the log of the watcher, as the check reads them", () =>
   assert.deepEqual(log[0].kv, { watch: "", agent: "701", before: "500" });
   assert.deepEqual(log[2].kv, { back: "500", "after-ms": "50", asks: "1" });
   assert.equal(log[3].kv.end, "error");
-});
-
-test("the dry run's stand-in for the watcher: its ready line names the given app, and it ends when the agent's pid is gone", async () => {
-  const agent = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600)"], { stdio: "ignore" });
-  const child = spawn(process.execPath, [join(ROOT, "test", "live", "anti-detect", "mac-standin-watchback.ts"), String(agent.pid), "20000", "4242", String(process.pid)], { stdio: ["ignore", "pipe", "pipe"] });
-  let out = "", err = "";
-  child.stdout!.on("data", (b) => { out += b; });
-  child.stderr!.on("data", (b) => { err += b; });
-  const code = await new Promise((r) => child.once("exit", r));
-  assert.equal(code, 0);
-  assert.deepEqual(parseWatchBackReady(out.split("\n")[0]), { before: 4242, bundle: null, agent: agent.pid });
-  assert.deepEqual(parseWatchBack(err).map((l) => l.text), [`watch agent=${agent.pid} before=4242 parent=${process.pid} ppid=yes`, "end=agent-gone"]);
 });

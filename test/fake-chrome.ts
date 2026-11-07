@@ -349,6 +349,8 @@ export class FakePage {
    * frames of the page (see `framesDrawn`).
    */
   background = false;
+  /** The page that opened this one (window.open, a target=_blank link: FakeChrome.openFrom), if any. */
+  opener?: FakePage;
   /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
   drew = true;
   /** The page changes by itself (a caret, an animation): a capture sent while Chrome draws nothing still ends after a frame. */
@@ -763,6 +765,17 @@ export class FakeChrome {
    * focus. Off (the default for the older tests): only `background` says which page is behind.
    */
   tabSwitches = false;
+  /**
+   * The Mac's window model (ab-v16.27; measured by test/live/anti-detect/mac.ts on 2026-11-05 and 2026-11-06). A press
+   * in a page whose window is not the active one gives that page the focus with no activation (keyFocus), and no other page gets a blur, so two pages can both have the focus. With tabSwitches, a
+   * page that a page opens as a tab comes in front of the opener's window with no focus; the opener goes hidden and
+   * keeps its focus. When that popup tab closes (Target.closeTarget), the opener comes in
+   * front of its window again `reshowMs` later (about 1.0 s on the Mac: 1006 to 1012 ms). Page.bringToFront and
+   * Target.activateTarget still activate (the Mac design never sends them: a test counts them).
+   */
+  macWindows = false;
+  /** With macWindows: how long after a popup tab closed its opener comes in front of its window again. */
+  reshowMs = 0;
   connections = 0;
   /** A method named here fails once with this message (a test of error handling). */
   readonly failOnce = new Map<string, string>();
@@ -893,9 +906,22 @@ export class FakeChrome {
   openFrom(opener: FakePage, url: string): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
     this.pages.set(page.targetId, page);
+    page.opener = opener;
     page.load(url);
-    if (this.tabSwitches) this.activateTab(page, "open");
+    // On the Mac the popup tab comes in front of its window with no focus, and the opener keeps its own (macWindows).
+    if (this.tabSwitches && this.macWindows) { this.selectTab(page); page.updateFocus(); }
+    else if (this.tabSwitches) this.activateTab(page, "open");
     return page;
+  }
+
+  /** A page's target goes (Target.closeTarget): on the Mac its opener comes in front of its window again reshowMs later (macWindows). */
+  closePage(page: FakePage) {
+    const wasFront = !page.background;
+    page.close();
+    this.pages.delete(page.targetId);
+    const opener = page.opener;
+    if (this.macWindows && this.tabSwitches && wasFront && opener && this.pages.has(opener.targetId) && opener.windowId === page.windowId)
+      setTimeout(() => { if (this.pages.has(opener.targetId) && ![...this.pages.values()].some((q) => q.windowId === opener.windowId && q !== opener && !q.background)) this.selectTab(opener); }, this.reshowMs);
   }
 
   async download(page: FakePage, url: string, suggestedFilename: string) {
@@ -993,8 +1019,7 @@ export class FakeChrome {
       case "Target.closeTarget": {
         const page = this.pages.get(params.targetId);
         if (!page) throw new Error("No target with given id found");
-        page.close();
-        this.pages.delete(page.targetId);
+        this.closePage(page);
         for (const s of [...this.sessions.values()]) if (s.page === page) {
           this.stopCast(s);
           this.sessions.delete(s.id);
@@ -1106,7 +1131,9 @@ export class FakeChrome {
         const el = page.hit(params.x, params.y);
         if (params.type === "mouseMoved") { page.hovered = el; if (el) el.onhover?.(page, el); }
         // On Linux a press in a page whose window is not the active one makes Chrome activate that window (measured on Chromium 156).
-        if (params.type === "mousePressed") this.focusWindow(page.windowId, "press", page.targetId);
+        // On the Mac it gives the page the focus with no activation, and no other page gets a blur (macWindows).
+        if (params.type === "mousePressed" && this.macWindows) { if (page.windowId !== this.focusedWindow && !page.keyFocus) { page.keyFocus = true; page.updateFocus(); } }
+        else if (params.type === "mousePressed") this.focusWindow(page.windowId, "press", page.targetId);
         if (params.type === "mousePressed" && el && (el.value !== undefined || el.isContentEditable)) { // a press focuses a text field, as in Chrome, with the caret where it lands
           page.focused = el;
           el.selectionStart = el.selectionEnd = Math.max(0, Math.min(el.caretText.length, Math.round((params.x - el.getBoundingClientRect().left - 2) / 8)));

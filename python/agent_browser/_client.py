@@ -127,8 +127,8 @@ class AgentBrowser:
     only. A hidden_drive that is not a bool raises ValueError here, before any call.
 
     `input_timing` (`--input-timing`, a JSON object) changes the shape of a person's input in a window of
-    its own (agent mode on Linux): ms ranges such as `{"pressMs": [70, 90], "keyMs": [90, 150]}`, and
-    `moveScale`, `activateMs`, `lockWaitMs`. The fields that it names replace the defaults; the CLI
+    its own (agent mode on Linux and on the Mac): ms ranges such as `{"pressMs": [70, 90], "keyMs": [90, 150]}`,
+    and `moveScale`, `activateMs`, `showMs`, `lockWaitMs`. The fields that it names replace the defaults; the CLI
     checks them and raises UsageError. An input_timing that is not a mapping raises ValueError here.
 
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
