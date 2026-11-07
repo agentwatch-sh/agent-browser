@@ -8,7 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
-import { moveProblem, monotonicMs, moveWait, type Pt } from "../src/relay/pointer.ts";
+import { GEO_EXPRESSION, moveProblem, monotonicMs, moveWait, type Pt } from "../src/relay/pointer.ts";
+import { TEXT } from "../src/relay/policy.ts";
 import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1453,5 +1454,171 @@ test("round 4: Page.setDeviceMetricsOverride and Page.clearDeviceMetricsOverride
     assert.ok(state(h).kept[B.tab.id], "B's geometry is kept again");
     await c.send("Page.clearDeviceMetricsOverride", {}, B.sessionId);
     assert.equal(state(h).kept[B.tab.id], undefined, "Page.clearDeviceMetricsOverride drops the kept geometry too");
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ the relay's own world (board ab-v16.80)
+
+/** The context id of the relay's own world in a page: the id of its last geometry read there. */
+const relayWorld = (h: Harness, p: Page): number =>
+  h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === p.tab.id && r.args[2].expression === GEO_EXPRESSION).at(-1)!.args[2].contextId;
+/** A V8 object id ("<isolate>.<context>.<n>") of an object in context `ctx`. */
+const objectIn = (ctx: number, n = 7) => `-4410290112045213491.${ctx}.${n}`;
+/** The client's calls of `p` that reached the fake receiver ("Chrome") from request `from` on, by method. */
+const reached = (h: Harness, p: Page, from: number) =>
+  h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[0].tabId === p.tab.id && r.args[2]?.expression !== GEO_EXPRESSION).map((r) => r.args[1] as string);
+
+/** Each call is refused with the relay's text and never reaches Chrome. */
+async function refusedAll(h: Harness, c: CDPConnection, p: Page, calls: [string, object][]) {
+  const from = h.fake.requests.length;
+  for (const [method, params] of calls)
+    await assert.rejects(c.send(method, params, p.sessionId), (e: Error) => e.message === `${method}: ${TEXT.relayWorld(method)}`, `${method} ${JSON.stringify(params)}`);
+  assert.deepEqual(reached(h, p, from), [], "no refused call reached Chrome");
+}
+
+/** A relay with the paths on, two pages, and a path from B to A: the relay made its world in each page and read there. */
+async function withWorlds() {
+  const { h, d } = await onHarness();
+  const { c, A, B } = await twoPages(h);
+  await click(c, A, 100, 100);
+  assert.equal(d.moves.length, 1);
+  return { h, c, A, B };
+}
+
+test("ab-v16.80: a client's Runtime.evaluate with the context id of the relay's own world is refused with a clear error, and never reaches Chrome; with any other id it goes on", async () => {
+  // review-68c note 3: a client's Runtime.evaluate with any contextId passed policy.ts. Chromium returns the same world
+  // while the document lives, so a client could guess the relay's id and change screenX there (the clamp box moved).
+  const { h, c, A, B } = await withWorlds();
+  try {
+    const wA = relayWorld(h, A), wB = relayWorld(h, B);
+    await refusedAll(h, c, A, [["Runtime.evaluate", { expression: "screenX = 10000", contextId: wA }],
+      ["Runtime.evaluate", { expression: "1", contextId: wA, returnByValue: false, awaitPromise: true }]]);
+    await refusedAll(h, c, B, [["Runtime.evaluate", { expression: "screenX = 10000", contextId: wB }]]);
+    const from = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1" }, A.sessionId);
+    await assert.rejects(c.send("Runtime.evaluate", { expression: "1", contextId: 5 }, A.sessionId), /Cannot find context/, "another id goes to Chrome");
+    assert.deepEqual(reached(h, A, from), ["Runtime.evaluate", "Runtime.evaluate"]);
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80: a client's call with the executionContextId of the relay's own world is refused (Runtime.callFunctionOn, DOM.resolveNode, Runtime.compileScript, Runtime.globalLexicalScopeNames)", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const w = relayWorld(h, A);
+    await refusedAll(h, c, A, [
+      ["Runtime.callFunctionOn", { functionDeclaration: "function () { screenX = 10000; }", executionContextId: w }],
+      ["DOM.resolveNode", { backendNodeId: 1, executionContextId: w }],
+      ["Runtime.compileScript", { expression: "screenX = 10000", sourceURL: "", persistScript: true, executionContextId: w }],
+      ["Runtime.globalLexicalScopeNames", { executionContextId: w }],
+    ]);
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80: a client's call with an object id or a call-frame id of the relay's own world is refused (the context in V8's id), also in Runtime.callFunctionOn's arguments and Debugger.setVariableValue's newValue", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const w = relayWorld(h, A), obj = objectIn(w), page = objectIn(5);
+    await refusedAll(h, c, A, [
+      ["Runtime.callFunctionOn", { functionDeclaration: "function () { this.screenX = 10000; }", objectId: obj }],
+      ["Runtime.callFunctionOn", { functionDeclaration: "function (o) { o.screenX = 10000; }", objectId: page, arguments: [{ value: 1 }, { objectId: obj }] }],
+      ["Runtime.getProperties", { objectId: obj, ownProperties: true }],
+      ["Runtime.awaitPromise", { promiseObjectId: obj }],
+      ["Debugger.evaluateOnCallFrame", { callFrameId: objectIn(w, 0), expression: "screenX = 10000" }],
+      ["Debugger.setVariableValue", { scopeNumber: 0, variableName: "x", newValue: { objectId: obj }, callFrameId: objectIn(5, 0) }],
+    ]);
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80: the client's own worlds stay usable: a world that it makes under its own name, the page's main world, its objects, no context id, and a child session (another renderer) with the relay's id", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const w = relayWorld(h, A);
+    const from = h.fake.requests.length;
+    const { executionContextId: own } = await c.send("Page.createIsolatedWorld", { frameId: A.targetId, worldName: "client-world" }, A.sessionId);
+    assert.notEqual(own, w);
+    assert.deepEqual(await c.send("Runtime.evaluate", { expression: "1", contextId: own, returnByValue: true }, A.sessionId), { result: { type: "object", value: GEO } });
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: own }, A.sessionId);
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(own), arguments: [{ objectId: objectIn(own, 8) }] }, A.sessionId);
+    await c.send("Runtime.evaluate", { expression: "1" }, A.sessionId);
+    await assert.rejects(c.send("Runtime.evaluate", { expression: "1", contextId: 5 }, A.sessionId), /Cannot find context/, "the main world's id goes to Chrome");
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: "not a V8 id" }, A.sessionId);
+    assert.deepEqual(reached(h, A, from), ["Page.createIsolatedWorld", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.callFunctionOn", "Runtime.evaluate", "Runtime.evaluate", "Runtime.callFunctionOn"]);
+    // A child session (a frame of another renderer, or a worker) numbers its contexts on its own: the same id goes on.
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+      targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://a.example/f", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    await sleep(20);
+    const n = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1", contextId: w }, "FR1");
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(w) }, "FR1");
+    assert.deepEqual(h.fake.requests.slice(n).filter((r) => r.args?.[0]?.sessionId === "FR1").map((r) => r.args[1]), ["Runtime.evaluate", "Runtime.callFunctionOn"]);
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80: a call that waits behind an activation step is checked when it goes to Chrome: the step's read made the world that it names", async () => {
+  const { h, d } = await onHarness();
+  try {
+    const { c, A } = await twoPages(h);
+    // The client guesses the id that the relay's world in A will get, and sends its call right behind its click.
+    h.fake.command = (t, method, params) => {
+      if (method !== "Page.createIsolatedWorld" || t.tabId !== A.tab.id || t.sessionId || params.worldName === "client-world") return undefined;
+      h.fake.worlds.set(777, A.tab.id);
+      return { executionContextId: 777 };
+    };
+    const from = h.fake.requests.length;
+    const clicked = click(c, A, 100, 100);
+    const call = c.send("Runtime.evaluate", { expression: "screenX = 10000", contextId: 777 }, A.sessionId);
+    await assert.rejects(call, (e: Error) => e.message === `Runtime.evaluate: ${TEXT.relayWorld("Runtime.evaluate")}`);
+    await clicked;
+    assert.equal(d.moves.length, 1);
+    assert.equal(relayWorld(h, A), 777);
+    assert.deepEqual(reached(h, A, from).filter((m) => m === "Runtime.evaluate"), [], "it never reached Chrome");
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80: an old id of the relay's world that Chrome gives to another world is not refused: the client's own Page.createIsolatedWorld, a context of another name, Runtime.executionContextsCleared", async () => {
+  const { h, c, A, B } = await withWorlds();
+  try {
+    // A cross-site navigation with no Runtime events: Chromium gives the relay's old id to the client's new world.
+    const wA = relayWorld(h, A);
+    h.fake.command = (_t, method, params) => (method === "Page.createIsolatedWorld" && params.worldName === "client-world" ? { executionContextId: wA } : undefined);
+    const { executionContextId } = await c.send("Page.createIsolatedWorld", { frameId: A.targetId, worldName: "client-world" }, A.sessionId);
+    assert.equal(executionContextId, wA);
+    let from = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1", contextId: wA }, A.sessionId);
+    assert.deepEqual(reached(h, A, from), ["Runtime.evaluate"], "the client's own world");
+    // A page's own context that got the old id of the relay's world in B.
+    const wB = relayWorld(h, B);
+    h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id: wB, origin: "https://a.example", name: "", uniqueId: "u9", auxData: { frameId: B.targetId, isDefault: true, type: "default" } } } });
+    await sleep(20);
+    from = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1", contextId: wB }, B.sessionId);
+    assert.deepEqual(reached(h, B, from), ["Runtime.evaluate"], "the page's main world");
+    // A new step reads again: the new world's id is refused; Runtime.executionContextsCleared (a navigation) frees it.
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, B, 700, 300);
+    const w2 = relayWorld(h, B);
+    await refusedAll(h, c, B, [["Runtime.evaluate", { expression: "1", contextId: w2 }]]);
+    h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Runtime.executionContextsCleared", params: {} });
+    await sleep(20);
+    from = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1", contextId: w2 }, B.sessionId);
+    assert.deepEqual(reached(h, B, from), ["Runtime.evaluate"]);
+  } finally { await h.close(); }
+});
+
+test("ab-v16.80: with an old daemon (unknown op) the relay makes no world, and no call is refused for its context id", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    await until(() => h.relay.model.pointerState().paths === "off", "the paths to stay off");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    await mouse(c, A, "mouseMoved", 100, 100);
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, A, 100, 100);
+    assert.equal(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length, 0, "no world of the relay's");
+    const from = h.fake.requests.length;
+    for (const id of [100, 101, 102]) await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: id, objectId: objectIn(id) }, A.sessionId);
+    assert.deepEqual(reached(h, A, from), ["Runtime.callFunctionOn", "Runtime.callFunctionOn", "Runtime.callFunctionOn"]);
   } finally { await h.close(); }
 });

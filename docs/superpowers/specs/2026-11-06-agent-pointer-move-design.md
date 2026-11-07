@@ -355,6 +355,23 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   set until the next read can name a page's context after a navigation and drop that page's own events of
   that id (`Runtime.executionContextDestroyed`, `Debugger.scriptParsed` and `Debugger.scriptFailedToParse`;
   ab-lead's note on round 3);
+- a client's call into the world is refused with a clear error (`TEXT.relayWorld`), before it reaches Chrome (board
+  ab-v16.80; review-68c note 3: a client could guess the id and change `screenX` there, which moved the
+  clamp box). The relay refuses a call on the tab's own session that names an id of the set: a `contextId` or
+  an `executionContextId` (`Runtime.evaluate`, `Runtime.callFunctionOn`, `DOM.resolveNode`,
+  `Runtime.compileScript`, ...), or an object id or a call-frame id of the world (`objectId`, a name that ends
+  in `ObjectId`, `callFrameId`; also in a call's arguments). V8 writes both ids as
+  `<isolate>.<context>.<n>`, so the id names its world; the relay's own calls give no object
+  (`returnByValue`), and their answers never go to a client. The check runs when the call goes to Chrome,
+  so a call that waited behind a step is checked against the world that the step's read made. An id that
+  Chrome gives to another world leaves the set: a `Runtime.executionContextCreated` of another name, and the
+  answer of a client's own `Page.createIsolatedWorld` (an old id of the relay's world from another renderer),
+  so the client's own worlds stay usable. A child session numbers its contexts on its own, and its calls are
+  not checked. With an old daemon, or on the Mac, the relay makes no world, and nothing is refused. The
+  limits: a call that reaches Chrome between the world's first `Page.createIsolatedWorld` in a document and
+  its answer (a few ms; later reads of the document get the same id, which is in the set then); the world's
+  `uniqueContextId` and its name, which no client sees (the relay drops the world's events) and which are
+  not guessed (the name has 32 random bits);
 - a read keeps or drops the kept geometry only when it answers within `GEOMETRY_WAIT_MS` and no drop event of
   the page came after the read started (the relay counts the drop events of each page); a late answer is
   dropped and changes nothing (round 3 of PR #68).
