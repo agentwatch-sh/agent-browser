@@ -701,10 +701,11 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
 // ------------------------------------------------------------------ front: agent-browser's front, on purpose (the watcher leaves it to the operator)
 /** How long the check leaves the agent Chrome in front after agent-browser's front, before it gives the front back itself. */
 const FRONT_STEP_MS = 1500;
-/** front's activation requests (its osascript runs; in the dry run its stand-in's): their times. */
-const frontRequests: number[] = [];
+/** front's activation requests (its osascript runs; in the dry run its stand-in's): their times, and whether the check had stopped then (exact, not by the clock's ms). */
+const frontRequests: { t: number; afterStop: boolean }[] = [];
+const frontRequest = () => { frontRequests.push({ t: Date.now(), afterStop: !!aborted }); };
 /** On the Mac: front's own runner, with each request counted (review-69d note 1). */
-const macFront: FrontDeps = { run: (argv, ms) => { if (argv[0].endsWith("/osascript")) frontRequests.push(Date.now()); return execRun(argv, ms); } };
+const macFront: FrontDeps = { run: (argv, ms) => { if (argv[0].endsWith("/osascript")) frontRequest(); return execRun(argv, ms); } };
 /** The dry run's stand-ins for front (src/front.ts, FrontDeps): macOS's tools answer that the agent Chrome is in front. */
 const dryFront: FrontDeps = {
   platform: "darwin", release: () => "24.1.0", sleep: (ms) => sleep(ms),
@@ -720,7 +721,7 @@ const dryFront: FrontDeps = {
   },
   run: async (argv) => {
     if (argv[0] === "/usr/bin/osascript") {
-      frontRequests.push(Date.now());
+      frontRequest();
       // review-69d B1: the person's key while osascript starts (MAC_DRY_STOP_IN=front-request): the request is out, and
       // its activation lands after the stop.
       if (DRY_STOP_IN === "front-request" && !dryStopSent) { dryStopSent = true; tell("person"); await sleep(300); }
@@ -819,7 +820,7 @@ if (stopInfo) {
   const popups = ["PA", "PB", "PC"].filter((tab) => log.some((e) => e.tab === tab && e.ev === "load" && e.t >= stopInfo!.t));
   const asked = builtLines().filter((l) => "asked" in l.kv && l.t >= stopInfo!.t).length;
   endLines.push(`after the stop: ${late.length} press, click, key or wheel event(s) reached a probe page${late.length ? ` (${late.slice(0, 4).map((e) => `${e.type} in ${e.tab} +${e.t - stopInfo!.t} ms`).join(", ")})` : ""}; ${popups.length ? `popup page(s) ${popups.join(", ")} loaded` : "no popup page loaded"}; `
-    + `${frontRequests.filter((t) => t >= stopInfo!.t).length} front request(s)${O.dryRun ? " (the dry run's stand-in)" : ""}; agent-browser's give-back watcher asked ${asked} time(s) to give the front back; `
+    + `${frontRequests.filter((r) => r.afterStop).length} front request(s) sent after it (${frontRequests.length} in all)${O.dryRun ? " (the dry run's stand-in)" : ""}; agent-browser's give-back watcher asked ${asked} time(s) to give the front back; `
     + `the check asked its watcher ${events.filter((e) => e.ev === "giveback" && e.t >= stopInfo!.t).length} time(s) for the front (review-69d B1: at the stop, and after a front step); `
     + `front's hold ${existsSync(join(stateDir, "give-back-hold-front.json")) ? "was still there at the end" : "was gone at the end"}`);
 }

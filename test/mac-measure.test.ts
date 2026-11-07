@@ -789,7 +789,8 @@ test("ab-v16.27: the check runs agent-browser's built design: its open, its comm
   assert.match(ts, /quitting = true;\nawait step\("end", "quit the agent Chrome"/);
   assert.match(ts, /abCommands\(\);\s+const r = await bringToFront\(resolveOptions\(oWin\), O\.dryRun \? dryFront : macFront\);/, "front: the same call as commands.front, with stand-ins only in the dry run");
   // review-69d note 1: on the Mac front's own runner, with each request counted.
-  assert.match(ts, /const macFront: FrontDeps = \{ run: \(argv, ms\) => \{ if \(argv\[0\]\.endsWith\("\/osascript"\)\) frontRequests\.push\(Date\.now\(\)\); return execRun\(argv, ms\); \} \};/);
+  assert.match(ts, /const frontRequest = \(\) => \{ frontRequests\.push\(\{ t: Date\.now\(\), afterStop: !!aborted \}\); \};/);
+  assert.match(ts, /const macFront: FrontDeps = \{ run: \(argv, ms\) => \{ if \(argv\[0\]\.endsWith\("\/osascript"\)\) frontRequest\(\); return execRun\(argv, ms\); \} \};/);
   // review-69d B1: the front step's finally asks for the front back also after a stop.
   assert.match(ts, /holds\[holds\.length - 1\]\.until = Date\.now\(\) \+ 200;\s+tell\("giveback"\);\s+await frontBack\(1500\);/);
   // review-69d note 4: agent-browser's watcher stops only after a quit that ps confirmed, and the exit handler only with no Chrome left.
