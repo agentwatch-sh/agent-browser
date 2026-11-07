@@ -14,7 +14,8 @@ The guard first leaves the driver's process tree (a fork whose parent exits at o
 driver's process group or session, or a kill of the driver's tree, does not reach it. It ignores SIGINT and SIGHUP. It
 closes every inherited fd from 3 up but its pipe from the driver (an inherited heavy.lock fd, a caller's pipe), and in
 the pid-file form its stderr after the lock goes to --log, so that a run of `run.sh up` alone holds nothing of its
-caller.
+caller. A caller that closed fd 0, 1 or 2 (`run.sh up <&-`) gets /dev/null there first, so the lock's fd is 3 or
+higher and no later dup2 onto 0 or 2 closes it.
 
 The lock: flock(LOCK_EX) on one file for each user, <home>/.cache/agent-harness/harness.lock (<home> from the
 password database, not from HOME). HARNESS_LOCK names another file, for the tests only: the guard then says on stderr
@@ -86,10 +87,10 @@ def lock_path():
 
 
 def say(name, text):
+    """One line on fd 2 (also when Python started with fd 2 closed and sys.stderr is None)."""
     try:
-        sys.stderr.write("harness-guard: %s: %s\n" % (name, text))
-        sys.stderr.flush()
-    except (OSError, ValueError):
+        os.write(2, ("harness-guard: %s: %s\n" % (name, text)).encode("utf-8", "replace"))
+    except OSError:
         pass
 
 
@@ -431,6 +432,16 @@ def main(argv):
             os.fstat(a.channel_fd)
         except OSError:
             a.channel_missing = True  # the guard stops the driver's processes at once (see watch())
+    # A caller with fd 0, 1 or 2 closed (for example `run.sh up <&-`): /dev/null there, so that the lock's fd is 3 or
+    # higher, and the later dup2 of /dev/null onto 0 or of the log onto 2 cannot close the lock.
+    for std in (0, 1, 2):
+        try:
+            os.fstat(std)
+        except OSError:
+            n = os.open(os.devnull, os.O_RDWR)
+            if n != std:
+                os.dup2(n, std)
+                os.close(n)
     close_inherited(set() if a.pid_dir or a.channel_missing else {a.channel_fd})
     g = Guard(a)
     g.driver_start = st[1]

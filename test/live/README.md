@@ -24,7 +24,9 @@ Chromium. The guard is a process of its own, outside the driver's process tree a
   no signal. Only when `pidfd_open` fails with an error other than ESRCH (for example no fd left)
   does it check the start time right before the signal, which leaves a short gap.
 - The guard closes every fd that it inherited, from 3 up, but its pipe from the driver: it holds no
-  outer lock (heavy.lock's fd under `flock`) and no pipe of its caller.
+  outer lock (heavy.lock's fd under `flock`) and no pipe of its caller. A caller that closed fd 0, 1
+  or 2 gets `/dev/null` there in the guard first, so the lock's fd is 3 or higher and stays open
+  (board ab-v16.78, review-71c R3).
 
 So after a `kill -9` of a driver, ps shows no recorded Xvfb, Chromium, stand-in daemon, relay or proxy
 of that harness within about 5 s (at most 20 s). `test/harness-guard.test.ts` checks it with

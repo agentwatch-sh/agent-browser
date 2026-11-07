@@ -416,3 +416,24 @@ p.kill(); p.wait()
   assert.equal(records, "records []");
   assert.equal(alive, "alive True 1", "the other process and its child still run");
 });
+
+test("a pid-file guard started with stdin, stdout and stderr closed still holds the lock (ab-v16.78b)", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const pids: number[] = [];
+  const guardPy = fileURLToPath(new URL("./live/harness_guard.py", import.meta.url));
+  try {
+    mkdirSync(join(dir, "pids"));
+    const env = { ...process.env, HARNESS_LOCK: join(dir, "harness.lock") };
+    // As `run.sh up <&-`: the caller's fds 0, 1 and 2 are closed; without /dev/null there the lock would take fd 0, and
+    // the guard's dup2 of /dev/null onto 0 would close it. The guard's pid goes to a file.
+    spawnSync("/bin/sh", ["-c", `python3 -I -B "${guardPy}" --name closed --driver 0 --limit 60 --pid-dir "${join(dir, "pids")}" --log "${join(dir, "guard.log")}" <&- 1>&- 2>&- &
+      sleep 1.5; ps -o pid=,args= -u "$(id -u)" | grep -F -- "--name closed --driver 0" | grep -v grep | awk '{print $1}' > "${join(dir, "guard.pid")}"`], { env, encoding: "utf8", timeout: 20_000 });
+    const guard = Number(readFileSync(join(dir, "guard.pid"), "utf8").trim().split("\n")[0]);
+    assert.ok(guard > 0, "the guard runs");
+    pids.push(guard);
+    const second = spawnSync("python3", ["-I", "-B", guardPy, "--name", "second", "--driver", String(process.pid), "--wait", "1"], { env, encoding: "utf8", timeout: 20_000 });
+    assert.match(second.stdout, /^refused the harness lock .* is still held after 1 s/, `the first guard still holds the lock: ${second.stdout}`);
+    process.kill(guard, "SIGTERM");
+    assert.deepEqual(await goneWithin([guard], GONE_MS), []);
+  } finally { stopOwn(pids); rmSync(dir, { recursive: true, force: true }); }
+});
