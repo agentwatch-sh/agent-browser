@@ -41,6 +41,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AGENT_ARGS } from "../../../src/agent.ts";
 import { CDPConnection } from "../../../src/cdp.ts";
+import { harnessGuard, reservedDisplay } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, trials: { type: "string" } } });
 const usage = "usage: node test/live/background-tabs/override.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 96] [--trials 3]";
@@ -53,6 +54,8 @@ if (!values["out-dir"]) refuse(usage);
 if (process.platform !== "linux") refuse(`the size-override check runs on Linux only, in a private Xvfb (this is ${process.platform})`);
 const DISPLAY = Number(values.display ?? 96), TRIALS = Number(values.trials ?? 3), CHROME = values.chrome ?? "/usr/bin/chromium";
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse(`--display is a whole display number: ${values.display}`);
+const reserved = reservedDisplay(DISPLAY, "--display");
+if (reserved) refuse(reserved);
 if (!Number.isInteger(TRIALS) || TRIALS < 1 || TRIALS > 20) refuse(`--trials is a whole number from 1 to 20: ${values.trials}`);
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
@@ -69,10 +72,13 @@ const field = (b: Buffer) => { const n = Buffer.alloc(2); n.writeUInt16BE(b.leng
 const xauth = join(RUN, "Xauthority");
 writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.alloc(0)), field(Buffer.from(String(DISPLAY))),
   field(Buffer.from("MIT-MAGIC-COOKIE-1")), field(randomBytes(16))]), { mode: 0o600 });
+// One live harness at a time, and nothing of this check after its end, also after a kill -9 (test/live/README.md).
+const harness = await harnessGuard("background-tabs override");
 const socket = `/tmp/.X11-unix/X${DISPLAY}`;
 if (existsSync(socket)) refuse(`display :${DISPLAY} is in use; pass --display N`);
 const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1280x800x24"], { stdio: "ignore" });
 children.push(xvfb);
+harness.track(xvfb.pid, "Xvfb");
 for (let i = 0; i < 50 && !existsSync(socket) && xvfb.exitCode === null; i++) await sleep(100);
 await sleep(200);
 if (!existsSync(socket) || xvfb.exitCode !== null) refuse(`Xvfb did not start on :${DISPLAY}; pass another --display N`);
@@ -91,6 +97,7 @@ delete env.XDG_SESSION_TYPE;
 const chrome = spawn(CHROME, [...AGENT_ARGS, `--user-data-dir=${profile}`, "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
   "--ozone-platform=x11", "--password-store=basic", "--window-position=0,0", "--window-size=1200,760", "about:blank"], { env, stdio: "ignore" });
 children.push(chrome);
+harness.track(chrome.pid, "Chromium");
 const portFile = join(profile, "DevToolsActivePort");
 for (let i = 0; i < 100 && !existsSync(portFile) && chrome.exitCode === null; i++) await sleep(100);
 if (!existsSync(portFile)) refuse(`Chromium (${CHROME}) did not start`);

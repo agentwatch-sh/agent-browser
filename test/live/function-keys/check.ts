@@ -76,6 +76,7 @@ import { parseArgs, promisify } from "node:util";
 import { keyFields, type Tab } from "../../../src/browser.ts";
 import { parseKey, sendKey } from "../../../src/record.ts";
 import { beforeFields, chromeArgs, failures as failuresOf, fullScreenEnded, isAsn, lsappinfoPid, notMeasured, startMode, stopReason, trialTable, type Control, type Result, type Way } from "./trials.ts";
+import { harnessGuard } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "wait-ms": { type: "string" }, only: { type: "string" },
   "on-my-screen": { type: "boolean" }, background: { type: "boolean" }, "full-screen": { type: "boolean" } } });
@@ -124,11 +125,14 @@ const children: ChildProcess[] = [];
 process.on("exit", () => { for (const c of children.reverse()) c.kill("SIGTERM"); });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
 
+// Linux: one live harness at a time, and nothing of this check after its end, also after a kill -9 (test/live/README.md).
+const harness = MAC ? undefined : await harnessGuard("function-keys");
 if (!MAC) {
   const socket = `/tmp/.X11-unix/X${DISPLAY}`;
   if (existsSync(socket)) throw new Error(`display :${DISPLAY} is in use; pass --display N`);
   const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1280x800x24"], { stdio: "ignore" });
   children.push(xvfb);
+  harness?.track(xvfb.pid, "Xvfb");
   for (let i = 0; i < 50 && !existsSync(socket) && xvfb.exitCode === null; i++) await sleep(100);
   await sleep(200);
   // The socket must be our Xvfb's: another X server that took the display between the check and the spawn
@@ -161,6 +165,7 @@ mkdirSync(profile, { recursive: true });
 rmSync(join(profile, "DevToolsActivePort"), { force: true }); // a run before in this --out-dir left its own
 const chrome = spawn(CHROME, chromeArgs(mode, profile), { env: chromeEnv(), stdio: "ignore" });
 children.push(chrome);
+harness?.track(chrome.pid, "Chromium");
 chrome.on("error", (e) => refuse(`--chrome ${CHROME} cannot start: ${e.message}`)); // for example a wrong path
 const START_S = MAC ? 30 : 10;
 const exited = () => chrome.exitCode !== null || chrome.signalCode !== null;

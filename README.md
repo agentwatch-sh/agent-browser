@@ -1847,6 +1847,18 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   its time limit; the relay with real processes of the test (a client under its scope's root admitted,
   others refused, a re-parented job refused where the root has no cgroup of its own, the 1008 of a root
   change); and a check that no other command loads `node:ffi` (they run with `--no-experimental-ffi`).
+- `test/live/README.md`: the two rules of every live harness that starts Xvfb or Chromium on Linux
+  (board ab-v16.78): no Xvfb, Chromium or other process of the harness after its driver ends, also
+  after a `kill -9` of the driver (a guard process outside the driver's tree records the driver's
+  processes and stops them), and one harness at a time on the box (the guard's `flock` on
+  `~/.cache/agent-harness/harness.lock`, at most `HARNESS_LOCK_WAIT` s, default 1200, then exit 2).
+  The guard is `test/live/harness_guard.py` (the same file in chrome-extension) with its Node client
+  `test/live/guard.ts`; `test/harness-guard.test.ts` kills a stand-in driver with `kill -9` and checks
+  with ps that none of its processes is left after 10 s, that a second harness waits for the lock
+  until then, that the wait has its limit, that a harness that a harness starts does not wait (and an
+  unrelated one does), that a reused pid gets no signal, that a pid that is not the driver's is left
+  alone, that a child started after the driver's end is stopped too, that the guard keeps no inherited
+  fd, and that no harness takes a reserved display (0, 90, 147, 190-192).
 - `test/live/agent-mode/` (Linux, in a private Xvfb; see the head of `run.ts`): agent mode live. A
   Chromium of its own loads chrome-extension's agent package; a stand-in for the daemon's bridge side
   and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
