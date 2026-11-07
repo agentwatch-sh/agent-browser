@@ -92,6 +92,7 @@ import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../ant
 import { StandInDaemon } from "./daemon.ts";
 import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
+import { pointerCases } from "./pointer-live.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 /** True when nothing listens on 127.0.0.1:`port`. */
@@ -121,7 +122,7 @@ const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 /** The port of the probe's site (site.mjs reads SITE_PORT too). The cases need 8781; 0 is for the spawn tests of
  *  `npm test` (test/agent-live-run-folder.test.ts): the site takes a free port, and the run checks no port. */
 const SITE_PORT = Number(process.env.SITE_PORT || 8781);
-const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up").split(",");
+const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,pointer,scopes,link-up").split(",");
 /** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
 const PEER = CASES.includes("peer");
 if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
@@ -262,6 +263,9 @@ console.log(`run ${RUN}\n${JSON.stringify(env)}`);
 const INSTALL = join(RUN, "install"), PACK = join(RUN, "pack");
 const RELAY_BIN = join(INSTALL, "node_modules/agent-browser/bin/agent-browser.js");
 let daemon: StandInDaemon | undefined, chromium: ChildProcess | undefined, aborted: string | undefined, cleaning: Promise<void> | undefined;
+/** The relay's log lines with the time that the run read them (the group pointer reads its step lines), and this run's X auth file. */
+const relayLines: { t: number; line: string }[] = [];
+let XAUTH = "";
 
 /** A child of this run: SIGTERM, then SIGKILL when it is still there after 3 s. */
 async function stopChild(c: ChildProcess): Promise<void> {
@@ -340,6 +344,10 @@ try {
     (r) => (r.expect === "refused" && r.tool === "browser_navigate" ? { refusedSaw: OFF_LIST("b.localhost") } : {}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
   if (CASES.includes("windows")) await windowCases(pw, WS);
+  // The agent pointer design's live check (ab-v16.71): the stand-in daemon's pointer ops on this run's own Xvfb.
+  if (CASES.includes("pointer") && (EXTERNAL || process.env.POINTER_DAEMON === "old")) skip("pointer", "the group pointer (the pointer design's live check)",
+    EXTERNAL ? "external endpoint: the run needs the stand-in daemon's played paths and its own Xvfb" : "POINTER_DAEMON=old: a daemon with no pointer ops");
+  else if (CASES.includes("pointer")) await pointerCases({ daemon: daemon!, url, run: RUN, relayBin: RELAY_BIN, pw, WebSocket: WS, record, relayLines, display: `:${DISPLAY_N}`, xauth: XAUTH, tracked });
   if (CASES.includes("scopes") && EXTERNAL) skip("scopes", "the group scopes (two scopes with two lists, the end of a scope, the sweep)",
     "external endpoint: the real daemon makes the lists (agentwatch's test browser has one: a.localhost), and the run can send no set_scopes or allowlist line");
   else if (CASES.includes("scopes")) await scopeCases(pw, WS);
@@ -369,12 +377,16 @@ async function startOwnBrowser() {
   writeFileSync(hostSh, `#!/bin/sh\nexec /usr/bin/python3 ${join(EXT, "test/live/host.py")} --socket ${DAEMON_SOCK} --log ${join(RUN, "logs/host.log")} "$@"\n`, { mode: 0o700 });
   writeFileSync(join(PROFILE, "NativeMessagingHosts/sh.agentwatch.browser.json"),
     JSON.stringify({ name: "sh.agentwatch.browser", description: "live test", path: hostSh, type: "stdio", allowed_origins: [`chrome-extension://${id}/`] }));
-  daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
-    relayLog: (l) => appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`) });
   // A private display: one MIT-MAGIC-COOKIE-1 entry from randomBytes in a 0600 file; the cookie never enters an argv.
   const field = (b: Buffer) => Buffer.concat([Buffer.from([b.length >> 8, b.length & 255]), b]);
-  const xauth = join(RUN, "xauth");
+  const xauth = XAUTH = join(RUN, "xauth");
   writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.alloc(0)), field(Buffer.from(String(DISPLAY_N))), field(Buffer.from("MIT-MAGIC-COOKIE-1")), field(randomBytes(16))]), { mode: 0o600 });
+  // The daemon's pointer ops (ab-v16.71) on this run's own Xvfb only; POINTER_DAEMON=old: a daemon from before them.
+  // The relay logs each activation step and catch-up (times and counts, never a point) for the group pointer.
+  process.env.AGENT_BROWSER_POINTER_LOG = "1";
+  daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
+    pointer: process.env.POINTER_DAEMON === "old" ? "old" : { display: `:${DISPLAY_N}`, xauth, size: { width: 1280, height: 900 } },
+    relayLog: (l) => { appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`); if (l.startsWith("relay: step ") || / catch-up /.test(l)) relayLines.push({ t: Date.now(), line: l }); } });
   start("Xvfb", [`:${DISPLAY_N}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1280x900x24"], { log: "xvfb.log" });
   for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`); i++) await sleep(200);
   chromium = start(CHROMIUM, [`--user-data-dir=${PROFILE}`, "--no-first-run", "--no-default-browser-check", "--password-store=basic",

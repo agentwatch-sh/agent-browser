@@ -346,7 +346,10 @@ export class Hands {
         }
       } catch (e) { off = `xdotool failed (${(e as Error).message.split("\n")[0]})`; x = undefined; }
     }
-    if (off) notice(s, state, `x-off-${off}`, `agent-browser: the X-pointer method is off (${off}): each path starts at the page's own pointer event, and a window that comes forward can show the pointer at another point`);
+    // Over agentwatch's relay the relay has the daemon move the X pointer at each activation (board ab-v16.71; the agent
+    // pointer design, docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, section 5): the page enters at its own last point.
+    if (off && s.cdpUrl && !disp.x) notice(s, state, `x-off-relay`, "agent-browser: the X-pointer method is off over agentwatch's relay: the relay has the daemon move the X pointer at each activation (a daemon with the pointer ops), along a path from where the page under the pointer last saw it, and each path of agent-browser starts at the page's own pointer event");
+    else if (off) notice(s, state, `x-off-${off}`, `agent-browser: the X-pointer method is off (${off}): each path starts at the page's own pointer event, and a window that comes forward can show the pointer at another point`);
     let at = entry ?? state.pages[tab.targetId];
     if (!at && x) {
       try { const p = await xLocation(x), o = origin(geo); at = { x: p.x - o.x, y: p.y - o.y }; } catch { /* below */ }
