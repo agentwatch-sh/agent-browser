@@ -843,8 +843,9 @@ export class Model {
   private tracked(tab: Tab, child: string | undefined, method: string, params: any, call: Promise<unknown>): void {
     if (!this.windowPerPage) return;
     const p = params ?? {};
-    if (!child && method === "Emulation.setDeviceMetricsOverride") tab.metrics = true;
-    if (!child && method === "Emulation.clearDeviceMetricsOverride") tab.metrics = false;
+    // A device-metrics override is in force from its set until its clear; Page's old pair acts as Emulation's (round 4).
+    if (!child && (method === "Emulation.setDeviceMetricsOverride" || method === "Page.setDeviceMetricsOverride")) tab.metrics = true;
+    if (!child && (method === "Emulation.clearDeviceMetricsOverride" || method === "Page.clearDeviceMetricsOverride")) tab.metrics = false;
     if (!child && VIEWPORT_CALLS.has(method)) this.dropGeo(tab);
     if (TOUCH_INPUT.has(method)) { this.setPoint(tab, null); return; }
     if (!POINTER_INPUT.has(method)) return;

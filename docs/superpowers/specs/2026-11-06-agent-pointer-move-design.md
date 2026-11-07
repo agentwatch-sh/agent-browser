@@ -347,8 +347,11 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
 - on the tab's own session only, the relay drops the world's `Runtime.executionContextCreated` (by the
   world's name, for any id; the id joins the set), and `Runtime.executionContextDestroyed`,
   `Debugger.scriptParsed` and `Debugger.scriptFailedToParse` of the ids in the set, so no client sees the
-  world; no page script sees its reads. Each read replaces the set with its new id.
-  `Runtime.executionContextsCleared` empties the set and still goes to the client. An id that stays in the
+  world; no page script sees its reads. Each read replaces the set with its new id. An id that left the
+  set is no longer the relay's: its events go to the client as any page's events (also a
+  `Runtime.executionContextDestroyed` of the relay's old world, of a context that the client never saw
+  created; a client ignores an id that it does not know). `Runtime.executionContextsCleared` empties the
+  set and still goes to the client. An id that stays in the
   set until the next read can name a page's context after a navigation and drop that page's own events of
   that id (`Runtime.executionContextDestroyed`, `Debugger.scriptParsed` and `Debugger.scriptFailedToParse`;
   ab-lead's note on round 3);
@@ -362,7 +365,8 @@ when the ratio or the scale is not 1, the window is minimized, the screen size i
 is in flight, the front page reports `document.visibilityState` "hidden" (a page under the pointer is
 visible: a hidden front page is not on top), a width or a height of the viewport or of the content box is
 4 px or less, the content box is wider or taller than the viewport, or a device-metrics override is in force
-on the tab (a client's `Emulation.setDeviceMetricsOverride` until its `clearDeviceMetricsOverride`:
+on the tab (a client's `Emulation.setDeviceMetricsOverride` or `Page.setDeviceMetricsOverride` until its
+`Emulation.clearDeviceMetricsOverride` or `Page.clearDeviceMetricsOverride`: Page's old pair acts as Emulation's;
 Playwright's `setViewportSize`, agent-browser's `record`: then `innerWidth` and `innerHeight` do not give the
 window's real viewport). The minimized test is only for the entering page (step 1 reads its window); the hidden
 test covers the front page. The catch-up's clamp uses only the read's own rules (the ratio, the scale, the

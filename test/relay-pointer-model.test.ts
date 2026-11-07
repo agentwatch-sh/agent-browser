@@ -41,6 +41,14 @@ async function onHarness(pos?: Pt) {
   return { h, d };
 }
 
+/** As onHarness, with the relay's step lines (AGENT_BROWSER_POINTER_LOG): a test reads the cause of a step's outcome. */
+async function onHarnessLogged(pos?: Pt) {
+  process.env.AGENT_BROWSER_POINTER_LOG = "1";
+  try { return await onHarness(pos); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
+}
+/** The step lines of a tab: `relay: step <kind> of tab <id>: <what>; <ms> ms`. */
+const stepLines = (h: Harness, tabId: number) => h.logs.filter((l) => l.startsWith("relay: step ") && l.includes(` of tab ${tabId}: `));
+
 /** A page of the connection's own (a window of its own), with auto-attach on. */
 async function page(h: Harness, c: CDPConnection) {
   await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
@@ -558,21 +566,19 @@ test("step 3: the step waits for the front page's release, then plays; a button 
 });
 
 test("step 3's limit: a front page that holds its button for 3 s gets no path at 2 s, and the input goes on; no real move comes between its press and release", async () => {
-  const { h, d } = await onHarness();
+  const { h, d } = await onHarnessLogged();
   try {
     const { c, A, B } = await twoPages(h);
     await mouse(c, B, "mousePressed", 700, 300);
-    const t0 = Date.now();
     await mouse(c, A, "mousePressed", 100, 100);
-    const waited = Date.now() - t0;
-    assert.ok(waited >= 1900 && waited < 3500, `${waited} ms`);
+    assert.match(stepLines(h, A.tab.id).at(-1) ?? "", /no path \(step 3 reached its limit\)/, "the limit ended the wait");
     assert.equal(d.moves.length, 0, "no path at the limit");
     assert.equal(state(h).front, A.tab.id);
   } finally { await h.close(); }
 });
 
 test("step 3: no path when the front page holds a button and its tab has a call that waits in the activation chain (its gate is set, or becomes set during the wait); the chain goes on at once", async () => {
-  const { h, d } = await onHarness();
+  const { h, d } = await onHarnessLogged();
   try {
     const { c, A, B } = await twoPages(h);
     // B holds a button; its release would wait behind B's next press in the chain, which waits behind A's step.
@@ -581,14 +587,14 @@ test("step 3: no path when the front page holds a button and its tab has a call 
     const gate = new Promise<void>((r) => (open = r));
     let first = true;
     h.fake.op = async ({ op }) => { if (op === "tabs.get" && first) { first = false; await gate; } return undefined; };
-    const t0 = Date.now();
     const a = click(c, A, 100, 100);
     await until(() => h.fake.sent("tabs.get").length, "A's step");
     const b = c.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }, B.sessionId); // B's call waits in the chain
     const rel = mouse(c, B, "mouseReleased", 700, 300);
     open();
     await Promise.all([a, b, rel]);
-    assert.ok(Date.now() - t0 < 1500, "the step did not wait for a release that waits behind it");
+    assert.match(stepLines(h, A.tab.id)[0] ?? "", /no path \(the front page holds a button and its next call waits in the activation chain\)/,
+      "the gate rule ended the step at once, not a wait for a release that waits behind it");
     assert.equal(d.moves.filter((m) => m.path.at(-1).x === 100 && m.path.at(-1).y === 100 + OFFSET).length, 0, "A's step played no path (B's own step after it may)");
   } finally { await h.close(); }
 });
@@ -675,14 +681,14 @@ test("the geometry read: the relay's own isolated world on the main frame, one e
 });
 
 test("the geometry read: only for a bridge tab, one in flight per tab, its own 200 ms", async () => {
-  const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET }); // the pointer at A's point: no catch-up after the step
+  const { h, d } = await onHarnessLogged({ x: 100, y: 100 + OFFSET }); // the pointer at A's point: no catch-up after the step
   try {
     const { c, A, B } = await twoPages(h);
     // B's evaluate never answers: the step stops waiting after 200 ms, and plays no path.
     h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && params.contextId !== undefined && _t.tabId === B.tab.id ? new Promise(() => {}) : undefined);
-    const t0 = Date.now();
     await click(c, A, 100, 100);
-    assert.ok(Date.now() - t0 < 1200, `${Date.now() - t0} ms`);
+    assert.match(stepLines(h, A.tab.id).at(-1) ?? "", /no path \(the front page's geometry is not usable \(a read in flight\)\)/,
+      "the step went on while B's read was still in flight: the relay's own wait ended");
     assert.equal(d.moves.length, 0);
     // A second step with B: its read is still in flight, so no second evaluate goes to B.
     const evals = () => h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[0].tabId === B.tab.id).length;
@@ -991,13 +997,19 @@ test("review-68 B2: a press on a frame's (child) session is a held button of its
     await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 5, y: 5, button: "left", clickCount: 1 }, "FR1");
     await mouse(c, B, "mouseMoved", 700, 300);
     assert.deepEqual(state(h).pressed, [B.tab.id]);
-    const t0 = Date.now();
+    const seq: string[] = [];
+    const op = h.fake.op;
+    h.fake.op = (r) => {
+      if (r.op === "windows.update") seq.push("A's raise");
+      if (r.op === "debugger.sendCommand" && r.args[0].sessionId === "FR1" && r.args[2]?.type === "mouseReleased") seq.push("the frame's release");
+      return op(r);
+    };
     const step = mouse(c2, A, "mousePressed", 100, 100);
     await sleep(300);
     assert.equal(d.moves.length, 0, "no path while the frame holds the button");
     await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 5, y: 5, button: "left", clickCount: 1 }, "FR1");
     await step;
-    assert.ok(Date.now() - t0 >= 280, "A's step waited for the frame's release");
+    assert.deepEqual(seq, ["the frame's release", "A's raise"], "A's step waited for the frame's release");
     // The release ended the wait, not step 3's limit: the frame's release is a child session's input, so B's point is
     // unknown after it, and that is the step's reason for no path.
     const line = h.logs.find((l) => l.startsWith(`relay: step input of tab ${A.tab.id}:`));
@@ -1084,10 +1096,9 @@ test("review-68 N3: when the step's first reads fail, Target.activateTarget's ta
     let open!: () => void;
     const never = new Promise<void>((r) => (open = r));
     h.fake.op = async ({ op, args }) => { if ((op === "tabs.get" || op === "tabs.update") && args[0] === A.tab.id) await never; return undefined; };
-    const t0 = Date.now();
     await c.send("Target.activateTarget", { targetId: A.targetId });
-    const ms = Date.now() - t0;
-    assert.ok(ms >= 3900 && ms < 5500, `${ms} ms: 2 s for the reads, 2 s for the tabs.update`);
+    // The cause: two limits ended it (the reads of steps 1 and 2, then the tabs.update), not the bridge's 30 s wait.
+    assert.equal(h.logs.filter((l) => l === `relay: the activation of tab ${A.tab.id} took more than 2000 ms; the input goes on`).length, 2, h.logs.join("\n"));
     open();
   } finally { await h.close(); }
 });
@@ -1344,5 +1355,87 @@ test("round 4: a client's Browser.setWindowBounds during a read is a drop event 
     await click(c, A, 100, 100); // A's step reads B; the window change comes while B's read runs
     assert.ok(changed);
     assert.equal(state(h).kept[B.tab.id], undefined, "Browser.setWindowBounds after the read started: the read keeps nothing");
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ round 4 (ab-lead): the drop count, Page's device metrics
+
+test("round 4: a late read after a drop event keeps and drops nothing; a late read drops no kept geometry; the count is per tab", async () => {
+  // B's read answers after its wait; a drop event came while it ran: the kept geometry stays dropped (the late usable read keeps nothing).
+  {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      await click(c, A, 100, 100);
+      assert.ok(state(h).kept[B.tab.id]);
+      h.fake.command = async (t, method, params) => {
+        if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) {
+          await sleep(60);
+          h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Page.frameResized", params: {} });
+          await sleep(300);
+        }
+        return undefined;
+      };
+      await mouse(c, B, "mouseMoved", 700, 300);
+      await click(c, B, 700, 300);
+      await sleep(400);
+      assert.equal(state(h).kept[B.tab.id], undefined, "the late read after the drop kept nothing");
+    } finally { await h.close(); }
+  }
+  // B's late read is not usable (a scale of 2): it drops nothing, and B's kept geometry stays.
+  {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      await click(c, A, 100, 100);
+      const kept = state(h).kept[B.tab.id];
+      assert.ok(kept);
+      h.fake.geometry = (id) => (id === B.tab.id ? { ...GEO, scale: 2 } : GEO);
+      h.fake.command = async (t, method, params) => { if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) await sleep(350); return undefined; };
+      await mouse(c, B, "mouseMoved", 700, 300);
+      await click(c, B, 700, 300);
+      await sleep(400);
+      assert.deepEqual(state(h).kept[B.tab.id], kept, "the late read dropped nothing");
+    } finally { await h.close(); }
+  }
+  // The count is per tab: a drop event of A while B's read runs changes nothing of B's read.
+  {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      h.fake.command = async (t, method, params) => {
+        if (method === "Runtime.evaluate" && params.contextId !== undefined && t.tabId === B.tab.id) {
+          await sleep(40);
+          h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Page.frameResized", params: {} });
+          await sleep(40);
+        }
+        return undefined;
+      };
+      await click(c, A, 100, 100); // A's step reads A and B; A's drop event comes while B's read runs
+      assert.ok(state(h).kept[B.tab.id], "B's read is kept: the drop was A's");
+    } finally { await h.close(); }
+  }
+});
+
+test("round 4: Page.setDeviceMetricsOverride and Page.clearDeviceMetricsOverride act as the Emulation calls: an override in force (no path into or out of that page) and a drop of the kept geometry", async () => {
+  const { h, d } = await onHarnessLogged();
+  try {
+    const { c, A, B } = await twoPages(h);
+    await click(c, A, 100, 100); // a path from B to A; B's geometry is kept
+    assert.ok(state(h).kept[B.tab.id]);
+    await c.send("Page.setDeviceMetricsOverride", { width: 600, height: 400, deviceScaleFactor: 1, mobile: false }, B.sessionId);
+    assert.equal(state(h).kept[B.tab.id], undefined, "Page.setDeviceMetricsOverride drops the kept geometry");
+    const n = d.moves.length;
+    await mouse(c, B, "mouseMoved", 700, 300);
+    await click(c, B, 700, 300);
+    assert.equal(d.moves.length, n, "no path into a page with an override");
+    assert.match(stepLines(h, B.tab.id).at(-1) ?? "", /a device-metrics override/);
+    await c.send("Page.clearDeviceMetricsOverride", {}, B.sessionId);
+    await mouse(c, A, "mouseMoved", 300, 200); // A's point is not where the pointer is
+    await click(c, A, 300, 200);
+    assert.equal(d.moves.length, n + 1, "after the clear, a path again");
+    await c.send("Page.setDeviceMetricsOverride", { width: 600, height: 400, deviceScaleFactor: 1, mobile: false }, B.sessionId);
+    await c.send("Page.clearDeviceMetricsOverride", {}, B.sessionId);
+    assert.equal(state(h).kept[B.tab.id], undefined, "Page.clearDeviceMetricsOverride drops the kept geometry too");
   } finally { await h.close(); }
 });
