@@ -266,6 +266,8 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     const [name, ...rest] = positionals;
     command = name ?? null;
     if (!name || name === "help" || values.help) { await write(io.stdout, json ? JSON.stringify({ ok: true, command: "help", usage: USAGE }) + "\n" : USAGE + "\n"); return 0; }
+    // The watcher's own flags (review-69c N6): only give-back-watch takes them, not proxy, relay or a command.
+    if (name !== "give-back-watch") for (const k of Object.keys(WATCH_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for give-back-watch (started by a command on the Mac), not ${name}`);
     if (name === "proxy") {
       if (!rest[0]) throw new UsageError("usage: agent-browser proxy <ws-url> --state-dir DIR (started by the library, not by hand)");
       const timeout = typeof values["timeout-ms"] === "string" ? Number(values["timeout-ms"]) : undefined;

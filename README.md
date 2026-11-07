@@ -479,7 +479,10 @@ person's input**) and `log` (progress lines; default standard error).
     JavaScript for Automation, AppKit's `activateWithOptions`: no Apple Event, no System Events and no
     input; 3 asks 250 ms apart for each take). A take still lasts some milliseconds
     (the start guard's takes ended after 79 and 132 ms), and a key typed in it can still reach the agent
-    Chrome. When another app comes to the front, that app is the one to give the front back to.
+    Chrome. When another app comes to the front, that app is the one to give the front back to: the
+    watcher gives the front back to the app that was in front before the take, which is not always the
+    operator's own app: it can be a system prompt (for example a permission dialog), `loginwindow` (the
+    lock screen) or any other app that was in front then (review-69c N3).
     - **It never fights the operator.** A take of the front is the operator's own, and the watcher
       leaves the agent Chrome in front until another app comes to the front, when at the take: a mouse
       button was down less than 1 s before (a click on an agent window, on its Dock icon or in its Dock
@@ -509,7 +512,9 @@ person's input**) and `log` (progress lines; default standard error).
       agent Chrome for 10 minutes (`give-back-watch-failed.json`). Its lines go to `launches.log`:
       `watch-back watch agent=PID before=PID ... input=nsevent+cg`, `took=PID from=PID [own=click|command|front|approval|start]`,
       `asked=PID n=N sent=BOOL`, `back=PID after-ms=N asks=N`, `refused=PID asks=N`, `before=PID`,
-      `end=WHY` (the script's) and `end=WHY by=node` (its node process's).
+      `end=WHY` (the script's) and `end=WHY by=node` (its node process's). It starts about 2 to 3 s after
+      a `launch` (after the start guard's end and the starts of node and osascript); in that time only the
+      start guard (until about 1 s after the endpoint is up) gives the front back.
     - **Not measured yet**: the watcher as built runs on the Mac only in the next Mac check (`mac.ts`
       runs it; ab-v16.27's Mac run). Its rule is tested against a fake AppKit bridge
       (`test/watchback.test.ts`); whether the JavaScript bridge gives AppKit's input state and
@@ -2051,9 +2056,14 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   stop it: quit them first. Its `results.json` keeps no key values (only event types and counts).
   The check exits 0 only when it never took the operator's focus or Space. It needs ffmpeg with
   libx264 (or `--skip record`). No other agent session may use the Mac's agent browser during the
-  run. `--dry-run` runs it on Linux in a private Xvfb with agent-browser's Mac design (the internal
+  run. At a stop no agent-browser command starts, a command that is in progress sends no more input event
+  and no request of `front` (the internal `stopped` option), no give-back watcher starts, and agent-browser's
+  watcher keeps running until the agent Chrome quits (review-69c B1). `--dry-run` runs it on Linux in a private Xvfb with agent-browser's Mac design (the internal
   `platform` option), a stand-in watcher and a stand-in for the give-back watcher's `osascript`
-  (`mac-standin-watchback.ts`), and its second part with the same Chromium on the next display. Not
+  (`mac-standin-watchback.ts`), and its second part with the same Chromium on the next display;
+  `test/live/anti-detect/mac-dry.ts` runs the dry runs of a review one after the other (plain, a key, a key
+  between the parts, a refusal, a stop in `front`, a stop in a popup's click, a `kill -9` of node) and stops
+  what each one left, by pid. Not
   part of `npm test`; `test/mac-measure.test.ts` tests its pure parts (`mac-rules.ts`),
   `test/watchback.test.ts` the give-back watcher (its script against a fake AppKit bridge, its node
   process with the stand-in), and `test/mac-watchback.test.ts` the prototype of 2026-11-06. It ran on the

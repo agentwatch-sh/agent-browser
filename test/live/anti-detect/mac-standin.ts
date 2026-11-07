@@ -15,7 +15,8 @@
 // MAC_STANDIN_POINTER_MS=N (N ms after its start, the pointer moves: a person at the Mac), MAC_STANDIN_INPUT_MS=N
 // (N ms after its start, a key press of the hardware: a person at the Mac), and MAC_STANDIN_HID=NAME=S[,NAME=S]
 // (the ready line's HID reading of NAME is S seconds; the others are 3600: a reading of 0 makes the check refuse), and
-// MAC_STANDIN_READY_POINTER=X,Y (the pointer of its ready line; else -1000,-1000). The first part passes each
+// MAC_STANDIN_READY_POINTER=X,Y (the pointer of its ready line; else -1000,-1000). Its command "person" gives a key press
+// of the hardware at once (the dry run's stop inside a named step: mac.ts, MAC_DRY_STOP_IN). The first part passes each
 // MAC_STANDIN_STABLE_X to the stable part as MAC_STANDIN_X (a person in the gap between the two parts).
 
 import { execFileSync } from "node:child_process";
@@ -76,6 +77,8 @@ rl.on("line", (line) => {
     emit("windows", { why: "snap", label: rest, list, owners: { [agentPid]: "Chromium (dry run)" }, front, space: null,
       agentAll: list.map(([, n, x, y, w, h]) => ({ n, layer: 0, x, y, w, h, alpha: 1, onscreen: true })), agentApp: { pid: agentPid, policy: 0, hidden: false, active: false } });
   }
+  // The dry run's person (mac.ts, MAC_DRY_STOP_IN): a key press of the hardware now, as MAC_STANDIN_INPUT_MS gives one.
+  else if (verb === "person") { emit("input", { kind: "keyDown", agoMs: 0 }); personSeen("input"); }
   else if (verb === "quit") finish("quit");
   else emit("error", { what: "unknown command", line });
 });

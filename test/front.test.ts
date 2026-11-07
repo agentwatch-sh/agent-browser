@@ -160,6 +160,22 @@ test("macOS: front holds the Mac's give-back watcher off for its request, so the
   assert.equal(holdNow(linux), null);
 });
 
+test("macOS: a caller's stop (the internal stopped option, the Mac check) that comes while front reads ps sends no request: nothing is activated (review-69c B1)", async () => {
+  let stop = false;
+  const s = { ...settings("stopped", {}, 4100), stopped: () => stop };
+  const ps = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(s, 4100)].join("\n");
+  const { run, calls } = stand({ activate: ok() }, [4100]);
+  await assert.rejects(bringToFront(s, onMac(ps, run, { started: () => { stop = true; return START; } })), /stopped/);
+  assert.deepEqual(osascriptCalls(calls), [], "no activation request after the stop");
+  // A stop that the event loop delivers while front reads ps (its reads block node): front yields before its request, so it sees it.
+  let late = false;
+  const t = { ...settings("stopped-late", {}, 4101), stopped: () => late };
+  const ps2 = [mac(UID, 600, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), agentRow(t, 4101)].join("\n");
+  const two = stand({ activate: ok() }, [4101]);
+  await assert.rejects(bringToFront(t, onMac(ps2, two.run, { started: () => { setImmediate(() => { late = true; }); return START; } })), /stopped/);
+  assert.deepEqual(osascriptCalls(two.calls), []);
+});
+
 test("a Chrome on this profile that agent-browser did not start, while an agent-browser proxy of this user drives it, is this consumer's agent Chrome (as `chromes` lists it)", async () => {
   const s = settings("driven", {}, 4600);
   const proxy = `/usr/local/bin/node /opt/agent-browser/bin/agent-browser.js proxy ws://127.0.0.1:52100/devtools/browser/9f8e --state-dir ${s.stateDir} `

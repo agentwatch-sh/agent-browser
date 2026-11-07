@@ -172,6 +172,14 @@ export type BrowserOptions = {
    * starts under node --test and off the Mac. Never set by the CLI's users.
    */
   watchBackCommand?: string[];
+  /**
+   * @internal A caller's stop (the Mac check, test/live/anti-detect/mac.ts, after a person's input and from its quit on;
+   * review-69c B1): read before each input event of a person's input (browser.ts, byHand's guard), before each
+   * activation request of `front` (front.ts), and before a start of the give-back watcher (watchback.ts). When it gives
+   * true, the input command and `front` fail with a "stopped" error, and no watcher starts: a command that is in
+   * progress then sends no more input. Never set by the CLI.
+   */
+  stopped?: () => boolean;
 };
 
 export type Settings = {
@@ -199,6 +207,7 @@ export type Settings = {
   inputTiming: InputTiming;
   display?: DisplayOption;
   watchBackCommand?: string[];
+  stopped?: () => boolean;
 };
 
 /**
@@ -376,6 +385,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     inputTiming: resolveInputTiming(o.inputTiming),
     display: o.display,
     watchBackCommand: o.watchBackCommand,
+    stopped: o.stopped,
   };
 }
 

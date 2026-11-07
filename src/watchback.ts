@@ -320,7 +320,7 @@ type SpawnLike = (bin: string, args: string[], opts: object) => Pick<ChildProces
  * this profile: an endpoint that another program started), "started", "failed".
  */
 export async function ensureWatchBack(s: Settings, deps: { spawn?: SpawnLike; pid?: () => number | undefined } = {}): Promise<"off" | "running" | "no-chrome" | "started" | "failed"> {
-  if (!macWindows(s)) return "off";
+  if (!macWindows(s) || s.stopped?.()) return "off";
   if (!s.watchBackCommand && (underNodeTest() || process.platform !== "darwin")) return "off";
   try {
     if (watchRunning(s)) return "running";

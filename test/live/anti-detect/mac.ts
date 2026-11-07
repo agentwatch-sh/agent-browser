@@ -122,6 +122,7 @@ import { AGENT_ARGS, agentChromeBin, agentChromePid, appBundle, CHROME_STABLE_BI
 import { AgentBrowser } from "../../../src/browser.ts";
 import type { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
+import { bringToFront, psStartTime, type FrontDeps } from "../../../src/front.ts";
 import { GIVE_BACK_GRACE_MS, giveBackToken, startGiveBack, type GiveBack } from "../../../src/giveback.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions, type Settings } from "../../../src/options.ts";
 import { stopProxy } from "../../../src/proxy.ts";
@@ -265,6 +266,8 @@ async function waitEvent(pred: (e: WatchEvent) => boolean, ms: number): Promise<
 }
 // ------------------------------------------------------------------ the stop rules: at each watcher line, every STOP_POLL_MS, inside each step
 let aborted: string | undefined;
+/** From the end step's start on: no agent-browser command, input, front request or watcher start any more (abCommands, base.stopped). */
+let quitting = false;
 /** The stop: its time, the step in progress then, and the watcher line of the person's first sign (pointer or input). */
 let stopInfo: { why: string; t: number; step: string; cause?: WatchEvent } | undefined;
 let onStop: () => void = () => {};
@@ -286,11 +289,15 @@ function checkHarm() {
   // The watcher stops its give-back by itself at a person's first sign (a pointer move, a key press, a modifier key,
   // a click or a scroll of the hardware); "disarm" stops it for the other stops. Then one last request, only while
   // the agent Chrome is in front, so that a person's keys go to their own app while the end step quits that Chrome.
-  // agent-browser's give-back watcher ends at once too: it leaves a click or Cmd-Tab to the person, but a switch by
-  // keys alone (Spotlight) it would give back once.
+  // agent-browser's give-back watcher keeps running until the agent Chrome quits (review-69c B1): a command that is in
+  // progress at the stop can still bring the agent Chrome to the front (its CDP calls already sent), and the watcher
+  // gives that back; it leaves a take less than 1 s after a person's click or Command key to the person. No
+  // agent-browser command starts after the stop (abCommands), none sends input or a front request after it, and no
+  // watcher starts after it (the stopped option). The check's fallback ends here (its watcher is disarmed).
   tell("disarm");
   tell("giveback");
-  stopWatchBack();
+  watchOn = false;
+  fallback.reset();
   say(`STOP${stopInfo.cause ? ` (${stopInfo.t - stopInfo.cause.t} ms after the watcher's ${stopInfo.cause.ev} line)` : ""} in ${stopInfo.step}: ${why}`);
   onStop();
 }
@@ -361,6 +368,8 @@ const notRun: string[] = [];
  * and the end step's quit of the agent Chrome ends that work). `always`: it runs also after a stop, to its own end
  * (the end step). `atOnce: false`: a stop does not cut the step short (the start: it must learn its Chrome's pid).
  */
+const DRY_STOP_IN = O.dryRun ? process.env.MAC_DRY_STOP_IN ?? "" : "", DRY_STOP_AFTER_MS = Number(process.env.MAC_DRY_STOP_AFTER_MS ?? 300);
+let dryStopSent = false;
 async function step<T>(phase: string, name: string, fn: () => Promise<T>, o: { limitMs?: number; tailMs?: number; snap?: boolean; always?: boolean; atOnce?: boolean } = {}): Promise<T | undefined> {
   const label = `${phase}: ${name}`;
   if (aborted && !o.always) { notRun.push(label); return undefined; }
@@ -369,6 +378,10 @@ async function step<T>(phase: string, name: string, fn: () => Promise<T>, o: { l
   if (aborted && !o.always) { notRun.push(label); return undefined; }
   current = label;
   const t0 = Date.now();
+  // The dry run's stop inside a named step (MAC_DRY_STOP_IN, a step label's start; MAC_DRY_STOP_AFTER_MS after it begins):
+  // the stand-in watcher then gives a person's key, as a person at the Mac would (review-69c B1: a stop in front, in a click).
+  // (The front step's stop comes inside front's ps reads instead: dryFront.started.)
+  if (O.dryRun && DRY_STOP_IN && label.startsWith(DRY_STOP_IN) && !label.startsWith("front: ") && !dryStopSent) { dryStopSent = true; setTimeout(() => tell("person"), DRY_STOP_AFTER_MS); }
   const r = await runStep(fn, { limitMs: o.limitMs ?? 25_000, stopped: () => { checkHarm(); return aborted; }, wake: stopped, atOnce: !o.always && o.atOnce !== false });
   current = undefined;
   const t1 = Date.now();
@@ -453,8 +466,18 @@ if (O.dryRun) process.env.MAC_STANDIN_WATCHBACK_FRONT = String(operatorPid);
 // The Mac's design (platform "darwin": on the Mac the default; in the dry run on Linux the internal option). chromeBin:
 // the give-back watcher activates nothing but checks that the pid is an instance of this app bundle.
 const base: BrowserOptions = { stateDir, socketPath, allow: ["probe.localhost"], ...(endpoint ? { endpoint } : {}), commandName: "mac check", proxyIdleMs: 60_000, log: (l) => say(`agent-browser: ${l}`),
-  platform: "darwin", ...(O.dryRun ? { watchBackCommand: STANDIN_WATCHBACK } : { chromeBin: O.chromeBin }) };
+  platform: "darwin", ...(O.dryRun ? { watchBackCommand: STANDIN_WATCHBACK } : { chromeBin: O.chromeBin }),
+  // review-69c B1: from a stop, and from the quit on, no more input event, no front request and no watcher start.
+  stopped: () => !!aborted || quitting };
 const oWin: BrowserOptions = base;
+/**
+ * agent-browser's commands, only before a stop (review-69c B1): after it no command starts. A command in progress at
+ * the stop sends no more input event and no front request, and starts no watcher (the stopped option of `base`).
+ */
+function abCommands(): typeof commands {
+  if (aborted || quitting) throw new Error(`stopped: no agent-browser command after ${aborted ? "the stop" : "the quit began"}`);
+  return commands;
+}
 let browser: AgentBrowser | undefined, fatal: string | undefined;
 if (endpoint && !aborted) {
   settings = resolveOptions(base);
@@ -471,7 +494,7 @@ async function recordStep(phase: string, name: string, o: BrowserOptions, tab: s
   if (!ffmpeg) { records.push({ where, error: "no ffmpeg" }); return; }
   const script = join(RUN, "record-steps.json");
   writeFileSync(script, JSON.stringify([{ wait: 3000 }]));
-  const r = await step(phase, name, () => commands.record(o, { tab, out: join(RUN, `${phase}-${tab.replace(/\W/g, "")}.mp4`), script, fps: 60, ffmpeg }), { limitMs: 90_000, snap: true });
+  const r = await step(phase, name, () => abCommands().record(o, { tab, out: join(RUN, `${phase}-${tab.replace(/\W/g, "")}.mp4`), script, fps: 60, ffmpeg }), { limitMs: 90_000, snap: true });
   const s = steps.at(-1);
   records.push(r ? { where, fps: +(r.frames / r.seconds).toFixed(1), frames: r.frames, seconds: +r.seconds.toFixed(2), maxFrameGapMs: r.maxFrameGapMs }
     : { where, error: s && s.phase === phase && s.name === name ? s.error ?? "failed" : "not run" });
@@ -551,12 +574,12 @@ async function fieldOf(targetId: string): Promise<unknown> {
 /** Keys into a page with no click (agent-browser's type with no --into: the keys go to the page's focused element); the field's lengths and whether exactly these keys arrived (fieldText). */
 async function keysInto(name: string, text: string): Promise<{ charsBefore: number; chars: number; theCheckKeys: boolean }> {
   const before = await fieldOf(wins[name].target);
-  await commands.type(oWin, { tab: `tab=${name}`, text });
+  await abCommands().type(oWin, { tab: `tab=${name}`, text });
   return fieldText(before, await fieldOf(wins[name].target), text);
 }
 if (browser) {
   for (const name of FULL ? ["WA", "WB"] : ["WA"]) await step("window", `open window ${name} (agent-browser open: Target.createTarget newWindow, background)`, async () => {
-    const r = await commands.open(oWin, { url: urlOf(name), name });
+    const r = await abCommands().open(oWin, { url: urlOf(name), name });
     wins[name] = { target: r.tab.targetId };
     await loaded(name);
     const w = await cdp("Browser.getWindowForTarget", { targetId: r.tab.targetId });
@@ -566,21 +589,21 @@ if (browser) {
 if (browser && FULL) {
   await step("window", "idle 3 s", () => sleep(3000), { snap: true });
   const A = "tab=WA", B = "tab=WB";
-  await step("window", "WA: text", () => commands.text(oWin, { tab: A }), { snap: true });
-  await step("window", "WA: click", () => commands.click(oWin, { tab: A, target: "#b" }), { snap: true });
-  await step("window", "WA: type", () => commands.type(oWin, { tab: A, text: "hello", into: "#f" }), { snap: true });
-  await step("window", "WA: press End", () => commands.press(oWin, { tab: A, key: "End" }), { snap: true });
-  await step("window", "WA: shot", () => commands.shot(oWin, { tab: A, path: join(RUN, "window-WA.png") }), { limitMs: 40_000, snap: true });
+  await step("window", "WA: text", () => abCommands().text(oWin, { tab: A }), { snap: true });
+  await step("window", "WA: click", () => abCommands().click(oWin, { tab: A, target: "#b" }), { snap: true });
+  await step("window", "WA: type", () => abCommands().type(oWin, { tab: A, text: "hello", into: "#f" }), { snap: true });
+  await step("window", "WA: press End", () => abCommands().press(oWin, { tab: A, key: "End" }), { snap: true });
+  await step("window", "WA: shot", () => abCommands().shot(oWin, { tab: A, path: join(RUN, "window-WA.png") }), { limitMs: 40_000, snap: true });
   await recordStep("window", "WA: record 3 s", oWin, A, "a page in a window of its own (the design)");
-  await step("window", "WB: click (WA had the focus)", () => commands.click(oWin, { tab: B, target: "#b" }), { snap: true });
+  await step("window", "WB: click (WA had the focus)", () => abCommands().click(oWin, { tab: B, target: "#b" }), { snap: true });
   if (wins.WA) details.keys = await step("window", "WA: keys with no click (WB has the focus)", () => keysInto("WA", "keys"), { snap: true });
-  await step("window", "WB: click (WA had the focus again)", () => commands.click(oWin, { tab: B, target: "#b" }), { snap: true });
-  await step("window", "WA: click (WB had the focus)", () => commands.click(oWin, { tab: A, target: "#b" }), { snap: true });
+  await step("window", "WB: click (WA had the focus again)", () => abCommands().click(oWin, { tab: B, target: "#b" }), { snap: true });
+  await step("window", "WA: click (WB had the focus)", () => abCommands().click(oWin, { tab: A, target: "#b" }), { snap: true });
   if (!O.skip.includes("person")) details.person = await step("window", "WA: person-shaped click and typing", async () => {
     // agent-browser's own input (input.ts): each path starts at the page's last point (pointer.json), never at the real pointer.
     const last = (() => { try { return JSON.parse(readFileSync(join(stateDir, "pointer.json"), "utf8")).pages?.[wins.WA.target] ?? null; } catch { return null; } })();
-    await commands.click(oWin, { tab: A, target: "#b" });
-    await commands.type(oWin, { tab: A, text: "hello", into: "#f" });
+    await abCommands().click(oWin, { tab: A, target: "#b" });
+    await abCommands().type(oWin, { tab: A, text: "hello", into: "#f" });
     return { pathFrom: "the page's last point (agent-browser's pointer.json)", last };
   }, { snap: true });
 }
@@ -620,9 +643,9 @@ async function stateOf(targetId: string): Promise<Record<string, unknown>> {
 /** The way back to the opener, as built: the popup closes (agent-browser's close: Target.closeTarget; or the page's own window.close()), with no activation. */
 async function wayBack(p: (typeof POPUPS)[number]): Promise<Record<string, unknown>> {
   const pt = popupInfo[p.tab]?.target as string;
-  if (p.back === "close") await commands.close(oWin, { tab: pt });
+  if (p.back === "close") await abCommands().close(oWin, { tab: pt });
   // The page closes during the call: its session ends, so the call can fail; the target list below says whether it closed.
-  else await commands.eval(oWin, { tab: pt, expression: "window.close(), true" }).catch(() => {});
+  else await abCommands().eval(oWin, { tab: pt, expression: "window.close(), true" }).catch(() => {});
   const isGone = async () => !((await cdp("Target.getTargets")).targetInfos as { targetId: string }[]).some((t) => t.targetId === pt);
   let gone = false, closedBy = p.back === "close" ? "agent-browser's close (Target.closeTarget)" : "its own window.close() (agent-browser's eval)";
   for (const end = Date.now() + 3000; Date.now() < end && !gone; await sleep(50)) gone = await isGone();
@@ -646,7 +669,7 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
   });
   for (const p of POPUPS) {
     await step("popup", p.kind, async () => {
-      await commands.click(oWin, { tab: "tab=WA", target: `#${p.id}` });
+      await abCommands().click(oWin, { tab: "tab=WA", target: `#${p.id}` });
       await loaded(p.tab, 8000);
       await sleep(1000);
       popupInfo[p.tab] = await popupState(p.tab, wins.WA.target);
@@ -655,7 +678,7 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
     if (p.drive) {
       const d = await step("popup", backName(p, "drive"), async () => {
         const pt = popupInfo[p.tab].target as string;
-        await commands.click(oWin, { tab: pt, target: "#b" });
+        await abCommands().click(oWin, { tab: pt, target: "#b" });
         await sleep(300);
         return { popup: await stateOf(pt), opener: await stateOf(wins.WA.target) };
       }, { tailMs: 800, snap: true });
@@ -665,7 +688,7 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
     if (r) backInfo[p.tab] = r;
     // The opener's next input right after the close: agent-browser waits (input.ts, showMs) until WA shows again.
     const n = await step("popup", backName(p, "next"), async () => {
-      await commands.click(oWin, { tab: "tab=WA", target: "#b" });
+      await abCommands().click(oWin, { tab: "tab=WA", target: "#b" });
       return stateOf(wins.WA.target);
     }, { limitMs: 20_000, tailMs: 800, snap: true });
     if (n) nextInfo[p.tab] = n;
@@ -675,6 +698,28 @@ if (browser && !O.skip.includes("popups") && wins.WA) {
 // ------------------------------------------------------------------ front: agent-browser's front, on purpose (the watcher leaves it to the operator)
 /** How long the check leaves the agent Chrome in front after agent-browser's front, before it gives the front back itself. */
 const FRONT_STEP_MS = 1500;
+/** The dry run's front requests (osascript's stand-in): their times. */
+const frontRequests: number[] = [];
+/** The dry run's stand-ins for front (src/front.ts, FrontDeps): macOS's tools answer that the agent Chrome is in front. */
+const dryFront: FrontDeps = {
+  platform: "darwin", release: () => "24.1.0", sleep: (ms) => sleep(ms),
+  // The start time from ps, as front reads it. With MAC_DRY_STOP_IN on the front step, a person's key comes while front
+  // reads ps (its reads block node for about 0.3 s): front must see that stop before its request.
+  started: (pid) => {
+    if (DRY_STOP_IN.startsWith("front") && !dryStopSent) {
+      dryStopSent = true;
+      tell("person");
+      for (const end = Date.now() + 300; Date.now() < end;) { /* as a slow ps read */ }
+    }
+    try { return psStartTime(execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, env: { ...process.env, LC_ALL: "C" } })); } catch { return undefined; }
+  },
+  run: async (argv) => {
+    if (argv[0] === "/usr/bin/osascript") { frontRequests.push(Date.now()); return { ok: true, stdout: `${JSON.stringify({ found: true, path: argv[7], launched: null, before: operatorPid, sent: true })}\n`, stderr: "" }; }
+    if (argv[0] === "/usr/bin/lsappinfo" && argv[1] === "front") return { ok: true, stdout: "ASN:0x0-0x1:\n", stderr: "" };
+    if (argv[0] === "/usr/bin/lsappinfo") return { ok: true, stdout: `"pid"=${chromePid}\n`, stderr: "" };
+    return { ok: true, stdout: "15.1\n", stderr: "" };
+  },
+};
 const FRONT_STEP = "front: agent-browser's front (the agent Chrome in front on purpose)";
 if (browser && FULL && !O.skip.includes("front")) {
   await step("front", "agent-browser's front (the agent Chrome in front on purpose)", async () => {
@@ -683,7 +728,11 @@ if (browser && FULL && !O.skip.includes("front")) {
     holds.push({ from, until: from + 60_000 + FRONT_STEP_MS });
     inFront = true;
     try {
-      const r = await commands.front(oWin);
+      // agent-browser's front (commands.front is this call): its request goes out only while the check has not stopped
+      // (the stopped option, read right before each request). The dry run gives it a stand-in for osascript and
+      // lsappinfo (Linux has neither), which records each request and says that the agent Chrome came to the front.
+      abCommands();
+      const r = await bringToFront(resolveOptions(oWin), O.dryRun ? dryFront : {});
       await pause(FRONT_STEP_MS);
       return r.via;
     } finally {
@@ -719,6 +768,7 @@ const endLines: string[] = [];
 let quitProblem: string | undefined;
 // running: false when ps shows that the Chrome quit; true or null (ps cannot tell) keep the profile.
 let quit: { running: boolean | null } = { running: null };
+quitting = true;
 await step("end", "quit the agent Chrome", async () => {
   if (chromePid === undefined && chromeNow() === null) { quit = { running: false }; endLines.push("no agent Chrome ran on the run's profile"); return; }
   // Each signal goes only to the pid that ps shows on this run's own profile at that moment (chromeNow).
@@ -746,7 +796,13 @@ if (stopInfo) {
   // progress and to the start of the end step.
   const from = stopInfo.cause?.t ?? stopInfo.t, cut = steps.find((x) => `${x.phase}: ${x.name}` === stopInfo!.step);
   endLines.push(`the stop (${stopInfo.why}) came in ${stopInfo.step}, ${stopInfo.t - from} ms after the watcher's ${stopInfo.cause ? `${stopInfo.cause.ev} line${stopInfo.cause.kind ? ` (${stopInfo.cause.kind})` : ""}` : "line"}; `
-    + `${cut ? `that step ended ${cut.t1 - from} ms after it; ` : ""}the end step began ${endStep?.phase === "end" ? `${endStep.t0 - from} ms` : "?"} after it`);
+    + `${cut ? `that step ended ${cut.t1 - from} ms after it; ` : ""}the end step began ${endStep?.phase === "end" ? `${endStep.t0 - from} ms` : "?"} after it`
+    + `${endStep?.phase === "end" ? `, and the agent Chrome had quit ${endStep.t1 - from} ms after it` : ""}`);
+  // review-69c B1: what of agent-browser still acted after the stop (a command in progress at the stop).
+  const late = ["WA", "WB", "PA", "PB", "PC"].flatMap((tab) => inputs(log, tab, stopInfo!.t, Number.POSITIVE_INFINITY).filter((e) => e.type !== "mousemove" && e.type !== "pointermove").map((e) => ({ tab, t: e.t as number, type: String(e.type) })));
+  const asked = builtLines().filter((l) => "asked" in l.kv && l.t >= stopInfo!.t).length;
+  endLines.push(`after the stop: ${late.length} input event(s) other than moves reached a probe page${late.length ? ` (${late.slice(0, 4).map((e) => `${e.type} in ${e.tab} +${e.t - stopInfo!.t} ms`).join(", ")})` : ""}; `
+    + `${frontRequests.filter((t) => t >= stopInfo!.t).length} front request(s)${O.dryRun ? " (the dry run's stand-in)" : ""}; agent-browser's give-back watcher asked ${asked} time(s) to give the front back`);
 }
 if (endStep?.phase === "end" && !endStep.ok && !quitProblem) quitProblem = `the quit of the agent Chrome did not finish (${endStep.error}); see stop-chrome.txt in the run folder`;
 await browser?.disconnect().catch(() => {});

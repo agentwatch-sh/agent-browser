@@ -211,6 +211,19 @@ test("the operator's own switch is never fought: a click (an agent window, its D
   assert.deepEqual(old.asks.map((a) => a.pid), [500, 600]);
 });
 
+test("the 1 s of OWN_MS at its edge: a press that ended 1.0 to 1.3 s before the take is not the switch; one less than 1 s before is (review-69c N3)", () => {
+  // The button sampled as down until `up` (ms after the start), the take at 3000: own only when the last down sample is within 1000 ms.
+  for (const [up, own] of [[1700, false], [1950, false], [1990, false], [2050, true], [2400, true]] as const) {
+    const r = watchRun(args, { apps: [TERMINAL, AGENT], front: 500, input: { cg: false }, events: [{ at: up - 60, mouse: true }, { at: up, mouse: false }, { at: 3000, front: 701 }], grantMs: 40, endAt: 4000 });
+    assert.equal(r.lines.includes("took=701 from=500 own=click"), own, `a press up at ${up} ms, the take at 3000 ms: ${r.lines.join(" | ")}`);
+  }
+  // The same with CoreGraphics' time of the last press (a tap).
+  for (const [at, own] of [[1700, false], [1960, false], [2010, true]] as const) {
+    const r = watchRun(args, { apps: [TERMINAL, AGENT], front: 500, input: { ns: false }, events: [{ at, tap: true }, { at: 3000, front: 701 }], grantMs: 40, endAt: 4000 });
+    assert.equal(r.lines.includes("took=701 from=500 own=click"), own, `a tap at ${at} ms: ${r.lines.join(" | ")}`);
+  }
+});
+
 test("keys alone do not make a take the operator's: a person who types in their own app gets the front back at once (ab-or9)", () => {
   // Typing gives no mouse button and no Command key; Shift (a capital letter) and the other modifiers are not the Command key.
   const r = watchRun(args, { apps: [TERMINAL, AGENT], front: 500, events: [{ at: 850, shift: true }, { at: 900, front: 701 }, { at: 950, shift: false }], grantMs: 40, endAt: 3000 });
@@ -438,6 +451,36 @@ exec ${realPs} "$@"
     assert.equal(lines.filter((l) => l === "end=stopped by=node").length, 2, lines.join("\n"));
     assert.equal(lines.filter((l) => l.startsWith("watch agent=")).length, 2);
   } finally { chrome.child.kill(); }
+});
+
+test("ensureWatchBack: a caller's stop (the internal stopped option: the Mac check after a stop or from its quit on) starts no watcher", async () => {
+  const spawned: string[][] = [];
+  const spawnStub = (_bin: string, a: string[]) => { spawned.push(a); return { pid: process.pid, unref() {}, once() { return this; } } as never; };
+  mkdirSync(c.stateDir, { recursive: true });
+  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 }));
+  let stop = true;
+  const s = mac({ watchBackCommand: [process.execPath, STANDIN], stopped: () => stop });
+  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "off");
+  assert.deepEqual(spawned, []);
+  stop = false;
+  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "started", "read at each call");
+  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 })); // no live record for the next test
+});
+
+test("the CLI takes --watch-back-command and --chrome-pid only in give-back-watch (review-69c N6), not in proxy, relay or a command", async () => {
+  const { main } = await import("../src/cli.ts");
+  const out: string[] = [];
+  const sink = { write: (x: string, cb?: () => void) => { out.push(x); cb?.(); return true; } };
+  const io = { stdout: sink, stderr: sink, stdin: process.stdin } as never;
+  for (const argv of [["proxy", "ws://127.0.0.1:9/devtools/browser/x"], ["relay", "--socket", join(c.dir, "r.sock")], ["text", "t"]]) {
+    out.length = 0;
+    assert.equal(await main([...argv, "--state-dir", c.stateDir, "--watch-back-command", JSON.stringify(["/bin/true"])], io), 2, argv[0]);
+    assert.match(out.join(""), /--watch-back-command/, argv[0]);
+    out.length = 0;
+    assert.equal(await main([...argv, "--state-dir", c.stateDir, "--chrome-pid", "1"], io), 2, `${argv[0]} --chrome-pid`);
+  }
+  // give-back-watch takes it (pid 1 is no agent Chrome: it ends at once with end=no-agent).
+  assert.equal(await main(["give-back-watch", "--state-dir", c.stateDir, "--chrome-pid", "1", "--watch-back-command", JSON.stringify([process.execPath, STANDIN])], io), 0);
 });
 
 test("ensureWatchBack: only for the Mac's design, never under node --test without a stand-in; it starts one detached watcher, and the next command finds it running", async () => {

@@ -13,7 +13,7 @@ import { CDPConnection, CDPError } from "./cdp.ts";
 import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
-import { ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
+import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, macWindows, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
@@ -1205,7 +1205,12 @@ export class Tab {
         if (p.disposition === "currentTab") early(p, sid);
       });
       const off = () => { offNav(); offStart(); offAsk(); };
-      const guard = () => { if (left !== undefined) throw new NotAllowedError(left); };
+      // A caller's stop (the internal stopped option: the Mac check after a person's input) ends the input at its next event.
+      const stoppedBy = this.browser.settings.stopped;
+      const guard = () => {
+        if (left !== undefined) throw new NotAllowedError(left);
+        if (stoppedBy?.()) throw new AgentBrowserError("error", "stopped: the caller stopped this input (no more input event)");
+      };
       let h: Hands | undefined;
       try {
         h = await Hands.begin(this, guard);

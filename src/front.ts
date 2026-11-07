@@ -232,6 +232,10 @@ export async function bringToFront(s: Settings, deps: FrontDeps = {}): Promise<{
   async function requests(): Promise<{ chrome: AgentChrome; via: FrontHow }> {
     for (const how of ["activate", "activate-from"] as const) {
       if (how === "activate-from" && !(darwin >= 23)) { asked.push("activate-from not sent (macOS before 14)"); continue; }
+      // A caller's stop (the internal stopped option, the Mac check): no request after it (review-69c B1). The ps reads
+      // above block node; a yield first lets the event loop deliver a stop that came meanwhile.
+      if (s.stopped) await new Promise((r) => setImmediate(r));
+      if (s.stopped?.()) throw new Error(`front stopped before its request (${how}): the caller stopped it; nothing was brought forward`);
       const r = await step(osascriptFront(how, chrome.pid, bin, start), OSASCRIPT_TIMEOUT_MS);
       if (!r.ok) throw new Error(`osascript failed (${how}, pid ${chrome.pid}): ${r.stderr.trim().slice(0, 300)}`);
       const answer = reply(r.stdout, how, chrome.pid);

@@ -714,7 +714,7 @@ test("the Mac check never activates a window or brings a page forward, and sends
     assert.doesNotMatch(ts, forbidden);
   // ab-v16.27: the check runs no osascript itself: agent-browser's give-back watcher (src/watchback.ts) is agent-browser's,
   // started by AgentBrowser.connect as on the Mac for each command, with agent-browser's Mac design (platform "darwin").
-  assert.match(ts, /platform: "darwin", \.\.\.\(O\.dryRun \? \{ watchBackCommand: STANDIN_WATCHBACK \} : \{ chromeBin: O\.chromeBin \}\) \};/);
+  assert.match(ts, /platform: "darwin", \.\.\.\(O\.dryRun \? \{ watchBackCommand: STANDIN_WATCHBACK \} : \{ chromeBin: O\.chromeBin \}\),/);
   assert.match(ts, /\["-n", "-g", "-a", bundle!/);
   assert.match(ts, /"-sdk", swift\.sdk/, "swiftc gets the SDK, so it never starts xcrun");
   // It removes only the throwaway profile and the watcher that it compiled, both inside its own run folder, after its Chrome quit.
@@ -746,15 +746,28 @@ test("the Mac check never activates a window or brings a page forward, and sends
 test("ab-v16.27: the check runs agent-browser's built design: its open, its commands, its give-back watcher, its popup rule and its front; a stop and the look end the watcher; the stable part gets the whole handover", () => {
   const ts = readFileSync(join(DIR, "mac.ts"), "utf8").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   // The windows come from agent-browser's open (its Target.createTarget with newWindow and background), driven by its commands (oWin: no hiddenDrive).
-  assert.match(ts, /const r = await commands\.open\(oWin, \{ url: urlOf\(name\), name \}\);/);
+  assert.match(ts, /const r = await abCommands\(\)\.open\(oWin, \{ url: urlOf\(name\), name \}\);/);
   assert.match(ts, /const oWin: BrowserOptions = base;/);
   assert.doesNotMatch(ts, /hiddenDrive|cdpClick|personInput|Input\.dispatch/, "no CDP input of the check's own: every click and key is agent-browser's");
   // The give-back watcher: agent-browser's (its watch line in launches.log), never one that the check starts.
   assert.match(ts, /parseWatchLines\(readFileSync\(launchesLog, "utf8"\)\)/);
   assert.doesNotMatch(ts, /watchBackArgs|mac-watchback/);
-  // A stop and the look end it at once (stopBuiltWatcher: only this state folder's watcher, by ps); the exit handler too.
-  assert.match(ts, /tell\("disarm"\);\s+tell\("giveback"\);\s+stopWatchBack\(\);/);
+  // review-69c B1: a stop keeps agent-browser's watcher until the agent Chrome quits (a command in progress can still
+  // bring the agent Chrome to the front); the end stops it only after the quit. The look ends it at once (the operator
+  // acts then), and the exit handler too (stopBuiltWatcher: only this state folder's watcher, by ps).
+  const harm = ts.slice(ts.indexOf("function checkHarm()"), ts.indexOf("let watchOn = false"));
+  assert.ok(harm.length > 200 && harm.length < 3000, `checkHarm's body: ${harm.length}`);
+  assert.match(harm, /tell\("disarm"\);\s+tell\("giveback"\);\s+watchOn = false;\s+fallback\.reset\(\);/);
+  assert.doesNotMatch(harm, /stopWatchBack\(|stopBuiltWatcher\(/, "no stop of agent-browser's watcher at a stop");
+  assert.ok(ts.indexOf("stopWatchBack();\nif (stopInfo)") > ts.indexOf('await step("end", "quit the agent Chrome"'), "after the quit");
   assert.match(ts, /measureEnd = Date\.now\(\);\s+clearInterval\(stopPoll\);\s+stopWatchBack\(\);/);
+  // No agent-browser command after a stop or from the quit on (abCommands); no input event, front request or watcher start then (the stopped option).
+  assert.doesNotMatch(ts, /[^.\w]commands\.\w+\(/, "every agent-browser command goes through abCommands()");
+  assert.match(ts, /function abCommands\(\): typeof commands \{\s+if \(aborted \|\| quitting\) throw/);
+  assert.match(ts, /stopped: \(\) => !!aborted \|\| quitting \};/);
+  assert.match(ts, /quitting = true;\nawait step\("end", "quit the agent Chrome"/);
+  assert.match(ts, /abCommands\(\);\s+const r = await bringToFront\(resolveOptions\(oWin\), O\.dryRun \? dryFront : \{\}\);/, "front: the same call as commands.front, with stand-ins only in the dry run");
+  assert.match(ts, /const DRY_STOP_IN = O\.dryRun \? process\.env\.MAC_DRY_STOP_IN \?\? "" : ""/, "the stop inside a step is the dry run's only");
   assert.match(ts, /if \(settings\) \{ try \{ stopBuiltWatcher\(settings\); \} catch/);
   assert.equal((ts.match(/tell\("disarm"\)/g) ?? []).length, 4, "a stop, the watcher's start, the fallback's end, the look");
   assert.equal((ts.match(/tell\("arm"\)/g) ?? []).length, 2, "the start, the fallback");
@@ -763,14 +776,14 @@ test("ab-v16.27: the check runs agent-browser's built design: its open, its comm
   assert.match(ts, /if \(e\) fallback\.line\(e\);/);
   // The popup rule as built: agent-browser's click in the popup, the way back only by its close (agent-browser's close,
   // or the page's own window.close()), and agent-browser's next click in the opener, which waits until it shows.
-  assert.match(ts, /if \(p\.back === "close"\) await commands\.close\(oWin, \{ tab: pt \}\);/);
-  assert.match(ts, /else await commands\.eval\(oWin, \{ tab: pt, expression: "window\.close\(\), true" \}\)/);
-  assert.match(ts, /await commands\.click\(oWin, \{ tab: pt, target: "#b" \}\);/);
-  assert.match(ts, /backName\(p, "next"\), async \(\) => \{\s+await commands\.click\(oWin, \{ tab: "tab=WA", target: "#b" \}\);/);
+  assert.match(ts, /if \(p\.back === "close"\) await abCommands\(\)\.close\(oWin, \{ tab: pt \}\);/);
+  assert.match(ts, /else await abCommands\(\)\.eval\(oWin, \{ tab: pt, expression: "window\.close\(\), true" \}\)/);
+  assert.match(ts, /await abCommands\(\)\.click\(oWin, \{ tab: pt, target: "#b" \}\);/);
+  assert.match(ts, /backName\(p, "next"\), async \(\) => \{\s+await abCommands\(\)\.click\(oWin, \{ tab: "tab=WA", target: "#b" \}\);/);
   assert.equal((ts.match(/cdp\("Target\.closeTarget"/g) ?? []).length, 1, "only when the page's own window.close() did not close it");
   // The front step: a hold (the stop rules let that take stay open), no fallback, and the check gives the front back itself.
   assert.match(ts, /holds\.push\(\{ from, until: from \+ 60_000 \+ FRONT_STEP_MS \}\);\s+inFront = true;/);
-  assert.match(ts, /const r = await commands\.front\(oWin\);/);
+  assert.match(ts, /const r = await bringToFront\(resolveOptions\(oWin\)/);
   assert.match(ts, /if \(!aborted\) tell\("giveback"\);\s+await frontBack\(1500\);\s+inFront = false;/);
   assert.match(ts, /stopReason\(events, steps, Date\.now\(\), \{ t0: T0, limitMs: LIMIT_MS, measureEnd, holds \}\)/);
   assert.match(ts, /if \(browser && FULL && !O\.skip\.includes\("front"\)\)/);

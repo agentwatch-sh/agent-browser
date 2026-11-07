@@ -346,6 +346,27 @@ test("the Mac: input to a window page that its popup tab still hides fails with 
   }, 100);
 });
 
+test("the Mac: a caller's stop (the internal stopped option, the Mac check) during a click's path sends no more input event: no press, no popup (review-69c B1)", async () => {
+  await onTheMac(async () => {
+    operatorInFront();
+    let stop = false;
+    const o = mac({ inputTiming: { ...FAST, moveScale: 1 }, stopped: () => stop });
+    const { name, page } = await opened(mac({ inputTiming: FAST }));
+    const from = fake.calls.length;
+    setTimeout(() => { stop = true; }, 150);
+    await assert.rejects(commands.click(o, { tab: name, target: "#b" }), /stopped/);
+    const ev = fake.calls.slice(from).filter((x) => x.targetId === page.targetId && x.method === "Input.dispatchMouseEvent");
+    assert.ok(ev.length >= 1, "the path had begun");
+    assert.deepEqual(ev.filter((x) => x.params.type !== "mouseMoved"), [], "no press after the stop");
+    assert.notEqual(page.title, "clicked");
+    // Keys: no key event at all once stopped.
+    const k = fake.calls.length;
+    await assert.rejects(commands.press(o, { tab: name, key: "Enter" }), /stopped/);
+    assert.deepEqual(fake.calls.slice(k).filter((x) => x.method === "Input.dispatchKeyEvent"), []);
+    await commands.close(mac(), { tab: name });
+  });
+});
+
 test("the Mac: record in a window page sends no activation and no focus emulation", needsFfmpeg, async () => {
   await onTheMac(async () => {
     const o = mac({ inputTiming: FAST });
