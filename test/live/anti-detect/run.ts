@@ -64,13 +64,15 @@ import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
 import { bothFocusedMs, FAR, LAYOUT, pointerSignals, rates, startServer, stepSignals, visAt, type Rec } from "./probe.ts";
 import { report } from "./report.ts";
-import { harnessGuard } from "../guard.ts";
+import { harnessGuard, reservedDisplay } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, only: { type: "string" }, playwright: { type: "string" } } });
 function refuse(message: string): never { process.stderr.write(`${message}\n`); process.exit(2); }
 if (!values["out-dir"]) refuse("usage: node test/live/anti-detect/run.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 121] [--only a,b] [--playwright DIR]");
 if (process.platform !== "linux") refuse(`linux only, in a private Xvfb (this is ${process.platform})`);
 const CHROME = values.chrome ?? "/usr/bin/chromium", DISPLAY = Number(values.display ?? 121);
+const reserved = reservedDisplay(DISPLAY, "--display");
+if (reserved) refuse(reserved);
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, "run-"));

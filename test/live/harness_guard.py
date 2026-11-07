@@ -42,7 +42,8 @@ pid is gone or has a new start time, a SIGTERM to the guard, or the --limit. The
 recorded process that still runs with its recorded start time, and to their children; after 5 s it sends SIGKILL to
 those still there; it waits until they are gone (at most 20 s in all), names them on stderr, and only then ends,
 which frees the lock. It signals through the record's pidfd, so a process that took a recorded pid later gets no
-signal; only when no pidfd could be opened (no fd left) does it check the start time right before the signal.
+signal; only when pidfd_open fails with an error other than ESRCH (for example no fd left) does it check the start
+time right before the signal.
 
 The limit: a process that leaves the driver's tree within 0.5 s of its start (a double fork, for example a daemon's
 server or a crash handler such as crashpad) and that the driver does not name escapes the records.
@@ -192,7 +193,9 @@ class Guard:
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, self.on_term)
         self.buf = b""
-        self.stdin_open = a.pid_dir is None
+        # main() checks the pipe fd before anything opens an fd: a missing fd 3 must not become the lock's fd 3.
+        self.missing = getattr(a, "channel_missing", False)
+        self.stdin_open = a.pid_dir is None and not self.missing
 
     def on_term(self, *_):
         self.reason = self.reason or "the guard got SIGTERM"
@@ -214,7 +217,7 @@ class Guard:
             self.rec.pop(pid, None)
             return
         except OSError:
-            fd = None  # no fd left: the start time is checked again right before each signal
+            fd = None  # any other error (for example no fd left): the start time is checked again right before each signal
         if fd is not None and not same(pid, st[1]):
             os.close(fd)
             self.rec.pop(pid, None)
@@ -328,19 +331,27 @@ class Guard:
     def watch(self):
         t0 = time.monotonic()
         self.seen = set()
-        while self.reason is None:
+        while True:
             self.read_input(POLL_S)
             if self.a.pid_dir:
                 self.read_pid_dir()
             if self.a.driver:
+                # The driver's start time from the same snapshot first: the pid of a driver that ended can belong to
+                # another process now, whose tree is not the harness's.
                 t = table()
-                for pid in tree(t, [self.a.driver]):
-                    self.record(pid, t[pid])
-                if self.driver_gone():
+                d = t.get(self.a.driver)
+                if d is None or d[1] != self.driver_start or d[2] in ("Z", "X"):
                     self.reason = self.reason or "the driver %d is gone" % self.a.driver
+                else:
+                    for pid in tree(t, [self.a.driver]):
+                        self.record(pid, t[pid])
+            if self.missing:
+                self.reason = self.reason or "the driver's pipe (fd %d) is missing" % self.a.channel_fd
             if self.a.limit and time.monotonic() - t0 >= self.a.limit:
                 self.reason = self.reason or "the run reached its limit of %d s" % self.a.limit
             self.prune()
+            if self.reason is not None:
+                return
 
     def alive(self):
         return {p: v for p, v in self.rec.items() if same(p, v[0])}
@@ -414,7 +425,13 @@ def main(argv):
     if os.fork():
         os._exit(0)
     os.setsid()
-    close_inherited(set() if a.pid_dir else {a.channel_fd})
+    a.channel_missing = False
+    if not a.pid_dir:
+        try:
+            os.fstat(a.channel_fd)
+        except OSError:
+            a.channel_missing = True  # the guard stops the driver's processes at once (see watch())
+    close_inherited(set() if a.pid_dir or a.channel_missing else {a.channel_fd})
     g = Guard(a)
     g.driver_start = st[1]
     print(g.lock(), flush=True)

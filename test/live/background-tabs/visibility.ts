@@ -70,7 +70,7 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions } from "../.
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg, pngPixels } from "../../../src/record.ts";
 import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./spans.ts";
-import { harnessGuard } from "../guard.ts";
+import { harnessGuard, reservedDisplay } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "hidden-drive": { type: "boolean" } } });
 /** A start that the check refuses: one line, exit 2. The exit handler ends the check's own children. */
@@ -82,6 +82,8 @@ if (!values["out-dir"]) refuse("usage: node test/live/background-tabs/visibility
 if (process.platform !== "linux") refuse(`the hidden-tab check runs on Linux only, in a private Xvfb, so that no window reaches a person's screen (this is ${process.platform})`);
 const DISPLAY = Number(values.display ?? 97), CHROME = values.chrome ?? "/usr/bin/chromium", hiddenDrive = !!values["hidden-drive"];
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse(`--display is a whole display number: ${values.display}`);
+const reserved = reservedDisplay(DISPLAY, "--display");
+if (reserved) refuse(reserved);
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, "run-"));

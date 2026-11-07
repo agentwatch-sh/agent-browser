@@ -19,6 +19,14 @@ export const GUARD_PY = fileURLToPath(new URL("./harness_guard.py", import.meta.
  *  RESERVED_DISPLAYS in harness_guard.py and chrome-extension's run.sh (test/harness-guard.test.ts compares them). */
 export const RESERVED_DISPLAYS: readonly number[] = [0, 90, 147, 190, 191, 192];
 
+/** The refusal of a display that no harness takes (RESERVED_DISPLAYS), or null. `what` names the setting, for example
+ *  "--display" or "DISPLAY_N". Every harness's option check calls it, before it makes or starts anything. */
+export function reservedDisplay(n: number, what: string): string | null {
+  return RESERVED_DISPLAYS.includes(n)
+    ? `${what} names :${n}, a reserved display (${RESERVED_DISPLAYS.join(", ")}: :90 is agentwatch's agent browser, the others are other programs' on taylor): no harness takes it, even while it is free; pass another one`
+    : null;
+}
+
 export type HarnessGuard = {
   /** The guard's pid (0: no guard, not Linux). */
   pid: number;

@@ -28,7 +28,7 @@ import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { bothFocusedMs, LAYOUT, pointerSignals, startServer, type Rec } from "./probe.ts";
-import { harnessGuard } from "../guard.ts";
+import { harnessGuard, reservedDisplay } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, display: { type: "string" }, exp: { type: "string" }, n: { type: "string" }, "no-window-size": { type: "boolean" } } });
 if (!values["out-dir"] || process.platform !== "linux") { process.stderr.write("usage (Linux only): node test/live/anti-detect/extra.ts --out-dir DIR [--display 122] [--exp raise|two|two-lock|two-noact|popup|jump|mem|pointer|caret] [--n 8] [--no-window-size]\n"); process.exit(2); }
@@ -36,6 +36,8 @@ const DISPLAY = Number(values.display ?? 122), EXP = values.exp ?? "raise", N = 
 const CHECKS = ["raise", "two", "two-lock", "two-noact", "popup", "jump", "mem", "pointer", "caret"];
 if (!CHECKS.includes(EXP)) { process.stderr.write(`--exp takes one check of: ${CHECKS.join(", ")} (not ${JSON.stringify(EXP)})\n`); process.exit(2); }
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1 || !Number.isInteger(N) || N < 1) { process.stderr.write("--display and --n are whole numbers\n"); process.exit(2); }
+const reserved = reservedDisplay(DISPLAY, "--display");
+if (reserved) { process.stderr.write(`${reserved}\n`); process.exit(2); }
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, `${EXP}-`));

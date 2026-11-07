@@ -21,8 +21,8 @@ Chromium. The guard is a process of its own, outside the driver's process tree a
 - Then the guard sends SIGTERM to each recorded process that still runs with its recorded start time,
   and to their children; SIGKILL after 5 s; it waits until all are gone (at most 20 s), and names them
   on stderr. It signals through the record's pidfd, so a process that took a recorded pid later gets
-  no signal. Only when it could open no pidfd (no fd left) does it check the start time right before
-  the signal, which leaves a short gap.
+  no signal. Only when `pidfd_open` fails with an error other than ESRCH (for example no fd left)
+  does it check the start time right before the signal, which leaves a short gap.
 - The guard closes every fd that it inherited, from 3 up, but its pipe from the driver: it holds no
   outer lock (heavy.lock's fd under `flock`) and no pipe of its caller.
 
@@ -63,8 +63,9 @@ No harness takes the X displays 0, 90 (agentwatch's agent browser on taylor, the
 190, 191 or 192, whatever its setting is: `RESERVED_DISPLAYS` in `harness_guard.py` and `guard.ts`
 (and chrome-extension's `run.sh`; the tests compare the lists). When such a display stops, its socket
 and lock file go, so a free test alone would take it. The parity probe's display search (from 90 on)
-skips them. The other harnesses take the one display that `--display` or `DISPLAY_N` names, and stop
-when it is in use.
+skips them. Every other harness refuses a reserved display that `--display` or `DISPLAY_N` names
+(exit 2, before it makes or starts anything), and the dry run of `anti-detect/mac.ts` also refuses a
+display whose next one (its stable part's) is reserved: `--display 89`, `146` or `189`.
 
 ## Which harnesses
 

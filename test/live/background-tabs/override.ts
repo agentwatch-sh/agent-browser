@@ -41,7 +41,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AGENT_ARGS } from "../../../src/agent.ts";
 import { CDPConnection } from "../../../src/cdp.ts";
-import { harnessGuard } from "../guard.ts";
+import { harnessGuard, reservedDisplay } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, trials: { type: "string" } } });
 const usage = "usage: node test/live/background-tabs/override.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 96] [--trials 3]";
@@ -54,6 +54,8 @@ if (!values["out-dir"]) refuse(usage);
 if (process.platform !== "linux") refuse(`the size-override check runs on Linux only, in a private Xvfb (this is ${process.platform})`);
 const DISPLAY = Number(values.display ?? 96), TRIALS = Number(values.trials ?? 3), CHROME = values.chrome ?? "/usr/bin/chromium";
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse(`--display is a whole display number: ${values.display}`);
+const reserved = reservedDisplay(DISPLAY, "--display");
+if (reserved) refuse(reserved);
 if (!Number.isInteger(TRIALS) || TRIALS < 1 || TRIALS > 20) refuse(`--trials is a whole number from 1 to 20: ${values.trials}`);
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });

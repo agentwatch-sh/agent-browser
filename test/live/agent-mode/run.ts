@@ -96,7 +96,7 @@ import { StandInDaemon } from "./daemon.ts";
 import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
-import { harnessGuard, type HarnessGuard } from "../guard.ts";
+import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 /** True when nothing listens on 127.0.0.1:`port`. */
@@ -140,6 +140,8 @@ function runChecked(run: string): string {
 }
 if (!OWN_RUN) runChecked(resolve(process.env.RUN!));
 // The early stops: before the run makes anything or calls CONTROL.
+const reserved = EXTERNAL ? null : reservedDisplay(DISPLAY_N, "DISPLAY_N");
+if (reserved) { process.stderr.write(`${reserved}\n`); process.exit(2); }
 if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) { process.stderr.write(`display :${DISPLAY_N} is taken; set DISPLAY_N\n`); process.exit(2); }
 if (SITE_PORT !== 0 && !(await portFree(SITE_PORT))) { process.stderr.write(`port ${SITE_PORT} is taken (the probe's site needs it)\n`); process.exit(2); }
 const RUN = runChecked(resolve(process.env.RUN || mkdtempSync(join(tmpdir(), "ab-agent-live-"))));

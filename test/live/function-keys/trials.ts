@@ -4,6 +4,7 @@
 
 import { keyFields } from "../../../src/browser.ts";
 import type { KeyEvent } from "../../../src/record.ts";
+import { reservedDisplay } from "../guard.ts";
 
 export type Way = "before" | "record" | "press";
 export type Trial = { way: Way; spec: string };
@@ -35,7 +36,9 @@ export function startMode(platform: string, f: Flags): Mode | { error: string } 
   if (platform === "linux") {
     const mac = f.onMyScreen ? "--on-my-screen" : f.background ? "--background" : f.fullScreen ? "--full-screen" : undefined;
     if (mac) return { error: `${mac} is for macOS: on Linux the check always runs in a private Xvfb, so that no window reaches a person's screen` };
-    return { platform: "linux", chrome: f.chrome ?? "/usr/bin/chromium", display: Number(f.display ?? 97) };
+    const display = Number(f.display ?? 97), reserved = reservedDisplay(display, "--display");
+    if (reserved) return { error: reserved };
+    return { platform: "linux", chrome: f.chrome ?? "/usr/bin/chromium", display };
   }
   if (platform === "darwin") {
     if (!f.onMyScreen) {

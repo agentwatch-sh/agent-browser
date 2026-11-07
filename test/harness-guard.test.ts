@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -314,4 +314,105 @@ test("the guard closes the fds that it inherited (an outer lock's fd, a caller's
     assert.ok(await logged(() => err, /harness-guard: nofd: the driver's pipe \(fd 9\) is missing; it stops 1 processes of the harness: sleep \d+/), err);
     assert.doesNotMatch(err, /Traceback/);
   } finally { stopOwn(pids); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("every harness refuses a reserved display that its option names (--display 90, DISPLAY_N=90) before it makes or starts anything", { skip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  try {
+    const live = fileURLToPath(new URL("./live/", import.meta.url));
+    // A stand-in chrome-extension checkout: the agent-mode run checks only that its two files are there.
+    mkdirSync(join(dir, "ext/agent"), { recursive: true });
+    mkdirSync(join(dir, "ext/test/live"), { recursive: true });
+    writeFileSync(join(dir, "ext/agent/manifest.json"), "{}");
+    writeFileSync(join(dir, "ext/test/live/host.py"), "");
+    // Stand-ins that fail at once, first on PATH: a harness whose check let the display through starts no real Xvfb
+    // (and the agent-mode run no npm install); it then fails with another message, and the row fails.
+    mkdirSync(join(dir, "bin"));
+    for (const bin of ["Xvfb", "npm"]) writeFileSync(join(dir, "bin", bin), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const PATH = `${join(dir, "bin")}:${process.env.PATH}`;
+    const out = join(dir, "out");
+    const rows: [string, string[], Record<string, string>, RegExp][] = [
+      ["background-tabs/check.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
+      ["background-tabs/override.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
+      ["background-tabs/visibility.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
+      ["function-keys/check.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
+      ["anti-detect/run.ts", ["--display", "147"], {}, /^--display names :147, a reserved display/],
+      ["anti-detect/extra.ts", ["--display", "0"], {}, /--display/],
+      ["anti-detect/extra.ts", ["--display", "190"], {}, /^--display names :190, a reserved display/],
+      ["anti-detect/mac.ts", ["--dry-run", "--display", "90"], {}, /^--display names :90, a reserved display/],
+      // The dry run's stable part takes the next display: 89 would give :90, 146 :147, 189 :190.
+      ["anti-detect/mac.ts", ["--dry-run", "--display", "89"], {}, /^--display 89 \(its stable part takes the next one\) names :90, a reserved display/],
+      ["anti-detect/mac.ts", ["--dry-run", "--display", "146"], {}, /names :147, a reserved display/],
+      ["anti-detect/mac.ts", ["--dry-run", "--display", "189"], {}, /names :190, a reserved display/],
+      ["agent-mode/run.ts", [], { DISPLAY_N: "90", CHROME_EXTENSION: join(dir, "ext"), SITE_PORT: "0" }, /^DISPLAY_N names :90, a reserved display/],
+    ];
+    for (const [file, args, env, want] of rows) {
+      const r = spawnSync(process.execPath, [join(live, file), ...(file.startsWith("agent-mode") ? [] : ["--out-dir", out]), ...args],
+        { env: { ...process.env, PATH, CHROMIUM: "/bin/false", HARNESS_LOCK: join(dir, "harness.lock"), ...env }, encoding: "utf8", timeout: 60_000 });
+      assert.equal(r.status, 2, `${file} ${args.join(" ")} ${JSON.stringify(env)}: ${r.stderr}`);
+      assert.match(r.stderr, want, `${file} ${args.join(" ")}`);
+      assert.doesNotMatch(r.stderr, /harness-guard/, `${file}: no guard, no lock`);
+    }
+    assert.equal(existsSync(out), false, "no harness made its out dir");
+    assert.equal(existsSync(join(dir, "harness.lock")), false, "no harness took the lock");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the option parsers: a reserved display is refused, its neighbours are not; the stable part checks only its own display", async () => {
+  const { startMode: bt } = await import("./live/background-tabs/rules.ts");
+  const { startMode: fk } = await import("./live/function-keys/trials.ts");
+  const { macArgs } = await import("./live/anti-detect/mac-rules.ts");
+  const { reservedDisplay } = await import("./live/guard.ts");
+  for (const n of [0, 90, 147, 190, 191, 192]) assert.match(reservedDisplay(n, "--display") ?? "", new RegExp(`^--display names :${n}, a reserved display`));
+  for (const n of [1, 89, 91, 146, 148, 189, 193]) assert.equal(reservedDisplay(n, "--display"), null);
+  assert.match((bt("linux", { display: "90" }) as { error: string }).error, /reserved display/);
+  assert.equal((bt("linux", { display: "91" }) as { display: number }).display, 91);
+  assert.match((fk("linux", { display: "192" }) as { error: string }).error, /names :192, a reserved display/);
+  assert.equal((fk("linux", { display: "91" }) as { display: number }).display, 91);
+  const linux = { platform: "linux", exists: (p: string) => p === "/usr/bin/chromium", defaultChrome: "/x" };
+  assert.equal(macArgs(["--dry-run", "--out-dir", "/tmp/o", "--display", "88"], linux).ok, true);
+  assert.equal(macArgs(["--dry-run", "--out-dir", "/tmp/o", "--display", "89"], linux).ok, false);
+  const stable = (d: string) => macArgs(["--dry-run", "--part", "stable", "--quiet-since", "1", "--pointer", "1,2", "--out-dir", "/tmp/o", "--display", d], linux);
+  assert.equal(stable("146").ok, true, "the stable part runs on its own display only");
+  assert.equal(stable("147").ok, false);
+});
+
+test("record() keeps no pidfd of a process whose start time is not the snapshot's (the pid was taken again)", { skip }, () => {
+  const r = py(`
+import argparse, os, subprocess, harness_guard as h
+a = argparse.Namespace(name="snap", driver=0, pid_dir=None, channel_fd=0, limit=0, wait=1)
+g = h.Guard(a)
+p = subprocess.Popen(["sleep", "30"])
+st = h.stat_of(p.pid)
+g.record(p.pid, (st[0], st[1] - 1, st[2], st[3]))  # a snapshot of the process that had this pid before
+print("stale", p.pid in g.rec)
+g.record(p.pid, st)
+print("own", p.pid in g.rec and g.rec[p.pid][2] is not None)
+p.kill(); p.wait()
+`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split("\n"), ["stale False", "own True"], r.stderr);
+});
+
+test("watch() compares the driver's start time before it records the driver's tree: a dead driver's pid that another process took adds no record", { skip }, () => {
+  const r = py(`
+import argparse, os, subprocess, time, harness_guard as h
+p = subprocess.Popen(["sh", "-c", "sleep 30 & wait"])  # another process with a child now has the driver's pid
+time.sleep(0.3)
+rd, wr = os.pipe()  # the driver's pipe stays open: only the start time tells that the driver is gone
+a = argparse.Namespace(name="reused", driver=p.pid, pid_dir=None, channel_fd=rd, channel_missing=False, limit=0, wait=1)
+g = h.Guard(a)
+g.driver_start = h.stat_of(p.pid)[1] - 1
+g.watch()
+print("reason", g.reason)
+print("records", sorted(g.rec))
+g.stop()
+print("alive", p.poll() is None, len(h.tree(h.table(), [p.pid])))
+p.kill(); p.wait()
+`);
+  assert.equal(r.status, 0, r.stderr);
+  const [reason, records, alive] = r.stdout.trim().split("\n");
+  assert.match(reason, /^reason the driver \d+ is gone$/);
+  assert.equal(records, "records []");
+  assert.equal(alive, "alive True 1", "the other process and its child still run");
 });
