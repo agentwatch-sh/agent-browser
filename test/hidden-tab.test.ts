@@ -735,6 +735,35 @@ for (const drive of ["window", "hidden"] as const) {
   const label = drive === "window" ? "a window of its own" : "hiddenDrive";
   const mode = drive === "window" ? w : h;
 
+  for (const action of ["input", "shot", "record"] as const) {
+    test(`ab-b84.24: ${label}: ${action} refuses an off-list about:blank origin before capture or clear of a size left set`, async () => {
+      const { b, tab, page, name } = await withSizeLeft(drive);
+      try {
+        page.url = "about:blank";
+        page.securityOrigin = "https://elsewhere.invalid";
+        const plan = planRecording({ out: join(c.dir, `${name}-blank.mp4`), size: "320x180", fps: 10, settle: 100, ffmpeg: FFMPEG }, b.allow);
+        const run = action === "input" ? () => tab.click("#b")
+          : action === "shot" ? () => tab.screenshot(join(c.dir, `${name}-blank.png`))
+          : () => recordTab(tab, plan, (take) => tab.withInput(take));
+        const { calls } = await callsOf(page, () => assert.rejects(run(), /elsewhere\.invalid is not on the allowlist/));
+        assert.deepEqual(methodsOf(calls), ["Target.getTargetInfo", "Page.getFrameTree"],
+          "no capture, clear, page code, input or screencast before refusal");
+        assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 });
+        assert.equal(existsSync(join(c.dir, `${name}-blank.png`)), false);
+        assert.equal(existsSync(join(c.dir, `${name}-blank.mp4`)), false);
+        const off = await callsOf(page, () => assert.rejects(tab.goto("https://elsewhere.invalid/"), NotAllowedError));
+        assert.deepEqual(off.calls, [], "goto checks only its destination");
+        const leaving = await callsOf(page, () => tab.goto(fx.base + "/next"));
+        assert.ok(methodsOf(leaving.calls).includes("Page.navigate"), "goto can leave the off-list origin");
+        const nav = methodsOf(leaving.calls).indexOf("Page.navigate");
+        assert.ok(!methodsOf(leaving.calls.slice(0, nav)).includes("Runtime.evaluate"), "no code runs in the off-list document while leaving");
+      } finally {
+        await b.disconnect();
+        await commands.close(mode(), { tab: name });
+      }
+    });
+  }
+
   test(`${label}: Tab.setFiles on a tab kept attached, after a Tab.screenshot with a size left the override set: it first ends the captures sent under it, then clears it`, async () => {
     // review-65 B1: out of a window of its own, setFiles goes neither to whileDrawn nor to byHand (review-65b N4: both drives).
     const { b, tab, page, name } = await withSizeLeft(drive);

@@ -213,6 +213,100 @@ test("ab-b84.20: the target list's URL can run ahead of the document (a navigati
   } finally { page.listedUrl = undefined; await tab.close(); }
 });
 
+// These URLs are identical in the target list and the frame tree. Only securityOrigin exposes the off-list opener.
+for (const action of ["click", "type", "press", "shot"] as const) {
+  test(`ab-b84.24: ${action} refuses about:blank of an off-list origin before code, input or capture`, async () => {
+    const page = fake.addPage("about:blank");
+    page.securityOrigin = "https://elsewhere.invalid";
+    const tab = await browser.attach(page.targetId);
+    try {
+      const from = fake.calls.length;
+      const run = action === "click" ? () => tab.click("#b") : action === "type" ? () => tab.type("x")
+        : action === "press" ? () => tab.press("Enter") : () => tab.screenshot(join(c.dir, "blank-off.png"));
+      await assert.rejects(run(), /elsewhere\.invalid is not on the allowlist/);
+      const calls = fake.calls.slice(from).filter((x) => x.targetId === page.targetId);
+      assert.deepEqual(calls.map((x) => x.method), ["Target.getTargetInfo", "Page.getFrameTree"],
+        "one browser-side read first, one frame-tree read, no page code or capture");
+      assert.equal(existsSync(join(c.dir, "blank-off.png")), false);
+    } finally { await tab.close(); }
+  });
+}
+
+test("ab-b84.24: an on-list blank origin passes; an external opaque blank fails even without its opener", async () => {
+  const opener = fake.addPage(base);
+  const page = fake.openFrom(opener, "about:blank");
+  const tab = await browser.attach(page.targetId);
+  try {
+    page.securityOrigin = new URL(base).origin;
+    assert.deepEqual(await pageCode(page.targetId, () => tab.assertAllowed()), []);
+    for (const origin of ["null", "://", "", "about:blank"]) {
+      page.securityOrigin = origin;
+      assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(tab.assertAllowed(), /unverified document origin/)), []);
+    }
+    page.url = "about:srcdoc"; // still refused by the URL check
+    await assert.rejects(tab.assertAllowed(), NotAllowedError);
+    page.url = "about:blank";
+    // Losing the opener never proves a fresh origin (review I1).
+    fake.closePage(opener);
+    assert.equal((await browser.conn.send("Target.getTargetInfo", { targetId: page.targetId })).targetInfo.openerId, undefined);
+    for (const origin of ["null", "://", ""]) {
+      page.securityOrigin = origin;
+      assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(tab.assertAllowed(), /unverified document origin/)), []);
+    }
+    page.securityOrigin = "https://elsewhere.invalid";
+    await assert.rejects(tab.assertAllowed(), /elsewhere\.invalid is not on the allowlist/);
+  } finally { await tab.close(); fake.pages.delete(opener.targetId); }
+});
+
+test("ab-b84.24: a new blank tab without an opener accepts input and a shot", async () => {
+  const tab = await browser.open("about:blank");
+  try {
+    fake.pages.get(tab.targetId)!.securityOrigin = "://";
+    await tab.press("Enter");
+    const file = join(c.dir, "blank-new.png");
+    await tab.screenshot(file);
+    assert.ok(existsSync(file));
+  } finally { await tab.close(); }
+});
+
+test("ab-b84.24: a created blank loses its trust after navigation or a new connection", async () => {
+  const tab = await browser.open("about:blank");
+  const other = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  try {
+    const attached = await other.attach(tab.targetId);
+    await assert.rejects(attached.assertAllowed(), /unverified document origin/);
+    await tab.assertAllowed();
+    fake.navigate(fake.pages.get(tab.targetId)!, "about:blank");
+    await assert.rejects(tab.assertAllowed(), /unverified document origin/);
+  } finally { await other.disconnect(); await tab.close(); }
+});
+
+test("ab-b84.24: noopener links have no opener metadata", async () => {
+  const tab = await browser.open(base);
+  try {
+    const page = fake.pages.get(tab.targetId)!;
+    const link = page.select("#next")[0];
+    link.setAttribute("href", `${base}/next`);
+    link.setAttribute("target", "_blank");
+    const from = new Set(fake.pages.keys());
+    await tab.click("#next");
+    const linked = [...fake.pages.values()].find((p) => !from.has(p.targetId))!;
+    assert.ok(linked, "the noopener link opened a tab");
+    assert.equal((await browser.conn.send("Target.getTargetInfo", { targetId: linked.targetId })).targetInfo.openerId, undefined);
+    fake.closePage(linked);
+  } finally { await tab.close(); }
+});
+
+test("ab-b84.24: Tab.url joins the frame URL and urlFragment without page code", async () => {
+  const tab = await browser.open(`${base}/next#part?x=1`);
+  try {
+    assert.deepEqual(await pageCode(tab.targetId, async () => {
+      assert.equal(await tab.url(), `${base}/next#part?x=1`);
+      await tab.assertAllowed();
+    }), []);
+  } finally { await tab.close(); }
+});
+
 test("setFiles fills a file input", async () => {
   const tab = await browser.open(base);
   const f = join(c.dir, "up.txt");

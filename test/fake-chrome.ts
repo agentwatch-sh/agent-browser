@@ -276,6 +276,8 @@ export class FakePage {
    * a new tab its first URL over its first empty document, and an error page the URL that failed. Undefined: `url`.
    */
   listedUrl: string | undefined;
+  /** Override the document origin for an about:blank inherited from its opener. */
+  securityOrigin: string | undefined;
   title = "";
   text = "";
   elements: FakeElement[] = [];
@@ -358,6 +360,8 @@ export class FakePage {
   background = false;
   /** The page that opened this one (window.open, a target=_blank link: FakeChrome.openFrom), if any. */
   opener?: FakePage;
+  /** The tab keeps its UI return tab, but a noopener link has no script opener. */
+  noopener = false;
   /** The page drew a frame since its load: false only for a page that loaded in a background tab. */
   drew = true;
   /** The page changes by itself (a caret, an animation): a capture sent while Chrome draws nothing still ends after a frame. */
@@ -562,6 +566,7 @@ export class FakePage {
     this.frameWaiters = []; // a new document never runs the old one's animation frames
     this.flushMoves();
     this.url = url;
+    this.securityOrigin = undefined;
     let spec: PageSpec | undefined;
     if (url !== "about:blank") { try { spec = this.fake.site(new URL(url)); } catch { spec = undefined; } }
     this.title = spec?.title ?? "";
@@ -701,7 +706,7 @@ export class FakePage {
     if (el.hasAttribute("download")) { void this.fake.download(this, target, el.getAttribute("download") || basename(new URL(target).pathname)); return; }
     // A target=_blank link (noopener, Chrome's default for it): the opener's frame asks for a navigation in a new tab
     // (Page.frameRequestedNavigation with disposition newTab, on the opener's sessions), and the page opens there.
-    if (el.getAttribute("target") === "_blank") { this.fake.requestNavigation(this, target, "newTab"); this.fake.openFrom(this, target); return; }
+    if (el.getAttribute("target") === "_blank") { this.fake.requestNavigation(this, target, "newTab"); this.fake.openFrom(this, target).noopener = true; return; }
     this.fake.navigate(this, target);
   }
 
@@ -959,7 +964,7 @@ export class FakeChrome {
 
   private info(p: FakePage) {
     const attached = [...this.sessions.values()].some((s) => s.page === p);
-    return { targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
+    return { ...(p.opener && !p.noopener && this.pages.has(p.opener.targetId) ? { openerId: p.opener.targetId, openerFrameId: `F-${p.opener.targetId}` } : {}), targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
   }
 
   private async onMessage(client: WebSocket, msg: { id: number; method: string; params?: any; sessionId?: string }) {
@@ -1208,7 +1213,14 @@ export class FakeChrome {
         } else if (page.background) data = page.framesDrawn >= 2 ? SHOT_FULL : SHOT_TOP_ONLY;
         return page.background ? page.capture({ data }, params, s.id) : { data };
       }
-      case "Page.getFrameTree": return { frameTree: { frame: { id: `F-${page.targetId}`, url: page.url } } };
+      case "Page.getFrameTree": {
+        const hash = page.url.indexOf("#");
+        return { frameTree: { frame: { id: `F-${page.targetId}`,
+          url: hash < 0 ? page.url : page.url.slice(0, hash),
+          urlFragment: hash < 0 ? undefined : page.url.slice(hash),
+          securityOrigin: page.securityOrigin ?? new URL(page.url).origin,
+        } } };
+      }
       case "Network.getResponseBody": {
         const b = page.bodies.get(params.requestId);
         if (!b) throw new Error("No resource with given identifier found");
