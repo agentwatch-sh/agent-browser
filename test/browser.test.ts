@@ -213,6 +213,291 @@ test("ab-b84.20: the target list's URL can run ahead of the document (a navigati
   } finally { page.listedUrl = undefined; await tab.close(); }
 });
 
+// These URLs are identical in the target list and the frame tree. Only securityOrigin exposes the off-list opener.
+for (const action of ["click", "type", "press", "shot"] as const) {
+  test(`ab-b84.24: ${action} refuses about:blank of an off-list origin before code, input or capture`, async () => {
+    const page = fake.addPage("about:blank");
+    page.securityOrigin = "https://elsewhere.invalid";
+    const tab = await browser.attach(page.targetId);
+    try {
+      const from = fake.calls.length;
+      const run = action === "click" ? () => tab.click("#b") : action === "type" ? () => tab.type("x")
+        : action === "press" ? () => tab.press("Enter") : () => tab.screenshot(join(c.dir, "blank-off.png"));
+      await assert.rejects(run(), /elsewhere\.invalid is not on the allowlist/);
+      const calls = fake.calls.slice(from).filter((x) => x.targetId === page.targetId);
+      assert.deepEqual(calls.map((x) => x.method), ["Target.getTargetInfo", "Page.getFrameTree"],
+        "one browser-side read first, one frame-tree read, no page code or capture");
+      assert.equal(existsSync(join(c.dir, "blank-off.png")), false);
+    } finally { await tab.close(); }
+  });
+}
+
+test("ab-b84.24: an on-list blank origin passes; an external opaque blank fails even without its opener", async () => {
+  const opener = fake.addPage(base);
+  const page = fake.openFrom(opener, "about:blank");
+  const tab = await browser.attach(page.targetId);
+  try {
+    page.securityOrigin = new URL(base).origin;
+    assert.deepEqual(await pageCode(page.targetId, () => tab.assertAllowed()), []);
+    for (const origin of ["null", "://", "", "about:blank"]) {
+      page.securityOrigin = origin;
+      assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(tab.assertAllowed(), /unverified document origin/)), []);
+    }
+    page.url = "about:srcdoc"; // still refused by the URL check
+    await assert.rejects(tab.assertAllowed(), NotAllowedError);
+    page.url = "about:blank";
+    // Losing the opener never proves a fresh origin (review I1).
+    fake.closePage(opener);
+    const lost = (await browser.conn.send("Target.getTargetInfo", { targetId: page.targetId })).targetInfo;
+    assert.equal(lost.openerId, undefined);
+    assert.equal(lost.openerFrameId, `F-${opener.targetId}`);
+    for (const origin of ["null", "://", ""]) {
+      page.securityOrigin = origin;
+      assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(tab.assertAllowed(), /unverified document origin/)), []);
+    }
+    page.securityOrigin = "https://elsewhere.invalid";
+    await assert.rejects(tab.assertAllowed(), /elsewhere\.invalid is not on the allowlist/);
+  } finally { await tab.close(); fake.pages.delete(opener.targetId); }
+});
+
+test("ab-b84.24: a new blank tab without an opener accepts input and a shot", async () => {
+  const tab = await browser.open("about:blank");
+  try {
+    fake.pages.get(tab.targetId)!.securityOrigin = "://";
+    await tab.press("Enter");
+    const file = join(c.dir, "blank-new.png");
+    await tab.screenshot(file);
+    assert.ok(existsSync(file));
+  } finally { await tab.close(); }
+});
+
+test("ab-b84.24: a created blank loses its trust after navigation or a new connection", async () => {
+  const tab = await browser.open("about:blank");
+  const other = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  try {
+    const attached = await other.attach(tab.targetId);
+    await assert.rejects(attached.assertAllowed(), /unverified document origin/);
+    await tab.assertAllowed();
+    fake.navigate(fake.pages.get(tab.targetId)!, "about:blank");
+    await assert.rejects(tab.assertAllowed(), /unverified document origin/);
+  } finally { await other.disconnect(); await tab.close(); }
+});
+
+test("ab-b84.24: noopener links have no opener metadata", async () => {
+  const tab = await browser.open(base);
+  try {
+    const page = fake.pages.get(tab.targetId)!;
+    const link = page.select("#next")[0];
+    link.setAttribute("href", `${base}/next`);
+    link.setAttribute("target", "_blank");
+    const from = new Set(fake.pages.keys());
+    await tab.click("#next");
+    const linked = [...fake.pages.values()].find((p) => !from.has(p.targetId))!;
+    assert.ok(linked, "the noopener link opened a tab");
+    assert.equal((await browser.conn.send("Target.getTargetInfo", { targetId: linked.targetId })).targetInfo.openerId, undefined);
+    fake.closePage(linked);
+  } finally { await tab.close(); }
+});
+
+test("ab-b84.24 round 2: a personal pinned window opens a usable blank", async () => {
+  const owner = consumer();
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  try {
+    const opener = await personal.open(base);
+    const blank = await personal.open("about:blank");
+    assert.equal(fake.pages.get(blank.targetId)!.opener?.targetId, opener.targetId);
+    await blank.press("Enter");
+    await blank.screenshot(join(owner.dir, "pinned-blank.png"));
+    assert.ok(existsSync(join(owner.dir, "pinned-blank.png")));
+    await blank.close();
+    // The source must pass the document check before openInWindow runs any page code.
+    const page = fake.pages.get(opener.targetId)!;
+    page.url = "about:blank";
+    page.securityOrigin = "https://elsewhere.invalid";
+    assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(personal.open("about:blank"), NotAllowedError)), []);
+    await opener.close();
+  } finally { await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove(); }
+});
+
+test("ab-b84.24 round 2: navigation during attach clears blank trust before sessions.set", async () => {
+  fake.onCreateTarget = (page) => { page.onPageEnable = () => { fake.navigate(page, "about:blank"); }; };
+  try {
+    const tab = await browser.open("about:blank");
+    try { await assert.rejects(tab.assertAllowed(), /unverified document origin/); }
+    finally { await tab.close(); }
+  } finally { fake.onCreateTarget = undefined; }
+});
+
+test("ab-b84.24 round 2: goto clears blank trust without a frameNavigated event", async () => {
+  const tab = await browser.open("about:blank");
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    await tab.assertAllowed();
+    page.suppressFrameNavigated = true;
+    await tab.goto("about:blank");
+    await assert.rejects(tab.assertAllowed(), /unverified document origin/);
+  } finally { page.suppressFrameNavigated = false; await tab.close(); }
+});
+
+test("ab-b84.24 round 2: a created target still needs a known opaque origin or an on-list HTTP origin", async () => {
+  const tab = await browser.open("about:blank");
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    for (const origin of ["null", "://", "", new URL(base).origin]) {
+      page.securityOrigin = origin;
+      await tab.assertAllowed();
+    }
+    for (const origin of ["file://", "about:blank", "data:"]) {
+      page.securityOrigin = origin;
+      await assert.rejects(tab.assertAllowed(), /unverified document origin/);
+    }
+    page.securityOrigin = "https://elsewhere.invalid";
+    await assert.rejects(tab.assertAllowed(), /elsewhere\.invalid is not on the allowlist/);
+  } finally { await tab.close(); }
+});
+
+test("ab-b84.24 round 2: absent targetInfo fails with NotAllowedError before a frame read", async () => {
+  const tab = await browser.open(base);
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    page.omitTargetInfo = true;
+    const from = fake.calls.length;
+    await assert.rejects(tab.assertAllowed(), NotAllowedError);
+    assert.deepEqual(fake.calls.slice(from).filter((x) => x.targetId === page.targetId).map((x) => x.method), ["Target.getTargetInfo"]);
+  } finally { page.omitTargetInfo = false; await tab.close(); }
+});
+
+for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-only"] as const) {
+  test(`ab-b84.24 round 3: a pinned blank excludes ${kind} popups from its creation trust`, async () => {
+    const owner = consumer(), before = new Set(fake.pages.keys());
+    const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+    try {
+      const opener = await personal.open(base);
+      const page = fake.pages.get(opener.targetId)!;
+      let own: string | undefined;
+      page.onWindowOpen = () => {
+        const source = kind === "other-tab" ? fake.addPage(base) : page;
+        source.windowId = page.windowId;
+        const intruder = fake.openFrom(source, "about:blank");
+        if (kind === "iframe" || kind === "iframe-only") intruder.openerFrameId = `child-${page.targetId}`;
+        if (kind !== "null-return" && kind !== "iframe-only") own = fake.openFrom(page, "about:blank").targetId;
+        return kind !== "null-return";
+      };
+      if (kind === "iframe" || kind === "other-tab") {
+        const tab = await personal.open("about:blank");
+        assert.equal(tab.targetId, own, "only the source top frame's own target is selected");
+        await tab.press("Enter");
+      } else {
+        const reason = kind === "second-top" ? /2 matching tabs.*all remain open/
+          : kind === "null-return" ? /window.open returned no window/ : /timed out opening a tab in the pinned window/;
+        await assert.rejects(personal.open("about:blank", { name: "mine" }), reason);
+        const blanks = [...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)
+          && candidate.targetId !== page.targetId && candidate.url === "about:blank");
+        assert.ok(blanks.length > 0);
+        for (const candidate of blanks) {
+          assert.equal((await personal.allowedPages()).find((info) => info.targetId === candidate.targetId)?.name, undefined);
+          assert.deepEqual(fake.callsFor(candidate.targetId).filter((call) => ["Target.attachToTarget", "Target.closeTarget"].includes(call.method)), [],
+            "an uncertain target is neither taken nor closed");
+        }
+        // A known id still supports the goto escape after the failed open.
+        const attached = await personal.attach(blanks[0].targetId);
+        await assert.rejects(attached.assertAllowed(), /unverified document origin/);
+        await attached.goto(base);
+        await attached.assertAllowed();
+      }
+    } finally {
+      await personal.disconnect();
+      stopProxy(resolveOptions(owner.options()));
+      owner.remove();
+      for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+    }
+  });
+}
+
+test("ab-b84.24 round 3: pinned creation never retries in a document that replaced its checked source", async () => {
+  const owner = consumer(), before = new Set(fake.pages.keys());
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  try {
+    const opener = await personal.open(base);
+    const page = fake.pages.get(opener.targetId)!;
+    let executed = 0, navigated = false;
+    page.onWindowOpen = () => { executed++; fake.openFrom(page, "about:blank"); return true; };
+    page.onEvaluate = ({ expression }) => {
+      if (!navigated && expression?.includes("window.open")) {
+        navigated = true;
+        fake.navigate(page, "https://elsewhere.invalid/");
+      }
+    };
+    const from = fake.calls.length;
+    await assert.rejects(personal.open("about:blank"), /context/);
+    assert.equal(executed, 0, "no window.open code executes in the replacement document");
+    const calls = fake.calls.slice(from).filter((call) => call.targetId === page.targetId);
+    const evals = calls.filter((call) => call.method === "Runtime.evaluate" && String(call.params.expression).includes("window.open"));
+    assert.equal(evals.length, 1, "one call against the old world, with no retry");
+    const world = calls.findIndex((call) => call.method === "Page.createIsolatedWorld");
+    const check = calls.findIndex((call) => call.method === "Target.getTargetInfo");
+    assert.ok(world >= 0 && check > world, "the world exists before the source check");
+    assert.equal([...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)).length, 1, "no new popup gets trust");
+  } finally {
+    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+  }
+});
+
+test("ab-b84.24 round 4: a person's new tab during an unmatched open is neither taken nor closed", async () => {
+  const owner = consumer(), before = new Set(fake.pages.keys());
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  let person: string | undefined;
+  try {
+    const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
+    source.onWindowOpen = () => {
+      const page = fake.addPage("about:blank");
+      page.windowId = source.windowId;
+      person = page.targetId;
+      return true;
+    };
+    await assert.rejects(personal.open("about:blank", { name: "mine" }), /timed out opening a tab in the pinned window/);
+    assert.ok(person && fake.pages.has(person), "the person's tab stays open");
+    assert.equal((await personal.allowedPages()).find((page) => page.targetId === person)?.name, undefined, "no name is assigned to the person's tab");
+    assert.deepEqual(fake.callsFor(person!).filter((call) => ["Target.attachToTarget", "Target.closeTarget"].includes(call.method)), []);
+  } finally {
+    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+  }
+});
+
+test("ab-b84.24 round 4: the confirmed blank outside the pinned window is closed with the original error", async () => {
+  const owner = consumer(), before = new Set(fake.pages.keys());
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  let misplaced: string | undefined;
+  try {
+    const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
+    source.onWindowOpen = () => {
+      const page = fake.openFrom(source, "about:blank");
+      page.windowId = source.windowId + 1000;
+      misplaced = page.targetId;
+      return true;
+    };
+    await assert.rejects(personal.open("about:blank"), /new tab landed outside the pinned window; closed it/);
+    assert.ok(misplaced && !fake.pages.has(misplaced), "only the confirmed misplaced tab is closed");
+    assert.ok(fake.pages.has(source.targetId), "the source stays open");
+    assert.equal(fake.callsFor(misplaced!).filter((call) => call.method === "Target.closeTarget").length, 1);
+  } finally {
+    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+  }
+});
+
+test("ab-b84.24: Tab.url joins the frame URL and urlFragment without page code", async () => {
+  const tab = await browser.open(`${base}/next#part?x=1`);
+  try {
+    assert.deepEqual(await pageCode(tab.targetId, async () => {
+      assert.equal(await tab.url(), `${base}/next#part?x=1`);
+      await tab.assertAllowed();
+    }), []);
+  } finally { await tab.close(); }
+});
+
 test("setFiles fills a file input", async () => {
   const tab = await browser.open(base);
   const f = join(c.dir, "up.txt");
