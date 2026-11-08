@@ -145,12 +145,13 @@ echo "$*" >> "$here/control.calls"
 if [ "$1" = status ] && [ "$STAND_IN_CONTROL" = signal ] && [ "$(grep -c '^status' "$here/control.calls")" = 2 ]; then
   kill -INT "$PPID"; sleep 2
 fi
-echo "{\\"ok\\": true, \\"running\\": \${STAND_IN_RUNNING:-true}, \\"receiver\\": true, \\"endpoint\\": {\\"state\\": \\"ready\\"}}"
+echo "{\\"ok\\": true, \\"socket\\": \\"$here/real/relay.sock\\", \\"running\\": \${STAND_IN_RUNNING:-true}, \\"receiver\\": true, \\"endpoint\\": {\\"state\\": \\"ready\\"}}"
 `;
 
 /**
  * The fault injection of suiteStandIn, for the run only (NODE_OPTIONS=--import=<hook>; STAND_IN_HOOK picks it). Each
  * action names a path of the run folder (RUN, or a new ab-agent-live-* folder) and goes into hook.log.
+ * - site-port:<port>: redirect the 8781 availability check to the test's own listener.
  * - race:<names>: just before the run's mkdirSync of <RUN>/<name>, another "run" makes that folder with theirs.txt.
  * - empty-error: the run's mkdirSync of <RUN>/install throws an error with an empty message.
  * - signal-then-error: the probe's site ignores SIGTERM and then sends SIGINT to the run, so that the cleanup that
@@ -159,6 +160,7 @@ echo "{\\"ok\\": true, \\"running\\": \${STAND_IN_RUNNING:-true}, \\"receiver\\"
  */
 const STAND_IN_HOOK = `import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname } from "node:path";
 const [mode, arg = ""] = (process.env.STAND_IN_HOOK ?? "").split(":");
@@ -170,6 +172,12 @@ if (mode === "signal-then-error" && process.argv[1]?.endsWith("/site.mjs")) {
 }
 const inRun = (p, name) => basename(String(p)) === name && (process.env.RUN ? dirname(String(p)) === process.env.RUN : /\\/ab-agent-live-[^/]+$/.test(dirname(String(p))));
 if (mode && process.argv[1]?.endsWith("/test/live/agent-mode/run.ts")) {
+  if (mode === "site-port") {
+    const connect = net.connect;
+    net.connect = function (port, ...rest) {
+      return connect.call(this, port === 8781 ? Number(arg) : port, ...rest);
+    };
+  }
   const mkdir = fs.mkdirSync, write = fs.writeFileSync, get = http.get;
   let signalled = false;
   process.on("SIGINT", () => { signalled = true; });

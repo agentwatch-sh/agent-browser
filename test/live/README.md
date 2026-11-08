@@ -80,5 +80,7 @@ No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
 screen, with no Xvfb, and the guard is Linux only. `sheets.ts` starts no Xvfb and drives a running
 agent browser. The agent-mode run's external mode starts no Xvfb or Chromium.
+Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
+The run exits 2 for different paths, missing files or socket fields, invalid JSON, a failed status or a status timeout.
 
 Environment: `HARNESS_LOCK_WAIT` (seconds), `HARNESS_LOCK` (another lock file: for the tests only).

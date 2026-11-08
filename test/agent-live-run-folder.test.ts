@@ -141,7 +141,7 @@ test("a part that another run makes just before this run's make is never removed
 });
 
 test("a taken site port stops the run before it makes anything or calls CONTROL (review-64, B2)", async () => {
-  // The test's own listener holds the port that SITE_PORT names.
+  // The hook redirects the fixed site port check to this test's own listener. It touches no shared port.
   const held = createServer();
   await new Promise<void>((r) => held.listen(0, "127.0.0.1", r));
   const s = await suiteStandIn();
@@ -149,9 +149,9 @@ test("a taken site port stops the run before it makes anything or calls CONTROL 
     const port = (held.address() as { port: number }).port, tmp = join(s.dir, "tmp"), run = join(s.dir, "run");
     mkdirSync(tmp);
     for (const env of [{ RUN: run }, { TMPDIR: tmp }]) {
-      const r = await s.run({ ...env, SITE_PORT: String(port) });
+      const r = await s.run({ ...env, SITE_PORT: "8781", STAND_IN_HOOK: `site-port:${port}` });
       assert.equal(r.status, 2, r.stdout + r.stderr);
-      assert.equal(r.stderr, `port ${port} is taken (the probe's site needs it)\n`);
+      assert.equal(r.stderr, `port 8781 is taken (the probe's site needs it)\n`);
     }
     assert.deepEqual(s.calls(), []);
     assert.equal(existsSync(run), false);
