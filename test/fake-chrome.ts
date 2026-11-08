@@ -281,6 +281,9 @@ export class FakePage {
   /** Tests can omit one browser metadata answer or navigate during Page.enable. */
   omitTargetInfo = false;
   onPageEnable?: () => void;
+  onWindowOpen?: (url: string) => boolean;
+  onEvaluate?: (params: { expression?: string; contextId?: number }) => void;
+  openerFrameId?: string;
   suppressFrameNavigated = false;
   title = "";
   text = "";
@@ -665,7 +668,11 @@ export class FakePage {
       setTimeout: (fn: () => void, ms: number) => page.later(ms, fn),
       clearTimeout: (t: NodeJS.Timeout | undefined) => page.cancel(t),
       console: { log: (...args: unknown[]) => page.fake.console(page, args) },
-      open: (url: string) => { page.fake.openFrom(page, url ?? "about:blank"); return null; },
+      open: (url: string) => {
+        if (page.onWindowOpen) return page.onWindowOpen(url ?? "about:blank") ? {} : null;
+        page.fake.openFrom(page, url ?? "about:blank");
+        return {};
+      },
     };
     sandbox.window = sandbox;
     return vm.createContext(sandbox);
@@ -969,7 +976,7 @@ export class FakeChrome {
 
   private info(p: FakePage) {
     const attached = [...this.sessions.values()].some((s) => s.page === p);
-    return { ...(p.opener && !p.noopener ? { ...(this.pages.has(p.opener.targetId) ? { openerId: p.opener.targetId } : {}), openerFrameId: `F-${p.opener.targetId}` } : {}), targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
+    return { ...(p.opener && !p.noopener ? { ...(this.pages.has(p.opener.targetId) ? { openerId: p.opener.targetId } : {}), openerFrameId: p.openerFrameId ?? `F-${p.opener.targetId}` } : {}), targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
   }
 
   private async onMessage(client: WebSocket, msg: { id: number; method: string; params?: any; sessionId?: string }) {
@@ -1140,7 +1147,7 @@ export class FakeChrome {
         return { frameId: `F-${page.targetId}`, loaderId: randomUUID() };
       }
       case "Page.createIsolatedWorld": return { executionContextId: page.createIsolatedWorld() };
-      case "Runtime.evaluate": return page.evaluate(String(params.expression), !!params.awaitPromise, params.contextId);
+      case "Runtime.evaluate": page.onEvaluate?.(params); return page.evaluate(String(params.expression), !!params.awaitPromise, params.contextId);
       case "Input.dispatchMouseEvent": {
         if (params.type === "mouseWheel") {
           page.wheel += params.deltaY ?? 0;

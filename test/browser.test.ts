@@ -367,6 +367,76 @@ test("ab-b84.24 round 2: absent targetInfo fails with NotAllowedError before a f
   } finally { page.omitTargetInfo = false; await tab.close(); }
 });
 
+for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-only"] as const) {
+  test(`ab-b84.24 round 3: a pinned blank excludes ${kind} popups from its creation trust`, async () => {
+    const owner = consumer(), before = new Set(fake.pages.keys());
+    const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+    try {
+      const opener = await personal.open(base);
+      const page = fake.pages.get(opener.targetId)!;
+      let own: string | undefined;
+      page.onWindowOpen = () => {
+        const source = kind === "other-tab" ? fake.addPage(base) : page;
+        source.windowId = page.windowId;
+        const intruder = fake.openFrom(source, "about:blank");
+        if (kind === "iframe" || kind === "iframe-only") intruder.openerFrameId = `child-${page.targetId}`;
+        if (kind !== "null-return" && kind !== "iframe-only") own = fake.openFrom(page, "about:blank").targetId;
+        return kind !== "null-return";
+      };
+      const tab = await personal.open("about:blank");
+      if (kind === "iframe" || kind === "other-tab") {
+        assert.equal(tab.targetId, own, "only the source top frame's own target is selected");
+        await tab.press("Enter");
+      } else {
+        await assert.rejects(tab.press("Enter"), /unverified document origin/);
+        // Every new blank stays untrusted when the creation result is ambiguous or absent.
+        for (const candidate of fake.pages.values()) {
+          if (before.has(candidate.targetId) || candidate.targetId === page.targetId || candidate.url !== "about:blank") continue;
+          const attached = await personal.attach(candidate.targetId);
+          await assert.rejects(attached.assertAllowed(), /unverified document origin/);
+        }
+        await tab.goto(base);
+        await tab.assertAllowed();
+      }
+    } finally {
+      await personal.disconnect();
+      stopProxy(resolveOptions(owner.options()));
+      owner.remove();
+      for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+    }
+  });
+}
+
+test("ab-b84.24 round 3: pinned creation never retries in a document that replaced its checked source", async () => {
+  const owner = consumer(), before = new Set(fake.pages.keys());
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  try {
+    const opener = await personal.open(base);
+    const page = fake.pages.get(opener.targetId)!;
+    let executed = 0, navigated = false;
+    page.onWindowOpen = () => { executed++; fake.openFrom(page, "about:blank"); return true; };
+    page.onEvaluate = ({ expression }) => {
+      if (!navigated && expression?.includes("window.open")) {
+        navigated = true;
+        fake.navigate(page, "https://elsewhere.invalid/");
+      }
+    };
+    const from = fake.calls.length;
+    await assert.rejects(personal.open("about:blank"), /context/);
+    assert.equal(executed, 0, "no window.open code executes in the replacement document");
+    const calls = fake.calls.slice(from).filter((call) => call.targetId === page.targetId);
+    const evals = calls.filter((call) => call.method === "Runtime.evaluate" && String(call.params.expression).includes("window.open"));
+    assert.equal(evals.length, 1, "one call against the old world, with no retry");
+    const world = calls.findIndex((call) => call.method === "Page.createIsolatedWorld");
+    const check = calls.findIndex((call) => call.method === "Target.getTargetInfo");
+    assert.ok(world >= 0 && check > world, "the world exists before the source check");
+    assert.equal([...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)).length, 1, "no new popup gets trust");
+  } finally {
+    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+  }
+});
+
 test("ab-b84.24: Tab.url joins the frame URL and urlFragment without page code", async () => {
   const tab = await browser.open(`${base}/next#part?x=1`);
   try {

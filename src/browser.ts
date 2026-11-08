@@ -389,8 +389,8 @@ export class AgentBrowser {
       if (!agent && opts.newWindow === false)
         throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
       targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? (!agent || windows) })).targetId;
+      this.createdBlankTargets.add(targetId);
     }
-    this.createdBlankTargets.add(targetId);
     // The new tab exists from here. When it cannot be recorded (the record lock timed out, say) or
     // attached, it is closed again (best effort), so it never stays as a tab that nobody recorded:
     // under a tab scope that would be a "no scope" tab that every other caller sees.
@@ -436,20 +436,18 @@ export class AgentBrowser {
     if (!pages.length) throw new Error("the pinned window has no allowlisted tab to open from; open one there by hand");
     const before = new Set(((await this.conn.send("Target.getTargets")).targetInfos as TargetInfo[]).map((t) => t.targetId));
     const opener = await this.attach((pages.find((p) => this.tabScope !== undefined && p.scope === this.tabScope) ?? pages[0]).targetId);
-    await opener.assertAllowed();
-    await opener.evaluateAsUser(() => { window.open("about:blank", "_blank"); });
-    const openerFrame = await opener.frameId();
+    const { opened, frameId: openerFrame } = await opener.openBlankForWindow();
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const { targetInfos } = await this.conn.send("Target.getTargets");
-      const fresh = (targetInfos as TargetInfo[]).find((t) => t.type === "page" && !before.has(t.targetId)
-        && t.openerId === opener.targetId && t.openerFrameId === openerFrame);
-      if (fresh) {
-        if ((await this.windowOf(fresh.targetId)) !== win) {
-          await this.conn.send("Target.closeTarget", { targetId: fresh.targetId });
-          throw new Error("new tab landed outside the pinned window; closed it");
-        }
-        return fresh.targetId;
+      const fresh = (targetInfos as TargetInfo[]).filter((t) => t.type === "page" && !before.has(t.targetId));
+      const matches = fresh.filter((t) => t.openerId === opener.targetId && t.openerFrameId === openerFrame);
+      // A site's popup can arrive during our user gesture. Only one match and a non-null open result prove enough
+      // to trust a blank here. Otherwise return a tab without trust: opaque input fails, but goto can still leave.
+      for (const candidate of matches.length ? matches : fresh) {
+        if ((await this.windowOf(candidate.targetId)) !== win) continue;
+        if (opened && matches.length === 1) this.createdBlankTargets.add(candidate.targetId);
+        return candidate.targetId;
       }
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -1202,6 +1200,23 @@ export class Tab {
   /** As evaluate, run as a user gesture (a popup that the page opens needs one): `eval`, and the open in a pinned window. */
   async evaluateAsUser<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
     return this.evaluateIn(fn, args, true);
+  }
+
+  /** @internal Open a pinned window's blank in a checked document. A destroyed world fails without a retry. */
+  async openBlankForWindow(): Promise<{ opened: boolean; frameId: string }> {
+    const contextId = await this.isolatedWorld();
+    const frameId = await this.frameId();
+    await this.assertAllowed();
+    let res: { result?: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } };
+    try {
+      res = await this.send("Runtime.evaluate", { expression: 'Boolean(window.open("about:blank", "_blank"))',
+        contextId, userGesture: true, returnByValue: true, awaitPromise: true });
+    } catch (e) {
+      if (e instanceof CDPError && /context/i.test(e.message)) this.isolatedContextId = undefined;
+      throw e;
+    }
+    if (res.exceptionDetails) throw new Error(`page error: ${res.exceptionDetails.exception?.description ?? res.exceptionDetails.text}`);
+    return { opened: res.result?.value === true, frameId };
   }
 
   private async evaluateIn<R, A extends unknown[]>(fn: ((...args: A) => R) | string, args: A, userGesture: boolean): Promise<Awaited<R>> {
