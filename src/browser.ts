@@ -437,16 +437,22 @@ export class AgentBrowser {
     const before = new Set(((await this.conn.send("Target.getTargets")).targetInfos as TargetInfo[]).map((t) => t.targetId));
     const opener = await this.attach((pages.find((p) => this.tabScope !== undefined && p.scope === this.tabScope) ?? pages[0]).targetId);
     const { opened, frameId: openerFrame } = await opener.openBlankForWindow();
+    if (!opened) throw new Error("window.open returned no window; no tab was taken or closed");
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const { targetInfos } = await this.conn.send("Target.getTargets");
       const fresh = (targetInfos as TargetInfo[]).filter((t) => t.type === "page" && !before.has(t.targetId));
       const matches = fresh.filter((t) => t.openerId === opener.targetId && t.openerFrameId === openerFrame);
-      // A site's popup can arrive during our user gesture. Only one match and a non-null open result prove enough
-      // to trust a blank here. Otherwise return a tab without trust: opaque input fails, but goto can still leave.
-      for (const candidate of matches.length ? matches : fresh) {
-        if ((await this.windowOf(candidate.targetId)) !== win) continue;
-        if (opened && matches.length === 1) this.createdBlankTargets.add(candidate.targetId);
+      // A site's popup can arrive during our user gesture. An ambiguous result identifies no tab that we own.
+      if (matches.length > 1)
+        throw new Error(`open in the pinned window found ${matches.length} matching tabs; ownership is ambiguous; all remain open`);
+      if (matches.length === 1) {
+        const candidate = matches[0];
+        if ((await this.windowOf(candidate.targetId)) !== win) {
+          await this.conn.send("Target.closeTarget", { targetId: candidate.targetId });
+          throw new Error("new tab landed outside the pinned window; closed it");
+        }
+        this.createdBlankTargets.add(candidate.targetId);
         return candidate.targetId;
       }
       await new Promise((r) => setTimeout(r, 100));
@@ -1197,7 +1203,7 @@ export class Tab {
     return this.evaluateIn(fn, args, this.drive !== "window");
   }
 
-  /** As evaluate, run as a user gesture (a popup that the page opens needs one): `eval`, and the open in a pinned window. */
+  /** As evaluate, run as a user gesture for `eval`. Pinned blank creation uses openBlankForWindow. */
   async evaluateAsUser<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
     return this.evaluateIn(fn, args, true);
   }

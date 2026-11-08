@@ -383,20 +383,27 @@ for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-
         if (kind !== "null-return" && kind !== "iframe-only") own = fake.openFrom(page, "about:blank").targetId;
         return kind !== "null-return";
       };
-      const tab = await personal.open("about:blank");
       if (kind === "iframe" || kind === "other-tab") {
+        const tab = await personal.open("about:blank");
         assert.equal(tab.targetId, own, "only the source top frame's own target is selected");
         await tab.press("Enter");
       } else {
-        await assert.rejects(tab.press("Enter"), /unverified document origin/);
-        // Every new blank stays untrusted when the creation result is ambiguous or absent.
-        for (const candidate of fake.pages.values()) {
-          if (before.has(candidate.targetId) || candidate.targetId === page.targetId || candidate.url !== "about:blank") continue;
-          const attached = await personal.attach(candidate.targetId);
-          await assert.rejects(attached.assertAllowed(), /unverified document origin/);
+        const reason = kind === "second-top" ? /2 matching tabs.*all remain open/
+          : kind === "null-return" ? /window.open returned no window/ : /timed out opening a tab in the pinned window/;
+        await assert.rejects(personal.open("about:blank", { name: "mine" }), reason);
+        const blanks = [...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)
+          && candidate.targetId !== page.targetId && candidate.url === "about:blank");
+        assert.ok(blanks.length > 0);
+        for (const candidate of blanks) {
+          assert.equal((await personal.allowedPages()).find((info) => info.targetId === candidate.targetId)?.name, undefined);
+          assert.deepEqual(fake.callsFor(candidate.targetId).filter((call) => ["Target.attachToTarget", "Target.closeTarget"].includes(call.method)), [],
+            "an uncertain target is neither taken nor closed");
         }
-        await tab.goto(base);
-        await tab.assertAllowed();
+        // A known id still supports the goto escape after the failed open.
+        const attached = await personal.attach(blanks[0].targetId);
+        await assert.rejects(attached.assertAllowed(), /unverified document origin/);
+        await attached.goto(base);
+        await attached.assertAllowed();
       }
     } finally {
       await personal.disconnect();
@@ -431,6 +438,50 @@ test("ab-b84.24 round 3: pinned creation never retries in a document that replac
     const check = calls.findIndex((call) => call.method === "Target.getTargetInfo");
     assert.ok(world >= 0 && check > world, "the world exists before the source check");
     assert.equal([...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)).length, 1, "no new popup gets trust");
+  } finally {
+    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+  }
+});
+
+test("ab-b84.24 round 4: a person's new tab during an unmatched open is neither taken nor closed", async () => {
+  const owner = consumer(), before = new Set(fake.pages.keys());
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  let person: string | undefined;
+  try {
+    const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
+    source.onWindowOpen = () => {
+      const page = fake.addPage("about:blank");
+      page.windowId = source.windowId;
+      person = page.targetId;
+      return true;
+    };
+    await assert.rejects(personal.open("about:blank", { name: "mine" }), /timed out opening a tab in the pinned window/);
+    assert.ok(person && fake.pages.has(person), "the person's tab stays open");
+    assert.equal((await personal.allowedPages()).find((page) => page.targetId === person)?.name, undefined, "no name is assigned to the person's tab");
+    assert.deepEqual(fake.callsFor(person!).filter((call) => ["Target.attachToTarget", "Target.closeTarget"].includes(call.method)), []);
+  } finally {
+    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
+  }
+});
+
+test("ab-b84.24 round 4: the confirmed blank outside the pinned window is closed with the original error", async () => {
+  const owner = consumer(), before = new Set(fake.pages.keys());
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  let misplaced: string | undefined;
+  try {
+    const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
+    source.onWindowOpen = () => {
+      const page = fake.openFrom(source, "about:blank");
+      page.windowId = source.windowId + 1000;
+      misplaced = page.targetId;
+      return true;
+    };
+    await assert.rejects(personal.open("about:blank"), /new tab landed outside the pinned window; closed it/);
+    assert.ok(misplaced && !fake.pages.has(misplaced), "only the confirmed misplaced tab is closed");
+    assert.ok(fake.pages.has(source.targetId), "the source stays open");
+    assert.equal(fake.callsFor(misplaced!).filter((call) => call.method === "Target.closeTarget").length, 1);
   } finally {
     await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
     for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
