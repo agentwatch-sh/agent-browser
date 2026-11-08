@@ -1,7 +1,8 @@
 // The external mode of the agent-mode live suite (run.ts; boards ab-v16.57 and ab-v16.60): the guard that it runs
-// before it makes its run folder or connects, and the answer of its control command. Pure, so that `npm test` checks
-// it (test/agent-live-external.test.ts).
+// before it makes its run folder or connects, and the answer of its control command. Separate from the runner, so
+// `npm test` checks it with stubs (test/agent-live-external.test.ts).
 
+import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 export const EXTERNAL_USAGE = "usage: RELAY_SOCK=<socket> CONTROL=<status|end-scope|restart-relay executable> npm run test:live:agent";
@@ -79,4 +80,25 @@ export function controlAnswer(stdout: string, exit: number | string): Record<str
     if (i >= 0 && v && typeof v === "object" && !Array.isArray(v)) return v;
   } catch { /* the failed answer below */ }
   return { ok: false, error: `no JSON answer (exit ${exit})` };
+}
+
+/** Check the first CONTROL status before the run can connect, end scopes or restart a relay. */
+export function controlSocket(stdout: string, exit: number | string, socket: string,
+  realpath: (p: string) => string = realpathSync): { ok: true; status: Record<string, unknown> } | { ok: false; message: string } {
+  let status: Record<string, unknown> | undefined;
+  try {
+    const value = JSON.parse(stdout);
+    if (value && typeof value === "object" && !Array.isArray(value)) status = value;
+  } catch { /* Refuse malformed output below. */ }
+  const refused = (why: string) => ({ ok: false as const,
+    message: `refused: CONTROL status socket ${JSON.stringify(status?.socket ?? "<missing>")}; RELAY_SOCK ${JSON.stringify(socket)}: ${why}` });
+  if (exit !== 0) return refused(`status failed or timed out (exit ${exit})`);
+  if (!status) return refused("status is not a JSON object");
+  if (status.ok !== true) return refused("status must report ok: true");
+  if (typeof status.socket !== "string" || !status.socket) return refused("status needs a nonempty socket field");
+  try {
+    const actual = realpath(status.socket), expected = realpath(socket);
+    if (actual !== expected) return refused(`socket paths differ (real paths ${JSON.stringify(actual)} and ${JSON.stringify(expected)})`);
+  } catch { return refused("a socket path cannot be resolved to an existing file"); }
+  return { ok: true, status };
 }

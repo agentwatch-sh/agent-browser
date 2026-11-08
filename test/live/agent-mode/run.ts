@@ -31,9 +31,10 @@
 //
 // Environment: CHROME_EXTENSION (required in the own mode: its agent/ and test/live/host.py are used; the agent folder is copied,
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
-// DISPLAY_N (default 118), RUN (an empty folder; default, also for an empty RUN, a new one in the temp folder; in the own mode its path must
-// have plain characters only, because the relay's socket is in it and the ws+unix URL changes other characters; the run
-// gives mode 0700 only to a RUN that it made itself), KEEP_RUN (1: the run removes nothing, below), SITE_PORT (the
+// DISPLAY_N (default 118), RUN (an empty folder; run only one suite at a time in each RUN; default, also for an empty
+// RUN, a new one in the temp folder; in the own mode its path must have plain characters only, because the relay's
+// socket is in it and the ws+unix URL changes other characters; the run gives mode 0700 only to a RUN that it made
+// itself), KEEP_RUN (1: the run removes nothing, below), SITE_PORT (the
 // probe's site; default 8781, which the cases need; 0 only for the spawn tests of `npm test`: a free port, and no
 // check), CASES (default all:
 // playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone) runs some groups only. The agent
@@ -68,9 +69,11 @@
 //
 // CONTROL takes `status`, `end-scope <scope>` and `restart-relay` and prints the answer as one JSON object (for
 // agentwatch's test browser: its control command with --root); it must control the browser whose socket RELAY_SOCK
-// names, which the run cannot check. The real daemon takes no bridge request of a client and no list of the run, so the
-// cases that used the stand-in's own bridge requests (tabs.*, windows.*, debugger.*) or its lines (set_scopes, a link
-// drop, a relay stop) use the endpoint, the probe site's log or CONTROL instead, or they are skipped with the reason:
+// names. Before it connects or makes RUN, the run checks the socket field of CONTROL status against RELAY_SOCK
+// with realpathSync and refuses a mismatch or a failed or incomplete status (external.ts). The real daemon takes no
+// bridge request of a client and no list of the run, so the cases that used the stand-in's own bridge requests
+// (tabs.*, windows.*, debugger.*) or its lines (set_scopes, a link drop, a relay stop) use the endpoint, the probe
+// site's log or CONTROL instead, or they are skipped with the reason:
 // each such result says so ("adapted" or "skip"). The group `scopes` needs two lists, so it is skipped; the group
 // `peer` is refused. The run ends every scope that it used through CONTROL, before the first relay restart and at its
 // end, as a session end does (a run that stopped before its first client used no scope, and ends none). A socket in a socket folder of agentwatch (/run/user/<uid>/agentwatch/, also through a
@@ -93,7 +96,7 @@ import { fileURLToPath } from "node:url";
 import { TEXT } from "../../../src/relay/policy.ts";
 import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../anti-detect/probe.ts";
 import { StandInDaemon } from "./daemon.ts";
-import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./external.ts";
+import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
 import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
@@ -125,6 +128,10 @@ const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 118);
 /** The port of the probe's site (site.mjs reads SITE_PORT too). The cases need 8781; 0 is for the spawn tests of
  *  `npm test` (test/agent-live-run-folder.test.ts): the site takes a free port, and the run checks no port. */
+if (![undefined, "", "8781", "0"].includes(process.env.SITE_PORT)) {
+  process.stderr.write("SITE_PORT must be empty, 8781 or 0 (0 is for spawn tests)\n");
+  process.exit(2);
+}
 const SITE_PORT = Number(process.env.SITE_PORT || 8781);
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,pointer,scopes,link-up").split(",");
 /** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
@@ -144,6 +151,26 @@ const reserved = EXTERNAL ? null : reservedDisplay(DISPLAY_N, "DISPLAY_N");
 if (reserved) { process.stderr.write(`${reserved}\n`); process.exit(2); }
 if (!EXTERNAL && (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`))) { process.stderr.write(`display :${DISPLAY_N} is taken; set DISPLAY_N\n`); process.exit(2); }
 if (SITE_PORT !== 0 && !(await portFree(SITE_PORT))) { process.stderr.write(`port ${SITE_PORT} is taken (the probe's site needs it)\n`); process.exit(2); }
+// One status for the identity check, before RUN, connections or destructive CONTROL calls.
+// Reuse this answer in the run's metadata; later readiness checks can still read status.
+let externalStatus: Record<string, unknown> | undefined;
+let initialControlLog = "";
+if (EXTERNAL) {
+  const t0 = Date.now();
+  let stdout = "", stderr = "", exit: number | string = 0;
+  try {
+    stdout = execFileSync(CONTROL, ["status"], { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const error = e as { stdout?: string; stderr?: string; status?: number; code?: string; signal?: string; message: string };
+    stdout = error.stdout ?? "";
+    stderr = error.stderr ?? "";
+    exit = error.status ?? error.code ?? error.signal ?? error.message;
+  }
+  const check = controlSocket(stdout, exit, EXTERNAL);
+  if (!check.ok) { process.stderr.write(`${check.message}\n`); process.exit(2); }
+  externalStatus = check.status;
+  initialControlLog = `${new Date(t0).toISOString()} status: exit ${exit} after ${Date.now() - t0} ms\n${stdout}${stderr}\n`;
+}
 const RUN = runChecked(resolve(process.env.RUN || mkdtempSync(join(tmpdir(), "ab-agent-live-"))));
 const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 /** The relay's refusal of a navigation off the scope's list (C11, layer 1). */
@@ -195,7 +222,8 @@ const say = (r: Result) => console.log(`${r.status.padEnd(7)} ${r.group}: ${r.ca
 function record(r: Result) { results.push(r); say(r); }
 function skip(group: string, name: string, why: string) { record({ group, case: name, status: "skip", ms: 0, why }); }
 
-/** The external mode: one call of CONTROL (its own process), its output in <RUN>/logs/control.log; the answer's JSON object. */
+/** The external mode: one call of CONTROL (its own process), its output in <RUN>/logs/control.log;
+ *  the answer's JSON object. */
 function control(...args: string[]): Promise<any> {
   return new Promise((done) => {
     const t0 = Date.now();
@@ -259,13 +287,14 @@ function extensionId(manifest: { key: string }): string {
 
 // The first folder that this mkdir made: RUN (or a folder above it) when the run made RUN.
 const first = mkdirSync(join(RUN, "logs"), { recursive: true });
+if (EXTERNAL) appendFileSync(join(RUN, "logs/control.log"), initialControlLog);
 // Only a RUN that the run made itself gets 0700 (a RUN from the environment, for example ., keeps its mode).
 if (OWN_RUN || (first !== undefined && first !== join(RUN, "logs"))) chmodSync(RUN, 0o700);
 makePart(join(RUN, "home"), true);
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
 // The endpoint: the client URL of scope s1 (the concurrency script's first scope). Every client URL of the run differs
 // from it in its scope only; in the external mode it names the real path that the guard checked (external.ts).
-const env = EXTERNAL ? { run: RUN, endpoint: url("s1"), external: { socket: EXTERNAL, control: CONTROL, status: await control("status") }, agentBrowser: git(ROOT, "rev-parse", "HEAD") }
+const env = EXTERNAL ? { run: RUN, endpoint: url("s1"), external: { socket: EXTERNAL, control: CONTROL, status: externalStatus }, agentBrowser: git(ROOT, "rev-parse", "HEAD") }
   : { run: RUN, endpoint: url("s1"), extension: { dir: EXT, commit: git(EXT, "rev-parse", "HEAD") }, agentBrowser: git(ROOT, "rev-parse", "HEAD"),
     chromium: execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim() };
 console.log(`run ${RUN}\n${JSON.stringify(env)}`);
