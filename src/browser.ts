@@ -126,6 +126,7 @@ export class AgentBrowser {
   /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
   readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
+  private attachedTargets = new Map<string, string>();
   /** @internal Only this connection's own initial blank documents can have an unverified origin. Never persisted. */
   readonly createdBlankTargets = new Set<string>();
   private notedDisplay = false;
@@ -140,9 +141,10 @@ export class AgentBrowser {
     this.windows = this.mac || !!display?.own;
     this.conn.on("Page.frameNavigated", (p: { frame?: { parentId?: string } }, sid?: string) => {
       if (!p.frame || p.frame.parentId) return;
-      for (const tab of this.sessions.values())
-        if (tab.sessionId === sid) this.createdBlankTargets.delete(tab.targetId);
+      const target = sid === undefined ? undefined : this.attachedTargets.get(sid);
+      if (target !== undefined) this.createdBlankTargets.delete(target);
     });
+    this.conn.on("Target.detachedFromTarget", (p: { sessionId: string }) => this.attachedTargets.delete(p.sessionId));
   }
 
   /**
@@ -387,8 +389,8 @@ export class AgentBrowser {
       if (!agent && opts.newWindow === false)
         throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
       targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? (!agent || windows) })).targetId;
-      this.createdBlankTargets.add(targetId);
     }
+    this.createdBlankTargets.add(targetId);
     // The new tab exists from here. When it cannot be recorded (the record lock timed out, say) or
     // attached, it is closed again (best effort), so it never stays as a tab that nobody recorded:
     // under a tab scope that would be a "no scope" tab that every other caller sees.
@@ -434,11 +436,14 @@ export class AgentBrowser {
     if (!pages.length) throw new Error("the pinned window has no allowlisted tab to open from; open one there by hand");
     const before = new Set(((await this.conn.send("Target.getTargets")).targetInfos as TargetInfo[]).map((t) => t.targetId));
     const opener = await this.attach((pages.find((p) => this.tabScope !== undefined && p.scope === this.tabScope) ?? pages[0]).targetId);
+    await opener.assertAllowed();
     await opener.evaluateAsUser(() => { window.open("about:blank", "_blank"); });
+    const openerFrame = await opener.frameId();
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const { targetInfos } = await this.conn.send("Target.getTargets");
-      const fresh = (targetInfos as TargetInfo[]).find((t) => t.type === "page" && !before.has(t.targetId));
+      const fresh = (targetInfos as TargetInfo[]).find((t) => t.type === "page" && !before.has(t.targetId)
+        && t.openerId === opener.targetId && t.openerFrameId === openerFrame);
       if (fresh) {
         if ((await this.windowOf(fresh.targetId)) !== win) {
           await this.conn.send("Target.closeTarget", { targetId: fresh.targetId });
@@ -510,6 +515,8 @@ export class AgentBrowser {
     if (!(await this.reachable(info))) throw new NotAllowedError(info.url, "refusing: that tab is outside the pinned window");
     const { sessionId } = await this.conn.send("Target.attachToTarget", { targetId, flatten: true });
     const tab = new Tab(this, targetId, sessionId, this.driveOf(targetId));
+    // A navigation can commit during Page.enable, before sessions.set: match its attach session immediately.
+    this.attachedTargets.set(sessionId, targetId);
     await tab.send("Page.enable");
     // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
     // a page can tell the Runtime domain is enabled, and we never need its events.
@@ -552,6 +559,7 @@ export class AgentBrowser {
       await this.conn.send("Target.detachFromTarget", { sessionId: tab.sessionId }).catch(() => {});
     }
     this.sessions.clear();
+    this.attachedTargets.clear();
     this.createdBlankTargets.clear();
     await this.conn.close();
   }
@@ -1013,7 +1021,7 @@ export class Tab {
     const allow = this.browser.allow;
     const listed = await this.listedInfo();
     if (!isAllowedUrl(listed?.url ?? "", allow)) return false;
-    try { this.assertDocumentAllowed(await this.documentInfo(), listed); return true; }
+    try { this.assertDocumentAllowed(await this.documentInfo()); return true; }
     catch (e) { if (e instanceof NotAllowedError) return false; throw e; }
   }
 
@@ -1038,11 +1046,12 @@ export class Tab {
   /** The URL and origin of the same main-frame document, from one browser metadata answer. */
   private async documentInfo(): Promise<{ url: string; securityOrigin: string }> {
     const { frameTree } = await this.send("Page.getFrameTree");
+    this.mainFrameId ??= frameTree.frame.id;
     return { url: `${frameTree.frame.url}${frameTree.frame.urlFragment ?? ""}`,
       securityOrigin: String(frameTree.frame.securityOrigin ?? "") };
   }
 
-  private assertDocumentAllowed({ url, securityOrigin }: { url: string; securityOrigin: string }, listed: TargetInfo): void {
+  private assertDocumentAllowed({ url, securityOrigin }: { url: string; securityOrigin: string }): void {
     assertAllowedUrl(url, this.browser.allow);
     if (url !== "about:blank") return;
     // A blank popup can inherit an off-list iframe's origin. Chromium 156 reports "://" for both such popups
@@ -1050,7 +1059,7 @@ export class Tab {
     // Trust only a blank this connection created, before any navigation. Never trust an opaque popup.
     if (/^https?:\/\//.test(securityOrigin)) {
       assertAllowedUrl(securityOrigin, this.browser.allow);
-    } else if (!this.browser.createdBlankTargets.has(this.targetId) || listed.openerId || !["", "null", "://"].includes(securityOrigin)) {
+    } else if (!this.browser.createdBlankTargets.has(this.targetId) || !["", "null", "://"].includes(securityOrigin)) {
       throw new NotAllowedError(url, "refusing: about:blank has an unverified document origin; navigate to an allowlisted URL first");
     }
   }
@@ -1115,7 +1124,7 @@ export class Tab {
    * its own session; then the URL and securityOrigin of the main frame's document, in one frame-tree answer, no code either.
    *
    * Both URLs must be on the list. A blank document with an HTTP(S) securityOrigin must have that origin on the list.
-   * An opaque or missing origin passes only for our own initial blank document, without an opener (ab-b84.24). The page that a command reaches is the document, so its URL is the one that the
+   * An opaque or missing origin passes only for our own initial blank document (ab-b84.24). The page that a command reaches is the document, so its URL is the one that the
    * allowlist must hold. The target list gives the URL that the tab shows (Chrome's visible URL), which can run ahead of
    * the document: a navigation that the browser started (Page.navigate, an address typed by the person) shows its new URL
    * before it commits, while the old document is still there; a new tab shows its first URL over its first empty
@@ -1137,7 +1146,7 @@ export class Tab {
     const win = this.browser.pinnedWindow();
     if (win !== undefined && (await this.browser.windowOf(this.targetId)) !== win)
       throw new NotAllowedError(listed, "refusing: this tab has been moved out of the pinned window");
-    this.assertDocumentAllowed(await this.documentInfo(), info);
+    this.assertDocumentAllowed(await this.documentInfo());
   }
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {

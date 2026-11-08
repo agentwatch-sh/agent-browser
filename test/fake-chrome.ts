@@ -278,6 +278,10 @@ export class FakePage {
   listedUrl: string | undefined;
   /** Override the document origin for an about:blank inherited from its opener. */
   securityOrigin: string | undefined;
+  /** Tests can omit one browser metadata answer or navigate during Page.enable. */
+  omitTargetInfo = false;
+  onPageEnable?: () => void;
+  suppressFrameNavigated = false;
   title = "";
   text = "";
   elements: FakeElement[] = [];
@@ -791,6 +795,7 @@ export class FakeChrome {
   connections = 0;
   /** A method named here fails once with this message (a test of error handling). */
   readonly failOnce = new Map<string, string>();
+  onCreateTarget?: (page: FakePage) => void;
   /** A method named here waits this many ms before Chrome handles it (a slow Chrome). */
   readonly delays = new Map<string, number>();
   /** Pages (by targetId) that Page.bringToFront does not bring in front of their window: they stay hidden. */
@@ -897,7 +902,7 @@ export class FakeChrome {
     // As Chrome: the navigation starts (Page.frameStartedNavigating), then the new document commits (Page.frameNavigated).
     this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
     page.load(url);
-    this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url, loaderId: randomUUID() }, type: "Navigation" });
+    if (!page.suppressFrameNavigated) this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url, loaderId: randomUUID() }, type: "Navigation" });
     setTimeout(() => this.toSessions(page, "Page.loadEventFired", { timestamp: Date.now() / 1000 }), 5);
   }
 
@@ -964,7 +969,7 @@ export class FakeChrome {
 
   private info(p: FakePage) {
     const attached = [...this.sessions.values()].some((s) => s.page === p);
-    return { ...(p.opener && !p.noopener && this.pages.has(p.opener.targetId) ? { openerId: p.opener.targetId, openerFrameId: `F-${p.opener.targetId}` } : {}), targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
+    return { ...(p.opener && !p.noopener ? { ...(this.pages.has(p.opener.targetId) ? { openerId: p.opener.targetId } : {}), openerFrameId: `F-${p.opener.targetId}` } : {}), targetId: p.targetId, type: "page", url: p.listedUrl ?? p.url, title: p.title, attached, browserContextId: "default" };
   }
 
   private async onMessage(client: WebSocket, msg: { id: number; method: string; params?: any; sessionId?: string }) {
@@ -1000,7 +1005,7 @@ export class FakeChrome {
       case "Target.getTargetInfo": {
         const p = this.pages.get(params.targetId);
         if (!p) throw new Error("No target with given id found");
-        return { targetInfo: this.info(p) };
+        return p.omitTargetInfo ? {} : { targetInfo: this.info(p) };
       }
       case "Target.createTarget": {
         const windowId = params.newWindow ? ++this.nextWindow : this.currentWindow;
@@ -1008,6 +1013,7 @@ export class FakeChrome {
         page.background = this.backgroundTabs && !!params.background && !params.newWindow;
         this.pages.set(page.targetId, page);
         page.load(params.url ?? "about:blank");
+        this.onCreateTarget?.(page);
         if (params.newWindow && !params.background) this.focusWindow(windowId, "open", page.targetId); // a new window in front takes the focus
         return { targetId: page.targetId };
       }
@@ -1099,7 +1105,8 @@ export class FakeChrome {
         page.update();
         return {};
       case "Page.bringToFront": if (!this.stayBehind.has(page.targetId)) this.activateTab(page, "bringToFront"); return {};
-      case "Page.enable": case "Fetch.disable": case "Network.disable":
+      case "Page.enable": page.onPageEnable?.(); return {};
+      case "Fetch.disable": case "Network.disable":
       case "Runtime.runIfWaitingForDebugger": return {};
       case "Target.setAutoAttach":
         // Like Chrome: each of the page's workers is attached through this session, announced on it.

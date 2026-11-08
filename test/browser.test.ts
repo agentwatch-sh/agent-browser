@@ -248,7 +248,9 @@ test("ab-b84.24: an on-list blank origin passes; an external opaque blank fails 
     page.url = "about:blank";
     // Losing the opener never proves a fresh origin (review I1).
     fake.closePage(opener);
-    assert.equal((await browser.conn.send("Target.getTargetInfo", { targetId: page.targetId })).targetInfo.openerId, undefined);
+    const lost = (await browser.conn.send("Target.getTargetInfo", { targetId: page.targetId })).targetInfo;
+    assert.equal(lost.openerId, undefined);
+    assert.equal(lost.openerFrameId, `F-${opener.targetId}`);
     for (const origin of ["null", "://", ""]) {
       page.securityOrigin = origin;
       assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(tab.assertAllowed(), /unverified document origin/)), []);
@@ -295,6 +297,74 @@ test("ab-b84.24: noopener links have no opener metadata", async () => {
     assert.equal((await browser.conn.send("Target.getTargetInfo", { targetId: linked.targetId })).targetInfo.openerId, undefined);
     fake.closePage(linked);
   } finally { await tab.close(); }
+});
+
+test("ab-b84.24 round 2: a personal pinned window opens a usable blank", async () => {
+  const owner = consumer();
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  try {
+    const opener = await personal.open(base);
+    const blank = await personal.open("about:blank");
+    assert.equal(fake.pages.get(blank.targetId)!.opener?.targetId, opener.targetId);
+    await blank.press("Enter");
+    await blank.screenshot(join(owner.dir, "pinned-blank.png"));
+    assert.ok(existsSync(join(owner.dir, "pinned-blank.png")));
+    await blank.close();
+    // The source must pass the document check before openInWindow runs any page code.
+    const page = fake.pages.get(opener.targetId)!;
+    page.url = "about:blank";
+    page.securityOrigin = "https://elsewhere.invalid";
+    assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(personal.open("about:blank"), NotAllowedError)), []);
+    await opener.close();
+  } finally { await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove(); }
+});
+
+test("ab-b84.24 round 2: navigation during attach clears blank trust before sessions.set", async () => {
+  fake.onCreateTarget = (page) => { page.onPageEnable = () => { fake.navigate(page, "about:blank"); }; };
+  try {
+    const tab = await browser.open("about:blank");
+    try { await assert.rejects(tab.assertAllowed(), /unverified document origin/); }
+    finally { await tab.close(); }
+  } finally { fake.onCreateTarget = undefined; }
+});
+
+test("ab-b84.24 round 2: goto clears blank trust without a frameNavigated event", async () => {
+  const tab = await browser.open("about:blank");
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    await tab.assertAllowed();
+    page.suppressFrameNavigated = true;
+    await tab.goto("about:blank");
+    await assert.rejects(tab.assertAllowed(), /unverified document origin/);
+  } finally { page.suppressFrameNavigated = false; await tab.close(); }
+});
+
+test("ab-b84.24 round 2: a created target still needs a known opaque origin or an on-list HTTP origin", async () => {
+  const tab = await browser.open("about:blank");
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    for (const origin of ["null", "://", "", new URL(base).origin]) {
+      page.securityOrigin = origin;
+      await tab.assertAllowed();
+    }
+    for (const origin of ["file://", "about:blank", "data:"]) {
+      page.securityOrigin = origin;
+      await assert.rejects(tab.assertAllowed(), /unverified document origin/);
+    }
+    page.securityOrigin = "https://elsewhere.invalid";
+    await assert.rejects(tab.assertAllowed(), /elsewhere\.invalid is not on the allowlist/);
+  } finally { await tab.close(); }
+});
+
+test("ab-b84.24 round 2: absent targetInfo fails with NotAllowedError before a frame read", async () => {
+  const tab = await browser.open(base);
+  const page = fake.pages.get(tab.targetId)!;
+  try {
+    page.omitTargetInfo = true;
+    const from = fake.calls.length;
+    await assert.rejects(tab.assertAllowed(), NotAllowedError);
+    assert.deepEqual(fake.calls.slice(from).filter((x) => x.targetId === page.targetId).map((x) => x.method), ["Target.getTargetInfo"]);
+  } finally { page.omitTargetInfo = false; await tab.close(); }
 });
 
 test("ab-b84.24: Tab.url joins the frame URL and urlFragment without page code", async () => {

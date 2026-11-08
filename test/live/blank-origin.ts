@@ -2,18 +2,23 @@
 // Run on Linux under the shared heavy-job lock:
 // flock /home/selden/.cache/ab-lead/heavy.lock timeout 1200 node test/live/blank-origin.ts
 // Optional: --chrome /usr/bin/chromium --display 122. Headless: no Xvfb or display connection.
-// All pages are local *.localhost. The proxy blocks other requests. No Runtime command runs.
+// All pages are local *.localhost. The proxy blocks other requests. Metadata checks run no Runtime command.
+// The final cases drive only blanks that agent-browser creates. They test a real click and shot.
 // The probe removes its temporary profile after Chromium ends. The guard ends its tree if the driver dies.
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
+import { WebSocketServer } from "ws";
+import { AgentBrowser } from "../../src/browser.ts";
+import { resolveOptions } from "../../src/options.ts";
+import { proxyInfo, stopProxy } from "../../src/proxy.ts";
 import { harnessGuard, reservedDisplay } from "./guard.ts";
 
 const { values } = parseArgs({ options: { chrome: { type: "string" }, display: { type: "string" } } });
@@ -30,6 +35,7 @@ const server = createServer((req, res) => {
   const id = url.searchParams.get("id")!;
   const mode = url.searchParams.get("mode") ?? "keep";
   res.writeHead(200, { "content-type": "text/html" });
+  if (url.pathname === "/safe") { res.end("<title>allowlisted opener</title><p>safe</p>"); return; }
   if (url.pathname === "/opened") { res.end("ok"); opened.get(id)?.(); return; }
   if (url.pathname === "/frame") {
     const open = "window.open();";
@@ -55,8 +61,9 @@ const chrome = spawn(values.chrome ?? "/usr/bin/chromium", [
 ], { env: chromeEnv, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
 guard.track(chrome.pid, "Chromium");
 process.stderr.write(`driver=${process.pid} guard=${guard.pid} chromium=${chrome.pid} profile=${run}\n`);
+const stopping = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
-  process.on(signal, () => process.exit(130));
+  process.on(signal, () => { stopping.abort(new Error(`probe stopped by ${signal}`)); });
 process.on("exit", () => { if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill("SIGTERM"); });
 
 let next = 0, buffer = "";
@@ -70,15 +77,22 @@ output.on("data", (chunk: string) => {
     const message = JSON.parse(buffer.slice(0, i));
     buffer = buffer.slice(i + 1);
     pending.get(message.id)?.(message);
+    if (message.id === undefined) for (const client of bridge?.clients ?? [])
+      if (client.readyState === 1) client.send(JSON.stringify(message));
   }
 });
+let bridge: WebSocketServer | undefined;
 function send(method: string, params: object = {}, sessionId?: string): Promise<any> {
+  if (stopping.signal.aborted) return Promise.reject(stopping.signal.reason);
   const id = ++next;
   sentMethods.push(method);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method}: timeout`)); }, 15_000);
+    const aborted = () => pending.get(id)?.({ error: { message: String(stopping.signal.reason) } });
+    const timer = setTimeout(() => { stopping.signal.removeEventListener("abort", aborted); pending.delete(id); reject(new Error(`${method}: timeout`)); }, 15_000);
+    stopping.signal.addEventListener("abort", aborted, { once: true });
     pending.set(id, (message) => {
       clearTimeout(timer);
+      stopping.signal.removeEventListener("abort", aborted);
       pending.delete(id);
       message.error ? reject(new Error(`${method}: ${message.error.message}`)) : resolve(message.result);
     });
@@ -168,9 +182,51 @@ try {
     extra.push({ mode, results });
     for (const target of fresh) await send("Target.closeTarget", { targetId: target.targetId });
   }
-  console.log(JSON.stringify({ product: version.product, port, opaque, trials, extra,
-    runtimeCalls: sentMethods.filter((method) => method.startsWith("Runtime.")).length }, null, 2));
+  const runtimeCalls = sentMethods.filter((method) => method.startsWith("Runtime.")).length;
+  // A loopback bridge gives the real library its normal proxy path, while this probe owns the CDP pipe.
+  bridge = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(bridge, "listening");
+  bridge.on("connection", (client) => client.on("message", (raw) => {
+    const request = JSON.parse(String(raw));
+    void send(request.method, request.params ?? {}, request.sessionId).then(
+      (result) => { if (client.readyState === 1) client.send(JSON.stringify({ id: request.id, result })); },
+      (error: Error) => { if (client.readyState === 1) client.send(JSON.stringify({ id: request.id, error: { code: -32000, message: error.message } })); });
+  }));
+  const endpoint = `ws://127.0.0.1:${(bridge.address() as { port: number }).port}`;
+  const library = [];
+  for (const [i, mode] of ["default", "hidden", "pinned"].entries()) {
+    const settings = resolveOptions({ stateDir: join(run, `s${i}`), allow: ["a.localhost"], endpoint, noLaunch: true,
+      mode: mode === "pinned" ? "personal" : "agent", hiddenDrive: mode === "hidden", display: { own: false }, log: () => {} });
+    let browser: AgentBrowser | undefined;
+    try {
+      browser = await AgentBrowser.connect(settings);
+      guard.track(proxyInfo(settings)?.pid, "library-proxy");
+      const opener = mode === "pinned" ? await browser.open(`http://a.localhost:${port}/safe`) : undefined;
+      const blank = await browser.open("about:blank");
+      const info = await metadata(blank.targetId);
+      let click = "pass", shot = "pass", bytes = 0;
+      try { await blank.clickAt(20, 20); } catch (error) { click = String(error); }
+      try { const path = await blank.screenshot(join(run, `shot${i}.png`)); bytes = statSync(path).size; }
+      catch (error) { shot = String(error); }
+      library.push({ mode, click, shot, bytes, ...info });
+      await blank.close();
+      await opener?.close();
+    } finally {
+      await browser?.disconnect();
+      guard.track(proxyInfo(settings)?.pid, "library-proxy");
+      const closed = [...bridge.clients].filter((client) => client.readyState !== 3).map((client) => once(client, "close"));
+      stopProxy(settings);
+      await Promise.all(closed);
+    }
+  }
+  const libraryRuntimeCalls = sentMethods.filter((method) => method.startsWith("Runtime.")).length - runtimeCalls;
+  console.log(JSON.stringify({ product: version.product, port, opaque, trials, extra, runtimeCalls, library, libraryRuntimeCalls }, null, 2));
+  assert.ok(library.every((result) => result.click === "pass" && result.shot === "pass" && result.bytes > 0), "Every own blank accepts a click and shot");
 } finally {
+  if (bridge) {
+    for (const client of bridge.clients) client.terminate();
+    await new Promise<void>((resolve) => bridge!.close(() => resolve()));
+  }
   if (chrome.exitCode === null && chrome.signalCode === null) {
     const exited = once(chrome, "exit");
     chrome.kill("SIGTERM");
