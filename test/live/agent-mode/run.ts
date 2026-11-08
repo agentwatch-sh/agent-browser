@@ -33,7 +33,8 @@
 // because Chromium writes _metadata/ into the folder that it loads), CHROMIUM (default /usr/bin/chromium),
 // DISPLAY_N (default 118), RUN (an empty folder; run only one suite at a time in each RUN; default, also for an empty
 // RUN, a new one in the temp folder; in the own mode its path must have plain characters only, because the relay's
-// socket is in it and the ws+unix URL changes other characters; the run gives mode 0700 only to a RUN that it made itself), KEEP_RUN (1: the run removes nothing, below), SITE_PORT (the
+// socket is in it and the ws+unix URL changes other characters; the run gives mode 0700 only to a RUN that it made
+// itself), KEEP_RUN (1: the run removes nothing, below), SITE_PORT (the
 // probe's site; default 8781, which the cases need; 0 only for the spawn tests of `npm test`: a free port, and no
 // check), CASES (default all:
 // playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone) runs some groups only. The agent
@@ -71,7 +72,8 @@
 // names. Before it connects or makes RUN, the run checks the socket field of CONTROL status against RELAY_SOCK
 // with realpathSync and refuses a mismatch or a failed or incomplete status (external.ts). The real daemon takes no
 // bridge request of a client and no list of the run, so the cases that used the stand-in's own bridge requests
-// (tabs.*, windows.*, debugger.*) or its lines (set_scopes, a link drop, a relay stop) use the endpoint, the probe site's log or CONTROL instead, or they are skipped with the reason:
+// (tabs.*, windows.*, debugger.*) or its lines (set_scopes, a link drop, a relay stop) use the endpoint, the probe
+// site's log or CONTROL instead, or they are skipped with the reason:
 // each such result says so ("adapted" or "skip"). The group `scopes` needs two lists, so it is skipped; the group
 // `peer` is refused. The run ends every scope that it used through CONTROL, before the first relay restart and at its
 // end, as a session end does (a run that stopped before its first client used no scope, and ends none). A socket in a socket folder of agentwatch (/run/user/<uid>/agentwatch/, also through a
@@ -157,7 +159,7 @@ if (EXTERNAL) {
   const t0 = Date.now();
   let stdout = "", stderr = "", exit: number | string = 0;
   try {
-    stdout = execFileSync(CONTROL, ["status"], { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
+    stdout = execFileSync(CONTROL, ["status"], { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
   } catch (e) {
     const error = e as { stdout?: string; stderr?: string; status?: number; code?: string; signal?: string; message: string };
     stdout = error.stdout ?? "";
@@ -220,7 +222,8 @@ const say = (r: Result) => console.log(`${r.status.padEnd(7)} ${r.group}: ${r.ca
 function record(r: Result) { results.push(r); say(r); }
 function skip(group: string, name: string, why: string) { record({ group, case: name, status: "skip", ms: 0, why }); }
 
-/** The external mode: one call of CONTROL (its own process), its output in <RUN>/logs/control.log; the answer's JSON object. */
+/** The external mode: one call of CONTROL (its own process), its output in <RUN>/logs/control.log;
+ *  the answer's JSON object. */
 function control(...args: string[]): Promise<any> {
   return new Promise((done) => {
     const t0 = Date.now();

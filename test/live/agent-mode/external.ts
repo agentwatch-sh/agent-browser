@@ -94,7 +94,7 @@ export function controlSocket(stdout: string, exit: number | string, socket: str
     message: `refused: CONTROL status socket ${JSON.stringify(status?.socket ?? "<missing>")}; RELAY_SOCK ${JSON.stringify(socket)}: ${why}` });
   if (exit !== 0) return refused(`status failed or timed out (exit ${exit})`);
   if (!status) return refused("status is not a JSON object");
-  if (status.ok === false) return refused("status reports a failure");
+  if (status.ok !== true) return refused("status must report ok: true");
   if (typeof status.socket !== "string" || !status.socket) return refused("status needs a nonempty socket field");
   try {
     const actual = realpath(status.socket), expected = realpath(socket);

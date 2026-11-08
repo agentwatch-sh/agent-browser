@@ -8,8 +8,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as external from "./live/agent-mode/external.ts";
-import { controlAnswer, externalMode, wsPathKept, wsUrl } from "./live/agent-mode/external.ts";
+import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from "./live/agent-mode/external.ts";
 import { ROOT, suiteStandIn } from "./helpers.ts";
 
 const UID = 1001;
@@ -167,7 +166,7 @@ test("the run's clients connect to the real path that the guard checked, not to 
 });
 
 // The comparison must resolve both paths, reject a failed status even with valid JSON, and fail closed on bad data.
-for (const kind of ["same", "symlink", "other", "missing-file", "missing-field", "empty-field", "non-string", "bad-json", "bad-shape", "failure", "timeout", "status-false"] as const) {
+for (const kind of ["same", "symlink", "other", "missing-file", "missing-field", "empty-field", "non-string", "bad-json", "bad-shape", "failure", "timeout", "status-false", "missing-ok"] as const) {
   test(`CONTROL socket check: ${kind}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "ab-control-"));
     try {
@@ -178,38 +177,39 @@ for (const kind of ["same", "symlink", "other", "missing-file", "missing-field",
       const paths = { same: socket, symlink: alias, other, "missing-file": join(dir, "missing.sock") };
       let answer: unknown = { ok: true, socket: paths[kind as keyof typeof paths] ?? socket };
       if (kind === "missing-field") answer = { ok: true };
+      if (kind === "missing-ok") answer = { socket };
       if (kind === "empty-field") answer = { ok: true, socket: "" };
       if (kind === "non-string") answer = { ok: true, socket: 42 };
       if (kind === "bad-shape") answer = [{ socket }];
       if (kind === "status-false") answer = { ok: false, socket, error: "status failed" };
       const stdout = kind === "bad-json" ? "not JSON" : JSON.stringify(answer);
       const exit = kind === "failure" ? 1 : kind === "timeout" ? "ETIMEDOUT" : 0;
-      // A namespace import lets the tests reach their assertions on the baseline, which has no comparison yet.
-      const check = (external as any).controlSocket;
-      assert.equal(typeof check, "function", "external.ts needs the CONTROL socket comparison");
-      const result = check(stdout, exit, socket, realpathSync);
+      const result = controlSocket(stdout, exit, socket, realpathSync);
       assert.equal(result.ok, kind === "same" || kind === "symlink", JSON.stringify(result));
       if (!result.ok) {
         assert.match(result.message, /refused:.*CONTROL status/);
+        if (kind === "empty-field" || kind === "non-string") assert.match(result.message, /needs a nonempty socket field/);
+        if (kind === "missing-ok") assert.match(result.message, /ok.*true/);
         assert.ok(result.message.includes(socket), result.message);
         if (kind === "other" || kind === "missing-file") assert.ok(result.message.includes(paths[kind]), result.message);
       }
       // The expected socket can also be a link, or can disappear after the environment guard.
       if (kind === "same") {
-        assert.equal(check(stdout, 0, alias, realpathSync).ok, true);
-        assert.equal(check(stdout, 0, join(dir, "gone.sock"), realpathSync).ok, false);
+        assert.equal(controlSocket(stdout, 0, alias, realpathSync).ok, true);
+        assert.equal(controlSocket(stdout, 0, join(dir, "gone.sock"), realpathSync).ok, false);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
 
-for (const kind of ["other", "missing-field", "bad-json", "failure", "status-false", "missing-file", "timeout"] as const) {
+for (const kind of ["other", "missing-field", "bad-json", "failure", "status-false", "missing-file", "timeout", "missing-ok"] as const) {
   test(`external run refuses CONTROL ${kind} before any connection, end-scope or restart-relay`, async () => {
     const s = await suiteStandIn();
     try {
       const other = join(s.dir, "other.sock"), run = join(s.dir, "run");
       writeFileSync(other, "");
       const output = kind === "bad-json" ? "not JSON" : JSON.stringify(kind === "missing-field" ? { ok: true }
+        : kind === "missing-ok" ? { socket: s.real }
         : { ok: kind !== "status-false", socket: kind === "other" ? other : kind === "missing-file" ? join(s.dir, "gone.sock") : s.real });
       // A single Node process implements CONTROL. A timed-out status leaves no shell child behind.
       writeFileSync(join(s.dir, "control"), `#!${process.execPath}
