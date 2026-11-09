@@ -1706,7 +1706,7 @@ opened under a tab scope.
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12; a function key goes to the page only, never to Chrome's own shortcuts) |
 | `text <tab> [selector\|#N]` | `tab`, `selector` string\|null, `text` |
 | `eval <tab> (<js> \| --stdin)` | `tab`, `value` (the JSON value; `undefined` becomes `null`) |
-| `shot <tab> [path] [--full] [--size WxH] [--scale N]` | `tab`, `path`, `fullPage` bool. Refused with `read_first` until `outline` or `text` read the tab at its current URL. Default path `<state-dir>/shots/<time>.png`. `--size`/`--scale` lay the page out at exactly that size for the shot only (the PNG is W x N by H x N pixels); a failure to restore the tab is an error that names the saved file. |
+| `shot <tab> [path] [--full] [--size WxH] [--scale N]` | `tab`, `path`, `fullPage` bool. Refused with `read_first` until `outline` or `text` read the tab at its current URL. Default path `<state-dir>/shots/<time>.png`. `--size`/`--scale` set the layout and pixel ratio for the shot only. The viewport PNG is W x N by H x N pixels. With `--full`, Chrome measures the content at width W, then expands the emulated height before capture. The PNG includes the full content. A failure to restore the tab is an error that names the saved file. |
 | `fetch <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `contentType` |
 | `download <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `status` int |
 | `close <tab>` | `tab` |
@@ -1980,6 +1980,12 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
   that encode need ffmpeg and ffprobe on `PATH` (skipped without them).
+- `test/shot-full-size.test.ts`: both CLI paths measure the content after the requested width override.
+  The tests check the full-height override, capture parameters, cleanup, Chrome errors, and allowlist refusal.
+- `test/live/shot-full-size-default.ts`: a headless Chromium checks full-page PNGs at three requested sizes.
+  The agent-mode own harness runs the same check with `CASES=shot-full-size`.
+  Both checks use local pages and compare bands for exact copies of the first screen.
+  `SHOT_BASELINE=1` reports the copies without failing, for comparison with an older revision.
 - `test/live/takeover/` (macOS; see the head of `check.ts`): drives one `about:blank` tab of a running
   agent browser while a monitor logs the frontmost app and the pointer, then names any command that
   changed either. Not part of `npm test`.

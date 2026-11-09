@@ -73,7 +73,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [TAB, p("expression", "string", true, "positional", "a JavaScript expression", true), ANY_SCOPE] },
   { name: "shot", summary: "Screenshot as PNG; refused until outline or text has read the page at its current URL", usage: "shot <tab> [path] [--full] [--size WxH] [--scale N]",
     params: [TAB, p("path", "string", false, "positional", "output PNG; default <state-dir>/shots/<time>.png"), p("full", "boolean", false, "--full", "the full page, not only the viewport"),
-      p("size", "string", false, "--size", "lay the page out at exactly WIDTHxHEIGHT CSS pixels for the shot (cleared afterwards)"),
+      p("size", "string", false, "--size", "lay the page out at WIDTHxHEIGHT CSS pixels; --full expands the height to the full page (cleared afterwards)"),
       p("scale", "number", false, "--scale", "the device pixel ratio for the shot, e.g. 1 or 2 (cleared afterwards)"), ANY_SCOPE] },
   { name: "fetch", summary: "Save a URL with the page's fetch() and cookies (same-origin and CORS rules apply)", usage: "fetch <tab> <url> <path>",
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("path", "string", true, "positional", "output file"), ANY_SCOPE] },

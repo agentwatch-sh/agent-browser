@@ -664,7 +664,7 @@ test("default: shot --size --full whose full-page capture never ends, the only c
   assert.deepEqual(captures(calls.slice(set)).map((x) => !!x.params.clip), [true], "the full-page capture alone under the override");
   assert.equal(m.indexOf("Emulation.clearDeviceMetricsOverride"), -1, "no clear while it may still end");
   assert.ok(lines.some((l) => /1 capture of tab \w+ sent under the size override may still end/.test(l)), JSON.stringify(lines));
-  assert.deepEqual(page.metrics, { width: 800, height: 600, deviceScaleFactor: 1 }, "left set by the shot");
+  assert.deepEqual(page.metrics, { width: 800, height: 2400, deviceScaleFactor: 1 }, "the full-height override is left set by the shot");
   assert.equal(page.override, undefined, "the end of the command's session cleared it");
   page.noFrames = false;
   await commands.close(o(), { tab: name });
