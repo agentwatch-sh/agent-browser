@@ -714,6 +714,47 @@ test("the geometry read: only for a bridge tab, one in flight per tab, its own 2
 
 // ------------------------------------------------------------------ the catch-up
 
+test("a covered page with a client point gets a catch-up after a raise that needs no X path", async () => {
+  for (const how of ["input", "bringToFront", "newWindow"] as const) {
+    const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET });
+    try {
+      const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+      if (how === "input") await click(c, A, 100, 100);
+      else if (how === "bringToFront") await c.send("Page.bringToFront", {}, A.sessionId);
+      else await page(h, c);
+      assert.equal(d.moves.length, 0, "the pointer is already at T: no X path changes B's client point");
+      assert.equal(pointOf(h, B)?.x11, false);
+      // An unrelated call must keep the mark until B's next pointer event leaves its gate.
+      await c.send("Runtime.evaluate", { expression: "1" }, B.sessionId);
+      const from = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 700, 500);
+      const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
+      assert.ok(moves.length >= 6, `${how}: catch-up before the client's far move, got ${moves.length}`);
+      let last = { x: 100, y: 100 };
+      for (const m of moves) { assert.ok(Math.hypot(m.x - last.x, m.y - last.y) <= 50); last = m; }
+      assert.deepEqual([last.x, last.y], [700, 500]);
+      const next = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 100, 100);
+      assert.deepEqual(ops(h, next), ["Input.dispatchMouseEvent mouseMoved"], "once per cover");
+    } finally { await h.close(); }
+  }
+});
+
+test("a covered page's catch-up stops at four unanswered moves and leaves the dialog call free", async () => {
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await click(c, A, 100, 100);
+    h.fake.command = (t, method, params) => t.tabId === B.tab.id && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" ? new Promise(() => {}) : undefined;
+    const from = h.fake.requests.length;
+    void mouse(c, B, "mouseMoved", 900, 700).catch(() => {});
+    await until(() => h.fake.requests.slice(from).some((r) => r.args?.[2]?.x === 900), "the client's move");
+    assert.equal(h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent").length, 5);
+    assert.equal(state(h).catchUpStops, 1);
+    assert.deepEqual(await c.send("Page.handleJavaScriptDialog", { accept: true }, B.sessionId), {});
+  } finally { await h.close(); }
+});
+
 test("the catch-up: after an X record, a client's move more than 50 px from it gets CDP moves along a path first, the client's move as its last step; once only", async () => {
   const { h } = await onHarness();
   try {

@@ -216,6 +216,28 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       const pa = await a.contexts()[0].newPage(), pb = await b.contexts()[0].newPage();
       await pa.goto(pageUrl("CA")); await pb.goto(pageUrl("CB"));
       await loaded("CA"); await loaded("CB");
+      await guard("covered client points: two clients, both pages, no X path at the cover", async () => {
+        // Establish a known X position with a path, then cover each page while at already equals T.
+        await pb.mouse.click(700, 300);
+        await pa.mouse.click(100, 200);
+        await pb.mouse.move(100, 200);
+        await pb.bringToFront();
+        await sleep(500);
+        const t0 = Date.now();
+        await pa.mouse.move(900, 600); // A was covered with its own client point, not an X record.
+        await pa.bringToFront(); // the path ends at (900, 600) in both pages
+        await pb.mouse.move(900, 600); // B's point is its client's again
+        await pb.bringToFront(); // at is T; A is covered with its client point
+        await pb.mouse.click(900, 600); // B also has a client point
+        await pa.bringToFront(); // at is T; B is covered with its client point
+        await pb.mouse.move(100, 200);
+        const t1 = Date.now();
+        const catchUps = o.relayLines.filter((l) => l.t >= t0 && l.t <= t1 && /^relay: catch-up in tab /.test(l.line)).map((l) => l.line);
+        const ids = [await tabIdOf("CA"), await tabIdOf("CB")];
+        // No own-raw exclusion: include each client's far move in the unexplained-change count.
+        await measure("covered client points: two clients, both pages, no X path at the cover", ["CA", "CB"], t0, t1,
+          { detail: { catchUps }, extra: () => ids.some((id) => !catchUps.some((l) => l.startsWith(`relay: catch-up in tab ${id}:`))) ? ["missing a covered-page catch-up"] : [] });
+      });
       await guard("two clients: A clicks in its page while B activates another page (A's page: 0 jumps, 0 presses away from the last move)", async () => {
         const t0 = Date.now();
         const spots = [[70, 280], [400, 300], [120, 345], [600, 420]];

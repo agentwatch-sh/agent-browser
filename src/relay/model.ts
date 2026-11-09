@@ -17,7 +17,7 @@
 // docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, section 3; C11 "The pointer at an activation"): with
 // one window per page, when a page comes under the pointer, the relay has the daemon play a person-shaped path
 // (daemon.movePointer, C10) from the last point of the page under the pointer to the last point of the page that comes
-// forward, before its window comes forward; after such an X record a client's next far pointer event gets a CDP catch-up
+// forward, before its window comes forward; after an X record or a cover a client's next far pointer event gets a CDP catch-up
 // path first. With an older daemon (`unknown op`) the paths stay off, and the relay is exactly as before.
 
 import { randomBytes } from "node:crypto";
@@ -95,6 +95,8 @@ type Tab = {
   pointerSent: Set<Promise<unknown>>;
   /** A catch-up that runs in the page. */
   catchUp: Promise<void> | null;
+  /** Another page came on top of this page: its next pointer event needs the same catch-up as an X record. */
+  covered: boolean;
   /** Its catch-up moves without an answer (at most CATCH_UP_MAX_UNANSWERED, per tab). */
   unanswered: number;
   /** Its calls that wait in the activation chain (or run there). */
@@ -848,7 +850,10 @@ export class Model {
     const ownWindow = ![...this.tabs.values()].some((t) => t !== tab && t.windowId === windowId);
     tab.windowId = windowId;
     if (this.paths !== "on" || !active) return;
-    if (ownWindow || windowId === this.frontWindow) { this.front = tab; this.frontWindow = windowId; }
+    if (ownWindow || windowId === this.frontWindow) {
+      if (this.front && this.front !== tab) this.front.covered = true;
+      this.front = tab; this.frontWindow = windowId;
+    }
   }
 
   /**
@@ -866,6 +871,7 @@ export class Model {
     if (!child && VIEWPORT_CALLS.has(method)) this.dropGeo(tab);
     if (TOUCH_INPUT.has(method)) { this.setPoint(tab, null); return; }
     if (!POINTER_INPUT.has(method)) return;
+    tab.covered = false;
     // A held button counts on any session of the page, a frame's too (review-68 B2): mousePressed until Chrome answered its mouseReleased.
     if (method === "Input.dispatchMouseEvent" && p.type === "mousePressed") tab.pressed = true;
     if (method === "Input.dispatchMouseEvent" && p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
@@ -1044,6 +1050,9 @@ export class Model {
       // Step 6: the X records.
       if (comes || (!front && raises)) await this.record(tab, front, outcome, gF, gT, w?.state === "minimized");
       // Step 7.
+      // Chrome resets movement on the covered page's next event even when no X path changed its client point.
+      // Mark before the raise: a failed or timed-out answer can still have raised the window.
+      if (comes) front!.covered = true;
       const raised = await this.raise(tab, kind, t, w, comes, bring);
       if (raised && (comes || (!front && raises))) { this.front = tab; this.frontWindow = tab.windowId; }
       else if (!raised) { this.front = null; this.frontWindow = null; }
@@ -1187,13 +1196,13 @@ export class Model {
 
   /**
    * The catch-up of a client's pointer event (C11), decided when the event leaves the tab's gate, against the page's
-   * point at that time: after an X record, a move more than 50 px from it, or a press or a wheel more than 2 px from it;
+   * point at that time: after an X record or cover, a move more than 50 px from it, or a press or wheel more than 2 px from it;
    * never while the page holds a button, and none while the tab has catch-up moves without an answer.
    */
   private catchUpOf(tab: Tab, method: string, params: any): { from: Pt; to: Pt; move: boolean } | null {
     if (!this.windowPerPage || this.paths !== "on" || !POINTER_INPUT.has(method) || this.tabs.get(tab.id) !== tab) return null;
     const pt = this.pointOf(tab), p = params ?? {};
-    if (!pt?.x11 || typeof p.x !== "number" || typeof p.y !== "number" || tab.pressed || tab.unanswered > 0) return null;
+    if (!pt || (!pt.x11 && !tab.covered) || typeof p.x !== "number" || typeof p.y !== "number" || tab.pressed || tab.unanswered > 0) return null;
     const type = String(p.type);
     const move = type === "mouseMoved" || type === "dragEnter" || type === "dragOver";
     if (!move && type !== "mousePressed" && type !== "mouseWheel" && type !== "drop") return null;
@@ -1243,7 +1252,7 @@ export class Model {
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
     if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false,
-      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
+      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, covered: false, unanswered: 0, chainSteps: 0, worldIds: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
     return tab;
   }
 
