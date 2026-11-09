@@ -629,9 +629,13 @@ function assertTransferUrl(url: string, allow: readonly string[], s: Settings): 
   if (!isAllowedUrl(url, allow)) throw transferRefusal(url, s);
 }
 
-/** A captured URL is checked once, at its start, against this connection's allowlist. */
+/** A download capture changes download behavior for the whole Chrome: personal mode's Chrome is the operator's own. */
+export const PERSONAL_CAPTURE_REFUSAL = "a download capture changes the whole Chrome; personal mode is the operator's own Chrome, so it never captures a download; use agent mode";
+
+/** A captured URL is checked once, at its start, against this connection's allowlist. A URL that does not parse is refused too. */
 function assertDownloadUrl(url: string, allow: readonly string[], s: Settings): void {
-  const parsed = new URL(url);
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw transferRefusal(url, s, `refusing download from ${url}: not a valid URL`); }
   if (parsed.protocol === "data:") return;
   if (parsed.protocol === "blob:") {
     if (/^https?:/.test(parsed.origin) && !isAllowedUrl(parsed.origin, allow))
@@ -1725,8 +1729,7 @@ export class Tab {
    * Personal mode refuses before any CDP call, because its Chrome belongs to the operator.
    */
   async expectDownload(action: () => Promise<unknown>, dir: string, timeoutMs = 120_000): Promise<Download> {
-    if (this.browser.settings.mode === "personal")
-      throw new UsageError("a download capture changes the whole Chrome; personal mode is the operator's own Chrome, so it never captures a download; use agent mode");
+    if (this.browser.settings.mode === "personal") throw new UsageError(PERSONAL_CAPTURE_REFUSAL);
     notEmpty(dir, "expectDownload");
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647)
       throw new UsageError("expectDownload timeout must be a positive integer of at most 2147483647 milliseconds");
@@ -1780,7 +1783,11 @@ export class Tab {
         if (started && !saved) await conn.send("Browser.cancelDownload", { guid: started.guid }).catch(() => {});
         await conn.send("Browser.setDownloadBehavior", { behavior: "default" }).catch(() => {});
         try { rmSync(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 }); }
-        catch (error) { this.browser.settings.log(`agent-browser: could not remove download staging folder ${staging}: ${(error as NodeJS.ErrnoException).code ?? "error"}`); }
+        catch (error) {
+          const { code, message } = error as NodeJS.ErrnoException;
+          const detail = code && !String(message).startsWith(code) ? `${code}: ${message}` : String(message ?? error);
+          this.browser.settings.log(`agent-browser: could not remove download staging folder ${staging}; it stays and can hold an unfinished or refused file: ${detail}`);
+        }
       }
     });
   }

@@ -1,12 +1,13 @@
 // The real CLI, a fake Chrome, and agent mode's real relay download emulation. No browser starts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs, { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
-import { NotAllowedError } from "../src/errors.ts";
+import { NotAllowedError, UsageError } from "../src/errors.ts";
 import { withInputLock } from "../src/input.ts";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
@@ -28,8 +29,14 @@ async function setup(agent = false) {
   const args = agent ? ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", h!.url("download-test")] : flags(c, chrome.ws);
   let serial = 0;
   // The stand-in browser emits real CDP events. The relay must copy the file from Chrome's folder.
-  function download(url = fx.base + "/export.csv", state = "completed", immediate = true, dangerous = false) {
-    page.select("#b")[0].onclick = () => {
+  // `follow`: the click requests `url`, and the events give the URL after every redirect, as Chrome does (fetchDownload).
+  function download(url = fx.base + "/export.csv", state = "completed", immediate = true, dangerous = false, follow = false) {
+    page.select("#b")[0].onclick = !follow ? () => start(url) : async () => {
+      const { url: final, response } = await chrome.fetchDownload(url);
+      await response.body?.cancel();
+      start(final);
+    };
+    function start(url: string) {
       page.title = "download-started";
       const guid = `download-${++serial}`;
       const event = (method: string, params: object) => {
@@ -51,7 +58,7 @@ async function setup(agent = false) {
       if (dangerous && h) h.fake.emit("downloads.onChanged", { delta: { id: serial, danger: { current: "file" } } });
       const progress = () => event("Browser.downloadProgress", { guid, state, totalBytes: CONTENT.length, receivedBytes: CONTENT.length });
       if (state !== "inProgress") { if (immediate) progress(); else setTimeout(progress, 30); }
-    };
+    }
   }
   return { fx, c, chrome, page, h, o, args, download,
     run: (tail: string[], json = true) => cli(["click", "export", ...tail, ...args, ...(json ? ["--json"] : [])], { cwd: c.dir }),
@@ -216,6 +223,18 @@ test("personal mode refuses library and CLI capture without a directory or downl
   } finally { await b.disconnect(); await f.close(); }
 });
 
+test("commands.click refuses a personal-mode capture before it connects or attaches a tab", async () => {
+  const f = await setup();
+  try {
+    const dir = join(f.c.dir, "personal-before-connect"), connections = f.chrome.connections, from = f.chrome.calls.length;
+    await assert.rejects(commands.click({ ...f.o, mode: "personal" }, { tab: "export", target: "#b", download: dir, timeout: 200 }),
+      (e: unknown) => e instanceof UsageError && /personal mode.*operator.*Chrome/.test(e.message));
+    assert.equal(f.chrome.connections, connections, "no connection to Chrome");
+    assert.deepEqual(f.chrome.calls.slice(from).map((x) => x.method), [], "no CDP call: no tab is resolved or attached");
+    assert.equal(existsSync(dir), false);
+  } finally { await f.close(); }
+});
+
 test("capture rechecks the page after another chain releases the input lock", async () => {
   const f = await setup(), b = await AgentBrowser.connect(f.o);
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), checked = Promise.withResolvers<void>();
@@ -270,6 +289,86 @@ for (const agent of [false, true]) test(`${agent ? "agent relay" : "default prox
   } finally { await f.close(); }
 });
 
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: capture refuses a malformed download URL as not_allowed and names it`, async () => {
+  const f = await setup(agent);
+  try {
+    const url = "http://[malformed/export.csv";
+    f.download(url);
+    const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "not_allowed", r.stdout);
+    assert.equal(r.json.error.message, `refusing download from ${url}: not a valid URL`);
+    assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
+  } finally { await f.close(); }
+});
+
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: a download that an allowlisted URL redirects to an off-list host is refused by its URL after the redirect`, async () => {
+  const f = await setup(agent);
+  // One local server for two names (the fake Chrome sends each *.localhost name to 127.0.0.1): fixture.localhost is on
+  // the list (at any port), and its /export redirects to elsewhere.localhost, which is off the list.
+  const server = createServer((req, res) => {
+    const port = (server.address() as { port: number }).port;
+    if (req.url === "/export") { res.writeHead(302, { location: `http://elsewhere.localhost:${port}/private.csv` }); res.end(); return; }
+    if (req.url === "/private.csv") { res.writeHead(200, { "content-type": "text/csv", "content-disposition": 'attachment; filename="private.csv"' }); res.end(CONTENT); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (server.address() as { port: number }).port, url = `http://${FIXTURE_HOST}:${port}/export`;
+    // The default proxy: the fake Chrome's own download. The agent relay: the relay's download events (Page.downloadWillBegin).
+    if (agent) f.download(url, "completed", true, false, true);
+    else f.page.select("#b")[0].onclick = (page) => { void f.chrome.download(page, url, "private.csv"); };
+    const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "not_allowed", r.stdout);
+    assert.equal(r.json.error.message, agent
+      ? "refusing download from elsewhere.localhost: URL is not on the allowlist. Ask the operator to add elsewhere.localhost to your browser list."
+      : `refusing download from http://elsewhere.localhost:${port}/private.csv: URL is not on the allowlist`);
+    assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await f.close(); }
+});
+
+// As in Chrome, a download that the capture cancels, or whose folder the capture removed, writes nothing and throws nothing.
+test("fake Chrome: a download that gets Browser.cancelDownload before its body writes nothing", async () => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  try {
+    const dir = join(f.c.dir, "fake-cancel");
+    mkdirSync(dir);
+    await b.conn.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: dir, eventsEnabled: true });
+    const result = await f.chrome.download(f.page, f.fx.base + "/file.bin", "file.bin", { beforeBody: (guid) => b.conn.send("Browser.cancelDownload", { guid }) });
+    assert.equal(result, "canceled");
+    assert.deepEqual(readdirSync(dir), [], "Chrome writes nothing for a canceled download");
+  } finally { await b.disconnect(); await f.close(); }
+});
+
+test("fake Chrome: a download whose folder is gone before its body is canceled, not a throw", async () => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  try {
+    const dir = join(f.c.dir, "fake-gone");
+    mkdirSync(dir);
+    await b.conn.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: dir, eventsEnabled: true });
+    const result = f.chrome.download(f.page, f.fx.base + "/file.bin", "file.bin", { beforeBody: () => rmSync(dir, { recursive: true }) });
+    assert.equal(await result, "canceled");
+    assert.equal(existsSync(dir), false);
+  } finally { await b.disconnect(); await f.close(); }
+});
+
+test("default proxy: a refused capture's download whose body comes after the cleanup writes nothing and throws nothing", async () => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  try {
+    const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "late-body"), cleaned = Promise.withResolvers<void>();
+    const url = f.fx.base.replace(FIXTURE_HOST, "elsewhere.localhost") + "/file.bin"; // off the list; the fake Chrome reaches it
+    let fake: Promise<string> | undefined;
+    f.page.select("#b")[0].onclick = (page) => { fake = f.chrome.download(page, url, "file.bin", { beforeBody: () => cleaned.promise }); };
+    await assert.rejects(tab.expectDownload(() => tab.click("#b"), dir, 5000), /refusing download from .*elsewhere\.localhost.*not on the allowlist/);
+    // The capture canceled the download, restored the behavior and removed its staging folder. Now the body comes.
+    assert.ok(f.chrome.calls.some((x) => x.method === "Browser.cancelDownload"));
+    cleaned.resolve();
+    assert.equal(await fake, "canceled");
+    assert.deepEqual(readdirSync(dir), []);
+  } finally { await b.disconnect(); await f.close(); }
+});
+
 test("the start URL check refuses an off-list download before it completes", async () => {
   const f = await setup();
   try {
@@ -319,8 +418,8 @@ test("a timeout explains that iframe and new-tab downloads are ignored", async (
   } finally { await b.disconnect(); await f.close(); }
 });
 
-test("staging cleanup failure preserves the original click error", async (t) => {
-  const f = await setup(), b = await AgentBrowser.connect(f.o);
+test("staging cleanup failure preserves the original click error and logs the folder, code and message", async (t) => {
+  const f = await setup(), logs: string[] = [], b = await AgentBrowser.connect({ ...f.o, log: (line) => { logs.push(line); } });
   const original = fs.rmSync;
   try {
     const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "cleanup-error");
@@ -330,5 +429,9 @@ test("staging cleanup failure preserves the original click error", async (t) => 
     });
     syncBuiltinESMExports();
     await assert.rejects(tab.expectDownload(async () => { throw new Error("original click error"); }, dir, 100), /original click error/);
+    const [staging] = readdirSync(dir);
+    assert.match(staging, /^\.download-/, "the staging folder stays when its cleanup fails");
+    const line = logs.find((l) => l.includes("download staging folder"));
+    assert.equal(line, `agent-browser: could not remove download staging folder ${join(dir, staging)}; it stays and can hold an unfinished or refused file: EBUSY: late copy blocks cleanup`);
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); await b.disconnect(); await f.close(); }
 });

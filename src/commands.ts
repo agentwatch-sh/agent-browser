@@ -3,7 +3,7 @@
 // adapter runs the CLI. COMMAND_SPECS describes them all, and the parity tests read it.
 
 import { join, resolve } from "node:path";
-import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab, type Download } from "./browser.ts";
+import { AgentBrowser, PERSONAL_CAPTURE_REFUSAL, allowlistOf, rememberEndpoint, type PageInfo, type Tab, type Download } from "./browser.ts";
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
 import { listAgentChromes, type AgentChrome } from "./chromes.ts";
 import { bringToFront, type FrontHow } from "./front.ts";
@@ -59,8 +59,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ANY_SCOPE] },
   { name: "outline", summary: "Number the interactive elements on screen (read this before a screenshot)", usage: "outline <tab> [--all]",
     params: [TAB, p("all", "boolean", false, "--all", "include elements outside the viewport"), ANY_SCOPE] },
-  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS]",
-    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder)"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ANY_SCOPE] },
+  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches; --download captures the file it starts (agent mode only)", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS]",
+    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder); agent mode only: personal mode refuses a capture"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ANY_SCOPE] },
   { name: "hover", summary: "Move the mouse over an element (hover menus)", usage: "hover <tab> <selector|#N>",
     params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector"), ANY_SCOPE] },
   { name: "type", summary: "Type text into #N or a selector, else the focused field; fails when it did not arrive; never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
@@ -328,6 +328,8 @@ export const commands = {
     const dir = p.download === undefined ? undefined : resolve(need(p.download, "--download"));
     if (p.timeout !== undefined && (dir === undefined || !Number.isSafeInteger(p.timeout) || p.timeout <= 0 || p.timeout > 2_147_483_647))
       throw new UsageError("--timeout needs --download and a positive integer of at most 2147483647 milliseconds");
+    // Refuse before onTab: a refused capture connects to no Chrome and attaches no tab (Tab.expectDownload refuses too).
+    if (dir !== undefined && resolveOptions(o).mode === "personal") throw new UsageError(PERSONAL_CAPTURE_REFUSAL);
     return onTab(o, p, async (tab, info) => {
       const click = () => p.text ? tab.clickText(p.text) : tab.click(idx(p.target!));
       const download = dir === undefined ? (await click(), undefined) : await tab.expectDownload(click, dir, p.timeout);

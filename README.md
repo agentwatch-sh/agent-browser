@@ -1732,7 +1732,7 @@ opened under a tab scope.
 | `open <url> [--name N] [--tab]` | `tab` TabRef, `window` int\|null |
 | `goto <tab> <url>` | `tab` TabRef (live URL and title) |
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
-| `click <tab> <selector\|#N>` or `click <tab> --text LABEL`, with `[--download DIR] [--timeout MS]` for either form | `tab`, `target` string\|null, `text` string\|null; with `--download`, also `download: {path, suggestedFilename, url, bytes}` |
+| `click <tab> <selector\|#N>` or `click <tab> --text LABEL`, with `[--download DIR] [--timeout MS]` for either form (agent mode only: personal mode refuses `--download`) | `tab`, `target` string\|null, `text` string\|null; with `--download`, also `download: {path, suggestedFilename, url, bytes}` |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
 | `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). Into an input or a textarea it types inserted text, and key events when the field ignores that. Into an editable element (an app's own editor, such as the Google Sheets cell editor) it types one key event per character at once: inserted text can reach that DOM and never reach the app. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. A tab or a newline in the text is a Tab or an Enter key: only the text before the first one is checked, so `type sheet $'a\tb\tc\n'` fills a row of cells in a spreadsheet without the clipboard. |
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12; a function key goes to the page only, never to Chrome's own shortcuts) |
@@ -1771,7 +1771,8 @@ The text result prints these four fields too.
 A later download keeps an existing file and uses a unique filename.
 Without `--download`, the click result stays the same.
 
-Personal mode refuses a download capture.
+Personal mode refuses a download capture with a usage error.
+The `click` command refuses it before it connects to Chrome or attaches a tab.
 The library's `Tab.expectDownload` refuses it before any lock, directory change or CDP call.
 A capture changes download behavior for the whole Chrome default context.
 Personal mode uses the operator's own Chrome, so a capture could affect downloads in other windows.
@@ -1801,18 +1802,26 @@ Earlier versions use a separate 30-second wait for the start.
 The library result now includes `bytes` with `path`, `suggestedFilename` and `url`.
 
 The capture checks the download URL when it starts, against the allowlist loaded for that connection.
+Chrome reports the URL after every redirect, so the check uses the final URL.
+A probe on Chromium 156 measured this for a link and for a `download` link that an allowlisted host redirects to another host.
+The capture refuses a redirect from an allowlisted host to an off-list host.
+It accepts a redirect chain that passes through an off-list host and ends on the list; Chrome has already sent those requests.
 It accepts `data:` URLs.
 For a `blob:` URL with an HTTP(S) inner origin, that origin must be on the allowlist.
 An opaque blob origin has no HTTP(S) host to check.
 The capture refuses an off-list HTTP(S) URL or blob origin, reports the full URL, and removes its output.
+It refuses a URL that does not parse in the same way, with the `not_allowed` code and the full URL.
 Chrome has already fetched an HTTP(S) URL with the profile's cookies by then.
 This refusal stops the saved file, not the request.
 The operator must add a download host to the allowlist if the export uses another host.
 
 The library saves into a private staging folder under `DIR` and moves a completed file to its final path.
-It removes the staging folder and unfinished output after success, refusal or timeout.
+It removes the staging folder and unfinished output after success, refusal or timeout, unless the cleanup fails.
 It restores Chrome's default download behavior.
 A cleanup error is logged and preserves the original capture error.
+When the cleanup fails, the staging folder `DIR/.download-XXXXXX` stays, and it can hold an unfinished or refused file.
+The log line names the folder and gives the error code and message.
+Remove that folder by hand.
 This cleanup applies to `DIR` and its staging folder only.
 In agent mode through the relay, Chrome's own download folder in the agent profile retains every file that Chrome finishes.
 The relay copies those files to the caller's directory; it never moves them.
@@ -1864,7 +1873,7 @@ dataclass:
 | `open(url, name=None, tab=False)` | `OpenResult(tab: TabRef, window)` |
 | `goto(tab, url)` | `GotoResult(tab)` |
 | `outline(tab, all=False)` | `OutlineResult(tab, elements: list[OutlineElement(index, role, type, label, href)])` |
-| `click(tab, target=None, text=None, *, download=None, timeout=None)` | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
+| `click(tab, target=None, text=None, *, download=None, timeout=None)` (agent mode only for `download`: personal mode raises `UsageError`) | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
 | `hover(tab, target)` | `HoverResult(tab, target)` |
 | `type(tab, text, into=None)` | `TypeResult(tab, into, length)`; the text goes on stdin |
 | `press(tab, key)` | `PressResult(tab, key)` |
@@ -1881,6 +1890,7 @@ dataclass:
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
 `click` keeps `any_scope` in its existing fourth positional slot. Its new `download` and `timeout` options are keyword-only.
+A `download` capture is for agent mode only: in personal mode, `click` raises `UsageError` before the CLI connects.
 
 Each method that takes a `tab`, and `window`, also takes `any_scope=False` (see
 **Tab scopes**). `TabRef(id, target_id, name, url, title, scope)`; `scope` is None for a tab with no
