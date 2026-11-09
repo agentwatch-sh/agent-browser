@@ -124,7 +124,7 @@ const o: BrowserOptions = {
   chromeArgs: ["--ozone-platform=x11", "--password-store=basic", "--disable-background-networking", "--disable-component-update", "--disable-sync",
     "--disable-default-apps", "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE probe.localhost", "--proxy-server=http://127.0.0.1:9",
     "--proxy-bypass-list=probe.localhost", "--window-position=0,0", "--window-size=1100,700"],
-  log: (line) => process.stderr.write(`agent-browser: ${line}\n`),
+  log: (line) => process.stderr.write(`${line}\n`),
 };
 const s = resolveOptions(o);
 

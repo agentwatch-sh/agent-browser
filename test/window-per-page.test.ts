@@ -533,7 +533,7 @@ test("Linux, through bin/agent-browser.js: open without --tab gives the page a w
   const own = consumer();
   try {
     // The real display check, with stand-ins on PATH: ps names an agent Chrome on this profile (a pid above pid_max: no
-    // real process has it), xdotool shows only its windows, xprop no window manager. Every other ps call is the real one.
+    // real process has it), xdotool shows only its windows, xprop no window manager, xdpyinfo no XWAYLAND extension. Every other ps call is the real one.
     const bin = join(own.dir, "bin"), log = join(own.dir, "x.log"), pid = 4194999;
     const realPs = ["/usr/bin/ps", "/bin/ps"].find((p) => existsSync(p))!;
     const profile = resolveOptions(own.options()).profileDir;
@@ -545,6 +545,7 @@ test("Linux, through bin/agent-browser.js: open without --tab gives the page a w
       `  getwindowpid) echo ${pid} ;;`, "  getmouselocation) printf 'X=900\\nY=700\\nSCREEN=0\\nWINDOW=200\\n' ;;",
       "  mousemove) ;;", "  *) exit 1 ;;", "esac"].join("\n"));
     script("xprop", `echo "$*" >> ${log}\necho "_NET_SUPPORTING_WM_CHECK:  not found."`);
+    script("xdpyinfo", `echo "xdpyinfo $*" >> ${log}\nprintf 'number of extensions: 1\\n    XTEST\\ndefault screen number: 0\\n'`);
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DISPLAY: ":4194" };
     delete env.WAYLAND_DISPLAY; delete env.XAUTHORITY;
     const run = (args: string[]) => cli([...args, ...flags(own, fake.ws), "--json", "--input-timing", JSON.stringify(FAST)], { env });
@@ -567,6 +568,7 @@ test("Linux, through bin/agent-browser.js: open without --tab gives the page a w
     const x = readFileSync(log, "utf8");
     assert.match(x, /^search --onlyvisible --name $/m, "the real windows check");
     assert.match(x, /^-root _NET_SUPPORTING_WM_CHECK$/m, "the real window manager check");
+    assert.match(x, /^xdpyinfo $/m, "the real XWAYLAND check");
     assert.match(x, /^mousemove \d+ \d+$/m, "the X pointer's move: the last step of the path");
     await run(["close", "w"]);
   } finally { stopProxy(resolveOptions(own.options())); own.remove(); }

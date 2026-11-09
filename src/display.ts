@@ -3,8 +3,8 @@
 // its own: a person's windows, focus and pointer on their own screen are theirs. That is agentwatch's private Xvfb
 // behind agent mode's endpoint (cdpUrl: agentwatch's agent unit starts one Xvfb for its one Chromium), and, for an
 // agent Chrome that agent-browser started, a display whose every visible window is that Chrome's (its pid, through
-// xdotool), with no window manager on it and no Wayland session around it (ab-v16.42). Elsewhere agent-browser drives
-// the page as before (background tabs, focus emulation), with a log line.
+// xdotool), with no window manager or XWAYLAND extension on it and no WAYLAND_DISPLAY in the chosen environment.
+// Elsewhere agent-browser drives the page as before (background tabs, focus emulation), with a log line.
 
 import { execFile } from "node:child_process";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -26,7 +26,8 @@ const CHECK_MS = 60_000;
 
 /**
  * The DISPLAY, XAUTHORITY and WAYLAND_DISPLAY of a process, from its environment (/proc/<pid>/environ); undefined when
- * it has no DISPLAY or cannot be read.
+ * it has no DISPLAY or cannot be read. Chromium 156 clears its main process environment, so this normally returns
+ * undefined and displayOf uses agent-browser's environment instead.
  */
 export function envOf(pid: number): Record<string, string> | undefined {
   try {
@@ -67,9 +68,9 @@ export async function onlyWindowsOf(x: XAccess, pid: string): Promise<boolean> {
 }
 
 /**
- * A window manager runs on the display: its root window has _NET_SUPPORTING_WM_CHECK (xprop's answer). A person's
- * desktop has one, also XWayland under a Wayland compositor; agentwatch's Xvfb has none. xprop's three answers, read on
- * an Xvfb of taylor (ab-v16.42): "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x21f" (set), "...:  not found." (not
+ * A window manager runs on the display: its root window has _NET_SUPPORTING_WM_CHECK (xprop's answer). Many desktops
+ * set it, including some Wayland compositors; its absence does not rule out XWayland. A private Xvfb has none.
+ * xprop's three answers, read on an Xvfb of taylor (ab-v16.42): "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x21f" (set), "...:  not found." (not
  * set) and "...:  no such atom on any window." (no client named it yet). An xprop that fails, or another answer, throws.
  */
 export async function hasWindowManager(xprop: XdotoolRunner): Promise<boolean> {
@@ -77,6 +78,20 @@ export async function hasWindowManager(xprop: XdotoolRunner): Promise<boolean> {
   if (/_NET_SUPPORTING_WM_CHECK\(WINDOW\): window id/.test(out)) return true;
   if (/_NET_SUPPORTING_WM_CHECK:\s+(not found|no such atom on any window)/.test(out)) return false;
   throw new Error(`xprop gave no answer: ${out.trim().split("\n")[0]}`);
+}
+
+/**
+ * XWayland advertises the XWAYLAND extension. Read xdpyinfo's complete extension list; an unreadable or incomplete
+ * answer throws. Older XWayland servers without this extension still need the environment or window-manager check.
+ * Protocol: https://sources.debian.org/src/xorgproto/2024.1-1/xwaylandproto.txt/
+ */
+async function hasXwayland(xdpyinfo: XdotoolRunner): Promise<boolean> {
+  const out = await xdpyinfo([]);
+  const list = /number of extensions:\s*(\d+)\r?\n([\s\S]*?)default screen number:/.exec(out);
+  if (!list) throw new Error("xdpyinfo gave no extension list");
+  const names = list[2].split("\n").map((line) => line.trim()).filter(Boolean);
+  if (names.length !== Number(list[1])) throw new Error("xdpyinfo gave no complete extension list");
+  return names.includes("XWAYLAND");
 }
 
 type Kept = { chromePid: number; own: boolean; why?: string; display?: string; xauthority?: string; at: number; noticeAt?: number };
@@ -97,7 +112,7 @@ function cmdlineOf(pid: number): string | undefined {
 
 /**
  * @internal The parts of displayOf that a test replaces: the agent Chrome's pid (ps), a process's command line and
- * display, xdotool and xprop on a display, the clock.
+ * display, xdotool, xprop and xdpyinfo on a display, the clock.
  */
 export type DisplayDeps = {
   pid?: (s: Settings) => number | undefined;
@@ -105,6 +120,7 @@ export type DisplayDeps = {
   env?: (pid: number) => Record<string, string> | undefined;
   runner?: (env: Record<string, string>) => XAccess;
   xprop?: (env: Record<string, string>) => XdotoolRunner;
+  xdpyinfo?: (env: Record<string, string>) => XdotoolRunner;
   now?: () => number;
 };
 
@@ -112,13 +128,15 @@ export type DisplayDeps = {
  * The agent Chrome's display (DisplayInfo). A test gives it (Settings.display); there is no other way past the check,
  * also under a test runner (review-45b: a consumer's own tests against a real agent Chrome must not skip it). Behind
  * cdpUrl: own; xdotool with this process's DISPLAY, which an activation must verify (input.ts). An agent Chrome that
- * agent-browser started: its own environment's DISPLAY first, else this process's; own only when xdotool shows that
- * every visible window there is that Chrome's, its environment has no WAYLAND_DISPLAY (XWayland shows its windows on a
- * person's screen) and the display's root window has no _NET_SUPPORTING_WM_CHECK (a window manager: a person's
- * desktop). That check holds for a minute for the same Chrome pid (display.json in the state folder); while it holds,
+ * agent-browser started: try /proc/<pid>/environ first, else use this process's DISPLAY, XAUTHORITY and WAYLAND_DISPLAY.
+ * Chromium 156 clears its main process environment, so that fallback is the normal path. Own only when xdotool shows
+ * that every visible window there is that Chrome's, the chosen environment has no WAYLAND_DISPLAY, the display's root
+ * window has no _NET_SUPPORTING_WM_CHECK, and xdpyinfo lists no XWAYLAND extension (a Wayland compositor's X server).
+ * Older XWayland without that extension can pass if both the environment and window-manager checks miss it.
+ * That check holds for a minute for the same Chrome pid (display.json in the state folder); while it holds,
  * /proc/<pid>/cmdline of the kept pid says whether it is still this profile's agent Chrome, so no ps runs (review-45c:
- * 35 to 39 ms on taylor). A check that fails (no ps, no xdotool, no xprop) gives "not own"; a state folder that cannot
- * be written keeps no answer, and the check runs each time. With `log`, a display that is not its own gets the log line
+ * 35 to 39 ms on taylor). A check that fails (no ps, no xdotool, no xprop, no xdpyinfo) gives "not own". A state folder
+ * that cannot be written keeps no answer, and the check runs each time. With `log`, a display that is not its own gets the log line
  * of noticeNotOwn.
  */
 export async function displayOf(s: Settings, log = false, deps: DisplayDeps = {}): Promise<DisplayInfo> {
@@ -165,18 +183,22 @@ async function find(s: Settings, deps: DisplayDeps, now: () => number): Promise<
   if (fresh && kept.chromePid === chromePid)
     return { own: kept.own, chromePid, why: kept.why,
       x: kept.own && kept.display && d?.xdotool !== false ? run({ DISPLAY: kept.display, ...(kept.xauthority ? { XAUTHORITY: kept.xauthority } : {}) }) : undefined };
+  // Chromium clears /proc/<pid>/environ: normally these are agent-browser's display variables.
   const env = (deps.env ?? envOf)(chromePid) ?? fromEnv;
   let info: DisplayInfo;
   if (!env) info = { own: false, chromePid, why: "agent-browser cannot see the agent Chrome's display (no DISPLAY)" };
-  else if (env.WAYLAND_DISPLAY) info = { own: false, chromePid, why: `the agent Chrome runs in a Wayland session (WAYLAND_DISPLAY=${env.WAYLAND_DISPLAY}): its X display ${env.DISPLAY} is XWayland, on a person's screen` };
+  else if (env.WAYLAND_DISPLAY) info = { own: false, chromePid, why: `the chosen display environment has WAYLAND_DISPLAY=${env.WAYLAND_DISPLAY}: treat its X display ${env.DISPLAY} as a person's screen` };
   else {
     const x = run(env);
     const only = await onlyWindowsOf(x, String(chromePid)).catch(() => undefined);
     const wm = only ? await hasWindowManager((deps.xprop ?? ((e) => xProgram("xprop", e)))(env)).catch(() => undefined) : false;
+    const wayland = only && wm === false ? await hasXwayland((deps.xdpyinfo ?? ((e) => xProgram("xdpyinfo", e)))(env)).catch(() => undefined) : false;
     info = only === undefined ? { own: false, chromePid, why: `agent-browser cannot check the display ${env.DISPLAY} (no xdotool, or it cannot read the display)` }
       : !only ? { own: false, chromePid, why: `another program's window is on the display ${env.DISPLAY}` }
       : wm === undefined ? { own: false, chromePid, why: `agent-browser cannot check for a window manager on the display ${env.DISPLAY} (no xprop, or it cannot read the display)` }
       : wm ? { own: false, chromePid, why: `a window manager runs on the display ${env.DISPLAY} (_NET_SUPPORTING_WM_CHECK): a person's desktop` }
+      : wayland === undefined ? { own: false, chromePid, why: `agent-browser cannot check for XWAYLAND on the display ${env.DISPLAY} (no xdpyinfo, or it cannot read the display)` }
+      : wayland ? { own: false, chromePid, why: `the display ${env.DISPLAY} advertises XWAYLAND: a person's screen` }
       : { own: true, chromePid, x: d?.xdotool === false ? undefined : x };
   }
   try {

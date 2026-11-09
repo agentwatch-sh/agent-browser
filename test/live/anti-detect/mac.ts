@@ -473,7 +473,7 @@ const STANDIN_WATCHBACK = [process.execPath, join(HERE, "mac-standin-watchback.t
 if (O.dryRun) process.env.MAC_STANDIN_WATCHBACK_FRONT = String(operatorPid);
 // The Mac's design (platform "darwin": on the Mac the default; in the dry run on Linux the internal option). chromeBin:
 // the give-back watcher activates nothing but checks that the pid is an instance of this app bundle.
-const base: BrowserOptions = { stateDir, socketPath, allow: ["probe.localhost"], ...(endpoint ? { endpoint } : {}), commandName: "mac check", proxyIdleMs: 60_000, log: (l) => say(`agent-browser: ${l}`),
+const base: BrowserOptions = { stateDir, socketPath, allow: ["probe.localhost"], ...(endpoint ? { endpoint } : {}), commandName: "mac check", proxyIdleMs: 60_000, log: (l) => say(l),
   platform: "darwin", ...(O.dryRun ? { watchBackCommand: STANDIN_WATCHBACK } : { chromeBin: O.chromeBin }),
   // review-69c B1: from a stop, and from the quit on, no more input event, no front request and no watcher start.
   stopped: () => !!aborted || quitting };

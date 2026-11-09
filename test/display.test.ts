@@ -38,6 +38,10 @@ const aWm = () => async () => "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x2
 /** xprop on a new Xvfb: no client has named the atom yet. */
 const noAtom = () => async () => "_NET_SUPPORTING_WM_CHECK:  no such atom on any window.\n";
 
+/** xdpyinfo's extension list on a server that is not XWayland. No real display is queried. */
+const noXwayland = () => async () => "number of extensions:    2\n    RANDR\n    XTEST\ndefault screen number:    0\n";
+
+
 test("onlyWindowsOf: every visible window but the root is the pid's; another pid, or no window, is not a display of its own", async () => {
   assert.equal(await onlyWindowsOf(fakeX({ 10: "4242", 11: "4242" }).x, "4242"), true);
   assert.equal(await onlyWindowsOf(fakeX({ 10: "4242", 11: "999" }).x, "4242"), false, "another program's window");
@@ -50,7 +54,7 @@ test("onlyWindowsOf: every visible window but the root is the pid's; another pid
 test("an agent Chrome that agent-browser started: own when its display holds only its windows; the answer holds a minute for that pid", async () => {
   let t = 1_000_000, pid = 4242;
   const disp = fakeX({ 10: "4242" });
-  const deps: DisplayDeps = { pid: () => pid, env: () => ({ DISPLAY: ":42" }), runner: () => disp.x, xprop: noWm, now: () => t };
+  const deps: DisplayDeps = { pid: () => pid, env: () => ({ DISPLAY: ":42" }), runner: () => disp.x, xprop: noWm, xdpyinfo: noXwayland, now: () => t };
   const s = settings();
   let info = await displayOf(s, false, deps);
   assert.deepEqual([info.own, info.chromePid, !!info.x], [true, 4242, true]);
@@ -81,7 +85,7 @@ test("not a display of its own: the log line says why, at most once in 5 minutes
     const lines: string[] = [];
     const s = resolveOptions(o.options({ platform: "linux", log: (l) => { lines.push(l); } }));
     const other = fakeX({ 10: "4242", 11: "777" });
-    const deps: DisplayDeps = { pid: () => 4242, env: () => ({ DISPLAY: ":42" }), runner: () => other.x, xprop: noWm, now: () => t };
+    const deps: DisplayDeps = { pid: () => 4242, env: () => ({ DISPLAY: ":42" }), runner: () => other.x, xprop: noWm, xdpyinfo: noXwayland, now: () => t };
     let info = await displayOf(s, true, deps);
     assert.equal(info.own, false);
     assert.match(info.why!, /another program's window is on the display :42/);
@@ -106,17 +110,17 @@ test("not a display of its own: the log line says why, at most once in 5 minutes
   } finally { o.remove(); }
 });
 
-test("a Wayland session or a window manager is not a display of its own: WAYLAND_DISPLAY in the agent Chrome's environment, _NET_SUPPORTING_WM_CHECK on the root, or no xprop (ab-v16.42)", async () => {
+test("a Wayland session or a window manager is not a display of its own: WAYLAND_DISPLAY in the chosen environment, _NET_SUPPORTING_WM_CHECK on the root, or no xprop (ab-v16.42)", async () => {
   const o = consumer();
   try {
     let t = 3_000_000;
     const s = resolveOptions(o.options({ platform: "linux" }));
     // The agent Chrome forced to X11 (--ozone-platform=x11) is the only XWayland client, and nothing frames it: xdotool alone says "own".
     const only = fakeX({ 10: "4242" });
-    const base: DisplayDeps = { pid: () => 4242, runner: () => only.x, xprop: noWm, now: () => (t += 61_000) };
+    const base: DisplayDeps = { pid: () => 4242, runner: () => only.x, xprop: noWm, xdpyinfo: noXwayland, now: () => (t += 61_000) };
     let info = await displayOf(s, false, { ...base, env: () => ({ DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" }) });
     assert.equal(info.own, false);
-    assert.match(info.why!, /runs in a Wayland session \(WAYLAND_DISPLAY=wayland-0\): its X display :0 is XWayland/);
+    assert.match(info.why!, /chosen display environment has WAYLAND_DISPLAY=wayland-0: treat its X display :0/);
     info = await displayOf(s, false, { ...base, env: () => ({ DISPLAY: ":0" }), xprop: aWm });
     assert.equal(info.own, false);
     assert.match(info.why!, /a window manager runs on the display :0 \(_NET_SUPPORTING_WM_CHECK\)/);
@@ -153,7 +157,7 @@ test("within the minute, the kept pid's /proc/<pid>/cmdline stands in for ps: no
     const disp = fakeX({ 10: "4242" });
     let cmdline: string | undefined = `/usr/lib/chromium/chromium --user-data-dir=${s.profileDir} --window-name=agent`;
     const deps: DisplayDeps = { pid: () => { psCalls++; return 4242; }, cmdline: (p) => (p === 4242 ? cmdline : undefined), env: () => ({ DISPLAY: ":42" }),
-      runner: () => disp.x, xprop: noWm, now: () => t };
+      runner: () => disp.x, xprop: noWm, xdpyinfo: noXwayland, now: () => t };
     assert.equal((await displayOf(s, false, deps)).own, true);
     assert.equal(psCalls, 1, "the first check finds the pid with ps");
     t += 30_000;
@@ -197,4 +201,52 @@ test("behind cdpUrl (agentwatch's private Xvfb): own, with no check; a test's ow
   assert.equal(real.own, false);
   assert.match(real.why!, /finds no agent Chrome of its own/);
   assert.ok(existsSync(join(c.stateDir, "display.json")));
+});
+
+
+test("the display gate rejects XWAYLAND without WAYLAND_DISPLAY or a window manager, and fails closed without xdpyinfo", async () => {
+  const c = consumer();
+  try {
+    let t = 20_000_000;
+    const seen: string[][] = [], displays: string[] = [];
+    const s = resolveOptions(c.options({ platform: "linux" }));
+    const deps: DisplayDeps = { pid: () => 4242, env: () => ({ DISPLAY: ":42", XAUTHORITY: "/tmp/test-cookie" }),
+      runner: () => fakeX({ 10: "4242" }).x, xprop: noWm, now: () => (t += 61_000) };
+    for (const output of [
+      "number of extensions:    3\n    RANDR\n    XTEST\n    XWAYLAND\ndefault screen number:    0\n",
+      "missing", "unreadable", "", "number of extensions: 2\n    RANDR\ndefault screen number: 0\n",
+    ]) {
+      const info = await displayOf(s, false, { ...deps, xdpyinfo: (env) => {
+        displays.push(env.DISPLAY);
+        assert.equal(env.XAUTHORITY, "/tmp/test-cookie");
+        assert.equal(env.WAYLAND_DISPLAY, undefined);
+        return async (args) => {
+          seen.push(args);
+          if (output === "missing") throw new Error("spawn xdpyinfo ENOENT");
+          if (output === "unreadable") throw new Error("unable to open display");
+          return output;
+        };
+      } });
+      assert.equal(info.own, false, output);
+      assert.equal(info.x, undefined, "no pointer access on a rejected display");
+      assert.match(info.why!, output.includes("XWAYLAND") ? /XWAYLAND.*person's screen/ : /cannot check.*xdpyinfo/);
+    }
+    assert.deepEqual(displays, Array(5).fill(":42"));
+    assert.deepEqual(seen, Array.from({ length: 5 }, () => []));
+    assert.equal((await displayOf(s, false, { ...deps, xdpyinfo: noXwayland })).own, true, "a complete list without XWAYLAND passes");
+  } finally { c.remove(); }
+});
+
+
+test("the display gate matches the exact XWAYLAND extension name", async () => {
+  const c = consumer();
+  try {
+    const s = resolveOptions(c.options({ platform: "linux" }));
+    const info = await displayOf(s, false, {
+      pid: () => 4242, env: () => ({ DISPLAY: ":42" }), runner: () => fakeX({ 10: "4242" }).x, xprop: noWm,
+      xdpyinfo: () => async () => "number of extensions: 3\n    XTEST\n    XWAYLAND-EXT\n    NOT_XWAYLAND\ndefault screen number: 0\n",
+    });
+    assert.equal(info.own, true, "similar extension names do not identify XWayland");
+    assert.ok(info.x, "the accepted display keeps its pointer access");
+  } finally { c.remove(); }
 });

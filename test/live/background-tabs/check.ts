@@ -142,7 +142,7 @@ const sock = join(RUN, "chrome-proxy.sock");
 const o: BrowserOptions = {
   stateDir: RUN, socketPath: Buffer.byteLength(sock) <= MAX_SOCKET_PATH_BYTES ? sock : join(mkdtempSync(join(tmpdir(), "ab-bt-")), "proxy.sock"),
   allow: ["probe.localhost"], chromeBin: mode.chrome, chromeArgs: chromeArgs(mode.before), approve: "xdotool", proxyIdleMs: 120_000,
-  hiddenDrive: mode.hiddenDrive, commandName: "background-tabs check", log: (line) => process.stderr.write(`agent-browser: ${line}\n`),
+  hiddenDrive: mode.hiddenDrive, commandName: "background-tabs check", log: (line) => process.stderr.write(`${line}\n`),
 };
 const s = resolveOptions(o);
 

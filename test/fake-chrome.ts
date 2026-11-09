@@ -708,16 +708,27 @@ export class FakePage {
   }
 
   /** A trusted click: the element's handler, else a link's navigation or download. */
-  async activate(el: FakeElement) {
+  async activate(el: FakeElement, button = "left", modifiers = 0) {
     if (el.onclick) return el.onclick(this, el);
     const href = el.getAttribute("href");
     if (el.tagName !== "A" || href === null) return;
     const target = new URL(href, this.url).href;
     // A download finishes after the click returns, as in Chrome.
     if (el.hasAttribute("download")) { void this.fake.download(this, target, el.getAttribute("download") || basename(new URL(target).pathname)); return; }
-    // A target=_blank link (noopener, Chrome's default for it): the opener's frame asks for a navigation in a new tab
-    // (Page.frameRequestedNavigation with disposition newTab, on the opener's sessions), and the page opens there.
-    if (el.getAttribute("target") === "_blank") { this.fake.requestNavigation(this, target, "newTab"); this.fake.openFrom(this, target).noopener = true; return; }
+    // Ctrl-click and middle click request newTab; Shift-click requests newWindow on the opener.
+    // Plain target=_blank links and window.open send no frameRequestedNavigation there (Chromium 156).
+    const disposition = button === "middle" || (modifiers & 2) ? "newTab" : (modifiers & 8) ? "newWindow" : undefined;
+    if (disposition) {
+      this.fake.requestNavigation(this, target, disposition);
+      this.fake.openFrom(this, target, disposition === "newWindow");
+      return;
+    }
+    if (el.getAttribute("target") === "_blank") {
+      const rel = (el.getAttribute("rel") ?? "").toLowerCase().split(/\s+/);
+      this.fake.openFrom(this, target).noopener = rel.includes("noopener") || !rel.includes("opener");
+      return;
+    }
+    this.fake.requestNavigation(this, target, "currentTab", "anchorClick");
     this.fake.navigate(this, target);
   }
 
@@ -914,11 +925,11 @@ export class FakeChrome {
   }
 
   /**
-   * A page's script asks for a navigation of its main frame (Page.frameRequestedNavigation); it does not commit yet.
-   * `disposition` as Chrome gives it: "currentTab" for the frame itself, "newTab" (and "newWindow") for a page that opens elsewhere.
+   * A script or same-tab link requests currentTab; Ctrl-click and middle click request newTab, Shift-click newWindow.
+   * Plain target=_blank links and window.open do not send this event on the opener. This method does not commit.
    */
-  requestNavigation(page: FakePage, url: string, disposition = "currentTab") {
-    this.toSessions(page, "Page.frameRequestedNavigation", { frameId: `F-${page.targetId}`, reason: disposition === "currentTab" ? "scriptInitiated" : "anchorClick", url, disposition });
+  requestNavigation(page: FakePage, url: string, disposition = "currentTab", reason = disposition === "currentTab" ? "scriptInitiated" : "anchorClick") {
+    this.toSessions(page, "Page.frameRequestedNavigation", { frameId: `F-${page.targetId}`, reason, url, disposition });
   }
 
   /** A navigation of the main frame starts (Page.frameStartedNavigating) and does not commit yet: a slow server, say. */
@@ -926,9 +937,9 @@ export class FakeChrome {
     this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
   }
 
-  /** window.open() or a target=_blank link: a new tab in the opener's window (with tabSwitches, in front and focused). Returns it. */
-  openFrom(opener: FakePage, url: string): FakePage {
-    const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), opener.windowId);
+  /** A popup: a tab in the opener's window, or a separate window for Shift-click. With tabSwitches it comes forward. */
+  openFrom(opener: FakePage, url: string, newWindow = false): FakePage {
+    const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), newWindow ? ++this.nextWindow : opener.windowId);
     this.pages.set(page.targetId, page);
     page.opener = opener;
     page.load(url);
@@ -1178,7 +1189,7 @@ export class FakeChrome {
             if (who && named) { page.fileChoosers++; who.client.send(JSON.stringify({ method: "Page.fileChooserOpened", params: { frameId: `F-${page.targetId}`, mode: "selectSingle", backendNodeId: page.elements.indexOf(named) + 2 }, sessionId: who.id })); }
             return {};
           }
-          await page.activate(el);
+          await page.activate(el, params.button, params.modifiers);
         }
         return {};
       }

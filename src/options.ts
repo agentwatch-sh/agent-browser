@@ -422,8 +422,8 @@ export function scopeFolderName(scope: string): string {
 
 /**
  * The folder of the tab record (browser.ts: tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json and their
- * lock tabs.lock), created private to this user. Behind agent mode's endpoint (cdpUrl) each endpoint scope lists only its
- * own tabs, and a record change drops the entries of every tab that its connection does not list, so each endpoint scope
+ * lock tabs.lock). A record change creates it private to this user; a read creates no folder. Behind agent mode's
+ * endpoint (cdpUrl) each endpoint scope lists only its own tabs, and a record change drops the entries of every tab that its connection does not list, so each endpoint scope
  * keeps a record of its own: <stateDir>/endpoint-scopes/<scopeFolderName(scope)>/ (board task ab-v16.58). With no
  * endpoint scope (the proxy, or a known endpoint) the record stays in the state folder itself, as before. Every other
  * file of the state folder stays one per agent browser for every endpoint scope: input.lock and pointer.json (input.ts),
@@ -431,10 +431,8 @@ export function scopeFolderName(scope: string): string {
  */
 export function recordDir(s: Settings): string {
   const scope = endpointScope(s);
-  if (scope === undefined) return stateDir(s);
-  const dir = join(stateDir(s), ENDPOINT_SCOPES_DIR, scopeFolderName(scope));
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
+  if (scope === undefined) return s.stateDir;
+  return join(s.stateDir, ENDPOINT_SCOPES_DIR, scopeFolderName(scope));
 }
 
 /** A file of the tab record (recordDir). */
