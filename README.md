@@ -1873,7 +1873,7 @@ dataclass:
 | `open(url, name=None, tab=False)` | `OpenResult(tab: TabRef, window)` |
 | `goto(tab, url)` | `GotoResult(tab)` |
 | `outline(tab, all=False)` | `OutlineResult(tab, elements: list[OutlineElement(index, role, type, label, href)])` |
-| `click(tab, target=None, text=None, *, download=None, timeout=None)` | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
+| `click(tab, target=None, text=None, *, download=None, timeout=None)` (agent mode only for `download`: personal mode raises `UsageError`) | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
 | `hover(tab, target)` | `HoverResult(tab, target)` |
 | `type(tab, text, into=None)` | `TypeResult(tab, into, length)`; the text goes on stdin |
 | `press(tab, key)` | `PressResult(tab, key)` |

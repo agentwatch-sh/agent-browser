@@ -780,6 +780,8 @@ export class FakeChrome {
   attached(sessionId: string): boolean { return this.sessions.has(sessionId); }
   private streams = new Map<string, { data: Buffer; offset: number }>();
   private downloadBehavior: { behavior: string; downloadPath?: string } = { behavior: "default" };
+  /** The downloads that have begun and not ended, by guid: `canceled` after Browser.cancelDownload. */
+  private activeDownloads = new Map<string, { canceled: boolean }>();
   private wss!: WebSocketServer;
   private clients = new Set<WebSocket>();
   private nextWindow = 1;
@@ -964,13 +966,11 @@ export class FakeChrome {
   }
 
   /**
-   * As in Chromium 156 (a probe with a 302 from an allowlisted host to another host): downloadWillBegin comes after the
-   * response's headers, and its url is the URL after every redirect, not the URL that the click requested.
+   * A download's response, and its URL as Chrome reports it in downloadWillBegin: in Chromium 156 (a probe with a 302
+   * from an allowlisted host to another host) that is the URL after every redirect, not the URL that the click requested.
+   * Each hop goes to 127.0.0.1 (local()).
    */
-  async download(page: FakePage, url: string, suggestedFilename: string) {
-    const { behavior, downloadPath } = this.downloadBehavior;
-    if (behavior !== "allowAndName" || !downloadPath) return;
-    const guid = randomUUID();
+  async fetchDownload(url: string): Promise<{ url: string; response: Response }> {
     let final = url, response = await globalThis.fetch(this.local(final), { redirect: "manual" });
     for (let hops = 1; response.status >= 300 && response.status < 400 && response.headers.has("location"); hops++) {
       if (hops > 20) throw new Error("the fake Chrome follows at most 20 redirects");
@@ -978,10 +978,35 @@ export class FakeChrome {
       await response.body?.cancel();
       response = await globalThis.fetch(this.local(final), { redirect: "manual" });
     }
-    this.broadcast("Browser.downloadWillBegin", { frameId: `F-${page.targetId}`, guid, url: final, suggestedFilename });
-    const data = Buffer.from(await response.arrayBuffer());
-    writeFileSync(join(downloadPath, guid), data);
-    setTimeout(() => this.broadcast("Browser.downloadProgress", { guid, totalBytes: data.length, receivedBytes: data.length, state: "completed" }), 50);
+    return { url: final, response };
+  }
+
+  /**
+   * A download into the allowAndName folder, as in Chrome: downloadWillBegin comes after the response's headers, with the
+   * URL after every redirect (fetchDownload). `beforeBody` (for a test) runs after downloadWillBegin and before the body.
+   * As in Chrome, a download that got Browser.cancelDownload writes nothing, and a folder that is gone at the write
+   * (ENOENT: a capture removed its staging folder) cancels the download; neither is an error.
+   * The result: "completed", "canceled", or "ignored" when no allowAndName folder is set.
+   */
+  async download(page: FakePage, url: string, suggestedFilename: string, opts: { beforeBody?: (guid: string) => unknown } = {}): Promise<"completed" | "canceled" | "ignored"> {
+    const { behavior, downloadPath } = this.downloadBehavior;
+    if (behavior !== "allowAndName" || !downloadPath) return "ignored";
+    const guid = randomUUID();
+    const { url: final, response } = await this.fetchDownload(url);
+    const state = { canceled: false };
+    this.activeDownloads.set(guid, state);
+    try {
+      this.broadcast("Browser.downloadWillBegin", { frameId: `F-${page.targetId}`, guid, url: final, suggestedFilename });
+      await opts.beforeBody?.(guid);
+      const data = Buffer.from(await response.arrayBuffer());
+      if (!state.canceled) {
+        try { writeFileSync(join(downloadPath, guid), data); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; state.canceled = true; }
+      }
+      const done = state.canceled ? "canceled" : "completed";
+      setTimeout(() => this.broadcast("Browser.downloadProgress", { guid, totalBytes: data.length, receivedBytes: done === "canceled" ? 0 : data.length, state: done }), 50);
+      return done;
+    } finally { this.activeDownloads.delete(guid); }
   }
 
   private local(url: string): string {
@@ -1033,6 +1058,7 @@ export class FakeChrome {
         return { windowId: p.windowId, bounds: { left: 0, top: 0, width: 1280, height: 800, windowState: "normal" } };
       }
       case "Browser.setDownloadBehavior": this.downloadBehavior = { behavior: params.behavior, downloadPath: params.downloadPath }; return {};
+      case "Browser.cancelDownload": { const d = this.activeDownloads.get(params.guid); if (d) d.canceled = true; return {}; }
       case "Browser.close": setTimeout(() => void this.close(), 5); return {};
       case "Target.getTargets": return { targetInfos: [...[...this.pages.values()].map((p) => this.info(p)), ...this.otherTargets.map((t) => ({ ...t, attached: false }))] };
       case "Target.getTargetInfo": {
