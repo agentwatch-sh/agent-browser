@@ -13,8 +13,11 @@
 //   agent-browser       agent-browser's own commands in a window of its own (ab-v16.26: src/input.ts), with the X pointer
 //   agent-browser-no-x  the same without the X pointer (as over agentwatch's relay)
 //   playwright          vanilla Playwright over CDP: each input action, what the page sees, and the CDP calls it sends
-//   file-mode           (only with --only) part B's use: the page opened as a file, two trials of task 1 by X input, "Save
-//                       JSON", and analyze.ts on the saved file
+//   playwright-extra    more Playwright input actions and options (the review of the first runs): mouse.dblclick,
+//                       modifiers, the right and middle buttons, clickCount, a click's delay, focus, blur, dispatchEvent,
+//                       selectText, touchscreen.tap, the old locator.type, and the script focus of pressSequentially and press
+//   file-mode           (only with --only) part B's use: the page opened as a file, task 1 (10 trials) and task 5 (2 rounds)
+//                       by X input, "Save JSON", and analyze.ts on the saved file
 // Chromium runs with --remote-debugging-pipe; a small bridge (a WebSocket server on a Unix socket in a short temporary
 // folder of its own, removed at the end) serves
 // the pipe to the clients and records every CDP message with its time (the trace of each Playwright action). Chromium
@@ -50,10 +53,10 @@ const CHROME = values.chrome ?? "/usr/bin/chromium", DISPLAY = Number(values.dis
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse("--display is a positive whole number");
 const reserved = reservedDisplay(DISPLAY, "--display");
 if (reserved) refuse(reserved);
-const ALL = ["xinput", "cdp-raw", "agent-browser", "agent-browser-no-x", "playwright"];
+const ALL = ["xinput", "cdp-raw", "agent-browser", "agent-browser-no-x", "playwright", "playwright-extra"];
 const ONLY = values.only ? values.only.split(",") : ALL;
 for (const n of ONLY) if (![...ALL, "file-mode"].includes(n)) refuse(`no scenario ${n}; known: ${ALL.join(", ")}, file-mode`);
-if (ONLY.includes("playwright") && !values.playwright) refuse("the playwright scenario needs --playwright DIR (a folder whose node_modules has playwright-core)");
+if (ONLY.some((n) => n.startsWith("playwright")) && !values.playwright) refuse("the playwright scenario needs --playwright DIR (a folder whose node_modules has playwright-core)");
 const OUT = resolve(values["out-dir"]!);
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, "run-"));
@@ -501,6 +504,44 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
       return { playwright: require_version(values.playwright!) };
     } finally { await browser?.close().catch(() => {}); await c.stop(); }
   },
+
+  async "playwright-extra"() {
+    const pw = createRequire(join(resolve(values.playwright!), "package.json"))("playwright-core");
+    const c = await startChrome("playwright-extra", [REC_URL("playwright-extra")]);
+    let browser: any;
+    try {
+      await loaded();
+      const win = chromeWindow(c.proc.pid!);
+      xdo("windowraise", win); xdo("windowfocus", win); await sleep(500);
+      xdo("mousemove", "900", "700"); await sleep(300);
+      browser = await pw.chromium.connectOverCDP(c.cdpUrl, { timeout: 15_000 });
+      const page = browser.contexts()[0].pages().find((p: any) => p.url().includes("recorder.html"));
+      if (!page) throw new Error("Playwright sees no recorder page");
+      evalTop = async (expression) => { await page.evaluate(expression); };
+      const t = { timeout: 8000 };
+      await step("idle 2 s", () => sleep(2000));
+      await step("page.mouse.dblclick(x, y)", () => page.mouse.dblclick(centre("b").x, centre("b").y));
+      await step("locator('#b').click({ modifiers: ['Shift'] })", () => page.locator("#b").click({ ...t, modifiers: ["Shift"] }));
+      await step("locator('#b').dblclick({ modifiers: ['Alt'] })", () => page.locator("#b").dblclick({ ...t, modifiers: ["Alt"] }));
+      await step("locator('#b').click({ button: 'right' })", () => page.locator("#b").click({ ...t, button: "right" }));
+      await step("locator('#b').click({ button: 'middle' })", () => page.locator("#b").click({ ...t, button: "middle" }));
+      await step("locator('#b').click({ clickCount: 3 })", () => page.locator("#b").click({ ...t, clickCount: 3 }));
+      await step("locator('#b').click({ delay: 80 })", () => page.locator("#b").click({ ...t, delay: 80 }));
+      await step("locator('#ta').focus()", () => page.locator("#ta").focus(t));
+      await step("locator('#ta').blur()", () => page.locator("#ta").blur(t));
+      await step("locator('#b').dispatchEvent('click')", () => page.locator("#b").dispatchEvent("click", undefined, t));
+      await step("locator('#f').selectText()", () => page.locator("#f").selectText(t));
+      await step("page.touchscreen.tap(x, y)", () => page.touchscreen.tap(centre("b").x, centre("b").y));
+      // The script focus of the typing actions: #b has the focus first, so the field has none.
+      await step("locator('#b').click() (the focus leaves the field)", () => page.locator("#b").click(t));
+      await step("locator('#f').pressSequentially('abc') into a field with no focus", () => page.locator("#f").pressSequentially("abc", t));
+      await step("locator('#b').click() (the focus leaves the field) ", () => page.locator("#b").click(t));
+      await step("locator('#ta').press('a') into a field with no focus", () => page.locator("#ta").press("a", t));
+      await step("locator('#b').click() (the focus leaves the field)  ", () => page.locator("#b").click(t));
+      await step("locator('#f').type('xyz') (the old name of pressSequentially)", () => page.locator("#f").type("xyz", t));
+      return { playwright: require_version(values.playwright!) };
+    } finally { await browser?.close().catch(() => {}); await c.stop(); }
+  },
 };
 
 /** Part B's use of the page, checked: a file:// page with its sandboxed box, X input, the download, the analysis. */
@@ -528,13 +569,20 @@ async function fileMode(): Promise<Record<string, unknown>> {
     xdo("windowraise", win); xdo("windowfocus", win); await sleep(500);
     xdo("mousemove", "900", "700"); await sleep(300);
     const click = async (p: Pt) => { xPath(p, 400, 125); await sleep(120); xPress(85); await sleep(400); };
-    await step("task 1: two trials by X input", async () => {
+    await step("task 1: ten trials by X input", async () => {
       await click(await rectOf("document.getElementById('t1')"));
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < 10; i++) {
         await click(await rectOf("document.getElementById('start')"));
         const b = await rectOf("document.getElementById('box')");
         await click({ x: b.x - 150 + 28, y: b.y - 32.5 + 32 });
         await sleep(800);
+      }
+    }, 60_000);
+    await step("task 5: two rounds of Tab and Space by X input", async () => {
+      await click(await rectOf("document.getElementById('t5')"));
+      for (let i = 0; i < 2; i++) {
+        await click(await rectOf("document.getElementById('start')"));
+        await sleep(300); xdo("key", "Tab"); await sleep(300); xdo("key", "space"); await sleep(1200);
       }
     });
     await step("save JSON", async () => { await click(await rectOf("document.getElementById('save')")); await sleep(1500); });
@@ -546,7 +594,7 @@ async function fileMode(): Promise<Record<string, unknown>> {
     const analysis = execFileSync(process.execPath, [join(HERE, "analyze.ts"), join(downloads, files[0])], { encoding: "utf8", timeout: 30_000 });
     return { file: files[0].replace(/\d{4}-\d\d-\d\dT[\d-]+Z/, "TIME"), records: saved.records.length, frames: saved.frames.length,
       top: count("top"), box: count("box"), boxMoves: count("box", "pointermove"), boxChecked: count("box", "box-checked"), trials: saved.records.filter((r: Rec) => r.e === "task" && r.what === "trial").length,
-      boxState: saved.records.find((r: Rec) => r.f === "box" && r.e === "state") ? "yes" : "no", analysis: analysis.split("\n").filter((l) => l.startsWith("| 1-clickbox")) };
+      boxState: saved.records.find((r: Rec) => r.f === "box" && r.e === "state") ? "yes" : "no", analysis: analysis.split("\n").filter((l) => /^\| (1-clickbox|5-keys-to-box)/.test(l)) };
   } finally { await cdp?.close().catch(() => {}); await c.stop(); }
 }
 

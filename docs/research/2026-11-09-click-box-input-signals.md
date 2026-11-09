@@ -25,26 +25,32 @@ analysis and the results (section 10).
 2. **No field of a single event tells CDP input from real X input (XTEST).** `isTrusted`, `pointerId`,
    `pointerType`, `pressure`, `width`, `height`, tilt, `movementX/Y`, the screen offset, the event order, the key codes
    and the `keypress` events are the same. Section 6.
-3. **Timing and rate tell them apart by default, and CDP can match both.** On X11 a real event's `timeStamp` falls on
-   a whole millisecond: in 100% of the sample gaps. CDP events fall on whole milliseconds in 0% to 75% of the gaps,
-   but in 100% when the sender sets the `timestamp` parameter. A mouse at 125 Hz gives about 2 samples in each
-   `pointermove` (`getCoalescedEvents()`) and 1.9 to 2.7 predicted points on average. agent-browser and Playwright give
-   1 sample and 0 or 1 predicted point, because they send about one move a frame. CDP moves that are sent faster coalesce too
-   (measured). Section 6.
+3. **Timing and rate tell them apart by default, and CDP can match both (measured).** On X11 a real event's
+   `timeStamp` falls on a whole millisecond: in 100% of the sample gaps (XTEST on Xvfb). CDP events do so in 0% to 75%
+   of the gaps, where the check gives about 30% by chance (section 2), and in 100% when the sender sets the
+   `timestamp` parameter. X input at 125 Hz gives about 2 samples in each `pointermove` (`getCoalescedEvents()`) and
+   1.86 to 2.71 predicted points on average. agent-browser and Playwright give 1 sample and 0 or 1 predicted point,
+   because they send about one move a frame. CDP moves that are sent faster coalesce too. NumLock is a third signal
+   by inference only (CDP has no NumLock modifier; not measured with NumLock on). Section 6.
 4. **Vanilla Playwright input is far from a person's.** A click is one jump to the target (one move), then a press of
    0 to 0.5 ms; the `focus` comes after the `click`, not between the press and the release. `keyboard.type` holds
    each key 1.4 to 2.9 ms and types a key every 2.4 to 5.8 ms, and it types capitals and `!` with no Shift key and
    `shiftKey` false. `fill` gives one `input` event with the whole text and no key events. `mouse.wheel` gives one
    wheel event of 600 px. `scrollIntoViewIfNeeded` and a click below the fold scroll with no wheel.
-   `selectOption` and `setInputFiles` give `input` and `change` events with `isTrusted` false. Sections 4.3 and 5.
+   `selectOption` and `setInputFiles` give `input` and `change` events with `isTrusted` false, and `dispatchEvent`
+   gives an untrusted `click`. `focus`, `selectText`, and `fill`, `pressSequentially`, `type` and `press` into a field
+   without the focus give it the focus from a script (a `focusin` with no press). Sections 4.3 and 5.
 5. **agent-browser's own input (ab-v16.26) closes the coarse gaps, not the fine ones.** It sends a curved path of 26
    to 58 moves, a press of 73 to 94 ms with `pressure` 0.5, one key at a time and wheel notches. The remaining gaps:
    one sample a frame (a 60 Hz mouse), key holds of 22 to 52 ms (a person: about 116 ms on average), no key overlap
    (a person: about 25% of keys), no Shift key for capitals, and wheel notches of 100 px where Linux gives 120 px.
    Section 4.2.
 6. **The relay sees every Playwright input action as plain `Input.*` calls,** after Playwright's own checks in its
-   isolated world (section 5). The click's press and release arrive together, before the relay answers the press.
-   `fill`, `selectOption` and `setInputFiles` arrive as script calls, not input.
+   isolated world (section 5). The click's press and release arrive together, before the relay answers the press. A
+   click with `modifiers` puts the modifier's key events around them. `fill`, `selectOption`, `setInputFiles`,
+   `focus`, `blur`, `selectText`, `dispatchEvent`, and the focus before `pressSequentially`, `type` and `press`,
+   arrive as script calls, not input. A click in a cross-origin frame checks the element on the frame's own session
+   and sends the input on the top page's session.
 
 The gaps that ab-t30.3, ab-t30.4 and ab-t30.6 must close, and how the harness (ab-t30.2) measures each one, are in
 section 7. A person's recordings (part B) are planned in section 8: until they exist, the person column of the table
@@ -113,16 +119,26 @@ page, and the entry, the last moves and the press in the box.
     forward. **agent-browser-no-x**: the same without the X pointer, as over agentwatch's relay.
   - **playwright**: Playwright (playwright-core 1.65.0, installed in a scratch folder, not in `package.json`) with
     `connectOverCDP` to the same kind of bridge, and 30 input actions and one script scroll (section 5).
+    **playwright-extra**: 18 more actions and options in the same way (`mouse.dblclick`, modifiers, the right and
+    middle buttons, `clickCount`, a locator click's `delay`, `focus`, `blur`, `dispatchEvent`, `selectText`,
+    `touchscreen.tap`, the old `locator.type`, and the typing actions into a field without the focus).
 - **The transport.** Chromium runs with `--remote-debugging-pipe`. A small bridge serves the pipe as a WebSocket on a
   Unix socket and records every CDP message with its time: this gives the CDP calls of each action (section 5). The
   pipe sets `navigator.webdriver` to true in every page here, also in the xinput runs. That is the probe's transport,
   not input (the earlier report, [`2026-11-05-anti-detect-drive.md`](2026-11-05-anti-detect-drive.md), section 2).
 - **The analysis** ([`analyze.ts`](2026-11-09-click-box-input-signals/analyze.ts)) takes the records of each step and
   computes the counts of section 4. It reads a person's saved recording too (part B).
+- **The whole-millisecond check.** A gap between two samples counts as a whole millisecond when it is within 0.15 ms
+  of a whole number. The page's clock has a step of 0.1 ms, so a gap of a random length passes in about 3 of 10 cases
+  (30%) by chance. Read the CDP shares (0% to 75%) against that 30%: CDP times are not on whole milliseconds, but a
+  sender whose own timers tick in whole milliseconds pushes the share above chance. 100% for X input is far above
+  chance.
 - **The runs.** Two final runs (23:15 to 23:17 and 23:17 to 23:19 UTC), about 2 minutes each, after three trial runs
-  that fixed the probe. Where the runs differ, a value is a range over both runs. The results are in `results/`. A
-  later fix of the page (the box's `z-index`, so that task 1 of part B can move the box over the task area) does not
-  change the probe's layout.
+  that fixed the probe. Where the runs differ, a value is a range over both runs. Run 3 (23:54 to 23:55 UTC, after
+  the first review) ran `playwright-extra` and the file-mode check once: its values are of one run. The results are in
+  `results/`. Two later changes of the page do not change the probe's layout: the box's `z-index` (task 1 of part B
+  moves the box over the task area), and task 5's Start button before the box in the Tab order. In probe mode only, the
+  page also stops the native context menu of a right click (it would take the X input of the probe's display).
 
 ## 3. The signals, path by path
 
@@ -132,7 +148,7 @@ click, a hover, typing "Hello world, 42!" and the wheel.
 
 | Signal | Person (not measured) | agent-browser, window drive | vanilla Playwright via CDP | xdotool XTEST |
 | --- | --- | --- | --- | --- |
-| `isTrusted` | true | true | true; but `selectOption` and `setInputFiles` give `input` and `change` with false (2 events each) | true |
+| `isTrusted` | true | true | true; but `selectOption` and `setInputFiles` give `input` and `change` with false (2 events each), and `dispatchEvent('click')` gives a `click` with false | true |
 | `pointerType`, `pointerId`, `isPrimary` | `mouse`, 1, true (a Mac trackpad in Chrome: not measured) | same | same | same |
 | `pressure` down / up | 0.5 / 0 for a mouse [1] | 0.5 / 0 | 0.5 / 0 | 0.5 / 0 |
 | `width`, `height`, tilt, `twist`, `tangentialPressure`, `altitudeAngle` | 1, 1, 0, 0, 0, pi/2 [1] | same | same | same |
@@ -140,10 +156,11 @@ click, a hover, typing "Hello world, 42!" and the wheel.
 | Fractional coordinates | integer on X11 at a pixel ratio of 1 (XTEST); the Mac: not measured | 0 (it rounds) | when the element's middle is fractional: 1 of 1 for `check()` and for `mouse.click` at .5 | 0 |
 | Moves before a click | a path of many samples | 26 to 58 | 1 (one jump to the target) | as scripted (25 to 40) |
 | Pointer jumps (one move of more than 100 px) | 0 | 0 | 1 at each click from another point | 1 only for a scripted jump |
-| Samples in each `pointermove` (`getCoalescedEvents()`) | more than 1 when the device reports faster than 60 Hz (most mice: 125 to 1000 Hz [7]) | 1 | 1 | 125 Hz: mean 1.9 to 2.0, max 3; about 400 Hz: mean 5.3 to 5.5, max 10; 60 Hz: 1 |
-| Predicted points (`getPredictedEvents()`) | not measured | mean 0.8 to 0.95, max 1 or 2 | 0 for a click; 0.85 for `steps` | 125 Hz: mean 1.9 to 2.7, max 3; about 400 Hz: 8; 60 Hz: 0.9 |
+| Samples in each `pointermove` (`getCoalescedEvents()`) | more than 1 when the device reports faster than the frame rate (60 Hz here); the device rate: not measured (part B); "Mice deliver input typically at 100Hz" [7]; a rate of 125 to 1000 Hz: no source | 1 | 1 | 125 Hz: mean 1.85 to 2.0, max 3; about 400 Hz: mean 5.3 to 5.5, max 10; 60 Hz: 1 |
+| Predicted points (`getPredictedEvents()`) | not measured | mean 0.8 to 0.95, max 1 or 2 | 0 for a click; 0.85 for `steps` | 125 Hz: mean 1.86 to 2.71, max 3; about 400 Hz: 8; 60 Hz: 0.9 |
 | Gap between samples | the device's report interval | 16 to 17 ms | `steps`: 16.4 to 16.9 ms | as scripted: 8 ms (125 Hz), 2 to 3 ms, 17 ms |
-| Sample gaps on a whole millisecond | X11: 100% (X server time is in ms); the Mac: not measured | 31% to 75% | 16% to 47% | 100% |
+| Sample gaps on a whole millisecond (chance: about 30%, section 2) | X11: 100% with XTEST (X server time is in ms); a hardware mouse through Xorg: not measured; the Mac: not measured | 31% to 75% | 16% to 47% | 100% |
+| Frame phase: handler time minus event time (`handlerLagMs`), median per step | not measured | 4.1 to 14.8 ms (most steps 10 to 15) | `steps`: 15.0 to 15.3 ms; one move alone: 7.9 to 11.8 ms; a click's move: 0.4 to 1.7 ms (its press dispatches it at once) | 125 Hz: 1.8 to 8.7 ms; 60 Hz: 7.4 to 13.4 ms; about 400 Hz: 2.4 to 2.6 ms |
 | Path shape (straightness = chord / length) | curved, bell-shaped speed [17]; 28.6% of human moves above 0.94 [13] | 0.72 to 0.97 (ghost-cursor), deviation 27 to 120 px; 0.98 to 1.0 in the box | 1.0 (`steps`), or one jump | as scripted |
 | Speed | at most about 3500 px/s; mean 427 px/s in [13] | peak 0.7 to 2.6 px/ms | `steps` 20: constant, about 2.3 px/ms; a click: one jump | as scripted |
 | Pause from the last move to the press | not measured | 96 to 183 ms | 0.1 to 0.6 ms | as scripted (134 to 175 ms) |
@@ -157,13 +174,15 @@ click, a hover, typing "Hello world, 42!" and the wheel.
 | Shift for capitals and symbols | a Shift `keydown` (location 1 or 2) before, `shiftKey` true | no Shift `keydown`; `shiftKey` true (2 of 2) | `type`: no Shift `keydown`, `shiftKey` false (2 of 2); `press('Shift+A')`: a Shift `keydown` | a Shift `keydown`, `shiftKey` true (2 of 2) |
 | `key`, `code`, `keyCode`, `which`, `location` of a character | consistent with the layout | same | same | same |
 | `repeat`, `isComposing` | true when a key is held; true with an IME | false | false | false |
-| `getModifierState('NumLock')` | the keyboard's state | false (CDP has no NumLock modifier) | false | the X server's state (off on this Xvfb) |
+| `getModifierState('NumLock')` | the keyboard's state | false (measured; with NumLock on, inferred: CDP has no NumLock modifier) | false (the same) | the X server's state (off on this Xvfb) |
 | Text with no key events | none (except paste and IME) | none, except characters with no US key | `fill`, `insertText`: one `input` with the whole text (16 characters) | none |
-| A field gets the focus with no press | no | 0 | `fill` on a field without the focus: 1 | 0 |
-| Wheel notch on X11 | `deltaY` 120, `wheelDeltaY` -120, `deltaMode` 0 (measured with XTEST button 5); a Mac trackpad: many small deltas (not measured) | `deltaY` 100, `wheelDeltaY` -120, 20 notches 55 to 65 ms apart | `mouse.wheel(0, 600)`: one event, `deltaY` 600, `wheelDeltaY` -120 | `deltaY` 120, `wheelDeltaY` -120 |
+| A field gets the focus with no press | no | 0 | 1 for each of `fill`, `pressSequentially`, `type`, `press`, `focus` and `selectText` on a field without the focus | 0 |
+| Modifiers at a click | a modifier key held from before the press to after the release | not measured (no modifier click) | `click({ modifiers })`: the modifier's `keydown`, then the click with the modifier flag, then its `keyup`, 6 ms in all | not measured |
+| Other buttons and clicks | `contextmenu` and `auxclick` for the right button, `auxclick` for the middle one | not measured | the right button: `pointerdown`, `mousedown`, `contextmenu`, `pointerup`, `mouseup`, `auxclick`; the middle one: the same without `contextmenu`; `clickCount: 3` and `dblclick`: 3 and 2 clicks 0.1 ms apart | not measured |
+| Wheel notch on X11 | `deltaY` 120, `wheelDeltaY` -120, `deltaMode` 0 (measured with XTEST button 5); a Mac trackpad: many small deltas (not measured) | `deltaY` 100, `wheelDeltaY` -120, 20 notches, gaps 35 to 86 ms (median 55 to 65 ms) | `mouse.wheel(0, 600)`: one event, `deltaY` 600, `wheelDeltaY` -120 | `deltaY` 120, `wheelDeltaY` -120 |
 | A scroll with no wheel or key | no | 0 | 1 for `scrollIntoViewIfNeeded` and for a click below the fold | 0 |
 | Drag | pointer moves with the button down, then the drop | not measured (no drag command) | one move with the button down; `dragstart`, `pointercancel`, `dragend`; the drop goes by `Input.dispatchDragEvent` | not measured |
-| Event time later than the handler's time | never | never | never | never; CDP with a `timestamp` in the future: 123 to 130 ms later |
+| Event time later than the handler's time (raw CDP with a `timestamp` in the future: every event, 12 to 304 ms later, median 123 and 130 ms in the two runs) | never | never | never | never |
 | The page's own state (`pointer: fine`, `hover`, `maxTouchPoints` 0) | the machine's | same in all paths (the Chromium and Xvfb of the run) | same | same |
 
 ## 4. What each path shows
@@ -172,8 +191,8 @@ click, a hover, typing "Hello world, 42!" and the wheel.
 
 - Every field of the events is the default of a mouse and a keyboard (section 3). The events have the X server's
   timestamps: each sample gap is a whole number of milliseconds (100% of the gaps, all steps, both runs).
-- The X server reports each move at once. At 125 Hz, Chromium puts about 2 samples into each `pointermove` (mean 1.9
-  to 2.0, max 3), with 1.9 to 2.5 predicted points. At about 400 Hz: 5.3 to 5.5 samples (max 10) and 8 predicted
+- The X server reports each move at once. At 125 Hz, Chromium puts about 2 samples into each `pointermove` (mean 1.85
+  to 2.0, max 3), with 1.86 to 2.71 predicted points. At about 400 Hz: 5.3 to 5.5 samples (max 10) and 8 predicted
   points. At 60 Hz: 1 sample and 0.9 predicted points. `pointerrawupdate` comes once for each sample.
 - The press: as scripted (80 to 101 ms). The `focus` comes between `mousedown` and `pointerup`. `xdotool click`
   gives a press of 0 ms, and `xdotool type` gives a fixed rhythm (a hold of 30 to 31 ms, a key every 60 to 61 ms),
@@ -187,13 +206,15 @@ click, a hover, typing "Hello world, 42!" and the wheel.
   `pressure` 0.5. The `focus` comes between the press and the release, as for a person. No pointer jump, with and
   without the X pointer.
 - Each `pointermove` has 1 sample and 0 or 1 predicted point. 31% to 75% of the sample gaps fall on a whole
-  millisecond, where real X input gives 100%.
+  millisecond (chance: about 30%), where real X input gives 100%. The handler time minus the event time has a
+  median of 10 to 15 ms in most steps: each move comes just after a frame (gap P8).
 - In the box: the path enters at the box's edge and makes 7 to 10 moves inside it. Those last moves are almost
   straight (straightness 0.98 to 1.0, deviation 0.3 to 2 px): the end of ghost-cursor's curve.
-- `type --into`: a click on the field, then one key at a time: hold 22 to 52 ms, a key every 90 to 148 ms, no
-  overlap. The two capitals ("H", "!") have `shiftKey` true but no Shift `keydown`.
-- The wheel: notches of `deltaY` 100 with `wheelDeltaY` -120, 55 to 65 ms apart. Real X11 wheel notches are 120.
-  `wheelDeltaY` -120 with `deltaY` 100 is what Chrome gives on Windows, not on Linux.
+- `type --into`: a click on the field, then one key at a time: hold 22 to 52 ms (32 of 34 holds below 50 ms in each
+  run), a key every 90 to 148 ms, no overlap. The two capitals ("H", "!") have `shiftKey` true but no Shift `keydown`.
+- The wheel: notches of `deltaY` 100 with `wheelDeltaY` -120, 35 to 86 ms apart (median 55 to 65 ms; the setting is
+  30 to 70 ms plus the time of each call). Real X11 wheel notches are `deltaY` 120 with `wheelDeltaY` -120, so a
+  notch of 100 px differs from a Linux wheel. Other platforms' notch sizes: not measured, no source here.
 - With the X pointer and without it: the same, except the last move of each path, which is a real X move when
   agent-browser has the X pointer.
 
@@ -210,12 +231,20 @@ click, a hover, typing "Hello world, 42!" and the wheel.
   hold 102 to 103 ms and a key every 104 to 105 ms, the same each time. Capitals and `!` come with no Shift and `shiftKey`
   false. The Playwright documentation says the same: "Modifier keys DO NOT effect keyboard.type" [26].
 - `fill` and `insertText`: one `beforeinput` and one `input` with the whole text, no key events. A `fill` into a field
-  that does not have the focus gives it the focus from a script (a `focusin` with no press).
+  that does not have the focus gives it the focus from a script (a `focusin` with no press). So do
+  `pressSequentially`, the old `type`, `press`, `focus` and `selectText` (run 3: 1 `focusin` with no press for each).
+  `blur` takes the focus away from a script.
 - `selectOption` and `setInputFiles`: no input at all; the page gets `input` and `change` events with `isTrusted`
-  false.
+  false. `dispatchEvent('click')`: one `click` with `isTrusted` false and no pointer events.
+- Modifiers (`click({ modifiers: ['Shift'] })`, `dblclick({ modifiers: ['Alt'] })`): the modifier's `keydown`, the
+  click's events with the modifier flag, then the modifier's `keyup`, 6 ms after the `keydown`.
+- The right and middle buttons: `contextmenu` (right only) and `auxclick`, with a press of 0.1 ms. `clickCount: 3`,
+  `dblclick` and `mouse.dblclick`: two or three clicks 0.1 ms apart (a person's double click: not measured). A locator
+  click with `delay: 80`: a press of 83.6 ms.
 - `mouse.wheel(0, 600)`: one wheel event of 600 px. `scrollIntoViewIfNeeded` and the scroll before a click below the
   fold: a scroll with no wheel.
 - `tap`: refused ("The page does not support tap. Use hasTouch context option to enable touch support.").
+  `touchscreen.tap`: refused too ("hasTouch must be enabled on the browser context before using the touchscreen.").
 - Fractional points: Playwright clicks the middle of the element's box, so a box of an odd size gives `x.5`
   coordinates in the pointer events (X11 gives whole pixels).
 
@@ -228,9 +257,10 @@ click, a hover, typing "Hello world, 42!" and the wheel.
 - Moves that are awaited one by one take one frame each (33 ms with a 16 ms sleep): 1 sample and 0 predicted points.
   Moves that are sent without waiting coalesce: 40 moves in 50 ms gave 22 to 23 `pointermove` events with 1.7 to 1.8
   samples each (max 3) and 7 to 9 predicted points.
-- The `timestamp` parameter sets `event.timeStamp`: moves with timestamps 8 ms apart gave sample gaps of exactly 8 ms
-  (100% on a whole millisecond). Sent all at once with times in the future, the events came 123 to 130 ms before
-  their own `timeStamp`: a page can see an event from the future.
+- The `timestamp` parameter sets `event.timeStamp`: moves with timestamps 8 ms apart gave sample gaps of 7.9 to 8.1
+  ms (100% on a whole millisecond). Sent all at once with times up to 312 ms in the future, every `pointermove`
+  (10 and 19 in the two runs) reached its handler before its own `timeStamp`: 12 to 304 ms before, median 123 and
+  130 ms. A page can see an event from the future.
 - A Shift `rawKeyDown` with location 1, a `keyDown` with `modifiers` 8, and the two `keyUp` give a person's capital.
   Two overlapping key pairs give a rollover. `autoRepeat` gives `repeat` true. So CDP can make every key signal of
   section 3 except NumLock and CapsLock.
@@ -246,23 +276,32 @@ connection with `Page.createIsolatedWorld`). The page does not see those calls, 
 | --- | --- |
 | `page.click`, `locator.click` | U x5 (find the element; wait until it is visible, enabled and stable over two frames: 20 to 31 ms), `DOM.scrollIntoViewIfNeeded`, `DOM.getContentQuads`, U (`innerWidth`, `innerHeight`), U (`setupHitTargetInterceptor`), `mouseMoved {x, y, button: none, buttons: 0, force: 0}`, `mousePressed {button: left, buttons: 1, clickCount: 1, force: 0.5}`, `mouseReleased {clickCount: 1}`, U (the hit-target check), `Page.enable` |
 | `dblclick` | the same, with `mousePressed`/`mouseReleased` with `clickCount` 1, then 2 |
+| `click({ clickCount: 3 })` | the same, with three press-and-release pairs, `clickCount` 1, 2 and 3 (run 3) |
+| `click({ modifiers: ['Shift'] })`, `dblclick({ modifiers: ['Alt'] })` | the click's checks, then `rawKeyDown {key: Shift, code: ShiftLeft, location: 1, modifiers: 8}` (Alt: `modifiers: 1`), the move, the press and the release with the same `modifiers`, then the modifier's `keyUp` (run 3) |
+| `click({ button: 'right' })`, `click({ button: 'middle' })` | the click's calls with `button: right, buttons: 2` or `button: middle, buttons: 4` (run 3) |
+| `click({ delay: 80 })` (locator) | the click's calls, with the delay between `mousePressed` and `mouseReleased` (run 3: a press of 83.6 ms) |
+| `page.mouse.dblclick(x, y)` | `mouseMoved`, then two press-and-release pairs, `clickCount` 1 and 2, with no checks (run 3) |
 | `check`, `setChecked` | the same as a click, with two more U calls before (the state) and after (the new state) |
 | `hover` | the same as a click up to `mouseMoved`, no press |
-| `frameLocator(...).locator(...).click()` | the frame's owner and box first (`DOM.getFrameOwner`, `DOM.getBoxModel`, `DOM.resolveNode`, `DOM.describeNode`), then the click's calls on the top page's session, in top-page coordinates |
+| `frameLocator(...).locator(...).click()` | the element's checks (U, `DOM.scrollIntoViewIfNeeded`, `DOM.getContentQuads`: 14 calls) on the box frame's own CDP session (the frame is a target of its own); the frame's owner and box on the top page's session (`DOM.getFrameOwner`, `DOM.getBoxModel`, `DOM.resolveNode`, `DOM.describeNode`); then the move, the press and the release on the top page's session, in top-page coordinates |
 | `mouse.move(x, y)` | one `mouseMoved` |
 | `mouse.move(x, y, { steps: n })` | n `mouseMoved` on a straight line, each one awaited |
 | `mouse.down()`, `mouse.up()` | `mousePressed`, `mouseReleased` at the last point |
 | `mouse.click(x, y)` | `mouseMoved`, `mousePressed`, `mouseReleased`; with `delay`, a wait between the last two |
 | `mouse.wheel(dx, dy)` | one `mouseWheel {x, y, deltaX, deltaY}` at the last point |
-| `keyboard.type`, `pressSequentially` | (`pressSequentially`: U x5 first, which focus the element from a script) then for each character `keyDown {key, code, windowsVirtualKeyCode, text, unmodifiedText, modifiers: 0, location: 0, autoRepeat: false, isKeypad: false, commands: []}` and `keyUp`; a capital is `key: "H", text: "H", modifiers: 0`. Characters with no key in Playwright's US layout go as `Input.insertText` [26] |
-| `press('Enter')` (locator) | U x5 (focus), `keyDown {key: Enter, text: "\r"}`, `keyUp` |
+| `keyboard.type`, `pressSequentially` | (`pressSequentially`: U x5 first; into a field without the focus, the last U calls the element's `focus()`: run 3) then for each character `keyDown {key, code, windowsVirtualKeyCode, text, unmodifiedText, modifiers: 0, location: 0, autoRepeat: false, isKeypad: false, commands: []}` and `keyUp`; a capital is `key: "H", text: "H", modifiers: 0`. Characters with no key in Playwright's US layout go as `Input.insertText` [26] |
+| `press('Enter')` (locator) | U x5 (into a field without the focus, the last U calls its `focus()`: run 3), `keyDown {key: Enter, text: "\r"}`, `keyUp` |
 | `keyboard.press('Shift+A')`, `down('Shift')` | `rawKeyDown {key: Shift, code: ShiftLeft, location: 1, modifiers: 8}`, `keyDown {key: A, text: A, modifiers: 8}`, `keyUp A`, `keyUp Shift` |
 | `fill`, `clear` | U x5 (focus, select all), then `Input.insertText {text}`; `clear`: `rawKeyDown Delete`, `keyUp Delete` |
 | `keyboard.insertText` | `Input.insertText` |
 | `selectOption`, `setInputFiles` | U calls only: the page's own events come from a script (`isTrusted` false) |
-| `dragTo` | the click's checks on both elements, `mouseMoved` and `mousePressed` at the source, `Input.setInterceptDrags {enabled: true}`, one `mouseMoved {buttons: 1}` to the target, `Input.dispatchDragEvent` `dragEnter` and `drop` |
+| `dragTo` | the click's checks on both elements, `mouseMoved` and `mousePressed` at the source, `Input.setInterceptDrags {enabled: true}`, one `mouseMoved {buttons: 1}` to the target, `Input.setInterceptDrags {enabled: false}`, `Input.dispatchDragEvent` `dragEnter` and `drop`. No `mouseReleased`: the drop takes its place |
 | `scrollIntoViewIfNeeded` | U and `DOM` calls, then `DOM.scrollIntoViewIfNeeded` |
-| `tap` | none: refused without `hasTouch` |
+| `focus`, `blur` | U calls only: the element's `focus()` or `blur()` in the utility world (run 3) |
+| `selectText` | U, `DOM.describeNode` and `DOM.resolveNode` calls only: the focus and the selection come from a script (run 3) |
+| `dispatchEvent('click')` | `Runtime.evaluate` x2 and one U: the event comes from a script (run 3) |
+| `locator.type` (the old name) | as `pressSequentially`: U x4, U (`focus`), then `keyDown` and `keyUp` for each character (run 3) |
+| `tap`, `touchscreen.tap` | none: refused without `hasTouch` (run 3 for `touchscreen.tap`) |
 
 What it means for the relay (ab-t30.6):
 
@@ -272,8 +311,17 @@ What it means for the relay (ab-t30.6):
 - Playwright's checks run before the input (actionability, the hit-target interceptor set up just before the move)
   and after it (the interceptor's result). A translated click must end with the press and the release on the
   point that Playwright chose, or the hit-target check fails.
-- `scrollIntoViewIfNeeded`, `fill`, `selectOption` and `setInputFiles` do not reach the relay as input at all: they
-  are `DOM.*`, `Runtime.callFunctionOn` or `Input.insertText` calls.
+- `scrollIntoViewIfNeeded`, `fill`, `selectOption`, `setInputFiles`, `focus`, `blur`, `selectText` and `dispatchEvent`
+  do not reach the relay as input at all: they are `DOM.*`, `Runtime.*` or `Input.insertText` calls. The focus of
+  `pressSequentially`, `type` and `press` into a field without the focus is a `Runtime.callFunctionOn` too, before
+  the keys.
+- A click with `modifiers` sends the modifier's key events around the mouse events: the relay must keep that order
+  and hold the modifier for the whole translated click.
+- A click in a cross-origin frame uses two sessions: the frame's own session for the element's checks, and the top
+  page's session for the input. The relay must route the sessions of cross-origin frames (Playwright attaches to
+  them itself), and it must translate the input on the top page's session, where the points are top-page points.
+- `dragTo` ends with `Input.dispatchDragEvent` `drop` and no `mouseReleased`: a translated drag must keep the drop
+  as its end.
 
 ## 6. Can a page tell CDP input from XTEST input?
 
@@ -284,23 +332,28 @@ Measured in the same Chromium, in the same kind of window, for the same steps:
   (it matched the change of the screen point in every move of every path), the boundary events, the order of
   `pointerdown`, `mousedown`, `focus`, `pointerup`, `mouseup`, `click`, the key events and their `key`, `code`,
   `keyCode`, `which`, `location` and `keypress`. No field of one event tells them apart.
-- **The timestamps.** X11 events carry the X server's time, in milliseconds: every sample gap was a whole millisecond.
-  CDP events carry the time when Chromium got the call: 0% to 75% of the gaps were whole milliseconds. CDP's
-  `timestamp` parameter makes them whole (100%, measured). A time in the future is a new signal (section 4.4). On the
-  Mac the OS gives finer times (not measured): the rule is per platform.
-- **The rate.** The number of samples and predicted points in each `pointermove` follows the rate of the sender: a
-  mouse at 125 to 1000 Hz gives 2 to 16 samples a frame; one awaited CDP call a frame gives 1. CDP calls sent without
-  waiting coalesce too (measured), so the rate is the sender's choice, not the source's.
+- **The timestamps.** X11 events carry the X server's time, in milliseconds: every sample gap was a whole millisecond
+  (XTEST on Xvfb; a hardware mouse through Xorg and libinput: not measured). CDP events carry the time when Chromium
+  got the call: 0% to 75% of the gaps were whole milliseconds, against about 30% by chance (section 2). CDP's
+  `timestamp` parameter makes them whole (100%, measured). A time in the future is a new signal (section 4.4). The
+  Mac's event times: not measured, so the rule is per platform.
+- **The rate.** The number of samples and predicted points in each `pointermove` follows the rate of the sender:
+  X input at 125 Hz gave about 2 samples a frame, at about 400 Hz 5.3 to 5.5 (max 10); one awaited CDP call a frame
+  gives 1. A faster mouse gives more (extrapolated, not measured: xdotool reached about 400 Hz). CDP calls sent
+  without waiting coalesce too (measured), so the rate is the sender's choice, not the source's.
 - **The phase of the times against the frames.** One awaited CDP move a frame arrives just after a frame and waits
   almost a whole frame (handler time minus event time, median: 15.5 to 15.8 ms for the probe's awaited moves, 10 to
-  15 ms for agent-browser's). Real moves come at any time in the frame (1.8 to 8.7 ms here at 125 Hz). A sender that
-  does not wait for each answer removes this.
-- **NumLock and CapsLock.** CDP has no modifier for them, so `getModifierState('NumLock')` is false for CDP keys. Real
-  keys carry the X server's state (off on this Xvfb, so no difference here; not measured with NumLock on).
+  15 ms in most of agent-browser's steps). Real moves at 125 Hz gave 1.8 to 8.7 ms. But real moves at 60 Hz gave 7.4
+  and 13.4 ms in the two runs, near the CDP values: the phase depends on the rate, so it is a signal of a low rate
+  more than of CDP. A sender that does not wait for each answer, at a device's rate, removes it (gap P8).
+- **NumLock and CapsLock.** CDP has no modifier for them, so `getModifierState('NumLock')` is false for CDP keys
+  (inferred from the CDP modifier list). Real keys carry the X server's state. It was off on this Xvfb, so the runs
+  show no difference; NumLock on was not measured.
 - **The X pointer.** XTEST moves the real pointer; CDP does not. When Chrome brings a window forward, the page gets
   a real event at the X pointer (the earlier report, section 5). agent-browser handles it; a relay must too.
 
-So a page can tell them apart by timing and rate, not by fields, and CDP can match the timing and the rate. The design
+So a page can tell them apart by timing and rate (measured), and perhaps by NumLock (inferred), not by fields; CDP
+can match the timing and the rate (measured). The design
 ab-t30.6 can keep CDP as the source if it sets `timestamp`, sends at a device's rate without waiting for each answer,
 and keeps NumLock and the X pointer in mind. Real X input through the daemon gives the timestamps and the X pointer for
 free, but only on Linux, one input at a time for the display, and never on the Mac.
@@ -315,24 +368,25 @@ recorder's records.
 
 | # | Signal | Today (agent-browser) | Target | Harness measure |
 | --- | --- | --- | --- | --- |
-| P1 | Report rate: samples per `pointermove` and predicted points | 60 Hz: 1 sample, 0 or 1 predicted point | the person's device rate (a mouse: 125 to 1000 Hz; the Mac trackpad: part B) | the distributions of `nc` and `np`, and of the sample gaps, against the person's |
-| P2 | Sample times | 31% to 75% on a whole millisecond | whole milliseconds on Linux (X11); the Mac's pattern from part B; never later than the handler's time | the share of whole-millisecond gaps; the count of events with a time after the handler's time |
-| P3 | Path shape | ghost-cursor: straightness 0.72 to 0.97, Fitts time 300 to 1000 ms, one overshoot over 500 px | a person's curvature, speed profile, sub-movements and end corrections; a person's spread, not one model | straightness, maximum deviation, peak and mean speed, duration against Fitts's index of difficulty, the number of speed peaks; distance between distributions (for example a Kolmogorov-Smirnov statistic) |
+| P1 | Report rate: samples per `pointermove` and predicted points | 60 Hz: 1 sample, 0 or 1 predicted point | the person's device rate (part B measures it; [7] says "typically at 100Hz"; 125 to 1000 Hz: no source) | the distributions of `nc` and `np`, and of the sample gaps, against the person's |
+| P2 | Sample times | 31% to 75% on a whole millisecond (chance: about 30%) | whole milliseconds on Linux (X11); the Mac's pattern from part B; never later than the handler's time | the share of whole-millisecond gaps; the count of events with a time after the handler's time |
+| P3 | Path shape | ghost-cursor: straightness 0.72 to 0.97, 0.4 to 1.1 s for each measured path (its settings: a Fitts time of 300 to 1000 ms, and an overshoot for a move over 500 px) | a person's curvature, speed profile, sub-movements and end corrections; a person's spread, not one model | straightness, maximum deviation, peak and mean speed, duration against Fitts's index of difficulty, the number of speed peaks; distance between distributions (for example a Kolmogorov-Smirnov statistic) |
 | P4 | The end of the path in the box | 7 to 10 moves inside the box, almost straight (0.98 to 1.0) | a person's approach to a 24 px target in a 300 x 65 box | the box frame's own view: entry point, moves inside, straightness, time from entry to press |
 | P5 | Pause before the press, and the press | pause 96 to 183 ms, press 73 to 94 ms (uniform, fixed ranges) | the person's distributions (part B) | the pause and press distributions |
 | P6 | The pointer between commands | no movement at all between commands | a person's idle hand (part B: task 6 measures it) | moves per second between steps; time from the page's load to the first move |
-| P7 | Wheel | notches of 100 px with `wheelDeltaY` -120, 30 to 70 ms apart | the platform's notch (X11: 120 px, measured) or the Mac trackpad's small deltas (part B) | `deltaY` values, `wheelDeltaY / deltaY`, gaps between wheel events, wheel events per scroll |
+| P7 | Wheel | notches of 100 px with `wheelDeltaY` -120, 35 to 86 ms apart (median 55 to 65 ms) | the platform's notch (X11: 120 px, measured) or the Mac trackpad's small deltas (part B) | `deltaY` values, `wheelDeltaY / deltaY`, gaps between wheel events, wheel events per scroll |
+| P8 | Frame phase: handler time minus event time | median 10 to 15 ms in most steps (4.1 to 14.8): one move just after each frame | a person's phase at the person's rate (X input at 125 Hz: 1.8 to 8.7 ms; at 60 Hz: 7.4 to 13.4 ms) | `handlerLagMs` (`analyze.ts`): its distribution per step against the person's, read together with P1's rate |
 
 ### ab-t30.4: keyboard patterns
 
 | # | Signal | Today (agent-browser) | Target | Harness measure |
 | --- | --- | --- | --- | --- |
-| K1 | Key hold | 22 to 52 ms; about half below 50 ms, where 5.82% of human keystrokes are below 0.05 s [13] | about 116 ms on average, SD 24 [19], per key | the hold distribution, per key and overall |
+| K1 | Key hold | 22 to 52 ms; 32 of 34 holds (94%) below 50 ms in each run, where 5.82% of human keystrokes are below 0.05 s [13] | about 116 ms on average, SD 24 [19], per key | the hold distribution, per key and overall |
 | K2 | Time between keys | 90 to 148 ms, uniform | about 239 ms on average (SD 112), per letter pair, longer at word and line ends [19, 20] | the down-to-down distribution, per digraph; pauses at spaces and punctuation |
 | K3 | Rollover | 0 | about 25% of keys overlap the next on average [19] | the share of keys whose `keydown` comes before the last key's `keyup` |
 | K4 | Shift | capitals with `shiftKey` true and no Shift `keydown` | a Shift `keydown` (location 1 or 2) before the key, its `keyup` after; CDP can do it (measured) | the share of shifted characters with a Shift `keydown` before them |
 | K5 | Corrections | none | a person's typing errors and Backspace (part B) | Backspace per 100 characters |
-| K6 | NumLock and CapsLock | always off | the platform's normal state | `getModifierState` values |
+| K6 | NumLock and CapsLock | off in the runs; always off with CDP (inferred: CDP has no modifier for them) | the platform's normal state | `getModifierState` values |
 
 ### ab-t30.6: the relay translates vanilla Playwright
 
@@ -340,16 +394,19 @@ recorder's records.
 | --- | --- | --- | --- | --- |
 | R1 | click, dblclick, check, setChecked, hover, frame clicks | one jump, a press of 0 to 0.5 ms, `focus` after `click`, entry at the target | turn `mouseMoved` into a path from the page's last point (P1 to P4), hold the release 70 to 120 ms (P5), keep the order, answer each call after its events, and end on Playwright's point | the click metrics of P1 to P5; `focus` between press and release; the box entry |
 | R2 | `mouse.move`, `steps` | one jump, or a straight line at a constant speed | a path, as R1 | as P3 |
-| R3 | `keyboard.type`, `pressSequentially`, `press` | hold 1.4 to 2.9 ms, a key every 2.4 to 5.8 ms, capitals with no Shift and `shiftKey` false | a person's timing (K1 to K3), a Shift `keydown` and `modifiers` 8 for shifted characters (K4) | as K1 to K4 |
+| R3 | `keyboard.type`, `pressSequentially`, the old `type`, `press` | hold 1.4 to 2.9 ms, a key every 2.4 to 5.8 ms, capitals with no Shift and `shiftKey` false; into a field without the focus, a focus from a script first (a `focusin` with no press: 1 for each, run 3) | a person's timing (K1 to K3), a Shift `keydown` and `modifiers` 8 for shifted characters (K4); a click on the field in place of the script's focus (as `src/input.ts` does for `type --into`) | as K1 to K4; `focusin` with no press: 0 |
 | R4 | `fill`, `insertText`, `clear` | one `input` with the whole text, no keys; a focus from a script | the design decides where typed keys can stand in for inserted text (not for a date input, a value with no US key, or a contenteditable that the page handles itself) | key events per character; `focusin` with no press |
 | R5 | `mouse.wheel` | one wheel event of 600 px | notches of the platform's size at a person's rate (P7) | as P7 |
 | R6 | `scrollIntoViewIfNeeded`, the scroll before a click below the fold | a scroll with no wheel (`DOM.scrollIntoViewIfNeeded`) | answer the call with wheel notches that bring the element into view, as `src/input.ts` does | scrolls with no wheel or key: 0 |
 | R7 | `selectOption`, `setInputFiles` | script events with `isTrusted` false; no input | the design decides: for example a click and keys for a `select`, a click that opens the file chooser for a file input (as `setFiles` does) | untrusted events: 0 |
 | R8 | `dragTo` | one move with the button down; the drop by protocol | a path with the button down at a person's rate | moves with `buttons` 1 between `pointerdown` and the drop |
 | R9 | all pointer actions | `x.5` points from element middles | whole device pixels on Linux; the Mac's pattern from part B | fractional coordinate count |
-| R10 | all input | CDP times, one call a frame | the `timestamp` parameter at the real send time (never in the future); moves sent without waiting for each answer, at the device rate (P1, P2) | as P1 and P2 |
+| R10 | all input | CDP times, one call a frame | the `timestamp` parameter at the real send time, rounded to a whole millisecond on Linux (P2), never in the future; moves sent without waiting for each answer, at the device rate (P1, P8) | as P1, P2 and P8 |
 | R11 | all input | the X pointer stays where it was | the X pointer at each activation (the earlier report, section 5; ab-v16.71) | pointer jumps at an activation: 0 |
-| R12 | `tap` | refused (no touch) | nothing: a desktop page has no touch | none |
+| R12 | `tap`, `touchscreen.tap` | refused (no touch) | nothing: a desktop page has no touch | none |
+| R13 | click options: `modifiers`, `button: 'right'` and `'middle'`, `clickCount`, `delay`; `mouse.dblclick` | the modifier key 6 ms around the click; two or three clicks 0.1 ms apart; `delay` gives an exact hold | keep the modifier key from before the path's last part to after the release, at a person's timing; space the clicks of a double or triple click as a person does (part B: not measured yet); keep each button's events | modifier hold around the press; the gap between the clicks of a double click; `contextmenu` and `auxclick` present |
+| R14 | `focus`, `blur`, `selectText` | a focus or a blur from a script (`focus`, `selectText`: a `focusin` with no press); `selectText` selects from a script | the design decides: a click on the element in place of `focus` and `selectText` (and keys such as Shift+Home for a selection), or the call goes through and the signal stays | `focusin` with no press: 0 |
+| R15 | `dispatchEvent` | an event with `isTrusted` false, from a script; no input reaches the relay | nothing can make a script's event trusted; the design decides whether the relay turns a `dispatchEvent('click')` into a click, or lets it go through as it is | untrusted events: 0 |
 
 ## 8. Part B: a person's recordings (plan; not run)
 
@@ -370,8 +427,11 @@ through the manager, when the operator is at the Mac, under the Mac rules. No ag
      mistakes as usual.
    - **4 Scroll** (about 1 minute): twice, scroll down to "Far button" and click it, then scroll up and click "Back at
      top".
-   - **5 Keys to box** (about 30 s): twice, click "Start", press Tab until the box's square has a focus ring, then
-     press Space.
+   - **5 Keys to box** (about 30 s): twice, click "Start" (it appears right of the box), press Tab once, and the box's
+     square has a focus ring; then press Space. The page puts "Start" just before the box in its Tab order and gives
+     it the focus at the click, so one Tab reaches the square. If the ring is not on the square, press Tab again. If
+     Tab never reaches it (a macOS or Chrome keyboard-navigation setting can stop Tab at buttons and check boxes; not
+     checked on the Mac), go to task 6: the recording keeps what came before.
    - **6 Rest** (10 s): keep the hand on the device and keep still.
    - **7 Switch away** (about 15 s): switch to another app or tab, wait about 3 s, come back, click "Button".
 4. Press "Save JSON". Chrome saves `input-recording-<device>-<time>.json` in Downloads.
@@ -380,24 +440,31 @@ through the manager, when the operator is at the Mac, under the Mac rules. No ag
 
 **What the page saves:** every record of section 2 (pointer, mouse, key, wheel, text, focus, visibility, scroll and
 drag events with their times; the coalesced and predicted points; each frame's time), a record at the start and end
-of each task and trial (with the target's place), the state of both frames (screen, window, media queries, the timer
-resolution, the keyboard layout's answer), the device, and the save time. The keys are only those typed into the page
-while it has the focus: the three task lines, Tab, Space and Enter.
+of each task and trial (with the target's place), the state of both frames (the user agent, the platform, the screen,
+the window's place and size, the media queries, the timer resolution, the keyboard layout's answer), the device, and
+the save time. The keys are only those typed into the page while it has the focus: the three task lines, Tab, Space
+and Enter. The file also holds the name of any file chosen in the page's file input (no task uses it).
 
-**Checked on taylor** (`probe.ts --only file-mode`, 23:27 UTC): the page opened as a file, two trials of task 1 by X
-input, "Save JSON", and `analyze.ts` on the saved file. The file held 530 records (106 from the box, with both
-checks of the box), and the analysis gave one step for each trial. The first check found that the task area covered
-the moved box; the fix is in the committed page.
+**Checked on taylor** (`probe.ts --only file-mode`): the page opened as a file, task 1 and task 5 by X input, "Save
+JSON", and `analyze.ts` on the saved file. Run 3 (23:55 UTC) ran all 10 trials of task 1 and 2 rounds of task 5
+(one Tab, then Space): the file held 2081 records (568 from the box) with 12 checks of the box, and the analysis gave
+one step for each of the 12 trials. The first check (two trials of task 1, 23:27 UTC) found that the task area
+covered the moved box; the fix is in the committed page.
 
 **How the results join this doc:**
 
-1. The operator (or the manager) sends the JSON file to taylor. An agent runs
-   `node docs/research/2026-11-09-click-box-input-signals/analyze.ts <file> --summary <out>`: each trial is a step.
-2. The person column of section 3 gets the measured values in place of "not measured", and section 7's targets get
-   the person's distributions. A follow-up commit updates this doc.
-3. The harness (ab-t30.2) takes the person's records as its reference distributions.
-4. Keep the raw file out of the public repository: it holds the operator's own typing and pointing rhythm. Commit
-   only derived numbers (medians, ranges, distributions).
+1. The operator (or the manager) sends the JSON file to taylor. It goes into a folder of its own in the agent's home
+   on taylor, outside every checkout (for example `~/research-data/ab-t30/`), never into a repository. The
+   repository's `.gitignore` also refuses `input-recording-*.json`.
+2. An agent runs `node docs/research/2026-11-09-click-box-input-signals/analyze.ts <file> --numbers <out>`, with the
+   output in the same folder: each trial is a step. `--numbers` keeps only the step metrics. `--summary` also copies
+   the state record (user agent, platform, screen, window place) and the change values, so its file is never
+   committed as it is.
+3. The person column of section 3 gets selected numbers (medians, ranges, distributions) in place of "not
+   measured", and section 7's targets get the person's distributions. A follow-up commit updates this doc with those
+   numbers only.
+4. The harness (ab-t30.2) takes the person's records as its reference distributions, from the folder of step 1.
+5. The raw file stays out of the public repository: it holds the operator's own typing and pointing rhythm.
 
 ## 9. What this did not measure
 
@@ -406,10 +473,20 @@ the moved box; the fix is in the committed page.
   Google Chrome stable. Only Chromium 156 on Linux ran.
 - The relay with the extension's `chrome.debugger` (agent mode's real transport): the probe drove Chromium through a
   pipe. The `Input` domain is the same; the relay's own handling is not measured.
-- A real window manager, a real mouse at 1000 Hz (xdotool reached about 400 Hz), and NumLock on.
+- A real window manager, a hardware mouse through Xorg and libinput (only XTEST on Xvfb ran), a mouse faster than
+  about 400 Hz (the rate that xdotool reached), and NumLock on.
+- The box's frame type in part B: there the box is a sandboxed `srcdoc` frame with an opaque origin, in the page's
+  own file. In the probe it is a cross-site frame (`box.localhost`) in its own renderer process, as a real click box
+  is. Its process, and so its event timing, can differ in part B on the Mac.
 - What Cloudflare's scripts read: this doc lists what a script can read in each place, not what one does.
 - Touch, pen and IME input from a person; `dragTo` against a page that accepts the drop.
 - agent-browser's `setFiles` and `record` (not input actions of a click box).
+- Playwright options that the probe did not trace, with their expected CDP path (from the traced actions and [26]):
+  `click({ trial: true })` (the checks only, no `Input` call: nothing for the relay to translate); `click({ force:
+  true })` (no actionability checks, the same `Input` calls: the relay translates them as R1); `click({ position })`
+  (the same calls at another point: as R1); `hover({ modifiers })` (the modifier's key events around one
+  `mouseMoved`: as R13); `keyboard.type` of a character with no key in Playwright's US layout (`Input.insertText`
+  [26]: as R4); `mouse.wheel` with a `deltaX` (one `mouseWheel` with `deltaX`: as R5).
 
 ## 10. Reproduce
 
@@ -418,8 +495,8 @@ On a Linux box with Xvfb, xdotool and Chromium, under the box's heavy-job lock:
 ```sh
 npm ci
 mkdir -p /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm install --ignore-scripts playwright-core@1.65.0)
-node docs/research/2026-11-09-click-box-input-signals/probe.ts --out-dir /tmp/click-box --playwright /tmp/pw [--display 168] [--only xinput,cdp-raw,agent-browser,agent-browser-no-x,playwright]
-node docs/research/2026-11-09-click-box-input-signals/analyze.ts /tmp/click-box/run-*/results.json --summary summary.json --traces cdp.json
+node docs/research/2026-11-09-click-box-input-signals/probe.ts --out-dir /tmp/click-box --playwright /tmp/pw [--display 168] [--only xinput,cdp-raw,agent-browser,agent-browser-no-x,playwright,playwright-extra,file-mode]
+node docs/research/2026-11-09-click-box-input-signals/analyze.ts /tmp/click-box/run-*/results.json --summary summary.json --traces cdp.json [--numbers numbers.json]
 ```
 
 The probe takes the harness guard (one harness at a time, nothing left after its end), refuses a reserved display,
@@ -432,6 +509,8 @@ folder holds:
 - `results/run-1.json`: run 1's records, marks and CDP requests (the Chromium events of the trace are left out).
 - `results/run-1-summary.json`, `results/run-2-summary.json`: the metrics of each step of each run.
 - `results/run-1-cdp.json`: the CDP calls of each step of run 1, with their times and parameters (long strings cut).
+- `results/run-3.json`, `results/run-3-summary.json`, `results/run-3-cdp.json`: run 3 (`playwright-extra`) in the same
+  forms.
 
 ## 11. Sources
 

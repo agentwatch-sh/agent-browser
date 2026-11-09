@@ -273,6 +273,8 @@ function recCore(FRAME, emit) {
   addEventListener("scroll", () => { clearTimeout(scrollT); scrollT = setTimeout(() => layout("scroll"), 120); }, { passive: true });
   addEventListener("resize", () => layout("resize"));
   if (SINK) {
+    // The probe only: no native context menu at a right click (it would take the X input of the probe's display).
+    addEventListener("contextmenu", (e) => e.preventDefault());
     const flush = () => {
       if (FRAMES.length) { pending.push({ f: "top", e: "frames", list: FRAMES.splice(0) }); }
       while (pending.length) {
@@ -310,7 +312,7 @@ function recCore(FRAME, emit) {
     say(`Task ${name} running.`);
     try { await fn(); } finally {
       mark("end", { task: name });
-      for (const el of [...stage.querySelectorAll("button, .tgt")]) el.remove();
+      for (const el of [...stage.querySelectorAll("button, .tgt"), ...document.querySelectorAll("body > #start")]) el.remove();
       instr.textContent = ""; boxHome(); busy = false;
       say(`Task ${name} done. Run the next task, or press "Save JSON".`);
     }
@@ -368,11 +370,16 @@ function recCore(FRAME, emit) {
     }
   });
   // 5: reach the box with the keyboard: Tab until its square has the focus, then Space; twice.
+  // The Start button sits just before the box in the page's order, beside it, and takes the focus at its click (a click
+  // does not focus a button on every platform): one Tab then reaches the box's square.
   $("t5").onclick = () => run("5-keys-to-box", async () => {
     for (let i = 0; i < 2; i++) {
-      instr.textContent = `Round ${i + 1} of 2: click "Start", then press Tab until the box's square shows a focus ring, then press Space.`;
-      const s = button("start", "Start", 40, 300);
+      instr.textContent = `Round ${i + 1} of 2: click "Start" (right of the box), press Tab once: the box's square shows a focus ring. Then press Space. If the ring is not on the square, press Tab again; if Tab never reaches it, stop and go to task 6.`;
+      const s = button("start", "Start", 0, 0);
+      Object.assign(s.style, { left: "800px", top: "110px" });
+      document.body.insertBefore(s, box);
       await once(s, "click");
+      s.focus();
       mark("trial", { task: "5-keys-to-box", n: i });
       await new Promise((res) => { onBox = (v) => { if (v === "checked") { onBox = null; res(); } }; });
       s.remove(); await sleep(600); box.contentWindow.postMessage({ cmd: "reset" }, "*");

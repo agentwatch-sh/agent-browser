@@ -5,12 +5,14 @@
 //
 // RESULTS.json is probe.ts's results.json, or a person's recording (then each task trial is a step). It prints one
 // markdown table per scenario and writes the metrics of each step (--summary) and the CDP calls of each step (--traces).
+// --numbers writes the step metrics only, with no state record (user agent, platform, screen, window), no notes, no
+// change values and no focus targets: the form to commit for a person's recording (part B), never --summary.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: { summary: { type: "string" }, traces: { type: "string" } } });
-if (!positionals[0]) { process.stderr.write("usage: node analyze.ts RESULTS.json [--summary OUT.json] [--traces OUT.json]\n"); process.exit(2); }
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { summary: { type: "string" }, traces: { type: "string" }, numbers: { type: "string" } } });
+if (!positionals[0]) { process.stderr.write("usage: node analyze.ts RESULTS.json [--summary OUT.json] [--traces OUT.json] [--numbers OUT.json]\n"); process.exit(2); }
 
 type R = Record<string, any> & { e: string; f?: string; t: number };
 type Mark = { name: string; t0: number; t1: number; ok: boolean; error?: string; note?: unknown };
@@ -151,7 +153,7 @@ function metrics(list: R[]) {
     K.keydowns = kd.length;
     K.keyups = ku.length;
     K.keypress = by("keypress").length;
-    K.holdMs = { median: r1(median(holds)), range: range(holds) };
+    K.holdMs = { median: r1(median(holds)), range: range(holds), under50: holds.length ? r2(holds.filter((h) => h < 50).length / holds.length) : null };
     K.downToDownMs = { median: r1(median(iki)), range: range(iki) };
     K.overlaps = overlaps;
     K.shiftDowns = kd.filter((r) => r.k === "Shift").length;
@@ -185,7 +187,8 @@ function metrics(list: R[]) {
   // ---- focus ----
   const fins = by("focusin").filter((r) => /^#(f|ta|cb|chk|sel|file|b)$/.test(r.tg));
   if (fins.length) {
-    out.focus = { focusin: fins.map((r) => `${r.f}:${r.tg}`), withNoPress: fins.filter((r) => !list.some((x) => x.e === "pointerdown" && x.f === r.f && x.t <= r.t && r.t - x.t < 1500)
+    // A focus with no press: no pointerdown on that element (in its frame) in the 1.5 s before it, and no Tab key.
+    out.focus = { focusin: fins.map((r) => `${r.f}:${r.tg}`), withNoPress: fins.filter((r) => !list.some((x) => x.e === "pointerdown" && x.f === r.f && x.tg === r.tg && x.t <= r.t && r.t - x.t < 1500)
       && !list.some((x) => x.e === "keydown" && x.k === "Tab" && x.t <= r.t && r.t - x.t < 1500)).length };
   }
   const drags = list.filter((r) => /^drag|^drop$/.test(r.e));
@@ -250,3 +253,14 @@ for (const [name, sc] of Object.entries(scenarios)) {
 }
 if (values.summary) writeFileSync(values.summary, JSON.stringify(summary, null, 1) + "\n");
 if (values.traces) writeFileSync(values.traces, JSON.stringify(traces, null, 1) + "\n");
+if (values.numbers) {
+  const numbers: Record<string, unknown> = { scenarios: {} };
+  for (const [name, sc] of Object.entries(summary.scenarios as Record<string, { frameGapMs: unknown; steps: { name: string; ok: boolean; ms: unknown; metrics: Record<string, any> }[] }>)) {
+    (numbers.scenarios as Record<string, unknown>)[name] = { frameGapMs: sc.frameGapMs, steps: sc.steps.map((s) => {
+      const { change, drag, focus, ...m } = s.metrics;
+      if (m.pointer) { const { order, down, ...p } = m.pointer; m.pointer = { ...p, ...(down ? { down: { ...down, target: undefined, at: undefined } } : {}) }; }
+      return { name: s.name, ok: s.ok, ms: s.ms, metrics: { ...m, ...(focus ? { focusWithNoPress: focus.withNoPress } : {}) } };
+    }) };
+  }
+  writeFileSync(values.numbers, JSON.stringify(numbers, null, 1) + "\n");
+}

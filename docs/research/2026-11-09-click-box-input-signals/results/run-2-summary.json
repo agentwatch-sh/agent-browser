@@ -772,7 +772,8 @@
         "range": [
          30,
          31
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": 61,
@@ -839,7 +840,8 @@
         "range": [
          115,
          125
-        ]
+        ],
+        "under50": 0
        },
        "downToDownMs": {
         "median": 83,
@@ -893,7 +895,8 @@
         "range": [
          6,
          6
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": 113,
@@ -949,7 +952,8 @@
         "range": [
          6,
          6
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
@@ -2390,7 +2394,8 @@
         "range": [
          73.4,
          73.4
-        ]
+        ],
+        "under50": 0
        },
        "downToDownMs": {
         "median": null,
@@ -2443,7 +2448,8 @@
         "range": [
          94.1,
          104.5
-        ]
+        ],
+        "under50": 0
        },
        "downToDownMs": {
         "median": 72.2,
@@ -2498,7 +2504,8 @@
         "range": [
          140.3,
          140.3
-        ]
+        ],
+        "under50": 0
        },
        "downToDownMs": {
         "median": null,
@@ -3358,7 +3365,8 @@
         "range": [
          25,
          49.1
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": 105.7,
@@ -3437,7 +3445,8 @@
         "range": [
          48.2,
          48.2
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
@@ -4336,7 +4345,8 @@
         "range": [
          22.2,
          51.7
-        ]
+        ],
+        "under50": 0.88
        },
        "downToDownMs": {
         "median": 127.6,
@@ -4415,7 +4425,8 @@
         "range": [
          36.4,
          36.4
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
@@ -5954,7 +5965,8 @@
         "range": [
          1.5,
          2.8
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": 3,
@@ -6021,7 +6033,8 @@
         "range": [
          102.2,
          103.1
-        ]
+        ],
+        "under50": 0
        },
        "downToDownMs": {
         "median": 104.1,
@@ -6099,7 +6112,8 @@
         "range": [
          2.5,
          2.5
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
@@ -6150,7 +6164,8 @@
         "range": [
          1.4,
          2.7
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": 2.8,
@@ -6211,7 +6226,8 @@
         "range": [
          1.6,
          1.6
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
@@ -6263,7 +6279,8 @@
         "range": [
          2.6,
          2.6
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
@@ -6316,7 +6333,8 @@
         "range": [
          2.3,
          2.3
-        ]
+        ],
+        "under50": 1
        },
        "downToDownMs": {
         "median": null,
