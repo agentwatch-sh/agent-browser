@@ -17,7 +17,10 @@ Chromium. The guard is a process of its own, outside the driver's process tree a
   tmux servers), if that process is in the driver's tree or started after the guard. It leaves any
   other pid alone and names it on stderr.
 - The driver's end: the pipe from the driver to the guard closes (the kernel closes it at any end of
-  the driver, also at a `kill -9`), or the driver's pid is gone.
+  the driver, also at a `kill -9`), or the driver's pid is gone. A SIGTERM to the guard
+  (chrome-extension's `run.sh down`) also ends the run. After the SIGTERM, the guard takes no new
+  process of the driver's tree into its records: the process that asks for the stop can run in that
+  tree, and its own processes are not the run's (board ab-v16.89).
 - Then the guard sends SIGTERM to each recorded process that still runs with its recorded start time,
   and to their children; SIGKILL after 5 s; it waits until all are gone (at most 20 s), and names them
   on stderr. It signals through the record's pidfd, so a process that took a recorded pid later gets

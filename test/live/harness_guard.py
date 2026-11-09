@@ -44,7 +44,10 @@ recorded process that still runs with its recorded start time, and to their chil
 those still there; it waits until they are gone (at most 20 s in all), names them on stderr, and only then ends,
 which frees the lock. It signals through the record's pidfd, so a process that took a recorded pid later gets no
 signal; only when pidfd_open fails with an error other than ESRCH (for example no fd left) does it check the start
-time right before the signal.
+time right before the signal. After a SIGTERM, the guard takes no new process of the driver's tree into its records:
+the process that asks for the stop can run in that tree (run.sh down in the EXIT trap of its all mode), and its own
+processes (down's sleep) are not the run's (board ab-v16.89). The processes that it recorded before, the pids that the
+driver names, and the children of recorded processes are still the run's.
 
 The limit: a process that leaves the driver's tree within 0.5 s of its start (a double fork, for example a daemon's
 server or a crash handler such as crashpad) and that the driver does not name escapes the records.
@@ -189,6 +192,7 @@ class Guard:
         self.name = a.name
         self.rec = {}  # pid -> [start time, name, pidfd or None]
         self.reason = None
+        self.term = False  # a SIGTERM came: watch() records no new process of the driver's tree
         self.my_start = stat_of(os.getpid())[1]
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -199,6 +203,7 @@ class Guard:
         self.stdin_open = a.pid_dir is None and not self.missing
 
     def on_term(self, *_):
+        self.term = True
         self.reason = self.reason or "the guard got SIGTERM"
 
     def record(self, pid, st, name=None):
@@ -343,7 +348,10 @@ class Guard:
                 d = t.get(self.a.driver)
                 if d is None or d[1] != self.driver_start or d[2] in ("Z", "X"):
                     self.reason = self.reason or "the driver %d is gone" % self.a.driver
-                else:
+                elif not self.term:
+                    # Not after a SIGTERM: the stop's own processes (run.sh down's) can be in the driver's tree. The
+                    # check comes after the snapshot: a process that started after the SIGTERM is in the snapshot only
+                    # if /proc was read after the SIGTERM, and on_term() runs before table() returns.
                     for pid in tree(t, [self.a.driver]):
                         self.record(pid, t[pid])
             if self.missing:

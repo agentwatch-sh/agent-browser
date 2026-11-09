@@ -417,6 +417,56 @@ p.kill(); p.wait()
   assert.equal(alive, "alive True 1", "the other process and its child still run");
 });
 
+/** A shell driver of the pid-file form (as chrome-extension's run.sh in its all mode, board ab-v16.89): the run fails
+ *  (exit 1), and the EXIT trap stops it as run.sh down does, in the driver: a SIGTERM to the guard, one sleep of 1 s
+ *  (longer than the guard's 0.5 s poll), then a wait until the guard has ended. The run's processes: an "Xvfb" (a pid
+ *  file), a process that only the guard's records of the driver's tree name, and a "Chromium" (a pid file) with a
+ *  helper; at its SIGTERM the Chromium starts one more child, which only the guard's look at the children of recorded
+ *  processes finds. */
+const downInTrap = (guardPy: string) => `#!/bin/sh
+set -eu
+answer=$(python3 -I -B "${guardPy}" --name "$NAME" --driver $$ --pid-dir "$RUN/pids" --log "$RUN/guard.log") || true
+case "$answer" in locked\\ * | nested\\ *) ;; *) echo "$answer" >&2; exit 2 ;; esac
+g=$(echo "$answer" | cut -d' ' -f2)
+echo "$g" > "$RUN/guard.pid"
+sleep 609 & echo $! > "$RUN/pids/xvfb"
+sleep 610 & echo $! > "$RUN/tree"
+sh -c 'trap "sleep 611 & echo \\$! > \\"\\$RUN/late\\"; wait" TERM; sleep 608 & echo $! > "$RUN/helper"; wait' & echo $! > "$RUN/pids/chromium"
+trap 'kill "$g"; sleep 1; while kill -0 "$g" 2>/dev/null; do sleep 0.1; done; echo "down: the guard ended" >&2' EXIT
+sleep 1.5
+exit 1
+`;
+
+test("a SIGTERM from a shell in the driver's tree (run.sh down in its EXIT trap): the guard stops the run, no process of that shell, and the shell keeps its own exit code", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const run = join(dir, "run");
+  const pids: number[] = [];
+  const pidOf = (file: string) => { try { return Number(readFileSync(join(run, file), "utf8")); } catch { return 0; } };
+  try {
+    mkdirSync(join(run, "pids"), { recursive: true });
+    writeFileSync(join(dir, "driver.sh"), downInTrap(fileURLToPath(new URL("./live/harness_guard.py", import.meta.url))), { mode: 0o755 });
+    const child = spawn("/bin/sh", [join(dir, "driver.sh")], {
+      env: { ...process.env, HARNESS_LOCK: join(dir, "harness.lock"), HARNESS_GUARD_HELD: "", NAME: "trap", RUN: run },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    drivers.push(child.pid!);
+    let err = "";
+    child.stderr!.on("data", (b) => { err += b; });
+    const code = await Promise.race([new Promise((r) => child.once("exit", (c, s) => r(c ?? s))), new Promise((r) => setTimeout(r, 40_000, "still running after 40 s").unref())]);
+    const [guard, xvfb, tree, chromium, helper, late] = ["guard.pid", "pids/xvfb", "tree", "pids/chromium", "helper", "late"].map(pidOf);
+    const all = [guard, xvfb, tree, chromium, helper, late].filter(Boolean);
+    pids.push(...all);
+    const log = () => { try { return readFileSync(join(run, "guard.log"), "utf8"); } catch { return ""; } };
+    assert.equal(code, 1, `the run's own exit code, not 143 of the shell's killed sleep: ${err}${log()}`);
+    assert.match(err, /down: the guard ended/);
+    assert.deepEqual(running(all), [], `the shell ended after the guard and every process of the run were gone: ${log()}`);
+    assert.ok(late > 0, "the Chromium started its late child at its SIGTERM");
+    const stopped = /the guard got SIGTERM; it stops (\d+) processes of the harness: (.*)/.exec(log());
+    assert.ok(stopped, log());
+    assert.deepEqual([stopped[1], stopped[2].split(", ").map((x) => Number(x.split(" ")[1])).sort()], ["4", [xvfb, tree, chromium, helper].sort()], `only the run's processes: ${log()}`);
+  } finally { stopOwn(pids); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a pid-file guard started with stdin, stdout and stderr closed still holds the lock (ab-v16.78b)", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
   const pids: number[] = [];
