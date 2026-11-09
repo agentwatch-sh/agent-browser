@@ -408,7 +408,7 @@ that page while it lives.
 | A session rule that blocks the scripts of requests of no tab (`tabIds: [-1]`, `resourceTypes: ["script"]`) | Registration failed (`TypeError`); dedicated and shared workers still started (results/sw-script.json) | `navigator.serviceWorker.register()` fails, as with an ad blocker that blocks a worker script |
 | The worker removal of C5 at each change of a list | Removes the workers that exist; a site registers its worker again on its next visit | A site's worker is gone after a list change |
 
-**Decision (2026-11-05, ab-8zv; confirmed on 2026-11-06, ab-7wg): "Keep service workers on".**
+**Decision: keep service workers (2026-11-05, ab-8zv); the operator selected "Keep service workers on" again on 2026-11-06 (ab-7wg).**
 Section 13, choice 2 records both answers. The guard has three layers.
 
 1. The relay refuses a main-frame `Page.navigate` (no `frameId`, or the `frameId` of the tab's own
@@ -514,10 +514,9 @@ relay and moves both at once.
   the chosen value, 2026-11-05, ab-dm6; choice 3 a), a list name (b and c), or `null` (d; also when
   the field is absent). For b (the union), agentwatch adds a list of the union to `lists`
   (for example `"operator-union"`) and names it. Any other value (not `"*"`, not `null`, not a
-  string that matches the scope pattern) counts 1
-  in `refused` and applies as `null`; a valid name that is not in `lists` applies as `null` with no
-  count. `rules` counts the marked-tab rule too. The `allowlist` line carries the field; the relay
-  ignores it (no connection sees a marked tab).
+  string that matches the scope pattern) counts 1 in `refused` and applies as `null`; a valid name
+  that is not in `lists` applies as `null` with no count. `rules` counts the marked-tab rule too.
+  The `allowlist` line carries the field; the relay ignores it (no connection sees a marked tab).
 - The daemon names a session's scope in `scopes` before it gives the session its endpoint
   (`agentwatch browser endpoint` waits for the receiver's answer and the `allowlist` line). Else a
   new session could connect in the moment before, and get the default list, which can be another
