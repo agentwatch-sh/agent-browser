@@ -1,9 +1,12 @@
 # A self-contained agent browser with the fewest moving parts — design
 
-Date: 2026-11-09. Status: **DRAFT for the operator's review**, round 4: revised after three fresh reviews
-and the daemon lead's review and re-read. Author: a taylor contributor, a design subagent of the lead (board
-task ab-v16.93, under goal ab-v16). Branch `ab-v16.93-self-contained-design` in agent-browser, from main
-`dc2431b`. Evidence: the probe in
+**Status: proposed. It waits for the operator's answers to Q1-Q5 and to the open points in section 17.
+Nothing is built before that.**
+
+Date: 2026-11-09. Revised after four fresh reviews and the daemon lead's review and re-read; the
+manager's bound ended the review rounds after the fourth review. Author: a taylor contributor, a
+design subagent of the lead (board task ab-v16.93, under goal ab-v16). Branch
+`ab-v16.93-self-contained-design` in agent-browser, from main `dc2431b`. Evidence: the probe in
 [2026-11-09-self-contained-agent-browser-probe/](2026-11-09-self-contained-agent-browser-probe/README.md)
 (M1 to M3), run on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
 `@playwright/mcp` 0.0.85). Nothing ran on the Mac. No product code changes in this task.
@@ -95,6 +98,10 @@ constraint.
    default and unchanged until stage 6. The switch on a box moves every part at once; the tested rollback
    (switch-off, with the same Chrome and the same list files) is its safeguard. The move keeps today's
    rule for start and stop; Q5 asks the operator about a change.
+9. **Open for the operator (sections 16 and 17).** Five questions (Q1 to Q5) and three open points at the
+   edges of section 13.2's rule: a switch-on that the daemon gave up, a start of the service's unit from
+   outside the switch-on, and the Mac after the daemon unloads the service's job. Nothing is built before
+   the operator answers.
 
 ## 2. The operator's words
 
@@ -446,8 +453,8 @@ The control door follows the daemon lead's proposal and review.
     a dismissal or an import without it. A caller with the API token (an agent, or `agentwatch browser ...`
     in a terminal) never produces it.
   - `kind: token` for a start or a stop with the API token (today's rule, section 5.6).
-  - `kind: daemon` for the daemon's own ops: `config`, `set_sessions`, `session_ended`, `launch_check`,
-    `adopt` and `release`. `browser.control` is a key of agentwatch's config file, as today, so it comes
+  - `kind: daemon` for the daemon's own ops: `config`, `set_sessions`, `session_ended` and
+    `launch_check`. `browser.control` is a key of agentwatch's config file, as today, so it comes
     in `config` with `kind: daemon` and `via: config`: its provenance is the config file, as today (the
     same-user limit of section 11 applies to that file today too).
 
@@ -1152,6 +1159,42 @@ decision. Its four notes are in this version: m1, no systemd user unit (section 
 where the browser is on (section 7.3); m3, the remote walk as new Python code in stage 5 (section 9); m4,
 the memory guard's last pid (section 7.3).
 
+### 13.5 Build notes from the last review
+
+These notes come from the last fresh review. They are not decisions; the build takes them into account.
+
+1. During a switch-on, a `failed` unit ends steps 4 to 6 at once, so the daemon takes over without the 30 s
+   wait.
+2. The switch-off runs `systemctl --user reset-failed` for the unit: `stop` does not clear `failed`, and a
+   hit start limit refuses a start for the rest of its interval.
+3. A reboot or a new login clears `failed` and starts an enabled unit again: the daemon disables the unit
+   when it takes over a failed unit, or the text says that each login tries again.
+4. An adopted Chrome stays in the cgroup of the side that started it (agentwatch's unit after a switch-on,
+   the service's unit after a switch-off), so a limit or a kill of that unit still reaches it; consider a
+   scope unit of Chrome's own (`systemd-run --user --scope`), and set a short `TimeoutStopSec` (the user
+   default is 90 s, and the switch-off waits for it).
+5. A crash loop slower than the start limit (one crash each 31 s or more) never ends `failed`, and each
+   instance starts a new 60 s count: count from the last confirm on this Chrome pid, kept on disk.
+6. A service that restarts while the daemon is down has no `set_sessions`, so it stops Chrome with
+   `sessions_unread` after 60 s; this is correct for C4, and the text and stage 2's tests say it.
+7. The new owner finds the old host by one rule: a direct child of the recorded Chrome pid, with no
+   `--type=` in its command line and the receiver's `chrome-extension://<receiver ID>/` origin in its
+   arguments; it ends that host through a pidfd, and never ends another child of Chrome (a renderer, say).
+8. The service opens its control door first, before any Chrome start (a start can take up to 2 × 45 s), so
+   step 6's 30 s does not end early; and "or starts them" respects the unit record's `wanted`, so a
+   switch-on or a crash restart never starts a browser that the operator stopped.
+9. agentwatch writes the service's unit file again whenever the daemon's command line changes, not only at a
+   pin change; else the control door refuses the new daemon, and the hung-service rule follows.
+10. The unit names its `Type=`: with `Type=notify` and a ready signal after the doors open, `active` means
+    "ready", and the order at login waits for it (Node has no built-in ready signal, so the build adds a
+    small one or uses `Type=exec`).
+11. The Mac (stage 4, not measured): the service owns while its job is loaded, also while launchd waits its
+    10 s `ThrottleInterval`; the daemon counts exits from `launchctl print`'s run count and last exit code;
+    `bootout` ends the job's process group, and the agent Chrome from `open -n -g` is outside it (open point
+    3 of section 17).
+12. `agentwatch health` says "failed" only for a `failed` unit, and an `inactive` unit gets a text of its
+    own.
+
 ## 14. What changes in earlier designs
 
 - The two-modes design, section 4.2: the daemon no longer carries the bridge; the relay is no longer a
@@ -1256,7 +1299,67 @@ stage 3.
 - c. Today's rule: the API token may start and stop. #643 stays open.
 - No answer: c. The behavior does not change without the operator's answer.
 
-## 17. The measurements
+## 17. Open points for the operator
+
+The last fresh review found three points at the edges of section 13.2's rule. The manager's bound ended
+the review rounds, so they go to the operator here. Section 13.2's rule stays as it is until the operator
+answers. Each point gives the open point, the reviewer's proposed fix, and a recommendation.
+
+**Open point 1. A switch-on that the daemon gave up.**
+
+- The open point: after step 6 of the switch-on (the control door did not work) or after the stop of a
+  hung service, the switch stays on and the unit is `inactive`, so the daemon can start the switch-on
+  again. The result is a loop of about 35 s: in each turn every client sees two closes, and for up to 30 s
+  the service sends no scope object; with a hung service, Chrome has a hung owner for about 60 s in each
+  turn. The operator decides how a given-up switch-on is kept (a mark on disk, or a switch-off of the
+  config key) before stage 2 is built.
+- The reviewer's proposed fix: step 6 and the hung-service rule end in a "gave up" state that the daemon
+  keeps on disk and that `agentwatch health` shows. The daemon starts a switch-on by itself only when no
+  such mark exists, as it does for `failed`. A stage 2 test: step 6, then 2 minutes with no new
+  switch-on.
+- The options:
+  - a. A "gave up" mark on disk. The config key stays as the operator wrote it. `agentwatch health` shows
+    the mark, and the operator clears it with a switch-off and a switch-on.
+  - b. The daemon turns the config key off itself. No new mark, but the daemon then writes the operator's
+    config file, and the file no longer says what the operator wrote.
+- Recommendation: a. It needs one small file and keeps the operator's config file the operator's own.
+
+**Open point 2. A start of the service's unit that the switch-on did not make.**
+
+- The open point: a start of the service's unit that the daemon's switch-on does not make (a tool's
+  restart, a start by hand) can give two owners until the daemon's next 5 s tick. For example, the update
+  command reads `active`, the hung-service rule then stops the unit and the daemon takes over, and the
+  update command's `systemctl --user restart` starts the unit again. Or a start job is queued between the
+  daemon's read of the state and its read of the jobs. For up to 5 s both sides run supervisors and write
+  `unit.json` and the lists.
+- The reviewer's proposed fix: the build uses `systemctl --user try-restart` everywhere (systemd restarts
+  only a running unit; on the Mac `kickstart -k` already fails for a job that is not loaded), and one read
+  of the unit's state and job (`ActiveState`, `SubState` and the job in one D-Bus property read, or a
+  second read that must agree with the first). The runbook forbids a start by hand. A stage 2 test: a
+  start of the unit while the daemon owns.
+- Recommendation: take the reviewer's fix as written. It changes no part of the rule; it closes the paths
+  that start the unit from outside the switch-on, and the one that stays open (a start by hand) is in the
+  runbook.
+
+**Open point 3. The Mac after the daemon unloads the service's job.**
+
+- The open point: on the Mac the daemon has no owner parts, so after it unloads the service's job (after 3
+  exits in 60 s, or the stop of a hung service) the agent Chrome runs with no watch and no endpoint. It was
+  started through `open -n -g`, so launchd does not end it, and its host shim tries a closed socket. The
+  operator decides at stage 4 whether the daemon then stops the agent Chrome, or the Mac gets a daemon
+  owner path.
+- The reviewer's proposed fix: on the Mac, after the `bootout` or the stop of a hung service, the daemon
+  runs `agent-browser service stop --all`. The agent Chrome stops (fail closed), and `agentwatch health`
+  says why.
+- The options:
+  - a. The daemon stops the agent Chrome. No browser runs with no watch; the operator starts it again on
+    the Mac.
+  - b. The Mac gets a daemon owner path. The Mac's agent browser keeps running after a service failure,
+    but agentwatch gets browser code again, against "all the browser code moves into the browser".
+- Recommendation: a (the reviewer's recommendation too). The Mac runs the agent browser only for difficult
+  sites, so a stop there costs little, and a Chrome with no watch is the worse state.
+
+## 18. The measurements
 
 All three ran on taylor on 2026-11-09 (Debian 13, Linux 6.12.115, Node v26.12.0). M1 and M3 used Debian
 Chromium 156.0.8078.79 (`/usr/bin/chromium`, `--headless=new`) with a temp profile of their own, under the
