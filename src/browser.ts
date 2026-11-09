@@ -1019,31 +1019,37 @@ export class Tab {
    *
    * Each caller checks the page first (assertAllowed), outside the shared ending: a page off the allowlist or out of
    * the pinned window gets no capture for input, a shot or a record. goto alone ends it with no page check
-   * (endSizeLeftFor, `leaving`).
+   * (#endSizeLeftFor, `leaving`).
    * @internal
    */
   endSizeLeft(): Promise<void> {
-    return this.endSizeLeftFor({ leaving: false });
+    return this.#endSizeLeftFor({ leaving: false });
   }
 
   /**
    * endSizeLeft; for goto alone (`leaving`) with no page check: goto leaves the page at once, to a URL that it checked
    * itself, and it must be able to leave a page that went off the list or out of the pinned window (review-65c N1: it
    * refused there, and so did each later goto on that Tab). Then only the captures (their pictures dropped) and the
-   * clear go to that page, and no code of ours; the page's own code can still run for them (a capture makes Chrome draw
-   * the page, so its requestAnimationFrame callbacks run; the clear can fire its resize handlers; review-70 note 4).
-   * Private (review-70 note 5): as an option of the public endSizeLeft, a library program could send those captures
-   * and the clear to such a page, with no navigation after them.
+   * clear go to that page, and no code of agent-browser's; the page's own code can still run for them (a capture makes
+   * Chrome draw the page, so its requestAnimationFrame callbacks run; the clear can fire its resize handlers; review-70
+   * note 4). Private (review-70 note 5): as an option of the public endSizeLeft, a library program could send those
+   * captures and the clear to such a page, with no navigation after them. A JavaScript #private method, as is
+   * #endSizeLeftNow (review-92 note 3): a TypeScript private method is private only to the compiler, and a program can
+   * call it when it runs (tab["endSizeLeftFor"]).
    */
-  private async endSizeLeftFor(opts: { leaving: boolean }): Promise<void> {
+  async #endSizeLeftFor(opts: { leaving: boolean }): Promise<void> {
     if (!this.sizeLeft) return;
     if (!opts.leaving) await this.assertAllowed();
     // The ending that runs now, also when its clear is still on its way; else a new one, if the size is still left.
     if (this.endingSize) return this.endingSize;
-    if (this.sizeLeft) return this.endingSize = this.endSizeLeftNow().finally(() => { this.endingSize = undefined; });
+    if (this.sizeLeft) return this.endingSize = this.#endSizeLeftNow().finally(() => { this.endingSize = undefined; });
   }
 
-  private async endSizeLeftNow(): Promise<void> {
+  /**
+   * The last captures under the override, then the clear, with no page check: #endSizeLeftFor checks the page first,
+   * except for goto.
+   */
+  async #endSizeLeftNow(): Promise<void> {
     const r = await new HeldCaptures(this).chain(Tab.shotTiming.lastMs, true);
     if (r !== true) {
       this.browser.settings.log(`agent-browser: the last capture of tab ${this.targetId.slice(0, 8)} under the size override that a shot left set ${r}; the override stays set`);
@@ -1199,8 +1205,8 @@ export class Tab {
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     assertNavigationUrl(url, this.browser.allow, usesAgentRelay(this.browser.settings));
     // With no check of the current page: goto must be able to leave a page that went off the list or out of the
-    // pinned window (endSizeLeftFor).
-    await this.endSizeLeftFor({ leaving: true });
+    // pinned window (#endSizeLeftFor).
+    await this.#endSizeLeftFor({ leaving: true });
     const loaded = this.browser.conn.waitForEvent("Page.loadEventFired", {
       sessionId: this.sessionId,
       timeoutMs: opts.timeoutMs ?? 45_000,

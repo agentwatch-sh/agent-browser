@@ -866,7 +866,7 @@ for (const drive of ["window", "hidden"] as const) {
       assert.ok(!methodsOf(click.calls).includes("Emulation.clearDeviceMetricsOverride"), "and no clear");
       const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
       endedFirst(page, calls, (x) => x.method === "Page.navigate");
-      // review-70 note 2 (ab-b84.23): as on a page off the allowlist, no code of ours there before the navigation.
+      // review-70 note 2 (ab-b84.23): as on a page off the allowlist, no code of agent-browser's there before the navigation.
       const nav = methodsOf(calls).indexOf("Page.navigate");
       assert.deepEqual(methodsOf(calls.slice(0, nav)).filter((x) => x === "Runtime.evaluate" || x === "Page.createIsolatedWorld"), [], "no page code in the page out of the pinned window");
       assert.equal(page.url, fx.base + "/next");
@@ -880,8 +880,11 @@ for (const drive of ["window", "hidden"] as const) {
       // review-70 note 1 (ab-b84.23): each caller but goto checks the page before it joins the ending that runs
       // (endSizeLeft). A click that came during goto's ending and joined it before its check would wait for those
       // captures and the clear, and check the page only after them; a click that came first and started an ending
-      // with its check in it would make goto fail with it. The clear's answer waits 500 ms, so that the ending still
-      // runs when the click's check ends.
+      // with its check in it would make goto fail with it. The order on the one WebSocket already makes the click refuse
+      // before the clear (review-92 note 2): the click's check and goto's first capture go out in the same tick, the
+      // fake answers the check at once and the capture only after a frame (16 ms), and the clear goes out only after
+      // that answer. The fake handles the clear 500 ms late only as a margin, for a slow run in which it reads the
+      // check after the capture's frame.
       const { b, tab, page, name } = await withSizeLeft(drive);
       try {
         fake.delays.set("Emulation.clearDeviceMetricsOverride", 500);
@@ -936,6 +939,32 @@ for (const drive of ["window", "hidden"] as const) {
         const { calls } = await callsOf(page, () => assert.rejects(asProgram.endSizeLeft(opts), /off-the-list\.example is not on the allowlist/));
         assert.deepEqual(methodsOf(calls), ["Target.getTargetInfo"], `${JSON.stringify(opts)}: the check alone, on Chrome's browser side; no capture and no clear`);
       }
+      assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "still left set");
+      const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
+      endedFirst(page, calls, (x) => x.method === "Page.navigate");
+      assert.equal(page.url, fx.base + "/next");
+      assert.equal(page.override, undefined);
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: no own or prototype property of a Tab kept attached ends a size left with no page check when a program runs: each such method refuses a page that went off the allowlist, with no capture and no clear, also with { leaving: true }; goto still leaves the page`, async () => {
+    // review-92 note 3 (ab-b84.23): a TypeScript private method is private only to the compiler. A program could call
+    // tab["endSizeLeftFor"]({ leaving: true }) or tab["endSizeLeftNow"]() when it ran, and send those captures and the
+    // clear to such a page, with no navigation after them. goto's ending is a JavaScript #private method now.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      page.url = "https://off-the-list.example/"; // for example a redirect
+      const methods: string[] = [];
+      for (let o: object | null = tab; o && o !== Object.prototype; o = Object.getPrototypeOf(o))
+        for (const k of Reflect.ownKeys(o))
+          if (/size|leav/i.test(String(k)) && typeof Object.getOwnPropertyDescriptor(o, k)?.value === "function") methods.push(String(k));
+      const asProgram = tab as unknown as Record<string, (opts: { leaving: boolean }) => Promise<void>>;
+      for (const k of methods) {
+        const { calls } = await callsOf(page, () => assert.rejects(asProgram[k]({ leaving: true }), /off-the-list\.example is not on the allowlist/, `${k}({ leaving: true }) sent the captures and the clear with no page check`));
+        assert.deepEqual(methodsOf(calls), ["Target.getTargetInfo"], `${k}({ leaving: true }): the check alone, on Chrome's browser side; no capture and no clear`);
+      }
+      assert.deepEqual(methods, ["endSizeLeft"], "the public endSizeLeft alone");
       assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "still left set");
       const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
       endedFirst(page, calls, (x) => x.method === "Page.navigate");
