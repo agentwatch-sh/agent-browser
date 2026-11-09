@@ -1,7 +1,7 @@
 # A self-contained agent browser with the fewest moving parts — design
 
-Date: 2026-11-09. Status: **DRAFT for the operator's review**, round 3: revised after two fresh reviews and
-the daemon lead's review and re-read. Author: a taylor contributor, a design subagent of the lead (board
+Date: 2026-11-09. Status: **DRAFT for the operator's review**, round 4: revised after three fresh reviews
+and the daemon lead's review and re-read. Author: a taylor contributor, a design subagent of the lead (board
 task ab-v16.93, under goal ab-v16). Branch `ab-v16.93-self-contained-design` in agent-browser, from main
 `dc2431b`. Evidence: the probe in
 [2026-11-09-self-contained-agent-browser-probe/](2026-11-09-self-contained-agent-browser-probe/README.md)
@@ -28,9 +28,9 @@ constraint.
      their dismissals, and the status texts.
 
    Chrome survives a restart of the service and of agentwatch. The service adopts a running Chrome, as the
-   daemon does today. One owner record, written only by a locked compare-and-set with an epoch, names the
-   one side (the daemon or the service) that runs the Chrome unit. A hand-off ends with exactly one owner
-   also when a step is slow, an answer is lost or a side stops (section 13.2).
+   daemon does today. The state of the service's own unit decides who runs the Chrome unit: the service
+   while its unit is active, the daemon while it is inactive or failed. The service runs only while it
+   owns. So a hand-off ends with exactly one owner also when a step is slow or a side stops (section 13.2).
 2. **Two doors and one link (sections 5 and 7).**
    - The **agent door** is a 0600 Unix socket for CDP and MCP clients. It keeps the peer check of today's
      relay.
@@ -135,8 +135,8 @@ call, with every security rule of today kept.
   an agentwatch session. A root is the pid and start time of the session's tmux pane process.
 - **A hop**: one process boundary that a message crosses.
 - **The owner**: the one side, the daemon or the service, that runs the Chrome unit at a given moment.
-  **The owner record** (`owner.json`, with an epoch) names it; only a locked compare-and-set changes it
-  (section 13.2).
+  The service's unit state names it: the service while its unit is active, the daemon while it is
+  inactive or failed (section 13.2).
 - **The switch**: agentwatch's config key per box that gives the Chrome unit to the service (stages 2
   and 3).
 - **The daemon lead**: the lead of agentwatch's daemon.
@@ -178,6 +178,7 @@ call, with every security rule of today kept.
 | Part | Today | After |
 | --- | --- | --- |
 | Lifetime units for the browser (systemd user units, launchd agents) | 1: agentwatch's own unit; Chrome and Xvfb run detached under it | 2: agentwatch's unit, and the new `agent-browser.service` with its own cgroup; Chrome and Xvfb run detached under the service's unit |
+| Who owns the Chrome unit | the daemon, always (no arbiter) | the state of the service's unit, which systemd (launchd on the Mac) keeps: the service while it is active, the daemon while it is inactive or failed; no file or message of its own (section 13.2) |
 | Long-lived processes in the browser path (one OS user, one box) | 5: agentwatch daemon (carrier), relay, native host, Chrome, Xvfb | 4: service, host shim, Chrome, Xvfb (the daemon leaves the path) |
 | Processes for the MCP of each session | 1 Playwright MCP per session (Node and Playwright; its memory is not measured here) | 1 stdio shim per session (62.7 MiB, no Playwright, M3); the session's MCP work runs in a worker thread of the service, with a heap limit for each scope (section 8.2; its memory is not measured) |
 | Connections of one session's MCP | its stdio pipe; its CDP connection to the relay | the shim's stdio pipe; the shim's HTTP connection to the agent door; inside the service, the MCP's CDP connection back to the agent door with a one-time ticket that never leaves the process (section 8.2) |
@@ -235,11 +236,12 @@ thread.) Chrome, Xvfb, the host shim and `xdotool` stay separate processes: Chro
 Chrome starts the shim.
 
 The service has its own unit, `agent-browser.service`, and so its own cgroup
-(`app.slice/agent-browser.service`), outside agentwatch's unit and outside every session's pane scope. So
-the daemon's memory guard never caps the browser for all sessions (the daemon lead's C9). The unit file
-names agentwatch's unit only for the control door's check (section 7.1). Chrome and Xvfb run detached, in
-their own sessions. At a restart the unit stops only the service (`KillMode=process` on Linux, as in
-agentwatch's own unit). So Chrome survives a restart of the service.
+(`app.slice/agent-browser.service`), outside agentwatch's unit and outside every session's pane scope. It
+runs only while it owns the Chrome unit (section 13.2). So the daemon's memory guard never caps the browser
+for all sessions (the daemon lead's C9). The unit file names agentwatch's unit only for the control door's
+check (section 7.1). Chrome and Xvfb run detached, in their own sessions. At a restart the unit stops only
+the service (`KillMode=process` on Linux, as in agentwatch's own unit). So Chrome survives a restart of the
+service.
 
 The folders:
 
@@ -273,11 +275,13 @@ restarts (the daemon lead's C5). So a small host shim stays. Measured (M1):
   pings); 2.66 ms p50 with 64 KiB of payload; 100 pings at once in 14 ms in all.
 - The shim's memory: 49.5 MiB of resident memory (Node). One shim runs for each Chrome, not for each
   session.
-- When the service drops the link (a restart of the service, or the switch from agentwatch's host),
-  Chrome keeps running, the extension connects again after its 1 s delay, and Chrome starts a new shim.
-  Chrome reads the manifest again at that connect, so a new host path takes effect with no Chrome
-  restart. Measured: the link was back after 1,065 ms. Chromium's pid and start time stayed, and the new
-  shim ran the new host path.
+- When the host process ends (at a change of owner, section 13.2), Chrome keeps running, the extension
+  connects again after its 1 s delay, and Chrome starts a new host. Chrome reads the manifest again at
+  that connect, so a new host path takes effect with no Chrome restart. Measured: the link was back after
+  1,065 ms. Chromium's pid and start time stayed, and the new shim ran the new host path. (M1's shim
+  exited when the service closed its socket. The design's shim does not: as today's host, it tries the
+  socket again every second while Chrome's port is open, so a restart of the service does not close the
+  receiver's port. At a change of owner, the new owner ends the old host.)
 
 The shim keeps today's host's own check too: its parent must run on the agent profile
 (`--user-data-dir` in `/proc/<ppid>/cmdline`, `ps` on the Mac). It sends `{"t":"link","up":true}` to the
@@ -420,9 +424,11 @@ The control door follows the daemon lead's proposal and review.
   daemon, not the MainPID, as its parent, and fails.
 - **When the check cannot run, the door refuses** (the daemon lead's m1). If the systemd query fails, or
   the daemon runs with no systemd user unit (a daemon started by hand, a box with no user manager), the
-  service refuses every control connection with one line that gives the reason, and closes it. It stays
-  passive, and it logs the reason. The daemon shows that line in `agentwatch health`. The service never
-  admits by a weaker rule. So the switch needs agentwatch to run as its user unit.
+  service refuses every control connection with one line that gives the reason, and closes it, and it logs
+  the reason. The daemon shows that line in `agentwatch health`. The service never admits by a weaker rule.
+  So the switch needs agentwatch to run as its user unit: the daemon checks this before a switch-on, and a
+  control door that does not work within 30 s after the start makes the daemon run the switch-off
+  (section 13.2).
 - **On the Mac** the service reads `LOCAL_PEERPID`, gets the job's pid from `launchctl print
   gui/<uid>/<agentwatch's label>` (its `pid` line) at each accept, reads the parent and the start time
   with `proc_pidinfo` and the command line with `sysctl` (`KERN_PROCARGS2`), and applies the same rules
@@ -462,7 +468,6 @@ The control door follows the daemon lead's proposal and review.
 | `prompt_allow {id}`, `prompt_dismiss {id}` (operator) | The service owns the prompts and their dismissals. The allow adds the host to the prompt's list, as a `list_set`. |
 | `import {payload}` (operator, `via: send`) | Checks the payload (C2), drops the box's own sign-in cookies (the hosts and names of `set_sessions`), sends `import` to the receiver, answers the counts. Nothing is written to disk. |
 | `start`, `stop` (`by.kind`: `operator` or `token`) | Starts or stops Chrome and Xvfb. Today's rule stays during the move (the API token may start and stop); Q5 asks about a change. |
-| `adopt n`, `release n` (the switch; `n` is the owner record's epoch) | Section 13.2: the service takes the Chrome unit from the daemon (`handing:n` to `service:n`), or gives it back (`service:n` to `daemon:n+1`). |
 | `status`, `lists_get`, `prompts_get`, `endpoint {scope}`, `sender` | The status of section 5.6, with an agent's text and an operator's text (I2); the lists and the old single list (read only); the open prompts; the agent door's URL for a scope (for `agentwatch browser endpoint` and `env`); the sender's ID, version and package (C1, C9). |
 
 | Service to daemon (the event stream) | Fields |
@@ -499,20 +504,21 @@ The control door follows the daemon lead's proposal and review.
   launchd agent (Mac). Its command is the pinned agent-browser's `bin/agent-browser.js service`, with the
   state folder, the lists folder, agentwatch's unit name and the daemon's command line (for section 7.1's
   check). The service runs in its own cgroup, not in agentwatch's.
-- **Only where the browser is on** (the daemon lead's m2): agentwatch installs and enables the unit only
-  while `browser.enabled` is true, or at the first switch-on. So a box or a user with the browser off runs
-  no extra Node process. When `browser.enabled` turns false and the service owns the unit, the daemon
-  first sends `stop` and `release n` (section 13.2), and then it stops and removes the unit. With the
-  service down, the owner record still names one owner (section 13.2), and the daemon runs today's path.
+- **Only where the browser is on** (the daemon lead's m2): agentwatch writes the unit file only while
+  `browser.enabled` is true, and it enables and starts the unit only at a switch-on. The service runs only
+  while it owns (section 13.2), so a box or a user with the switch off, or the browser off, runs no extra
+  Node process. When `browser.enabled` turns false and the service owns the unit, the daemon runs the
+  switch-off first, then stops the browser as today, then removes the unit file.
 - **A pin change** (R3): `agentwatch restart` does not touch the service (its own lifetime, C5). An
   agentwatch update or rollback that changes `AGENT_BROWSER_COMMIT` installs that commit beside the old
-  one, writes the unit's command again, and restarts the service's unit (`systemctl --user restart`, and
-  `launchctl kickstart -k` on the Mac). The new service adopts Chrome only when the owner record names the
-  service (section 13.2, rule 5). At each connect the daemon also
-  compares the hello's version with its pin; on a mismatch it does the same restart once and reports it.
+  one, and writes the unit's command again. Only when the unit is active (the service owns) does it
+  restart the unit (`systemctl --user restart`, and `launchctl kickstart -k` on the Mac). The unit stays
+  `activating` or has a job of systemd during the restart, so the service owns throughout (section
+  13.2), and the new instance adopts Chrome. At each connect the daemon also compares the hello's version
+  with its pin; on a mismatch it does the same restart once and reports it.
 - **Health** (R3): `agentwatch health` shows the service: up or down, its version and whether it matches the
-  pin, the owner record (section 13.2), Chrome's pid, the peer check's form, and a control door refusal
-  with its reason (section 7.1).
+  pin, the owner (the service's unit state, section 13.2), Chrome's pid, the peer check's form, and a
+  control door refusal with its reason (section 7.1).
 - **The memory guard** (the daemon lead's m4) takes Chrome's pid (`browser_pid`) from the service's
   `ready` events and `status`, read off its own tick with a short time limit. When the service is down or
   slow, the guard keeps its last known pid, and its tick never waits for the service.
@@ -576,14 +582,14 @@ logic leaves agentwatch. What stays is the UI, identity, transport and install o
 - **The path**: today's folder, `CONFIG_DIR/browser/lists/<list>.json`, `{"allow":[...],"repo":...}`. The
   unit gives the path to the service. No copy and no migration of the files.
 - **One writer**: the owner of the Chrome unit (section 13.2) writes the lists, the ended scopes and the
-  list copies: the daemon while the switch is off, the service while it is on. The other one does not
-  write them.
+  list copies: the daemon while the service's unit is inactive or failed, the service while its unit is
+  active. The other one does not write them.
 - **The rollback keeps every list** (the daemon lead's R6): a list change made while the switch is on is in
   the same file. At a switch-off the daemon reads the list files and the ended scopes file again from disk,
   never a copy in memory from before the switch-on (section 13.2). No copy back is needed.
-- **The hand-off window**: from the first step of a switch until the owner record names the new owner, the
-  daemon holds list changes, prompt answers, session ends and launch checks, and gives them to the new
-  owner (section 13.2).
+- **During a change of owner**: while the daemon waits for the service's unit to become active or inactive
+  (at most 30 s), it holds list changes, prompt answers, session ends and launch checks, gives them to the
+  owner, and refuses a held operator act after 30 s (section 13.2).
 - **The old single list** (Decision 4): `CONFIG_DIR/browser/allowlist.json` stays read only. Nothing
   copies it, and no scope uses it. The service reads it only to show it in the pane, as today ("The old
   single list (agents no longer use it)"). The first draft of this design copied it into a list; that
@@ -887,13 +893,13 @@ Every rule of today holds. The table names where each rule lives after the chang
 | Per-scope allowlists that only the operator edits | lists in agentwatch's config folder, edited in the web viewer (password login), pushed by the daemon | the same files in the same folder (section 7.5), changed only by `list_set` and `prompt_allow` on the control door with `by.kind: operator`, which the daemon sets only from the gateway's password-login field (R7); no op on the agent door or in the MCP changes a list |
 | The lists' enforcement | the receiver's DNR rules, guard and sweep; the relay's navigation refusal (layer 1) | the same: the receiver, and the model in the service |
 | The peer check (the scope is the session's) | the relay (`src/relay/peer.ts`), roots from the daemon's `allowlist` line | the same code in the service, roots from `set_sessions`; the MCP shim and the MCP's own connection under the same check (section 8.2) |
-| Who may use the control door | the daemon's ops come from the gateway; the daemon's sockets take no agent | only the agentwatch daemon process itself, by pid, parent, executable and start time, read at each accept (section 7.1, R1); never a process of agentwatch's cgroup only, never the service's own pid, never an agent-browser CLI command |
+| Who may use the control door | the daemon's ops come from the gateway; the daemon's sockets take no agent | only the agentwatch daemon process itself, by pid, parent, command line and start time, read at each accept (section 7.1, R1); never a process of agentwatch's cgroup only, never the service's own pid, never an agent-browser CLI command |
 | No cookie calls; cookie headers masked | the relay's model | the model in the service; the MCP's page tools reach the browser only through the model |
 | The refused page marks (main-world init scripts and bindings) | the model | the model |
 | The world refusal (the relay's own isolated world) | the model | the model |
 | No prompt, no remote-debugging port | the daemon's flags and `chrome_args.py`; agent-browser's `assertSafeChromeArgs` | `assertSafeChromeArgs` in the service, on every Chrome start |
 | The operator's own Chrome is never reachable | the operator package has no `debugger`; the host manifest only in the agent profile; the host checks its parent's profile; the daemon checks the host's parent is the unit's Chrome | the same package rule; the owner of the Chrome unit writes the manifest only in its agent profile; the shim checks its parent's profile; the service checks that the shim's parent is its own Chrome, by pid and start time (M1); on the Mac the service never writes the default folders |
-| Fail closed: no confirmed receiver, Chrome stops after 60 s; no scope object before the first complete read of the sessions | the daemon (`check_receiver`, `_fail_closed`) | the owner of the Chrome unit only (section 13.2); the watch reads the owner record again right before it stops Chrome; the `stopped` event to the daemon and the last stop in `status` |
+| Fail closed: no confirmed receiver, Chrome stops after 60 s; no scope object before the first complete read of the sessions | the daemon (`check_receiver`, `_fail_closed`) | the owner of the Chrome unit only (section 13.2: the service's unit state); the daemon's watch reads the unit state again right before it stops Chrome; the `stopped` event to the daemon and the last stop in `status` |
 | Start and stop | the API token or a web login (#643 open) | unchanged during the move; each op names its caller's kind; Q5 asks about a change |
 | A web page cannot connect | the `Origin` 403 of the endpoint | the same on CDP and MCP paths (M3); a Unix socket is out of a web page's reach |
 | Secrets | no secret in argv or a log; payloads in memory | the same; the service gets a payload on the control door and keeps it in memory only; logs carry a user, a domain and counts; the MCP's one-time ticket never leaves the service's process |
@@ -915,7 +921,7 @@ section 11).
 | C2. Operator-only acts only through a control door, provenance from the credential | Section 7.1: only the daemon process itself on the control door (R1); `by.kind: operator` only from the gateway's password-login field (R7); no such op on the agent door or in the MCP. Start and stop keep today's rule until the operator answers Q5. |
 | C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check; the MCP's local path is the stdio shim (Q1 a); the MCP's own ticket is bound to the service's pid and never leaves the process; cross-box through the link and a new kernel-checked daemon socket. Loopback TCP only if the operator picks Q1 b, with the M2 check and its limits. |
 | C4. Fail closed; the daemon sees the stop | Section 11; the `stopped` event, and the last stop in `status` for a daemon that was down. |
-| C5. Chrome survives restarts; the service has its own lifetime and adopts a running Chrome | Sections 5.2, 7.3 and 13.2: one owner of the Chrome unit, named by an owner record with a lock, a compare-and-set and an epoch; a daemon restart and a service restart keep Chrome in both modes (tested in stage 2). |
+| C5. Chrome survives restarts; the service has its own lifetime and adopts a running Chrome | Sections 5.2, 7.3 and 13.2: one owner of the Chrome unit, named by the state of the service's unit (`KillMode=process`, so a stop or crash of the service keeps Chrome); a daemon restart and a service restart keep Chrome in both modes (tested in stage 2). |
 | C6. Secrets | Section 11. |
 | C7. The version pin, a hello with features | Sections 7.1 and 7.3: the hello; a pin change restarts the service's unit, which adopts Chrome; one agentwatch release carries both paths during the whole move. |
 | C8. One event stream | Section 7.1. |
@@ -933,134 +939,168 @@ agentwatch's `SECURITY.md`). Each stage is live-checked on taylor first.
 | Stage | Repository | What | Tests | Rollback |
 | --- | --- | --- | --- | --- |
 | 0. Contracts | chrome-extension (`docs/protocol.md`), agent-browser | C1, C4 and C10 texts of section 6, the C4 and C10 parts marked "from stage 3"; C11's master text moves to agent-browser; C12 (the control door) and the format of the MCP's allow list in agent-browser | the vectors (`test/vectors/`) gain the control door's lines | a text revert |
-| 1. The service, off by default | agent-browser | `agent-browser service`: both doors with the admission of section 7.1, the hello, the host shim, the model in-process, the Chrome unit with `adopt n`, `release n`, the owner record's lock and compare-and-set, and the yield to a foreign manifest (section 13.2), Xvfb, the pointer, the lists in today's files, the prompts, the status texts (I2), `launch_check`, `sender`, `endpoint`, the import, the events, the MCP with its allow list and its worker limits; the CLI's refusals of the internal commands and flags; `--fake`, `--test`, `stop --all` | unit tests with fakes (the model's tests stay); the allow-list test; the control door's admission (the MainPID, its child with the daemon's command line and the parent's start time, a process of agentwatch's cgroup refused, a child of the daemon refused, a new pid after a restart, a failed systemd query refused); a live test in the harness with `--test` (its own Xvfb, its own Chromium with the real agent package, no stand-in daemon); `adopt` and `release` against a stand-in owner, with races on the owner record | nothing uses it yet |
-| 2. The client in agentwatch, off by default | agentwatch (the daemon lead) | the control door client behind the hello's features; `config`, `set_sessions`, `launch_check`; the gateway's operator field (R7); the switch, a config key per box (`browser.service`, default off), with section 13.2's steps; `panes.py` to `agentwatch/daemon/`; the unit's install (only while `browser.enabled` is true), restart at a pin change, and its `agentwatch health` line; the memory guard's pid from the service; the update and rollback commands' refusal of a release from before stage 2 while the switch is on; the old path stays the default and unchanged | `make check` with `--fake`, in both switch states (no unit part of the daemon starts while the switch is on; a slow `launch_check`); the live suite with the test browser on taylor: the switch-on and the switch-off (the Chrome pid stays, the daemon's host connects again after the switch-off, the lists and tabs are intact, a list change made while on is there after, no fail-closed stop in 5 minutes after either step), a daemon restart in each mode keeps Chrome, a service restart in each mode (no link taken while the switch is off; Chrome adopted while on), a pin change; and every case of section 13.2's test list (a late or lost `adopt` answer, a killed service before and after its write, a killed daemon between steps 2 and 3, races on the record, a stand-in older daemon, the downgrade refusal) | the switch off; then, for the code, the previous agentwatch release with the service's unit removed (the update command switches off first, section 13.2 rule 6) |
+| 1. The service, off by default | agent-browser | `agent-browser service`: both doors with the admission of section 7.1, the hello, the host shim, the model in-process, the Chrome unit, which the service runs only while its unit is active (section 13.2), with the end of the old owner's host, `--hello`, and a host shim that tries its socket again every second, Xvfb, the pointer, the lists in today's files, the prompts, the status texts (I2), `launch_check`, `sender`, `endpoint`, the import, the events, the MCP with its allow list and its worker limits; the CLI's refusals of the internal commands and flags; `--fake`, `--test`, `stop --all` | unit tests with fakes (the model's tests stay); the allow-list test; the control door's admission (the MainPID, its child with the daemon's command line and the parent's start time, a process of agentwatch's cgroup refused, a child of the daemon refused, a new pid after a restart, a failed systemd query refused); a live test in the harness with `--test` (its own Xvfb, its own Chromium with the real agent package, no stand-in daemon); a start, a crash and a stop of the service under a test systemd unit, with Chrome kept and a stand-in daemon host ended | nothing uses it yet |
+| 2. The client in agentwatch, off by default | agentwatch (the daemon lead) | the control door client behind the hello's features; `config`, `set_sessions`, `launch_check`; the gateway's operator field (R7); the switch, a config key per box (`browser.service`, default off), with section 13.2's steps; `panes.py` to `agentwatch/daemon/`; the unit file (only while `browser.enabled` is true; `KillMode=process`, `Restart=on-failure`, the start limit, `Before` and `After`), the daemon's reads of the unit state, its health rule for a hung service, restart at a pin change, and its `agentwatch health` line; the memory guard's pid from the service; the update and rollback commands' refusal of a release from before stage 2 while the switch is on; the old path stays the default and unchanged | `make check` with `--fake`, in both unit states (no owner part of the daemon starts while the unit is active; a slow `launch_check`); the live suite with the test browser on taylor: every case of section 13.2's test list, a daemon restart in each mode keeps Chrome, and a pin change | the switch off; then, for the code, the previous agentwatch release with the service's unit removed (the update command switches off first, section 13.2 rule 6) |
 | 3. Switch taylor | agentwatch config, with the operator's approval | the switch on for the operator's agent browser on taylor; the service listens at today's endpoint path, which the daemon gives | the live check: Chrome's pid stays, every session's endpoint works, a sign-in send works, a blocked prompt reaches the pane, start and stop behave as today | the switch off (stage 2's tested steps) |
 | 4. The Mac | agent-browser, agentwatch | the Mac paths of section 10 (ab-v16.8, age-0kh.23 go straight to the service); the control door's admission for the launchd job | the Mac checks of section 10, through the manager with the operator | the Mac stays without agent mode |
 | 5. Another box | agentwatch (the grant, the remote MCP socket and its new Python walk, the seal, the limits, the quiet times), agent-browser (remote scopes: the daemon's identity, the MCP path only, no path arguments), chrome-extension (the scope pattern) | section 9 | the Python walk's unit tests with the cases of M2 and the peer admission design; a two-box live check (taylor to the Mac), with the operator | the grant revoked |
 | 6. Cleanup | agentwatch | delete `daemon/browser/` and the browser parts of section 7.4, after both boxes ran on the service for a while and the new live tests pass; the endpoint path becomes the service's own (agentwatch asks `endpoint`) | `make check`; the new live tests | the pin before the cleanup |
 
-### 13.2 One owner of the Chrome unit, during the switch and the rollback
+### 13.2 One owner of the Chrome unit: the service's unit state decides
 
 **The owner's parts.** Only the owner runs these parts:
 
 - the start and adoption of Chrome and Xvfb, the 5 s supervisor, the fail-closed watch (60 s), the Chrome
-  updater, and the boot sweep of orphans (`stop_orphans`);
+  updater and its move, and the boot sweep of orphans (`stop_orphans`);
 - the host manifest, the native link's socket, and the endpoint (the relay, or the agent door);
-- the writes of the lists, the ended scopes and the list copies (section 7.5).
+- the writes of the lists, the ended scopes, the list copies and the unit record (section 7.5).
 
-**The owner record.** The state folder holds `owner.json`: `{"state": "daemon" | "handing" | "service",
-"epoch": n}`. These rules make it safe with two writers:
+**The rule.** The state of the service's own unit decides who owns, and only systemd (launchd on the Mac)
+changes that state:
 
-1. **A lock and a compare-and-set.** Each write takes an exclusive `flock` on `<state>/owner.lock` (Python
-   `fcntl.flock` in the daemon; libc `flock` through `node:ffi` in the service, which loads `node:ffi`
-   already for the peer check). It reads the record, compares it with the value that it expects, writes
-   the new value by a rename of a temp file, and frees the lock. A write whose expected value is not there
-   changes nothing and returns the record that is there.
-2. **Who may write what.** Only these writes exist:
+- **The service owns while its unit is `active`, `activating` (also between automatic restarts) or
+  `deactivating`.** The service runs only while it owns: it is never a passive process. At its start it
+  adopts Chrome and Xvfb from the unit record (or starts them), writes its shim's path into the host
+  manifest, ends every host process among Chrome's children whose command line is not its own shim's,
+  opens its link socket and its agent door, and starts its supervisor, its updater and its watch with a
+  new 60 s count.
+- **The daemon owns while the service's unit is `inactive` or `failed`** (no restart pending), with no job
+  queued for the unit (`systemctl --user list-jobs`): a restart of the unit (a pin change, or the operator's
+  `systemctl --user restart`) is one job of systemd from its first moment to its end, so the daemon never
+  takes the short gap of a restart. An automatic restart keeps the unit `activating` (sub-state
+  `auto-restart`). It reads the unit state at its start, at each 5 s tick, and right before each owner part:
+  before it starts a part, before a Chrome move, and before its watch stops Chrome. When it finds the unit
+  active, it stops its owner parts at once. When it finds the unit inactive or failed, it adopts Chrome and
+  Xvfb, writes its own host path into the manifest, ends every host process among Chrome's children whose
+  command line is not its own host's, and starts its parts with a new 60 s count. A failed service unit
+  counts as inactive, so one side always acts. While the daemon itself runs the steps of a switch-on or a
+  switch-off, its tick does not act on the state; the steps do.
+- **When the daemon starts a switch-on by itself.** The daemon starts the switch-on when the switch is on
+  and the unit is `inactive`, for example after a daemon crash before step 3. It does not start it when
+  the unit is `failed`: then it owns, and it waits for the operator (note 7).
+- **A host retries; the new owner ends the old host.** The daemon's host and the service's shim both try
+  their socket again every second while Chrome's port is open (today's host does so). A host never exits
+  by itself, so a restart of its owner does not close the receiver's port. At a change of owner, the new
+  owner ends the old owner's host after it wrote its manifest. The receiver's port closes, the receiver
+  connects again after 1 s, and Chrome reads the new manifest (M1: the link was back in 1,065 ms, with the
+  same Chrome). So the receiver reaches the new owner well before the new owner's 60 s watch ends, also
+  when the old owner is down.
+- **Chrome survives each change.** The service's unit has `KillMode=process`, as agentwatch's own unit:
+  a stop or a crash of the service ends only its main process. Chrome, Xvfb and the hosts (Chrome's
+  children) stay.
+- **The endpoint socket.** During the move both owners serve the same endpoint path. Each side removes
+  that socket at its stop only when the socket's inode is the one that it made, as today's relay does
+  (`src/relay/endpoint.ts`), so it never removes the other owner's new socket.
+- **The unit's settings bound a failure.** `Restart=on-failure` with a short delay, and a start limit
+  (first values: 3 starts in 60 s). A service that crash-loops ends `failed`, and the daemon then owns. On
+  the Mac, launchd has no `failed` state, so the daemon unloads the job (`launchctl bootout`) after 3 exits
+  in 60 s. A service that hangs while systemd sees it `active`: the daemon reads `status` every 10 s, and
+  after 3 missed answers in a row it restarts the unit once; after 3 more it stops the unit, and then it
+  owns.
+- **The order at login.** The service's unit says `Before=agentwatch.service`, and agentwatch's unit says
+  `After=agent-browser.service`. So with the switch on, the service is `active` (or `failed`) before the
+  daemon reads the state at its start. On the Mac the daemon waits at most 10 s for a loaded job to run
+  before it decides.
+- **The unit record** (`unit.json`) keeps today's format during the whole move: Chrome's and Xvfb's pids
+  and start times, the display, the Chrome version. The owner writes it, with an `fsync` of the temp file
+  and of the folder before the rename. The service's updater writes the moved Chrome there in that
+  format, so a daemon at a switch-off, or an older daemon, adopts the right Chrome. An unreadable record
+  is not "no record": the owner then finds Chrome by the profile in the process table, as today's adoption
+  does, and it never runs `stop_orphans` on a record that it cannot read.
+- **No version without the unit.** agentwatch reads the service's version and features with a one-shot
+  `agent-browser service --hello` (it prints the hello and exits) or from the installed commit, with no
+  service running. A service runs only to own.
 
-   | Write | By | When |
-   | --- | --- | --- |
-   | `daemon:n` to `handing:n` | the daemon | a switch-on, after it stopped its parts |
-   | `handing:n` to `service:n` | the service | at `adopt n`; or by itself when the record holds `handing:n` for 30 s and no daemon is connected |
-   | `handing:n` to `daemon:n+1` | the daemon | a take-back, when its wait for the `adopt` answer ends, or at its start (rule 4) |
-   | `service:n` to `daemon:n+1` | the service | at `release n`, after it stopped its parts; or when it yields (rule 5) |
+**The switch-on** (the operator turns the switch on; the daemon owns):
 
-   So `handing:n` always ends with one compare-and-set, by one side. The side that loses it follows the
-   record that it gets back.
-3. **A check before each part.** Each side reads the record under the lock before it starts each owner
-   part, and starts the part only when the record names it as the owner, with the epoch that it holds. The
-   service writes the host manifest only after its own `handing:n` to `service:n` succeeded. Each side also
-   reads the record at each 5 s tick of its supervisor. A side that does not find itself as the owner of
-   its epoch stops all its owner parts at once and closes its link socket. The fail-closed watch reads the
-   record under the lock once more right before it stops Chrome, and stops nothing when it is not the
-   owner.
-4. **A daemon at its start.** With no record (the first start of a daemon from stage 2), the daemon writes
-   `daemon:1` under the lock; the service never makes the record. A daemon that starts and finds
-   `daemon:n` owns the unit, as today. A daemon
-   that finds `handing:n` reads the service's `status` on the control door (a wait of 10 s). If the switch
-   is on and the service answers, it sends `adopt n` again. Else it takes the unit back (`handing:n` to
-   `daemon:n+1`). A daemon that finds `service:n` starts no owner part and no `stop_orphans`. It reads the
-   service's `status`, and it ends its own old native host process if one still runs (it finds it among
-   Chrome's children by its command line). If the switch is off, it sends `release n`. The record never
-   stays without a side that acts on it.
-5. **The service at its start, and a foreign owner.** A service that starts and finds `service:n` adopts
-   Chrome and Xvfb from the unit record and starts its parts with epoch n. A service that finds `daemon:n`
-   or `handing:n` stays passive and waits for `adopt n` (or rule 2's 30 s). A service that owns the unit
-   and finds, at a tick, that another writer changed the host manifest (an older agentwatch that does not
-   know the record, below) yields: it stops its parts, keeps Chrome, writes `service:n` to `daemon:n+1`,
-   and its `status` says "an older agentwatch took the agent browser".
-6. **No downgrade past stage 2 while the switch is on.** An agentwatch release from before stage 2 does not
-   know the record, so it would adopt Chrome as its own. From stage 2 on, agentwatch's update and rollback
-   commands refuse a target release from before stage 2 while the record is not `daemon:n`, and they offer
-   the switch-off first. A manual install of an old release outside these commands is not guarded: the
-   runbook says "switch off first", and rule 5 makes the service yield to such a daemon, so the unit still
-   has one owner.
+1. The daemon checks that it runs as its own systemd unit (section 7.1, m1) and that `--hello` lists the
+   features that it needs. Else it refuses the switch-on, and `agentwatch health` says why.
+2. The daemon stops its updater, its watch, its supervisor, its relay and its link socket, and turns
+   `stop_orphans` off. Clients see one close, as at a relay restart today. Chrome, Xvfb and the daemon's
+   host keep running.
+3. The daemon enables and starts the service's unit. From the moment that the unit is `activating`, the
+   service owns.
+4. The service does its start (above): it adopts Chrome, writes its manifest, ends the daemon's host, and
+   opens its doors. The receiver connects to the service's shim.
+5. The daemon connects to the control door and sends `config` and `set_sessions`. The service sends
+   `set_scopes`, reads the receiver's tab-to-scope map (`bridge.tabScopes`), and only then admits a
+   connection, at the endpoint path that sessions already use. A client connects again, and its tabs are
+   still in its scope.
+6. If the control door does not work within 30 s (a refusal, no hello, no answer), the daemon runs the
+   switch-off. So the service never runs long with no sessions: with no `set_sessions` it sends no scope
+   object, and its watch would stop Chrome at 60 s (`sessions_unread`).
 
-**The switch-on** (the daemon starts it when the operator turns the switch on; the record is `daemon:n`):
+**The switch-off** (the rollback; the service owns):
 
-1. The daemon stops its updater, its fail-closed watch, its supervisor, its relay and its link socket, and
-   turns `stop_orphans` off. Clients see one close, as at a relay restart today. Chrome and Xvfb keep
-   running. The daemon's old host process stays and tries the socket again every second.
-2. The daemon writes `daemon:n` to `handing:n`.
-3. The daemon sends `adopt n` on the control door and waits at most 30 s for the answer.
-4. The service writes `handing:n` to `service:n`. Then it adopts Chrome and Xvfb from the unit record (pid
-   and start time checked), writes its shim's path into the host manifest, opens its link socket, and
-   starts its supervisor, its updater and its fail-closed watch with a new 60 s count. It answers `ok n`.
-   If its write fails, it does nothing more and answers with the record that it found.
-5. The daemon reads the record. With `service:n` (after an `ok`, a late answer or no answer), it ends its
-   old native host process. The receiver's port closes, the receiver connects again after 1 s, Chrome
-   reads the new manifest and starts the service's shim (M1: 1,065 ms, Chrome's pid kept). With
-   `handing:n` and no answer in 30 s, the daemon takes the unit back (`handing:n` to `daemon:n+1`), writes
-   its own host path into the manifest again, and starts its parts again with a new 60 s count.
-6. The service sends `set_scopes` from the daemon's `set_sessions`, reads the receiver's tab-to-scope map
-   (`bridge.tabScopes`), and only then admits a connection, at the endpoint path that sessions already
-   use. A client connects again, and its tabs are still in its scope.
+1. The daemon stops and disables the service's unit. systemd sends the service SIGTERM: the service closes
+   its agent door and its link socket and exits, and Chrome stays. The daemon waits until the unit is
+   `inactive` or `failed`: at most the unit's stop timeout, after which systemd kills the main process.
+2. The daemon owns. It reads the list files and the ended scopes file again from disk (never a copy in
+   memory from before the switch-on), adopts Chrome and Xvfb from the unit record, writes its host path
+   into the manifest, ends the service's shim, opens its link socket, and starts its relay, its supervisor,
+   its updater and its watch with a new 60 s count. The receiver connects to the daemon's host.
 
-**The switch-off** (the rollback; the record is `service:n`):
+**Operator acts during a change.** While the daemon waits for the unit to become `active` or `inactive`
+(at most 30 s), it holds an operator act (`list_set`, `prompt_allow`, `prompt_dismiss`, `import`, `start`,
+`stop`) and session events (`session_ended`, `launch_check`) in memory, in order, and gives them to the
+owner when the state settles. After 30 s it refuses the held operator acts with "the agent browser is
+changing hands; try again", and the pane shows that no change was made. The daemon answers an operator's
+act only after the owner applied it, so an act that a daemon crash loses was never confirmed to the
+operator. A `prompt_allow` with an id that the new owner does not know gets "this prompt is gone", and the
+pane reads the prompts again. A launch of a name that ended during the wait waits for the owner's
+`launch_check`.
 
-1. The daemon sends `release n`. The service closes the agent door, stops its watch, its updater and its
-   supervisor, writes the daemon's host path into the manifest, writes `service:n` to `daemon:n+1`,
-   closes its link socket (its shim exits), and answers.
-2. The daemon reads the record. With `daemon:n+1` it reads the list files and the ended scopes file again
-   from disk (never a copy from before the switch-on), adopts Chrome and Xvfb (`BrowserUnit.adopt`), opens
-   its link socket, and starts its relay, its supervisor, its updater and its watch with a new 60 s count.
-   The receiver connects to the daemon's host. With `service:n` (the service did not release), the switch
-   stays on, and the daemon reports it.
+**The cases, with this rule.** Each case ends with exactly one owner:
 
-**Operator acts and session events in the hand-off window.** From step 1 of a switch until the record
-names a new owner (at most 30 s), the daemon holds `list_set`, `prompt_allow`, `prompt_dismiss`,
-`session_ended` and `launch_check` in order, in memory. An ended name is in that list, so a launch of the
-same name waits for the hand-off to end and gets the new owner's `launch_check`. When the record names the
-owner, the daemon gives the held ops to it: to the service on the control door, or to its own code after
-a take-back.
+| Case | How it ends |
+| --- | --- |
+| The fresh review's first case: a slow or lost answer at a switch-on | No answer decides anything. The unit is `activating` or `active`, so the service owns; the daemon runs no part. If the start fails for good, the unit is `failed`, and the daemon owns. |
+| A service that crashes during its start, or after it | systemd restarts it (the unit stays `activating`): the service owns, and the new instance adopts Chrome. After the start limit the unit is `failed`, and the daemon owns. |
+| The fresh review's second case: a daemon that stops in the middle of a switch-on | Before step 3 the unit is `inactive`: the new daemon owns, as today, and it runs the switch-on again because the switch is on and the unit is not `failed`. After step 3 the service owns, and the new daemon runs no part. |
+| The fresh review's third case: a downgrade past stage 2 while the switch is on | Rule 6 below: the update and rollback commands refuse it until the switch-off has run. After the switch-off the unit is `inactive`, and the older daemon owns, as today. |
+| F1 of the narrow re-check: a late `release` answer, or a yield | No such message and no yield exist. At a switch-off the daemon waits for `inactive` from systemd, which comes at the latest after the stop timeout, and then it owns. If the stop itself fails, the daemon reads the state at each tick and owns as soon as the unit is `inactive`. |
+| F2: an old host that holds the receiver's port | The new owner ends the old owner's host after it wrote its manifest, also when the old owner is down. The receiver reaches the new owner within about 1 to 2 s. |
+| Note 2: a lost record | No owner record exists. The unit state cannot be lost. A lost or unreadable `unit.json` makes the owner find Chrome in the process table; it never makes a second owner. |
+| Note 3: a passive service with no timer | No passive service exists. |
+| Note 6: a service that stays down | Its unit is `inactive` or `failed`, so the daemon owns. `agentwatch health` shows "the switch is on, but the service's unit failed; the daemon runs the agent browser". |
+| Note 7: the switch is on, but the daemon owns | This is note 6's state. The daemon does not start the unit again by itself after a failure. The operator repairs it with a switch-off (which also clears the `failed` state) and a switch-on. |
+| Note 8: no working control door | Step 1 checks the daemon's own unit and `--hello` before the start; step 6 runs the switch-off when the control door does not work within 30 s. |
+| A daemon that is down while the service runs | The service owns, and it goes on (section 7.1, "when the daemon drops"). |
+| A service that crash-loops | Each new instance starts a new 60 s count, so no watch stops Chrome in the loop. After the start limit the unit is `failed`, and the daemon owns at its next tick (at most 5 s), ends the service's shim, and starts its own watch with a new count. |
+| A daemon that is down while the unit is `inactive` | The daemon owns while it is down, as today: no side runs a watch until it starts. |
 
-**The three failure cases of the fresh review, with these rules:**
+**Rule 6: no downgrade past stage 2 while the switch is on.** An agentwatch release from before stage 2
+does not know this rule, so it would adopt Chrome while the service owns. From stage 2 on, agentwatch's
+update and rollback commands refuse a target release from before stage 2 while the service's unit is
+enabled, and they offer the switch-off first. A manual install of an old release outside these commands
+is not guarded: the runbook says "switch off first".
 
-- **A slow or lost `adopt` answer.** If the service's write came first, the record is `service:n`. The
-  daemon's take-back fails, the daemon reads `service:n`, and it goes on with step 5: it ends its old host,
-  and the receiver connects to the service before the service's 60 s watch ends. If the take-back came
-  first, the record is `daemon:n+1`. The service's later write fails, so it writes no manifest and starts
-  no part. Either way: one owner. A service that crashes after its write and restarts reads `service:n`
-  and adopts (rule 5); the daemon's take-back fails, as above. A service that crashes before its write
-  leaves `handing:n`, and the daemon's take-back wins. One owner in each case.
-- **A daemon that stops between steps 2 and 3.** The record holds `handing:n`. The new daemon reads it at
-  its start (rule 4), reads the service's status, and sends `adopt n` again or takes the unit back. If no
-  daemon comes back, the service takes `handing:n` itself after 30 s (rule 2). One owner in each case, and
-  the time with no owner part is at most about 30 s, with Chrome running.
-- **A downgrade of agentwatch past stage 2 while the switch is on.** The update and rollback commands
-  refuse it until the switch is off (rule 6). After the switch-off the record is `daemon:n+1`, and the old
-  daemon adopts Chrome as today. If the old release comes in by another way, it writes its host files at
-  its start; the service sees the foreign manifest at its next tick and yields (rule 5). One owner: the old
-  daemon.
+**What this rule removes** (from round 3's owner record): the owner file and its lock (`owner.json`,
+`owner.lock`, `flock` in both languages), the epoch, the `handing` state and the table of allowed writes,
+the `adopt n` and `release n` ops, the service's 30 s self-take, the yield to a foreign manifest, the
+passive service process (one Node process on each box with the browser on), and the daemon's start rules
+for each record state. In their place: the unit state, which systemd already keeps; a few lines of unit
+settings (`KillMode`, `Restart`, the start limit, `Before` and `After`); the one-shot `--hello`; and one
+rule for hosts (the new owner ends the old owner's host).
 
-**The tests of stage 2** cover each step and each failure path, with `--fake` and in the live suite with
-the test browser: an `adopt` answer that comes after the daemon's wait; an `adopt` that never comes; a
-service that is killed before and after its write; a daemon that is killed between steps 2 and 3, and
-after step 3; two writers that race on the record (both orders); a restart of each side in each state; a
-manifest that a stand-in older daemon writes while the service owns; the update command's refusal of a
-release from before stage 2 while the switch is on; and a run of 5 minutes after each switch with no
-fail-closed stop and exactly one side with owner parts.
+**The tests of stage 2** cover, with `--fake` and in the live suite with the test browser:
+
+- a switch-on and a switch-off, each with Chrome's pid kept, the receiver on the new owner's host within
+  5 s, the lists and tabs intact, a list change made while on that is there after, and a run of 5 minutes
+  with no fail-closed stop and exactly one side with owner parts;
+- a slow service start (a stand-in that waits 20 s before it adopts); a start that fails for good; a
+  service killed during its start and after it; a crash loop up to the start limit, then the daemon's take
+  over with no fail-closed stop;
+- a daemon killed before and after step 3 of the switch-on, and kept down for 120 s while the service
+  owns;
+- a hung service (no `status` answer) up to the daemon's restart and stop;
+- the receiver's port held by the old owner's host at each change (the new owner ends it);
+- a login with the switch on (the order of the two units);
+- a control door that refuses after the start (step 6);
+- operator acts and a session end during the wait, given on at the end and refused after 30 s;
+- a stop of the unit that fails, with the daemon's take-over at its next tick;
+- an unreadable `unit.json` at each side's start;
+- the update command's refusal of a release from before stage 2 while the unit is enabled.
 
 ### 13.3 The order, and the daemon lead's conditions
 
@@ -1095,7 +1135,7 @@ The daemon lead's answers to the list of what the daemon lead must agree to (rev
 
 | Item | Answer | In this version |
 | --- | --- | --- |
-| 1. The control door (C12) as the only interface | yes, with R1 and R7 | section 7.1: the daemon process itself by pid, parent, executable and start time (R1); the gateway's operator field (R7) |
+| 1. The control door (C12) as the only interface | yes, with R1 and R7 | section 7.1: the daemon process itself by pid, parent, command line and start time (R1); the gateway's operator field (R7) |
 | 2. The order | yes, this order, with four conditions | section 13.3 |
 | 3. The move of every file | yes | section 7.4, with the files that the fresh review added |
 | 4. The pins | yes: agentwatch pins only agent-browser; the service checks the CRX hash | section 7.4; the sender's ID and package come from the service (section 6) |
@@ -1175,8 +1215,9 @@ stays: nothing goes into a session's environment)
 
 - **a. One grant per box (recommended).** The operator approves the grant, `browser.use`, on the Mac's
   Links page. The grant names one Mac list for all sessions of that box. The list is new and empty until
-  the operator fills it on the Mac's Browser pane. The Mac's quiet times refuse a new remote MCP session.
-  A revoked grant ends that box's scopes and closes their tabs. Effect: one approval and one list per box.
+  the operator fills it on the Mac's Browser pane. The Mac's quiet times refuse a new remote MCP session,
+  and at the start of a quiet window they end an open one after its current request (section 9). A
+  revoked grant ends that box's scopes and closes their tabs. Effect: one approval and one list per box.
 - b. One grant per box and repo: the Mac keeps a list for each remote repo. More lists to keep; a finer
   limit.
 - c. The grant of a, and the operator also approves each new remote session on the Mac (a prompt in the
