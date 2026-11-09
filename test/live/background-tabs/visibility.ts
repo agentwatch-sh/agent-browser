@@ -1,10 +1,21 @@
 // The live hidden-tab check (Linux, ab-v16.15): what a command on a background tab shows a site, in
-// agent-browser's two modes. Not part of `npm test`; its pure parts (spans.ts) are, in
+// agent-browser's two tab modes and Linux's window drive. Not part of `npm test`; its pure parts (spans.ts) are, in
 // test/hidden-tab.test.ts.
 //
-//   node test/live/background-tabs/visibility.ts --out-dir DIR [--hidden-drive] [--chrome /usr/bin/chromium] [--display 97]
+//   node test/live/background-tabs/visibility.ts --out-dir DIR [--hidden-drive | --window-drive] [--chrome /usr/bin/chromium] [--display 97]
 //
-// Without --hidden-drive the check runs agent-browser's default mode (focus emulation while a command
+// --window-drive opens each page without --tab, in its own Linux window. Every command must work;
+// every page must stay visible and draw frames after the command, including
+// record and commands away from the front window. visibleMs includes the existing visible span,
+// clipped to the command's measurement window (through 200 ms after it). Shots must still contain
+// the box, button and status line. New pages already draw, rather than testing a never-drawn hidden
+// tab. --hidden-drive cannot be combined with --window-drive. The descriptions below cover tab modes.
+// A goto may hide its old document at unload, before its new document loads visible. Each page
+// reports performance.timeOrigin as documentId. Only the pre-command document's hide before a load
+// with a different documentId counts as navigationHides. The new document must load visible and stay
+// visible. Other visibilitychange events fail this mode. The summary reports both navigation fields.
+//
+// Without either drive flag the check runs the default tab mode (focus emulation while a command
 // is attached: the page is visible for the command); with it, the hiddenDrive option (the page stays
 // hidden). Like check.ts beside it (ab-v16.13), it goes through agent-browser's own launch
 // (launchAgentChrome, the proxy, approve: "xdotool") in a private Xvfb that it starts (with -auth), on
@@ -69,18 +80,21 @@ import { commands } from "../../../src/commands.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions } from "../../../src/options.ts";
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg, pngPixels } from "../../../src/record.ts";
-import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./spans.ts";
+import { failures, navigationVisibility, visibleMs, visibleSpans, type Measured, type PageEvent } from "./spans.ts";
+import { driveConflict } from "./rules.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
 
-const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "hidden-drive": { type: "boolean" } } });
+const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, "hidden-drive": { type: "boolean" }, "window-drive": { type: "boolean" } } });
 /** A start that the check refuses: one line, exit 2. The exit handler ends the check's own children. */
 function refuse(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(2);
 }
-if (!values["out-dir"]) refuse("usage: node test/live/background-tabs/visibility.ts --out-dir DIR [--hidden-drive] [--chrome /usr/bin/chromium] [--display 97]");
+if (!values["out-dir"]) refuse("usage: node test/live/background-tabs/visibility.ts --out-dir DIR [--hidden-drive | --window-drive] [--chrome /usr/bin/chromium] [--display 97]");
 if (process.platform !== "linux") refuse(`the hidden-tab check runs on Linux only, in a private Xvfb, so that no window reaches a person's screen (this is ${process.platform})`);
-const DISPLAY = Number(values.display ?? 97), CHROME = values.chrome ?? "/usr/bin/chromium", hiddenDrive = !!values["hidden-drive"];
+const DISPLAY = Number(values.display ?? 97), CHROME = values.chrome ?? "/usr/bin/chromium", hiddenDrive = !!values["hidden-drive"], windowDrive = !!values["window-drive"];
+const conflict = driveConflict(hiddenDrive, windowDrive);
+if (conflict) refuse(conflict);
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse(`--display is a whole display number: ${values.display}`);
 const reserved = reservedDisplay(DISPLAY, "--display");
 if (reserved) refuse(reserved);
@@ -140,7 +154,7 @@ const PAGE = (name: string) => `<!doctype html><title>tab ${name}</title>
 <div id="box"></div><input id="f" autocomplete="off"><button id="b">Click</button><p id="s">clicks: 0</p>
 <script>
 const colours = ${JSON.stringify(COLOURS.map((c) => `rgb(${c})`))};
-const send = (ev, extra) => navigator.sendBeacon("/log", JSON.stringify({ t: Date.now(), tab: ${JSON.stringify(name)}, ev, vis: document.visibilityState, focus: document.hasFocus(), ...extra }));
+const send = (ev, extra) => navigator.sendBeacon("/log", JSON.stringify({ t: Date.now(), tab: ${JSON.stringify(name)}, documentId: performance.timeOrigin, ev, vis: document.visibilityState, focus: document.hasFocus(), ...extra }));
 document.addEventListener("visibilitychange", () => send("visibilitychange"));
 addEventListener("focus", () => send("focus"));
 addEventListener("blur", () => send("blur"));
@@ -178,9 +192,9 @@ const BASE = `http://probe.localhost:${(server.address() as { port: number }).po
 
 // The first command launches the agent Chrome and starts the proxy, as an agent's first command does.
 const ids: Record<string, string> = {};
-try { ids.a = (await commands.open(o, { url: `${BASE}/a`, name: "a", tab: true })).tab.targetId; }
+try { ids.a = (await commands.open(o, { url: `${BASE}/a`, name: "a", tab: !windowDrive })).tab.targetId; }
 catch (e) { refuse(`agent-browser could not start its Chrome or connect to it: ${(e as Error).message.split("\n")[0]} (see ${RUN})`); }
-ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b", tab: true })).tab.targetId;
+ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b", tab: !windowDrive })).tab.targetId;
 // The check's own connection, through agent-browser's approved proxy: it only switches the front tab.
 const browser = await AgentBrowser.connect(o);
 const product = browser.product;
@@ -196,6 +210,7 @@ const clicksOf = (tab: string) => last(tab, (e) => e.ev.startsWith("click:"))?.c
 async function measure(command: string, tab: string, front: string, fn: () => Promise<unknown>, check: (r: unknown) => string | undefined | Promise<string | undefined>): Promise<void> {
   await sleep(500);
   const t0 = Date.now();
+  const previousDocument = last(tab, (e) => e.ev === "load")?.documentId;
   let r: unknown, detail: string | undefined;
   try { r = await fn(); } catch (e) { detail = `error: ${(e as Error).message.split("\n")[0]}`; }
   const t1 = Date.now();
@@ -207,6 +222,10 @@ async function measure(command: string, tab: string, front: string, fn: () => Pr
   run.push({ command, tab, front, ms: t1 - t0, ok: detail === undefined, ...(detail === undefined ? {} : { detail }),
     visibleMs: visibleMs(spans, t0, t1 + 200), visibilityChanges: during.filter((e) => e.ev === "visibilitychange").length,
     focusEvents: during.filter((e) => e.ev === "focus" || e.ev === "blur").map((e) => `${e.ev}@${e.t - t0}`), framesAfter });
+  if (windowDrive && command === "goto") {
+    const navigation = navigationVisibility(during, tab, previousDocument);
+    Object.assign(run.at(-1)!, { navigationHides: navigation.hides, navigationStartsVisible: navigation.startsVisible });
+  }
   process.stderr.write(`${command} ${tab}: ${JSON.stringify(run.at(-1))}\n`);
 }
 
@@ -247,12 +266,12 @@ await shot("a", "a");
 await shot("a", "a-size", { size: "800x600" });
 await shot("a", "a-full", { full: true });
 // c: a new background tab, whose page never drew a frame before the first command.
-await measure("open", "c", front, async () => { ids.c = (await commands.open(o, { url: `${BASE}/c`, name: "c", tab: true })).tab.targetId; }, () => undefined);
+await measure("open", "c", front, async () => { ids.c = (await commands.open(o, { url: `${BASE}/c`, name: "c", tab: !windowDrive })).tab.targetId; }, () => undefined);
 await click("c");
 await measure("text", "c", front, () => commands.text(o, { tab: "c" }), (r) => ((r as { text: string }).text.includes("clicks: 1") ? undefined : "no clicks line"));
 await shot("c", "c");
 // d: a new background tab, read and shot at once.
-await measure("open", "d", front, async () => { ids.d = (await commands.open(o, { url: `${BASE}/d`, name: "d", tab: true })).tab.targetId; }, () => undefined);
+await measure("open", "d", front, async () => { ids.d = (await commands.open(o, { url: `${BASE}/d`, name: "d", tab: !windowDrive })).tab.targetId; }, () => undefined);
 await measure("text", "d", front, () => commands.text(o, { tab: "d" }), (r) => ((r as { text: string }).text.includes("clicks: 0") ? undefined : "no clicks line"));
 await shot("d", "d");
 // b: a new page in the hidden tab, then input.
@@ -273,10 +292,10 @@ await sleep(1000);
 await click("a");
 await shot("a", "a-front");
 
-const failed = failures(run, hiddenDrive);
+const failed = failures(run, hiddenDrive, windowDrive);
 const summary = {
-  ok: failed.length === 0, chrome: product, flags: AGENT_ARGS, hiddenDrive, ffmpeg: !!ffmpeg,
-  commands: run.map((m) => ({ command: m.command, tab: m.tab, front: m.front, ok: m.ok, ms: m.ms, visibleMs: m.visibleMs, visibilityChanges: m.visibilityChanges, focusEvents: m.focusEvents, framesAfter: m.framesAfter, ...(m.detail ? { detail: m.detail } : {}) })),
+  ok: failed.length === 0, chrome: product, flags: AGENT_ARGS, hiddenDrive, windowDrive, ffmpeg: !!ffmpeg,
+  commands: run.map((m) => ({ command: m.command, tab: m.tab, front: m.front, ok: m.ok, ms: m.ms, visibleMs: m.visibleMs, visibilityChanges: m.visibilityChanges, focusEvents: m.focusEvents, framesAfter: m.framesAfter, ...(windowDrive && m.command === "goto" ? { navigationHides: m.navigationHides, navigationStartsVisible: m.navigationStartsVisible } : {}), ...(m.detail ? { detail: m.detail } : {}) })),
   failures: failed, run: RUN,
 };
 writeFileSync(join(RUN, "summary.json"), JSON.stringify({ ...summary, log }, null, 2) + "\n");

@@ -6,7 +6,15 @@
 // test/background-tabs.test.ts.
 //
 //   node test/live/background-tabs/check.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 98]
-//     [--before] [--hidden-ms 6000] [--hidden-drive] [--new-tabs 5]
+//     [--before] [--hidden-ms 6000] [--hidden-drive | --window-drive] [--new-tabs 5]
+//
+// --window-drive runs Linux's default open, without --tab: each page has its own window. All pages
+// stay visible before, during and after a drive, even when another window is in front. Their timers
+// run at full rate and their animation frames continue. The shot pixel rules stay the same: the
+// box, button and status line must be drawn. visibleMs includes a window's existing visible span,
+// clipped to the drive or recording; it measures continuous visibility, not a command's focus span.
+// p5 opens new visible windows, rather than tabs that never drew. --hidden-drive cannot be combined
+// with --window-drive. The phase descriptions below describe the two tab modes.
 //
 // It goes through agent-browser's own launch, as an agent's first command does: launchAgentChrome
 // starts the Chrome with AGENT_ARGS, no debugging port and remote debugging seeded on, and the proxy
@@ -97,15 +105,15 @@ import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions } from "../.
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg, pngPixels } from "../../../src/record.ts";
 import {
-  BOX_COLOURS, chromeArgs, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, TIMER_MS, timerStats, visibilityIn, visibleSpans,
+  BOX_COLOURS, chromeArgs, expectedVisibility, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, TIMER_MS, timerStats, visibilityIn, visibleSpans,
   type Drive, type Idle, type Recording, type Run, type Step, type StepName, type Timer,
 } from "./rules.ts";
 import { harnessGuard } from "../guard.ts";
 
 const { values } = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, before: { type: "boolean" },
-  "hidden-ms": { type: "string" }, "hidden-drive": { type: "boolean" }, "new-tabs": { type: "string" } } });
+  "hidden-ms": { type: "string" }, "hidden-drive": { type: "boolean" }, "window-drive": { type: "boolean" }, "new-tabs": { type: "string" } } });
 if (!values["out-dir"]) {
-  process.stderr.write("usage: node test/live/background-tabs/check.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 98] [--before] [--hidden-ms 6000] [--hidden-drive] [--new-tabs 5]\n");
+  process.stderr.write("usage: node test/live/background-tabs/check.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 98] [--before] [--hidden-ms 6000] [--hidden-drive | --window-drive] [--new-tabs 5]\n");
   process.exit(2);
 }
 /** A start that the check refuses: one line, exit 2. The exit handler ends the check's own children. */
@@ -113,7 +121,7 @@ function refuse(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(2);
 }
-const start = startMode(process.platform, { chrome: values.chrome, display: values.display, before: values.before, hiddenMs: values["hidden-ms"], hiddenDrive: values["hidden-drive"], newTabs: values["new-tabs"] });
+const start = startMode(process.platform, { chrome: values.chrome, display: values.display, before: values.before, hiddenMs: values["hidden-ms"], hiddenDrive: values["hidden-drive"], windowDrive: values["window-drive"], newTabs: values["new-tabs"] });
 if ("error" in start) refuse(start.error);
 const mode = start;
 const OUT = resolve(values["out-dir"]);
@@ -208,11 +216,11 @@ const pageState = async (tab: string) => (await commands.eval(o, { tab, expressi
 const launchStart = Date.now();
 let ids: Record<string, string>;
 try {
-  const a = await commands.open(o, { url: `${BASE}/a`, name: "a", tab: true });
+  const a = await commands.open(o, { url: `${BASE}/a`, name: "a", tab: !mode.windowDrive });
   ids = { a: a.tab.targetId };
 } catch (e) { refuse(`agent-browser could not start its Chrome or connect to it: ${(e as Error).message.split("\n")[0]} (see ${RUN})`); }
 const launchMs = Date.now() - launchStart;
-ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b", tab: true })).tab.targetId;
+ids.b = (await commands.open(o, { url: `${BASE}/b`, name: "b", tab: !mode.windowDrive })).tab.targetId;
 const listed = (await commands.tabs(o)).tabs.map((t) => t.name ?? t.id);
 // The check's own connection, through agent-browser's approved proxy: it only switches the front tab.
 const browser = await AgentBrowser.connect(o);
@@ -225,7 +233,7 @@ async function toFront(tab: string): Promise<void> {
 const timers: Timer[] = [], drives: Drive[] = [], idles: Idle[] = [], recordings: Recording[] = [];
 /** Each shot step's time (ms) and its problem (shotProblem), if any: information, the steps' own failures say the rest. */
 const shots: { phase: string; tab: string; front: string; ms: number; problem?: string }[] = [];
-const expect = (tab: string, front: string) => (tab === front ? "visible" : "hidden");
+const expect = (tab: string, front: string) => expectedVisibility(tab, front, mode.windowDrive);
 
 /** Each tab's timer over the next --hidden-ms, with no command in between. */
 async function measure(phase: string, front: string, tabs: string[]): Promise<void> {
@@ -284,7 +292,7 @@ async function drive(phase: string, front: string, tab: string, only?: readonly 
     return problem;
   });
   const end = Date.now(), logs = await idle(phase, front, tab);
-  drives.push({ phase, tab, front, visibility, during, visibleMs: visibleSpans(logs[tab], t0, end), expected: expect(tab, front), steps });
+  drives.push({ phase, tab, front, visibility, during, visibleMs: visibleSpans(logs[tab], t0, end, mode.windowDrive), expected: expect(tab, front), steps });
 }
 
 /**
@@ -315,7 +323,7 @@ async function record(front: string, tab: string, ffmpeg: string | undefined): P
     const r = await commands.record(o, { tab, out: join(RUN, `record-${tab}.mp4`), script, size: "640x360", fps: 30, ffmpeg });
     const end = Date.now();
     await sleep(500);
-    const visibleMs = visibleSpans((await pageState(tab)).vis, t0, end);
+    const visibleMs = visibleSpans((await pageState(tab)).vis, t0, end, mode.windowDrive);
     recordings.push({ tab, front, visibility, visibleMs, frames: r.frames, seconds: r.seconds, fps: +(r.frames / r.seconds).toFixed(1), maxFrameGapMs: r.maxFrameGapMs });
   } catch (e) { recordings.push({ tab, front, error: (e as Error).message.split("\n")[0] }); }
 }
@@ -339,7 +347,7 @@ await drive("p4", "a", "b");
 // p5: new tabs, opened in the background behind a, read and shot at once; each closed after its drive.
 for (let i = 1; i <= mode.newTabs; i++) {
   const tab = `n${i}`;
-  ids[tab] = (await commands.open(o, { url: `${BASE}/${tab}`, name: tab, tab: true })).tab.targetId;
+  ids[tab] = (await commands.open(o, { url: `${BASE}/${tab}`, name: tab, tab: !mode.windowDrive })).tab.targetId;
   await drive("p5", "a", tab, ["eval", "text", "shot"]);
   await commands.close(o, { tab });
 }
@@ -348,12 +356,12 @@ try { ffmpeg = findFfmpeg(); } catch { ffmpeg = undefined; }
 await record("a", "a", ffmpeg);
 await record("a", "b", ffmpeg);
 
-const run: Run = { before: mode.before, tabs: listed, drives, timers, idles, recordings };
+const run: Run = { before: mode.before, windowDrive: mode.windowDrive, tabs: listed, drives, timers, idles, recordings };
 const failed = failures(run);
 const ms = (d: Drive) => Object.fromEntries(d.steps.map((x) => [x.step, x.ms]));
 const summary = {
   ok: failed.length === 0, chrome: product, launch: "agent-browser's own (launchAgentChrome, the proxy, approve: xdotool)", launchMs,
-  flags: [...AGENT_ARGS, ...(mode.before ? TIMER_FLAGS : [])], hiddenDrive: mode.hiddenDrive, tabs: listed,
+  flags: [...AGENT_ARGS, ...(mode.before ? TIMER_FLAGS : [])], hiddenDrive: mode.hiddenDrive, windowDrive: mode.windowDrive, tabs: listed,
   timers: timers.map((t) => ({ phase: t.phase, tab: t.tab, front: t.front, visibility: t.visibility, ...t.stats, windowMs: mode.hiddenMs, askedMs: TIMER_MS })),
   drives: drives.map((d) => ({ phase: d.phase, tab: d.tab, front: d.front, visibility: d.visibility, during: d.during, visibleMs: d.visibleMs, ok: d.steps.every((x) => x.ok), ms: ms(d) })),
   idles: idles.map((i) => `${i.phase} after ${i.driven}: ${i.tab} ${i.visibility}, ${i.frames} frames`),
