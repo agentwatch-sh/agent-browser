@@ -46,8 +46,8 @@ measured here), so the limit is on what one frame can hold, not only on one step
    under the pointer (the page that leaves) to the last point of the page that comes forward, inside the
    leaving page's content box (its viewport less its scrollbars), and waits for its end before the window comes forward. The end is both pages'
    last point.
-3. **Continuity (section 3):** after a path or an entry changed a page's point, a client's next pointer
-   event far from that point gets a person-shaped CDP catch-up path first.
+3. **Continuity (section 3):** a path, an entry or a cover can require a catch-up.
+   The client's next far pointer event gets a person-shaped CDP catch-up path first.
 4. **The checks (section 4):** the relay's pipe, the unit's Xvfb and its size, each point inside it, steps
    of at most 50 px 16 ms apart, the pointer at `at`, one X call at a time, 5 paths a second, a deadline.
 5. **What a site sees (section 5):** both pages see a person's input. When the relay cannot know a
@@ -244,10 +244,15 @@ answer after the step.
    the relay keeps). The front page is unknown after failed reads of step 1 and after a raise that reached
    its limit or failed for an input or a `Page.bringToFront`; a failed `tabs.update` of
    `Target.activateTarget` gives the client the error and keeps the front page as it was.
-7. **Bring the page forward:** `tabs.update` and `windows.update`, or the client's own
-   `Page.bringToFront`, or the `tabs.update` of `Target.activateTarget`; then open the front page's gate.
-   Each within one `ACTIVATE_MAX_MS`, also `Target.activateTarget`'s `tabs.update` after the reads of
-   steps 1 and 2 failed (review-68 N3).
+7. **Mark the leaving page for catch-up.** Then bring the page forward with the raise.
+   The raise uses `tabs.update` and `windows.update`, the client's `Page.bringToFront`, or the `tabs.update` of `Target.activateTarget`.
+   Then open the front page's gate.
+   The mark applies even when no X path plays or `at` is T. It precedes the raise because a failed
+   or late answer can still have raised the window. A new tab that comes on top also marks the old front
+   page. The mark changes no last point.
+   A raise with an unknown front page sets no cover mark.
+   Each raise stays within one `ACTIVATE_MAX_MS`.
+   This includes `Target.activateTarget`'s `tabs.update` after failed reads in steps 1 and 2 (review-68 N3).
 8. The input that needed the activation goes (after a `Page.bringToFront`, the client sends its input
    after the answer). A press's catch-up (if any) then runs inside its chain step, from step 6's record.
 
@@ -264,13 +269,13 @@ call changes nothing. With the paths off or unknown it goes at once, as before. 
 each activation that brings a page under the pointer, also for agent-browser's reads that bring a hidden
 window page forward (`Tab.toFront` for `text`, `outline`, `eval` and waits).
 
-**The catch-up (continuity of each page's pointer events).** After an X record set a page's point, the
-client's next pointer event for that page may not start there: client A's moves that waited behind a path
-in its page, or Playwright's next move, which goes from Playwright's own idea of the point. Chrome would
-give that event its movement from the X record (fact 2): a jump, or a press away from the last move. So,
-when a client's next `Input.dispatchMouseEvent` or `Input.dispatchDragEvent` for a page whose point is an
-X record is a move more than 50 px from it, or a press or a wheel more than 2 px from it, the relay first
-sends CDP `mouseMoved` events (no button) along a path of the same generator from the recorded point to
+**The catch-up (continuity of each page's pointer events).** An X record or a cover can separate
+a client's next event from the page's last point. A client's moves can wait behind a path in its page.
+Playwright sends its next move from its own idea of the point.
+Chrome measures movement from the X record (fact 2), but gives the covered page's next event movement 0.
+When a client's next `Input.dispatchMouseEvent` or `Input.dispatchDragEvent` reaches such a page,
+the relay checks the distance from its known point.
+A move more than 50 px away, or a press or wheel more than 2 px away, first gets CDP `mouseMoved` events (no button) along a path of the same generator from the recorded point to
 the event's point, with the path's limits (steps of at most 50 px, `dt` 16 to 250 ms, at most 1500 ms;
 else no catch-up), each point clamped 2 px inside the page's content box as in step 4 (from the page's last
 usable geometry, else a read; with neither, no clamp), except the event's own point, which stays where the
@@ -278,7 +283,9 @@ client sent it. The relay decides it when the event leaves the tab's gate, again
 that time, so a move that waited behind a step starts at that step's record. For a move, the client's
 move is the path's last step; for another event, the path ends with a move at its point. Then the
 client's event goes, and the page's point is the client's again, so the catch-up applies only once after
-each X record: never between a client's own events, and never while the page holds a button. That rule
+each X record or cover. The first pointer input consumes the cover mark; unrelated calls keep it.
+Another record or cover is necessary for another catch-up between the client's events.
+The relay sends no catch-up while the page holds a button. That rule
 wins over a release far from the point: a release comes only while a button is held, and no path plays
 under a page that holds a button (step 3); a page that comes forward while it holds one is as today
 (step 6 can record it; review-63e note A). The catch-up is a step of the tab's gate: the client's event
@@ -617,6 +624,16 @@ twice, and the whole suite 198 of 198. Runs 1 to 3 had no path for agent-browser
 ends its connection, so the front page was no bridge tab), and runs 2 and 3 one unexplained change from a
 catch-up over a scrollbar: ab-lead's decisions on points 1 and 5.
 
+**Covered client points (board ab-v16.76).** The own-mode pointer group passes all 19 cases.
+The added case uses two clients and both pages, with no raw-move exclusions.
+Each page has 0 jumps, 0 unexplained changes and 0 zero-movement path moves.
+The case has 3 activation steps and 1 X path; both covers need no X path because `at` is T.
+After review-83, the leaving page sees 58 moves in that X path, with a maximum movement of 30 px.
+The whole group measures 987 timing pairs: error median 0 ms, p90 1 ms, maximum 2 ms.
+The live check gives no fallback exemption to an `at`-is-T step. All 19 cases still pass.
+The jump and unexplained-change counts stay unchanged in every case.
+The 3 s held press and the moved window each retain one jump at an actual fallback activation.
+
 ## 8. The build split and the limits
 
 The build: (1) chrome-extension: the C10 text (the two ops, their rows, waits and key, the clock, the
@@ -640,12 +657,11 @@ The limits:
 - A path gives the page under the pointer real moves and hovers inside its own content box at points that
   the pages' input chose: at most 5 paths a second, no click, key or read.
 - Where the relay cannot know a page's point (section 3), that one activation is as today.
-- **Movement 0 after the page loses the pointer** (measured, board ab-v16.71; a follow-up, board ab-v16.76):
-  when another window comes over a page under the pointer, the page gets `mouseout`, and Chrome then gives
-  its next pointer event a movement of 0. A client's raw move into such a page (Playwright sends its move
-  before its press, so its move reaches a page that is still behind another window) is then an unexplained
-  position change when the page's point is no X record (the catch-up covers it only after an X record). In
-  the live check it showed as Playwright's own raw moves (2 in each page of the two-client case).
+- **Movement 0 after the page loses the pointer** (measured, board ab-v16.71; fixed for known raises
+  by board ab-v16.76): Chrome gives the covered page's next event movement 0. The cover mark now
+  applies the catch-up even when its point is a client point. The same thresholds, path limits, held-button
+  rule and per-tab bound of 4 unanswered catch-up moves apply. An unknown point still has no catch-up.
+  A window change that the relay cannot observe remains outside this rule.
 - **A kept geometry** (section 3, the geometry; review-68 N9): a front page that is no bridge tab uses its
   kept geometry, which can be out of date when its window moves or changes its size, or its content box
   changes, with no event that the relay sees: a site popup's `window.moveTo` or `window.resizeTo`, the

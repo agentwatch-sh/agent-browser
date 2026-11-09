@@ -714,6 +714,130 @@ test("the geometry read: only for a bridge tab, one in flight per tab, its own 2
 
 // ------------------------------------------------------------------ the catch-up
 
+test("review-83 B1: a raise after failed activation reads marks the old front page", async () => {
+  for (const kind of ["bringToFront", "activateTarget"] as const) {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      h.fake.op = (r) => r.op === "tabs.get" && r.args[0] === A.tab.id ? { error: "read failed" } : undefined;
+      if (kind === "bringToFront") await c.send("Page.bringToFront", {}, A.sessionId);
+      else await c.send("Target.activateTarget", { targetId: A.targetId });
+      assert.equal(state(h).front, null);
+      assert.equal(pointOf(h, B)?.x11, false);
+      const from = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 100, 100);
+      const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent");
+      assert.ok(moves.length >= 6, `${kind}: catch-up after the raise despite the failed read, got ${moves.length}`);
+    } finally { await h.close(); }
+  }
+});
+
+test("review-83 B2: Browser.setWindowBounds marks the old front page before a window can cover it", async () => {
+  for (const bounds of [{ windowState: "normal" }, { left: 50 }]) {
+    const { h } = await onHarness();
+    try {
+      const { c, A, B } = await twoPages(h);
+      await c.send("Browser.setWindowBounds", { windowId: A.tab.windowId, bounds });
+      assert.equal(state(h).front, null);
+      assert.equal(pointOf(h, B)?.x11, false);
+      const from = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 100, 100);
+      const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent");
+      assert.ok(moves.length >= 6, `catch-up after the observed window change, got ${moves.length}`);
+    } finally { await h.close(); }
+  }
+});
+
+test("review-83 note 2: the mark precedes a failed or late raise, while its answer still waits", async () => {
+  for (const result of ["failed", "late"] as const) {
+    const { h } = await onHarnessLogged();
+    let finish: ((answer: any) => void) | undefined;
+    try {
+      const c = await h.connect(), A = await page(h, c), B = await page(h, c);
+      await mouse(c, B, "mouseMoved", 100, 100); // A has no point: the step holds no gate in B.
+      h.fake.command = (_t, method) => method === "Page.bringToFront" ? new Promise((r) => { finish = r; }) : undefined;
+      const raise = c.send("Page.bringToFront", {}, A.sessionId).then(() => null, (e) => e);
+      await until(() => !!finish, "the raise without an answer");
+      const from = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 700, 500);
+      const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent");
+      assert.ok(moves.length >= 6, "B gets its catch-up while the raise's answer still waits");
+      if (result === "late") await until(() => h.logs.some((l) => l.includes(`activation of tab ${A.tab.id} took more than 2000 ms`)), "the raise's limit");
+      finish!(result === "failed" ? { error: JSON.stringify({ code: -32000, message: "raise failed" }) } : {});
+      assert.equal(!!await raise, result === "failed");
+    } finally { finish?.({}); await h.close(); }
+  }
+});
+
+test("review-83 note 2: an inactive new tab neither covers nor marks the front page", async () => {
+  const { h } = await onHarness();
+  try {
+    const { c, B } = await twoPages(h);
+    const background = h.fake.newTab("about:blank", undefined, 99, 20, "s1");
+    background.active = false;
+    await until(() => h.fake.sent("debugger.sendCommand", "Target.getTargetInfo").some((r) => r.args[0].tabId === background.id), "the inactive tab's creation");
+    assert.equal(state(h).front, B.tab.id);
+    const from = h.fake.requests.length;
+    await mouse(c, B, "mouseMoved", 100, 100);
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
+  } finally { await h.close(); }
+});
+
+test("review-83 note 2: a covered page that holds a button gets no catch-up", async () => {
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await mouse(c, B, "mousePressed", 100, 100);
+    await c.send("Page.bringToFront", {}, A.sessionId); // its step reaches the held-button limit, then covers B.
+    assert.equal(pointOf(h, B)?.x11, false);
+    const from = h.fake.requests.length;
+    await mouse(c, B, "mouseMoved", 700, 500, { buttons: 1 });
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
+    await mouse(c, B, "mouseReleased", 700, 500);
+  } finally { await h.close(); }
+});
+
+test("a covered page with a client point gets a catch-up after a raise that needs no X path", async () => {
+  for (const how of ["input", "bringToFront", "newWindow"] as const) {
+    const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET });
+    try {
+      const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+      if (how === "input") await click(c, A, 100, 100);
+      else if (how === "bringToFront") await c.send("Page.bringToFront", {}, A.sessionId);
+      else await page(h, c);
+      assert.equal(d.moves.length, 0, "the pointer is already at T: no X path changes B's client point");
+      assert.equal(pointOf(h, B)?.x11, false);
+      // An unrelated call must keep the mark until B's next pointer event leaves its gate.
+      await c.send("Runtime.evaluate", { expression: "1" }, B.sessionId);
+      const from = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 700, 500);
+      const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
+      assert.ok(moves.length >= 6, `${how}: catch-up before the client's far move, got ${moves.length}`);
+      let last = { x: 100, y: 100 };
+      for (const m of moves) { assert.ok(Math.hypot(m.x - last.x, m.y - last.y) <= 50); last = m; }
+      assert.deepEqual([last.x, last.y], [700, 500]);
+      const next = h.fake.requests.length;
+      await mouse(c, B, "mouseMoved", 100, 100);
+      assert.deepEqual(ops(h, next), ["Input.dispatchMouseEvent mouseMoved"], "once per cover");
+    } finally { await h.close(); }
+  }
+});
+
+test("a covered page's catch-up stops at four unanswered moves and leaves the dialog call free", async () => {
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await click(c, A, 100, 100);
+    h.fake.command = (t, method, params) => t.tabId === B.tab.id && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" ? new Promise(() => {}) : undefined;
+    const from = h.fake.requests.length;
+    void mouse(c, B, "mouseMoved", 900, 700).catch(() => {});
+    await until(() => h.fake.requests.slice(from).some((r) => r.args?.[2]?.x === 900), "the client's move");
+    assert.equal(h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent").length, 5);
+    assert.equal(state(h).catchUpStops, 1);
+    assert.deepEqual(await c.send("Page.handleJavaScriptDialog", { accept: true }, B.sessionId), {});
+  } finally { await h.close(); }
+});
+
 test("the catch-up: after an X record, a client's move more than 50 px from it gets CDP moves along a path first, the client's move as its last step; once only", async () => {
   const { h } = await onHarness();
   try {

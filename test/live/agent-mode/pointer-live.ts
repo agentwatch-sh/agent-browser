@@ -128,7 +128,8 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       const c = pageCounts(log, tab, from, t1 + 300, acts.filter((s) => s.t >= from).map((s) => s.t - s.ms), ps.filter((p) => leaving.get(p) === tab), o2.own?.[tab] ?? []);
       // A jump or an unexplained change of a page in the second after its own step with no path: that activation is as
       // today (it enters at the X pointer; section 5), counted apart.
-      const asToday = countAsToday(log, tab, from, t1 + 300, all.filter((s) => s.tab === id && noPath(s) && /no path/.test(s.what)), o2.own?.[tab] ?? []);
+      // "No path needed (at is T)" is continuous; only an actual fallback gets the as-today exemption.
+      const asToday = countAsToday(log, tab, from, t1 + 300, all.filter((s) => s.tab === id && noPath(s) && /^no path \(/.test(s.what)), o2.own?.[tab] ?? []);
       per[tab] = { ...c, dt: undefined, asToday, activations: acts.filter((s) => s.t >= t0 && s.t <= t1 + 300).map((s) => `${s.kind} ${playedStep(s) ? "path" : s.what.replace(/^no path \((.*)\)$/, "no path: $1")} ${s.ms} ms`) };
       allDt.push(...c.dt);
       if (c.jumps - asToday.jumps > 0) fails.push(`${tab}: ${c.jumps - asToday.jumps} jumps`);
@@ -311,6 +312,28 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       const pa = await a.contexts()[0].newPage(), pb = await b.contexts()[0].newPage();
       await pa.goto(pageUrl("CA")); await pb.goto(pageUrl("CB"));
       await loaded("CA"); await loaded("CB");
+      await guard("covered client points: two clients, both pages, no X path at the cover", async () => {
+        // Establish a known X position with a path, then cover each page while at already equals T.
+        await pb.mouse.click(700, 300);
+        await pa.mouse.click(100, 200);
+        await pb.mouse.move(100, 200);
+        await pb.bringToFront();
+        await sleep(500);
+        const t0 = Date.now();
+        await pa.mouse.move(900, 600); // A was covered with its own client point, not an X record.
+        await pa.bringToFront(); // the path ends at (900, 600) in both pages
+        await pb.mouse.move(900, 600); // B's point is its client's again
+        await pb.bringToFront(); // at is T; A still has the X record from its path at (900, 600)
+        await pb.mouse.click(900, 600); // B also has a client point
+        await pa.bringToFront(); // at is T; B is covered with its client point
+        await pb.mouse.move(100, 200);
+        const t1 = Date.now();
+        const catchUps = o.relayLines.filter((l) => l.t >= t0 && l.t <= t1 && /^relay: catch-up in tab /.test(l.line)).map((l) => l.line);
+        const ids = [await tabIdOf("CA"), await tabIdOf("CB")];
+        // No own-raw exclusion: include each client's far move in the unexplained-change count.
+        await measure("covered client points: two clients, both pages, no X path at the cover", ["CA", "CB"], t0, t1,
+          { detail: { catchUps }, extra: () => ids.some((id) => !catchUps.some((l) => l.startsWith(`relay: catch-up in tab ${id}:`))) ? ["missing a covered-page catch-up"] : [] });
+      });
       await guard("two clients: A clicks in its page while B activates another page (A's page: 0 jumps, 0 presses away from the last move)", async () => {
         const t0 = Date.now();
         const spots = [[70, 280], [400, 300], [120, 345], [600, 420]];
