@@ -37,6 +37,7 @@ export function startMode(platform: string, f: Flags): Mode | { error: string } 
     const mac = f.onMyScreen ? "--on-my-screen" : f.background ? "--background" : f.fullScreen ? "--full-screen" : undefined;
     if (mac) return { error: `${mac} is for macOS: on Linux the check always runs in a private Xvfb, so that no window reaches a person's screen` };
     const display = Number(f.display ?? 97), reserved = reservedDisplay(display, "--display");
+    if (!Number.isInteger(display) || display < 1) return { error: "--display is a positive whole number" };
     if (reserved) return { error: reserved };
     return { platform: "linux", chrome: f.chrome ?? "/usr/bin/chromium", display };
   }

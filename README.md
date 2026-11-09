@@ -1270,16 +1270,16 @@ files of the agent browser stay one of each in the state folder:
 ```text
 <stateDir>/
   endpoint-scopes/          mode 0700
-    ab-lead/                the tab record of the endpoint scope ab-lead:
+    my-repo/                the tab record of the endpoint scope my-repo:
                             tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json, tabs.lock
-    +ab-+lead/              the tab record of the endpoint scope Ab-Lead
+    +my-+repo/              the tab record of the endpoint scope My-Repo
   input.lock                one input lock for every endpoint scope
   pointer.json              one pointer for every endpoint scope
   display.json, launches.log, shots/, recordings/, ...
 ```
 
-- The folder name is the scope, with each capital letter written as `+` and its small letter (`Ab-Lead`
-  gives `+ab-+lead`). So two scopes that differ only in case get two folders, also on a disk that ignores
+- The folder name is the scope, with each capital letter written as `+` and its small letter (`My-Repo`
+  gives `+my-+repo`). So two scopes that differ only in case get two folders, also on a disk that ignores
   case (the Mac's), and no two scopes get one folder (a scope holds no `+`). agent-browser refuses a
   scope outside the relay's pattern (1 to 64 letters, digits, `.`, `_` or `-`, the first a letter or a
   digit) before it makes a folder: `cdpUrl` with such a scope is a usage error.

@@ -1,6 +1,6 @@
 # Two modes: operator mode sends sign-ins, agent mode serves the Playwright APIs — design
 
-Date: 2026-11-03. Status: **DRAFT for the operator's review.** Author: taylor session `ab-design`
+Date: 2026-11-03. Status: **DRAFT for the operator's review.** Author: a taylor contributor
 (board task ab-v16.1, goal ab-v16). Branch `ab-v16.1-design-the-two-modes-and-how-agent-mode`.
 Evidence: the probe in [2026-11-03-two-modes-probe/](2026-11-03-two-modes-probe/README.md), run on
 taylor with Debian Chromium 156.0.8078.73, Playwright 1.64.1 and Playwright MCP 0.0.84.

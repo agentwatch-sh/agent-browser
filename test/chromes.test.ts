@@ -71,17 +71,17 @@ test("Linux: each agent Chrome main process of this user, with its state folder,
     linux(UID, 200140, `/opt/google/chrome-beta/chrome --type=renderer --crashpad-handler-pid=200102 --user-data-dir=${A}/profile --lang=en-US --num-raster-threads=4`),
     // Debian's chromium wrapper puts its own flags first; the profile and the command name hold spaces.
     linux(UID, 200300, `/usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 ${SIG} --user-data-dir=${B}/My Profile --window-name=vedlo browser: ${B} --lang=en-US ${INSPECT} https://example.org/`),
-    linux(UID, 200400, proxyCommand("/home/me/.nvm/versions/node/v26.1.0/bin/node", "/home/me/src/app/node_modules/agent-browser/bin/agent-browser.js", "ws://127.0.0.1:41234/devtools/browser/0b1c", { stateDir: A, profile: `${A}/profile`, commandName: "agent-browser" })),
+    linux(UID, 200400, proxyCommand("/example/me/.nvm/versions/node/v26.1.0/bin/node", "/example/me/src/app/node_modules/agent-browser/bin/agent-browser.js", "ws://127.0.0.1:41234/devtools/browser/0b1c", { stateDir: A, profile: `${A}/profile`, commandName: "agent-browser" })),
     linux(OTHER, 300400, proxyCommand("/usr/bin/node", "/opt/agent-browser/bin/agent-browser.js", "ws://127.0.0.1:41999/devtools/browser/ffff", { stateDir: B, profile: `${B}/My Profile`, commandName: "vedlo browser" })),
     // Another user's agent Chrome, with every mark of one.
-    linux(OTHER, 300100, `/opt/google/chrome/chrome ${SIG} --user-data-dir=/home/other/state/profile --window-name=agent-browser: /home/other/state ${INSPECT}`),
+    linux(OTHER, 300100, `/opt/google/chrome/chrome ${SIG} --user-data-dir=/example/other/state/profile --window-name=agent-browser: /example/other/state ${INSPECT}`),
     // Processes that only name the profile in their argv.
     linux(UID, 200500, `claude --print the browser binary with --user-data-dir=${A}/profile, no --type=`),
     linux(UID, 200510, `tail -f ${A}/launches.log`),
-    linux(UID, 200520, `/usr/bin/python3 /home/me/bin/probe.py ${SIG} --user-data-dir=${A}/profile`),
+    linux(UID, 200520, `/usr/bin/python3 /example/me/bin/probe.py ${SIG} --user-data-dir=${A}/profile`),
     linux(UID, 200530, `/usr/bin/timeout 5 /opt/google/chrome/chrome ${SIG} --user-data-dir=${A}/profile`),
     // A Chrome of this user that agent-browser did not start (a Playwright run): no launch flags, no proxy.
-    linux(UID, 200600, `/home/me/.cache/ms-playwright/chromium-1200/chrome-linux/chrome --disable-field-trial-config --no-first-run --user-data-dir=/tmp/playwright_chromiumdev_profile-x --remote-debugging-pipe --no-startup-window`),
+    linux(UID, 200600, `/example/me/.cache/ms-playwright/chromium-1200/chrome-linux/chrome --disable-field-trial-config --no-first-run --user-data-dir=/tmp/playwright_chromiumdev_profile-x --remote-debugging-pipe --no-startup-window`),
   ].join("\n");
   assert.deepEqual(listAgentChromes({ ps: () => ps, uid: UID }), [
     { pid: 200100, profileDir: `${A}/profile`, stateDir: A, windowName: `agent-browser: ${A}`, commandName: "agent-browser",

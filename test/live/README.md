@@ -50,8 +50,8 @@ the harness starts Xvfb or Chromium.
 - A harness that a harness starts (the stable part of `anti-detect/mac.ts --dry-run`) runs under its
   parent's lock: `HARNESS_GUARD_HELD` names the holder, and the guard checks that the holder's driver
   is an ancestor.
-- The agents' outer lock (`flock /home/selden/.cache/ab-lead/heavy.lock timeout 1200 <command>`, by
-  hand, around a whole heavy job) is always the outer one. No harness takes it, so a process that holds
+- The agents' outer lock (the box's shared heavy-job lock, if it has one, around a whole
+  heavy job) is always the outer one. No harness takes it, so a process that holds
   the harness lock never waits for heavy.lock, and the two locks cannot deadlock. A harness under
   heavy.lock waits only for a harness that runs without it.
 - `HARNESS_LOCK` names another lock file, for the tests only. A guard with it says so on stderr: that

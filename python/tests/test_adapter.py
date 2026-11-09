@@ -176,7 +176,7 @@ class AdapterTest(unittest.TestCase):
             other.remove()
 
     def test_cdp_url_goes_to_the_cli_in_place_of_the_proxy(self) -> None:
-        url = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/ab-lead"
+        url = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/my-repo"
         b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=url)
         flags = b._global_flags()
         self.assertEqual(flags[flags.index("--cdp-url") + 1], url)
@@ -513,7 +513,7 @@ class ChromesTest(unittest.TestCase):
             f"{uid:5d}  4500 /usr/bin/node /opt/agent-browser/bin/agent-browser.js proxy ws://127.0.0.1:9/devtools/browser/p --state-dir {state} "
             f"--socket {state}/chrome-proxy.sock --profile {state}/profile --mode agent --proxy-idle-ms 1000 --command-name vedlo browser "
             "--attempt a --timeout-ms 1",
-            f"{uid + 1:5d}  5100 /opt/google/chrome/chrome {launch} --user-data-dir=/home/other/profile {inspect}",
+            f"{uid + 1:5d}  5100 /opt/google/chrome/chrome {launch} --user-data-dir=/example/other/profile {inspect}",
         ]
         (self.folder / "ps.txt").write_text("\n".join(rows) + "\n")
         bin_dir = self.folder / "bin"

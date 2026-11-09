@@ -17,7 +17,7 @@ import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { backByChrome, harness, lineOf, until } from "./fake-bridge.ts";
 import { consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
 
-const CDP_URL = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/ab-lead";
+const CDP_URL = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/my-repo";
 const AGENT = { mode: "agent", commandName: "vedlo browser" };
 const PERSONAL = { mode: "personal", commandName: "vedlo browser" };
 const ENDPOINT = { mode: "agent", commandName: "vedlo browser", cdpUrl: CDP_URL };
@@ -69,7 +69,7 @@ test("the unreachable hint: without cdpUrl it names `launch --login`; with cdpUr
       assert.match(e.message, /vedlo browser launch --login/);
       return true;
     });
-    const dead = `ws+unix://${join(c.dir, "no.sock")}:/devtools/browser/ab-lead`;
+    const dead = `ws+unix://${join(c.dir, "no.sock")}:/devtools/browser/my-repo`;
     await assert.rejects(AgentBrowser.connect(c.options({ cdpUrl: dead, commandName: "vedlo browser" })), (e: unknown) => {
       assert.ok(e instanceof ChromeUnreachableError);
       assert.match(e.message, /^agent mode's endpoint did not answer/);
@@ -84,7 +84,7 @@ test("over agent mode's endpoint, a redirect to a sign-in page names the operato
   const end = await backByChrome(h.fake, chrome);
   try {
     await h.ready(lineOf([FIXTURE_HOST]));
-    const o = c.options({ cdpUrl: h.url("ab-lead") });
+    const o = c.options({ cdpUrl: h.url("my-repo") });
     await commands.open(o, { url: fx.base + "/", name: "redir" });
     await assert.rejects(commands.goto(o, { tab: "redir", url: fx.base + "/redirect" }), (e: unknown) => {
       assert.ok(e instanceof NotAllowedError);
@@ -136,7 +136,7 @@ test("over agent mode's endpoint, a recording that lands on a sign-in page names
   const end = await backByChrome(h.fake, chrome);
   try {
     await h.ready(lineOf([FIXTURE_HOST]));
-    const e = await recordOntoSignIn(chrome, c.options({ cdpUrl: h.url("ab-lead") }), c.dir, fx.base);
+    const e = await recordOntoSignIn(chrome, c.options({ cdpUrl: h.url("my-repo") }), c.dir, fx.base);
     assert.ok(e instanceof NotAllowedError, String(e));
     assert.equal(e.message, recordRefusal(operatorHint("login.elsewhere.invalid", FIXTURE_HOST)));
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
@@ -154,7 +154,7 @@ test("over agent mode's endpoint, a goto step to a second site that redirects to
   chrome.navigate = (page, url) => navigate(page, new URL(url).hostname === SECOND ? "https://accounts.second.invalid/signin?code=SECRET-CODE" : url);
   try {
     await h.ready(lineOf([FIXTURE_HOST, SECOND]));
-    const e = await recordTake(chrome, c.options({ cdpUrl: h.url("ab-lead") }), c.dir, fx.base, [{ goto: `https://${SECOND}/doc` }, { wait: 20_000 }]);
+    const e = await recordTake(chrome, c.options({ cdpUrl: h.url("my-repo") }), c.dir, fx.base, [{ goto: `https://${SECOND}/doc` }, { wait: 20_000 }]);
     assert.ok(e instanceof NotAllowedError, String(e));
     assert.equal(e.message, recordRefusal(operatorHint("accounts.second.invalid", SECOND), "accounts.second.invalid"));
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
@@ -165,7 +165,7 @@ test("over agent mode's endpoint, a navigation to a second allowlisted site, the
   const end = await backByChrome(h.fake, chrome);
   try {
     await h.ready(lineOf([FIXTURE_HOST, SECOND]));
-    const e = await recordTake(chrome, c.options({ cdpUrl: h.url("ab-lead") }), c.dir, fx.base, [{ wait: 20_000 }], (page) => {
+    const e = await recordTake(chrome, c.options({ cdpUrl: h.url("my-repo") }), c.dir, fx.base, [{ wait: 20_000 }], (page) => {
       chrome.navigate(page, `https://${SECOND}/doc`); // a link the page follows: an allowlisted main-frame navigation
       setTimeout(() => chrome.navigate(page, "https://login.elsewhere.invalid/oauth?code=SECRET-CODE"), 300);
     });

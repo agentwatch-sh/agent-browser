@@ -2,16 +2,15 @@
 
 Date: 2026-11-06. Status: **reviewed and merged** (agent-browser PR #63, merge `6bb6838`): revision 5,
 after five fresh reviews (review-63, 63b, 63c and 63d at `b340c26`, `1d29201`, `f42f714` and `19307c0`,
-and review-63e at `cd415cb`) and aw-lead's answers (mails mb5c6cbf, m98c6f1f, m2933af4 and md133a6e),
-with aw-lead's yes to sections 2 and 4 (mail mbf51aeb); review-63e's doc notes A to C are in the text. The
-build (board ab-v16.71, agent-browser PR #68) added ab-lead's decisions on its five points: the cached
+and review-63e at `cd415cb`) and the daemon lead's answers (mails mb5c6cbf, m98c6f1f, m2933af4 and md133a6e),
+with the daemon lead's yes to sections 2 and 4 (mail mbf51aeb); review-63e's doc notes A to C are in the text. The
+build (board ab-v16.71, agent-browser PR #68) added the lead's decisions on its five points: the cached
 geometry of a front page that is no bridge tab, the content box as the clamp, the text on a jump with no path,
 the limit of movement 0 (board ab-v16.76), the hover dialog's pass condition, and the gate rule's sentence;
 then review-68's fixes (B1 a world before each read, B2 a held button on any session, B3 `Browser.setWindowBounds`
 behind a running step, N1 a front page only by a raise that the relay sent, N2 and N3, a minimized or hidden page).
 Its contract text is chrome-extension PR #29 (board ab-v16.70: C10 and C11, with the vectors); its build
-is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: taylor session
-`pointer-design`, a subagent of `ab-lead` (board task ab-v16.37). Sources: agent-browser main `6e51439`
+is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: a taylor contributor, a subagent of the lead (board task ab-v16.37). Sources: agent-browser main `6e51439`
 (`src/input.ts`, `src/record.ts`, `src/relay/`, the README), chrome-extension main `37b5647`
 (`docs/protocol.md` C4, C10, C11), agentwatch main `18609d80` (read only: `agentwatch/daemon/browser/`,
 the agent-browser design's section 5.6). No browser ran for this task. The numbers are those of
@@ -23,7 +22,7 @@ ab-v16.26 moves the X pointer (`xdotool mousemove`) as the last step of each pat
 enters where the page last saw the pointer: `run.ts design` measured 0 jumps over 100 px and 0 position
 changes that the movement does not explain (4 runs, then 2, 1 and 1 after the reviews of PR #47).
 Through agentwatch's relay no process has the Xvfb's `DISPLAY`, and the fallback runs: `design-no-x`
-measured 5 unexplained position changes in 6 activations. aw-lead (mail m4f38c16) refused `DISPLAY` and
+measured 5 unexplained position changes in 6 activations. The daemon lead (mail m4f38c16) refused `DISPLAY` and
 `XAUTHORITY` for agents and proposed the narrow way that this design settles: the daemon, which owns the
 Xvfb, moves the pointer itself on a small request from the relay. The Result of ab-v16.37: no pointer
 jump at a window activation, in any page.
@@ -63,7 +62,7 @@ the daemon's own answers and lines, and the daemon already reads each relay line
 ops on that pipe that the daemon answers itself: no new channel or socket, and only the relay, the
 daemon's own child, writes there. C11 gets one paragraph (section 3).
 
-**The daemon side (aw-lead's answers).** The prefix `daemon.` is reserved. The daemon handles a `daemon.`
+**The daemon side (the daemon lead's answers).** The prefix `daemon.` is reserved. The daemon handles a `daemon.`
 op in `from_relay` after the parse and the duplicate-id check, before the link checks, outside the queue
 and `MAX_BYTES_IN_FLIGHT`; it never forwards any `daemon.` op, and it answers an unknown one `unknown op`
 itself. The X calls run in their own task, one at a time, off the carrier's read lock (so no bridge line
@@ -137,7 +136,7 @@ only with `pointer moved` (`{"x","y","views"}`). The errors, in the order of the
 | `pointer moved` | move | the read before the play is more than 2 px from `at` (with `data`) | not moved by the op |
 | `too late` | move | the clock is past `notAfter` when the play would start | not moved |
 
-**The ops table rows, the waits and the key** (aw-lead's answer 6). C10 says that the relay sends each
+**The ops table rows, the waits and the key** (the daemon lead's answer 6). C10 says that the relay sends each
 op's default wait; these two ops are the exception. `daemon.pointerAt` has the wait 1200 ms.
 `daemon.movePointer` has, per request, `POINTER_START_MS` (300, the lead of `notAfter`) plus the path's
 total time plus `POINTER_KILL_MS` plus `POINTER_SLACK_MS = 200`. Both have the in-flight key `pointer` of
@@ -210,7 +209,7 @@ answer after the step.
    no path. When the front page holds a button, wait for its release. The rule "no path when the front
    page's tab's next call waits in the activation chain (its gate is set, also when it becomes set during
    the wait)" applies only while the front page holds a button, because only then does the release wait
-   behind this step (ab-lead's decision on PR #68). No other page's button counts: the X pointer reaches
+   behind this step (the lead's decision on PR #68). No other page's button counts: the X pointer reaches
    only the page under it. Wait for the end of a catch-up that runs in the front page. Then chain the front page's
    gate on its old gate (`behind()` alone would replace it), so that its later calls, its pointer input
    among them, wait behind the step in order (C10, the order of requests). Last, wait for the answers of
@@ -219,7 +218,7 @@ answer after the step.
    going).
 4. **Plan.** Read both geometries (below; at most `GEOMETRY_WAIT_MS = 200`). Map S and T to display px.
    Read `at` too when it is unknown. When S or T is outside the front page's content box (its viewport less
-   its scrollbars, 2 px inside its edges; ab-lead's decision on point 5 of PR #68), no path. When `at` is T, no path is needed: the entry comes at T (step 6 records it). Take the
+   its scrollbars, 2 px inside its edges; the lead's decision on point 5 of PR #68), no path. When `at` is T, no path is needed: the entry comes at T (step 6 records it). Take the
    legs of `src/input.ts`'s generator from S to T (`planMove`'s curve and times, an overshoot leg past
    500 px, the default target width 24) and sample them every 16 ms (`pointAt`; `input.ts` samples 12 to
    60 points). Clamp each point 2 px inside the front page's content box, in whole pixels (a page gets no
@@ -327,7 +326,7 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
 
 - only for a bridge tab, with no attach and no `Page.enable` or `Runtime.enable` of the relay's own (they
   would change the client's domain state). The relay keeps each page's last usable geometry from its own
-  reads (ab-lead's decision on point 1 of PR #68): a front page that is no bridge tab (agent-browser's CLI
+  reads (the lead's decision on point 1 of PR #68): a front page that is no bridge tab (agent-browser's CLI
   ends its connection after each command, and the relay then detaches its page) uses it. The relay keeps a
   read only when it is usable as a front page's geometry (below: also not minimized, by step 1's
   `windows.get`, and not hidden); a read that is not usable, or that fails, drops the kept one (review-68
@@ -449,7 +448,7 @@ no client method reaches a `daemon.` op.
 - **One X call at a time** (`busy`), **5 paths and 10 reads a second**, and **the deadline**, checked right
   before the play.
 - **The call:** absolute pointer moves and reads of the pointer; no button, no key, no read of pixels.
-- **The live view** (when it exists; aw-lead's answers 4 and 5): `not now` for 10 s after the operator's
+- **The live view** (when it exists; the daemon lead's answers 4 and 5): `not now` for 10 s after the operator's
   last live-view input and for an old `views`; the operator's input kills a playing path.
 - **A refusal** moves nothing (`pointer moved` and `too late` follow a read; `no display` and `not now`
   can follow a call that was killed or failed, and the place is then unknown). The daemon logs the op,
@@ -487,7 +486,7 @@ no client method reaches a `daemon.` op.
 
 ## 6. Why no agent gets raw X
 
-aw-lead's reasons (mail m4f38c16): raw X input reaches Chrome's UI and `chrome://extensions` (an agent
+The daemon lead's reasons (mail m4f38c16): raw X input reaches Chrome's UI and `chrome://extensions` (an agent
 could switch the agent extension off, and its allowlist rules with it), and X access allows raw
 screenshots of the whole display (other scopes' pages, the operator's tabs). Both break the rule that
 agents reach the agent browser only through the relay and its refusals (C11, the peer check, the
@@ -495,7 +494,7 @@ per-scope lists). Here no agent makes an X call: the daemon moves the pointer al
 the relay computed from the pages' own input, inside a page's content box, and reads its position; never a
 click, a key or a read of pixels. A raw-X way (the Xvfb's `DISPLAY` and `XAUTHORITY` for agent sessions)
 would change the trust boundary, which only the operator can decide; its reason would be the measured 5
-unexplained changes in 6 activations. This design is expected to remove them with no raw X, so ab-lead
+unexplained changes in 6 activations. This design is expected to remove them with no raw X, so the lead
 asks the operator only if the live check of section 7 fails.
 
 ## 7. The tests that the build needs
@@ -534,7 +533,7 @@ extra key, a float, a missing `at` or one outside the request's `width` and `hei
 `out of bounds` (a point or `from`);
 `wrong display`; `too late`; `busy`; `pointer moved` (the read more than 2 px from `at`, with `data`; a
 read 1 px from `at` and far from `from` plays); 6 paths and 11 reads in a second; an unknown `daemon.`
-op; a `daemon.` op at the receiver gets `unknown op`. The relay's tests and aw-lead's daemon tests use
+op; a `daemon.` op at the receiver gets `unknown op`. The relay's tests and the daemon lead's daemon tests use
 the same vectors.
 
 **Live (taylor, in the harness's own private Xvfb; never the operator's agent browser, never the live
@@ -561,20 +560,20 @@ checks of section 4, the read before the play and the `xdotool -` script. Throug
 - counted in both pages: jumps over 100 px (also of moves that Chrome merged into one frame, fact 3),
   unexplained position changes, zero-movement moves of the path, entries at an earlier entry's point, the
   path's moves and speed against the probe's person baseline, the `dt` that the page saw against the
-  planned `dt` (`xdotool sleep`, aw-lead's answer 2), and the time of the step and of a catch-up.
+  planned `dt` (`xdotool sleep`, the daemon lead's answer 2), and the time of the step and of a catch-up.
 
 The pass mark: after each page's first activation, 0 jumps and 0 unexplained changes in both pages of
 each activation, 0 zero-movement moves in each path, the leaving page's moves like the person's, and in
 review-63b's two-client case 0 jumps and 0 presses away from the last move in A's page; Playwright's own
 raw moves are counted apart. `test/live/agent-mode/` passes in full. Then agentwatch's live test with the
-real daemon (aw-lead's task age-0kh.28, on the age-cqd test browser).
+real daemon (the daemon lead's task age-0kh.28, on the age-cqd test browser).
 
 ### 7.1 Measured by the build (board ab-v16.71)
 
 On taylor, Chromium 156 in the live test's own Xvfb (1280 x 900), chrome-extension main `8a3b66f`, through the
 real relay and the stand-in daemon, whose `daemon.movePointer` plays each path on `xdotool -` on that Xvfb only
 (the live group `pointer` of `test/live/agent-mode/run.ts`). Runs 1 to 3 (2026-11-06, PR #68's first head) found
-the five points of ab-lead's decisions; runs 4 to 6 are after them (run 4 before the live check's own targets
+the five points of the lead's decisions; runs 4 to 6 are after them (run 4 before the live check's own targets
 and its rule of the needed paths; runs 5 and 6 the final code: the group alone, then the whole suite).
 
 **`xdotool sleep`.** For each played path, the moves that the leaving page saw (matched by their screen point
@@ -622,7 +621,7 @@ same counts in every case (0 jumps and 0 unexplained changes after each page's f
 path moves; the as-today entries: 1 jump after the 3 s press, 1 after the moved window); the group alone 16 of 16
 twice, and the whole suite 198 of 198. Runs 1 to 3 had no path for agent-browser's own commands (each CLI command
 ends its connection, so the front page was no bridge tab), and runs 2 and 3 one unexplained change from a
-catch-up over a scrollbar: ab-lead's decisions on points 1 and 5.
+catch-up over a scrollbar: the lead's decisions on points 1 and 5.
 
 **Covered client points (board ab-v16.76).** The own-mode pointer group passes all 19 cases.
 The added case uses two clients and both pages, with no raw-move exclusions.
@@ -638,7 +637,7 @@ The 3 s held press and the moved window each retain one jump at an actual fallba
 
 The build: (1) chrome-extension: the C10 text (the two ops, their rows, waits and key, the clock, the
 daemon's checks, the rule for `data` on an error) and C11's paragraph, with the vectors; their commit
-goes to aw-lead. (2) agentwatch (aw-lead, task age-0kh.28 after age-0kh.27): the daemon side; it can ship
+goes to the daemon lead. (2) agentwatch (the daemon lead, task age-0kh.28 after age-0kh.27): the daemon side; it can ship
 first. (3) agent-browser: the relay, the stand-in daemon's ops, the shared generator, the README rows and
 the live check; agentwatch's relay pin moves after this merges and its live check passes. Two build
 points: `Bridge.answer` drops `data` on an error answer today, and the relay needs `pointer moved`'s
@@ -649,7 +648,7 @@ The limits:
 
 - Each activation that brings a page under the pointer costs a path of 0.3 to 1.5 s, and a catch-up costs
   as long once after it (section 3, the limits of the step).
-- **A position across scopes** (review-63b note 17; ab-lead accepts it as a residue): the front page can
+- **A position across scopes** (review-63b note 17; the lead accepts it as a residue): the front page can
   be a page of another scope or an operator tab. It sees the path's end, which is the entering page's last
   point, and a page that enters with no path enters at the last path's end. So the pages of one scope can
   learn where a page of another scope last saw the pointer: a position only, no content. Today over the
@@ -671,9 +670,9 @@ The limits:
   lies there now. On the agent browser's Xvfb only the relay and the receiver place windows. A window that
   comes on top during a path with no step (a popup) is the same class (section 5, "Not covered").
 
-## 9. Questions for aw-lead (the daemon side)
+## 9. Questions for the daemon lead (the daemon side)
 
-None is open. aw-lead answered questions 1 to 6 (mail m98c6f1f) and 7 to 9 (mail m2933af4: the kills,
+None is open. The daemon lead answered questions 1 to 6 (mail m98c6f1f) and 7 to 9 (mail m2933af4: the kills,
 the limits, the error with `data`), and chose form (a) for the place check (mail md133a6e: the relay
 sends `at`, the daemon keeps no state). The answers are in sections 2 and 4. The build adds the measured
 accuracy of `xdotool sleep` (section 7) to section 2.

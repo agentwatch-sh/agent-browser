@@ -53,7 +53,7 @@ python3 bench_walk.py; node bench_walk.mjs; python3 proc_fd_pipe.py
 
 ## The runs of record (`results/`)
 
-- `shapes-run1*.jsonl|txt`, `shapes-run2*`: tmux server `peer-design` started with no D-Bus
+- `shapes-run1*.jsonl|txt`, `shapes-run2*`: the probe tmux server started with no D-Bus
   address, so tmux could not give its panes a scope: both panes stayed in the server's cgroup. The
   walk results. Run 1 holds the other session's case (pane B names scope A).
 - `shapes-run3*`: tmux server `peer-design2` with the user's D-Bus: each pane in its own

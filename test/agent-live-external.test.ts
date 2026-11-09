@@ -26,7 +26,7 @@ const SOCKETS = new Set([LIVE, "/tmp/t/run/browser-cdp.sock", `/run/user/${UID}/
  *  executable. */
 const box = {
   uid: UID,
-  home: "/home/u",
+  home: "/example/u",
   realpath: (p: string) => {
     if (p === "/tmp/link/none.sock" || p === "/tmp/dead.sock" || p.startsWith("/tmp/gone")) return null;
     if (p === "/tmp/l.sock") return LIVE;
@@ -94,7 +94,7 @@ test("the external mode refuses a path that the ws+unix URL changes, and a hard 
   assert.match(refused({ RELAY_SOCK: "/tmp/hard2.sock", CONTROL: "/tmp/ctl" }), /^refused: .* is the same file as a socket of the live daemon/);
   // agentwatch's other socket folders: the gateway's, and the macOS one (runtime_paths.py).
   assert.match(refused({ RELAY_SOCK: "/run/agentwatch/x.sock", CONTROL: "/tmp/ctl" }), /^refused: .* live daemon's socket folder/);
-  assert.match(refused({ RELAY_SOCK: "/home/u/.cache/agentwatch/run/browser-cdp.sock", CONTROL: "/tmp/ctl" }), /^refused: .* live daemon's socket folder/);
+  assert.match(refused({ RELAY_SOCK: "/example/u/.cache/agentwatch/run/browser-cdp.sock", CONTROL: "/tmp/ctl" }), /^refused: .* live daemon's socket folder/);
 });
 
 test("a socket path is kept by the ws+unix URL only when it has plain characters and the URL gives it back", () => {

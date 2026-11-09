@@ -15,6 +15,8 @@
 // 360, part "worker"). It starts its own Xvfb and Chromium and stops only those, by the pids that it recorded. It
 // uses *.localhost hosts on 127.0.0.1 only. It writes <RUN>/results.json and logs in <RUN>/logs. It deletes nothing.
 
+import { harnessGuard, reservedDisplay } from "../../../../test/live/guard.ts";
+
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -35,6 +37,9 @@ if (!process.env.CHROME_EXTENSION || !process.env.RUN || !existsSync(join(EXT, "
 }
 const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 const DISPLAY_N = Number(process.env.DISPLAY_N ?? 137);
+if (!Number.isInteger(DISPLAY_N) || DISPLAY_N < 1) { process.stderr.write("DISPLAY_N is a positive whole number\n"); process.exit(2); }
+const reserved = reservedDisplay(DISPLAY_N, "DISPLAY_N");
+if (reserved) { process.stderr.write(`${reserved}\n`); process.exit(2); }
 const PORT = Number(process.env.PORT ?? 8793);
 const IDLE_S = Number(process.env.IDLE_S ?? 360);
 const A = `http://a.localhost:${PORT}`;
@@ -43,6 +48,8 @@ const PROFILE = join(RUN, "profile");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
 const now = () => Date.now() - t0;
+
+const harness = await harnessGuard("documentation probe");
 
 mkdirSync(join(RUN, "logs"), { recursive: true });
 mkdirSync(join(RUN, "home"), { recursive: true });
@@ -99,6 +106,7 @@ class Daemon {
   startRelay(): void {
     if (!this.withRelay) return;
     const relay = spawn(process.execPath, [join(ROOT, "bin/agent-browser.js"), "relay", "--socket", RELAY_SOCK], { stdio: ["pipe", "pipe", "pipe"] });
+    harness.track(relay.pid, "relay");
     this.relay = relay;
     createInterface({ input: relay.stdout! }).on("line", (line) => this.fromRelay(line));
     createInterface({ input: relay.stderr! }).on("line", (l) => logLine("relay.log", l));
@@ -239,6 +247,7 @@ const xauth = join(RUN, "xauth");
 writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.alloc(0)), field(Buffer.from(String(DISPLAY_N))), field(Buffer.from("MIT-MAGIC-COOKIE-1")), field(randomBytes(16))]), { mode: 0o600 });
 if (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`)) throw new Error(`display :${DISPLAY_N} is taken`);
 const xvfb = spawn("Xvfb", [`:${DISPLAY_N}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1280x900x24"], { stdio: ["ignore", openSync(join(RUN, "logs/xvfb.log"), "a"), openSync(join(RUN, "logs/xvfb.log"), "a")] });
+harness.track(xvfb.pid, "Xvfb");
 pids.xvfb.push(xvfb.pid!);
 for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`); i++) await sleep(200);
 
@@ -253,6 +262,7 @@ function startChromium(withPipe: boolean): ChildProcess {
     "--window-position=0,0", "--window-size=1280,900", "--disable-backgrounding-occluded-windows", ...(withPipe ? ["--remote-debugging-pipe"] : []), "about:blank"],
   { env: { PATH: "/usr/bin:/bin", HOME: join(RUN, "home"), LANG: "en_US.UTF-8", DISPLAY: `:${DISPLAY_N}`, XAUTHORITY: xauth },
     stdio: withPipe ? ["ignore", out, out, "pipe", "pipe"] : ["ignore", out, out] });
+  harness.track(c.pid, "Chromium");
   pids.chromium.push(c.pid!);
   chromium = c;
   if (withPipe) pipe = new Pipe(c);

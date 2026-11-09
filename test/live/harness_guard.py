@@ -29,7 +29,7 @@ A harness that a harness started (for example the second part of anti-detect/mac
 its parent holds: the client sets HARNESS_GUARD_HELD=<guard pid> after "locked", and a guard whose environment names
 the lock's holder, while the holder's driver is an ancestor of its own driver, does not take the lock ("nested").
 
-The agents' outer lock (/home/selden/.cache/ab-lead/heavy.lock, taken by hand around a whole job) is always the outer
+The agents' outer lock (the box's shared heavy-job lock, if it has one, taken by hand around a whole job) is always the outer
 one: no harness and no guard takes it, so a process that holds the harness lock never waits for heavy.lock, and the
 two locks cannot deadlock.
 

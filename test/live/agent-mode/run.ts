@@ -1361,7 +1361,7 @@ async function scopeCases(pw: any, WebSocket: any) {
     }, { want: (x) => x.tabs.every((t: unknown) => t !== undefined) && x.closed === 2 && !x.connected && x.refused[0] === 503 && x.refused[1] === NO_LIST && x.seen === 0 && x.chromium, ms: 40_000 });
 
     // C11: this relay runs without --peer-check, so a line with session roots (a daemon with the peer check on) gives
-    // no list: the relay fails closed until a line without roots comes (ab-lead's decision for PR #58; board ab-v16.51
+    // no list: the relay fails closed until a line without roots comes (the lead's decision for PR #58; board ab-v16.51
     // adds the check itself).
     await step(G, "a line with roots: the open connection closes with 1008 and each upgrade gets the roots 503, until a line without roots comes", async () => {
       const c = await rawClient(WebSocket, "sc-roots");

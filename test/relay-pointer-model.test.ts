@@ -968,7 +968,7 @@ test("a page that answers no move: the catch-up stops at 4 unanswered moves (per
   } finally { await h.close(); }
 });
 
-// ------------------------------------------------------------------ the geometry cache (ab-lead's decision on point 1) and the content box (point 5)
+// ------------------------------------------------------------------ the geometry cache (the lead's decision on point 1) and the content box (point 5)
 
 test("a front page that is no bridge tab (its client left, as agent-browser's CLI does after each command) uses its last geometry from the relay's own read: the path plays; with no such read, no path", async () => {
   const { h, d } = await onHarness();
@@ -1481,7 +1481,7 @@ test("round 4: a client's Browser.setWindowBounds during a read is a drop event 
   } finally { await h.close(); }
 });
 
-// ------------------------------------------------------------------ round 4 (ab-lead): the drop count, Page's device metrics
+// ------------------------------------------------------------------ round 4 (the lead): the drop count, Page's device metrics
 
 test("round 4: a late read after a drop event keeps and drops nothing; a late read drops no kept geometry; the count is per tab", async () => {
   // B's read answers after its wait; a drop event came while it ran: the kept geometry stays dropped (the late usable read keeps nothing).

@@ -31,7 +31,7 @@ test("no built-in denylist: a mail, account or admin host validates and matches 
     "https://admin.example.com/", "https://bank.example.com/accounts/1", "https://dash.cloudflare.com/"])
     assert.ok(isAllowedUrl(url, entries), url);
   for (const url of ["https://mail.google.com/", "https://myaccount.google.com/", "https://example.com/", "https://webmail.example.com/",
-    "https://gmail.com.evil.io/", "https://notgmail.com/", "file:///home/x/mail", "javascript:alert(1)"])
+    "https://gmail.com.evil.io/", "https://notgmail.com/", "file:///example/x/mail", "javascript:alert(1)"])
     assert.ok(!isAllowedUrl(url, entries), `still only what the list names: ${url}`);
 });
 

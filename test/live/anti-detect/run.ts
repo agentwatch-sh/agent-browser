@@ -71,6 +71,7 @@ function refuse(message: string): never { process.stderr.write(`${message}\n`); 
 if (!values["out-dir"]) refuse("usage: node test/live/anti-detect/run.ts --out-dir DIR [--chrome /usr/bin/chromium] [--display 121] [--only a,b] [--playwright DIR]");
 if (process.platform !== "linux") refuse(`linux only, in a private Xvfb (this is ${process.platform})`);
 const CHROME = values.chrome ?? "/usr/bin/chromium", DISPLAY = Number(values.display ?? 121);
+if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse("--display is a positive whole number");
 const reserved = reservedDisplay(DISPLAY, "--display");
 if (reserved) refuse(reserved);
 const OUT = resolve(values["out-dir"]!);

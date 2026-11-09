@@ -1,6 +1,6 @@
 # Sign-in through an external provider — design
 
-Date: 2026-11-05. Status: **DRAFT for review.** Author: taylor session `auth-design`, a subagent of `ab-lead`
+Date: 2026-11-05. Status: **DRAFT for review.** Author: a taylor contributor, a subagent of the lead
 (board task ab-v16.45, under goal ab-v16). Branch `ab-v16.45-auth-provider-design` in agent-browser. Evidence: the
 probe in [2026-11-05-sign-in-provider-probe/](2026-11-05-sign-in-provider-probe/README.md), run on taylor with
 Debian Chromium 156.0.8078.79 (the agent unit's `/usr/bin/chromium`) in private Xvfb displays, with local fake
@@ -13,7 +13,7 @@ contracts C4, C5, C6, C10 and C11 of chrome-extension `docs/protocol.md` (main `
 of PR #17, merged at `052c15c`; this design's changes apply on top of them). The code that it measured:
 agent-browser main `87be973` (`src/allowlist.ts`, `src/browser.ts`, `src/relay/`; main is now `19397f1`, and this
 branch does not change those files), and the receiver of chrome-extension main `230f381` (agent package 0.2.0:
-`agent/dnr.js`, `agent/importer.js`; `agent/` is the same at `052c15c` and at `aa809ed`). ab-lead's fresh reviewer
+`agent/dnr.js`, `agent/importer.js`; `agent/` is the same at `052c15c` and at `aa809ed`). a fresh reviewer
 (review-53) ran the probe again with the same results, and ran extra cases (`review-53-extra.ts`), which sections 4,
 5 and 7 cite. No product code changes in this task.
 
@@ -69,7 +69,7 @@ allow those things."
    sign-in provider". C5 gets the provider rule, and the providers join the covered set of the closing rule and the
    guard. C11 gets `providers` in the `allowlist` line and a refusal text for a provider. The build: the contract
    PR, the receiver (in parts 1a and 1c of the per-scope build), the relay (part 2), agent-browser's own guard, and
-   agentwatch's web viewer (aw-lead).
+   agentwatch's web viewer (the daemon lead).
 
 ## 2. Words
 
@@ -316,7 +316,7 @@ What a provider flow needs in the agent browser:
 - **The frame's silent renew** needs both the provider's cookie and a third-party cookie that Chromium sends. The
   agent unit on taylor runs `/usr/bin/chromium` today (agentwatch `daemon/browser/unit.py`, `DEFAULT_CHROME`), which
   blocks them by default. The unit moves to Google Chrome stable in agentwatch's stage 4 step C; that Chrome's default
-  is not measured yet (aw-lead checks it in step C's live run). Google Chrome stable may allow third-party cookies by
+  is not measured yet (the daemon lead checks it in step C's live run). Google Chrome stable may allow third-party cookies by
   default; then the frame's silent renew works there with no change. The receiver has the `contentSettings`
   permission, so it can allow the provider's cookies in frames under the list's sites only (the `*.` rows). Without
   that, a site whose script falls back to a top-level redirect still signs in (the redirect chain above); a site that
@@ -339,7 +339,7 @@ What a provider flow needs in the agent browser:
 | A provider's page that links anywhere | Its links reach only the list's sites and providers; its frames load from any host (as a listed page's, O11) | Its links reach any host (the `excludedInitiatorDomains` form), or its own POST fails (strict form) | As a |
 | A provider shared by many sites | Its other pages (account settings, a dashboard on the same host) are open to the agent's click or script, not to its `goto`. A broad entry (`auth0.com`) covers every tenant and the provider's own site: the viewer warns. A provider that serves every customer on one host (`accounts.google.com`, `login.microsoftonline.com`, `login.live.com`, `appleid.apple.com`) has no tenant host: with such an entry the agent's own script in a listed page can use every page of that host with the operator's provider sign-in (for Google, the account's own settings). The viewer warns for these hosts too | The same, and every other host too | Its every page is open to the agent's `goto`; a broad entry covers the provider's other hosts (measured: `manage.auth0.test` under `auth0.test`) |
 | Input on the provider's page | Allowed (agent-browser's guard accepts a provider's page): the agent can choose an account, type, consent, or sign the operator out | Allowed anywhere: the input guard can no longer use the list | Allowed |
-| The build | Medium: the contract, one more DNR rule per list and the covered set (receiver), the relay's refusal text and line field (relay), agent-browser's list file and guard, the web viewer's provider entries (aw-lead) | Small in DNR (one rule), but the closing rule, the guard and agent-browser's input guard must stop using the list for pages: the list then bounds only the agent's `goto` | None |
+| The build | Medium: the contract, one more DNR rule per list and the covered set (receiver), the relay's refusal text and line field (relay), agent-browser's list file and guard, the web viewer's provider entries (the daemon lead) | Small in DNR (one rule), but the closing rule, the guard and agent-browser's input guard must stop using the list for pages: the list then bounds only the agent's `goto` | None |
 
 **Recommendation: a.** It is the operator's rule in a precise form: the agent cannot open a provider URL directly,
 and a listed site's sign-in reaches its provider and works in every measured flow, the agent's input included. Its
@@ -446,7 +446,7 @@ agent's own navigation.
 - In plain agent-browser (no DNR) this is the whole guard: Chrome still follows every site navigation anywhere
   (section 3), as today.
 - Behind `--cdp-url` agent-browser reads the list file that agentwatch gives it. For the per-scope build that file
-  must hold the session's scope's list and providers: aw-lead's part (section 9).
+  must hold the session's scope's list and providers: the daemon lead's part (section 9).
 
 ### 7.5 The web viewer and `blocked` (C4)
 
@@ -538,11 +538,11 @@ needs option a before part 1a merges. The per-scope build: the text of `set_scop
 
 | Task | Repo | What | Depends on |
 | --- | --- | --- | --- |
-| 1. The contract | chrome-extension | C4, C5, C10, C11 of section 8 for the per-scope build, the vectors (`scopes.json`, `endpoint.json`); ab-lead mails the commit to aw-lead before it merges (C4 and C5 bind agentwatch). Into the open contract work of the per-scope build if it is still open, else a small PR before part 1a | the operator's answer (choice 1) |
+| 1. The contract | chrome-extension | C4, C5, C10, C11 of section 8 for the per-scope build, the vectors (`scopes.json`, `endpoint.json`); the lead mails the commit to the daemon lead before it merges (C4 and C5 bind agentwatch). Into the open contract work of the per-scope build if it is still open, else a small PR before part 1a | the operator's answer (choice 1) |
 | 2. The receiver | chrome-extension (`agent/`) | Part 1a: the provider rule per list, the frame rule with the providers, the covered set in the closing rule and the worker removal, the removal of dynamic id 9 at the start, `blocked`'s `from`. Part 1b: the retry with the covered set. Part 1c: the guard with the covered set. With choice 2 a, the cookie content settings. Unit tests with the fake chrome; the live test of the six flows of section 3 with a provider on a list's `providers`, many times for the popups | 1; parts 1a to 1c of the per-scope build |
 | 3. The relay | agent-browser (`src/relay/`) | Part 2: `providers` in the `allowlist` line, the provider refusal of `Page.navigate` and `Target.createTarget` (in layer 1), unit tests with the fake bridge, the live test through Playwright and the MCP (the agent's `goto` of the provider refused; a site's sign-in through it works) | 1; part 2 of the per-scope build |
 | 4. agent-browser's own guard | agent-browser (`src/allowlist.ts`, `src/browser.ts`, `src/errors.ts`) | The `providers` array of the list file, the refusal of `open` and `goto`, the covered set in every other check (section 7.4), `redirectError` and the sign-in hint, README; unit tests; the live test in plain mode and over `--cdp-url` | 1 (the file format) |
-| 5. agentwatch | agentwatch (aw-lead) | The provider entries per list in the web viewer, the two warnings of section 7.5 (a broad entry; a shared host of the named list), the offer from `blocked`'s `from` (with its wording); `providers` in `set_scopes` and in the `allowlist` line; the list file of each session's agent-browser with its scope's list and providers; the send of a provider's sign-in (which list: choice 6 of the per-scope design); the skill text (a refused `goto` of a provider; how a sign-in reaches it) | 1 to 4 |
+| 5. agentwatch | agentwatch (the daemon lead) | The provider entries per list in the web viewer, the two warnings of section 7.5 (a broad entry; a shared host of the named list), the offer from `blocked`'s `from` (with its wording); `providers` in `set_scopes` and in the `allowlist` line; the list file of each session's agent-browser with its scope's list and providers; the send of a provider's sign-in (which list: choice 6 of the per-scope design); the skill text (a refused `goto` of a provider; how a sign-in reaches it) | 1 to 4 |
 | (Today's one list, only if the operator needs a before part 1a merges) | chrome-extension, agent-browser, agentwatch | Dynamic rule 9 and rule 4 with the providers; the relay's provider refusal (today's relay has none); task 4; `set_allowlist`'s `providers` | the contract text of section 8 for `set_allowlist` |
 
 Each task: test first, a fresh reviewer per PR, no tag or publish. Option c needs none of them: the operator adds
@@ -550,7 +550,7 @@ the provider's tenant host to the list in the web viewer today.
 
 ## 10. Choices for the operator
 
-ab-lead asked these in the Needs You question ab-pbk before any build (the task's check); the text below says
+The lead asked these in the Needs You question ab-pbk before any build (the task's check); the text below says
 the same as that question.
 
 **Choice 1. How should a listed site's sign-in reach its external provider (for example Auth0), while the agent's
@@ -573,7 +573,7 @@ own navigation stays on the list?**
 silent renew in a frame works?** The agent browser's Chromium today (Debian Chromium 156) blocks third-party
 cookies by default (measured), so a site that renews its sign-in in a hidden frame loses it when the token
 expires. The agent unit moves to Google Chrome stable in agentwatch's stage 4 step C. Google Chrome stable may
-allow third-party cookies by default; aw-lead checks it in step C's live run. If it does, this choice changes
+allow third-party cookies by default; the daemon lead checks it in step C's live run. If it does, this choice changes
 nothing there.
 
 - **a. Yes, for each list's providers on that list's sites only (recommended).** A small part of the receiver's
@@ -604,7 +604,7 @@ sign-ins must work (section 5), and choice 6 of the per-scope design decides whi
   the cookies (section 5). The per-scope import rules remove that case for a domain on no list; a failure after
   step 1 for another reason still leaves the new cookies.
 - **Not measured:** Google Chrome stable (the agent unit runs Debian Chromium, `/usr/bin/chromium`, until agentwatch's
-  stage 4 step C moves it to Google Chrome stable) and its default for third-party cookies (aw-lead checks it in step
+  stage 4 step C moves it to Google Chrome stable) and its default for third-party cookies (the daemon lead checks it in step
   C's live run); a person's click (the probe's clicks are CDP clicks); the Mac; a real provider (Auth0, Okta, Google,
   Microsoft) with its own scripts, captchas, bot checks and second factors; FedCM, the Storage Access API and
   passkeys; a provider's service worker; the candidate rules with `tabIds` (the per-scope build), and the retry of a

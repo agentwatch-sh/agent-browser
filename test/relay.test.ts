@@ -516,10 +516,10 @@ test("each end of a connection has the contract's close code and reason", async 
     const big = await raw(h.url("s1"));
     big.ws!.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: "x".repeat(1000) } }));
     assert.equal((await big.closed)[0], 1009);
-    const c = await h.connect("ab-lead");
+    const c = await h.connect("my-repo");
     const { tab } = await page(h, c);
-    const scoped = await raw(h.url("ab-lead")), kept = await raw(h.url("s1"));
-    h.fake.line({ t: "end_scope", scope: "ab-lead" });
+    const scoped = await raw(h.url("my-repo")), kept = await raw(h.url("s1"));
+    h.fake.line({ t: "end_scope", scope: "my-repo" });
     assert.deepEqual(await scoped.closed, closes[1]);
     await until(() => h.fake.sent("tabs.remove").some((r) => r.args[0] === tab.id), "the removal of the scope's tab");
     h.fake.line({ t: "link", up: false });
