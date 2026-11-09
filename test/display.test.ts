@@ -236,3 +236,17 @@ test("the display gate rejects XWAYLAND without WAYLAND_DISPLAY or a window mana
     assert.equal((await displayOf(s, false, { ...deps, xdpyinfo: noXwayland })).own, true, "a complete list without XWAYLAND passes");
   } finally { c.remove(); }
 });
+
+
+test("the display gate matches the exact XWAYLAND extension name", async () => {
+  const c = consumer();
+  try {
+    const s = resolveOptions(c.options({ platform: "linux" }));
+    const info = await displayOf(s, false, {
+      pid: () => 4242, env: () => ({ DISPLAY: ":42" }), runner: () => fakeX({ 10: "4242" }).x, xprop: noWm,
+      xdpyinfo: () => async () => "number of extensions: 3\n    XTEST\n    XWAYLAND-EXT\n    NOT_XWAYLAND\ndefault screen number: 0\n",
+    });
+    assert.equal(info.own, true, "similar extension names do not identify XWayland");
+    assert.ok(info.x, "the accepted display keeps its pointer access");
+  } finally { c.remove(); }
+});

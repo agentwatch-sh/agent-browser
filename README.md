@@ -235,10 +235,13 @@ person's input**) and `log` (progress lines; default standard error).
     for a minute for the same Chrome pid (`display.json` in the state folder); in that minute
     `/proc/<pid>/cmdline` of the kept pid stands in for `ps`. Elsewhere (another program's window on
     the display, a window manager, a Wayland session, XWayland, no xdotool, no xprop or no xdpyinfo,
-    an endpoint that another program started, a check that fails) every page opens and is driven as before, in a background tab,
-    and a log line says why, at most once in 5 minutes, at the first command that opens or attaches a
-    page (`tabs`, `status` and `window` give none). No test runner skips the check: a test gives its
+    an endpoint that another program started, a check that fails) every page opens and is driven as
+    before, in a background tab, and a log line says why, at most once in 5 minutes, at the first command
+    that opens or attaches a page (`tabs`, `status` and `window` give none). No test runner skips the
+    check: a test gives its
     own answer (the internal `display` option).
+    **Linux requirements:** The display gate needs `xdotool`, `xprop` and `xdpyinfo`.
+    Debian/Ubuntu provides `xprop` and `xdpyinfo` in `x11-utils`. Missing tools keep background tabs.
   - **A window page behind another tab of its window** is hidden, as a person's background tab: the
     opener behind a site's popup tab, an older tab of a pinned window (`open` puts each new tab there),
     a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.
@@ -907,7 +910,6 @@ so it needs an OS tool, which is a documented prerequisite, not an npm dependenc
   Settings → Privacy & Security → Accessibility) for the process that runs `osascript`. Without the grant
   it fails safe with `-25211` and approves nothing. In a headless `tmux`/`launchd` session there may be no
   terminal app to grant, so the macOS approver suits an attended Mac or a session launched under a granted app.
-- **Linux requirements:** The display gate needs `xdotool`, `xprop` and `xdpyinfo`. Debian/Ubuntu provides `xprop` and `xdpyinfo` in `x11-utils`. Missing tools keep background tabs.
 - **Linux** (`approve: "xdotool"` / `approve: true`): sends `Tab` then `Return` (the dialog opens with
   focus on "Cancel"; one `Tab` moves it to "Allow"). Needs `xdotool` and a display. This relies on the
   dialog's focus order, so pin the Chrome/Chromium version. Verified on Chromium 156.
