@@ -98,9 +98,9 @@ test("an endpoint scope's folder name: the scope, a capital letter as + and its 
   // The relay's scope, agent-browser's endpoint scope and the tab scope are one pattern.
   assert.equal(ENDPOINT_SCOPE_RE.source, SCOPE.source);
   assert.equal(ENDPOINT_SCOPE_RE.source, TAB_SCOPE_RE.source);
-  assert.equal(scopeFolderName("ab-lead"), "ab-lead");
+  assert.equal(scopeFolderName("my-repo"), "my-repo");
   assert.equal(scopeFolderName("a.b_c-9"), "a.b_c-9");
-  assert.equal(scopeFolderName("Ab-Lead"), "+ab-+lead");
+  assert.equal(scopeFolderName("My-Repo"), "+my-+repo");
   // On a disk that ignores case (the Mac's), two scopes that differ only in case still get two folders: no folder name
   // has a capital letter, and no two scopes get one name.
   const names = ["ab", "Ab", "aB", "AB", "a+b", "x".repeat(64), "X".repeat(64)].filter((s) => ENDPOINT_SCOPE_RE.test(s)).map(scopeFolderName);
@@ -112,9 +112,9 @@ test("an endpoint scope's folder name: the scope, a capital letter as + and its 
   // The endpoint scope comes from cdpUrl only; with no cdpUrl (the proxy, a direct Chrome) the record stays in the state folder.
   const c = consumer();
   try {
-    const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/Ab-Lead";
-    assert.equal(endpointScope(resolveOptions(c.options({ cdpUrl: good }))), "Ab-Lead");
-    assert.equal(recordDir(resolveOptions(c.options({ cdpUrl: good }))), join(c.stateDir, ENDPOINT_SCOPES_DIR, "+ab-+lead"));
+    const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/My-Repo";
+    assert.equal(endpointScope(resolveOptions(c.options({ cdpUrl: good }))), "My-Repo");
+    assert.equal(recordDir(resolveOptions(c.options({ cdpUrl: good }))), join(c.stateDir, ENDPOINT_SCOPES_DIR, "+my-+repo"));
     assert.equal(endpointScope(resolveOptions(c.options())), undefined);
     assert.equal(recordDir(resolveOptions(c.options())), c.stateDir);
     assert.equal(recordDir(resolveOptions(c.options({ endpoint: "ws://127.0.0.1:9/devtools/browser/x" }))), c.stateDir);

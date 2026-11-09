@@ -2,6 +2,8 @@
 // Xvfb and Chromium processes that the probe starts itself. It stops only the processes that it started, by the pids
 // that it recorded (results: pids). It deletes nothing.
 
+import { harnessGuard, reservedDisplay } from "../../../../test/live/guard.ts";
+
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
@@ -12,11 +14,16 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const CHROMIUM = process.env.CHROMIUM ?? "/usr/bin/chromium";
 export const PORT = Number(process.env.PORT ?? 8461);
 export const DISPLAY_N = Number(process.env.DISPLAY_N ?? 145);
+if (!Number.isInteger(DISPLAY_N) || DISPLAY_N < 1) { process.stderr.write("DISPLAY_N is a positive whole number\n"); process.exit(2); }
+const reserved = reservedDisplay(DISPLAY_N, "DISPLAY_N");
+if (reserved) { process.stderr.write(`${reserved}\n`); process.exit(2); }
 export const RUN = resolve(process.env.RUN ?? "");
 if (!process.env.RUN) { process.stderr.write("usage: RUN=<empty folder> PART=... node probe.ts\n"); process.exit(2); }
 export const S = `https://site.test:${PORT}`, P = `https://tenant.auth0.test:${PORT}`, M = `https://manage.auth0.test:${PORT}`, O = `https://other.test:${PORT}`;
 const t0 = Date.now();
 export const now = () => Date.now() - t0;
+
+const harness = await harnessGuard("documentation probe");
 
 mkdirSync(join(RUN, "logs"), { recursive: true });
 mkdirSync(join(RUN, "home"), { recursive: true });
@@ -40,6 +47,7 @@ export async function startXvfb(): Promise<void> {
   if (existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`) || existsSync(`/tmp/.X${DISPLAY_N}-lock`)) throw new Error(`display :${DISPLAY_N} is taken`);
   const out = openSync(join(RUN, "logs/xvfb.log"), "a");
   const x = spawn("Xvfb", [`:${DISPLAY_N}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1280x900x24"], { stdio: ["ignore", out, out] });
+  harness.track(x.pid, "Xvfb");
   pids.xvfb.push(x.pid!);
   children.push(x);
   for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`); i++) await sleep(200);
@@ -57,6 +65,7 @@ export function chromiumArgs(profile: string, extra: string[]): string[] {
 export function startChromium(args: string[], o: { pipe?: boolean } = {}): ChildProcess {
   const out = openSync(join(RUN, "logs/chromium.log"), "a");
   const c = spawn(CHROMIUM, args, { env: xenv(), stdio: o.pipe ? ["ignore", out, out, "pipe", "pipe"] : ["ignore", out, out] });
+  harness.track(c.pid, "Chromium");
   pids.chromium.push(c.pid!);
   children.push(c);
   return c;
@@ -71,7 +80,7 @@ export async function stopChild(c: ChildProcess): Promise<void> {
   c.kill("SIGKILL");
   await Promise.race([gone, sleep(2000)]);
 }
-export function track(c: ChildProcess): ChildProcess { children.push(c); return c; }
+export function track(c: ChildProcess): ChildProcess { children.push(c); harness.track(c.pid, "child"); return c; }
 export async function stopAll(): Promise<void> {
   for (const c of [...children].reverse()) await stopChild(c);
   await new Promise<void>((r) => site.server.close(() => r()));

@@ -1,7 +1,7 @@
 # Orphan agent tabs — design
 
-Date: 2026-11-05. Status: **Reviewed** (ab-lead's fresh reviewers, review-48 and review-48b). Author:
-taylor session `orphan`, a subagent of `ab-lead` (board task ab-v16.39, under goal ab-v16). Branch
+Date: 2026-11-05. Status: **Reviewed** (the fresh reviewers, review-48 and review-48b). Author:
+a taylor contributor, a subagent of the lead (board task ab-v16.39, under goal ab-v16). Branch
 `ab-v16.39-orphan-tabs` in agent-browser. Evidence: the probe in
 [2026-11-05-orphan-agent-tabs-probe/](2026-11-05-orphan-agent-tabs-probe/README.md), run on taylor with
 Debian Chromium 156.0.8078.79 in a private Xvfb, against the receiver of chrome-extension main `27543ce`
@@ -10,12 +10,12 @@ Debian Chromium 156.0.8078.79 in a private Xvfb, against the receiver of chrome-
 This design builds on the per-scope allowlist design
 ([2026-11-04-per-scope-allowlist-design.md](2026-11-04-per-scope-allowlist-design.md), sections 5, 7, 8
 and 12) and on the blocks marked "Target (board ab-v16.23)" in C4, C5, C10 and C11 of chrome-extension
-`docs/protocol.md` (main `27543ce`). A given, from ab-lead (2026-11-05): aw-lead agrees with option a, and
+`docs/protocol.md` (main `27543ce`). A given, from the lead (2026-11-05): the daemon lead agrees with option a, and
 a short link drop must not close the tabs of live sessions. No code changes in this task.
 
 ## 1. The answer in short
 
-The gap (aw-lead, mail m3230a3a, from its stage-4 B5 review): agentwatch writes `end_scope` with every
+The gap (the daemon lead, mail m3230a3a, from its stage-4 B5 review): agentwatch writes `end_scope` with every
 name of a session at the session's end. When no relay runs at that moment (the link is down, or the
 relay restarts), the session's tabs stay open and nobody owns them. The relay's tab map is in memory
 only, and `reset()` and `onLinkUp()` empty it, so a later `end_scope` closes nothing. Section 2 gives the
@@ -54,14 +54,14 @@ measurements. The decisions, each with its reason in the section that the line n
 10. **The build (section 14).** The work goes into part 1a (receiver, ab-v16.31) and part 2 (relay,
     ab-v16.35). The contract text of section 13 goes into the contract PR (ab-v16.30) while it is open,
     else into a small contract PR before part 1a. The relay's detach at each link up (decision 6) and
-    a last-window guard need no new op and go into today's relay now (board ab-v16.40). aw-lead: three
+    a last-window guard need no new op and go into today's relay now (board ab-v16.40). The daemon lead: three
     daemon rules (section 15).
 
 ## 2. Today, measured
 
 The probe (part "today", two runs; part "worker", three runs; part "ids") drives the relay of this
 checkout through a stand-in daemon, and the receiver 0.2.0 in its own Chromium. Each line names its
-probe case. ab-lead's reviewer ran the probe again (review-48: the same results) and two checks of its
+probe case. A reviewer ran the probe again (review-48: the same results) and two checks of its
 own (its rows name "review-48").
 
 | What | Today | Case |
@@ -87,7 +87,7 @@ own (its rows name "review-48").
   which tabs agents opened (its model is in memory only), and which scopes are live (today's `allowlist`
   line names none).
 - **b. The receiver closes the agent tabs at a link drop.** Simple, but a short link drop then closes
-  the pages of every live session. Refused (section 4; aw-lead agrees).
+  the pages of every live session. Refused (section 4; the daemon lead agrees).
 - **a′. The receiver sweeps at each `set_scopes` (chosen).** The receiver has both facts in the
   per-scope build: the map, and the live scopes of `set_scopes`.
 - **c. The daemon keeps `end_scope` lines for the next relay.** Refused: the next relay's model has no
@@ -119,7 +119,7 @@ Reasons:
   The relay's snapshot of the map (section 8) comes either after the sweep, and then it lacks the
   closed tabs, or before it, and then the bridge is open on that link, so each `tabs.onRemoved` of the
   sweep reaches the relay before the answer, and so before the `allowlist` line. Chrome fires
-  `tabs.onRemoved` before the `tabs.remove` call ends (measured by ab-lead's reviewer, review-48 check
+  `tabs.onRemoved` before the `tabs.remove` call ends (measured by a reviewer, review-48 check
   X4: 20 of 20), so the receiver drops the entry and sends the event before it counts the tab. In both
   orders the relay knows that the tabs are gone before it admits a client of the new lists.
 - **"No list", not "not named".** With choice 5 b (a default list), a scope that `scopes` does not name
@@ -141,7 +141,7 @@ Reasons:
 **Why not option b.** Link drops are short and frequent: a daemon restart (3.1 to 4.1 s from the drop to a
 ready relay with a 3 s gap, case A), a native host that ends (1.1 s, case A2). Option b would close the
 pages of every live session at each of them and lose their state: a filled form, a sign-in that runs, a
-page that took many steps to reach. aw-lead agrees that a short link drop must not close them.
+page that took many steps to reach. The daemon lead agrees that a short link drop must not close them.
 
 **Why not the relay as the sweeper.** The relay would need the receiver's map anyway, and the live
 scopes from its `allowlist` line, and it sweeps only while it runs. The receiver needs neither.
@@ -270,7 +270,7 @@ the browser's last window.
   covers the relay's `end_scope`, a client's `Target.closeTarget` (Playwright's `page.close()`), and
   the sweep, which is a part of the closing rule.
 - **One removal at a time.** The `tabs.remove` op, the closing rule and the sweep run in one queue in
-  the receiver: one query and its removals at a time. Measured by ab-lead's reviewer (review-48, check
+  the receiver: one query and its removals at a time. Measured by a reviewer (review-48, check
   X2b): two guarded removals at the same time each read two tabs, neither opened a tab first, and
   Chromium ended (exit 0); one at a time kept it running (X2).
 - Before part 1a, today's relay keeps the last window with today's ops (board ab-v16.40,
@@ -354,7 +354,7 @@ every live session.
 Reasons:
 
 - A scope that this `set_scopes` leaves out loses its tabs. So the daemon sends it only after it has
-  read its sessions (aw-lead, section 15).
+  read its sessions (the daemon lead, section 15).
 - A session that ended while the daemon was down is not in that `set_scopes`, so its tabs close then.
   It needs no `end_scope`, and the daemon's rule "the lines are not kept" stays right.
 
@@ -367,7 +367,7 @@ Reasons:
   earlier run's pages open again, in new tabs with new ids, and load again (measured, E3). They are
   tabs of no scope: blocked, not seen by any connection, never closed by the sweep. C5's closing rule
   closes those whose host no list covers. A limit (section 16). A unit that writes `"session":
-  {"restore_on_startup": 5}` into the profile's preferences at each start would prevent them. aw-lead
+  {"restore_on_startup": 5}` into the profile's preferences at each start would prevent them. The daemon lead
   declined that (mail m9e1ad35): it would override the operator's own setting. If the limit ever
   matters, it is an operator decision (section 15).
 - **An extension reload.** Not measured: `chrome.runtime.reload()` left the receiver disabled in the
@@ -518,17 +518,17 @@ The work fits into parts that exist; it adds no new part. Each row adds its line
 
 | Part | What this design adds | Tests |
 | --- | --- | --- |
-| Contract (ab-v16.30, open) | The text of section 13 and its vectors. If ab-v16.30 merges first: a small contract PR "ab-v16.39 contract" before part 1a. Before it merges, ab-lead mails aw-lead its commit (C4 is a daemon rule). | `npm test` (the vectors) |
+| Contract (ab-v16.30, open) | The text of section 13 and its vectors. If ab-v16.30 merges first: a small contract PR "ab-v16.39 contract" before part 1a. Before it merges, the lead mails the daemon lead its commit (C4 is a daemon rule). | `npm test` (the vectors) |
 | 1a. Rules and map (ab-v16.31) | The map and the scope rules kept at each link change (in place of "its reset at each link change"); the `storage` permission and the copy in `chrome.storage.session`, one key per tab, written with the rule update; its restore at the worker's start before the native port connects, and the handlers that wait for it; the sweep at `set_scopes` (none for a bad `scopes` or `lists`); the check of each new entry and the error `no list for this scope`; the kept entries of `TOMBSTONE_MS`; the window rule in `tabs.remove` and the one queue of removals; the op `bridge.tabScopes`. | Unit tests with the fake chrome (it needs `storage.session`), also: two removals at the same time keep the last window; an event that starts the worker waits for the restore. The live test: a tab of scope S stays over a link drop and keeps its rule; after a `set_scopes` without S it closes; then a `tabs.create` of S gets the error; a tab of no scope and the restore tab stay; the last window stays, also with two removals at the same time. |
 | 1b. Popups and the retry (ab-v16.32) | A popup of a scope with no list closes at once; a popup of an opener that left the map takes the kept entry. | Its live test also measures the delay of `bridge.tabScope` with the write of the copy in place. |
 | 2. The relay (ab-v16.35) | Steps 2 and 3 of section 8 (`bridge.tabScopes`, the entries added at once, the target ids, the drop of closed tabs) and readiness after them; the error `no list for this scope` passed to the client of `Target.createTarget`. | Unit tests with the fake bridge (a snapshot with events before, between and after the steps); the live test of the task: a session ends while the relay is down, the relay starts, and its tabs close; a live session's tabs survive a link drop, and a client that connects again sees them. |
 | Today's relay (ab-v16.40, chrome-extension PR #16 for its text) | Steps 3 and 4 of section 8 without step 2: the detach of every attached tab at each link up; the last-window guard of section 7 with today's ops, one at a time; the three items of today's text. It matters when agentwatch's stage 4 (ab-v16.7) ships agent mode before the per-scope build. | Unit tests with the fake bridge; the probe's cases B and F, and review-48's X2b: after a relay restart the page's `fetch()` loads; after `end_scope` of the last window Chromium still runs, also with two removals at the same time. |
 
 Folding into 1a costs less than a part of its own: 1a would otherwise build the map's reset at each
-link change, and the next part would take it out again. If ab-lead wants 1a to stay as it is, the 1a
+link change, and the next part would take it out again. If the lead wants 1a to stay as it is, the 1a
 and 2 rows above make one small receiver part and one small relay part after them, with the same tests.
 
-## 15. What needs aw-lead (the daemon)
+## 15. What needs the daemon lead (the daemon)
 
 1. **The first `set_scopes` on each connection names every live session.** After a daemon start, the
    daemon sends it only after it has read its sessions. A partial `scopes` closes the tabs of the
@@ -543,11 +543,11 @@ and 2 rows above make one small receiver part and one small relay part after the
 4. `end_scope` stays as today; no queue for a relay that is not running.
 5. The stage-4 note of the gap can go when the parts of section 14 are pinned.
 6. Declined: the unit writes `"session": {"restore_on_startup": 5}` at each start, so "Continue
-   where you left off" cannot bring back tabs of no scope (section 11). The reason (aw-lead, mail
+   where you left off" cannot bring back tabs of no scope (section 11). The reason (the daemon lead, mail
    m9e1ad35): it would override the operator's own setting. If that limit ever matters, it is an
    operator decision.
 
-aw-lead's agreement (mail m9e1ad35, through ab-lead, after review-48): it agrees with rules 1 to 5 and
+The daemon lead's agreement (mail m9e1ad35, through the lead, after review-48): it agrees with rules 1 to 5 and
 declines rule 6. What it says for the daemon:
 
 - The first `set_scopes` on each connection goes after the daemon's first complete read of its
@@ -558,7 +558,7 @@ declines rule 6. What it says for the daemon:
 - `end_scope` stays as today, with no queue.
 - Its B7 documents the gap until parts 1a, 2 and 3 are pinned together.
 
-aw-lead's answer for a session that ended while the daemon was down (mail m1c19e2a, through ab-lead,
+The daemon lead's answer for a session that ended while the daemon was down (mail m1c19e2a, through the lead,
 after review-48):
 
 - **Rule 2 holds over a daemon restart, with no daemon memory.** No agentwatch session launches while
@@ -571,7 +571,7 @@ after review-48):
   restart. With choice 5 a (`default` `null`, as ab-8zv assumes) that does not matter: a scope that
   `set_scopes` does not name has no list, so the sweep closes its tabs. With choice 5 b the daemon
   would need the scopes of the receiver's map at each link up (from `bridge.tabScopes`, or a field in
-  an answer) and would send `null` for each of them that is no live session. aw-lead prefers 5 a and
+  an answer) and would send `null` for each of them that is no live session. The daemon lead prefers 5 a and
   no daemon file, and builds that read in part 3 only if the operator takes 5 b.
 
 ## 16. The limits
@@ -588,7 +588,7 @@ after review-48):
   (section 5).
 - With choice 5 b (a default list), a scope that ended while the daemon was down is not named after
   the restart, so it falls back to the default list, and the sweep does not close its tabs. Only the
-  map read of section 15 closes that gap, and aw-lead builds it only if the operator takes 5 b. With
+  map read of section 15 closes that gap, and the daemon lead builds it only if the operator takes 5 b. With
   choice 5 a (assumed, ab-8zv) the gap does not exist.
 - A popup whose opener left the map more than `TOMBSTONE_MS` before, or whose opener the map never
   held, gets no scope: it fails closed, no connection sees it, and the sweep never closes it (section

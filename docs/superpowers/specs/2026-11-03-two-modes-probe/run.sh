@@ -8,10 +8,23 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 : "${PW_DIR:?set PW_DIR}"
 : "${RUN:?set RUN to an empty scratch folder}"
 DISPLAY_N="${DISPLAY_N:-117}"
+reserved_display() {
+  case "$1" in 0|90|147|190|191|192) echo "DISPLAY_N names :$1, a reserved display" >&2; exit 2 ;; esac
+  [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "DISPLAY_N is a positive whole number" >&2; exit 2; }
+}
+reserved_display "$DISPLAY_N"
 # A Unix socket path holds at most 107 bytes, so the socket lives in the runtime folder.
 SOCK="${SOCK:-${XDG_RUNTIME_DIR:-/tmp}/ab-v16-probe-$$.sock}"
 RES="$HERE/results"
-mkdir -p "$RUN" "$RES" "$RUN/home/Downloads" "$RUN/dl" "$RUN/mcp-out"
+mkdir -p "$RUN/pids"
+# The guard owns the harness lock and records this driver's tree, including its server and relay.
+if ! python3 -I -B "$HERE/../../../../test/live/harness_guard.py" --name documentation-probe --driver "$$" --pid-dir "$RUN/pids" --log "$RUN/guard.log" >"$RUN/guard.answer"; then
+  cat "$RUN/guard.answer" >&2
+  exit 2
+fi
+read -r mode guard _ <"$RUN/guard.answer"
+[[ "$mode" = locked || "$mode" = nested ]] || { cat "$RUN/guard.answer" >&2; exit 2; }
+mkdir -p "$RES" "$RUN/home/Downloads" "$RUN/dl" "$RUN/mcp-out"
 chmod 700 "$RUN"
 cp -r "$HERE/ext" "$RUN/ext"           # Chromium writes _metadata/ into the folder
 # NO_FRAME_GUARD=1 is the control run: it leaves out the frame rule (id 3) of the copy.
@@ -46,18 +59,18 @@ PIDS=()
 cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
 
-Xvfb ":$DISPLAY_N" -nolisten tcp -auth "$RUN/xauth" -screen 0 1280x900x24 >"$RUN/xvfb.log" 2>&1 & PIDS+=($!)
+Xvfb ":$DISPLAY_N" -nolisten tcp -auth "$RUN/xauth" -screen 0 1280x900x24 >"$RUN/xvfb.log" 2>&1 & PIDS+=($!); echo "$!" >"$RUN/pids/xvfb"
 for _ in $(seq 1 20); do [ -S "/tmp/.X11-unix/X$DISPLAY_N" ] && break; sleep 0.25; done
 [ -S "/tmp/.X11-unix/X$DISPLAY_N" ] || { echo "Xvfb did not start" >&2; exit 1; }
-SITE_LOG="$RUN/site-log.jsonl" node "$HERE/site.mjs" & PIDS+=($!)
-PW_DIR="$PW_DIR" RELAY_SOCK="$SOCK" RELAY_LOG="$RUN/relay-log.jsonl" node "$HERE/relay.mjs" & PIDS+=($!)
+SITE_LOG="$RUN/site-log.jsonl" node "$HERE/site.mjs" & PIDS+=($!); echo "$!" >"$RUN/pids/site"
+PW_DIR="$PW_DIR" RELAY_SOCK="$SOCK" RELAY_LOG="$RUN/relay-log.jsonl" node "$HERE/relay.mjs" & PIDS+=($!); echo "$!" >"$RUN/pids/relay"
 sleep 1
 
 env -i PATH="$PATH" HOME="$RUN/home" LANG=en_US.UTF-8 DISPLAY=":$DISPLAY_N" XAUTHORITY="$RUN/xauth" \
   /usr/bin/chromium --user-data-dir="$RUN/profile" --no-first-run --no-default-browser-check \
   --password-store=basic --load-extension="$RUN/ext" --silent-debugger-extension-api \
   --enable-unsafe-swiftshader --lang=en-US --window-position=0,0 --window-size=1280,900 about:blank \
-  >"$RUN/chromium.log" 2>&1 & PIDS+=($!)
+  >"$RUN/chromium.log" 2>&1 & PIDS+=($!); echo "$!" >"$RUN/pids/chromium"
 
 for _ in $(seq 1 60); do
   if curl -s http://127.0.0.1:8790/status | grep -q '"extension":true'; then break; fi

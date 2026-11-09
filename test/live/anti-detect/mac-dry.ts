@@ -7,7 +7,7 @@
 // it with the run's own Xauthority). It never touches another program's process or display.
 //
 //   node test/live/anti-detect/mac-dry.ts --out-dir DIR [--display 211] [CASE ...]
-//     (on taylor under ab-lead's heavy-job lock: flock /home/selden/.cache/ab-lead/heavy.lock timeout 1200 node ...)
+//     (under the box's shared heavy-job lock, if it has one, around the whole job)
 //
 // CASE (default all, in this order): plain, key (a key 20 s in), gap (a key between the two parts: the stable part's
 // stand-in gives a key at the middle of the gap, so it is shorter than the gap for any gap), refuse (a HID

@@ -46,7 +46,7 @@ ab-v16.45). No file here is part of `npm test`.
   site's silent renew in a frame, with Chromium's default settings and with each way that an extension can allow
   the provider's cookie in a frame.
 - `tables.ts`: the tables of the design's section 4 from `results/initiator.json`.
-- `review-53-extra.ts` (ab-lead's fresh reviewer, review-53): navigations to the provider from a `data:` page, from
+- `review-53-extra.ts` (a fresh reviewer, review-53): navigations to the provider from a `data:` page, from
   an `about:blank` tab and window that the extension made, a `meta` refresh, a sandboxed frame's top navigation,
   the retry's `chrome.tabs.reload` of a blocked popup, and the content setting patterns of choice 2. review-53 ran
   it from its own worktree of this folder; the copy here takes the folder from its own path, and nothing else
@@ -57,7 +57,7 @@ RUN=<empty folder> node initiator.ts                       # REPS=2: 3 trials of
 CHROME_EXTENSION=<a detached chrome-extension worktree> PLAYWRIGHT=<a folder with node_modules/playwright-core@1.64.1> \
   RUN=<empty folder> DISPLAY_N=146 PORT=8462 node agent.ts  # CASES=pw,ab,beam
 RUN=<empty folder> DISPLAY_N=148 PORT=8464 DEBUG_PORT=9462 node plain.ts
-RUN=<empty folder> DISPLAY_N=147 PORT=8463 node cookies.ts
+RUN=<empty folder> DISPLAY_N=167 PORT=8463 node cookies.ts
 node tables.ts results/initiator.json
 RUN=<empty folder> DISPLAY_N=... PORT=... node review-53-extra.ts
 ```
@@ -85,7 +85,7 @@ debugging port. Their results are not used.
 
 ## Not measured
 
-Google Chrome stable (agentwatch's stage 4 step C moves the agent unit to it; aw-lead checks its third-party cookie
+Google Chrome stable (agentwatch's stage 4 step C moves the agent unit to it; the daemon lead checks its third-party cookie
 default in step C's live run); a person's click (the probe's clicks are CDP clicks); the Mac; a real provider (Auth0, Okta, Google, Microsoft) and its own scripts, captchas and
 bot checks; FedCM and the Storage Access API; a provider's service worker; the per-scope build itself (no code of
 it exists yet: the candidate rules of part "initiator" have no `tabIds`).

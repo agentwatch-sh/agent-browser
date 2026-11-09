@@ -19,7 +19,7 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
   const end = await backByChrome(h.fake, chrome);
   try {
     await h.ready(lineOf([FIXTURE_HOST]));
-    const o = c.options({ cdpUrl: h.url("ab-lead") });
+    const o = c.options({ cdpUrl: h.url("my-repo") });
     const opened = await commands.open(o, { url: fx.base, name: "main" });
     assert.equal(opened.tab.name, "main");
     assert.match((await commands.text(o, { tab: "main" })).text, /Fixture page/);
@@ -29,7 +29,7 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     // On Linux the page has a window of its own, the relay answers focus emulation itself, and agent-browser's click
     // brings the page's window forward itself (Page.bringToFront, ab-v16.26), so the relay's own window focus before a
     // press (ab-v16.28) finds the window focused and sends none.
-    assert.deepEqual(h.fake.sent("windows.create").map((r) => r.args), [[{ url: "about:blank", focused: false }, "ab-lead"]]);
+    assert.deepEqual(h.fake.sent("windows.create").map((r) => r.args), [[{ url: "about:blank", focused: false }, "my-repo"]]);
     assert.deepEqual(h.fake.sent("tabs.create"), []);
     assert.ok(!chrome.calls.some((x) => x.method === "Emulation.setFocusEmulationEnabled"), "focus emulation reached Chrome");
     const win = chrome.pages.get(opened.tab.targetId)!.windowId;
@@ -38,7 +38,7 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), []);
     assert.equal((await commands.tabs(o)).tabs.length, 1);
     const status = await commands.status(o);
-    assert.deepEqual([status.connected, status.proxy, status.allowedTabs, status.profileDir, status.target], [true, null, 1, null, `agent mode's endpoint ${h.url("ab-lead")}`]);
+    assert.deepEqual([status.connected, status.proxy, status.allowedTabs, status.profileDir, status.target], [true, null, 1, null, `agent mode's endpoint ${h.url("my-repo")}`]);
     // The tab is in the endpoint's scope: another scope's connection does not see it.
     const other = await h.connect("s2");
     assert.deepEqual((await other.send("Target.getTargets")).targetInfos, []);
@@ -60,7 +60,7 @@ test("open --tab over the endpoint (Linux): the relay opens a window, so agent-b
   const end = await backByChrome(h.fake, chrome);
   try {
     await h.ready(lineOf([FIXTURE_HOST]));
-    const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
+    const o = c.options({ cdpUrl: h.url("my-repo"), platform: "linux" });
     const opened = await commands.open(o, { url: fx.base, name: "t", tab: true });
     const page = chrome.pages.get(opened.tab.targetId)!;
     assert.notEqual(page.windowId, 1, "a window of its own");
@@ -78,10 +78,10 @@ test("the fake receiver's tabs have the fake Chrome's front state: a tab behind 
   const end = await backByChrome(h.fake, chrome);
   try {
     await h.ready(lineOf([FIXTURE_HOST]));
-    const o = c.options({ cdpUrl: h.url("ab-lead"), platform: "linux" });
+    const o = c.options({ cdpUrl: h.url("my-repo"), platform: "linux" });
     const opened = await commands.open(o, { url: fx.base, name: "o" });
     const page = chrome.pages.get(opened.tab.targetId)!;
-    const conn = await h.connect("ab-lead");
+    const conn = await h.connect("my-repo");
     const { sessionId } = await conn.send("Target.attachToTarget", { targetId: page.targetId, flatten: true });
     const popup = chrome.openFrom(page, `${fx.base}/next`); // the site's popup tab, in front of the opener's window
     assert.equal(page.background, true);
@@ -103,9 +103,9 @@ test("the fake receiver's tabs have the fake Chrome's front state: a tab behind 
 test("an endpoint that is not ready: status names the endpoint and C11's text, also in --notify; a command fails with that text", async () => {
   const h = await harness(), c = consumer(), sent: string[] = [];
   try {
-    const o = c.options({ cdpUrl: h.url("ab-lead"), notify: async (m: string) => { sent.push(m); } });
+    const o = c.options({ cdpUrl: h.url("my-repo"), notify: async (m: string) => { sent.push(m); } });
     const status = await commands.status(o, { notify: true });
-    assert.deepEqual([status.connected, status.profileDir, status.target], [false, null, `agent mode's endpoint ${h.url("ab-lead")}`]);
+    assert.deepEqual([status.connected, status.profileDir, status.target], [false, null, `agent mode's endpoint ${h.url("my-repo")}`]);
     assert.ok(status.detail!.includes(NOT_READY.link) && !/approval|prompt|profile/i.test(status.detail!), status.detail!);
     assert.ok(sent[0].includes(NOT_READY.link));
     await assert.rejects(commands.tabs(o), (e: Error) => e.message.includes(NOT_READY.link));
@@ -116,7 +116,7 @@ test("the CLI takes --cdp-url: only agent mode's endpoint, and none of the proxy
   const c = consumer();
   try {
     const opts = (o: object) => () => resolveOptions(c.options(o));
-    const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/ab-lead";
+    const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/my-repo";
     assert.equal(resolveOptions(c.options({ cdpUrl: good })).cdpUrl, good);
     for (const bad of ["ws://127.0.0.1:9222/devtools/browser/0b1c", "wss://remote.example/devtools/browser/x", "ws+unix://relative.sock:/devtools/browser/a",
       "ws+unix:///tmp/x.sock:/anything", "ws+unix:///tmp/x.sock:/devtools/browser/.x", "http://x/devtools/browser/a"]) {
@@ -141,7 +141,7 @@ test("over the endpoint the X-pointer log line names the relay's way: the relay 
   const lines: string[] = [];
   try {
     await h.ready(lineOf([FIXTURE_HOST]));
-    const o = c.options({ cdpUrl: h.url("ab-lead"), log: (l: string) => { lines.push(l); } });
+    const o = c.options({ cdpUrl: h.url("my-repo"), log: (l: string) => { lines.push(l); } });
     await commands.open(o, { url: fx.base, name: "main" });
     await commands.click(o, { tab: "main", target: "#b" });
     const line = lines.find((l) => /X-pointer method/.test(l));

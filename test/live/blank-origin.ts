@@ -1,6 +1,6 @@
 // ab-b84.24: measure an iframe's window.open() with no URL, using browser metadata only.
 // Run on Linux under the shared heavy-job lock:
-// flock /home/selden/.cache/ab-lead/heavy.lock timeout 1200 node test/live/blank-origin.ts
+// node test/live/blank-origin.ts (hold the box's shared heavy-job lock, if it has one, around the whole job)
 // Optional: --chrome /usr/bin/chromium --display 122. Headless: no Xvfb or display connection.
 // All pages are local *.localhost. The proxy blocks other requests. Metadata checks run no Runtime command.
 // The final cases drive only blanks that agent-browser creates. They test a real click and shot.

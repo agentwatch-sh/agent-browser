@@ -410,7 +410,7 @@ export const ENDPOINT_SCOPES_DIR = "endpoint-scopes";
 
 /**
  * The folder name of an endpoint scope's tab record (recordDir): the scope, with each capital letter written as "+" and
- * its small letter ("Ab-Lead" gives "+ab-+lead"). So no folder name has a capital letter, and two scopes that differ
+ * its small letter ("My-Repo" gives "+my-+repo"). So no folder name has a capital letter, and two scopes that differ
  * only in case get two folders also on a disk that ignores case (the Mac's). No scope holds a "+", so no two scopes get
  * one name. A scope that ENDPOINT_SCOPE_RE does not match is refused: no ".", "..", slash or other path part gets in.
  */

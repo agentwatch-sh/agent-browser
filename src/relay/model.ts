@@ -110,7 +110,7 @@ type Tab = {
   /** A geometry read of the relay is in flight. */
   geoReading: boolean;
   /**
-   * The last usable geometry of the relay's own reads (ab-lead's decision on point 1 of PR #68): a front page that is no
+   * The last usable geometry of the relay's own reads (the lead's decision on point 1 of PR #68): a front page that is no
    * bridge tab (agent-browser's CLI ends its connection after each command) has no read, and its path uses this. It goes
    * at every window event that the relay sees: Browser.setWindowBounds, a viewport override, Page.frameResized.
    */
@@ -212,7 +212,7 @@ export class Model {
   /** The roots of the last allowlist line that apply, by scope (with the peer check). */
   private roots: Roots = new Map();
   /**
-   * The scopes of an end_scope that no later line named again (ab-lead's decision for PR #58; the C11 sentence comes
+   * The scopes of an end_scope that no later line named again (the lead's decision for PR #58; the C11 sentence comes
    * with board ab-v16.55): their new connections get the no-list 503, also over a link change. So no process of an
    * ended session connects again in the moment before the daemon's next line drops its scope, also with a default
    * list. A later session of the same name comes only after a line that names its scope (C4, rule 2).

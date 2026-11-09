@@ -1,7 +1,7 @@
 # Admission by the connecting process, with no key — design
 
-Date: 2026-11-05. Status: **DRAFT, fixed after review-54** (ab-lead's fresh reviewer). Author: taylor session `peer-design`, a subagent of
-`ab-lead` (board task ab-v16.47, under goal ab-v16). Branch `ab-v16.47-peer-admission-design` in
+Date: 2026-11-05. Status: **DRAFT, fixed after review-54** (a fresh reviewer). Author: a taylor contributor, a subagent of
+the lead (board task ab-v16.47, under goal ab-v16). Branch `ab-v16.47-peer-admission-design` in
 agent-browser. Evidence: the probe in
 [2026-11-05-peer-admission-probe/](2026-11-05-peer-admission-probe/README.md), run on taylor (Debian 13,
 Linux 6.12.115, Node v26.12.0, Python 3.13.5, tmux 3.5a). Nothing ran on the Mac. No product code
@@ -19,9 +19,9 @@ level without a key? i.e. each process gets its socket, etc. if we do it via MCP
 mcp target at the right socket inside claude i think. see if we can solve it without adding a whole
 new key system."
 
-aw-lead's input (mail m6ea8936, 2026-11-05): the root is the session's tmux pane process, not the
+The daemon lead's input (mail m6ea8936, 2026-11-05): the root is the session's tmux pane process, not the
 claude or codex pid; the daemon can send `{scope: {pid, start}}`; a respawned pane changes the root;
-aw-lead prefers that the relay reads the peer itself, and accepts as a second choice that the daemon
+the daemon lead prefers that the relay reads the peer itself, and accepts as a second choice that the daemon
 accepts and passes the socket to the relay with `SCM_RIGHTS`; the daemon must not forward CDP bytes;
 the limit of section 11.
 
@@ -36,7 +36,7 @@ process belongs to, with no key. Each decision has its reason in the section tha
    after a fork, an exec and a socket passed on.
 2. **Who reads it (section 3.3).** The relay itself, in its own process, with Node 26's `node:ffi`
    (libc `getsockopt` on the accepted socket's fd): 16 µs per connection, no helper, no daemon in
-   the path. This is aw-lead's first preference. The relay loads `node:ffi` only with `--peer-check`,
+   the path. This is the daemon lead's first preference. The relay loads `node:ffi` only with `--peer-check`,
    in its self-test, and the self-test connects from a child process (section 9.4). When `node:ffi`
    cannot run, the endpoint fails closed with a 503. Only if that happens on a box that we run, a
    later build adds W2: the relay sends a duplicate of the socket to the daemon over Node's IPC
@@ -77,7 +77,7 @@ process belongs to, with no key. Each decision has its reason in the section tha
    today's advisory scope.
 8. **The build (section 12).** Three tasks replace ab-v16.36: the contract (chrome-extension), the
    relay's peer check (agent-browser, smaller than ab-v16.36: no secret to redact), and agentwatch's
-   roots (aw-lead). A Mac measurement comes with the Mac stage.
+   roots (the daemon lead). A Mac measurement comes with the Mac stage.
 
 ## 2. Words
 
@@ -166,10 +166,10 @@ channel. Six ways, measured (`results/`):
 | --- | --- | --- | --- |
 | W1. `node:ffi` in the relay | libc `getsockopt` on `socket._handle.fd`; `/proc` reads with `fs` (Linux); `proc_pidinfo` from libproc with `node:ffi` (Mac) | 16 µs for the peer, 30 to 66 µs per hop | `node:ffi` is experimental in Node 26 (on by default; `--no-experimental-ffi` turns it off; one `ExperimentalWarning`, which `--disable-warning=ExperimentalWarning` hides). `socket._handle.fd` is an internal property (it was there for 1000 of 1000 connections). A change shows at the relay's self-test (section 9.4) and fails closed. |
 | W2. The relay asks the daemon | Node's IPC channel (`NODE_CHANNEL_FD`): the relay sends a duplicate of the accepted socket (`process.send(msg, socket._handle)`, type `net.Native`, so its own socket stays open); the daemon (Python) does `SO_PEERCRED` and the walk and answers the scope | +0.47 ms (sequential p50 1.22 ms against 0.75 ms with no check; the daemon's part 0.14 ms) | Node's documentation calls an IPC channel with a program that is not Node "not supported"; the protocol (one JSON object per line, `NODE_HANDLE` with the fd in `SCM_RIGHTS`, `NODE_HANDLE_ACK`) is Node's internal `lib/internal/child_process.js`. The daemon must answer each check. |
-| W3. The daemon accepts and passes the socket (aw-lead's second choice) | The daemon listens, checks, and sends the accepted socket to the relay as `NODE_HANDLE` type `net.Socket`; the relay feeds it to its HTTP server with `emit('connection', socket)`; no CDP byte goes through the daemon | +0.40 ms (sequential p50 1.15 ms) | The same unsupported protocol. The daemon owns the endpoint's listener. A refused connection must still go to the relay (with no scope), so that the relay sends the 403 text: an answer before the request reads gives the client `EPIPE` (measured in the first run). |
+| W3. The daemon accepts and passes the socket (the daemon lead's second choice) | The daemon listens, checks, and sends the accepted socket to the relay as `NODE_HANDLE` type `net.Socket`; the relay feeds it to its HTTP server with `emit('connection', socket)`; no CDP byte goes through the daemon | +0.40 ms (sequential p50 1.15 ms) | The same unsupported protocol. The daemon owns the endpoint's listener. A refused connection must still go to the relay (with no scope), so that the relay sends the 403 text: an answer before the request reads gives the client `EPIPE` (measured in the first run). |
 | W4. A helper per connection | `spawn(helper, [], {stdio: [..., socket]})`: the helper gets the socket as fd 3 and runs `getsockopt` | 2.2 ms p50 (a C helper), 28 ms p50 (a Python helper) | A compiled binary per platform in a package that has none today, or 28 ms per connection. |
 | W5. `/proc` and `ss` (Linux only) | The peer inode from `ss -x` (sock_diag; `/proc/net/unix` has no peer column), then a scan of `/proc/<pid>/fd`; or `ss -xp` | 25 ms (`ss -x` 6 ms, the scan 19 to 34 ms over about 510 pids and 1300 fds) | It finds every holder of the socket, not the connecter: two holders after a fork, in 5 of 5 runs. It cannot tell them apart. Refused. |
-| W6. The daemon forwards the bytes | The daemon accepts and copies CDP traffic both ways | Not measured | aw-lead refuses it: all CDP load on the daemon, and a daemon restart cuts every client. Refused. |
+| W6. The daemon forwards the bytes | The daemon accepts and copies CDP traffic both ways | Not measured | The daemon lead refuses it: all CDP load on the daemon, and a daemon restart cuts every client. Refused. |
 
 Each way that admits refused the re-parented client with 403 and admitted the 350 connections of
 the root's own tree (300 one after the other, 50 at once) in W2 and W3. A burst of 50 at once took
@@ -182,7 +182,7 @@ import would make every agent-browser command print the `ExperimentalWarning`, a
 `node:ffi` every command would fail at load (review-54 measured `ERR_UNKNOWN_BUILTIN_MODULE`). An
 import, `dlopen` or symbol that fails makes the self-test fail, and the endpoint fails closed.
 
-W2 is not in this build. It is a later build only if W1 fails on a box that we run (aw-lead's plan).
+W2 is not in this build. It is a later build only if W1 fails on a box that we run (the daemon lead's plan).
 Until then, on such a box, the relay answers each upgrade with the 503 `the relay cannot read the
 program of a connection`, and the endpoint's state (`agentwatch browser status` and the Browser page)
 says that the peer check cannot run: agents get the 503 and cannot use the agent browser there. W2
@@ -229,7 +229,7 @@ that move stays in the tmux server's cgroup for its life (the probe's client did
 tmux moves only pane processes, so a `run-shell` command stays in its server's cgroup, and a server
 that a session started is in that session's pane scope. `systemd-run --user` (not run) starts its command as a
 child of `systemd --user` in a new unit, so both checks refuse it. A cron job of agentwatch is a
-session of its own, with its own pane and root (aw-lead).
+session of its own, with its own pane and root (the daemon lead).
 
 The walk costs 30 to 66 µs per hop (66 µs p50 for a pid read for the first time); agents are 2 to 4
 hops below the pane, so the check takes well under 1 ms. Codex was not run: its tool commands and MCP servers are its children, so they have the same
@@ -375,7 +375,7 @@ The texts below replace the blocks of the key. Each line number is of main `052c
 
 No new field. The keys were never in `set_scopes`: C10's `allowlist` line carried them, and the
 receiver never saw them. The roots take the keys' place in that line, so no pid reaches the
-extension. (aw-lead's note names `set_scopes`. The line is the better place: the receiver has no use
+extension. (The daemon lead's note names `set_scopes`. The line is the better place: the receiver has no use
 for a pid, and the line is where the relay reads the scopes.) The intro's mention of
 "choice 1, the scope's key" (line 29) and C4's "only when the operator allowed it: C11, the scope's
 key" (line 289) name the peer check instead. Nothing in the receiver (parts 1a to 1d) changes.
@@ -408,10 +408,10 @@ key" (line 289) name the peer check instead. Nothing in the receiver (parts 1a t
   started without --peer-check`, until a line without `roots` comes. A relay with `--peer-check` that
   gets a line with no `roots` field applies the lists, and every scope has no root: step 6 refuses
   each connection.
-- When a root changes (a respawned pane: a restart, an account swap, a resume; aw-lead), the daemon
+- When a root changes (a respawned pane: a restart, an account swap, a resume; the daemon lead), the daemon
   writes a line with the new root at once, with the last confirmed object, and does not wait for a
   `set_scopes` round trip: the receiver does not use the roots, so a root change needs no
-  `set_scopes`. (A new `set_scopes` and its line, aw-lead's way, also works, but it leaves a longer
+  `set_scopes`. (A new `set_scopes` and its line, the daemon lead's way, also works, but it leaves a longer
   window.) `tmux respawn-pane -k` gives the pane a new process and a new scope (review-54), so the
   old pane's jobs are refused after the respawn (section 5), also with P2.
 - At a launch, the daemon reads the new pane's pid and start (after `tmux new-session`, before the
@@ -528,7 +528,7 @@ other agent-browser command prints the warning or depends on it.
   the 503); a relay with `--peer-check` that gets a line with no `roots` (the lists apply, every scope
   has no root).
 
-## 10. What agentwatch's daemon must do (aw-lead)
+## 10. What agentwatch's daemon must do (the daemon lead)
 
 1. For each live session, its pane's pid (`list-panes -F '#{pane_pid}'`, as `pane_of` reads today)
    and start time (Linux field 22; Mac `proc_pidinfo`), as `roots` in each `allowlist` line, from the
@@ -567,7 +567,7 @@ other agent-browser command prints the warning or depends on it.
 ## 11. The limits
 
 - **A hostile process of the same OS user.** It can still act inside another session, so the check
-  stops mistakes and casual crossing, not an attack (aw-lead's point 3). Measured on taylor: it can
+  stops mistakes and casual crossing, not an attack (the daemon lead's point 3). Measured on taylor: it can
   join another session's scope cgroup with one write (`results/cgroup-join.txt`); it can write a line
   into another process's stdin pipe through `/proc/<pid>/fd/0`, so into another session's MCP, which
   the check admits (`results/proc-fd-pipe.json`; Yama's `ptrace_scope` 1 does not stop it). It can
@@ -605,9 +605,9 @@ other agent-browser command prints the warning or depends on it.
 
 | Task | Repo | What | Depends on | Size |
 | --- | --- | --- | --- | --- |
-| T1. The contract | chrome-extension (`docs/protocol.md`, `test/vectors/`) | Section 9: the key texts replaced (intro line 29, C4 line 289, C10 lines 1034 and 1046, C11 lines 1442 to 1514, 1593 to 1596, 1922 to 2022), the 403 and 503 texts, the order, the vectors of 9.5. ab-lead mails the commit to aw-lead before the merge (C10 is a rule agentwatch follows). | this design merged | small |
+| T1. The contract | chrome-extension (`docs/protocol.md`, `test/vectors/`) | Section 9: the key texts replaced (intro line 29, C4 line 289, C10 lines 1034 and 1046, C11 lines 1442 to 1514, 1593 to 1596, 1922 to 2022), the 403 and 503 texts, the order, the vectors of 9.5. The lead mails the commit to the daemon lead before the merge (C10 is a rule agentwatch follows). | this design merged | small |
 | T2. The relay's peer check | agent-browser (`src/relay/endpoint.ts`, a new `src/relay/peer.ts`) | `--peer-check`; the peer reader behind one interface (Linux: `node:ffi` `getsockopt` `SO_PEERCRED` and `SO_PEERPIDFD`, libc `poll` and `close` on the pidfd, `fdinfo`, the form for a kernel before 6.5, `/proc` walk, cgroup; Mac: `LOCAL_PEERPID`, `proc_pidinfo`) with a fake for the tests; `node:ffi` loaded only with `--peer-check`, by a dynamic import in the self-test; the self-test from a child process (section 9.4); the order of 9.3 in `admit()`; the texts; the `roots` line rules and the defensive root rules; a relay without the flag that gets `roots`; the 1008 close at a root change; unit tests with the vectors; a test that no other agent-browser command loads `node:ffi`; the live test on taylor: two tmux panes of the test's own server, Playwright, agent-browser and an MCP-like child admitted, another pane's process refused, a double fork admitted (P2), a `run-shell` through the other session's nested tmux server admitted with P2 and refused with P1 (the cost, recorded) | T1; ab-v16.35 (the relay per scope) | about half of ab-v16.36: no key, no redaction of `src/options.ts` and `src/cdp.ts` |
-| T3. agentwatch | agentwatch (aw-lead, an age- task) | Section 10 | T1; T2 for the live test | small (the daemon has `pane_of`) |
+| T3. agentwatch | agentwatch (the daemon lead, an age- task) | Section 10 | T1; T2 for the live test | small (the daemon has `pane_of`) |
 | T4. The Mac | agent-browser (with the Mac stage) | Measure on the Mac: `LOCAL_PEERPID` after a fork, a passed socket and a send by another process; `LOCAL_PEERTOKEN`; `node:ffi` with `getsockopt` and `proc_pidinfo` on the Mac's Node; the walk to a pane under `launchd`. Fix T2's Mac reader if needed. | T2; a Mac session | small |
 
 ab-v16.36's build notes that name the key (review-42g notes 2, 3, 5, 6, 7, 11 and 12) do not carry
@@ -620,7 +620,7 @@ section 9.3.
 One real choice remains; the rest are engineering choices that this design makes (W1, one socket,
 `roots` in the line).
 
-**Choice 1: background jobs that leave the tool's shell, on Linux.** (ab-lead's item ab-6gs asks
+**Choice 1: background jobs that leave the tool's shell, on Linux.** (the lead's item ab-6gs asks
 it, with the cost below.)
 
 - a (recommended, P2): admit them when they stay in the session's pane scope. An agent's

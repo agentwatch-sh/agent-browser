@@ -184,7 +184,7 @@ export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: 
  * outerWidth, outerHeight, innerWidth, innerHeight, devicePixelRatio), visualViewport.scale, screen.width and
  * screen.height, document.visibilityState, and the content box `cw` x `ch`: the viewport less its scrollbars
  * (visualViewport.width and height, at a scale of 1; else documentElement.clientWidth and clientHeight). A page gets no
- * mouse event over its scrollbars, so the path and the catch-up stay inside the content box (ab-lead's decision on
+ * mouse event over its scrollbars, so the path and the catch-up stay inside the content box (the lead's decision on
  * point 5 of PR #68).
  */
 export type Geo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; cw: number; ch: number; dpr: number; scale: number; sw: number; sh: number; vis: string };

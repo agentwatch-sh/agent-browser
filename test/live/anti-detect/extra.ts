@@ -56,8 +56,9 @@ if (existsSync(`/tmp/.X11-unix/X${DISPLAY}`)) { say(`display ${DISPLAY} in use`)
 const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", "1600x1000x24"], { stdio: "ignore" });
 children.push(xvfb);
 harness.track(xvfb.pid, "Xvfb");
-for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY}`); i++) await sleep(100);
+for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY}`) && xvfb.exitCode === null && xvfb.signalCode === null; i++) await sleep(100);
 await sleep(300);
+if (xvfb.exitCode !== null || xvfb.signalCode !== null || !existsSync(`/tmp/.X11-unix/X${DISPLAY}`)) { say(`Xvfb did not start on :${DISPLAY}`); process.exit(2); }
 const XENV: NodeJS.ProcessEnv = { ...process.env, DISPLAY: `:${DISPLAY}`, XAUTHORITY: xauth };
 delete XENV.WAYLAND_DISPLAY; delete XENV.XDG_SESSION_TYPE;
 say(`Xvfb pid ${xvfb.pid} run ${RUN}`);

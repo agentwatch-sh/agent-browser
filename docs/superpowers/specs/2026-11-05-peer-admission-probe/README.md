@@ -5,8 +5,8 @@ task ab-v16.47). Run on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Python
 playwright-core 1.64.1 of the global `playwright` package) on 2026-11-05. Nothing ran on the Mac. None
 of these files is part of `npm test`.
 
-Every probe uses its own sockets in a scratch folder, its own tmux servers (`tmux -L peer-design`,
-`tmux -L peer-design2`) and its own processes. It reads the process table of this session's own
+Every probe uses its own sockets in a scratch folder, its own tmux servers (`tmux -L peer-probe`,
+`tmux -L peer-probe2`) and its own processes. It reads the process table of this session's own
 processes only (`results/claude-code-tree.txt`), and it sends keys only to its own tmux panes. The
 operator's Chrome, the agent browser and agentwatch's tmux server were not touched.
 
@@ -37,11 +37,11 @@ S=<an empty scratch folder>
 python3 peer_server.py $S/probe.sock $S/roots.json $S/shapes.jsonl &
 env -i HOME=$HOME PATH=$PATH TERM=xterm-256color LANG=C.UTF-8 SHELL=/bin/bash \
   XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus \
-  tmux -L peer-design2 new-session -d -s C /bin/bash        # with D-Bus: tmux gives each pane a scope
-tmux -L peer-design2 new-session -d -s D /bin/bash
+  tmux -L peer-probe2 new-session -d -s C /bin/bash        # with D-Bus: tmux gives each pane a scope
+tmux -L peer-probe2 new-session -d -s D /bin/bash
 # roots.json: {"scopeC": [<pane pid>, <field 22>, "<pane cgroup>"], "scopeD": [...]}
-tmux -L peer-design2 send-keys -t C "node fake_agent.mjs $S/probe.sock <agent-browser>/bin/agent-browser.js $S/late.txt" Enter
-tmux -L peer-design2 send-keys -t D "python3 client.py $S/probe.sock scopeC-named-from-D" Enter
+tmux -L peer-probe2 send-keys -t C "node fake_agent.mjs $S/probe.sock <agent-browser>/bin/agent-browser.js $S/late.txt" Enter
+tmux -L peer-probe2 send-keys -t D "python3 client.py $S/probe.sock scopeC-named-from-D" Enter
 python3 fork_pass.py $S
 node --disable-warning=ExperimentalWarning node_ffi_peercred.mjs $S 1000
 cc -O2 -o $S/peercred peercred.c && node node_helper_peercred.mjs $S 300 $S/peercred
@@ -53,10 +53,10 @@ python3 bench_walk.py; node bench_walk.mjs; python3 proc_fd_pipe.py
 
 ## The runs of record (`results/`)
 
-- `shapes-run1*.jsonl|txt`, `shapes-run2*`: tmux server `peer-design` started with no D-Bus
+- `shapes-run1*.jsonl|txt`, `shapes-run2*`: the probe tmux server started with no D-Bus
   address, so tmux could not give its panes a scope: both panes stayed in the server's cgroup. The
   walk results. Run 1 holds the other session's case (pane B names scope A).
-- `shapes-run3*`: tmux server `peer-design2` with the user's D-Bus: each pane in its own
+- `shapes-run3*`: tmux server `peer-probe2` with the user's D-Bus: each pane in its own
   `tmux-spawn-<uuid>.scope`. The walk and the cgroup results side by side.
 - `claude-code-tree.txt`: the shapes of this real Claude Code session (read only).
 - `fork_pass.jsonl`, `node_ffi_peercred.json`, `node_helper_peercred.jsonl`, `node_proc_scan.jsonl`,
