@@ -140,7 +140,7 @@ test("Playwright's focus of an element (its injected focusNode) brings the windo
     // client's own function or string that mentions focusNode (page.evaluate((s) => s.length, "see el.focusNode(x)")).
     for (const fn of ["([injected, node]) => injected.blurNode(node)", "([injected, node]) => injected.focusNodeLater(node)",
       "([injected, node]) => injected.focusNode", "([page, node]) => page.focusNode(node)", "(s) => s.length", "see el.focusNode(x)",
-      "focusNode", "() => injected.focusNode(document.body)"]) {
+      "focusNode", "() => injected.focusNode(document.body)", "([e, n]) => e.focusNode(n)"]) {
       h.fake.focusedWindow = 1;
       from = h.fake.requests.length;
       await call(fn);
@@ -152,6 +152,25 @@ test("Playwright's focus of an element (its injected focusNode) brings the windo
     assert.deepEqual(ops(h, from), ["Runtime.callFunctionOn", "Runtime.callFunctionOn"]);
   } finally { await h.close(); }
 });
+
+for (const [name, fn] of [
+  ["text before the function", "x = ([injected, node]) => injected.focusNode(node)"],
+  ["text after the function", "([injected, node]) => injected.focusNode(node); other()"],
+  ["an unfinished focusNode call", "([injected, node]) => injected.focusNode(node"],
+] as const) {
+  test(`Playwright's focus rule rejects ${name} without bringing the window forward`, async () => {
+    const h = await harness();
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const { sessionId } = await page(h, c);
+      const from = h.fake.requests.length;
+      await c.send("Runtime.callFunctionOn", { arguments: [{ value: fn }] }, sessionId);
+      assert.deepEqual(ops(h, from), ["Runtime.callFunctionOn"], fn);
+      assert.equal(h.fake.focusedWindow, 1, "the window keeps its focus");
+    } finally { await h.close(); }
+  });
+}
 
 test("a call that comes behind an input that waits for its window reaches Chrome behind that input", async () => {
   const h = await harness();

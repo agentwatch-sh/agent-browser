@@ -54,6 +54,7 @@ export class FakeReceiver {
    */
   readonly pageWorlds = new Map<number, FakeGeo>();
   private nextContext = 100;
+  private namedWorlds = new Map<string, number>();
   readonly tabs = new Map<number, FakeTab>();
   readonly attached = new Set<number>();
   /** The receiver's tab-to-scope map (C10, each tab's scope): bridge.tabScopes answers it. */
@@ -149,7 +150,14 @@ export class FakeReceiver {
         if (r !== undefined) return r;
         const t = tab(target.tabId);
         // The relay's geometry read (pointer.ts): its own isolated world on the main frame, then one evaluate in it.
-        if (method === "Page.createIsolatedWorld" && !target.sessionId) { const id = this.nextContext++; this.worlds.set(id, t.id); return { executionContextId: id }; }
+        if (method === "Page.createIsolatedWorld" && !target.sessionId) {
+          const key = JSON.stringify([t.id, params.frameId, params.worldName]);
+          const old = this.namedWorlds.get(key);
+          const id = old !== undefined && this.worlds.has(old) && !this.pageWorlds.has(old) ? old : this.nextContext++;
+          this.namedWorlds.set(key, id);
+          this.worlds.set(id, t.id);
+          return { executionContextId: id };
+        }
         if (method === "Runtime.evaluate" && params?.contextId !== undefined) {
           const reused = this.pageWorlds.get(params.contextId);
           if (reused) return { result: { type: "object", value: reused } };
