@@ -1554,13 +1554,17 @@ export class Tab {
     let failure: unknown;
     try {
       await new Promise((r) => setTimeout(r, opts.settleMs ?? 500)); // the page lays itself out again at the new size
+      let contentSize: { width: number; height: number } | undefined;
       if (opts.fullPage) {
         // Measure after the requested width takes effect. A concurrent rearm capture under a short override can
         // make the full-page capture repeat the first screen. Give both captures a surface as tall as the content.
         const { cssContentSize } = await this.send("Page.getLayoutMetrics");
-        await this.send("Emulation.setDeviceMetricsOverride", { width, height: Math.ceil(cssContentSize.height), deviceScaleFactor: scale, mobile: false });
+        contentSize = { width: cssContentSize.width, height: Math.ceil(cssContentSize.height) };
+        await this.send("Emulation.setDeviceMetricsOverride", { width, height: contentSize.height, deviceScaleFactor: scale, mobile: false });
       }
-      await this.capture(path, !!opts.fullPage, shot.own, true);
+      // Reuse the measured height: vh-sized content can grow again under the expanded override. A second
+      // height would let Chrome resize the surface during the capture and bring the repeat back.
+      await this.capture(path, !!opts.fullPage, shot.own, true, contentSize);
     } catch (e) { failure = e; }
     // A capture that went out under the override sets it again when it ends, and one that ends after the clear sets
     // the view to the shot's size for good (review-41d). Measured on taylor with Chromium 156 (2026-11-06,
@@ -1592,10 +1596,10 @@ export class Tab {
     return path;
   }
 
-  private async capture(path: string, fullPage: boolean, own: OwnCapture, resized: boolean): Promise<string> {
+  private async capture(path: string, fullPage: boolean, own: OwnCapture, resized: boolean, contentSize?: { width: number; height: number }): Promise<string> {
     const params: Record<string, unknown> = { format: "png" };
     if (fullPage) {
-      const { cssContentSize } = await this.send("Page.getLayoutMetrics");
+      const cssContentSize = contentSize ?? (await this.send("Page.getLayoutMetrics")).cssContentSize;
       params.captureBeyondViewport = true;
       params.clip = { x: 0, y: 0, width: cssContentSize.width, height: cssContentSize.height, scale: 1 };
     }

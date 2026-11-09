@@ -23,7 +23,9 @@ for (const mode of ["default", "agent"] as const) {
       const o = c.options(connection);
       const { tab } = await commands.open(o, { url: fx.base, name: "tall" });
       const page = fake.pages.get(tab.targetId)!;
-      page.contentSize = (width, height) => ({ width, height: Math.max(height, width === 800 ? 3100.25 : 2400) });
+      // Like a vh-sized page: expanding the viewport grows the content again. A second measurement would
+      // produce 6202, above the 3101-pixel surface, and allow the overlapping capture to resize it again.
+      page.contentSize = (width, height) => ({ width, height: width === 800 ? (height === 600 ? 3100.25 : 6202) : 2400 });
       await commands.text(o, { tab: "tall" });
       const path = join(c.dir, "full.png"), from = fake.calls.length;
       const r = await cli(["shot", "tall", path, "--full", "--size", "800x600", "--scale", "2", "--json",
@@ -36,7 +38,6 @@ for (const mode of ["default", "agent"] as const) {
         ["Emulation.setDeviceMetricsOverride", { width: 800, height: 600, deviceScaleFactor: 2, mobile: false }],
         ["Page.getLayoutMetrics", {}],
         ["Emulation.setDeviceMetricsOverride", { width: 800, height: 3101, deviceScaleFactor: 2, mobile: false }],
-        ["Page.getLayoutMetrics", {}],
         ["Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: 800, height: 3101, scale: 1 } }],
         ["Emulation.clearDeviceMetricsOverride", {}],
       ]);
