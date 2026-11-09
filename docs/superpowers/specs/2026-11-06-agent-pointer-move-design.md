@@ -367,11 +367,19 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   The relay retains at most 128 candidate ids per tab. It never evicts an id while the tab stays in the
   model. The tab's removal or a link reset ends that state. Before a call names a retained id, the relay
   sends `Page.createIsolatedWorld` with its private name on the current main frame. This native lookup
-  runs no script and sends no enable. Chrome returns the existing world's id for that document. The
-  relay refuses the call when it names that current id. Thus a numeric id reused for a client's context
-  in another renderer stays usable, while the cached renderer's world stays protected when it returns.
+  runs no script and sends no enable. Chrome returns the existing world's id for that document. If the
+  document has no world with that name, the lookup creates it. Its id joins the retained set, within the
+  same bound. The relay refuses the call when it names that current id. Thus a numeric id reused for a
+  client's context in another renderer stays usable. The cached renderer's world stays protected when it
+  returns.
   A lookup error, an invalid answer, a lost frame, a removed tab, a detach or a wait beyond 200 ms refuses
   the call. A late lookup answer never forwards it.
+  The tab's later calls wait behind this lookup, including calls with no context. The gate opens when
+  the first command is sent or refused. It does not wait for an ordinary CDP answer: a dialog or held
+  target must still accept its release command. Activation steps also wait for lookup and submission.
+  A `Page.bringToFront` keeps its bounded reply wait, including when the tab read fails.
+  A client's own world with a reused id pays one native lookup round trip on each call that names it.
+  This cost can continue for the tab's lifetime. Each lookup can hold later calls for up to 200 ms.
   At 128 retained ids, the relay checks **every context-bearing call** by the same native lookup. It
   retains all 128 ids and allocates no more entries. Newly created or restored worlds therefore stay
   protected after the bound, without refusing a client's reused id forever. Calls with no context and

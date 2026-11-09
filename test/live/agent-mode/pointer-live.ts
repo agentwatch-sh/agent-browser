@@ -245,7 +245,8 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         }
         const reasons = raw.events.filter((e: any) => e.method === "Page.backForwardCacheNotUsed").map((e: any) => e.params.notRestoredExplanations);
         const ok = before === first && afterAgain === after && !cachedContextReachable && noReadAfterRestore && (!cached || (after === first && refused.length === 3));
-        o.record({ group: G, case: "ab-v16.84: native world lookups keep the read's id, including after a back-forward cache restore", status: ok ? "pass" : "fail", ms: 0,
+        o.record({ group: G, case: "ab-v16.84: native world lookups keep the read's id, including after a back-forward cache restore", status: !ok ? "fail" : cached ? "pass" : "skip", ms: 0,
+          ...(!cached && ok ? { why: "Chromium did not restore the page from the back-forward cache; the cache refusal checks did not run" } : {}),
           detail: { first, before, second, after, afterAgain, cached, cachedContextReachable, awayTitle, noReadAfterRestore, refused, reasons } });
       } finally {
         o.daemon.relay.stdout!.off("data", observe);

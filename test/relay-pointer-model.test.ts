@@ -1607,6 +1607,137 @@ test("ab-v16.84: removing a tab ends its retained ids; a new tab permits the sam
   } finally { await h.close(); }
 });
 
+test("review-85 B1: a world lookup preserves the order of client commands and replies", async (t) => {
+  for (const mode of ["no context", "navigation", "128 ids", "existing gate"]) await t.test(mode, async () => {
+    const { h, c, A, B } = await withWorlds();
+    let release: (() => void) | undefined;
+    const pending: Promise<unknown>[] = [];
+    try {
+      const old = relayWorld(h, A), replies: string[] = [];
+      if (mode === "128 ids") {
+        const name = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld")[0].args[2].worldName;
+        for (let id = 1000; id < 1127; id++) h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id, name } } });
+        await sleep(20);
+      }
+      h.fake.command = (target, method) => target.tabId === A.tab.id && method === "Page.createIsolatedWorld"
+        ? new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); }) : undefined;
+      let unblock: (() => void) | undefined;
+      if (mode === "existing gate") {
+        h.fake.op = (r) => r.op === "tabs.get" && r.args[0] === A.tab.id
+          ? new Promise((resolve) => { unblock = () => resolve(h.fake.tabs.get(A.tab.id)); }) : undefined;
+        const press = mouse(c, A, "mousePressed", 100, 100);
+        press.catch(() => {}); pending.push(press);
+        await until(() => unblock, "the activation gate");
+      }
+      const from = h.fake.requests.length;
+      const first = c.send("Runtime.callFunctionOn", { functionDeclaration: "function () { return 1; }", executionContextId: mode === "128 ids" ? 9000 : old }, A.sessionId)
+        .then((r) => { replies.push("first"); return r; });
+      first.catch(() => {}); pending.push(first);
+      const secondMethod = mode === "navigation" ? "Page.navigate" : "Runtime.evaluate";
+      const second = c.send(secondMethod, mode === "navigation" ? { url: "https://a.example/next" } : { expression: "1" }, A.sessionId)
+        .then((r) => { replies.push("second"); return r; });
+      second.catch(() => {}); pending.push(second);
+      unblock?.();
+      await until(() => release, "the lookup");
+      // A reply from the other tab proves that the server receives the later messages while A's lookup waits.
+      await c.send("Runtime.evaluate", { expression: "heartbeat" }, B.sessionId);
+      const before = reached(h, A, from).filter((m) => m === "Runtime.callFunctionOn" || m === secondMethod);
+      release!();
+      await Promise.all(pending);
+      if (mode === "existing gate") await mouse(c, A, "mouseReleased", 100, 100);
+      assert.deepEqual(before, [], "neither client command passes the pending lookup");
+      assert.deepEqual(reached(h, A, from).filter((m) => m === "Runtime.callFunctionOn" || m === secondMethod), ["Runtime.callFunctionOn", secondMethod]);
+      assert.deepEqual(replies, ["first", "second"]);
+    } finally { release?.(); await Promise.allSettled(pending); await h.close(); }
+  });
+});
+
+test("review-85 B1: the activation chain waits for an input's lookup before the next activation", async () => {
+  const { h, c, A, B } = await withWorlds();
+  let release: (() => void) | undefined;
+  const pending: Promise<unknown>[] = [];
+  try {
+    const old = relayWorld(h, A);
+    let lookedUp = false;
+    h.fake.command = (target, method) => {
+      if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+      if (lookedUp) return { executionContextId: 800 };
+      lookedUp = true;
+      return new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); });
+    };
+    const from = h.fake.requests.length;
+    const first = mouse(c, A, "mousePressed", 100, 100, { contextId: old });
+    first.catch(() => {}); pending.push(first);
+    await until(() => release, "the input's lookup");
+    const next = c.send("Page.bringToFront", {}, B.sessionId);
+    next.catch(() => {}); pending.push(next);
+    const released = mouse(c, A, "mouseReleased", 100, 100);
+    released.catch(() => {}); pending.push(released);
+    await sleep(40);
+    const early = reached(h, B, from).includes("Page.bringToFront");
+    release!();
+    await Promise.all(pending);
+    assert.equal(early, false, "the next activation waits");
+    const sent = h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" &&
+      ((r.args[0].tabId === A.tab.id && r.args[1] === "Input.dispatchMouseEvent" && r.args[2].type === "mousePressed") || (r.args[0].tabId === B.tab.id && r.args[1] === "Page.bringToFront")));
+    assert.deepEqual(sent.map((r) => r.args[1]), ["Input.dispatchMouseEvent", "Page.bringToFront"]);
+  } finally { release?.(); await Promise.allSettled(pending); await h.close(); }
+});
+
+test("review-85 B1: bringToFront keeps its lookup in the activation chain, including a failed tab read", async (t) => {
+  for (const failRead of [false, true]) await t.test(failRead ? "failed read" : "normal raise", async () => {
+    const { h, c, A, B } = await withWorlds();
+    let release: (() => void) | undefined;
+    const pending: Promise<unknown>[] = [];
+    try {
+      const old = relayWorld(h, A);
+      await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }, B.sessionId);
+      assert.equal(pointOf(h, B), null, "the next activation needs no read of A");
+      let lookedUp = false;
+      h.fake.command = (target, method) => {
+        if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+        if (lookedUp) return { executionContextId: 800 };
+        lookedUp = true;
+        return new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); });
+      };
+      if (failRead) h.fake.op = (r) => { if (r.op === "tabs.get" && r.args[0] === A.tab.id) throw new Error("tab read failed"); return undefined; };
+      const from = h.fake.requests.length;
+      const first = c.send("Page.bringToFront", { contextId: old }, A.sessionId);
+      first.catch(() => {}); pending.push(first);
+      await until(() => release, "the raise's lookup");
+      const second = c.send("Page.bringToFront", {}, B.sessionId);
+      second.catch(() => {}); pending.push(second);
+      await sleep(40);
+      const early = reached(h, B, from).includes("Page.bringToFront");
+      release!();
+      await Promise.all(pending);
+      assert.equal(early, false, "the next raise waits for the lookup");
+      assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Page.bringToFront").map((r) => r.args[0].tabId), [A.tab.id, B.tab.id]);
+    } finally { release?.(); await Promise.allSettled(pending); await h.close(); }
+  });
+});
+
+test("review-85 note 3: removal or detach during a lookup refuses the client command", async (t) => {
+  for (const event of ["tabs.onRemoved", "debugger.onDetach"]) await t.test(event, async () => {
+    const { h, c, A } = await withWorlds();
+    let release: (() => void) | undefined;
+    let call: Promise<unknown> | undefined;
+    try {
+      const old = relayWorld(h, A), from = h.fake.requests.length;
+      h.fake.command = (target, method) => target.tabId === A.tab.id && method === "Page.createIsolatedWorld"
+        ? new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); }) : undefined;
+      call = c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: old }, A.sessionId);
+      call.catch(() => {});
+      await until(() => release, "the pending lookup");
+      h.fake.emit(event, event === "tabs.onRemoved" ? { tabId: A.tab.id } : { source: { tabId: A.tab.id }, reason: "target_closed" });
+      await until(() => event === "tabs.onRemoved" ? !(h.relay.model as any).tabs.has(A.tab.id) : !(h.relay.model as any).tabs.get(A.tab.id).attached, "the removal or detach");
+      release!();
+      await assert.rejects(call, (e: Error) => e.message === `Runtime.callFunctionOn: ${TEXT.relayWorld("Runtime.callFunctionOn")}`);
+      assert.deepEqual(reached(h, A, from), [], "no call after removal or detach");
+    } finally { release?.(); await call?.catch(() => {}); await h.close(); }
+  });
+});
+
 test("ab-v16.84: renderer reuse permits the client's id, but preserves refusal when the cached renderer returns", async () => {
   const { h, c, A } = await withWorlds();
   try {

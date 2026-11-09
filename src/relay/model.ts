@@ -578,7 +578,7 @@ export class Model {
     if (!this.conns.size && this.linkUp) this.bridge.call("bridge.attachNew", [false]).catch(() => {});
   }
 
-  /** One CDP message of a client. A call for Chrome goes to the bridge with no await before it, so Chrome gets the calls in order. */
+  /** One client message. A tab's gate preserves command order through activations, catch-ups and world lookups. */
   async onMessage(c: Conn, msg: any): Promise<void> {
     // A connection that the model closed (end_scope, a line without its list, a link change) can still send until its
     // close handshake ends (up to 30 s): none of that reaches the bridge, and it gets no answer (review-58 note 1).
@@ -627,9 +627,8 @@ export class Model {
         .catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`));
     } else if (tab.gate) this.behind(tab, tab.gate.then(send).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
     else {
-      // A catch-up (C11) is a step of the tab's gate: the tab's later calls wait behind it.
-      const run = send();
-      if (run) this.behind(tab, run.catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
+      // A catch-up or world lookup holds the tab's later calls until this client's command is sent or refused.
+      this.behind(tab, send().catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
     }
   }
 
@@ -682,7 +681,7 @@ export class Model {
     if (this.pathsOn()) return this.step(tab, kind, bring);
     if (kind === "input") return this.activateToday(tab);
     // A Page.bringToFront or a Target.activateTarget that the chain took while the paths were on: as with the paths off.
-    if (kind === "bringToFront") { void bring!().catch(() => {}); return; }
+    if (kind === "bringToFront") { await this.within(ACTIVATE_MAX_MS, bring!().catch(() => {})); return; }
     await this.bridge.call("tabs.update", [tab.id, { active: true }]);
   }
 
@@ -711,19 +710,21 @@ export class Model {
 
   /**
    * A client's call leaves the tab's gate: a pointer event first gets its catch-up when it needs one (C11, decided now,
-   * against the page's point at this time). Returns the catch-up and the call behind it, or undefined when the call went.
+   * against the page's point at this time). Settles when its lookup and catch-up end and the call is sent or refused.
+   * Never wait for an ordinary CDP answer: a dialog or held target must still accept its release command.
    */
-  private send(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<void> | undefined {
+  private send(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<void> {
     const cu = child ? null : this.catchUpOf(tab, method, params);
-    if (!cu) { void this.sendNow(tab, child, method, params, answer).catch(() => {}); return undefined; }
-    const run = this.catchUp(tab, cu.from, cu.to, cu.move).then(() => { void this.sendNow(tab, child, method, params, answer).catch(() => {}); });
+    const sent = () => this.sendNow(tab, child, method, params, answer, false).then(() => {}, () => {});
+    if (!cu) return sent();
+    const run = this.catchUp(tab, cu.from, cu.to, cu.move).then(sent);
     tab.catchUp = run;
     void run.then(() => { if (tab.catchUp === run) tab.catchUp = null; });
     return run;
   }
 
-  /** Send one client call to Chrome now; its answer goes to the client. Returns the bridge call. */
-  private async sendNow(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<unknown> {
+  /** Send after the world lookup. A raise waits for the answer; an ordinary call settles at submission. */
+  private async sendNow(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void, waitForReply = true): Promise<unknown> {
     // A call into the relay's own isolated world (board ab-v16.80; review-68c note 3): it could change what the
     // geometry read sees there (screenX: the clamp box). Checked here, as the call goes to Chrome, not when it came: a
     // call that waited behind an activation step can name the world that the step's read made. The tab's own session
@@ -763,7 +764,7 @@ export class Model {
       if (tab.held) this.release(tab);
       if (tab.navigateTo) void this.navigate(tab);
     }
-    return call;
+    return waitForReply ? call : undefined;
   }
 
   // ------------------------------------------------------------------ the pointer (ab-v16.71; the agent pointer design, section 3)
@@ -1016,7 +1017,7 @@ export class Model {
       if (Date.now() - t0 >= ACTIVATE_MAX_MS) this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
       this.front = null; this.frontWindow = null;
       // The client's own call still goes, as with the paths off.
-      if (kind === "bringToFront") void bring!().catch(() => {});
+      if (kind === "bringToFront") await this.within(ACTIVATE_MAX_MS, bring!().catch(() => {}));
       // Step 7's one ACTIVATE_MAX_MS (review-68 N3): a receiver that does not answer holds the chain no longer.
       if (kind === "activateTarget" && await this.within(ACTIVATE_MAX_MS, this.bridge.call("tabs.update", [tab.id, { active: true }])) === TIMEOUT)
         this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
