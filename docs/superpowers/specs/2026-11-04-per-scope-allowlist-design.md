@@ -41,7 +41,8 @@ decision below has its reason in the section that the line names.
    neither. In its own scope no worker breaks. The guard: the relay refuses a client's navigation to
    a host off the scope's list; the receiver sends a tab to `about:blank` at `onBeforeNavigate` and
    at `onCommitted` of an off-list page. The guard is not a full block. A full block (no service
-   workers in the agent browser) is a choice for the operator (section 13, choice 2).
+   workers in the agent browser) was option b. The operator chose "Keep service workers on"
+   (2026-11-06, ab-7wg; section 13, choice 2).
 5. **A list loses a site (section 7).** Only the tabs whose own list no longer covers their host
    close. The receiver removes every service worker when a scope's list loses an entry. The
    back/forward-cache limit stays; the guard covers a restore that Chrome reports.
@@ -51,8 +52,9 @@ decision below has its reason in the section that the line names.
    Session rules go at a browser restart or an extension reload: the start fails closed.
 7. **The scope is advisory (section 9).** The per-repo list keeps an honest agent and a page inside
    its repo's sites. It does not stop a process that connects with another session's scope. A scope
-   token per session is a choice for the operator (section 13, choice 1). Section 13 holds six
-   choices: the token, service workers, the operator's own tabs, the retry, the default list, and
+   token per session was proposed. The operator answered: "see if we can solve it without adding
+   a whole new key system." (2026-11-05, ab-dm6; section 13, choice 1). Section 13 records the six
+   answers: the token, service workers, the operator's own tabs, the retry, the default list, and
    which list a sent site joins.
 8. **One profile (section 10).** The operator-mode send stays one profile. A sent site's cookies are
    in the profile for every scope. Only navigation is guarded.
@@ -306,7 +308,8 @@ popups-form-retry.json):
   `Referer`, `Sec-Fetch-Site: cross-site`, no `Sec-Fetch-User`, and `history.length` 2. So the retry
   is a reload. A one-shot session rule that removes `Cache-Control` from the retried request did not
   remove it (20 of 20, ab-lead's reviewer). So the retry stays visible to a site that compares a
-  popup's first request with a normal one: an operator choice (section 13, choice 4).
+  popup's first request with a normal one. The operator kept the retry (2026-11-05, ab-8zv;
+  section 13, choice 4).
 - The retry runs once per tab and only for a host that the tab's list covers. A tab of no scope
   never gets one; a marked tab (choice 3) and its popups get it like a tab of a scope. The receiver
   sends no `blocked` notice for a first request that it retries; it sends one when the rule is in
@@ -405,8 +408,8 @@ that page while it lives.
 | A session rule that blocks the scripts of requests of no tab (`tabIds: [-1]`, `resourceTypes: ["script"]`) | Registration failed (`TypeError`); dedicated and shared workers still started (results/sw-script.json) | `navigator.serviceWorker.register()` fails, as with an ad blocker that blocks a worker script |
 | The worker removal of C5 at each change of a list | Removes the workers that exist; a site registers its worker again on its next visit | A site's worker is gone after a list change |
 
-**Decision (the default, the operator can choose otherwise in section 13, choice 2): keep service
-workers, and guard in three layers.**
+**Decision: keep service workers (2026-11-05, ab-8zv); the operator selected "Keep service workers on" again on 2026-11-06 (ab-7wg).**
+Section 13, choice 2 records both answers. The guard has three layers.
 
 1. The relay refuses a main-frame `Page.navigate` (no `frameId`, or the `frameId` of the tab's own
    target, which Playwright's `goto` sends) and `Target.createTarget` with a URL, when the URL's
@@ -434,7 +437,8 @@ to register a service worker. Sites lose offline pages and push, and a site that
 sees the failure, which is rare in real Chrome. The operator's top goal is that a site sees nothing
 unusual (two-modes design, section 7). And the scope is advisory (section 9): a session that wants
 another repo's sites can name that repo's scope. So the guard closes the hole for an honest agent
-and for a page's own links, at no cost to sites; the full block is the operator's choice.
+and for a page's own links, at no cost to sites. The operator chose "Keep service workers on"
+(2026-11-06, ab-7wg), after the item described the cached page and its exposure to the agent.
 
 **What the guard leaves open:** a page's navigation that the receiver does not win at
 `onBeforeNavigate` commits; the worker's page then runs its scripts for some tens of ms before the
@@ -503,16 +507,16 @@ relay and moves both at once.
 - `scopes`: scope to list name, or `null`. A scope with `null`, or whose list is not in `lists`, has
   no list; it does not fall back to `default`. A scope that does not match the scope pattern, or
   whose value is neither a string nor `null`, applies as absent and counts as refused.
-- `default`: a list name or `null` (the recommended value, choice 5 a): the list of a scope that
-  `scopes` does not name. Any other value counts as refused and applies as `null`. With `null`, such
-  a scope has no list: its tabs fail closed, and the relay refuses its connections.
+- `default`: a list name or `null` (the chosen value, 2026-11-05, ab-8zv; choice 5 a): the list of
+  a scope that `scopes` does not name. Any other value counts as refused and applies as `null`.
+  With `null`, such a scope has no list: its tabs fail closed, and the relay refuses its connections.
 - `operator` (with choice 3): what the operator's own (marked) tabs may open: `"*"` (any site,
-  choice 3 a), a list name (b and c), or `null` (d; also when the field is absent). For b (the
-  union), agentwatch adds a list of the union to `lists` (for example `"operator-union"`) and names
-  it. Any other value (not `"*"`, not `null`, not a string that matches the scope pattern) counts 1
-  in `refused` and applies as `null`; a valid name that is not in `lists` applies as `null` with no
-  count. `rules` counts the marked-tab rule too. The `allowlist` line carries the field; the relay
-  ignores it (no connection sees a marked tab).
+  the chosen value, 2026-11-05, ab-dm6; choice 3 a), a list name (b and c), or `null` (d; also when
+  the field is absent). For b (the union), agentwatch adds a list of the union to `lists`
+  (for example `"operator-union"`) and names it. Any other value (not `"*"`, not `null`, not a
+  string that matches the scope pattern) counts 1 in `refused` and applies as `null`; a valid name
+  that is not in `lists` applies as `null` with no count. `rules` counts the marked-tab rule too.
+  The `allowlist` line carries the field; the relay ignores it (no connection sees a marked tab).
 - The daemon names a session's scope in `scopes` before it gives the session its endpoint
   (`agentwatch browser endpoint` waits for the receiver's answer and the `allowlist` line). Else a
   new session could connect in the moment before, and get the default list, which can be another
@@ -549,8 +553,8 @@ relay and moves both at once.
 
 The agentwatch side (aw-lead): which repo each session belongs to, the lists per repo, the default,
 where the lists live (the proxy path's `allowlist.json` of C5 stays for the CDP proxy), and the web
-viewer's editing. A send of the operator mode no longer implies "add to the one list": agentwatch
-decides which list a sent site joins.
+viewer's editing. A send of the operator mode adds the sign-in to no repo's list. The operator
+chose "No repo until you add it" (2026-11-05, ab-dm6; section 13, choice 6).
 
 ### 8.2 What the receiver answers and tells
 
@@ -663,8 +667,12 @@ can connect with the scope of a session of repo A and get A's list.
 - A process that reads the profile's files (the cookie store) directly, as today.
 - A content setting that another scope granted for a host that both lists hold (section 8.4).
 
-**A fix exists: a scope token** (section 13, choice 1). The daemon makes a random token for each
-scope; the endpoint URL carries it in its query,
+**The scope-token proposal** (section 13, choice 1). The operator answered on 2026-11-05 (ab-dm6):
+"see if we can solve it without adding a whole new key system." The text below records the token
+proposal, not a chosen answer. Section 13 quotes the full answer.
+
+In the proposal, the daemon makes a random token for each scope; the endpoint URL carries it in
+its query,
 `ws+unix://<socket>:/devtools/browser/<scope>?key=<token>` (or in an upgrade header
 `X-Agentwatch-Key`, for a client that can send one, as a script's `connectOverCDP({headers})`); the
 daemon sends the relay a hash of each token in the `allowlist` line (`"keys":{"<scope>":"<sha-256
@@ -787,15 +795,14 @@ rejected ways).
   behaves on such a popup is not measured (section 5.2).
 - The guard is not a block for a worker's page, also one that the worker passes on from the network
   (section 6), or a back/forward-cache page (section 7).
-- With a default list, a scope name that `scopes` does not name gets that list (section 8.1).
-- Tabs of no scope fail closed, and that includes the operator's own tabs. Today the operator can
-  open a tab in the agent browser's live view (agentwatch design §5.15) and browse the one list.
-  With this design such a tab has no scope, so it can open no site at all. The receiver can mark
-  such a tab: a new tab that no page opened and that no bridge op created starts at Chrome's New Tab
-  page (`chrome://newtab/`), which no agent tab ever does (the relay opens `about:blank` only). The
-  options are in section 13, choice 3. The mark, its rule, the guard for marked tabs and the
-  inheritance by their popups are receiver work (part 1d, section 12); the setting is agentwatch's
-  (part 3).
+- The operator kept no default list (2026-11-05, ab-8zv; section 13, choice 5).
+  A scope that `scopes` does not name gets no sites.
+- Tabs of no scope fail closed, except the operator's marked tabs. The operator chose "Any site"
+  (2026-11-05, ab-dm6; section 13, choice 3). The receiver marks a new tab that no page opened
+  and that no bridge op created: it starts at Chrome's New Tab page (`chrome://newtab/`), which
+  no agent tab ever does (the relay opens `about:blank` only). The mark, its rule, the guard for
+  marked tabs and the inheritance by their popups are receiver work (part 1d, section 12).
+  The setting is agentwatch's (part 3).
 - A daemon restart (a link change) leaves the open tabs in no scope: they fail closed and close at
   the next `set_scopes` when no list covers them (section 7). Today they stay open but no connection
   sees them. (Changed by the orphan agent tabs design: the tabs keep their scopes over a link change,
@@ -837,12 +844,12 @@ parts 1 to 3 only where they say. Before the contract PR merges, ab-lead mails i
 
 ## 13. Choices for the operator
 
-Six choices. The design works with the "No answer" of each; the build parts that each choice changes
-are in section 12. ab-lead asks the operator choices 1, 3 and 6 now, in the Needs You question
-ab-dm6, and records choices 2, 4 and 5 as assumptions, each with its option a, in ab-8zv (the
-operator can reverse an assumption in To Review).
+The options, recommendations and "No answer" lines below record the questions as asked.
+The Answer line of each choice records the operator's answer. Section 12 lists the build parts.
+The operator answered choices 1, 3 and 6 in ab-dm6 on 2026-11-05, and choices 2, 4 and 5 in
+ab-8zv on 2026-11-05. The operator answered choice 2 again in ab-7wg on 2026-11-06.
 
-**Choice 1 (asked, ab-dm6). Should each agent session get a scope token, so that a session cannot
+**Choice 1 (answered, ab-dm6). Should each agent session get a scope token, so that a session cannot
 take another repo's list by naming that repo's scope?** Today any process of your OS user can
 connect to the agent browser with any session's name and get that session's list.
 
@@ -864,9 +871,17 @@ connect to the agent browser with any session's name and get that session's list
 - Recommendation: b, because without it the per-repo list is one name away for any session, and a
   simple injected instruction can use it.
 - No answer: a (no token); the rest of the design does not depend on it.
+- **Answer (2026-11-05, ab-dm6):** "agentwatch knows what repo launched the session. so it knows
+  each claude / codex PID. can't we enforce this at the OS level without a key? i.e. each process
+  gets its socket, etc.
 
-**Choice 2 (assumed a, ab-8zv). Should the agent browser block service workers, so that a site's
-worker never shows its page in another repo's tab?**
+  if we do it via MCP then we can point the mcp target at the right socket inside claude i think.
+  see if we can solve it without adding a whole new key system."
+  The [peer admission design](2026-11-05-peer-admission-design.md) answers this request with a
+  check of the connecting process, without a key.
+
+**Choice 2 (answered a, ab-8zv and ab-7wg). Should the agent browser block service workers, so that
+a site's worker never shows its page in another repo's tab?**
 
 - **a. Keep service workers; the guard stops most such pages (recommended).** Sites work as in a
   normal Chrome. A page's link to another repo's site that has a worker can still show that page for
@@ -881,8 +896,13 @@ worker never shows its page in another repo's tab?**
   With choice 1 b, the worker hole is the last easy way from one repo's tab to another repo's site;
   the recommendation stays a, but choose b if that way must be closed too.
 - No answer: a.
+- **Answer (2026-11-05, ab-8zv): a**, "that's fine. keep. we control direct agent navigation.
+  i.e. we don't let an agent navigate outside the allowlist, but if a site uses an external auth
+  provider (auth0 for example) we need to allow those things"
+- **Answer (2026-11-06, ab-7wg):** "Keep service workers on". The item describes another repo's
+  cached page running for tens of ms in a repo's tab, where an attached agent can read it.
 
-**Choice 3 (asked, ab-dm6). What can your own tabs in the agent browser's live view open?** Today a
+**Choice 3 (answered a, ab-dm6). What can your own tabs in the agent browser's live view open?** Today a
 tab that you open there can browse the one list. With per-repo lists it belongs to no repo, so it
 can open no site. The agent browser can mark your tabs: a tab that you open starts at Chrome's New
 Tab page, which no agent tab does (the relay opens `about:blank` only and refuses `chrome:` URLs;
@@ -898,8 +918,9 @@ tab is marked too. No connection of an agent ever sees a marked tab.
 - Recommendation: a, because it is the plan that the agentwatch design already holds, and you decide
   what you open yourself.
 - No answer: d (No site).
+- **Answer (2026-11-05, ab-dm6): a**, "Any site".
 
-**Choice 4 (assumed a, ab-8zv). Is it acceptable that a site can see the retry of a popup?** A popup
+**Choice 4 (answered a, ab-8zv). Is it acceptable that a site can see the retry of a popup?** A popup
 that does not keep a link to its opener (a link with `target=_blank`, or `window.open` with
 `noopener`) always loads a moment too early for its repo's rule, and the agent browser loads it once
 more. A popup that keeps its opener needs the same retry when the box is busy: with one window per
@@ -913,8 +934,11 @@ most popups would show it.
   many sign-in popups, fail.
 - Recommendation: a, because b breaks common sites, and a site rarely compares these headers.
 - No answer: a.
+- **Answer (2026-11-05, ab-8zv): a**, "that's fine. keep. we control direct agent navigation.
+  i.e. we don't let an agent navigate outside the allowlist, but if a site uses an external auth
+  provider (auth0 for example) we need to allow those things"
 
-**Choice 5 (assumed a, ab-8zv). What list does a scope get that no repo names (the default list)?**
+**Choice 5 (answered a, ab-8zv). What list does a scope get that no repo names (the default list)?**
 For example a program that agentwatch did not start, or a scope name that someone made up.
 
 - **a. None (recommended).** Such a connection is refused. Each session gets its repo's list by
@@ -924,8 +948,11 @@ For example a program that agentwatch did not start, or a scope name that someon
   default list leaves that hole open.
 - Recommendation: a, because b gives a list to any name.
 - No answer: a.
+- **Answer (2026-11-05, ab-8zv): a**, "that's fine. keep. we control direct agent navigation.
+  i.e. we don't let an agent navigate outside the allowlist, but if a site uses an external auth
+  provider (auth0 for example) we need to allow those things"
 
-**Choice 6 (asked, ab-dm6). Which list does a site that you send to the agent browser join?** Today
+**Choice 6 (answered b, ab-dm6). Which list does a site that you send to the agent browser join?** Today
 a send adds the site to the one list.
 
 - a. You choose the repo (or repos) when you send. The send dialog of the operator extension gets
@@ -936,6 +963,7 @@ a send adds the site to the one list.
 - Recommendation: b, because a sign-in is the most sensitive thing on the box, and b makes each
   repo's access an explicit choice with no change to the operator extension.
 - No answer: b.
+- **Answer (2026-11-05, ab-dm6): b**, "No repo until you add it".
 
 ## 14. The evidence
 
