@@ -317,7 +317,7 @@ popups-form-retry.json):
   again (no second retry), and when the retry starts no request (above).
 
 **How often a popup with an opener needs the retry** depends on the load of the box. In this probe:
-1 of 60 with no hold, 2 of 60 with the hold (the table above). a reviewer (review-42, the
+1 of 60 with no hold, 2 of 60 with the hold (the table above). A reviewer (review-42, the
 same probe) measured more: 3 to 4 of 20 with the hold, 2 of 10 for the sign-in pattern, and 8 of 10
 with one window per page (agent-browser PR #43) and the opener behind another window. The time of
 one assignment also grows with the tabs open under the rules: median 9 ms with none, 13 ms with 50,

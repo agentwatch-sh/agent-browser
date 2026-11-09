@@ -1,7 +1,9 @@
 // Contract checks for historical probes. These tests never execute a probe or start Xvfb or Chromium.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { startMode } from "./live/function-keys/trials.ts";
 
@@ -69,4 +71,18 @@ test("anti-detect extra starts no Chromium when Xvfb exits or its socket never a
     await assert.rejects(start(() => ({ pid: 123, exitCode, signalCode }), 167, "test-auth", [], { track() {} }, () => socket, async () => {}, () => {}, { exit() { throw new Error("Xvfb refused"); } }), /Xvfb/);
   }
   await start(() => ({ pid: 123, exitCode: null, signalCode: null }), 167, "test-auth", [], { track() {} }, () => true, async () => {}, () => {}, { exit() { throw new Error("a ready Xvfb must pass"); } });
+});
+
+test("the shell doc probe prints a guard refusal even with errexit", () => {
+  const s = read(probes + "2026-11-03-two-modes-probe/run.sh");
+  const guardStart = s.indexOf('python3 -I -B');
+  const start = s.lastIndexOf('\n', guardStart) + 1;
+  const commands = s.slice(start, s.indexOf('mkdir -p "$RES"'));
+  const dir = mkdtempSync(join(tmpdir(), "probe-refusal-"));
+  try {
+    const script = `set -euo pipefail\nRUN="$1"\nHERE=unused\npython3() { printf 'refused fixture lock\\n'; return 2; }\n${commands}`;
+    const r = spawnSync("bash", ["-c", script, "guard-refusal", dir], { encoding: "utf8" });
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /refused fixture lock/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

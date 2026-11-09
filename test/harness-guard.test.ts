@@ -254,7 +254,7 @@ test("a pid that the driver names but that is neither in its tree nor started af
 test("a child that a recorded process starts after the driver's end (outside the driver's tree) is stopped too", { skip }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
   const late = `607.${process.pid}${Date.now() % 1000}`;
-  const lateOnes = () => execFileSync("ps", ["-e", "-o", "pid="], { encoding: "utf8" }).split("\n").filter((l) => l.trim().endsWith(`sleep ${late}`)).map((l) => Number(l.trim().split(" ")[0]));
+  const lateOnes = () => execFileSync("ps", ["-e", "-o", "pid=,args="], { encoding: "utf8" }).split("\n").filter((l) => l.trim().endsWith(`sleep ${late}`)).map((l) => Number(l.trim().split(" ")[0]));
   const pids: number[] = [];
   try {
     const d = driver(dir, "late", { LATE: late });

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 const [sock, abBin, lateArg] = process.argv.slice(2);
 const here = dirname(fileURLToPath(import.meta.url));
 const py = (label, extra = "") => `python3 ${join(here, "client.py")} ${sock} ${label} ${extra}`;
-const stateDir = mkdtempSync(join(tmpdir(), "peer-design-ab-"));
+const stateDir = mkdtempSync(join(tmpdir(), "peer-probe-ab-"));
 writeFileSync(join(stateDir, "allowlist.json"), JSON.stringify({ allow: ["example.com"] }));
 const ab = (label) => `node ${abBin} tabs --cdp-url ws+unix://${sock}:/devtools/browser/${label} --state-dir ${stateDir} --allowlist ${join(stateDir, "allowlist.json")} 2>&1 | head -1`;
 /** Claude Code's own form of a Bash tool command (read from this session's process table): a snapshot

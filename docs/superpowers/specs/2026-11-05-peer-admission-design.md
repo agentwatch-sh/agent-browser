@@ -169,7 +169,7 @@ channel. Six ways, measured (`results/`):
 | W3. The daemon accepts and passes the socket (the daemon lead's second choice) | The daemon listens, checks, and sends the accepted socket to the relay as `NODE_HANDLE` type `net.Socket`; the relay feeds it to its HTTP server with `emit('connection', socket)`; no CDP byte goes through the daemon | +0.40 ms (sequential p50 1.15 ms) | The same unsupported protocol. The daemon owns the endpoint's listener. A refused connection must still go to the relay (with no scope), so that the relay sends the 403 text: an answer before the request reads gives the client `EPIPE` (measured in the first run). |
 | W4. A helper per connection | `spawn(helper, [], {stdio: [..., socket]})`: the helper gets the socket as fd 3 and runs `getsockopt` | 2.2 ms p50 (a C helper), 28 ms p50 (a Python helper) | A compiled binary per platform in a package that has none today, or 28 ms per connection. |
 | W5. `/proc` and `ss` (Linux only) | The peer inode from `ss -x` (sock_diag; `/proc/net/unix` has no peer column), then a scan of `/proc/<pid>/fd`; or `ss -xp` | 25 ms (`ss -x` 6 ms, the scan 19 to 34 ms over about 510 pids and 1300 fds) | It finds every holder of the socket, not the connecter: two holders after a fork, in 5 of 5 runs. It cannot tell them apart. Refused. |
-| W6. The daemon forwards the bytes | The daemon accepts and copies CDP traffic both ways | Not measured | the daemon lead refuses it: all CDP load on the daemon, and a daemon restart cuts every client. Refused. |
+| W6. The daemon forwards the bytes | The daemon accepts and copies CDP traffic both ways | Not measured | The daemon lead refuses it: all CDP load on the daemon, and a daemon restart cuts every client. Refused. |
 
 Each way that admits refused the re-parented client with 403 and admitted the 350 connections of
 the root's own tree (300 one after the other, 50 at once) in W2 and W3. A burst of 50 at once took
@@ -375,7 +375,7 @@ The texts below replace the blocks of the key. Each line number is of main `052c
 
 No new field. The keys were never in `set_scopes`: C10's `allowlist` line carried them, and the
 receiver never saw them. The roots take the keys' place in that line, so no pid reaches the
-extension. (the daemon lead's note names `set_scopes`. The line is the better place: the receiver has no use
+extension. (The daemon lead's note names `set_scopes`. The line is the better place: the receiver has no use
 for a pid, and the line is where the relay reads the scopes.) The intro's mention of
 "choice 1, the scope's key" (line 29) and C4's "only when the operator allowed it: C11, the scope's
 key" (line 289) name the peer check instead. Nothing in the receiver (parts 1a to 1d) changes.

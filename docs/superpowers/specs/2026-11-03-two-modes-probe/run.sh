@@ -18,7 +18,10 @@ SOCK="${SOCK:-${XDG_RUNTIME_DIR:-/tmp}/ab-v16-probe-$$.sock}"
 RES="$HERE/results"
 mkdir -p "$RUN/pids"
 # The guard owns the harness lock and records this driver's tree, including its server and relay.
-python3 -I -B "$HERE/../../../../test/live/harness_guard.py" --name documentation-probe --driver "$$" --pid-dir "$RUN/pids" --log "$RUN/guard.log" >"$RUN/guard.answer"
+if ! python3 -I -B "$HERE/../../../../test/live/harness_guard.py" --name documentation-probe --driver "$$" --pid-dir "$RUN/pids" --log "$RUN/guard.log" >"$RUN/guard.answer"; then
+  cat "$RUN/guard.answer" >&2
+  exit 2
+fi
 read -r mode guard _ <"$RUN/guard.answer"
 [[ "$mode" = locked || "$mode" = nested ]] || { cat "$RUN/guard.answer" >&2; exit 2; }
 mkdir -p "$RES" "$RUN/home/Downloads" "$RUN/dl" "$RUN/mcp-out"

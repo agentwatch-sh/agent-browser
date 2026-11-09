@@ -61,7 +61,7 @@ measurements. The decisions, each with its reason in the section that the line n
 
 The probe (part "today", two runs; part "worker", three runs; part "ids") drives the relay of this
 checkout through a stand-in daemon, and the receiver 0.2.0 in its own Chromium. Each line names its
-probe case. a reviewer ran the probe again (review-48: the same results) and two checks of its
+probe case. A reviewer ran the probe again (review-48: the same results) and two checks of its
 own (its rows name "review-48").
 
 | What | Today | Case |
