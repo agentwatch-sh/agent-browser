@@ -1,5 +1,5 @@
 // CLI download check in default mode. Linux, headless, only local *.localhost pages.
-// flock /home/selden/.cache/ab-lead/heavy.lock timeout 1500 node test/live/click-download.ts
+// Run under the box's shared heavy-job lock, if it has one: node test/live/click-download.ts
 // Uses its own Chromium, profile, pipe endpoint, proxy and harness guard. No external mode.
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";

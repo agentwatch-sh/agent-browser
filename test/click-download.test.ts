@@ -1,10 +1,13 @@
 // The real CLI, a fake Chrome, and agent mode's real relay download emulation. No browser starts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { syncBuiltinESMExports } from "node:module";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
+import { NotAllowedError } from "../src/errors.ts";
+import { withInputLock } from "../src/input.ts";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
@@ -96,6 +99,7 @@ for (const agent of [false, true]) {
       assert.equal(r.json.error.code, "not_allowed", r.stdout + JSON.stringify(f.h?.logs));
       assert.ok(r.json.error.message.includes(url), r.stdout);
       assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
+      if (!agent) assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default", "restored after refusal");
     } finally { await f.close(); }
   });
 
@@ -110,6 +114,7 @@ for (const agent of [false, true]) {
       assert.match(r.json.error.message, /dangerous|person/);
       assert.ok(Date.now() - start < 6000, "the caller's timeout applies before completion");
       assert.equal(f.page.title, "download-started", "the click starts the waiting download before its timeout");
+      if (!agent) assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default", "restored after timeout");
       assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
     } finally { await f.close(); }
   });
@@ -124,7 +129,7 @@ test("capture checks the live page before changing download behavior or capturin
     const from = f.chrome.calls.length;
     const dir = join(f.c.dir, "never-created");
     let acted = false;
-    await assert.rejects(tab.expectDownload(async () => { acted = true; }, dir, 100), /not on the allowlist/);
+    await assert.rejects(tab.expectDownload(async () => { acted = true; await tab.click("#b"); }, dir, 100), /not on the allowlist/);
     assert.equal(acted, false);
     assert.equal(existsSync(dir), false);
     assert.deepEqual(f.chrome.calls.slice(from).filter((x) => /Browser.setDownloadBehavior|Page.captureScreenshot|Emulation.clearDeviceMetricsOverride|Input\./.test(x.method)), []);
@@ -186,4 +191,140 @@ test("a click error restores download behavior and removes the capture folder", 
     assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
     assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default");
   } finally { await f.close(); }
+});
+
+
+test("personal mode refuses library and CLI capture without a directory or download behavior change", async () => {
+  const f = await setup();
+  const b = await AgentBrowser.connect({ ...f.o, mode: "personal" });
+  try {
+    const tab = await b.open(f.fx.base, { name: "personal-export" });
+    const dir = join(f.c.dir, "personal-downloads"), from = f.chrome.calls.length;
+    let acted = false;
+    await assert.rejects(tab.expectDownload(async () => { acted = true; }, dir, 200), /personal mode.*operator.*Chrome/);
+    assert.equal(acted, false);
+    assert.deepEqual(f.chrome.calls.slice(from), [], "the library refuses before any CDP call");
+    assert.equal(existsSync(dir), false);
+    const r = await cli(["click", "personal-export", "#b", "--mode", "personal", "--download", dir, "--timeout", "200", ...f.args, "--json"]);
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "usage");
+    assert.match(r.json.error.message, /personal mode.*operator.*Chrome/);
+    assert.equal(existsSync(dir), false);
+    assert.equal(f.chrome.calls.slice(from).some((x) => x.method === "Browser.setDownloadBehavior"), false);
+  } finally { await b.disconnect(); await f.close(); }
+});
+
+test("capture rechecks the page after another chain releases the input lock", async () => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), checked = Promise.withResolvers<void>();
+  const holder = withInputLock(b.settings, async () => { entered.resolve(); await release.promise; });
+  try {
+    const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "after-lock");
+    const original = tab.assertAllowed.bind(tab);
+    tab.assertAllowed = async () => { await original(); checked.resolve(); };
+    await entered.promise;
+    let acted = false;
+    const capture = tab.expectDownload(async () => { acted = true; await tab.click("#b"); }, dir, 150);
+    void capture.catch(() => {});
+    await checked.promise;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(existsSync(dir), false, "the capture waits for the other chain");
+    await f.chrome.navigate(f.page, "https://elsewhere.invalid/");
+    const from = f.chrome.calls.length;
+    release.resolve(); await holder;
+    await assert.rejects(capture, NotAllowedError);
+    assert.equal(acted, false);
+    assert.equal(existsSync(dir), false);
+    assert.deepEqual(f.chrome.calls.slice(from).filter((x) => /Browser.setDownloadBehavior|Page.captureScreenshot|Emulation.clearDeviceMetricsOverride|Input\./.test(x.method)), []);
+  } finally { release.resolve(); await holder; await b.disconnect(); await f.close(); }
+});
+
+test("an off-list page refuses capture before waiting for another chain's input lock", async () => {
+  const f = await setup(), b = await AgentBrowser.connect({ ...f.o, inputTiming: { lockWaitMs: 250 } });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const holder = withInputLock(b.settings, async () => { entered.resolve(); await release.promise; });
+  try {
+    const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "before-lock");
+    await entered.promise;
+    await f.chrome.navigate(f.page, "https://elsewhere.invalid/");
+    await assert.rejects(tab.expectDownload(() => tab.click("#b"), dir, 150), NotAllowedError);
+    assert.equal(existsSync(dir), false);
+    assert.equal(f.chrome.calls.some((x) => x.method === "Browser.setDownloadBehavior"), false);
+  } finally { release.resolve(); await holder; await b.disconnect(); await f.close(); }
+});
+
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: capture refuses a blob URL with an off-list HTTP origin`, async () => {
+  const f = await setup(agent);
+  try {
+    const url = "blob:https://elsewhere.invalid/private-export";
+    f.download(url);
+    const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "not_allowed");
+    assert.ok(r.json.error.message.includes(url), r.stdout);
+    assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
+  } finally { await f.close(); }
+});
+
+test("the start URL check refuses an off-list download before it completes", async () => {
+  const f = await setup();
+  try {
+    const url = "https://elsewhere.invalid/unfinished.csv";
+    f.download(url, "inProgress");
+    const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "not_allowed");
+    assert.ok(r.json.error.message.includes(url), r.stdout);
+    assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default");
+    assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
+  } finally { await f.close(); }
+});
+
+test("a download that starts after the timeout is canceled and leaves no captured output", async () => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  try {
+    const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "late-download");
+    await assert.rejects(tab.expectDownload(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const behavior = f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params;
+      writeFileSync(join(behavior.downloadPath, "late-guid"), CONTENT);
+      (f.chrome as any).broadcast("Browser.downloadWillBegin", { guid: "late-guid", frameId: `F-${f.page.targetId}`, url: f.fx.base + "/late.csv", suggestedFilename: "late.csv" });
+      // Let the browser event reach the capture before the action returns.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }, dir, 20), /download timed out/);
+    assert.ok(f.chrome.calls.some((x) => x.method === "Browser.cancelDownload" && x.params.guid === "late-guid"));
+    assert.deepEqual(readdirSync(dir), []);
+    assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default");
+    await f.chrome.download(f.page, f.fx.base + "/file.bin", "after-restore.bin");
+    assert.deepEqual(readdirSync(dir), [], "a download after restoration stays outside DIR");
+  } finally { await b.disconnect(); await f.close(); }
+});
+
+test("a timeout explains that iframe and new-tab downloads are ignored", async () => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  try {
+    const tab = await b.attach(f.page.targetId);
+    for (const frameId of ["child-frame", "new-tab-main-frame"]) {
+      const dir = join(f.c.dir, frameId);
+      await assert.rejects(tab.expectDownload(async () => {
+        (f.chrome as any).broadcast("Browser.downloadWillBegin", { guid: frameId, frameId, url: f.fx.base + "/export.csv", suggestedFilename: "ignored.csv" });
+        (f.chrome as any).broadcast("Browser.downloadProgress", { guid: frameId, state: "completed" });
+      }, dir, 30), /iframe.*new tab/);
+      assert.deepEqual(readdirSync(dir), []);
+    }
+  } finally { await b.disconnect(); await f.close(); }
+});
+
+test("staging cleanup failure preserves the original click error", async (t) => {
+  const f = await setup(), b = await AgentBrowser.connect(f.o);
+  const original = fs.rmSync;
+  try {
+    const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "cleanup-error");
+    t.mock.method(fs, "rmSync", (path, options) => {
+      if (String(path).startsWith(dir + "/.download-")) throw Object.assign(new Error("late copy blocks cleanup"), { code: "EBUSY" });
+      return original(path, options);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(tab.expectDownload(async () => { throw new Error("original click error"); }, dir, 100), /original click error/);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); await b.disconnect(); await f.close(); }
 });

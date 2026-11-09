@@ -92,8 +92,10 @@ It clicks a local `a.localhost` button that serves a CSV attachment.
 It then clicks a button that creates a blob download.
 Both results must name a file with the expected contents, name, URL and size.
 
+Run each check under the box's shared heavy-job lock, if it has one.
+
 ```sh
-flock /home/selden/.cache/ab-lead/heavy.lock timeout 1500 node test/live/click-download.ts
+node test/live/click-download.ts
 ```
 
 The agent-mode harness runs the same checks through its stand-in daemon, receiver and relay.
@@ -101,7 +103,7 @@ Use its own mode only. The downloads group refuses external mode.
 
 ```sh
 CHROME_EXTENSION=/absolute/path/to/chrome-extension CASES=downloads DISPLAY_N=124 \
-  flock /home/selden/.cache/ab-lead/heavy.lock timeout 1500 node test/live/agent-mode/run.ts
+  node test/live/agent-mode/run.ts
 ```
 
 Both harnesses use `harnessGuard` and check `reservedDisplay` before they start Chromium.

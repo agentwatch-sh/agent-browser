@@ -1608,8 +1608,8 @@ Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
 `clickText(text, { within })`, `clickAt(x, y)`, `hover(selector)`, `type(text, selector?)`,
 `press(key)`, `setFiles(selector, paths)`, `text(selector?)`, `screenshot(path, { fullPage, viewport })`,
-`fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir, timeoutMs=120000)` (a download that a
-click starts), `expectResponse(match, action)` (capture an API response body; a CORS preflight's
+`fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir, timeoutMs=120000)` (agent mode only; a main-frame download;
+allowlist checks, input lock, staging folder, one timeout and `bytes` in the result; see **Downloads that a click starts**), `expectResponse(match, action)` (capture an API response body; a CORS preflight's
 response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, transform, action)`
 (rewrite a request body in flight; a CORS preflight is continued untouched), `close()`. Property
 `drive`: `"window"` (a page in a window of its own, Linux), `"focus-emulation"` or `"hidden"` (the
@@ -1710,7 +1710,7 @@ own entry in the consumer's allowlist file. `fetch` follows the page's same-orig
 
 ### Downloads that a click starts
 
-Use `click TAB SELECTOR --download DIR` or `click TAB --text LABEL --download DIR`.
+Use `click TAB SELECTOR --download DIR` or `click TAB --text LABEL --download DIR` in agent mode.
 The option uses the same trusted click and the same allowlist checks as a normal click.
 This option keeps the command list small.
 The CLI resolves `DIR` from its current folder, like the path of `shot`.
@@ -1726,24 +1726,52 @@ The text result prints these four fields too.
 A later download keeps an existing file and uses a unique filename.
 Without `--download`, the click result stays the same.
 
+Personal mode refuses a download capture.
+The library's `Tab.expectDownload` refuses it before any lock, directory change or CDP call.
+A capture changes download behavior for the whole Chrome default context.
+Personal mode uses the operator's own Chrome, so a capture could affect downloads in other windows.
+Use agent mode for a capture.
+
+Only a download that the tab's main frame starts counts.
+Downloads from a child frame (iframe) or a new tab that the click opens are ignored.
+A capture that gets only those downloads ends at the timeout.
+
 `--timeout MS` takes a positive integer in milliseconds and requires `--download`.
 The default is 120000 ms.
 The timeout starts before the click, after the input lock becomes available.
 The capture lets the click finish before it restores Chrome's download behavior.
+The total time can exceed `--timeout` because the click finishes first.
 The click retains its input timing and input limits.
-A timeout removes this capture's unfinished output.
-The error explains that Chrome can wait for a person to approve a dangerous file.
+The timeout error states the main-frame limit and explains that Chrome can wait for a person to approve a dangerous file.
 Agent mode never approves these files.
 The relay can also cancel a file that Chrome marks as dangerous.
 
-The capture checks the live page before it changes download behavior or starts a capture or size clear.
-It accepts `blob:` and `data:` download URLs from that checked page.
-It refuses an off-list HTTP(S) download URL, reports that URL in the error, and removes its output.
-Chrome has already fetched the URL with the profile's cookies by then.
+`Tab.expectDownload(action, dir, timeoutMs=120000)` checks the allowlist before it acts and after it gets the input lock.
+The checks precede download behavior changes, captures and size clears.
+The library now holds the input lock during the action and the download wait.
+Other input commands that share its state folder wait while the capture holds the lock.
+This wait can last for the capture timeout, or longer if the click finishes later.
+`timeoutMs` now covers both the start and completion of the download.
+Earlier versions use a separate 30-second wait for the start.
+The library result now includes `bytes` with `path`, `suggestedFilename` and `url`.
+
+The capture checks the download URL when it starts, against the allowlist loaded for that connection.
+It accepts `data:` URLs.
+For a `blob:` URL with an HTTP(S) inner origin, that origin must be on the allowlist.
+An opaque blob origin has no HTTP(S) host to check.
+The capture refuses an off-list HTTP(S) URL or blob origin, reports the full URL, and removes its output.
+Chrome has already fetched an HTTP(S) URL with the profile's cookies by then.
 This refusal stops the saved file, not the request.
 The operator must add a download host to the allowlist if the export uses another host.
-The capture uses `Tab.expectDownload` in both modes.
-In agent mode, the relay copies the completed file from Chrome's download folder to the caller's directory.
+
+The library saves into a private staging folder under `DIR` and moves a completed file to its final path.
+It removes the staging folder and unfinished output after success, refusal or timeout.
+It restores Chrome's default download behavior.
+A cleanup error is logged and preserves the original capture error.
+This cleanup applies to `DIR` and its staging folder only.
+In agent mode through the relay, Chrome's own download folder in the agent profile retains every file that Chrome finishes.
+The relay copies those files to the caller's directory; it never moves them.
+That behavior predates this CLI option.
 
 ## Python adapter (`python/agent_browser`)
 

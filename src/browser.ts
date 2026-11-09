@@ -609,6 +609,18 @@ function notEmpty(path: string, method: string): void {
   if (path === "") throw new UsageError(`${method}: the path is empty`);
 }
 
+/** A captured URL is checked once, at its start, against this connection's allowlist. */
+function assertDownloadUrl(url: string, allow: readonly string[]): void {
+  const parsed = new URL(url);
+  if (parsed.protocol === "data:") return;
+  if (parsed.protocol === "blob:") {
+    if (/^https?:/.test(parsed.origin) && !isAllowedUrl(parsed.origin, allow))
+      throw new NotAllowedError(url, `refusing download from ${url}: blob origin is not on the allowlist`);
+    return;
+  }
+  if (!isAllowedUrl(url, allow)) throw new NotAllowedError(url, `refusing download from ${url}: URL is not on the allowlist`);
+}
+
 /** An exact page size for a screenshot or a recording: CSS pixels and a device pixel ratio. */
 export type Viewport = { width: number; height: number; scale: number };
 
@@ -1668,11 +1680,14 @@ export class Tab {
   }
 
   /**
-   * Run an action that triggers a browser download and save the file into `dir`.
-   * Download behaviour is browser-wide, so it is redirected only for the duration of
-   * this call and then restored to Chrome's default.
+   * Agent mode only: run an action and capture a download from this tab's main frame into `dir`.
+   * The input lock covers the action and the wait. One timeout covers download start and completion;
+   * the action finishes before cleanup. Browser-wide download behavior is restored to Chrome's default.
+   * Personal mode refuses before any CDP call, because its Chrome belongs to the operator.
    */
   async expectDownload(action: () => Promise<unknown>, dir: string, timeoutMs = 120_000): Promise<Download> {
+    if (this.browser.settings.mode === "personal")
+      throw new UsageError("a download capture changes the whole Chrome; personal mode is the operator's own Chrome, so it never captures a download; use agent mode");
     notEmpty(dir, "expectDownload");
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647)
       throw new UsageError("expectDownload timeout must be a positive integer of at most 2147483647 milliseconds");
@@ -1694,15 +1709,13 @@ export class Tab {
         await conn.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: staging, eventsEnabled: true });
         const done = new Promise<typeof started & {}>((resolve, reject) => {
           rejectDownload = reject;
-          timer = setTimeout(() => reject(new Error(`download timed out after ${timeoutMs} ms; Chrome may be waiting for a person to approve a dangerous file; agent mode never approves downloads`)), timeoutMs);
+          timer = setTimeout(() => reject(new Error(`download timed out after ${timeoutMs} ms; only a download from the tab's main frame counts; downloads from an iframe or a new tab are ignored; Chrome may be waiting for a person to approve a dangerous file; agent mode never approves downloads`)), timeoutMs);
           // Both listeners precede the click: a small file can finish before the click's reply.
           offBegin = conn.on("Browser.downloadWillBegin", (p) => {
             if (started || p.frameId !== frame) return;
             started = p;
             try {
-              const protocol = new URL(p.url).protocol;
-              if (protocol !== "blob:" && protocol !== "data:" && !isAllowedUrl(p.url, this.browser.allow))
-                throw new NotAllowedError(p.url, `refusing download from ${p.url}: URL is not on the allowlist`);
+              assertDownloadUrl(p.url, this.browser.allow);
             } catch (e) { reject(e); }
           });
           offProgress = conn.on("Browser.downloadProgress", (p) => {
@@ -1718,8 +1731,6 @@ export class Tab {
         if (captured.status === "rejected") throw captured.reason;
         const download = captured.value;
         await this.assertAllowed();
-        if (!/^(blob|data):/.test(download.url) && !isAllowedUrl(download.url, this.browser.allow))
-          throw new NotAllowedError(download.url, `refusing download from ${download.url}: URL is not on the allowlist`);
         const final = uniquePath(join(dir, basename(download.suggestedFilename || download.guid)));
         renameSync(join(staging, download.guid), final);
         saved = true;
@@ -1729,7 +1740,8 @@ export class Tab {
         offBegin(); offProgress();
         if (started && !saved) await conn.send("Browser.cancelDownload", { guid: started.guid }).catch(() => {});
         await conn.send("Browser.setDownloadBehavior", { behavior: "default" }).catch(() => {});
-        rmSync(staging, { recursive: true, force: true });
+        try { rmSync(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 }); }
+        catch (error) { this.browser.settings.log(`agent-browser: could not remove download staging folder ${staging}: ${(error as NodeJS.ErrnoException).code ?? "error"}`); }
       }
     });
   }
