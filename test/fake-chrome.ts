@@ -312,6 +312,10 @@ export class FakePage {
   /** The view size, as innerWidth and innerHeight give it. */
   get width() { return this.override?.width ?? this.stuck?.width ?? 1280; }
   get height() { return this.override?.height ?? this.stuck?.height ?? 800; }
+  /** A responsive page's content size at the current view, for screenshot tests. */
+  contentSize?: (width: number, height: number) => { width: number; height: number };
+  /** A screenshot beyond this height fails as Chrome does at its capture limit. */
+  captureLimit?: number;
   /** The page's own height: below its lowest element, at least 2400 px. */
   get scrollHeight() { return Math.max(2400, ...this.elements.map((e) => e.rect[1] + e.rect[3] + 100)); }
   scrollTo(x: number, y: number) {
@@ -1229,8 +1233,9 @@ export class FakeChrome {
         el.files = (params.files as string[]).map((f) => ({ name: basename(f) }));
         return {};
       }
-      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, width: page.override?.width ?? 1280, height: 2400 }, cssVisualViewport: { pageX: 0, pageY: 0 } };
+      case "Page.getLayoutMetrics": return { cssContentSize: { x: 0, y: 0, ...(page.contentSize?.(page.width, page.height) ?? { width: page.width, height: 2400 }) }, cssVisualViewport: { pageX: 0, pageY: 0 } };
       case "Page.captureScreenshot": {
+        if (page.captureLimit !== undefined && params.clip?.height > page.captureLimit) throw new Error("Unable to capture screenshot: page exceeds the capture limit");
         let data = PNG_1x1;
         if (params.clip) { // A clip: 8x8 pixels at the device scale, all in a colour that follows page.paint.
           const k = page.override?.deviceScaleFactor ?? 1, v = page.paint % 256;

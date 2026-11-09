@@ -1533,7 +1533,8 @@ export class Tab {
   /**
    * A PNG of the tab. Read the page with outline or text first: a screenshot is the last resort.
    * With a viewport, the page is laid out at exactly that size for the shot (so the PNG is
-   * width x scale by height x scale), and the override is cleared afterwards, but only when no capture that went
+   * width x scale by height x scale, or the full content height with fullPage). The override is cleared afterwards,
+   * but only when no capture that went
    * out under it is left in flight: else it stays set until the tab's session ends (screenshotNow; sizeLeft). A
    * failure to clear it never hides the shot's own error. Under whileDrawnForShot, in both modes (ab-b84.17): its
    * first capture comes before the override, and the shot's own capture, two frames later, ends it. whileDrawnForShot checks
@@ -1553,7 +1554,17 @@ export class Tab {
     let failure: unknown;
     try {
       await new Promise((r) => setTimeout(r, opts.settleMs ?? 500)); // the page lays itself out again at the new size
-      await this.capture(path, !!opts.fullPage, shot.own, true);
+      let contentSize: { width: number; height: number } | undefined;
+      if (opts.fullPage) {
+        // Measure after the requested width takes effect. A concurrent rearm capture under a short override can
+        // make the full-page capture repeat the first screen. Give both captures a surface as tall as the content.
+        const { cssContentSize } = await this.send("Page.getLayoutMetrics");
+        contentSize = { width: cssContentSize.width, height: Math.ceil(cssContentSize.height) };
+        await this.send("Emulation.setDeviceMetricsOverride", { width, height: contentSize.height, deviceScaleFactor: scale, mobile: false });
+      }
+      // Reuse the measured height: vh-sized content can grow again under the expanded override. A second
+      // height would let Chrome resize the surface during the capture and bring the repeat back.
+      await this.capture(path, !!opts.fullPage, shot.own, true, contentSize);
     } catch (e) { failure = e; }
     // A capture that went out under the override sets it again when it ends, and one that ends after the clear sets
     // the view to the shot's size for good (review-41d). Measured on taylor with Chromium 156 (2026-11-06,
@@ -1585,10 +1596,10 @@ export class Tab {
     return path;
   }
 
-  private async capture(path: string, fullPage: boolean, own: OwnCapture, resized: boolean): Promise<string> {
+  private async capture(path: string, fullPage: boolean, own: OwnCapture, resized: boolean, contentSize?: { width: number; height: number }): Promise<string> {
     const params: Record<string, unknown> = { format: "png" };
     if (fullPage) {
-      const { cssContentSize } = await this.send("Page.getLayoutMetrics");
+      const cssContentSize = contentSize ?? (await this.send("Page.getLayoutMetrics")).cssContentSize;
       params.captureBeyondViewport = true;
       params.clip = { x: 0, y: 0, width: cssContentSize.width, height: cssContentSize.height, scale: 1 };
     }

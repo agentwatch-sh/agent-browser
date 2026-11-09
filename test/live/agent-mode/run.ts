@@ -97,6 +97,7 @@ import { TEXT } from "../../../src/relay/policy.ts";
 import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../anti-detect/probe.ts";
 import { StandInDaemon } from "./daemon.ts";
 import { CSV, downloadSite } from "../download-site.ts";
+import { shotSite, shotFullSizeChecks } from "../shot-full-size.ts";
 import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
@@ -137,6 +138,7 @@ const SITE_PORT = Number(process.env.SITE_PORT || 8781);
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,pointer,scopes,link-up").split(",");
 /** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
 if (EXTERNAL && CASES.includes("downloads")) { process.stderr.write("the downloads group uses own mode only; external mode is refused\n"); process.exit(2); }
+if (EXTERNAL && CASES.includes("shot-full-size")) { process.stderr.write("the shot-full-size group uses own mode only; external mode is refused\n"); process.exit(2); }
 const PEER = CASES.includes("peer");
 if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
 /** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
@@ -387,6 +389,7 @@ try {
     (r) => (r.expect === "refused" && r.tool === "browser_navigate" ? { refusedSaw: OFF_LIST("b.localhost") } : {}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
   if (CASES.includes("downloads")) await downloadCases();
+  if (CASES.includes("shot-full-size")) await shotFullSizeCases();
   if (CASES.includes("windows")) await windowCases(pw, WS);
   // The agent pointer design's live check (ab-v16.71): the stand-in daemon's pointer ops on this run's own Xvfb.
   if (CASES.includes("pointer") && (EXTERNAL || process.env.POINTER_DAEMON === "old")) skip("pointer", "the group pointer (the pointer design's live check)",
@@ -1943,4 +1946,20 @@ async function peerCases() {
     ws.once("unexpected-response", (_q: any, res: any) => { let b = ""; res.setEncoding("utf8"); res.on("data", (x: string) => (b += x)).on("end", () => done({ status: res.statusCode, body: b })); });
     ws.on("error", () => {});
   }
+}
+
+// Full-page screenshots under an explicit viewport, through this harness's own relay only.
+async function shotFullSizeCases() {
+  const site = await shotSite(), state = join(RUN, "shot-state"), allow = join(RUN, "shot-allow.json");
+  writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
+  const cli = (...args: string[]) => new Promise<any>((resolve, reject) => {
+    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("shot-full-size"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"],
+      { encoding: "utf8", timeout: 60000 }, (e, stdout, stderr) => {
+        if (e) reject(new Error(stdout + stderr)); else { try { resolve(JSON.parse(stdout)); } catch (e) { reject(e); } }
+      }));
+  });
+  try {
+    await step("shot-full-size", process.env.SHOT_BASELINE === "1" ? "baseline repeated bands" : "all sizes have no repeated first screen",
+      () => shotFullSizeChecks(cli, RUN, site.base), { ms: 180_000 });
+  } finally { await site.close(); }
 }
