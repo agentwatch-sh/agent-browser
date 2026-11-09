@@ -1127,15 +1127,15 @@ session's 403, and a Playwright script in the new pane was admitted. Codex was n
   events takes about 16 ms more for each character.
 
 Measured on taylor with Chromium 156 and chrome-extension main 7e36332 (`CASES=windows` of
-`test/live/agent-mode/run.ts`, three runs on 2026-11-05): with Playwright's defaults, with `noDefaults` and
-with the Playwright MCP, every step passed while another window had the focus. The page stayed `visible`,
-drew 55 to 67 frames a second in each step of 100 ms or more (60 in each 3 s idle step; eight runs of the
-group, with the reviews' runs), got no action while it was hidden or did not have the focus, and got the
+`test/live/agent-mode/run.ts`, eight runs on 2026-11-05, including the reviews' runs): with Playwright's
+defaults, with `noDefaults` and with the Playwright MCP, every step passed while another window had the
+focus. The page stayed `visible`, drew 55 to 67 frames a second in each step of 100 ms or more
+(60 in each 3 s idle step), got no action while it was hidden or did not have the focus, and got the
 focus only with the input, while the other page got a `blur`. Both pages had the focus at the same time only
 at a switch of the window: the new page's `focus` came 4 to 32 ms before the old page's `blur` (7 to 9
 switches in each drive, 200 in the eight runs, measured from the pages' `focus` and `blur` events; a
-person's switch was not measured that way). No `Emulation.setFocusEmulationEnabled` reached Chrome. What a site can still
-see of a Playwright client (section 8 of the research):
+person's switch was not measured that way). No `Emulation.setFocusEmulationEnabled` reached Chrome.
+What a site can still see of a Playwright client (section 8 of the research):
 
 - Playwright's own input: a click with one or two moves and no path, a press of 0 to 2 ms (a person's
   takes 70 to 90 ms), `fill` as one `insertText` with no key event, a field's focus with no press
@@ -1161,8 +1161,10 @@ see of a Playwright client (section 8 of the research):
   the research, section 6). The fix can need a change of agentwatch's agent unit.
 
 Playwright's focus of an element: `pressSequentially`, `press` and `type` on a locator first call
-Playwright's injected `focusNode` with a caret reset (Playwright 1.64.1). It moves the caret of an input to
-its start when `document.hasFocus()` is false, so in a window that lost the focus Playwright would type at
+Playwright's injected `focusNode` with a caret reset (Playwright 1.64.1).
+The MCP uses `playwright-core` 1.65.0-alpha-2026-10-30, with the same focus function text.
+The function moves the caret of an input to its start when `document.hasFocus()` is false.
+So in a window that lost the focus Playwright would type at
 the start of the field (`def` after `abc` gives `defabc`, and Backspace deletes nothing). With focus
 emulation every page had the focus. So the relay also brings the window forward before a
 `Runtime.callFunctionOn` with a string argument that is Playwright's utility-script function
@@ -1170,8 +1172,9 @@ emulation every page had the focus. So the relay also brings the window forward 
 that way). A client's own function or string that only mentions `focusNode` does not count. `focus()` on a
 locator calls `focusNode` too, without the caret reset, and its window comes forward as well. Then the
 caret stays where it was (measured live with Playwright's defaults, `noDefaults` and the MCP's
-`browser_type` with `slowly`). The rule depends on Playwright's internal names `injected` and `focusNode`:
-if a later Playwright renames them, the caret moves to the start again, and nothing else breaks.
+`browser_type` with `slowly`). The rule depends on Playwright's internal names `injected` and `focusNode`.
+A minified bundle that renames `injected` does not match the rule.
+If Playwright renames either name, the caret moves to the start again, and nothing else breaks.
 
 Playwright's `expect(locator).toBeFocused()` also reads `document.hasFocus()`. After another window took
 the focus, it fails for a field that is the page's active element, until the page's window has the focus
