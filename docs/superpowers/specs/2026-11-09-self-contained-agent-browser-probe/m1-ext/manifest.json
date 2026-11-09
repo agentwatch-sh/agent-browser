@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "M1 probe: native link",
+  "version": "0.0.1",
+  "description": "Probe only (board ab-v16.93): answers pings from its native host. No other permission.",
+  "permissions": ["nativeMessaging"],
+  "background": { "service_worker": "sw.js" }
+}

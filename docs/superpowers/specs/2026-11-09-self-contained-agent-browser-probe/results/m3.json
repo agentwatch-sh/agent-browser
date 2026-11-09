@@ -1,0 +1,158 @@
+{
+  "chromium": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)",
+  "node": "v26.12.0",
+  "playwrightMcp": "0.0.85",
+  "playwrightCore": "1.66.0-alpha-2026-11-09",
+  "mcpSdk": "1.32.2",
+  "rssMiBAtStart": 150,
+  "rssMiBAfterInit": 154,
+  "partA": {
+    "originRefused": {
+      "status": 403,
+      "body": "A web page cannot connect to the agent browser."
+    },
+    "initialize": {
+      "status": 200,
+      "ms": 55.3,
+      "server": {
+        "name": "api",
+        "version": "1.66.0-alpha-2026-11-09"
+      },
+      "protocolVersion": "2025-06-18",
+      "sessionId": true
+    },
+    "initialized": {
+      "status": 202
+    },
+    "toolsList": {
+      "status": 200,
+      "ms": 28.1,
+      "count": 25,
+      "names": [
+        "browser_close",
+        "browser_resize",
+        "browser_console_messages",
+        "browser_handle_dialog",
+        "browser_emulate_media",
+        "browser_evaluate",
+        "browser_file_upload",
+        "browser_drop",
+        "browser_find",
+        "browser_fill_form",
+        "browser_press_key",
+        "browser_type",
+        "browser_navigate",
+        "browser_navigate_back",
+        "browser_network_requests",
+        "browser_network_request",
+        "browser_run_code_unsafe",
+        "browser_take_screenshot",
+        "browser_snapshot",
+        "browser_click",
+        "browser_drag",
+        "browser_hover",
+        "browser_select_option",
+        "browser_tabs",
+        "browser_wait_for"
+      ]
+    },
+    "browserNavigate": {
+      "status": 200,
+      "ms": 446.6,
+      "isError": false,
+      "sawTitle": true,
+      "sawWebdriverFalse": false,
+      "excerpt": "### Ran Playwright code | ```js | await page.goto('http://a.localhost:36901/'); | ``` | ### Page | - Page URL: http://a.localhost:36901/"
+    },
+    "browserSnapshot": {
+      "status": 200,
+      "ms": 29.4,
+      "sawHeading": true
+    },
+    "navigateTen": {
+      "msEach": [
+        111.3,
+        100.2,
+        102.6,
+        100.7,
+        93,
+        89.8,
+        88.7,
+        97.8,
+        90.5,
+        88.8
+      ]
+    },
+    "unknownSessionHeader": 404,
+    "deleteSession": {
+      "status": 200
+    }
+  },
+  "rssMiBAfterPartA": 179,
+  "partB": {
+    "initialize": {
+      "ms": 103.5,
+      "server": {
+        "name": "api",
+        "version": "1.66.0-alpha-2026-11-09"
+      }
+    },
+    "toolsList": {
+      "ms": 15.2,
+      "count": 25
+    },
+    "browserNavigate": {
+      "ms": 385.7,
+      "isError": false,
+      "sawTitle": true
+    },
+    "browserSnapshot": {
+      "ms": 14,
+      "isError": false,
+      "buttonRef": "e4"
+    },
+    "browserClick": {
+      "ms": 617.2,
+      "isError": false,
+      "sawClicked": false
+    },
+    "shimRssKiB": 64168
+  },
+  "partC": {
+    "initialize": {
+      "status": 200,
+      "ms": 20.3,
+      "server": {
+        "name": "api",
+        "version": "1.66.0-alpha-2026-11-09"
+      }
+    },
+    "initialized": 202,
+    "toolsList": {
+      "status": 200,
+      "ms": 18.8,
+      "count": 24,
+      "hasUnsafe": false
+    },
+    "unsafeRefused": {
+      "status": 200,
+      "error": "Not available in the agent browser: browser_run_code_unsafe"
+    },
+    "browserNavigate": {
+      "status": 200,
+      "ms": 386.8,
+      "isError": false,
+      "sawTitle": true
+    },
+    "originRefused": 403,
+    "droppedServerMessages": 1,
+    "deleteSession": 200
+  },
+  "createConnectionMs": [
+    13.8,
+    6.9,
+    3.7
+  ],
+  "rssMiBAtEnd": 182,
+  "ok": true
+}
