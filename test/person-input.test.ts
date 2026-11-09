@@ -737,7 +737,7 @@ test("a navigation off the list that the page only asks for (Page.frameRequested
   await commands.close(linux(), { tab: name }).catch(() => {});
 });
 
-test("a target=_blank link to a host off the list (Page.frameRequestedNavigation with disposition newTab) stops no later input of the opener; the new tab stays out of reach (review-47d note 7)", async () => {
+test("a target=_blank link to a host off the list sends no request on the opener and stops no later input; the new tab stays out of reach (review-47d note 7)", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const b = await AgentBrowser.connect(linux());
@@ -869,4 +869,19 @@ await commands.click({ ...o, log: () => {} }, { tab: process.argv[3], target: "#
   assert.ok(a1 <= b0 || b1 <= a0, `a ${a0}-${a1}, b ${b0}-${b1}`);
   await commands.close(linux(), { tab: a.name });
   await commands.close(linux(), { tab: b.name });
+});
+
+
+for (const disposition of ["newTab", "newWindow"]) test(`an off-list ${disposition} request on the opener leaves its input guard open (review-47d note 7)`, async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  let requests = 0;
+  page.select("#hov")[0].onhover = (p) => { requests++; p.fake.requestNavigation(p, "http://evil.test/", disposition); };
+  page.select("#hov")[0].onclick = (p) => { p.title = "clicked"; };
+  try {
+    await commands.click(linux(), { tab: name, target: "#hov" });
+    assert.ok(requests > 0, "the request arrived during the input");
+    assert.equal(page.title, "clicked");
+    assert.equal(page.url, `${fx.base}/`);
+  } finally { await commands.close(linux(), { tab: name }).catch(() => {}); }
 });

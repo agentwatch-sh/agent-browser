@@ -82,7 +82,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<scope>/` instead (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<coded-scope>/` instead (`Work-One` uses `+work-+one`) (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
@@ -223,15 +223,19 @@ person's input**) and `log` (progress lines; default standard error).
   - **Only on a display of its own.** The design applies where the agent Chrome runs on a display of its
     own, so that it never puts windows on a person's screen or takes their focus: behind agent mode's
     endpoint (`--cdp-url`: agentwatch's agent unit runs its Chromium on a private Xvfb), and for an agent
-    Chrome that agent-browser started when every visible window of its display (its own environment's
-    `DISPLAY`, through xdotool) belongs to that Chrome's pid, no window manager runs there (the root
-    window has no `_NET_SUPPORTING_WM_CHECK`, read with xprop of x11-utils: a person's desktop has one)
-    and the Chrome's environment has no `WAYLAND_DISPLAY` (a Chrome forced to X11 under a Wayland
-    desktop is an XWayland client, on a person's screen, also when it is the only one). That check holds
+    Chrome that agent-browser started when every visible window on the chosen display belongs to that
+    Chrome's pid. The gate checks windows through xdotool. It also requires no `WAYLAND_DISPLAY`, no
+    `_NET_SUPPORTING_WM_CHECK` on the root (xprop), and no `XWAYLAND` extension (xdpyinfo).
+    The extension identifies XWayland even when the compositor sets no window-manager property.
+    The gate first tries `/proc/<pid>/environ`. Chromium 156 clears that environment, so the gate normally
+    uses agent-browser's `DISPLAY`, `XAUTHORITY` and `WAYLAND_DISPLAY` instead. An older XWayland server
+    without the extension can still pass if the command has no `WAYLAND_DISPLAY`, the compositor sets
+    no `_NET_SUPPORTING_WM_CHECK`, and Chrome owns every visible X window. The server's vendor and client
+    list cannot reliably distinguish that case. Use a private display for agent Chrome. That check holds
     for a minute for the same Chrome pid (`display.json` in the state folder); in that minute
     `/proc/<pid>/cmdline` of the kept pid stands in for `ps`. Elsewhere (another program's window on
-    the display, a window manager, a Wayland session, no xdotool or no xprop, an endpoint that another
-    program started, a check that fails) every page opens and is driven as before, in a background tab,
+    the display, a window manager, a Wayland session, XWayland, no xdotool, no xprop or no xdpyinfo,
+    an endpoint that another program started, a check that fails) every page opens and is driven as before, in a background tab,
     and a log line says why, at most once in 5 minutes, at the first command that opens or attaches a
     page (`tabs`, `status` and `window` give none). No test runner skips the check: a test gives its
     own answer (the internal `display` option).
@@ -293,11 +297,10 @@ person's input**) and `log` (progress lines; default standard error).
     `Tab.waitFor`) of a visible window page never brings a window forward; a read of a hidden window page
     (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
     waits for another agent's input command (review-47c: a tab switch during another agent's typing gave
-    two focused pages). `Tab.waitFor`'s `timeoutMs` covers that wait: while the lock is busy until its
-    timeout, the page stays hidden and the wait ends at its timeout (review-47d), and the condition is read
-    from the start, also during the wait, so a condition that holds ends it at once (review-52). `shot` and
-    `fetch` never do. A page that a site opened in the
-    opener's window is in front of that window; to go back to the opener, the next command on the
+    two focused pages). `shot` and `fetch` never bring a tab or window forward.
+    `Tab.waitFor` reads its condition while the lock is busy and ends as soon as the condition holds.
+    Its `timeoutMs` includes that wait; on timeout, the page stays hidden (review-47d, review-52).
+    A page that a site opened in the opener's window is in front of that window; to go back to the opener, the next command on the
     opener brings it forward: a tab switch, as a person makes. Keys need this activation: keys into a
     window that is not active gave its page the focus with no switch, so two pages had the focus (the
     research's `window-keys-inactive`).
@@ -904,6 +907,7 @@ so it needs an OS tool, which is a documented prerequisite, not an npm dependenc
   Settings → Privacy & Security → Accessibility) for the process that runs `osascript`. Without the grant
   it fails safe with `-25211` and approves nothing. In a headless `tmux`/`launchd` session there may be no
   terminal app to grant, so the macOS approver suits an attended Mac or a session launched under a granted app.
+- **Linux requirements:** The display gate needs `xdotool`, `xprop` and `xdpyinfo`. Debian/Ubuntu provides `xprop` and `xdpyinfo` in `x11-utils`. Missing tools keep background tabs.
 - **Linux** (`approve: "xdotool"` / `approve: true`): sends `Tab` then `Return` (the dialog opens with
   focus on "Cancel"; one `Tab` moves it to "Allow"). Needs `xdotool` and a display. This relies on the
   dialog's focus order, so pin the Chrome/Chromium version. Verified on Chromium 156.
@@ -2100,7 +2104,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   is still in flight at the clear or at the end of its session, with the page hidden and visible. It
   gives the trials whose view kept the override's size. Not part of `npm test`; the fake Chrome models
   what it measured (`FakePage.metrics`). Measured on taylor on 2026-11-06; see **A shot, in both modes**.
-- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, pid and
+- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, xdpyinfo, pid and
   clock: the windows check, a Wayland session and a window manager (not own), the answer of one minute
   for the same Chrome pid (with `/proc/<pid>/cmdline` in place of `ps`), the log line at most once in 5
   minutes, a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test
@@ -2113,7 +2117,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   opened. `open --tab` keeps the old default (and the hidden drive) for its tab, also in later
   commands, through `tab-pages.json`, also after the gate's fallback. The gate's log line comes at a
   command that opens or attaches a page, not at `tabs`. Through `bin/agent-browser.js` (Linux only),
-  `open` and `click` with the real display check and stand-ins for `ps`, xdotool and xprop. On the Mac
+  `open` and `click` with the real display check and stand-ins for `ps`, xdotool, xprop and xdpyinfo. On the Mac
   and in personal mode, `open` and focus emulation stay as before.
 - `test/person-input.test.ts`: a person's input in a window of its own on Linux, against the fake
   Chrome (its windows, the X pointer's event when a window comes forward, a page that scrolls, the

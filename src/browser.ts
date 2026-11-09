@@ -14,7 +14,7 @@ import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
 import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, macWindows, personalUserDataDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
+import { assertTestStateIsolated, macWindows, personalUserDataDir, recordDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
@@ -265,6 +265,7 @@ export class AgentBrowser {
    * temporary file renamed over it, so a reader (which takes no lock) never sees half a file.
    */
   private async updateRecord(change: (r: TabRecord) => void): Promise<void> {
+    mkdirSync(recordDir(this.settings), { recursive: true, mode: 0o700 });
     await withFileLock(recordPath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
       const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow(), tabPages: this.readTabPages() };
       const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window, tabPages: JSON.stringify(r.tabPages) };
@@ -1317,9 +1318,10 @@ export class Tab {
         if (sid === this.sessionId && !p.frame?.parentId && !isAllowedUrl(p.frame?.url ?? "", allow)) left = p.frame?.url ?? "";
       });
       // Also as soon as the main frame starts or asks for a navigation to a host off the list (review-47c: one move still
-      // reached an off-list page before its commit). A request for a page elsewhere (a target=_blank link: disposition
-      // newTab, newWindow or download) leaves the main frame where it is: only "currentTab" counts, as in Playwright
-      // (review-47d note 7). The new tab itself is off the list, so no command reaches it.
+      // reached an off-list page before its commit). Ctrl-click and middle click request newTab; Shift-click requests
+      // newWindow. Those leave the main frame where it is: only currentTab counts (review-47d note 7). A plain
+      // target=_blank link (with or without noopener) and window.open send no request on the opener. A same-tab link
+      // sends currentTab, frameStartedNavigating, then frameNavigated. An off-list new tab stays out of reach.
       const early = (p: { frameId?: string; url?: string }, sid?: string) => {
         if (sid === this.sessionId && p.frameId === main && p.url && !isAllowedUrl(p.url, allow)) left = p.url;
       };

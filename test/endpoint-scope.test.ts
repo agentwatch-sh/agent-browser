@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
@@ -195,4 +195,67 @@ test("over the relay, two endpoint scopes share the one input lock: their input 
       for (const f of [INPUT_LOCK, POINTER_FILE]) assert.equal(existsSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, dir, f)), false, `no ${f} in ${dir}`);
     for (const name of ["s-a", "s-b"]) await commands.close(session(name), { tab: "main" });
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
+
+test("two endpoint scopes without a tab scope keep their own tabs.json names", async () => {
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
+  const end = await backByChrome(h.fake, chrome);
+  const options = (scope: string) => c.options({ cdpUrl: h.url(scope), platform: "linux", display: { own: true, xdotool: false } });
+  try {
+    await h.ready(lineOf([FIXTURE_HOST]));
+    const a = await commands.open(options("one"), { url: `${fx.base}/?a`, name: "main" });
+    const b = await commands.open(options("two"), { url: `${fx.base}/?b`, name: "main" });
+    // Alternate changes: each connection lists only its own targets.
+    await commands.text(options("one"), { tab: "main" });
+    await commands.text(options("two"), { tab: "main" });
+    for (const [scope, tab] of [["one", a.tab], ["two", b.tab]] as const) {
+      assert.deepEqual((await commands.tabs(options(scope))).tabs.map((t) => [t.targetId, t.name, t.scope]), [[tab.targetId, "main", undefined]]);
+      assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, scope, "tabs.json"), "utf8")), { main: tab.targetId });
+      assert.equal(existsSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, scope, "tab-scopes.json")), false);
+    }
+    assert.equal(existsSync(join(c.stateDir, "tabs.json")), false);
+    await commands.close(options("one"), { tab: "main" });
+    assert.equal((await commands.tabs(options("two"))).tabs[0].name, "main");
+    await commands.close(options("two"), { tab: "main" });
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
+test("two endpoint scopes read and prune only their own tab-pages.json", async () => {
+  const end = await scopedEndpoint({ one: [{ targetId: "TA", url: "http://127.0.0.1/a" }], two: [{ targetId: "TB", url: "http://127.0.0.1/b" }] }), c = consumer();
+  const options = (scope: string) => c.options({ cdpUrl: end.url(scope), platform: "linux", display: { own: true, xdotool: false } });
+  const a = await AgentBrowser.connect(options("one")), b = await AgentBrowser.connect(options("two"));
+  try {
+    // The relay normally opens windows, so seed the explicit-tab records to test their paths independently.
+    for (const [browser, scope, id] of [[a, "one", "TA"], [b, "two", "TB"]] as const) {
+      await browser.markRead(id, `http://127.0.0.1/${scope}`);
+      writeFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, scope, "tab-pages.json"), JSON.stringify([id, "closed"]));
+    }
+    assert.equal(a.driveOf("TA"), "focus-emulation");
+    assert.equal(a.driveOf("TB"), "window");
+    assert.equal(b.driveOf("TB"), "focus-emulation");
+    assert.equal(b.driveOf("TA"), "window");
+    await a.markRead("TA", "http://127.0.0.1/a");
+    assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, "two", "tab-pages.json"), "utf8")), ["TB", "closed"]);
+    await b.markRead("TB", "http://127.0.0.1/b");
+    for (const [scope, id] of [["one", "TA"], ["two", "TB"]])
+      assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, scope, "tab-pages.json"), "utf8")), [id]);
+    assert.equal(existsSync(join(c.stateDir, "tab-pages.json")), false);
+  } finally { await a.disconnect(); await b.disconnect(); await end.close(); c.remove(); }
+});
+
+test("reading an empty endpoint record creates no endpoint folder; its first change creates a private folder", async () => {
+  const end = await scopedEndpoint({ one: [{ targetId: "TA", url: "http://127.0.0.1/a" }] }), c = consumer();
+  const b = await AgentBrowser.connect(c.options({ cdpUrl: end.url("one"), platform: "linux", display: { own: true, xdotool: false } }));
+  try {
+    assert.equal(b.readMark("TA"), undefined);
+    assert.equal(b.pinnedWindow(), undefined);
+    assert.equal(b.driveOf("TA"), "window");
+    assert.equal((await b.allowedPages())[0].name, undefined);
+    assert.equal(existsSync(join(c.stateDir, ENDPOINT_SCOPES_DIR)), false);
+    await b.markRead("TA", "http://127.0.0.1/a");
+    assert.equal(b.readMark("TA"), "http://127.0.0.1/a");
+    assert.equal(statSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, "one")).mode & 0o777, 0o700);
+    assert.equal(statSync(join(c.stateDir, ENDPOINT_SCOPES_DIR)).mode & 0o777, 0o700);
+  } finally { await b.disconnect(); await end.close(); c.remove(); }
 });
