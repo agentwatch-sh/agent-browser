@@ -1586,7 +1586,7 @@ async function linkUpCases(pw: any, WebSocket: any) {
     const closed = (await Promise.all([a.closed, b.closed])).map((c) => c[0]);
     await sleep(END_WAIT_MS);
     return { before, closed, chromium: chrome(), after: await after() };
-  }, { want: (x) => x.before.length === 2 && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank", ms: 40_000 });
+  }, { want: (x) => x.before.length === 2 && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.after.wins.length === 1 && x.after.wins[0].focused === false, ms: 40_000 });
 
   await step(G, "two Target.closeTarget at once (two scopes), of the browser's only two tabs: Chromium stays up", async () => {
     const a = await rawClient(WebSocket, "lu-x2c"), b = await rawClient(WebSocket, "lu-x2d");
@@ -1598,7 +1598,7 @@ async function linkUpCases(pw: any, WebSocket: any) {
     await sleep(END_WAIT_MS);
     a.close(); b.close();
     return { before, res, chromium: chrome(), after: await after() };
-  }, { want: (x) => x.before.length === 2 && x.res.every((r: any) => r?.success === true) && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank", ms: 40_000 });
+  }, { want: (x) => x.before.length === 2 && x.res.every((r: any) => r?.success === true) && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.after.wins.length === 1 && x.after.wins[0].focused === false, ms: 40_000 });
 
   // review-51: Playwright's page.close({ runBeforeUnload: true }) sends Page.close on the page session. Last: before
   // the relay's guard for Page.close (board ab-v16.40, fix A) it ended Chromium (exit 0).
@@ -1614,7 +1614,7 @@ async function linkUpCases(pw: any, WebSocket: any) {
       await sleep(END_WAIT_MS);
       return { before, err, chromium: chrome(), after: await after(), pages: browser.contexts()[0]?.pages().length ?? null };
     } finally { await browser.close().catch(() => {}); }
-  }, { want: (x) => x.before.length === 1 && x.err === null && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.pages === 0, ms: 40_000 });
+  }, { want: (x) => x.before.length === 1 && x.err === null && x.chromium === "running" && x.after?.urls.length === 1 && x.after.urls[0] === "about:blank" && x.after.wins.length === 1 && x.after.wins[0].focused === false && x.pages === 0, ms: 40_000 });
 }
 
 /**
