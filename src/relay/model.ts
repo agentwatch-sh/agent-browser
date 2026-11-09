@@ -580,7 +580,16 @@ export class Model {
     if (!this.conns.size && this.linkUp) this.bridge.call("bridge.attachNew", [false]).catch(() => {});
   }
 
-  /** One client message. A tab's gate preserves command order through activations, catch-ups and world lookups. */
+  /**
+   * One client message. The tab's gate orders forwarded Chrome calls through activations, catch-ups and world lookups.
+   * The model's Browser.* and Target.* handlers bypass that gate: Browser.getVersion, Browser.close,
+   * Browser.setDownloadBehavior, Browser.cancelDownload, Browser.grantPermissions, Browser.resetPermissions,
+   * Browser.getWindowForTarget, Browser.getWindowBounds, Browser.setWindowBounds, Target.setAutoAttach,
+   * Target.setDiscoverTargets, Target.getTargets, Target.getTargetInfo, Target.getBrowserContexts, Target.createTarget,
+   * Target.closeTarget, Target.activateTarget, Target.attachToTarget, Target.detachFromTarget and Target.attachToBrowserTarget.
+   * With paths on, Browser.setWindowBounds waits in the activation chain and Target.activateTarget uses chainStep.
+   * Other handlers can pass a pending world lookup; removal or detach in that window refuses the waiting call.
+   */
   async onMessage(c: Conn, msg: any): Promise<void> {
     // A connection that the model closed (end_scope, a line without its list, a link change) can still send until its
     // close handshake ends (up to 30 s): none of that reaches the bridge, and it gets no answer (review-58 note 1).
@@ -744,7 +753,13 @@ export class Model {
       }
     }
     const target = child ? { tabId: tab.id, sessionId: child } : { tabId: tab.id };
-    const call = this.bridge.call("debugger.sendCommand", [target, method, withForce(method, params)]);
+    let call: Promise<any>;
+    try { call = this.bridge.call("debugger.sendCommand", [target, method, withForce(method, params)]); }
+    catch (e) {
+      answer({ error: cdpError(method, e) });
+      // Preserve a raise's failure; ordinary calls settle their gate on either outcome in send().
+      throw e;
+    }
     this.tracked(tab, child, method, params, call);
     call.then((result) => {
       // This id belongs to the client's current world, but a cached renderer can still have a relay world with it.

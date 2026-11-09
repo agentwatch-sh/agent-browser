@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { GEO_EXPRESSION, moveProblem, monotonicMs, moveWait, type Pt } from "../src/relay/pointer.ts";
 import { TEXT } from "../src/relay/policy.ts";
-import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
+import { GEO, harness, raw, until, type Harness } from "./fake-bridge.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const ops = (h: Harness, from = 0) => h.fake.requests.slice(from).map((r) => (r.op !== "debugger.sendCommand" ? r.op : r.args[2]?.type ? `${r.args[1]} ${r.args[2].type}` : r.args[1]));
@@ -2080,4 +2080,34 @@ test("ab-v16.80 (review-72 note 6): Runtime.runIfWaitingForDebugger is not check
     await until(() => h.fake.sent("bridge.release").some((r) => r.args[0] === popup.id), "the release of the held tab");
     assert.deepEqual(reached(h, p, from), ["Runtime.runIfWaitingForDebugger"]);
   } finally { await h.close(); }
+});
+
+// A deeply nested but valid JSON request makes the real bridge's JSON.stringify throw synchronously.
+// Removing sendNow's error answer must fail these client-visible checks.
+test("review-85b note 5: a synchronous bridge send throw answers the client and opens the gate", async (t) => {
+  for (const method of ["Runtime.evaluate", "Page.bringToFront"]) await t.test(method, async () => {
+    const { h } = await onHarness();
+    const connection = await raw(h.url("s1")), ws = connection.ws!;
+    const messages: any[] = [];
+    ws.on("message", (data) => messages.push(JSON.parse(String(data))));
+    try {
+      ws.send(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true } }));
+      await until(() => messages.find((m) => m.id === 1), "auto-attach answer");
+      ws.send(JSON.stringify({ id: 2, method: "Target.createTarget", params: { url: "about:blank" } }));
+      await until(() => messages.find((m) => m.id === 2), "new page answer");
+      const sessionId = messages.find((m) => m.method === "Target.attachedToTarget").params.sessionId;
+      // JSON.parse accepts this depth. A non-callable toJSON forces the serializer onto its recursive path.
+      ws.send(`{"id":3,"method":${JSON.stringify(method)},"sessionId":${JSON.stringify(sessionId)},"params":{"toJSON":null,"unused":${"[".repeat(12000)}0${"]".repeat(12000)}}}`);
+      ws.send(JSON.stringify({ id: 4, method: "Runtime.evaluate", sessionId, params: { expression: "2" } }));
+      const next = await until(() => messages.find((m) => m.id === 4), "the next call's answer");
+      assert.deepEqual(next, { id: 4, sessionId, result: {} }, "the next command passes the open gate");
+      const failed = await until(() => messages.find((m) => m.id === 3), "the client's error answer", 500);
+      assert.deepEqual(failed, { id: 3, sessionId, error: { code: -32000, message: "Maximum call stack size exceeded" } });
+      assert.ok(!h.fake.sent("debugger.sendCommand", method).some((r) => "unused" in r.args[2]), "serialization fails before submission");
+    } finally {
+      ws.close();
+      await connection.closed;
+      await h.close();
+    }
+  });
 });
