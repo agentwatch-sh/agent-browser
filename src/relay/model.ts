@@ -1344,6 +1344,7 @@ export class Model {
     const url = tab.navigateTo;
     tab.navigateTo = null;
     if (!url) return;
+    if (tab.scope !== null && this.ended.has(tab.scope)) return;
     // A line can change the scope's list during the hold (review-58 note 5): layer 1 judges the URL again by the last line.
     const off = offList("Page.navigate", { url }, tab.scope === null || this.ended.has(tab.scope) ? null : this.entriesOf(tab.scope), null);
     if (off !== null) { this.log(`relay: new tab ${tab.id} is not navigated: ${await this.navigationRefusal(off, tab.scope)}`); return; }

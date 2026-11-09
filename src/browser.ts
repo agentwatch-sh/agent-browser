@@ -10,10 +10,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, statSync, rmSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
-import { assertAllowedUrl, isAllowedUrl, loadAllowlist, usesAgentRelay, validateAllowlist } from "./allowlist.ts";
+import { assertAllowedUrl, assertNavigationUrl, isAllowedUrl, loadAllowlist, usesAgentRelay, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
-import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, safeHost, withCleanupErrors } from "./errors.ts";
+import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, macWindows, personalUserDataDir, recordDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
@@ -375,7 +375,7 @@ export class AgentBrowser {
    * without stealing focus.
    */
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
-    if (!usesAgentRelay(this.settings)) assertAllowedUrl(url, this.allow);
+    assertNavigationUrl(url, this.allow, usesAgentRelay(this.settings));
     this.noteDisplay();
     const win = this.pinnedWindow();
     const agent = this.mode === "agent", windows = this.windows;
@@ -613,9 +613,11 @@ function notEmpty(path: string, method: string): void {
 /** Transfers never make a navigation prompt; name the host and the operator's list addition instead. */
 function transferRefusal(url: string, s: Settings, message?: string): NotAllowedError {
   const origin = url.startsWith("blob:") ? new URL(url).origin : url;
-  const host = safeHost(origin);
-  const e = new NotAllowedError(usesAgentRelay(s) ? origin : url, message);
-  if (usesAgentRelay(s)) {
+  let host: string | undefined;
+  try { host = new URL(origin).hostname || undefined; } catch { /* A URL without a host keeps its existing refusal. */ }
+  const managed = usesAgentRelay(s);
+  const e = new NotAllowedError(managed && host ? origin : url, message);
+  if (managed && host) {
     if (message) e.message = message.replace(url, host);
     e.message += `. Ask the operator to add ${host} to your browser list.`;
   }
@@ -1184,7 +1186,7 @@ export class Tab {
   }
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    if (!usesAgentRelay(this.browser.settings)) assertAllowedUrl(url, this.browser.allow);
+    assertNavigationUrl(url, this.browser.allow, usesAgentRelay(this.browser.settings));
     // With no check of the current page: goto must be able to leave a page that went off the list or out of the
     // pinned window (endSizeLeft).
     await this.endSizeLeft({ leaving: true });
@@ -1194,7 +1196,14 @@ export class Tab {
     });
     // A refused or failed command leaves no load event to wait for: the wait must not reject unseen later.
     this.browser.createdBlankTargets.delete(this.targetId);
-    const res = await this.send("Page.navigate", { url }).catch((e) => { loaded.catch(() => {}); throw e; });
+    const res = await this.send("Page.navigate", { url }).catch((e) => {
+      loaded.catch(() => {});
+      if (e instanceof CDPError && /^Page\.navigate: Not allowed:/.test(e.message)) {
+        const host = /^Page\.navigate: Not allowed: (\S+) is not on the allowlist/.exec(e.message)?.[1];
+        throw new NotAllowedError(host ? `https://${host}/` : url, e.message);
+      }
+      throw e;
+    });
     if (res.errorText) { loaded.catch(() => {}); throw new Error(`navigation failed: ${res.errorText}`); }
     await loaded;
   }

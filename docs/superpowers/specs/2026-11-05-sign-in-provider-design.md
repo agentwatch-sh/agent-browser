@@ -23,7 +23,7 @@ No product code changes in this design task.
 On 2026-11-05, the operator chose an allow prompt in the agentwatch web viewer (board item ab-pbk).
 The operator did not choose option a or a separate list of sign-in providers.
 When browsing reaches a host outside the list, the operator gets a Browser permission prompt for that host.
-The operator can add the host to the repo's list.
+The operator can add the host to the repo's list (or the list for sessions outside a repo).
 
 The agent tells the operator about the prompt and waits for the allow notice.
 After the notice, the agent starts the blocked step again. The agent must never work around a block.

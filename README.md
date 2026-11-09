@@ -1693,6 +1693,10 @@ An older carrier or a report without an acknowledgement keeps the existing refus
 Fetches and downloads keep their local checks. In agentwatch, their errors say:
 `Ask the operator to add <host> to your browser list.` They do not create a navigation prompt.
 Standalone agent-browser keeps its existing refusal text and local navigation checks.
+Both modes keep the prior local scheme rules, including refusals of `data:`, `javascript:`, and `file:` URLs.
+Managed navigation leaves HTTP, HTTPS, and web blob host decisions to the relay.
+Relay host refusals keep the `not_allowed` error code and the complete relay message.
+The Python adapter raises `NotAllowedError` for that code.
 An extension block during a redirect can still report `navigation failed: net::ERR_BLOCKED_BY_CLIENT`.
 That error has no reliable destination host; the extension sends the prompt event separately.
 

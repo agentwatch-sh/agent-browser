@@ -13,7 +13,7 @@ import * as policy from "../src/relay/policy.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { backByChrome, harness, lineOf, until } from "./fake-bridge.ts";
 import { FakeChrome } from "./fake-chrome.ts";
-import { consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
+import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
 
 const baseError = "Not allowed: b.example is not on the allowlist";
 const prompted = baseError + ". The operator has a Browser permission prompt in the agentwatch web viewer. Tell the operator; after the notice that the operator added b.example, start the step again.";
@@ -112,12 +112,32 @@ for (const managed of [false, true]) {
       for (const run of [() => commands.open(o, { url: "https://b.example/private" }), () => commands.goto(o, { tab: "work", url: "https://b.example/private" })]) {
         await assert.rejects(run(), (e: Error) => {
           assert.equal(e.message, managed ? "Page.navigate: " + prompted : "refusing: b.example is not on the allowlist");
+          assert.ok(e instanceof NotAllowedError);
+          assert.equal(e.code, "not_allowed");
+          assert.equal(e.host, "b.example");
           return true;
         });
       }
+      if (h) await assert.rejects(commands.goto(o, { tab: "work", url: "blob:https://b.example/private" }), (e: Error) => {
+        assert.ok(e instanceof NotAllowedError);
+        assert.equal(e.code, "not_allowed");
+        assert.equal(e.host, "b.example");
+        assert.equal(e.message, "Page.navigate: " + prompted);
+        return true;
+      });
       assert.equal(chrome.pages.size, 1, "a refused open closes only its own empty tab");
       b = await AgentBrowser.connect(o);
       const tab = await b.attach(opened.tab.targetId);
+      for (const url of ["data:text/plain,hello", "javascript:void(0)", "file:///example", "relative/path", "blob:null/uuid", "blob:file:///example"]) {
+        const before = chrome.calls.length;
+        for (const run of [() => b!.open(url), () => tab.goto(url)]) {
+          await assert.rejects(run(), (e: Error) => e instanceof NotAllowedError && e.code === "not_allowed");
+        }
+        assert.equal(chrome.calls.length, before, "a scheme refusal happens before any browser call");
+        const script = join(c.dir, "scheme.json");
+        writeFileSync(script, JSON.stringify([{ goto: url }]));
+        assert.throws(() => planRecording({ out: join(c.dir, "record.mp4"), script }, [FIXTURE_HOST], managed), NotAllowedError);
+      }
       for (const run of [() => tab.fetchToFile("https://b.example/private?secret=hidden", join(c.dir, "fetch")), () => tab.download("https://b.example/private?secret=hidden", join(c.dir, "download"))]) {
         await assert.rejects(run(), (e: Error) => {
           assert.ok(e instanceof NotAllowedError);
@@ -125,7 +145,23 @@ for (const managed of [false, true]) {
           return true;
         });
       }
-      if (h) assert.equal(h.fake.daemonRequests.filter((r) => r.op === "daemon.blocked").length, 2, "transfers make no prompt report");
+      if (h) assert.equal(h.fake.daemonRequests.filter((r) => r.op === "daemon.blocked").length, 3, "transfers make no prompt report");
+      for (const url of ["not a URL", "data:text/plain,hello", "javascript:void(0)", "blob:null/uuid"]) {
+        for (const run of [() => tab.fetchToFile(url, join(c.dir, "fetch")), () => tab.download(url, join(c.dir, "download"))]) {
+          await assert.rejects(run(), (e: Error) => {
+            assert.ok(e instanceof NotAllowedError);
+            assert.equal(e.message, new NotAllowedError(url).message, "a URL without a host keeps its old text");
+            return true;
+          });
+        }
+      }
+      if (h) {
+        const r = await cli(["open", "https://b.example/private", "--state-dir", c.stateDir, "--allowlist", c.allowlist,
+          "--cdp-url", h.url("scope-a"), "--json"], { cwd: c.dir });
+        assert.equal(r.status, 1);
+        assert.equal(r.json.error.code, "not_allowed");
+        assert.equal(r.json.error.message, "Page.navigate: " + prompted);
+      }
       const script = join(c.dir, "steps.json");
       writeFileSync(script, JSON.stringify([{ goto: "https://b.example/private" }]));
       if (managed) {
@@ -137,3 +173,24 @@ for (const managed of [false, true]) {
     }
   });
 }
+
+test("a delayed navigation for an ended scope makes no prompt report", async () => {
+  const h = await harness();
+  try {
+    h.fake.daemon = () => ({});
+    await h.ready();
+    const c = await h.connect("scope-a");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    const { targetId } = await c.send("Target.createTarget", { url: "https://a.example/path" });
+    await attached;
+    // Keep the captured tab of a delayed continuation while end_scope closes its connection and drops the tab.
+    const model = h.relay.model as any;
+    const delayed = { ...[...model.tabs.values()].find((t: any) => t.targetId === targetId) };
+    h.fake.line({ t: "end_scope", scope: "scope-a" });
+    await until(() => model.ended.has("scope-a"), "the scope end");
+    await model.navigate(delayed);
+    assert.deepEqual(h.fake.daemonRequests.filter((r) => r.op === "daemon.blocked"), []);
+    assert.deepEqual(h.fake.sent("debugger.sendCommand", "Page.navigate"), []);
+  } finally { await h.close(); }
+});

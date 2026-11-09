@@ -26,7 +26,7 @@ import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { inflateSync } from "node:zlib";
 import { KEYS, keyFields, type Tab, type Viewport } from "./browser.ts";
-import { assertAllowedUrl, isAllowedUrl } from "./allowlist.ts";
+import { assertNavigationUrl, isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
@@ -118,7 +118,7 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
       case "wait": ms("wait"); break;
       case "goto":
         if (typeof step.goto !== "string") throw bad("goto is a URL");
-        if (!relayNavigation) assertAllowedUrl(step.goto, allow);
+        assertNavigationUrl(step.goto, allow, relayNavigation);
         break;
       case "click": case "hover": target(action); ms("duration"); break;
       case "type":
