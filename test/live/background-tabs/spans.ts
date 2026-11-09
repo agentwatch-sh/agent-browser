@@ -3,7 +3,7 @@
 // `npm test`.
 
 /** One event that a probe page reported (navigator.sendBeacon): its time (Date.now()), its tab, what. */
-export type PageEvent = { t: number; tab: string; ev: string; vis: string; focus: boolean };
+export type PageEvent = { t: number; tab: string; ev: string; vis: string; focus: boolean; documentId?: number; unloading?: boolean };
 
 /** A span in which the page reported "visible": from its visibilitychange to "visible" to the next one to "hidden" (`to` null: still visible). */
 export type Span = { from: number; to: number | null };
@@ -30,6 +30,20 @@ export function visibleMs(spans: readonly Span[], from: number, to: number): num
   return spans.reduce((sum, s) => sum + Math.max(0, Math.min(s.to ?? to, to) - Math.max(s.from, from)), 0);
 }
 
+/** Time origins identify documents: only the pre-command document's hide before a new visible load is an unload. */
+export function navigationVisibility(events: readonly PageEvent[], tab: string, previousDocument: number | undefined): { hides: number; startsVisible: boolean } {
+  const changes = events.filter((e) => e.tab === tab && (e.ev === "visibilitychange" || e.ev === "load")).sort((a, b) => a.t - b.t);
+  if (previousDocument === undefined) return { hides: 0, startsVisible: false };
+  const loads = changes.filter((e) => e.ev === "load");
+  const newVisibleLoad = (e: PageEvent | undefined) => e?.ev === "load" && e.vis === "visible"
+    && e.documentId !== undefined && e.documentId !== previousDocument;
+  return {
+    hides: changes.filter((e, i) => e.ev === "visibilitychange" && e.vis === "hidden"
+      && e.unloading === true && e.documentId === previousDocument && newVisibleLoad(changes[i + 1])).length,
+    startsVisible: loads.length > 0 && loads.every(newVisibleLoad),
+  };
+}
+
 /**
  * One command of the check. `front` names the tab in front, `ok` and `detail` its own result,
  * `visibleMs` the page's visible time while the command ran, `framesAfter` the animation frames that
@@ -38,19 +52,41 @@ export function visibleMs(spans: readonly Span[], from: number, to: number): num
 export type Measured = {
   command: string; tab: string; front: string; ms: number; ok: boolean; detail?: string;
   visibleMs: number; visibilityChanges: number; focusEvents: string[]; framesAfter: number;
+  navigationHides?: number;
+  navigationStartsVisible?: boolean;
+  from?: number;
+  to?: number;
 };
+
+/** The command rules cover their intervals; a hidden page outside those intervals always fails the window drive. */
+export function windowIdleFailures(log: readonly PageEvent[], run: readonly Measured[]): string[] {
+  return log.filter((e) => (e.ev === "visibilitychange" || e.ev === "load") && e.vis === "hidden"
+    && !run.some((m) => m.tab === e.tab && m.from !== undefined && m.to !== undefined && e.t >= m.from && e.t <= m.to))
+    .map((e) => `tab ${e.tab}: the window page reported hidden outside a command at ${e.t}`);
+}
 
 /**
  * Why the run failed, or nothing. Every command must work. With `hiddenDrive` (agent-browser's option of
  * that name) also: a command on a hidden tab leaves the page hidden (no visible time and no
  * visibilitychange), except `record`, whose span is reported; and a hidden page draws no frame after a
  * command. In the default mode the page is visible while a command is attached: the spans are reported.
+ * With `windowDrive`, every page stays visible and draws frames after every command, regardless of
+ * which window is in front. Only goto's old-document hide before a new visible load is allowed.
  */
-export function failures(run: readonly Measured[], hiddenDrive: boolean): string[] {
+export function failures(run: readonly Measured[], hiddenDrive: boolean, windowDrive = false): string[] {
   const out: string[] = [];
   for (const m of run) {
     const where = `${m.command} on tab ${m.tab} (front: ${m.front})`;
     if (!m.ok) out.push(`${where}: ${m.detail ?? "failed"}`);
+    if (windowDrive) {
+      const unloads = m.command === "goto" ? m.navigationHides ?? 0 : 0;
+      if (m.command === "goto" && !m.navigationStartsVisible)
+        out.push(`${where}: the navigation did not load a new visible document`);
+      if (m.visibleMs <= 0 || m.visibilityChanges !== unloads)
+        out.push(`${where}: the window page must stay visible (${m.visibleMs} ms visible, ${m.visibilityChanges} visibilitychange events)`);
+      if (m.framesAfter === 0) out.push(`${where}: the window page drew no frame in the second after the command`);
+      continue;
+    }
     if (!hiddenDrive || m.front === m.tab) continue;
     if (!m.command.startsWith("record") && (m.visibleMs > 0 || m.visibilityChanges > 0))
       out.push(`${where}: the hidden page reported "visible" for ${m.visibleMs} ms (${m.visibilityChanges} visibilitychange events)`);

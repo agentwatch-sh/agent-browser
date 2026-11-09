@@ -18,7 +18,7 @@ import { commands } from "../src/commands.ts";
 import { resolveOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg, planRecording, pngPixels, recordTab } from "../src/record.ts";
-import { failures, visibleMs, visibleSpans, type Measured, type PageEvent } from "./live/background-tabs/spans.ts";
+import { failures, navigationVisibility, visibleMs, visibleSpans, windowIdleFailures, type Measured, type PageEvent } from "./live/background-tabs/spans.ts";
 import { FakeChrome, SHOT_COLOUR, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -1171,4 +1171,77 @@ test("failures: every command must work; with the hidden drive a hidden tab's pa
   assert.deepEqual(failures([m({ framesAfter: 3 })], true), ["click on tab a (front: x): the hidden page drew 3 frames in the second after the command"]);
   assert.deepEqual(failures([m({ ok: false, detail: "no click", visibleMs: 12 })], false), ["click on tab a (front: x): no click"], "the default mode: the results only");
   assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2, framesAfter: 1 })], false), []);
+});
+
+test("failures: window drive requires visible time, no visibility change, and frames after every command", () => {
+  const m: Measured = { command: "shot", tab: "a", front: "b", ms: 10, ok: true,
+    visibleMs: 210, visibilityChanges: 0, focusEvents: [], framesAfter: 60 };
+  assert.deepEqual(failures([m], false, true), []);
+  assert.match(failures([{ ...m, visibleMs: 0 }], false, true).join(), /visible/);
+  assert.match(failures([{ ...m, visibilityChanges: 2 }], false, true).join(), /visibilitychange/);
+  assert.match(failures([{ ...m, framesAfter: 0 }], false, true).join(), /no frame/);
+  assert.match(failures([{ ...m, command: "record", framesAfter: 0 }], false, true).join(), /no frame/);
+  assert.match(failures([{ ...m, front: "a", visibleMs: 0 }], false, true).join(), /visible/);
+  assert.match(failures([{ ...m, ok: false, detail: "wrong pixels" }], false, true).join(), /wrong pixels/);
+});
+
+test("navigationVisibility: only an identified old document can hide before a different visible document loads", () => {
+  const old = { ...ev(10, "b", "visibilitychange", "hidden"), documentId: 100, unloading: true };
+  const loaded = { ...ev(19, "b", "load", "visible"), documentId: 200 };
+  assert.deepEqual(navigationVisibility([old, loaded], "b", 100), { hides: 1, startsVisible: true });
+  assert.deepEqual(navigationVisibility([{ ...old, unloading: false }, loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([{ ...old, unloading: undefined }, loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([old], "b", 100), { hides: 0, startsVisible: false });
+  assert.deepEqual(navigationVisibility([old, { ...loaded, documentId: 100 }], "b", 100), { hides: 0, startsVisible: false });
+  assert.deepEqual(navigationVisibility([old, { ...loaded, vis: "hidden" }], "b", 100), { hides: 0, startsVisible: false });
+  assert.deepEqual(navigationVisibility([{ ...old, documentId: 200 }, loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([{ ...old, documentId: undefined }, loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([old, { ...loaded, documentId: undefined }], "b", 100), { hides: 0, startsVisible: false });
+  assert.deepEqual(navigationVisibility([old, loaded], "b", undefined), { hides: 0, startsVisible: false });
+  assert.deepEqual(navigationVisibility([{ ...old, tab: "a" }, loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([{ ...old, vis: "visible" }, loaded], "b", 100), { hides: 0, startsVisible: true });
+  assert.deepEqual(navigationVisibility([old, { ...loaded, ev: "visibilitychange" }], "b", 100), { hides: 0, startsVisible: false });
+  const late = [loaded, old];
+  assert.deepEqual(navigationVisibility(late, "b", 100), { hides: 1, startsVisible: true });
+  assert.equal(late[0], loaded, "the rule leaves beacon arrival order unchanged");
+  assert.deepEqual(navigationVisibility([{ ...loaded, t: 0 }, old], "b", 100), { hides: 0, startsVisible: true });
+});
+
+test("failures: window goto requires a new visible document and permits only the identified old document's hide", () => {
+  const m: Measured = { command: "goto", tab: "b", front: "a", ms: 74, ok: true,
+    visibleMs: 265, visibilityChanges: 1, navigationHides: 1, navigationStartsVisible: true, focusEvents: [], framesAfter: 60 };
+  assert.deepEqual(failures([m], false, true), []);
+  assert.match(failures([{ ...m, navigationHides: 0 }], false, true).join(), /visibilitychange/);
+  assert.match(failures([{ ...m, visibilityChanges: 2 }], false, true).join(), /visibilitychange/);
+  assert.match(failures([{ ...m, command: "shot" }], false, true).join(), /visibilitychange/);
+  assert.match(failures([{ ...m, navigationStartsVisible: false }], false, true).join(), /new visible document/);
+  assert.match(failures([{ ...m, navigationStartsVisible: undefined }], false, true).join(), /new visible document/);
+  assert.match(failures([{ ...m, framesAfter: 0 }], false, true).join(), /no frame/);
+  assert.match(failures([{ ...m, visibleMs: 0 }], false, true).join(), /visible/);
+  const events = [
+    { ...ev(10, "b", "visibilitychange", "hidden"), documentId: 100, unloading: true },
+    { ...ev(19, "b", "load", "visible"), documentId: 200 },
+    { ...ev(30, "b", "visibilitychange", "hidden"), documentId: 200 },
+  ];
+  const state = navigationVisibility(events, "b", 100);
+  assert.deepEqual(state, { hides: 1, startsVisible: true });
+  assert.match(failures([{ ...m, visibilityChanges: 2, navigationHides: state.hides,
+    navigationStartsVisible: state.startsVisible }], false, true).join(), /visibilitychange/, "the new document must stay visible");
+  const liveHide = navigationVisibility([{ ...events[0], unloading: false }, events[1]], "b", 100);
+  assert.match(failures([{ ...m, navigationHides: liveHide.hides,
+    navigationStartsVisible: liveHide.startsVisible }], false, true).join(), /visibilitychange/, "a live old document can hide before the navigation commits");
+});
+
+test("windowIdleFailures: hidden changes between commands and after the last command fail", () => {
+  const m: Measured = { command: "goto", tab: "b", front: "a", ms: 100, ok: true,
+    visibleMs: 300, visibilityChanges: 1, focusEvents: [], framesAfter: 60, from: 100, to: 400 };
+  assert.deepEqual(windowIdleFailures([ev(200, "b", "visibilitychange", "hidden")], [m]), [], "the command rules check its own interval");
+  assert.deepEqual(windowIdleFailures([ev(100, "b", "visibilitychange", "hidden"), ev(400, "b", "visibilitychange", "hidden")], [m]), []);
+  assert.deepEqual(windowIdleFailures([ev(99, "b", "load", "visible"), ev(500, "b", "visibilitychange", "visible")], [m]), []);
+  assert.match(windowIdleFailures([ev(99, "b", "visibilitychange", "hidden")], [m]).join(), /outside a command/);
+  assert.match(windowIdleFailures([ev(401, "b", "visibilitychange", "hidden")], [m]).join(), /outside a command/);
+  assert.match(windowIdleFailures([ev(200, "a", "visibilitychange", "hidden")], [m]).join(), /outside a command/);
+  assert.match(windowIdleFailures([ev(500, "b", "load", "hidden")], [m]).join(), /outside a command/);
+  assert.match(windowIdleFailures([ev(200, "b", "visibilitychange", "hidden")], [{ ...m, from: undefined, to: undefined }]).join(), /outside a command/);
 });

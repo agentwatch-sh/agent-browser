@@ -11,20 +11,32 @@ export const TIMER_FLAGS: readonly string[] = ["--disable-renderer-backgrounding
 /** The page's interval timer asks for this period. */
 export const TIMER_MS = 50;
 
-export type Mode = { chrome: string; display: number; before: boolean; hiddenMs: number; hiddenDrive: boolean; newTabs: number };
-export type Flags = { chrome?: string; display?: string; before?: boolean; hiddenMs?: string; hiddenDrive?: boolean; newTabs?: string };
+export type Mode = { chrome: string; display: number; before: boolean; hiddenMs: number; hiddenDrive: boolean; windowDrive: boolean; newTabs: number };
+export type Flags = { chrome?: string; display?: string; before?: boolean; hiddenMs?: string; hiddenDrive?: boolean; windowDrive?: boolean; newTabs?: string };
+
+/** The two explicit drives select different page arrangements, so they cannot be combined. */
+export function driveConflict(hiddenDrive: boolean, windowDrive: boolean): string | undefined {
+  return hiddenDrive && windowDrive ? "--hidden-drive and --window-drive cannot be combined" : undefined;
+}
+
+/** Each window has its own visible page; only the front tab is visible in the two tab modes. */
+export function expectedVisibility(tab: string, front: string, windowDrive = false): "visible" | "hidden" {
+  return windowDrive || tab === front ? "visible" : "hidden";
+}
 
 /** The start guard: the mode to run in, or the usage error (exit 2). */
 export function startMode(platform: string, f: Flags): Mode | { error: string } {
   if (platform !== "linux")
     return { error: `the background-tab check runs on Linux only, in a private Xvfb, so that no window reaches a person's screen (this is ${platform})` };
+  const conflict = driveConflict(!!f.hiddenDrive, !!f.windowDrive);
+  if (conflict) return { error: conflict };
   const display = Number(f.display ?? 98), hiddenMs = Number(f.hiddenMs ?? 6000), newTabs = Number(f.newTabs ?? 5);
   if (!Number.isInteger(display) || display < 1) return { error: `--display is a whole display number: ${f.display}` };
   const reserved = reservedDisplay(display, "--display");
   if (reserved) return { error: reserved };
   if (!Number.isInteger(hiddenMs) || hiddenMs < 2000 || hiddenMs > 60_000) return { error: `--hidden-ms is a whole number of ms from 2000 to 60000: ${f.hiddenMs}` };
   if (!Number.isInteger(newTabs) || newTabs < 0 || newTabs > 50) return { error: `--new-tabs is a whole number from 0 to 50: ${f.newTabs}` };
-  return { chrome: f.chrome ?? "/usr/bin/chromium", display, before: !!f.before, hiddenMs, hiddenDrive: !!f.hiddenDrive, newTabs };
+  return { chrome: f.chrome ?? "/usr/bin/chromium", display, before: !!f.before, hiddenMs, hiddenDrive: !!f.hiddenDrive, windowDrive: !!f.windowDrive, newTabs };
 }
 
 /**
@@ -109,15 +121,17 @@ export function visibilityIn(log: VisibilityLog, from: number, to: number): stri
 /**
  * How long each visible span of the page lasted (ms) that began from `from` to `to`, in order. A span
  * that is still open at `to` counts up to `to`. For a background tab, each span is one command of
- * agent-browser, attached.
+ * agent-browser, attached. With `includeExisting`, also include a window's span that began earlier,
+ * clipped to `from`: a window page stays visible between commands.
  */
-export function visibleSpans(log: VisibilityLog, from: number, to: number): number[] {
+export function visibleSpans(log: VisibilityLog, from: number, to: number, includeExisting = false): number[] {
   const out: number[] = [];
   for (let i = 0; i < log.length; i++) {
     const [t, v] = log[i];
-    if (v !== "visible" || t < from || t > to || (i > 0 && log[i - 1][1] === "visible")) continue;
+    if (v !== "visible" || (!includeExisting && t < from) || t > to || (i > 0 && log[i - 1][1] === "visible")) continue;
     const end = log.slice(i + 1).find(([, w]) => w !== "visible")?.[0];
-    out.push(Math.min(end ?? to, to) - t);
+    if (includeExisting && end !== undefined && end < from) continue;
+    out.push(Math.min(end ?? to, to) - Math.max(t, includeExisting ? from : t));
   }
   return out;
 }
@@ -131,7 +145,7 @@ export type Step = { step: StepName; ok: boolean; ms: number; detail?: string };
  * visible spans during the drive (visibleSpans; for a hidden tab, one for each command). Both are
  * information only.
  */
-export type Drive = { phase: string; tab: string; front: string; visibility: string; during: string; visibleMs?: number[]; expected: "visible" | "hidden"; steps: Step[] };
+export type Drive = { phase: string; tab: string; front: string; visibility: string; during: string; throughout?: string; visibleMs?: number[]; expected: "visible" | "hidden"; steps: Step[] };
 /** One tab's timer over a window with no command; `visibility` is the page's own (visibilityIn). */
 export type Timer = { phase: string; tab: string; front: string; visibility: string; expected: "visible" | "hidden"; stats: TimerStats };
 /**
@@ -141,7 +155,7 @@ export type Timer = { phase: string; tab: string; front: string; visibility: str
 export type Idle = { phase: string; driven: string; tab: string; front: string; visibility: string; expected: "visible" | "hidden"; frames: number };
 /** A recording of one tab; `visibility` is the page's own state right before it, and `visibleMs` its visible spans during it (as in Drive). */
 export type Recording = { tab: string; front: string; visibility: string; visibleMs?: number[]; frames: number; seconds: number; fps: number; maxFrameGapMs: number } | { tab: string; front: string; error: string } | { tab: string; front: string; skipped: string };
-export type Run = { before: boolean; tabs: string[]; drives: Drive[]; timers: Timer[]; idles: Idle[]; recordings: Recording[] };
+export type Run = { before: boolean; windowDrive?: boolean; tabs: string[]; drives: Drive[]; timers: Timer[]; idles: Idle[]; recordings: Recording[] };
 
 /**
  * A hidden tab's 50 ms timer: a median of 1000 ms in plain Chrome, 50 ms with the timer flags (on
@@ -157,7 +171,8 @@ export const FULL_RATE_MAX_MS = 100;
  * no animation frame in a timer window or after a drive, and a visible tab draws some. A visible tab's
  * timer runs at full rate. A hidden tab's timer slows down as in plain Chrome (at least
  * THROTTLED_MIN_MS), or with `before` (the timer flags) runs at full rate. A recording must not fail; a
- * skipped one (no ffmpeg) is no failure.
+ * skipped one (no ffmpeg) is no failure. In the window drive all expectations are visible; the eval
+ * during a drive must also read visible. Drawing and full-rate timers are required in each window.
  */
 export function failures(run: Run): string[] {
   const out: string[] = [];
@@ -165,6 +180,8 @@ export function failures(run: Run): string[] {
   for (const d of run.drives) {
     for (const s of d.steps) if (!s.ok) out.push(`${d.phase}: tab ${d.tab} (front: ${d.front}) ${s.step}: ${s.detail ?? "failed"}`);
     if (d.visibility !== d.expected) out.push(`${d.phase}: tab ${d.tab} was ${d.visibility} before its drive, expected ${d.expected} (front: ${d.front})`);
+    if (run.windowDrive && d.during !== "visible") out.push(`${d.phase}: tab ${d.tab} was ${d.during} during its drive, expected visible (its own window)`);
+    if (run.windowDrive && d.throughout !== "visible") out.push(`${d.phase}: tab ${d.tab} was ${d.throughout} throughout its drive, expected visible (its own window)`);
   }
   for (const t of run.timers) {
     const where = `${t.phase}: tab ${t.tab}'s timer (front: ${t.front})`;

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assertSafeChromeArgs } from "../src/agent.ts";
 import type { Pixels } from "../src/record.ts";
-import { boxColour, chromeArgs, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, timerStats, visibilityIn, visibleSpans, type Drive, type Idle, type Run, type Timer } from "./live/background-tabs/rules.ts";
+import { boxColour, chromeArgs, driveConflict, expectedVisibility, failures, LAYOUT, shotProblem, startMode, TIMER_FLAGS, timerStats, visibilityIn, visibleSpans, type Drive, type Idle, type Run, type Timer } from "./live/background-tabs/rules.ts";
 
 const stats = (medianMs: number | null, frames = 0) => ({ ticks: 6, medianMs, maxMs: medianMs, frames });
 const timer = (tab: string, expected: "visible" | "hidden", medianMs: number | null, o: Partial<Timer> = {}): Timer =>
@@ -36,13 +36,53 @@ function picture(clicks: number, o: { dpr?: number; channels?: number; drawn?: n
 }
 
 test("start guard: Linux only, in a private Xvfb; the display, the timer window and the number of new tabs are checked", () => {
-  assert.deepEqual(startMode("linux", {}), { chrome: "/usr/bin/chromium", display: 98, before: false, hiddenMs: 6000, hiddenDrive: false, newTabs: 5 });
+  assert.deepEqual(startMode("linux", {}), { chrome: "/usr/bin/chromium", display: 98, before: false, hiddenMs: 6000, hiddenDrive: false, windowDrive: false, newTabs: 5 });
   assert.deepEqual(startMode("linux", { chrome: "/opt/c/chrome", display: "42", before: true, hiddenMs: "3000", hiddenDrive: true, newTabs: "0" }),
-    { chrome: "/opt/c/chrome", display: 42, before: true, hiddenMs: 3000, hiddenDrive: true, newTabs: 0 });
+    { chrome: "/opt/c/chrome", display: 42, before: true, hiddenMs: 3000, hiddenDrive: true, windowDrive: false, newTabs: 0 });
   const mac = startMode("darwin", {});
   assert.ok("error" in mac && /Linux only/.test(mac.error) && /private Xvfb/.test(mac.error), JSON.stringify(mac));
   for (const f of [{ display: "x" }, { display: "0" }, { hiddenMs: "100" }, { hiddenMs: "1.5" }, { newTabs: "-1" }, { newTabs: "51" }, { newTabs: "2.5" }])
     assert.ok("error" in startMode("linux", f), JSON.stringify(f));
+});
+
+test("start guard: window drive selects separate windows and refuses the hidden drive together", () => {
+  const mode = startMode("linux", { windowDrive: true });
+  assert.ok(!("error" in mode));
+  assert.equal(mode.windowDrive, true);
+  assert.equal(mode.hiddenDrive, false);
+  assert.ok("error" in startMode("linux", { windowDrive: true, hiddenDrive: true }));
+});
+
+test("drive selection: only separate windows keep a page visible away from the front", () => {
+  assert.equal(expectedVisibility("b", "a", true), "visible");
+  assert.equal(expectedVisibility("a", "a", true), "visible");
+  assert.equal(expectedVisibility("b", "a"), "hidden");
+  assert.equal(expectedVisibility("a", "a"), "visible");
+  assert.equal(driveConflict(false, true), undefined);
+  assert.equal(driveConflict(true, false), undefined);
+  assert.equal(driveConflict(false, false), undefined);
+  assert.match(driveConflict(true, true) ?? "", /cannot be combined/);
+});
+
+test("visibleSpans: window drive includes the visible span that began before the command", () => {
+  const log = [[0, "visible"], [150, "hidden"], [200, "visible"]] as const;
+  assert.deepEqual(visibleSpans(log, 100, 300, true), [50, 100]);
+  assert.deepEqual(visibleSpans([[0, "visible"]], 100, 300, true), [200]);
+  assert.deepEqual(visibleSpans([[0, "hidden"]], 100, 300, true), []);
+  assert.deepEqual(visibleSpans([[0, "visible"], [50, "hidden"]], 100, 300, true), []);
+  assert.deepEqual(visibleSpans([[0, "visible"], [50, "visible"]], 100, 300, true), [200]);
+  assert.deepEqual(visibleSpans([[400, "visible"]], 100, 300, true), []);
+});
+
+test("failures: window pages stay visible during the drive, also away from the front window", () => {
+  const windowRun = run({ windowDrive: true,
+    drives: [drive("b", { visibility: "visible", expected: "visible", throughout: "visible" })],
+    timers: [timer("b", "visible", 50)], idles: [idle("b", "visible")] });
+  assert.deepEqual(failures(windowRun), []);
+  assert.match(failures({ ...windowRun, drives: [drive("b", { visibility: "visible", expected: "visible", during: "hidden", throughout: "visible" })] }).join(), /during its drive/);
+  assert.match(failures({ ...windowRun, drives: [drive("b", { visibility: "visible", expected: "visible", throughout: "visible, hidden, visible" })] }).join(), /throughout its drive/);
+  assert.match(failures({ ...windowRun, timers: [timer("b", "visible", 1000)] }).join(), /expected at most 100 ms/);
+  assert.match(failures({ ...windowRun, idles: [idle("b", "visible", { frames: 0 })] }).join(), /drew no animation frame/);
 });
 
 test("the agent Chrome's extra switches: no network and an X11 window, the timer flags only with --before, and nothing that agent-browser refuses", () => {
