@@ -44,10 +44,16 @@ recorded process that still runs with its recorded start time, and to their chil
 those still there; it waits until they are gone (at most 20 s in all), names them on stderr, and only then ends,
 which frees the lock. It signals through the record's pidfd, so a process that took a recorded pid later gets no
 signal; only when pidfd_open fails with an error other than ESRCH (for example no fd left) does it check the start
-time right before the signal.
+time right before the signal. After a SIGTERM, the guard takes a new process of the driver's tree into its records
+only if that process started before the SIGTERM (its start time, with TERM_EARLY_S of margin): the process that asks for
+the stop can run in that tree (run.sh down in the EXIT trap of its all mode), and its own processes (down's sleep) are
+not the run's (board ab-v16.89). The processes that it recorded before, the pids that the driver names, and the
+children of recorded processes are still the run's.
 
 The limit: a process that leaves the driver's tree within 0.5 s of its start (a double fork, for example a daemon's
-server or a crash handler such as crashpad) and that the driver does not name escapes the records.
+server or a crash handler such as crashpad) and that the driver does not name escapes the records. So does a process
+of the driver's tree that started less than about 0.03 s before a SIGTERM, if no poll recorded it and the driver does
+not name it.
 
 The clients: test/live/guard.ts (agent-browser's Node harnesses), start_guard() below (a Python driver), and the
 pid-file form (chrome-extension's run.sh). RESERVED_DISPLAYS below: the X displays that no harness takes.
@@ -68,6 +74,11 @@ TERM_S = 5.0
 GONE_S = 20.0
 DEFAULT_WAIT_S = 1200
 REFUSED = 75
+# After a SIGTERM, a new process of the driver's tree is the run's only if it started before the SIGTERM. on_term()
+# takes the moment this much early: Python runs the handler a little after the signal, and a process that the stop's
+# caller starts right after its kill (run.sh down's sleep) must not count as started before it.
+TERM_EARLY_S = 0.02
+TICK_NS = 10 ** 9 // os.sysconf("SC_CLK_TCK")  # the unit of a /proc start time, in ns
 # The X displays that no harness takes, whatever its own setting is: 0 (a desktop), 90 (agentwatch's agent browser on
 # taylor, the operator's), 147, 190, 191, 192 (other programs' displays on taylor). chrome-extension's run.sh and
 # agent-browser's guard.ts keep the same list (their tests compare it with this one).
@@ -189,6 +200,7 @@ class Guard:
         self.name = a.name
         self.rec = {}  # pid -> [start time, name, pidfd or None]
         self.reason = None
+        self.term_start = None  # after a SIGTERM: the start time before which a tree process is the run's
         self.my_start = stat_of(os.getpid())[1]
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -199,6 +211,9 @@ class Guard:
         self.stdin_open = a.pid_dir is None and not self.missing
 
     def on_term(self, *_):
+        if self.term_start is None:
+            # The clock of a /proc start time: CLOCK_BOOTTIME, in clock ticks.
+            self.term_start = (time.clock_gettime_ns(time.CLOCK_BOOTTIME) - int(TERM_EARLY_S * 10 ** 9)) // TICK_NS
         self.reason = self.reason or "the guard got SIGTERM"
 
     def record(self, pid, st, name=None):
@@ -344,8 +359,13 @@ class Guard:
                 if d is None or d[1] != self.driver_start or d[2] in ("Z", "X"):
                     self.reason = self.reason or "the driver %d is gone" % self.a.driver
                 else:
+                    # After a SIGTERM, only a process that started before it: the stop's own processes (run.sh
+                    # down's) can be in the driver's tree. The check comes after the snapshot: a process that started
+                    # after the SIGTERM is in the snapshot only if /proc was read after the SIGTERM, and on_term() runs
+                    # before table() returns.
                     for pid in tree(t, [self.a.driver]):
-                        self.record(pid, t[pid])
+                        if self.term_start is None or t[pid][1] < self.term_start:
+                            self.record(pid, t[pid])
             if self.missing:
                 self.reason = self.reason or "the driver's pipe (fd %d) is missing" % self.a.channel_fd
             if self.a.limit and time.monotonic() - t0 >= self.a.limit:
