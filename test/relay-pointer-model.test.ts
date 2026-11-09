@@ -2086,7 +2086,7 @@ test("ab-v16.80 (review-72 note 6): Runtime.runIfWaitingForDebugger is not check
 // Removing sendNow's error answer must fail these client-visible checks.
 test("review-85b note 5: a synchronous bridge send throw answers the client and opens the gate", async (t) => {
   for (const method of ["Runtime.evaluate", "Page.bringToFront"]) await t.test(method, async () => {
-    const { h } = await onHarness();
+    const { h } = await onHarnessLogged();
     const connection = await raw(h.url("s1")), ws = connection.ws!;
     const messages: any[] = [];
     ws.on("message", (data) => messages.push(JSON.parse(String(data))));
@@ -2097,13 +2097,22 @@ test("review-85b note 5: a synchronous bridge send throw answers the client and 
       await until(() => messages.find((m) => m.id === 2), "new page answer");
       const sessionId = messages.find((m) => m.method === "Target.attachedToTarget").params.sessionId;
       // JSON.parse accepts this depth. A non-callable toJSON forces the serializer onto its recursive path.
-      ws.send(`{"id":3,"method":${JSON.stringify(method)},"sessionId":${JSON.stringify(sessionId)},"params":{"toJSON":null,"unused":${"[".repeat(12000)}0${"]".repeat(12000)}}}`);
+      ws.send(`{"id":3,"method":${JSON.stringify(method)},"sessionId":${JSON.stringify(sessionId)},"params":{"toJSON":null,"unused":${"[".repeat(100000)}0${"]".repeat(100000)}}}`);
       ws.send(JSON.stringify({ id: 4, method: "Runtime.evaluate", sessionId, params: { expression: "2" } }));
       const next = await until(() => messages.find((m) => m.id === 4), "the next call's answer");
       assert.deepEqual(next, { id: 4, sessionId, result: {} }, "the next command passes the open gate");
       const failed = await until(() => messages.find((m) => m.id === 3), "the client's error answer", 500);
       assert.deepEqual(failed, { id: 3, sessionId, error: { code: -32000, message: "Maximum call stack size exceeded" } });
       assert.ok(!h.fake.sent("debugger.sendCommand", method).some((r) => "unused" in r.args[2]), "serialization fails before submission");
+      if (method === "Page.bringToFront") {
+        assert.equal(state(h).front, null, "the failed raise leaves the front page unknown");
+        ws.send(JSON.stringify({ id: 5, method: "Page.bringToFront", sessionId, params: {} }));
+        const raised = await until(() => messages.find((m) => m.id === 5), "the next raise's answer");
+        assert.deepEqual(raised, { id: 5, sessionId, result: {} });
+        const tabId = [...h.fake.tabs.values()].find((tab) => tab.targetId === messages.find((m) => m.id === 2).result.targetId)!.id;
+        assert.match(stepLines(h, tabId).at(-1) ?? "", /no path \(the front page is unknown\)/,
+          "the next activation sees the failed raise's unknown front page");
+      }
     } finally {
       ws.close();
       await connection.closed;
