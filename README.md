@@ -1210,6 +1210,10 @@ a second; no client method reaches these ops). The relay (`src/relay/model.ts`, 
   (the viewport less its scrollbars: a page gets no mouse event over its scrollbars), and has the daemon play
   it before the window comes forward. The entering page then
   enters at its own last point; the leaving page sees real moves of at most 50 px, 16 ms apart.
+- The relay protects its world after a back-forward cache restore, before the next geometry read.
+  It retains up to 128 context ids per tab and checks a suspected call with a native world lookup.
+  At the limit, it checks every context-bearing call. A reused client context stays usable.
+  The design states the remaining race between the lookup and a navigation.
 - The catch-up: after a path, a client's next pointer event far from the page's recorded point (a move more
   than 50 px away, a press or a wheel more than 2 px away) gets CDP moves along a path of the same generator
   first (clamped to the page's content box too), so Playwright's next raw move after an activation is no

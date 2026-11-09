@@ -1197,7 +1197,7 @@ test("round 3: the one more try: when the first evaluate names an unknown contex
   } finally { await h.close(); }
 });
 
-test("round 3: Runtime.executionContextsCleared empties the set of the world's ids and still goes to the client", async () => {
+test("round 3: Runtime.executionContextsCleared resets the current world event filter and still goes to the client", async () => {
   const { h } = await onHarness();
   try {
     const { c, A } = await twoPages(h);
@@ -1466,7 +1466,7 @@ const relayWorld = (h: Harness, p: Page): number =>
 const objectIn = (ctx: number, n = 7) => `-4410290112045213491.${ctx}.${n}`;
 /** The client's calls of `p` that reached the fake receiver ("Chrome") from request `from` on, by method. */
 const reached = (h: Harness, p: Page, from: number) =>
-  h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[0].tabId === p.tab.id && r.args[2]?.expression !== GEO_EXPRESSION).map((r) => r.args[1] as string);
+  h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[0].tabId === p.tab.id && r.args[2]?.expression !== GEO_EXPRESSION && !(r.args[1] === "Page.createIsolatedWorld" && r.args[2]?.worldName?.startsWith("agentwatch-relay-"))).map((r) => r.args[1] as string);
 
 /** Each call is refused with the relay's text and never reaches Chrome. */
 async function refusedAll(h: Harness, c: CDPConnection, p: Page, calls: [string, object][]) {
@@ -1484,6 +1484,280 @@ async function withWorlds() {
   assert.equal(d.moves.length, 1);
   return { h, c, A, B };
 }
+
+test("ab-v16.84: a cached document's relay world stays protected before the next read, with or without navigation events", async (t) => {
+  for (const events of ["none", "Page", "Runtime", "both"]) await t.test(events, async () => {
+    const { h, c, A, B } = await withWorlds();
+    try {
+      const first = relayWorld(h, A);
+      let current = first;
+      // The fake keeps both cached documents' contexts alive. Chrome returns the same world's id on a restore.
+      h.fake.command = (target, method, params) => {
+        if (target.tabId === A.tab.id && method === "Page.createIsolatedWorld" && params.worldName !== "client-world") {
+          h.fake.worlds.set(current, A.tab.id);
+          return { executionContextId: current };
+        }
+        return undefined;
+      };
+      const navigate = async (loaderId: string, restored = false) => {
+        if (events === "Runtime" || events === "both") {
+          h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextDestroyed", params: { executionContextId: first } });
+          h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextsCleared", params: {} });
+        }
+        if (events === "Page" || events === "both") h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Page.frameNavigated", params: {
+          frame: { id: A.targetId, url: "https://a.example/" + loaderId, loaderId }, type: restored ? "BackForwardCacheRestore" : "Navigation" } });
+        await sleep(20);
+      };
+      current = 800;
+      await navigate("document-2");
+      await click(c, B, 700, 300);
+      await click(c, A, 100, 100);
+      assert.equal(relayWorld(h, A), current, "a read in document 2");
+      current = first;
+      await navigate("document-1", true);
+      const reads = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[2].expression === GEO_EXPRESSION).length;
+      await refusedAll(h, c, A, [
+        ["Runtime.evaluate", { expression: "screenX = 10000", contextId: first }],
+        ["Runtime.callFunctionOn", { functionDeclaration: "function () { screenX = 10000; }", executionContextId: first }],
+        ["Runtime.callFunctionOn", { functionDeclaration: "function () { this.screenX = 10000; }", objectId: objectIn(first) }],
+      ]);
+      assert.equal(h.fake.sent("debugger.sendCommand", "Runtime.evaluate").filter((r) => r.args[2].expression === GEO_EXPRESSION).length, reads, "no geometry read after the restore");
+    } finally { await h.close(); }
+  });
+});
+
+test("ab-v16.84: the 128-id bound retains old ids and checks an unrecorded world before every context-bearing call", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const first = relayWorld(h, A);
+    let current = first;
+    h.fake.command = (target, method) => target.tabId === A.tab.id && method === "Page.createIsolatedWorld" ? { executionContextId: current } : undefined;
+    const name = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld")[0].args[2].worldName;
+    const created = (id: number) => h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id, name } } });
+    for (let id = 1000; id < 1126; id++) created(id);
+    await sleep(30);
+    const before = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length;
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: 7000 }, A.sessionId);
+    assert.equal(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length, before, "127 ids: an unrelated context needs no lookup");
+    for (let id = 1126; id < 1140; id++) created(id);
+    await sleep(30);
+    // This assertion checks the resource limit; refusal checks below exercise its externally visible fallback.
+    assert.equal((h.relay.model as any).tabs.get(A.tab.id).worldIds.size, 128);
+    current = 9000; // Not recorded: the bound must never turn into a refusal gap.
+    await refusedAll(h, c, A, [
+      ["Runtime.evaluate", { expression: "1", contextId: current }],
+      ["Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: current }],
+      ["Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(current) }],
+    ]);
+    assert.equal((h.relay.model as any).tabs.get(A.tab.id).worldIds.size, 128);
+    current = first;
+    await refusedAll(h, c, A, [["Runtime.evaluate", { expression: "1", contextId: first }]]);
+    const from = h.fake.requests.length;
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: 7000 }, A.sessionId);
+    await c.send("Runtime.evaluate", { expression: "1" }, A.sessionId);
+    assert.deepEqual(reached(h, A, from), ["Runtime.callFunctionOn", "Runtime.evaluate"], "client contexts and calls without a context stay usable at the bound");
+    assert.equal(h.fake.sent("debugger.sendCommand", "Runtime.enable").length, 0, "no enable of the relay's own");
+  } finally { await h.close(); }
+});
+
+test("ab-v16.84: lookup failure, timeout, malformed answer or a lost frame refuses the client call", async (t) => {
+  for (const failure of ["error", "timeout", "malformed", "frame"]) await t.test(failure, async () => {
+    const { h, c, A } = await withWorlds();
+    try {
+      const id = relayWorld(h, A);
+      h.fake.command = (target, method) => {
+        if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+        if (failure === "timeout") return new Promise(() => {});
+        if (failure === "malformed") return {};
+        return { error: JSON.stringify({ code: -32000, message: failure === "frame" ? "No frame for given id found" : "lookup failed" }) };
+      };
+      const before = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length;
+      await refusedAll(h, c, A, [["Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(id) }]]);
+      assert.equal(h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length, before + 1, "the refusal follows a failed lookup");
+    } finally { await h.close(); }
+  });
+});
+
+test("ab-v16.84: a late lookup answer never forwards a timed-out client call", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const id = relayWorld(h, A);
+    h.fake.command = async (target, method) => {
+      if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+      await sleep(300);
+      return { executionContextId: 800 };
+    };
+    const from = h.fake.requests.length;
+    await refusedAll(h, c, A, [["Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: id }]]);
+    await sleep(150);
+    assert.deepEqual(reached(h, A, from), [], "the late answer releases no client command");
+  } finally { await h.close(); }
+});
+
+test("ab-v16.84: removing a tab ends its retained ids; a new tab permits the same numeric client id", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const id = relayWorld(h, A);
+    await c.send("Target.closeTarget", { targetId: A.targetId });
+    await until(() => !(h.relay.model as any).tabs.has(A.tab.id), "the tab leaves the model");
+    const next = await page(h, c);
+    const from = h.fake.requests.length;
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: id }, next.sessionId);
+    assert.deepEqual(reached(h, next, from), ["Runtime.callFunctionOn"]);
+  } finally { await h.close(); }
+});
+
+test("review-85 B1: a world lookup preserves the order of client commands and replies", async (t) => {
+  for (const mode of ["no context", "navigation", "128 ids", "existing gate"]) await t.test(mode, async () => {
+    const { h, c, A, B } = await withWorlds();
+    let release: (() => void) | undefined;
+    const pending: Promise<unknown>[] = [];
+    try {
+      const old = relayWorld(h, A), replies: string[] = [];
+      if (mode === "128 ids") {
+        const name = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld")[0].args[2].worldName;
+        for (let id = 1000; id < 1127; id++) h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id, name } } });
+        await sleep(20);
+      }
+      h.fake.command = (target, method) => target.tabId === A.tab.id && method === "Page.createIsolatedWorld"
+        ? new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); }) : undefined;
+      let unblock: (() => void) | undefined;
+      if (mode === "existing gate") {
+        h.fake.op = (r) => r.op === "tabs.get" && r.args[0] === A.tab.id
+          ? new Promise((resolve) => { unblock = () => resolve(h.fake.tabs.get(A.tab.id)); }) : undefined;
+        const press = mouse(c, A, "mousePressed", 100, 100);
+        press.catch(() => {}); pending.push(press);
+        await until(() => unblock, "the activation gate");
+      }
+      const from = h.fake.requests.length;
+      const first = c.send("Runtime.callFunctionOn", { functionDeclaration: "function () { return 1; }", executionContextId: mode === "128 ids" ? 9000 : old }, A.sessionId)
+        .then((r) => { replies.push("first"); return r; });
+      first.catch(() => {}); pending.push(first);
+      const secondMethod = mode === "navigation" ? "Page.navigate" : "Runtime.evaluate";
+      const second = c.send(secondMethod, mode === "navigation" ? { url: "https://a.example/next" } : { expression: "1" }, A.sessionId)
+        .then((r) => { replies.push("second"); return r; });
+      second.catch(() => {}); pending.push(second);
+      unblock?.();
+      await until(() => release, "the lookup");
+      // A reply from the other tab proves that the server receives the later messages while A's lookup waits.
+      await c.send("Runtime.evaluate", { expression: "heartbeat" }, B.sessionId);
+      const before = reached(h, A, from).filter((m) => m === "Runtime.callFunctionOn" || m === secondMethod);
+      release!();
+      await Promise.all(pending);
+      if (mode === "existing gate") await mouse(c, A, "mouseReleased", 100, 100);
+      assert.deepEqual(before, [], "neither client command passes the pending lookup");
+      assert.deepEqual(reached(h, A, from).filter((m) => m === "Runtime.callFunctionOn" || m === secondMethod), ["Runtime.callFunctionOn", secondMethod]);
+      assert.deepEqual(replies, ["first", "second"]);
+    } finally { release?.(); await Promise.allSettled(pending); await h.close(); }
+  });
+});
+
+test("review-85 B1: the activation chain waits for an input's lookup before the next activation", async () => {
+  const { h, c, A, B } = await withWorlds();
+  let release: (() => void) | undefined;
+  const pending: Promise<unknown>[] = [];
+  try {
+    const old = relayWorld(h, A);
+    let lookedUp = false;
+    h.fake.command = (target, method) => {
+      if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+      if (lookedUp) return { executionContextId: 800 };
+      lookedUp = true;
+      return new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); });
+    };
+    const from = h.fake.requests.length;
+    const first = mouse(c, A, "mousePressed", 100, 100, { contextId: old });
+    first.catch(() => {}); pending.push(first);
+    await until(() => release, "the input's lookup");
+    const next = c.send("Page.bringToFront", {}, B.sessionId);
+    next.catch(() => {}); pending.push(next);
+    const released = mouse(c, A, "mouseReleased", 100, 100);
+    released.catch(() => {}); pending.push(released);
+    await sleep(40);
+    const early = reached(h, B, from).includes("Page.bringToFront");
+    release!();
+    await Promise.all(pending);
+    assert.equal(early, false, "the next activation waits");
+    const sent = h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" &&
+      ((r.args[0].tabId === A.tab.id && r.args[1] === "Input.dispatchMouseEvent" && r.args[2].type === "mousePressed") || (r.args[0].tabId === B.tab.id && r.args[1] === "Page.bringToFront")));
+    assert.deepEqual(sent.map((r) => r.args[1]), ["Input.dispatchMouseEvent", "Page.bringToFront"]);
+  } finally { release?.(); await Promise.allSettled(pending); await h.close(); }
+});
+
+test("review-85 B1: bringToFront keeps its lookup in the activation chain, including a failed tab read", async (t) => {
+  for (const failRead of [false, true]) await t.test(failRead ? "failed read" : "normal raise", async () => {
+    const { h, c, A, B } = await withWorlds();
+    let release: (() => void) | undefined;
+    const pending: Promise<unknown>[] = [];
+    try {
+      const old = relayWorld(h, A);
+      await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }, B.sessionId);
+      assert.equal(pointOf(h, B), null, "the next activation needs no read of A");
+      let lookedUp = false;
+      h.fake.command = (target, method) => {
+        if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+        if (lookedUp) return { executionContextId: 800 };
+        lookedUp = true;
+        return new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); });
+      };
+      if (failRead) h.fake.op = (r) => { if (r.op === "tabs.get" && r.args[0] === A.tab.id) throw new Error("tab read failed"); return undefined; };
+      const from = h.fake.requests.length;
+      const first = c.send("Page.bringToFront", { contextId: old }, A.sessionId);
+      first.catch(() => {}); pending.push(first);
+      await until(() => release, "the raise's lookup");
+      const second = c.send("Page.bringToFront", {}, B.sessionId);
+      second.catch(() => {}); pending.push(second);
+      await sleep(40);
+      const early = reached(h, B, from).includes("Page.bringToFront");
+      release!();
+      await Promise.all(pending);
+      assert.equal(early, false, "the next raise waits for the lookup");
+      assert.deepEqual(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Page.bringToFront").map((r) => r.args[0].tabId), [A.tab.id, B.tab.id]);
+    } finally { release?.(); await Promise.allSettled(pending); await h.close(); }
+  });
+});
+
+test("review-85 note 3: removal or detach during a lookup refuses the client command", async (t) => {
+  for (const event of ["tabs.onRemoved", "debugger.onDetach"]) await t.test(event, async () => {
+    const { h, c, A } = await withWorlds();
+    let release: (() => void) | undefined;
+    let call: Promise<unknown> | undefined;
+    try {
+      const old = relayWorld(h, A), from = h.fake.requests.length;
+      h.fake.command = (target, method) => target.tabId === A.tab.id && method === "Page.createIsolatedWorld"
+        ? new Promise((resolve) => { release = () => resolve({ executionContextId: 800 }); }) : undefined;
+      call = c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: old }, A.sessionId);
+      call.catch(() => {});
+      await until(() => release, "the pending lookup");
+      h.fake.emit(event, event === "tabs.onRemoved" ? { tabId: A.tab.id } : { source: { tabId: A.tab.id }, reason: "target_closed" });
+      await until(() => event === "tabs.onRemoved" ? !(h.relay.model as any).tabs.has(A.tab.id) : !(h.relay.model as any).tabs.get(A.tab.id).attached, "the removal or detach");
+      release!();
+      await assert.rejects(call, (e: Error) => e.message === `Runtime.callFunctionOn: ${TEXT.relayWorld("Runtime.callFunctionOn")}`);
+      assert.deepEqual(reached(h, A, from), [], "no call after removal or detach");
+    } finally { release?.(); await call?.catch(() => {}); await h.close(); }
+  });
+});
+
+test("ab-v16.84: renderer reuse permits the client's id, but preserves refusal when the cached renderer returns", async () => {
+  const { h, c, A } = await withWorlds();
+  try {
+    const old = relayWorld(h, A);
+    let current = 800;
+    h.fake.command = (target, method, params) => {
+      if (target.tabId !== A.tab.id || method !== "Page.createIsolatedWorld") return undefined;
+      return { executionContextId: params.worldName === "client-world" ? old : current };
+    };
+    h.fake.pageWorlds.set(old, GEO);
+    await c.send("Page.createIsolatedWorld", { frameId: A.targetId, worldName: "client-world" }, A.sessionId);
+    const from = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1", contextId: old }, A.sessionId);
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", executionContextId: old }, A.sessionId);
+    await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(old) }, A.sessionId);
+    assert.deepEqual(reached(h, A, from), ["Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.callFunctionOn"]);
+    current = old; // The old renderer returns, without Runtime or Page events or a geometry read.
+    await refusedAll(h, c, A, [["Runtime.evaluate", { expression: "1", contextId: old }]]);
+  } finally { await h.close(); }
+});
 
 test("ab-v16.80: a client's Runtime.evaluate with the context id of the relay's own world is refused with a clear error, and never reaches Chrome; with any other id it goes on", async () => {
   // review-68c note 3: a client's Runtime.evaluate with any contextId passed policy.ts. Chromium returns the same world
@@ -1575,11 +1849,12 @@ test("ab-v16.80: a call that waits behind an activation step is checked when it 
   } finally { await h.close(); }
 });
 
-test("ab-v16.80: an old id of the relay's world that Chrome gives to another world is not refused: the client's own Page.createIsolatedWorld, a context of another name, Runtime.executionContextsCleared", async () => {
+test("ab-v16.80: an old id of the relay's world that Chrome gives to another world is not refused: the client's own Page.createIsolatedWorld, a context of another name, and after Runtime.executionContextsCleared", async () => {
   const { h, c, A, B } = await withWorlds();
   try {
     // A cross-site navigation with no Runtime events: Chromium gives the relay's old id to the client's new world.
     const wA = relayWorld(h, A);
+    h.fake.pageWorlds.set(wA, GEO);
     h.fake.command = (_t, method, params) => (method === "Page.createIsolatedWorld" && params.worldName === "client-world" ? { executionContextId: wA } : undefined);
     const { executionContextId } = await c.send("Page.createIsolatedWorld", { frameId: A.targetId, worldName: "client-world" }, A.sessionId);
     assert.equal(executionContextId, wA);
@@ -1588,18 +1863,21 @@ test("ab-v16.80: an old id of the relay's world that Chrome gives to another wor
     assert.deepEqual(reached(h, A, from), ["Runtime.evaluate"], "the client's own world");
     // A page's own context that got the old id of the relay's world in B.
     const wB = relayWorld(h, B);
+    h.fake.pageWorlds.set(wB, GEO);
     h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Runtime.executionContextCreated", params: { context: { id: wB, origin: "https://a.example", name: "", uniqueId: "u9", auxData: { frameId: B.targetId, isDefault: true, type: "default" } } } });
     await sleep(20);
     from = h.fake.requests.length;
     await c.send("Runtime.evaluate", { expression: "1", contextId: wB }, B.sessionId);
     assert.deepEqual(reached(h, B, from), ["Runtime.evaluate"], "the page's main world");
-    // A new step reads again: the new world's id is refused; Runtime.executionContextsCleared (a navigation) frees it.
+    // A new step reads again. A clear alone cannot release a cached world's id; a native lookup proves reuse.
     await mouse(c, B, "mouseMoved", 700, 300);
     await click(c, B, 700, 300);
     const w2 = relayWorld(h, B);
     await refusedAll(h, c, B, [["Runtime.evaluate", { expression: "1", contextId: w2 }]]);
     h.fake.emit("debugger.onEvent", { source: { tabId: B.tab.id }, method: "Runtime.executionContextsCleared", params: {} });
     await sleep(20);
+    await refusedAll(h, c, B, [["Runtime.evaluate", { expression: "1", contextId: w2 }]]);
+    h.fake.pageWorlds.set(w2, GEO);
     from = h.fake.requests.length;
     await c.send("Runtime.evaluate", { expression: "1", contextId: w2 }, B.sessionId);
     assert.deepEqual(reached(h, B, from), ["Runtime.evaluate"]);
@@ -1639,7 +1917,7 @@ test("ab-v16.80 (review-72 B1): the relay's own evaluate in its world sends disa
   } finally { await h.close(); }
 });
 
-test("ab-v16.80 (review-72 note 1): a main-frame Page.frameNavigated (a new document) empties the set, also with Runtime off; a frame's does not", async () => {
+test("ab-v16.80 (review-72 note 1): a main-frame Page.frameNavigated retains refusal candidates; a native lookup permits a reused client context with Runtime off", async () => {
   // A cross-process navigation with Runtime off: no Runtime.executionContextsCleared; Chromium can give the relay's old
   // id to a world of the new document, and the client's call there was refused until the relay's next read.
   const { h, c, A } = await withWorlds();
@@ -1650,9 +1928,11 @@ test("ab-v16.80 (review-72 note 1): a main-frame Page.frameNavigated (a new docu
     await refusedAll(h, c, A, [["Runtime.evaluate", { expression: "1", contextId: w }]]);
     h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Page.frameNavigated", params: { frame: { id: A.targetId, url: "https://a.example/next", loaderId: "L2" }, type: "Navigation" } });
     await sleep(20);
+    await refusedAll(h, c, A, [["Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(w) }]]);
+    h.fake.pageWorlds.set(w, GEO); // A new renderer gives the numeric id to a client context.
     const from = h.fake.requests.length;
     await c.send("Runtime.callFunctionOn", { functionDeclaration: "function () {}", objectId: objectIn(w) }, A.sessionId);
-    assert.deepEqual(reached(h, A, from), ["Runtime.callFunctionOn"], "the old id names a world of the new document");
+    assert.deepEqual(reached(h, A, from), ["Runtime.callFunctionOn"], "the native lookup proves that the current relay world has another id");
   } finally { await h.close(); }
 });
 
@@ -1666,6 +1946,7 @@ test("ab-v16.80 (review-72 note 6): Runtime.runIfWaitingForDebugger is not check
     const ev = await attached;
     assert.equal(ev.waitingForDebugger, true);
     // The relay's world in the held tab (its Runtime.executionContextCreated): the id joins the tab's set.
+    h.fake.command = (target, method) => target.tabId === popup.id && method === "Page.createIsolatedWorld" ? { executionContextId: 900 } : undefined;
     h.fake.emit("debugger.onEvent", { source: { tabId: popup.id }, method: "Runtime.executionContextCreated", params: { context: { id: 900, origin: "", name, uniqueId: "u900", auxData: { frameId: popup.targetId, isDefault: false, type: "isolated" } } } });
     await sleep(20);
     const p = { targetId: popup.targetId, sessionId: ev.sessionId as string, tab: popup };

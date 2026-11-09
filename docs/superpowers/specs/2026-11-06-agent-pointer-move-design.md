@@ -340,24 +340,20 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   another context: after a cross-site navigation Chromium reuses context ids in the new renderer process,
   and the relay sees no context event while no client has `Runtime` on (review-68 B1: an old id ran in a
   page's own world, which saw the read and gave its own values). When the evaluate names an unknown
-  context (a navigation between the two calls), the relay tries once more. The relay keeps only the new id
-  (and the ids of `Runtime.executionContextCreated` with its world's name) for the events below; an old id
-  leaves that set, so the page's own events with it reach the client. The window between the two calls of
-  one read stays (a navigation that commits in it can give the new id to another context; a few ms);
-- on the tab's own session only, the relay drops the world's `Runtime.executionContextCreated` (by the
-  world's name, for any id; the id joins the set), and `Runtime.executionContextDestroyed`,
-  `Debugger.scriptParsed` and `Debugger.scriptFailedToParse` of the ids in the set, so no client sees the
-  world; no page script sees its reads. Each read replaces the set with its new id. An id that left the
-  set is no longer the relay's: its events go to the client as any page's events (also a
-  `Runtime.executionContextDestroyed` of the relay's old world, of a context that the client never saw
-  created; a client ignores an id that it does not know). `Runtime.executionContextsCleared` empties the
-  set and still goes to the client. An id that stays in the
-  set until the next read can name a page's context after a navigation and drop that page's own events of
-  that id (`Runtime.executionContextDestroyed`, `Debugger.scriptParsed` and `Debugger.scriptFailedToParse`;
-  ab-lead's note on round 3);
+  context (a navigation between the two calls), the relay tries once more. The relay retains the ids across
+  documents, including documents in the back-forward cache. A restore can return the same world before the
+  next geometry read. Navigation, context destruction and context clearing therefore keep these refusal
+  candidates (ab-v16.84);
+- on the tab's own session only, the relay drops the world's `Runtime.executionContextCreated` by its
+  name. The event records the id. A separate set filters the current document's
+  `Runtime.executionContextDestroyed`, `Debugger.scriptParsed` and `Debugger.scriptFailedToParse` events.
+  A read replaces this event filter with its current world. A context of another name, or a client's
+  `Page.createIsolatedWorld` answer, releases that id from the event filter only. A context clear or a
+  main-frame navigation resets this filter and still reaches the client. These changes never remove a
+  retained refusal candidate. Thus a client can see its own context's events after renderer reuse;
 - a client's call into the world is refused with a clear error (`TEXT.relayWorld`), before it reaches Chrome (board
   ab-v16.80; review-68c note 3: a client could guess the id and change `screenX` there, which moved the
-  clamp box). The relay refuses a call on the tab's own session that names an id of the set: a `contextId` or
+  clamp box). The relay checks a call on the tab's own session that names a candidate id: a `contextId` or
   an `executionContextId` (`Runtime.evaluate`, `Runtime.callFunctionOn`, `DOM.resolveNode`,
   `Runtime.compileScript`, ...), or an object id or a call-frame id of the world (`objectId`, a name that ends
   in `ObjectId`, `callFrameId`; also in a call's arguments, down to 3 levels). The relay reads the world of an
@@ -368,12 +364,28 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   their answers never go to a client. The check runs when the call goes to Chrome, so a call that waited
   behind a step is checked against the world that the step's read made. `Runtime.runIfWaitingForDebugger`
   is not checked: it runs no code in a context, and its release of a held tab must go (review-72 note 6).
-  An id that Chrome gives to another world leaves the set: a `Runtime.executionContextCreated` of another
-  name, and the answer of a client's own `Page.createIsolatedWorld` (an old id of the relay's world from
-  another renderer), so the client's own worlds stay usable. A main-frame `Page.frameNavigated` (a new
-  document) empties the set, also when no client has `Runtime` on (review-72 note 1). A child session
-  numbers its contexts on its own, and its calls are not checked. With an old daemon, or on the Mac, the
-  relay makes no world, and nothing is refused;
+  The relay retains at most 128 candidate ids per tab. It never evicts an id while the tab stays in the
+  model. The tab's removal or a link reset ends that state. Before a call names a retained id, the relay
+  sends `Page.createIsolatedWorld` with its private name on the current main frame. This native lookup
+  runs no script and sends no enable. Chrome returns the existing world's id for that document. If the
+  document has no world with that name, the lookup creates it. Its id joins the retained set, within the
+  same bound. The relay refuses the call when it names that current id. Thus a numeric id reused for a
+  client's context in another renderer stays usable. The cached renderer's world stays protected when it
+  returns.
+  A lookup error, an invalid answer, a lost frame, a removed tab, a detach or a wait beyond 200 ms refuses
+  the call. A late lookup answer never forwards it.
+  The tab's later calls wait behind this lookup, including calls with no context. The gate opens when
+  the first command is sent or refused. It does not wait for an ordinary CDP answer: a dialog or held
+  target must still accept its release command. Activation steps also wait for lookup and submission.
+  A `Page.bringToFront` keeps its bounded reply wait, including when the tab read fails.
+  A client's own world with a reused id pays one native lookup round trip on each call that names it.
+  This cost can continue for the tab's lifetime. Each lookup can hold later calls for up to 200 ms.
+  At 128 retained ids, the relay checks **every context-bearing call** by the same native lookup. It
+  retains all 128 ids and allocates no more entries. Newly created or restored worlds therefore stay
+  protected after the bound, without refusing a client's reused id forever. Calls with no context and
+  `Runtime.runIfWaitingForDebugger` keep their existing paths. A child session numbers its contexts on
+  its own, and its calls are not checked. With an old daemon, or on the Mac, the relay makes no world,
+  and nothing is refused;
 - the relay's evaluate sends `disableBreaks: true` (review-72 B1). The client and the relay share the tab's
   debugger session, so a client's breakpoint reaches the relay's evaluate, with no id named. A
   `Debugger.setBreakpointByUrl` by the `scriptHash` of `GEO_EXPRESSION` (its text is public; the client
@@ -388,12 +400,12 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   own world (the controls). A breakpoint by `urlRegex: "^$"` reached not even the client's own evaluate:
   V8 sets no URL breakpoint on a script with no URL. The read throws no exception, so a pause on exceptions
   does not reach it;
-- the limits of the refusal: a call that reaches Chrome between the world's first `Page.createIsolatedWorld`
-  in a document and its answer (a few ms; later reads of the document get the same id, which is in the set
-  then); after a navigation with neither `Runtime` nor `Page` events (no client has them on), the set keeps
-  the old id until the relay's next read, so a client's call with that id in a world of the new document is
-  refused until then; the world's `uniqueContextId` and its name, which no client sees (the relay drops the
-  world's events) and which are not guessed (the name has 32 random bits);
+- the limits of the refusal: a call can reach Chrome between the world's first `Page.createIsolatedWorld`
+  in a document and its answer. A navigation can also commit between a native lookup and the client's
+  forwarded command, just as it can commit between a world's creation and the geometry evaluate. These
+  separate CDP commands are not atomic. Retention closes the restore gap between geometry reads; it does
+  not close this navigation race. The object-id format dependency above also stays. The world's
+  `uniqueContextId` and its name stay hidden from clients; the name has 32 random bits;
 - a read keeps or drops the kept geometry only when it answers within `GEOMETRY_WAIT_MS` and no drop event of
   the page came after the read started (the relay counts the drop events of each page); a late answer is
   dropped and changes nothing (round 3 of PR #68).

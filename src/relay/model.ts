@@ -37,6 +37,8 @@ const CONTENT_TYPES = ["location", "notifications", "camera", "microphone", "cli
 const HIDDEN_TYPES = new Set(["service_worker", "shared_worker", "browser"]);
 /** How long Target.createTarget waits for its tab's tabs.onCreated, which brings the tab's hold (C10 does not order it before the answer). */
 const CREATED_WAIT_MS = 2000;
+/** Retain at most this many world ids per tab; at the limit every context-bearing call gets a native lookup. */
+export const RELAY_WORLD_IDS_MAX = 128;
 /** How long a new tab that the relay did not create waits in the model for its bridge.tabScope (C11). */
 export const TAB_SCOPE_WAIT_MS = 500;
 /** The tries of bridge.info at a link up (review-58 note 7): a failed one (a timeout, say) is tried again, then the relay waits for the next link up. */
@@ -99,14 +101,10 @@ type Tab = {
   unanswered: number;
   /** Its calls that wait in the activation chain (or run there). */
   chainSteps: number;
-  /**
-   * The context ids of the relay's isolated world in the tab: the id that its last Page.createIsolatedWorld returned,
-   * and the ids of Runtime.executionContextCreated with its name. Each read makes the world again and keeps only the
-   * new id: Chromium reuses context ids in a new renderer process, so an old id can name a page's context (review-68 B1).
-   * A client's call that names one of them is refused (sendNow; board ab-v16.80); an id that Chrome gives to another
-   * world (its Runtime.executionContextCreated, or the answer of a client's Page.createIsolatedWorld) leaves the set.
-   */
+  /** A bounded union across documents and renderers. Never evict an id while the tab lives (ab-v16.84). */
   worldIds: Set<number>;
+  /** The world's ids for event filtering in the current document; distinct from the retained refusal candidates. */
+  worldEvents: Set<number>;
   /** A geometry read of the relay is in flight. */
   geoReading: boolean;
   /**
@@ -580,7 +578,7 @@ export class Model {
     if (!this.conns.size && this.linkUp) this.bridge.call("bridge.attachNew", [false]).catch(() => {});
   }
 
-  /** One CDP message of a client. A call for Chrome goes to the bridge with no await before it, so Chrome gets the calls in order. */
+  /** One client message. A tab's gate preserves command order through activations, catch-ups and world lookups. */
   async onMessage(c: Conn, msg: any): Promise<void> {
     // A connection that the model closed (end_scope, a line without its list, a link change) can still send until its
     // close handshake ends (up to 30 s): none of that reaches the bridge, and it gets no answer (review-58 note 1).
@@ -629,9 +627,8 @@ export class Model {
         .catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`));
     } else if (tab.gate) this.behind(tab, tab.gate.then(send).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
     else {
-      // A catch-up (C11) is a step of the tab's gate: the tab's later calls wait behind it.
-      const run = send();
-      if (run) this.behind(tab, run.catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
+      // A catch-up or world lookup holds the tab's later calls until this client's command is sent or refused.
+      this.behind(tab, send().catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)));
     }
   }
 
@@ -684,7 +681,7 @@ export class Model {
     if (this.pathsOn()) return this.step(tab, kind, bring);
     if (kind === "input") return this.activateToday(tab);
     // A Page.bringToFront or a Target.activateTarget that the chain took while the paths were on: as with the paths off.
-    if (kind === "bringToFront") { void bring!().catch(() => {}); return; }
+    if (kind === "bringToFront") { await this.within(ACTIVATE_MAX_MS, bring!().catch(() => {})); return; }
     await this.bridge.call("tabs.update", [tab.id, { active: true }]);
   }
 
@@ -713,35 +710,44 @@ export class Model {
 
   /**
    * A client's call leaves the tab's gate: a pointer event first gets its catch-up when it needs one (C11, decided now,
-   * against the page's point at this time). Returns the catch-up and the call behind it, or undefined when the call went.
+   * against the page's point at this time). Settles when its lookup and catch-up end and the call is sent or refused.
+   * Never wait for an ordinary CDP answer: a dialog or held target must still accept its release command.
    */
-  private send(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<void> | undefined {
+  private send(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<void> {
     const cu = child ? null : this.catchUpOf(tab, method, params);
-    if (!cu) { void this.sendNow(tab, child, method, params, answer).catch(() => {}); return undefined; }
-    const run = this.catchUp(tab, cu.from, cu.to, cu.move).then(() => { void this.sendNow(tab, child, method, params, answer).catch(() => {}); });
+    const sent = () => this.sendNow(tab, child, method, params, answer, false).then(() => {}, () => {});
+    if (!cu) return sent();
+    const run = this.catchUp(tab, cu.from, cu.to, cu.move).then(sent);
     tab.catchUp = run;
     void run.then(() => { if (tab.catchUp === run) tab.catchUp = null; });
     return run;
   }
 
-  /** Send one client call to Chrome now; its answer goes to the client. Returns the bridge call. */
-  private sendNow(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<unknown> {
+  /** Send after the world lookup. A raise waits for the answer; an ordinary call settles at submission. */
+  private async sendNow(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void, waitForReply = true): Promise<unknown> {
     // A call into the relay's own isolated world (board ab-v16.80; review-68c note 3): it could change what the
     // geometry read sees there (screenX: the clamp box). Checked here, as the call goes to Chrome, not when it came: a
     // call that waited behind an activation step can name the world that the step's read made. The tab's own session
     // only: a child session (a frame of another renderer, a worker) numbers its contexts on its own. Not
     // Runtime.runIfWaitingForDebugger: it runs no code in a context, and its release of a held tab must go (review-72 note 6).
-    if (!child && tab.worldIds.size && method !== "Runtime.runIfWaitingForDebugger" && contextsNamed(params).some((id) => tab.worldIds.has(id))) {
-      answer({ error: { code: -32000, message: TEXT.relayWorld(method) } });
-      return Promise.resolve();
+    const contexts = !child && method !== "Runtime.runIfWaitingForDebugger" ? contextsNamed(params) : [];
+    if (contexts.length && (tab.worldIds.size >= RELAY_WORLD_IDS_MAX || contexts.some((id) => tab.worldIds.has(id)))) {
+      // Numeric ids overlap across renderers. Resolve the world on the current main frame, also after a cache
+      // restore, instead of interpreting a retained id as the current renderer's world. No script and no enable.
+      const lookup = this.relayWorld(tab).catch(() => null);
+      const id = await this.within(GEOMETRY_WAIT_MS, lookup);
+      if (id === TIMEOUT || id === null || contexts.includes(id) || this.tabs.get(tab.id) !== tab || !tab.attached) {
+        answer({ error: { code: -32000, message: TEXT.relayWorld(method) } });
+        return;
+      }
     }
     const target = child ? { tabId: tab.id, sessionId: child } : { tabId: tab.id };
     const call = this.bridge.call("debugger.sendCommand", [target, method, withForce(method, params)]);
     this.tracked(tab, child, method, params, call);
     call.then((result) => {
-      // The client's own world: the id that Chrome gave it names no world of the relay's now (an old id of the relay's
-      // world from another renderer process, review-68 B1).
-      if (method === "Page.createIsolatedWorld" && !child) tab.worldIds.delete((result as any)?.executionContextId);
+      // This id belongs to the client's current world, but a cached renderer can still have a relay world with it.
+      // Keep the refusal candidate; only the current document's event filter releases it.
+      if (method === "Page.createIsolatedWorld" && !child) tab.worldEvents.delete((result as any)?.executionContextId);
       let r = hidesCookies(method) ? hideCookies(result) : result;
       if (r?.targetInfo) r = { ...r, targetInfo: { ...r.targetInfo, browserContextId: DEFAULT_CONTEXT } };
       answer({ result: r ?? {} });
@@ -758,7 +764,7 @@ export class Model {
       if (tab.held) this.release(tab);
       if (tab.navigateTo) void this.navigate(tab);
     }
-    return call;
+    return waitForReply ? call : undefined;
   }
 
   // ------------------------------------------------------------------ the pointer (ab-v16.71; the agent pointer design, section 3)
@@ -880,18 +886,36 @@ export class Model {
     }
   }
 
-  /** The relay's world's events (its context, its scripts): no client sees them. True when the relay drops the event. */
+  /** Resolve the relay's world on the current main frame without executing code or changing domain state. */
+  private async relayWorld(tab: Tab): Promise<number | null> {
+    if (!tab.targetId || !tab.attached || this.tabs.get(tab.id) !== tab) return null;
+    const w = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.createIsolatedWorld", {
+      frameId: tab.targetId, worldName: this.worldName, grantUniversalAccess: false,
+    }]);
+    if (!Number.isInteger(w?.executionContextId)) return null;
+    const id = w.executionContextId as number;
+    this.rememberWorld(tab, id);
+    tab.worldEvents.add(id);
+    return id;
+  }
+
+  private rememberWorld(tab: Tab, id: number): void {
+    if (tab.worldIds.size < RELAY_WORLD_IDS_MAX) tab.worldIds.add(id);
+  }
+
+  /** The current world's events stay hidden; navigation never drops retained refusal candidates (ab-v16.84). */
   private worldEvent(tab: Tab, method: string, params: any): boolean {
-    if (method === "Runtime.executionContextCreated" && params?.context?.name === this.worldName) { tab.worldIds.add(params.context.id); return true; }
-    // Another world with an id of the set: an old id of the relay's world, which Chromium gave to that world (board ab-v16.80).
-    if (method === "Runtime.executionContextCreated") tab.worldIds.delete(params?.context?.id);
+    if (method === "Runtime.executionContextCreated" && params?.context?.name === this.worldName) {
+      this.rememberWorld(tab, params.context.id);
+      tab.worldEvents.add(params.context.id);
+      return true;
+    }
+    if (method === "Runtime.executionContextCreated") tab.worldEvents.delete(params?.context?.id);
     const id = params?.executionContextId;
-    if (method === "Runtime.executionContextDestroyed" && tab.worldIds.has(id)) { tab.worldIds.delete(id); return true; }
-    if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldIds.has(id)) return true;
-    // A new document of the main frame: its old contexts are gone, also with Runtime off (no
-    // Runtime.executionContextsCleared then; review-72 note 1).
-    if (method === "Runtime.executionContextsCleared" || (method === "Page.frameNavigated" && !params?.frame?.parentId)) tab.worldIds.clear();
-    // A window event that the relay sees: the page's cached geometry goes.
+    if (method === "Runtime.executionContextDestroyed" && tab.worldEvents.has(id)) { tab.worldEvents.delete(id); return true; }
+    if ((method === "Debugger.scriptParsed" || method === "Debugger.scriptFailedToParse") && tab.worldEvents.has(id)) return true;
+    // These events do not prove that cached contexts are dead. Only the current document's event filter resets.
+    if (method === "Runtime.executionContextsCleared" || (method === "Page.frameNavigated" && !params?.frame?.parentId)) tab.worldEvents.clear();
     if (method === "Page.frameResized") this.dropGeo(tab);
     return false;
   }
@@ -917,10 +941,9 @@ export class Model {
     const target = { tabId: tab.id }, drops = tab.geoDrops;
     const read = (async () => {
       for (let tryNo = 0; tryNo < 2; tryNo++) {
-        const w = await this.bridge.call("debugger.sendCommand", [target, "Page.createIsolatedWorld", { frameId: tab.targetId, worldName: this.worldName, grantUniversalAccess: false }]);
-        if (!Number.isInteger(w?.executionContextId)) return null;
-        const id = w.executionContextId as number;
-        tab.worldIds = new Set([id]);
+        const id = await this.relayWorld(tab);
+        if (id === null) return null;
+        tab.worldEvents = new Set([id]);
         try {
           // disableBreaks: the client and the relay share the tab's debugger session, so a client's breakpoint (its
           // condition, a logpoint), instrumentation breakpoint or pause would run its code in the relay's world before
@@ -994,7 +1017,7 @@ export class Model {
       if (Date.now() - t0 >= ACTIVATE_MAX_MS) this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
       this.front = null; this.frontWindow = null;
       // The client's own call still goes, as with the paths off.
-      if (kind === "bringToFront") void bring!().catch(() => {});
+      if (kind === "bringToFront") await this.within(ACTIVATE_MAX_MS, bring!().catch(() => {}));
       // Step 7's one ACTIVATE_MAX_MS (review-68 N3): a receiver that does not answer holds the chain no longer.
       if (kind === "activateTarget" && await this.within(ACTIVATE_MAX_MS, this.bridge.call("tabs.update", [tab.id, { active: true }])) === TIMEOUT)
         this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
@@ -1243,7 +1266,7 @@ export class Model {
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
     if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false,
-      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
+      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), worldEvents: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
     return tab;
   }
 
