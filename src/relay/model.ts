@@ -23,10 +23,10 @@
 import { randomBytes } from "node:crypto";
 import { copyFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { BridgeError, RELAY_TIMER, type Bridge } from "./bridge.ts";
+import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge.ts";
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
-import { awaitsPromise, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
@@ -605,7 +605,7 @@ export class Model {
     // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off
     // that list.
     const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined);
-    if (off !== null) return fail(TEXT.notAllowed(off));
+    if (off !== null) return fail(await this.navigationRefusal(off, c.scope));
     if (to === "chrome") return this.forward(tab!, child, method, params, answer);
     try {
       const result = await this.handlers[method](c, params, sessionId, tab);
@@ -1327,14 +1327,27 @@ export class Model {
     return tab.attaching;
   }
 
+  /** A local navigation refusal makes no receiver event: ask the carrier to make the operator's prompt (C10). */
+  private async navigationRefusal(host: string, scope: string | null): Promise<string> {
+    const args = [{ host, scope }];
+    if (blockedArgsFit(args)) {
+      try {
+        await this.bridge.call("daemon.blocked", args, { wait: BLOCKED_WAIT_MS });
+        return TEXT.notAllowed(host, true);
+      } catch { /* An older or unavailable carrier cannot promise a prompt. The refusal still stands. */ }
+    }
+    return TEXT.notAllowed(host);
+  }
+
   /** The client's URL of a tab that Target.createTarget opened at about:blank (C10), after the hold. */
   private async navigate(tab: Tab): Promise<void> {
     const url = tab.navigateTo;
     tab.navigateTo = null;
     if (!url) return;
+    if (tab.scope !== null && this.ended.has(tab.scope)) return;
     // A line can change the scope's list during the hold (review-58 note 5): layer 1 judges the URL again by the last line.
     const off = offList("Page.navigate", { url }, tab.scope === null || this.ended.has(tab.scope) ? null : this.entriesOf(tab.scope), null);
-    if (off !== null) { this.log(`relay: new tab ${tab.id} is not navigated: ${TEXT.notAllowed(off)}`); return; }
+    if (off !== null) { this.log(`relay: new tab ${tab.id} is not navigated: ${await this.navigationRefusal(off, tab.scope)}`); return; }
     try {
       await this.ensureAttached(tab);
       await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.navigate", { url }]);

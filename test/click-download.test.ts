@@ -97,7 +97,9 @@ for (const agent of [false, true]) {
       const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
       assert.equal(r.status, 1, r.stdout + r.stderr);
       assert.equal(r.json.error.code, "not_allowed", r.stdout + JSON.stringify(f.h?.logs));
-      assert.ok(r.json.error.message.includes(url), r.stdout);
+      assert.equal(r.json.error.message, agent
+        ? "refusing download from elsewhere.invalid: URL is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list."
+        : `refusing download from ${url}: URL is not on the allowlist`);
       assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
       if (!agent) assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default", "restored after refusal");
     } finally { await f.close(); }
@@ -261,7 +263,9 @@ for (const agent of [false, true]) test(`${agent ? "agent relay" : "default prox
     const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(r.json.error.code, "not_allowed");
-    assert.ok(r.json.error.message.includes(url), r.stdout);
+    assert.equal(r.json.error.message, agent
+        ? "refusing download from elsewhere.invalid: blob origin is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list."
+        : `refusing download from ${url}: blob origin is not on the allowlist`);
     assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
   } finally { await f.close(); }
 });
@@ -274,7 +278,7 @@ test("the start URL check refuses an off-list download before it completes", asy
     const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(r.json.error.code, "not_allowed");
-    assert.ok(r.json.error.message.includes(url), r.stdout);
+    assert.equal(r.json.error.message, `refusing download from ${url}: URL is not on the allowlist`);
     assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default");
     assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
   } finally { await f.close(); }

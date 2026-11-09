@@ -6,7 +6,7 @@
   "mainFrameIdNote": "The id of the sample tab's own target: a Page.navigate with this frameId, or with none, navigates the main frame.",
   "scope": {
     "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-    "valid": ["my-repo", "a", "A.b_c-9", "0", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"],
+    "valid": ["ab-lead", "a", "A.b_c-9", "0", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"],
     "invalid": ["", ".hidden", "-x", "_x", "a/b", "a b", "a%2Fb", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "ä", "a\n"]
   },
   "defaultContext": "agentwatch-default",
