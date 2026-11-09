@@ -1,0 +1,7179 @@
+{
+ "chrome": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)",
+ "playwright": "1.65.0",
+ "screen": {
+  "w": 1920,
+  "h": 1080
+ },
+ "scenarios": {
+  "xinput": {
+   "notes": {
+    "window": "2097154"
+   },
+   "frameGapMs": 16.7,
+   "state": {
+    "top": {
+     "f": "top",
+     "e": "state",
+     "why": "load",
+     "t": 1794266133141.7,
+     "wx": 0,
+     "wy": 0,
+     "ow": 1280,
+     "oh": 1000,
+     "iw": 1280,
+     "ih": 857,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      1265,
+      857,
+      1
+     ],
+     "hf": 1,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266132978.1,
+     "origin": "http://rec.localhost:43757",
+     "top": true,
+     "anc": [],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    },
+    "box": {
+     "f": "box",
+     "e": "state",
+     "why": "load",
+     "t": 1794266133111.3,
+     "wx": 0,
+     "wy": 0,
+     "ow": 0,
+     "oh": 0,
+     "iw": 0,
+     "ih": 0,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      0,
+      0,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266133063.8,
+     "origin": "http://box.localhost:43757",
+     "top": false,
+     "anc": [
+      "http://rec.localhost:43757"
+     ],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    }
+   },
+   "kbdmap": [
+    {
+     "f": "box",
+     "ok": 0,
+     "err": "getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy."
+    },
+    {
+     "f": "top",
+     "ok": 1,
+     "KeyQ": "q"
+    }
+   ],
+   "io": [
+    {
+     "hit": 1,
+     "vis": 1,
+     "rb": 0
+    },
+    {
+     "hit": 0,
+     "vis": 0,
+     "rb": 0
+    }
+   ],
+   "steps": [
+    {
+     "name": "idle 2 s",
+     "ok": true,
+     "ms": 2000.4,
+     "metrics": {
+      "untrusted": 0
+     }
+    },
+    {
+     "name": "path 125 Hz to #b, press 80 ms",
+     "ok": true,
+     "ms": 686.2,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 28,
+       "movesBeforePress": 28,
+       "withMovement": 28,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 28,
+         "first": [
+          903,
+          556
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 2,
+        "max": 3,
+        "over1": 26
+       },
+       "predicted": {
+        "mean": 2.46,
+        "max": 3,
+        "over0": 27
+       },
+       "rawupdates": 56,
+       "sampleGapMs": {
+        "median": 8,
+        "range": [
+         8,
+         9
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         8,
+         25
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 8.6,
+        "down": 1.4
+       },
+       "path": {
+        "samples": 56,
+        "ms": 458,
+        "lengthPx": 871.6,
+        "straightness": 0.99,
+        "maxDeviationPx": 21.5,
+        "peakPxPerMs": 3.64,
+        "meanPxPerMs": 1.9
+       },
+       "pauseBeforePressMs": 135,
+       "pressMs": 80,
+       "mousePressMs": 80,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#b"
+       ],
+       "withNoPress": 0
+      }
+     }
+    },
+    {
+     "name": "path 1000 Hz to #hov (hover)",
+     "ok": true,
+     "ms": 943.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 32,
+       "movesBeforePress": 32,
+       "withMovement": 32,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 32,
+         "first": [
+          102,
+          239
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 5.5,
+        "max": 10,
+        "over1": 31
+       },
+       "predicted": {
+        "mean": 8.06,
+        "max": 10,
+        "over0": 31
+       },
+       "rawupdates": 176,
+       "sampleGapMs": {
+        "median": 2,
+        "range": [
+         1,
+         14
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         10,
+         25
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 2.6,
+        "down": null
+       },
+       "path": {
+        "samples": 176,
+        "ms": 523,
+        "lengthPx": 178.3,
+        "straightness": 0.78,
+        "maxDeviationPx": 12,
+        "peakPxPerMs": 1,
+        "meanPxPerMs": 0.34
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "2/0",
+        "pointerenter": "0/0",
+        "pointerout": "2/0",
+        "pointerleave": "0/0"
+       }
+      }
+     }
+    },
+    {
+     "name": "path 60 Hz to #chk, press 100 ms",
+     "ok": true,
+     "ms": 731.3,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 27,
+       "movesBeforePress": 27,
+       "withMovement": 27,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 27,
+         "first": [
+          244,
+          239
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.89,
+        "max": 1,
+        "over0": 24
+       },
+       "rawupdates": 27,
+       "sampleGapMs": {
+        "median": 17,
+        "range": [
+         17,
+         17
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         17,
+         17
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 13.4,
+        "down": 1.9
+       },
+       "path": {
+        "samples": 27,
+        "ms": 442,
+        "lengthPx": 117,
+        "straightness": 0.74,
+        "maxDeviationPx": 11.9,
+        "peakPxPerMs": 0.42,
+        "meanPxPerMs": 0.26
+       },
+       "pauseBeforePressMs": 175,
+       "pressMs": 101,
+       "mousePressMs": 101,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#chk",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         331,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown blur focusout focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "3/0",
+        "pointerenter": "0/0",
+        "pointerout": "3/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "top:#chk"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#chk=true"
+      ]
+     }
+    },
+    {
+     "name": "jump to #b, xdotool click (no path)",
+     "ok": true,
+     "ms": 107.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          100,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 1.3,
+        "down": 1.5
+       },
+       "pauseBeforePressMs": 0,
+       "pressMs": 0,
+       "mousePressMs": 0,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#b"
+       ],
+       "withNoPress": 0
+      }
+     }
+    },
+    {
+     "name": "path to #f, press, xdotool type --delay 120",
+     "ok": true,
+     "ms": 1920.1,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 25,
+       "movesBeforePress": 25,
+       "withMovement": 25,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 25,
+         "first": [
+          104,
+          238
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 2,
+        "max": 2,
+        "over1": 25
+       },
+       "predicted": {
+        "mean": 2.36,
+        "max": 3,
+        "over0": 24
+       },
+       "rawupdates": 50,
+       "sampleGapMs": {
+        "median": 8,
+        "range": [
+         8,
+         9
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         16,
+         17
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 2.9,
+        "down": 1.2
+       },
+       "path": {
+        "samples": 50,
+        "ms": 409,
+        "lengthPx": 279.1,
+        "straightness": 0.93,
+        "maxDeviationPx": 4.6,
+        "peakPxPerMs": 1.29,
+        "meanPxPerMs": 0.68
+       },
+       "pauseBeforePressMs": 135,
+       "pressMs": 80,
+       "mousePressMs": 80,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#f",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         328,
+         110
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown blur focusout focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "keys": {
+       "keydowns": 18,
+       "keyups": 18,
+       "keypress": 16,
+       "holdMs": {
+        "median": 31,
+        "range": [
+         30,
+         31
+        ]
+       },
+       "downToDownMs": {
+        "median": 61,
+        "range": [
+         60,
+         61
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 2,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 2,
+       "shiftedWithShiftKeyDown": 2,
+       "locations": [
+        "Shift:1",
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Shift:16/16",
+        "H:72/72",
+        "e:69/69",
+        "l:76/76",
+        "o:79/79",
+        " :32/32",
+        "w:87/87",
+        "r:82/82"
+       ],
+       "handlerLagMs": 1.3,
+       "gapsWholeMs": 1
+      },
+      "text": {
+       "input": 16,
+       "beforeinput": 16,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      },
+      "focus": {
+       "focusin": [
+        "top:#f"
+       ],
+       "withNoPress": 0
+      }
+     }
+    },
+    {
+     "name": "key rollover: h down, e down, h up, e up",
+     "ok": true,
+     "ms": 216.7,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 2,
+       "keyups": 2,
+       "keypress": 2,
+       "holdMs": {
+        "median": 120.5,
+        "range": [
+         116,
+         125
+        ]
+       },
+       "downToDownMs": {
+        "median": 82,
+        "range": [
+         82,
+         82
+        ]
+       },
+       "overlaps": 1,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "h:72/72",
+        "e:69/69"
+       ],
+       "handlerLagMs": 1.6,
+       "gapsWholeMs": 1
+      },
+      "text": {
+       "input": 2,
+       "beforeinput": 2,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     }
+    },
+    {
+     "name": "Shift held for two capitals: Shift down, A, B, Shift up",
+     "ok": true,
+     "ms": 257.8,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 3,
+       "keyups": 3,
+       "keypress": 2,
+       "holdMs": {
+        "median": 6,
+        "range": [
+         6,
+         6
+        ]
+       },
+       "downToDownMs": {
+        "median": 113,
+        "range": [
+         113,
+         113
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 1,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 2,
+       "shiftedWithShiftKeyDown": 2,
+       "locations": [
+        "Shift:1",
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Shift:16/16",
+        "A:65/65",
+        "B:66/66"
+       ],
+       "handlerLagMs": 0.9,
+       "gapsWholeMs": 1
+      },
+      "text": {
+       "input": 2,
+       "beforeinput": 2,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     }
+    },
+    {
+     "name": "key Return",
+     "ok": true,
+     "ms": 19.8,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 1,
+       "keyups": 1,
+       "keypress": 1,
+       "holdMs": {
+        "median": 7,
+        "range": [
+         7,
+         7
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "Enter:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Enter:13/13"
+       ],
+       "handlerLagMs": 1.3,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 0,
+       "beforeinput": 1,
+       "types": [],
+       "longestData": 0
+      },
+      "change": [
+       "#f=Hello world, 42!heAB"
+      ]
+     }
+    },
+    {
+     "name": "path 125 Hz into the box, press 85 ms on its square",
+     "ok": true,
+     "ms": 880.9,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 39,
+       "movesBeforePress": 39,
+       "withMovement": 38,
+       "frames": [
+        "top",
+        "box"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 23,
+         "first": [
+          331,
+          109
+         ]
+        },
+        "box": {
+         "moves": 16,
+         "first": [
+          3,
+          15
+         ]
+        }
+       },
+       "coalesced": {
+        "mean": 1.92,
+        "max": 2,
+        "over1": 36
+       },
+       "predicted": {
+        "mean": 2.44,
+        "max": 3,
+        "over0": 36
+       },
+       "rawupdates": 75,
+       "sampleGapMs": {
+        "median": 8,
+        "range": [
+         8,
+         17
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         8,
+         25
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 2.5,
+        "down": 1.2
+       },
+       "path": {
+        "samples": 29,
+        "ms": 242,
+        "lengthPx": 50.6,
+        "straightness": 0.6,
+        "maxDeviationPx": 11.1,
+        "peakPxPerMs": 0.46,
+        "meanPxPerMs": 0.21
+       },
+       "pauseBeforePressMs": 165,
+       "pressMs": 85,
+       "mousePressMs": 85,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "box",
+        "target": "#cb",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         480,
+         239
+        ],
+        "at": [
+         28,
+         32
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "2/2",
+        "pointerenter": "0/0",
+        "pointerout": "2/1",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "box:#cb"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#cb=true"
+      ]
+     }
+    },
+    {
+     "name": "wheel: 8 notches down, 90 ms apart",
+     "ok": true,
+     "ms": 1758,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 27,
+       "movesBeforePress": 27,
+       "withMovement": 27,
+       "frames": [
+        "box",
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 20,
+         "first": [
+          537,
+          164
+         ]
+        },
+        "box": {
+         "moves": 7,
+         "first": [
+          30,
+          31
+         ]
+        }
+       },
+       "coalesced": {
+        "mean": 1.85,
+        "max": 2,
+        "over1": 23
+       },
+       "predicted": {
+        "mean": 2.56,
+        "max": 3,
+        "over0": 23
+       },
+       "rawupdates": 50,
+       "sampleGapMs": {
+        "median": 8,
+        "range": [
+         8,
+         9
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         8,
+         17
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 5.1,
+        "down": null
+       },
+       "path": {
+        "samples": 50,
+        "ms": 406.9,
+        "lengthPx": 983.1,
+        "straightness": 0.82,
+        "maxDeviationPx": 264.1,
+        "peakPxPerMs": 62.57,
+        "meanPxPerMs": 2.42
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "3/1",
+        "pointerenter": "0/0",
+        "pointerout": "3/2",
+        "pointerleave": "0/0"
+       }
+      },
+      "wheel": {
+       "wheels": 8,
+       "deltaY": [
+        120
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        -120
+       ],
+       "gapMs": {
+        "median": 90,
+        "range": [
+         90,
+         91
+        ]
+       },
+       "scrolls": 49,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     }
+    },
+    {
+     "name": "wheel to #far, path, press",
+     "ok": true,
+     "ms": 2070.8,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 31,
+       "movesBeforePress": 31,
+       "withMovement": 31,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 31,
+         "first": [
+          603,
+          599
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1.94,
+        "max": 3,
+        "over1": 24
+       },
+       "predicted": {
+        "mean": 2.03,
+        "max": 3,
+        "over0": 27
+       },
+       "rawupdates": 60,
+       "sampleGapMs": {
+        "median": 8,
+        "range": [
+         8,
+         33
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 17,
+        "range": [
+         8,
+         33
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 1.8,
+        "down": 1.7
+       },
+       "path": {
+        "samples": 60,
+        "ms": 518,
+        "lengthPx": 510.6,
+        "straightness": 0.98,
+        "maxDeviationPx": 3.3,
+        "peakPxPerMs": 1.86,
+        "meanPxPerMs": 0.99
+       },
+       "pauseBeforePressMs": 164,
+       "pressMs": 80,
+       "mousePressMs": 80,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#far",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         120,
+         740
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "wheel": {
+       "wheels": 6,
+       "deltaY": [
+        120
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        -120
+       ],
+       "gapMs": {
+        "median": 80,
+        "range": [
+         80,
+         487
+        ]
+       },
+       "scrolls": 41,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     }
+    }
+   ]
+  },
+  "cdp-raw": {
+   "notes": {
+    "frames": [
+     "http://box.localhost:PORT/box.html"
+    ]
+   },
+   "frameGapMs": 16.7,
+   "state": {
+    "top": {
+     "f": "top",
+     "e": "state",
+     "why": "load",
+     "t": 1794266155511.5,
+     "wx": 0,
+     "wy": 0,
+     "ow": 1280,
+     "oh": 1000,
+     "iw": 1280,
+     "ih": 857,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      1265,
+      857,
+      1
+     ],
+     "hf": 1,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266155334.3,
+     "origin": "http://rec.localhost:43757",
+     "top": true,
+     "anc": [],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    },
+    "box": {
+     "f": "box",
+     "e": "state",
+     "why": "load",
+     "t": 1794266155481.5,
+     "wx": 0,
+     "wy": 0,
+     "ow": 0,
+     "oh": 0,
+     "iw": 300,
+     "ih": 65,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      300,
+      65,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266155442.5,
+     "origin": "http://box.localhost:43757",
+     "top": false,
+     "anc": [
+      "http://rec.localhost:43757"
+     ],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    }
+   },
+   "kbdmap": [
+    {
+     "f": "box",
+     "ok": 0,
+     "err": "getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy."
+    },
+    {
+     "f": "top",
+     "ok": 1,
+     "KeyQ": "q"
+    },
+    {
+     "f": "top",
+     "ok": 1,
+     "KeyQ": "q"
+    },
+    {
+     "f": "box",
+     "ok": 0,
+     "err": "getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy."
+    }
+   ],
+   "io": [
+    {
+     "hit": 1,
+     "vis": 1,
+     "rb": 0
+    },
+    {
+     "hit": 0,
+     "vis": 0,
+     "rb": 0
+    }
+   ],
+   "steps": [
+    {
+     "name": "idle 2 s",
+     "ok": true,
+     "ms": 2000.5,
+     "metrics": {
+      "untrusted": 0
+     }
+    },
+    {
+     "name": "30 moves, each awaited, 16 ms apart",
+     "ok": true,
+     "ms": 989.9,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 30,
+       "movesBeforePress": 30,
+       "withMovement": 29,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 30,
+         "first": [
+          680,
+          588
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 30,
+       "sampleGapMs": {
+        "median": 33.2,
+        "range": [
+         25.7,
+         34.7
+        ],
+        "wholeMs": 0.34
+       },
+       "moveGapMs": {
+        "median": 33.2,
+        "range": [
+         25.7,
+         34.7
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 15.5,
+        "down": null
+       },
+       "path": {
+        "samples": 30,
+        "ms": 955.5,
+        "lengthPx": 676.4,
+        "straightness": 1,
+        "maxDeviationPx": 0,
+        "peakPxPerMs": 0.91,
+        "meanPxPerMs": 0.71
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "7/0",
+        "pointerenter": "0/0",
+        "pointerout": "6/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved) x30"
+    },
+    {
+     "name": "40 moves sent at once (not awaited), 1 ms apart",
+     "ok": true,
+     "ms": 49,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 23,
+       "movesBeforePress": 23,
+       "withMovement": 23,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 23,
+         "first": [
+          107,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1.74,
+        "max": 3,
+        "over1": 15
+       },
+       "predicted": {
+        "mean": 7.39,
+        "max": 10,
+        "over0": 17
+       },
+       "rawupdates": 35,
+       "sampleGapMs": {
+        "median": 1.3,
+        "range": [
+         0.1,
+         1.9
+        ],
+        "wholeMs": 0.33
+       },
+       "moveGapMs": {
+        "median": 1.7,
+        "range": [
+         0.3,
+         2.9
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.4,
+        "down": null
+       },
+       "path": {
+        "samples": 40,
+        "ms": 42.7,
+        "lengthPx": 136,
+        "straightness": 1,
+        "maxDeviationPx": 0,
+        "peakPxPerMs": 3.64,
+        "meanPxPerMs": 3.19
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "2/0",
+        "pointerenter": "0/0",
+        "pointerout": "2/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved) x40"
+    },
+    {
+     "name": "40 moves at once with timestamp params 8 ms apart",
+     "ok": true,
+     "ms": 7.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 10,
+       "movesBeforePress": 10,
+       "withMovement": 10,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 10,
+         "first": [
+          226,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 4,
+        "max": 12,
+        "over1": 9
+       },
+       "predicted": {
+        "mean": 2.1,
+        "max": 3,
+        "over0": 7
+       },
+       "rawupdates": 12,
+       "sampleGapMs": {
+        "median": 8,
+        "range": [
+         7.9,
+         8.1
+        ],
+        "wholeMs": 1
+       },
+       "moveGapMs": {
+        "median": 16.1,
+        "range": [
+         8,
+         96.1
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": -122.7,
+        "down": null
+       },
+       "path": {
+        "samples": 40,
+        "ms": 312.1,
+        "lengthPx": 137,
+        "straightness": 1,
+        "maxDeviationPx": 0,
+        "peakPxPerMs": 0.51,
+        "meanPxPerMs": 0.44
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "2/0",
+        "pointerenter": "0/0",
+        "pointerout": "2/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved) x40"
+    },
+    {
+     "name": "moves at fractional points (x.25, y.75)",
+     "ok": true,
+     "ms": 158.3,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 5,
+       "movesBeforePress": 5,
+       "withMovement": 5,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 5,
+         "first": [
+          300.25,
+          400.75
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 5,
+       "sampleGapMs": {
+        "median": 33,
+        "range": [
+         25.5,
+         33.3
+        ],
+        "wholeMs": 0
+       },
+       "moveGapMs": {
+        "median": 33,
+        "range": [
+         25.5,
+         33.3
+        ]
+       },
+       "fractional": {
+        "pointer": 5,
+        "mouse": 0,
+        "samples": 5
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 15.5,
+        "down": null
+       },
+       "path": {
+        "samples": 5,
+        "ms": 124.8,
+        "lengthPx": 14.4,
+        "straightness": 1,
+        "maxDeviationPx": 0,
+        "peakPxPerMs": 0.14,
+        "meanPxPerMs": 0.12
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved) x5"
+    },
+    {
+     "name": "mouse press with force 0.5, tiltX 15, tiltY -10, twist 30, tangentialPressure 0.2",
+     "ok": true,
+     "ms": 102.9,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          100,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 15.3,
+        "down": 0.5
+       },
+       "pauseBeforePressMs": 16.9,
+       "pressMs": 83.2,
+       "mousePressMs": 83.2,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0.2,
+        "width": 1,
+        "height": 1,
+        "tiltX": 15,
+        "tiltY": -10,
+        "twist": 30,
+        "altitudeAngle": 1.26,
+        "azimuthAngle": 5.701,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#b"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "pen press (pointerType pen, force 0.3, tilt)",
+     "ok": true,
+     "ms": 97.5,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 0,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          240,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 12.1,
+        "down": 0.5
+       },
+       "pauseBeforePressMs": 13.8,
+       "pressMs": 81.4,
+       "mousePressMs": 81.4,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#hov",
+        "pointerType": "pen",
+        "pointerId": 2,
+        "isPrimary": 1,
+        "pressure": 0.3,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 20,
+        "tiltY": 5,
+        "twist": 0,
+        "altitudeAngle": 1.213,
+        "azimuthAngle": 0.236,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         240,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerover mouseout mouseover pointerout pointerover pointerdown mousedown blur focusout pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "2/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "press with no move before it (at #chk)",
+     "ok": true,
+     "ms": 85.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 0,
+       "movesBeforePress": 0,
+       "withMovement": 0,
+       "frames": [],
+       "perFrame": {
+        "top": {
+         "moves": 0,
+         "first": null
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 0,
+        "max": null,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": null,
+        "over0": 0
+       },
+       "rawupdates": 0,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [],
+       "handlerLagMs": {
+        "move": null,
+        "down": 0.8
+       },
+       "pauseBeforePressMs": null,
+       "pressMs": 82.6,
+       "mousePressMs": 82.6,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#chk",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         330.5,
+         239.5
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown focus focusin pointerup mouseup click input change",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "top:#chk"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#chk=true"
+      ]
+     },
+     "cdp": "dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "focus #f by a press",
+     "ok": true,
+     "ms": 98.1,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          364,
+          110
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 10.2,
+        "down": 0.6
+       },
+       "pauseBeforePressMs": 11.7,
+       "pressMs": 83.4,
+       "mousePressMs": 83.4,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#f",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         364,
+         110
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown blur focusout focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#f"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "Shift keydown, H (modifiers 8), Shift up: a person's capital",
+     "ok": true,
+     "ms": 178.5,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 2,
+       "keyups": 2,
+       "keypress": 1,
+       "holdMs": {
+        "median": 72.7,
+        "range": [
+         72.7,
+         72.7
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 1,
+       "shiftedChars": 1,
+       "shiftedWithShiftFlag": 1,
+       "shiftedWithShiftKeyDown": 1,
+       "locations": [
+        "Shift:1",
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Shift:16/16",
+        "H:72/72"
+       ],
+       "handlerLagMs": 0.75,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "dispatchKeyEvent(rawKeyDown), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp) x2"
+    },
+    {
+     "name": "key rollover: h down, e down, h up, e up",
+     "ok": true,
+     "ms": 168.5,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 2,
+       "keyups": 2,
+       "keypress": 2,
+       "holdMs": {
+        "median": 99.7,
+        "range": [
+         94.1,
+         105.4
+        ]
+       },
+       "downToDownMs": {
+        "median": 72.8,
+        "range": [
+         72.8,
+         72.8
+        ]
+       },
+       "overlaps": 1,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "h:72/72",
+        "e:69/69"
+       ],
+       "handlerLagMs": 0.4,
+       "gapsWholeMs": 0
+      },
+      "text": {
+       "input": 2,
+       "beforeinput": 2,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "dispatchKeyEvent(keyDown) x2, dispatchKeyEvent(keyUp) x2"
+    },
+    {
+     "name": "auto-repeat: a down, 3 repeats, up",
+     "ok": true,
+     "ms": 143.4,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 4,
+       "keyups": 1,
+       "keypress": 4,
+       "holdMs": {
+        "median": 140.4,
+        "range": [
+         140.4,
+         140.4
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 3,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "a:65/65"
+       ],
+       "handlerLagMs": 0.35,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 4,
+       "beforeinput": 4,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "dispatchKeyEvent(keyDown) x4, dispatchKeyEvent(keyUp)"
+    },
+    {
+     "name": "insertText",
+     "ok": true,
+     "ms": 4.3,
+     "note": {},
+     "metrics": {
+      "untrusted": 0,
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 3
+      }
+     },
+     "cdp": "Input.insertText"
+    },
+    {
+     "name": "wheel deltaY 100, 53, 120 at a point",
+     "ok": true,
+     "ms": 1033.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          600,
+          600
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 15.9,
+        "down": null
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "3/0",
+        "pointerenter": "0/0",
+        "pointerout": "3/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "wheel": {
+       "wheels": 4,
+       "deltaY": [
+        100,
+        53,
+        120,
+        -273
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        -120,
+        120
+       ],
+       "gapMs": {
+        "median": 136.8,
+        "range": [
+         132.4,
+         434.4
+        ]
+       },
+       "scrolls": 4,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mouseWheel) x4"
+    },
+    {
+     "name": "moves into the box and a press on its square",
+     "ok": true,
+     "ms": 691.1,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 20,
+       "movesBeforePress": 20,
+       "withMovement": 19,
+       "frames": [
+        "top",
+        "box"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 16,
+         "first": [
+          595,
+          291
+         ]
+        },
+        "box": {
+         "moves": 4,
+         "first": [
+          42,
+          58
+         ]
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.05,
+        "max": 1,
+        "over0": 1
+       },
+       "rawupdates": 20,
+       "sampleGapMs": {
+        "median": 33.1,
+        "range": [
+         17.8,
+         34.1
+        ],
+        "wholeMs": 0.44
+       },
+       "moveGapMs": {
+        "median": 33.1,
+        "range": [
+         17.8,
+         34.1
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 15.65,
+        "down": 0.6
+       },
+       "path": {
+        "samples": 4,
+        "ms": 56,
+        "lengthPx": 29.5,
+        "straightness": 1,
+        "maxDeviationPx": 0.1,
+        "peakPxPerMs": 0.56,
+        "meanPxPerMs": 0.53
+       },
+       "pauseBeforePressMs": 17.8,
+       "pressMs": 83.2,
+       "mousePressMs": 83.2,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "box",
+        "target": "#cb",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         480,
+         239
+        ],
+        "at": [
+         28,
+         32
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click input",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/2",
+        "pointerenter": "0/0",
+        "pointerout": "1/1",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "box:#cb"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#f=Hheaaaaxyz",
+       "#cb=true"
+      ]
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved) x20, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    }
+   ]
+  },
+  "agent-browser": {
+   "notes": {
+    "xPointer": true,
+    "pointerDisplay": {
+     "name": ":168",
+     "ok": true,
+     "at": 1794266178913
+    }
+   },
+   "frameGapMs": 16.7,
+   "state": {
+    "top": {
+     "f": "top",
+     "e": "state",
+     "why": "load",
+     "t": 1794266175368,
+     "wx": 0,
+     "wy": 0,
+     "ow": 1280,
+     "oh": 1000,
+     "iw": 1280,
+     "ih": 913,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      1265,
+      913,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266175281.2,
+     "origin": "http://rec.localhost:43757",
+     "top": true,
+     "anc": [],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    },
+    "box": {
+     "f": "box",
+     "e": "state",
+     "why": "load",
+     "t": 1794266175338.6,
+     "wx": 0,
+     "wy": 0,
+     "ow": 0,
+     "oh": 0,
+     "iw": 0,
+     "ih": 0,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      0,
+      0,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266175305.9,
+     "origin": "http://box.localhost:43757",
+     "top": false,
+     "anc": [
+      "http://rec.localhost:43757"
+     ],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    }
+   },
+   "kbdmap": [
+    {
+     "f": "box",
+     "ok": 0,
+     "err": "getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy."
+    },
+    {
+     "f": "top",
+     "ok": 1,
+     "KeyQ": "q"
+    }
+   ],
+   "io": [
+    {
+     "hit": 1,
+     "vis": 1,
+     "rb": 0
+    },
+    {
+     "hit": 0,
+     "vis": 0,
+     "rb": 0
+    }
+   ],
+   "steps": [
+    {
+     "name": "idle 2 s",
+     "ok": true,
+     "ms": 2000.6,
+     "metrics": {
+      "untrusted": 0
+     }
+    },
+    {
+     "name": "click #b",
+     "ok": true,
+     "ms": 1299.3,
+     "note": {
+      "ok": true,
+      "command": "click",
+      "tab": {
+       "id": "E2EF0726",
+       "targetId": "E2EF072680C6988C1D7337E850CB78CB",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "target": "#b",
+      "text": null
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 57,
+       "movesBeforePress": 57,
+       "withMovement": 56,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 57,
+         "first": [
+          900,
+          613
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.86,
+        "max": 1,
+        "over0": 49
+       },
+       "rawupdates": 57,
+       "sampleGapMs": {
+        "median": 16.9,
+        "range": [
+         15.4,
+         138.5
+        ],
+        "wholeMs": 0.45
+       },
+       "moveGapMs": {
+        "median": 16.9,
+        "range": [
+         15.4,
+         138.5
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 14.2,
+        "down": 0.4
+       },
+       "path": {
+        "samples": 57,
+        "ms": 1086,
+        "lengthPx": 1122.2,
+        "straightness": 0.8,
+        "maxDeviationPx": 117.5,
+        "peakPxPerMs": 2.58,
+        "meanPxPerMs": 1.03
+       },
+       "pauseBeforePressMs": 99.3,
+       "pressMs": 80.8,
+       "mousePressMs": 80.8,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         87
+        ],
+        "at": [
+         89,
+         235
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "9/0",
+        "pointerenter": "0/0",
+        "pointerout": "8/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#b"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Page.bringToFront, Runtime.evaluate x4, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseMoved) x55, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Target.detachFromTarget"
+    },
+    {
+     "name": "hover #hov",
+     "ok": true,
+     "ms": 570.9,
+     "note": {
+      "ok": true,
+      "command": "hover",
+      "tab": {
+       "id": "E2EF0726",
+       "targetId": "E2EF072680C6988C1D7337E850CB78CB",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "target": "#hov"
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 28,
+       "movesBeforePress": 28,
+       "withMovement": 28,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 28,
+         "first": [
+          89,
+          236
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.86,
+        "max": 1,
+        "over0": 24
+       },
+       "rawupdates": 28,
+       "sampleGapMs": {
+        "median": 16.4,
+        "range": [
+         14.9,
+         21.7
+        ],
+        "wholeMs": 0.41
+       },
+       "moveGapMs": {
+        "median": 16.4,
+        "range": [
+         14.9,
+         21.7
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 13.8,
+        "down": null
+       },
+       "path": {
+        "samples": 28,
+        "ms": 444.9,
+        "lengthPx": 194.9,
+        "straightness": 0.82,
+        "maxDeviationPx": 46.9,
+        "peakPxPerMs": 0.71,
+        "meanPxPerMs": 0.44
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseMoved) x27, Target.detachFromTarget"
+    },
+    {
+     "name": "type --into #f",
+     "ok": true,
+     "ms": 2590.7,
+     "note": {
+      "ok": true,
+      "command": "type",
+      "tab": {
+       "id": "E2EF0726",
+       "targetId": "E2EF072680C6988C1D7337E850CB78CB",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "into": "#f",
+      "length": 16
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 29,
+       "movesBeforePress": 29,
+       "withMovement": 29,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 29,
+         "first": [
+          250,
+          242
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.86,
+        "max": 1,
+        "over0": 25
+       },
+       "rawupdates": 29,
+       "sampleGapMs": {
+        "median": 16.05,
+        "range": [
+         15.2,
+         21.4
+        ],
+        "wholeMs": 0.43
+       },
+       "moveGapMs": {
+        "median": 16.05,
+        "range": [
+         15.2,
+         21.4
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 10.3,
+        "down": 0.6
+       },
+       "path": {
+        "samples": 29,
+        "ms": 457.2,
+        "lengthPx": 183.6,
+        "straightness": 0.73,
+        "maxDeviationPx": 61,
+        "peakPxPerMs": 0.67,
+        "meanPxPerMs": 0.4
+       },
+       "pauseBeforePressMs": 139,
+       "pressMs": 89.4,
+       "mousePressMs": 89.4,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#f",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         87
+        ],
+        "at": [
+         244,
+         109
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown blur focusout focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "keys": {
+       "keydowns": 16,
+       "keyups": 16,
+       "keypress": 16,
+       "holdMs": {
+        "median": 35,
+        "range": [
+         26.4,
+         51.7
+        ]
+       },
+       "downToDownMs": {
+        "median": 118,
+        "range": [
+         90.9,
+         148.1
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 2,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "H:72/72",
+        "e:69/69",
+        "l:76/76",
+        "o:79/79",
+        " :32/32",
+        "w:87/87",
+        "r:82/82",
+        "d:68/68"
+       ],
+       "handlerLagMs": 0.5,
+       "gapsWholeMs": 0.4
+      },
+      "text": {
+       "input": 16,
+       "beforeinput": 16,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      },
+      "focus": {
+       "focusin": [
+        "top:#f"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseMoved) x28, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), Runtime.evaluate, Target.detachFromTarget"
+    },
+    {
+     "name": "press Enter",
+     "ok": true,
+     "ms": 102.2,
+     "note": {
+      "ok": true,
+      "command": "press",
+      "tab": {
+       "id": "E2EF0726",
+       "targetId": "E2EF072680C6988C1D7337E850CB78CB",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "key": "Enter"
+     },
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 1,
+       "keyups": 1,
+       "keypress": 1,
+       "holdMs": {
+        "median": 36.5,
+        "range": [
+         36.5,
+         36.5
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "Enter:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Enter:13/13"
+       ],
+       "handlerLagMs": 1.2,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 0,
+       "beforeinput": 1,
+       "types": [],
+       "longestData": 0
+      },
+      "change": [
+       "#f=Hello world, 42!"
+      ]
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), Target.detachFromTarget"
+    },
+    {
+     "name": "clickAt the box's square (library Tab.clickAt)",
+     "ok": true,
+     "ms": 915,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 37,
+       "movesBeforePress": 37,
+       "withMovement": 36,
+       "frames": [
+        "top",
+        "box"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 27,
+         "first": [
+          245,
+          108
+         ]
+        },
+        "box": {
+         "moves": 10,
+         "first": [
+          0,
+          3
+         ]
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.78,
+        "max": 1,
+        "over0": 29
+       },
+       "rawupdates": 37,
+       "sampleGapMs": {
+        "median": 16,
+        "range": [
+         15,
+         17.6
+        ],
+        "wholeMs": 0.58
+       },
+       "moveGapMs": {
+        "median": 16,
+        "range": [
+         15,
+         17.6
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 4.1,
+        "down": 0.7
+       },
+       "path": {
+        "samples": 10,
+        "ms": 150.2,
+        "lengthPx": 40.5,
+        "straightness": 1,
+        "maxDeviationPx": 1,
+        "peakPxPerMs": 0.52,
+        "meanPxPerMs": 0.27
+       },
+       "pauseBeforePressMs": 152.2,
+       "pressMs": 91.9,
+       "mousePressMs": 91.9,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "box",
+        "target": "#cb",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         480,
+         183
+        ],
+        "at": [
+         28,
+         32
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click input",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "5/2",
+        "pointerenter": "0/0",
+        "pointerout": "5/1",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "box:#cb"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#cb=true"
+      ]
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mouseMoved) x35, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Target.detachFromTarget"
+    },
+    {
+     "name": "click #far (the wheel brings it into view)",
+     "ok": true,
+     "ms": 2622.2,
+     "note": {
+      "ok": true,
+      "command": "click",
+      "tab": {
+       "id": "E2EF0726",
+       "targetId": "E2EF072680C6988C1D7337E850CB78CB",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "target": "#far",
+      "text": null
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 53,
+       "movesBeforePress": 53,
+       "withMovement": 53,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 53,
+         "first": [
+          507,
+          130
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.87,
+        "max": 1,
+        "over0": 46
+       },
+       "rawupdates": 53,
+       "sampleGapMs": {
+        "median": 16.7,
+        "range": [
+         15.1,
+         32.8
+        ],
+        "wholeMs": 0.65
+       },
+       "moveGapMs": {
+        "median": 16.7,
+        "range": [
+         15.1,
+         32.8
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 14,
+        "down": 0.5
+       },
+       "path": {
+        "samples": 53,
+        "ms": 876,
+        "lengthPx": 738,
+        "straightness": 0.96,
+        "maxDeviationPx": 67,
+        "peakPxPerMs": 1.67,
+        "meanPxPerMs": 0.84
+       },
+       "pauseBeforePressMs": 96.1,
+       "pressMs": 82.8,
+       "mousePressMs": 82.8,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#far",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         87
+        ],
+        "at": [
+         133,
+         733
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "wheel": {
+       "wheels": 20,
+       "deltaY": [
+        100
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        -120
+       ],
+       "gapMs": {
+        "median": 65,
+        "range": [
+         46,
+         85.8
+        ]
+       },
+       "scrolls": 17,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseWheel) x20, Runtime.evaluate, dispatchMouseEvent(mouseMoved) x52, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Target.detachFromTarget"
+    }
+   ]
+  },
+  "agent-browser-no-x": {
+   "notes": {
+    "xPointer": false,
+    "pointerDisplay": null
+   },
+   "frameGapMs": 16.7,
+   "state": {
+    "top": {
+     "f": "top",
+     "e": "state",
+     "why": "load",
+     "t": 1794266193869.2,
+     "wx": 0,
+     "wy": 0,
+     "ow": 1280,
+     "oh": 1000,
+     "iw": 1280,
+     "ih": 913,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      1265,
+      913,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266193786.9,
+     "origin": "http://rec.localhost:43757",
+     "top": true,
+     "anc": [],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    },
+    "box": {
+     "f": "box",
+     "e": "state",
+     "why": "load",
+     "t": 1794266193840,
+     "wx": 0,
+     "wy": 0,
+     "ow": 0,
+     "oh": 0,
+     "iw": 0,
+     "ih": 0,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      0,
+      0,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266193810.6,
+     "origin": "http://box.localhost:43757",
+     "top": false,
+     "anc": [
+      "http://rec.localhost:43757"
+     ],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    }
+   },
+   "kbdmap": [
+    {
+     "f": "box",
+     "ok": 0,
+     "err": "getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy."
+    },
+    {
+     "f": "top",
+     "ok": 1,
+     "KeyQ": "q"
+    }
+   ],
+   "io": [
+    {
+     "hit": 1,
+     "vis": 1,
+     "rb": 0
+    },
+    {
+     "hit": 0,
+     "vis": 0,
+     "rb": 0
+    }
+   ],
+   "steps": [
+    {
+     "name": "idle 2 s",
+     "ok": true,
+     "ms": 2000.6,
+     "metrics": {
+      "untrusted": 0
+     },
+     "cdp": "Target.attachToTarget"
+    },
+    {
+     "name": "click #b",
+     "ok": true,
+     "ms": 1252.1,
+     "note": {
+      "ok": true,
+      "command": "click",
+      "tab": {
+       "id": "544040A3",
+       "targetId": "544040A351152908C6891C0407023C3F",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser-no-x&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "target": "#b",
+      "text": null
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 57,
+       "movesBeforePress": 57,
+       "withMovement": 56,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 57,
+         "first": [
+          900,
+          613
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.88,
+        "max": 1,
+        "over0": 50
+       },
+       "rawupdates": 57,
+       "sampleGapMs": {
+        "median": 16.3,
+        "range": [
+         15.5,
+         66.2
+        ],
+        "wholeMs": 0.34
+       },
+       "moveGapMs": {
+        "median": 16.3,
+        "range": [
+         15.5,
+         66.2
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 11,
+        "down": 0.6
+       },
+       "path": {
+        "samples": 57,
+        "ms": 1002,
+        "lengthPx": 1040.7,
+        "straightness": 0.86,
+        "maxDeviationPx": 93.7,
+        "peakPxPerMs": 2.39,
+        "meanPxPerMs": 1.04
+       },
+       "pauseBeforePressMs": 139.6,
+       "pressMs": 91.3,
+       "mousePressMs": 91.3,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         87
+        ],
+        "at": [
+         84,
+         245
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "7/0",
+        "pointerenter": "0/0",
+        "pointerout": "6/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#b"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Page.bringToFront, Runtime.evaluate x3, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseMoved) x56, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Target.detachFromTarget"
+    },
+    {
+     "name": "hover #hov",
+     "ok": true,
+     "ms": 521,
+     "note": {
+      "ok": true,
+      "command": "hover",
+      "tab": {
+       "id": "544040A3",
+       "targetId": "544040A351152908C6891C0407023C3F",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser-no-x&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "target": "#hov"
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 27,
+       "movesBeforePress": 27,
+       "withMovement": 27,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 27,
+         "first": [
+          85,
+          244
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.89,
+        "max": 1,
+        "over0": 24
+       },
+       "rawupdates": 27,
+       "sampleGapMs": {
+        "median": 16.45,
+        "range": [
+         15.5,
+         17.9
+        ],
+        "wholeMs": 0.31
+       },
+       "moveGapMs": {
+        "median": 16.45,
+        "range": [
+         15.5,
+         17.9
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 14.1,
+        "down": null
+       },
+       "path": {
+        "samples": 27,
+        "ms": 431.5,
+        "lengthPx": 203,
+        "straightness": 0.76,
+        "maxDeviationPx": 60.5,
+        "peakPxPerMs": 0.76,
+        "meanPxPerMs": 0.47
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseMoved) x27, Target.detachFromTarget"
+    },
+    {
+     "name": "type --into #f",
+     "ok": true,
+     "ms": 2604.5,
+     "note": {
+      "ok": true,
+      "command": "type",
+      "tab": {
+       "id": "544040A3",
+       "targetId": "544040A351152908C6891C0407023C3F",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser-no-x&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "into": "#f",
+      "length": 16
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 30,
+       "movesBeforePress": 30,
+       "withMovement": 30,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 30,
+         "first": [
+          239,
+          232
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.9,
+        "max": 1,
+        "over0": 27
+       },
+       "rawupdates": 30,
+       "sampleGapMs": {
+        "median": 16.3,
+        "range": [
+         14.7,
+         17.8
+        ],
+        "wholeMs": 0.45
+       },
+       "moveGapMs": {
+        "median": 16.3,
+        "range": [
+         14.7,
+         17.8
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 14,
+        "down": 0.7
+       },
+       "path": {
+        "samples": 30,
+        "ms": 475.2,
+        "lengthPx": 197.4,
+        "straightness": 0.72,
+        "maxDeviationPx": 60,
+        "peakPxPerMs": 0.72,
+        "meanPxPerMs": 0.42
+       },
+       "pauseBeforePressMs": 144.9,
+       "pressMs": 85.8,
+       "mousePressMs": 85.8,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#f",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         87
+        ],
+        "at": [
+         163,
+         111
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown blur focusout focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "4/0",
+        "pointerenter": "0/0",
+        "pointerout": "4/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "keys": {
+       "keydowns": 16,
+       "keyups": 16,
+       "keypress": 16,
+       "holdMs": {
+        "median": 36.8,
+        "range": [
+         23.7,
+         49.1
+        ]
+       },
+       "downToDownMs": {
+        "median": 118.6,
+        "range": [
+         90.3,
+         146.7
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 2,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "H:72/72",
+        "e:69/69",
+        "l:76/76",
+        "o:79/79",
+        " :32/32",
+        "w:87/87",
+        "r:82/82",
+        "d:68/68"
+       ],
+       "handlerLagMs": 0.5,
+       "gapsWholeMs": 0.33
+      },
+      "text": {
+       "input": 16,
+       "beforeinput": 16,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      },
+      "focus": {
+       "focusin": [
+        "top:#f"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseMoved) x30, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), Runtime.evaluate, Target.detachFromTarget"
+    },
+    {
+     "name": "press Enter",
+     "ok": true,
+     "ms": 70.1,
+     "note": {
+      "ok": true,
+      "command": "press",
+      "tab": {
+       "id": "544040A3",
+       "targetId": "544040A351152908C6891C0407023C3F",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser-no-x&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "key": "Enter"
+     },
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 1,
+       "keyups": 1,
+       "keypress": 1,
+       "holdMs": {
+        "median": 50.4,
+        "range": [
+         50.4,
+         50.4
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "Enter:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Enter:13/13"
+       ],
+       "handlerLagMs": 1,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 0,
+       "beforeinput": 1,
+       "types": [],
+       "longestData": 0
+      },
+      "change": [
+       "#f=Hello world, 42!"
+      ]
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), Target.detachFromTarget"
+    },
+    {
+     "name": "clickAt the box's square (library Tab.clickAt)",
+     "ok": true,
+     "ms": 936.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 39,
+       "movesBeforePress": 39,
+       "withMovement": 38,
+       "frames": [
+        "top",
+        "box"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 30,
+         "first": [
+          164,
+          111
+         ]
+        },
+        "box": {
+         "moves": 9,
+         "first": [
+          2,
+          50
+         ]
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.85,
+        "max": 1,
+        "over0": 33
+       },
+       "rawupdates": 39,
+       "sampleGapMs": {
+        "median": 16.3,
+        "range": [
+         6,
+         17.5
+        ],
+        "wholeMs": 0.32
+       },
+       "moveGapMs": {
+        "median": 16.3,
+        "range": [
+         6,
+         17.5
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 11.7,
+        "down": 0.8
+       },
+       "path": {
+        "samples": 9,
+        "ms": 117.4,
+        "lengthPx": 31.9,
+        "straightness": 0.99,
+        "maxDeviationPx": 0.3,
+        "peakPxPerMs": 1.2,
+        "meanPxPerMs": 0.27
+       },
+       "pauseBeforePressMs": 182.7,
+       "pressMs": 82,
+       "mousePressMs": 82,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "box",
+        "target": "#cb",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         480,
+         183
+        ],
+        "at": [
+         28,
+         32
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click input",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "3/2",
+        "pointerenter": "0/0",
+        "pointerout": "3/1",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "box:#cb"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#cb=true"
+      ]
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mouseMoved) x39, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Target.detachFromTarget"
+    },
+    {
+     "name": "click #far (the wheel brings it into view)",
+     "ok": true,
+     "ms": 2541.2,
+     "note": {
+      "ok": true,
+      "command": "click",
+      "tab": {
+       "id": "544040A3",
+       "targetId": "544040A351152908C6891C0407023C3F",
+       "name": "rec",
+       "url": "http://rec.localhost:43757/recorder.html?sink=1&run=agent-browser-no-x&box=http%3A%2F%2Fbox.localhost%3A43757%2Fbox.html",
+       "title": "Input recorder"
+      },
+      "target": "#far",
+      "text": null
+     },
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 56,
+       "movesBeforePress": 56,
+       "withMovement": 56,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 56,
+         "first": [
+          506,
+          129
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.95,
+        "max": 1,
+        "over0": 53
+       },
+       "rawupdates": 56,
+       "sampleGapMs": {
+        "median": 16.9,
+        "range": [
+         14.8,
+         18.9
+        ],
+        "wholeMs": 0.65
+       },
+       "moveGapMs": {
+        "median": 16.9,
+        "range": [
+         14.8,
+         18.9
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 14.75,
+        "down": 0.6
+       },
+       "path": {
+        "samples": 56,
+        "ms": 918.7,
+        "lengthPx": 902.8,
+        "straightness": 0.8,
+        "maxDeviationPx": 103.2,
+        "peakPxPerMs": 2.03,
+        "meanPxPerMs": 0.98
+       },
+       "pauseBeforePressMs": 153.9,
+       "pressMs": 72.8,
+       "mousePressMs": 72.8,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#far",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         87
+        ],
+        "at": [
+         111,
+         732
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown focus focus focusin pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "5/0",
+        "pointerenter": "0/0",
+        "pointerout": "5/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "wheel": {
+       "wheels": 20,
+       "deltaY": [
+        100
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        -120
+       ],
+       "gapMs": {
+        "median": 59.4,
+        "range": [
+         42.9,
+         77.1
+        ]
+       },
+       "scrolls": 17,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "Browser.getVersion, Target.getTargets x2, Target.attachToTarget, Page.enable, Target.getTargetInfo, Page.getFrameTree, Target.getTargetInfo, Page.getFrameTree, Page.createIsolatedWorld, Runtime.evaluate, Target.getTargetInfo, Page.getFrameTree, Runtime.evaluate x2, dispatchMouseEvent(mouseWheel) x20, Runtime.evaluate, dispatchMouseEvent(mouseMoved) x56, Target.getTargetInfo, Page.getFrameTree, dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Target.detachFromTarget"
+    }
+   ]
+  },
+  "playwright": {
+   "notes": {
+    "playwright": "1.65.0"
+   },
+   "frameGapMs": 16.7,
+   "state": {
+    "top": {
+     "f": "top",
+     "e": "state",
+     "why": "load",
+     "t": 1794266211453.8,
+     "wx": 0,
+     "wy": 0,
+     "ow": 1280,
+     "oh": 1000,
+     "iw": 1280,
+     "ih": 857,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      1265,
+      857,
+      1
+     ],
+     "hf": 1,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266211285.6,
+     "origin": "http://rec.localhost:43757",
+     "top": true,
+     "anc": [],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    },
+    "box": {
+     "f": "box",
+     "e": "state",
+     "why": "load",
+     "t": 1794266211424.1,
+     "wx": 0,
+     "wy": 0,
+     "ow": 0,
+     "oh": 0,
+     "iw": 0,
+     "ih": 0,
+     "dpr": 1,
+     "sw": 1920,
+     "sh": 1080,
+     "saw": 1920,
+     "sah": 1080,
+     "sal": 0,
+     "sat": 0,
+     "pointer": "fine",
+     "anyPointer": [
+      "fine"
+     ],
+     "hover": "hover",
+     "anyHover": [
+      "hover"
+     ],
+     "mtp": 0,
+     "ontouch": false,
+     "touchEvent": "function",
+     "idc": "function",
+     "cd": 24,
+     "ori": "landscape-primary",
+     "ext": false,
+     "vv": [
+      0,
+      0,
+      1
+     ],
+     "hf": 0,
+     "vs": "visible",
+     "wd": true,
+     "sec": true,
+     "coi": false,
+     "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+     "plat": "Linux x86_64",
+     "uad": {
+      "mobile": false,
+      "platform": "Linux"
+     },
+     "to": 1794266211368.9,
+     "origin": "http://box.localhost:43757",
+     "top": false,
+     "anc": [
+      "http://rec.localhost:43757"
+     ],
+     "res": 0.1,
+     "uact": [
+      0,
+      0
+     ],
+     "kbd": true,
+     "rawupdate": true,
+     "coalesced": true,
+     "predicted": true
+    }
+   },
+   "kbdmap": [
+    {
+     "f": "box",
+     "ok": 0,
+     "err": "getLayoutMap() must be called from a top-level browsing context or allowed by the permission policy."
+    },
+    {
+     "f": "top",
+     "ok": 1,
+     "KeyQ": "q"
+    }
+   ],
+   "io": [
+    {
+     "hit": 1,
+     "vis": 1,
+     "rb": 0
+    },
+    {
+     "hit": 0,
+     "vis": 0,
+     "rb": 0
+    }
+   ],
+   "steps": [
+    {
+     "name": "idle 2 s",
+     "ok": true,
+     "ms": 2000.5,
+     "metrics": {
+      "untrusted": 0
+     },
+     "cdp": "Page.createIsolatedWorld"
+    },
+    {
+     "name": "page.click('#b')",
+     "ok": true,
+     "ms": 104.6,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          100,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.9,
+        "down": 1.3
+       },
+       "pauseBeforePressMs": 0.2,
+       "pressMs": 0.1,
+       "mousePressMs": 0.1,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "focus": {
+       "focusin": [
+        "top:#b"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "Runtime.evaluate x2, Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Page.enable, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#b').click()",
+     "ok": true,
+     "ms": 42.2,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 0,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          100,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.5,
+        "down": 0.6
+       },
+       "pauseBeforePressMs": 0.1,
+       "pressMs": 0.2,
+       "mousePressMs": 0.2,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "0/0",
+        "pointerenter": "0/0",
+        "pointerout": "0/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Page.enable, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#b').dblclick()",
+     "ok": true,
+     "ms": 47.8,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 0,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          100,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.4,
+        "down": 0.6
+       },
+       "pauseBeforePressMs": 0.1,
+       "pressMs": 0.3,
+       "mousePressMs": 0.3,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown pointerup mouseup click pointerdown mousedown pointerup mouseup click",
+       "presses": 2,
+       "boundary": {
+        "pointerover": "0/0",
+        "pointerenter": "0/0",
+        "pointerout": "0/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject x2"
+    },
+    {
+     "name": "locator('#hov').hover()",
+     "ok": true,
+     "ms": 58.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          240,
+          240
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 7.9,
+        "down": null
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), Runtime.callFunctionOn, Runtime.releaseObject x2"
+    },
+    {
+     "name": "mouse.move(x, y)",
+     "ok": true,
+     "ms": 14.4,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          700,
+          600
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 11.8,
+        "down": null
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved)"
+    },
+    {
+     "name": "mouse.move(x, y, { steps: 20 })",
+     "ok": true,
+     "ms": 333.1,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 20,
+       "movesBeforePress": 20,
+       "withMovement": 20,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 20,
+         "first": [
+          670,
+          582
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0.85,
+        "max": 1,
+        "over0": 17
+       },
+       "rawupdates": 20,
+       "sampleGapMs": {
+        "median": 16.9,
+        "range": [
+         15,
+         17.6
+        ],
+        "wholeMs": 0.47
+       },
+       "moveGapMs": {
+        "median": 16.9,
+        "range": [
+         15,
+         17.6
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 15.25,
+        "down": null
+       },
+       "path": {
+        "samples": 20,
+        "ms": 315,
+        "lengthPx": 664.7,
+        "straightness": 1,
+        "maxDeviationPx": 0,
+        "peakPxPerMs": 2.33,
+        "meanPxPerMs": 2.11
+       },
+       "presses": 0,
+       "boundary": {
+        "pointerover": "6/0",
+        "pointerenter": "0/0",
+        "pointerout": "6/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved) x20"
+    },
+    {
+     "name": "mouse.down(); mouse.up()",
+     "ok": true,
+     "ms": 6.6,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 0,
+       "movesBeforePress": 0,
+       "withMovement": 0,
+       "frames": [],
+       "perFrame": {
+        "top": {
+         "moves": 0,
+         "first": null
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 0,
+        "max": null,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": null,
+        "over0": 0
+       },
+       "rawupdates": 0,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [],
+       "handlerLagMs": {
+        "move": null,
+        "down": 0.6
+       },
+       "pauseBeforePressMs": null,
+       "pressMs": 3.1,
+       "mousePressMs": 3.1,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#b",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         100,
+         240
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "0/0",
+        "pointerenter": "0/0",
+        "pointerout": "0/0",
+        "pointerleave": "0/0"
+       }
+      }
+     },
+     "cdp": "dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "mouse.click(x, y)",
+     "ok": true,
+     "ms": 5.7,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          330.5,
+          239.5
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 1,
+        "mouse": 0,
+        "samples": 1
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.8,
+        "down": 0.9
+       },
+       "pauseBeforePressMs": 0.2,
+       "pressMs": 0.1,
+       "mousePressMs": 0.1,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#chk",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         330.5,
+         239.5
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown pointerup mouseup click blur",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "top:#chk"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#chk=true"
+      ]
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "mouse.click(x, y, { delay: 80 })",
+     "ok": true,
+     "ms": 105.2,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 0,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          330.5,
+          239.5
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 1,
+        "mouse": 0,
+        "samples": 1
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 16.2,
+        "down": 0.7
+       },
+       "pauseBeforePressMs": 17.8,
+       "pressMs": 83.5,
+       "mousePressMs": 83.5,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#chk",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         330.5,
+         239.5
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown pointerup mouseup click input change",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "0/0",
+        "pointerenter": "0/0",
+        "pointerout": "0/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "change": [
+       "#chk=false"
+      ]
+     },
+     "cdp": "dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased)"
+    },
+    {
+     "name": "locator('#f').click(); keyboard.type(text)",
+     "ok": true,
+     "ms": 94.3,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          220,
+          110
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.6,
+        "down": 0.7
+       },
+       "pauseBeforePressMs": 0.2,
+       "pressMs": 0,
+       "mousePressMs": 0,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#f",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         220,
+         110
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown pointerup mouseup click blur",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "keys": {
+       "keydowns": 16,
+       "keyups": 16,
+       "keypress": 16,
+       "holdMs": {
+        "median": 1.8,
+        "range": [
+         1.5,
+         2.9
+        ]
+       },
+       "downToDownMs": {
+        "median": 2.9,
+        "range": [
+         2.6,
+         4.4
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "H:72/72",
+        "e:69/69",
+        "l:76/76",
+        "o:79/79",
+        " :32/32",
+        "w:87/87",
+        "r:82/82",
+        "d:68/68"
+       ],
+       "handlerLagMs": 0.3,
+       "gapsWholeMs": 0.47
+      },
+      "text": {
+       "input": 16,
+       "beforeinput": 16,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      },
+      "focus": {
+       "focusin": [
+        "top:#f"
+       ],
+       "withNoPress": 0
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Page.enable, Runtime.releaseObject, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp)"
+    },
+    {
+     "name": "keyboard.type(text, { delay: 100 })",
+     "ok": true,
+     "ms": 1672.5,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 16,
+       "keyups": 16,
+       "keypress": 16,
+       "holdMs": {
+        "median": 102.8,
+        "range": [
+         102.6,
+         103.3
+        ]
+       },
+       "downToDownMs": {
+        "median": 104.5,
+        "range": [
+         104.1,
+         104.9
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "H:72/72",
+        "e:69/69",
+        "l:76/76",
+        "o:79/79",
+        " :32/32",
+        "w:87/87",
+        "r:82/82",
+        "d:68/68"
+       ],
+       "handlerLagMs": 0.4,
+       "gapsWholeMs": 0.2
+      },
+      "text": {
+       "input": 16,
+       "beforeinput": 16,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp)"
+    },
+    {
+     "name": "locator('#f').fill(text)",
+     "ok": true,
+     "ms": 14.3,
+     "metrics": {
+      "untrusted": 0,
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 16
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, Input.insertText, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#f').clear()",
+     "ok": true,
+     "ms": 14.7,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 1,
+       "keyups": 1,
+       "keypress": 0,
+       "holdMs": {
+        "median": 2.8,
+        "range": [
+         2.8,
+         2.8
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "Delete:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Delete:46/46"
+       ],
+       "handlerLagMs": 0.5,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "deleteContentForward"
+       ],
+       "longestData": 0
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, dispatchKeyEvent(rawKeyDown), dispatchKeyEvent(keyUp), Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#f').pressSequentially(text)",
+     "ok": true,
+     "ms": 53.5,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 16,
+       "keyups": 16,
+       "keypress": 16,
+       "holdMs": {
+        "median": 1.5,
+        "range": [
+         1.4,
+         2.2
+        ]
+       },
+       "downToDownMs": {
+        "median": 2.7,
+        "range": [
+         2.4,
+         3.3
+        ]
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 2,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "H:72/72",
+        "e:69/69",
+        "l:76/76",
+        "o:79/79",
+        " :32/32",
+        "w:87/87",
+        "r:82/82",
+        "d:68/68"
+       ],
+       "handlerLagMs": 0.3,
+       "gapsWholeMs": 0.2
+      },
+      "text": {
+       "input": 16,
+       "beforeinput": 16,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#f').press('Enter')",
+     "ok": true,
+     "ms": 12.3,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 1,
+       "keyups": 1,
+       "keypress": 1,
+       "holdMs": {
+        "median": 1.2,
+        "range": [
+         1.2,
+         1.2
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 0,
+       "shiftedChars": 0,
+       "shiftedWithShiftFlag": 0,
+       "shiftedWithShiftKeyDown": 0,
+       "locations": [
+        "Enter:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Enter:13/13"
+       ],
+       "handlerLagMs": 0.3,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 0,
+       "beforeinput": 1,
+       "types": [],
+       "longestData": 0
+      },
+      "change": [
+       "#f=Hello world, 42!"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp), Page.enable, Runtime.releaseObject"
+    },
+    {
+     "name": "keyboard.press('Shift+A')",
+     "ok": true,
+     "ms": 9,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 2,
+       "keyups": 2,
+       "keypress": 1,
+       "holdMs": {
+        "median": 2.6,
+        "range": [
+         2.6,
+         2.6
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 1,
+       "shiftedChars": 1,
+       "shiftedWithShiftFlag": 1,
+       "shiftedWithShiftKeyDown": 1,
+       "locations": [
+        "Shift:1",
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Shift:16/16",
+        "A:65/65"
+       ],
+       "handlerLagMs": 0.8,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "dispatchKeyEvent(rawKeyDown), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp) x2"
+    },
+    {
+     "name": "keyboard.down('Shift'); press('KeyB'); up('Shift')",
+     "ok": true,
+     "ms": 18.5,
+     "metrics": {
+      "untrusted": 0,
+      "keys": {
+       "keydowns": 2,
+       "keyups": 2,
+       "keypress": 1,
+       "holdMs": {
+        "median": 6.9,
+        "range": [
+         6.9,
+         6.9
+        ]
+       },
+       "downToDownMs": {
+        "median": null,
+        "range": null
+       },
+       "overlaps": 0,
+       "shiftDowns": 1,
+       "shiftedChars": 1,
+       "shiftedWithShiftFlag": 1,
+       "shiftedWithShiftKeyDown": 1,
+       "locations": [
+        "Shift:1",
+        "char:0"
+       ],
+       "repeats": 0,
+       "composing": 0,
+       "numLock": [
+        0
+       ],
+       "keyCodes": [
+        "Shift:16/16",
+        "B:66/66"
+       ],
+       "handlerLagMs": 1.3,
+       "gapsWholeMs": null
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 1
+      }
+     },
+     "cdp": "dispatchKeyEvent(rawKeyDown), dispatchKeyEvent(keyDown), dispatchKeyEvent(keyUp) x2"
+    },
+    {
+     "name": "keyboard.insertText('héllo')",
+     "ok": true,
+     "ms": 6.6,
+     "metrics": {
+      "untrusted": 0,
+      "text": {
+       "input": 1,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 5
+      }
+     },
+     "cdp": "Input.insertText"
+    },
+    {
+     "name": "locator('#ta').fill('two\\nlines')",
+     "ok": true,
+     "ms": 17.1,
+     "metrics": {
+      "untrusted": 0,
+      "text": {
+       "input": 3,
+       "beforeinput": 1,
+       "types": [
+        "insertText"
+       ],
+       "longestData": 5
+      },
+      "focus": {
+       "focusin": [
+        "top:#ta"
+       ],
+       "withNoPress": 1
+      },
+      "change": [
+       "#f=Hello world, 42!ABhéllo"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, Input.insertText, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#chk').check()",
+     "ok": true,
+     "ms": 44.3,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          330.5,
+          239.5
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 1,
+        "mouse": 0,
+        "samples": 1
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 1,
+        "down": 1.1
+       },
+       "pauseBeforePressMs": 0.3,
+       "pressMs": 0.2,
+       "mousePressMs": 0.2,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#chk",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         330.5,
+         239.5
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "top:#chk"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#ta=two\nlines",
+       "#chk=true"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn x3, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Runtime.callFunctionOn, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#chk').setChecked(false)",
+     "ok": true,
+     "ms": 48.9,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 0,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          330.5,
+          239.5
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 1,
+        "mouse": 0,
+        "samples": 1
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.4,
+        "down": 0.6
+       },
+       "pauseBeforePressMs": 0.1,
+       "pressMs": 0.5,
+       "mousePressMs": 0.5,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#chk",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         330.5,
+         239.5
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerdown mousedown pointerup mouseup click input change",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "0/0",
+        "pointerenter": "0/0",
+        "pointerout": "0/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "change": [
+       "#chk=false"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn x3, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Runtime.callFunctionOn, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#sel').selectOption('b')",
+     "ok": true,
+     "ms": 12,
+     "note": [
+      "b"
+     ],
+     "metrics": {
+      "untrusted": 2,
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "change": [
+       "#sel=b"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#file').setInputFiles(file)",
+     "ok": true,
+     "ms": 17.2,
+     "metrics": {
+      "untrusted": 2,
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "change": [
+       "#file=C:\\fakepath\\upload.txt"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn x3, Runtime.releaseObject"
+    },
+    {
+     "name": "locator('#drag').dragTo(locator('#drop'))",
+     "ok": true,
+     "ms": 117.6,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 2,
+       "movesBeforePress": 1,
+       "withMovement": 2,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 2,
+         "first": [
+          90,
+          350
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 2,
+       "sampleGapMs": {
+        "median": 57.4,
+        "range": [
+         57.4,
+         57.4
+        ],
+        "wholeMs": 0
+       },
+       "moveGapMs": {
+        "median": 57.4,
+        "range": [
+         57.4,
+         57.4
+        ]
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 2,
+       "pressureOnMoves": [
+        0,
+        0.5
+       ],
+       "handlerLagMs": {
+        "move": 6.85,
+        "down": 0.5
+       },
+       "pauseBeforePressMs": 11.4,
+       "pressMs": null,
+       "mousePressMs": null,
+       "upToClickMs": null,
+       "down": {
+        "frame": "top",
+        "target": "#drag",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         90,
+         350
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": null,
+       "order": "pointerout pointerover mouseout mouseover pointerdown mousedown dragstart blur focusout pointerout pointerover mouseout mouseover pointercancel pointerout dragend",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "2/0",
+        "pointerenter": "0/0",
+        "pointerout": "3/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "drag": "dragstart dragend"
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), Runtime.callFunctionOn, Runtime.releaseObject x2, Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, Runtime.evaluate, Runtime.callFunctionOn x2, Input.setInterceptDrags, dispatchMouseEvent(mouseMoved), Runtime.callFunctionOn x2, Input.setInterceptDrags, dispatchDragEvent(dragEnter), dispatchDragEvent(drop), Runtime.callFunctionOn, Runtime.releaseObject x2"
+    },
+    {
+     "name": "locator('#b').tap()",
+     "ok": false,
+     "error": "locator.tap: The page does not support tap. Use hasTouch context option to enable touch support.",
+     "ms": 2.1,
+     "metrics": {
+      "untrusted": 0
+     }
+    },
+    {
+     "name": "frameLocator('#box').locator('#cb').click()",
+     "ok": true,
+     "ms": 144.4,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 0,
+       "frames": [
+        "box"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 0,
+         "first": null
+        },
+        "box": {
+         "moves": 1,
+         "first": [
+          29,
+          33
+         ]
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 0,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 1.7,
+        "down": 1.9
+       },
+       "pauseBeforePressMs": 0.6,
+       "pressMs": 0.1,
+       "mousePressMs": 0.1,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "box",
+        "target": "#cb",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         480,
+         239
+        ],
+        "at": [
+         29,
+         33
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "pointerover mouseover pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "0/1",
+        "pointerenter": "0/0",
+        "pointerout": "0/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "text": {
+       "input": 1,
+       "beforeinput": 0,
+       "types": [
+        null
+       ],
+       "longestData": 0
+      },
+      "focus": {
+       "focusin": [
+        "box:#cb"
+       ],
+       "withNoPress": 0
+      },
+      "change": [
+       "#cb=true"
+      ]
+     },
+     "cdp": "Runtime.callFunctionOn x2, Runtime.getProperties, Runtime.callFunctionOn, Runtime.releaseObject, DOM.describeNode, Runtime.releaseObject, Runtime.evaluate, Runtime.callFunctionOn x4, Runtime.releaseObject, DOM.scrollIntoViewIfNeeded, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn, DOM.getFrameOwner, DOM.resolveNode, Runtime.evaluate, DOM.getBoxModel, Runtime.evaluate, Runtime.releaseObject, DOM.getFrameOwner, Runtime.callFunctionOn, DOM.resolveNode, Runtime.callFunctionOn, DOM.getBoxModel, DOM.describeNode, DOM.resolveNode, Runtime.callFunctionOn x2, Runtime.releaseObject, DOM.describeNode, DOM.resolveNode, Runtime.callFunctionOn x2, Runtime.releaseObject x2, Runtime.callFunctionOn, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Page.enable, Runtime.releaseObject"
+    },
+    {
+     "name": "mouse.wheel(0, 600)",
+     "ok": true,
+     "ms": 11.1,
+     "metrics": {
+      "untrusted": 0,
+      "wheel": {
+       "wheels": 1,
+       "deltaY": [
+        600
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        -120
+       ],
+       "gapMs": {
+        "median": null,
+        "range": null
+       },
+       "scrolls": 1,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseWheel)"
+    },
+    {
+     "name": "mouse.wheel(0, -600)",
+     "ok": true,
+     "ms": 16.2,
+     "metrics": {
+      "untrusted": 0,
+      "wheel": {
+       "wheels": 1,
+       "deltaY": [
+        -600
+       ],
+       "deltaX": [
+        0
+       ],
+       "deltaMode": [
+        0
+       ],
+       "wheelDeltaY": [
+        120
+       ],
+       "gapMs": {
+        "median": null,
+        "range": null
+       },
+       "scrolls": 1,
+       "scrollsWithNoWheelOrKey": 0,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "dispatchMouseEvent(mouseWheel)"
+    },
+    {
+     "name": "locator('#far').scrollIntoViewIfNeeded()",
+     "ok": true,
+     "ms": 51.8,
+     "metrics": {
+      "untrusted": 0,
+      "wheel": {
+       "wheels": 0,
+       "deltaY": [],
+       "deltaX": [],
+       "deltaMode": [],
+       "wheelDeltaY": [],
+       "gapMs": {
+        "median": null,
+        "range": null
+       },
+       "scrolls": 1,
+       "scrollsWithNoWheelOrKey": 1,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, DOM.describeNode, DOM.resolveNode, Runtime.releaseObject, Runtime.callFunctionOn, DOM.describeNode, DOM.resolveNode, Runtime.callFunctionOn x2, Runtime.releaseObject, DOM.scrollIntoViewIfNeeded, Runtime.releaseObject"
+    },
+    {
+     "name": "page.evaluate(scrollTo(0, 0))",
+     "ok": true,
+     "ms": 5.2,
+     "note": {
+      "interrupted": false
+     },
+     "metrics": {
+      "untrusted": 0,
+      "wheel": {
+       "wheels": 0,
+       "deltaY": [],
+       "deltaX": [],
+       "deltaMode": [],
+       "wheelDeltaY": [],
+       "gapMs": {
+        "median": null,
+        "range": null
+       },
+       "scrolls": 1,
+       "scrollsWithNoWheelOrKey": 1,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "Runtime.callFunctionOn"
+    },
+    {
+     "name": "locator('#far').click()",
+     "ok": true,
+     "ms": 52.9,
+     "metrics": {
+      "untrusted": 0,
+      "pointer": {
+       "moves": 1,
+       "movesBeforePress": 1,
+       "withMovement": 1,
+       "frames": [
+        "top"
+       ],
+       "perFrame": {
+        "top": {
+         "moves": 1,
+         "first": [
+          120,
+          677
+         ]
+        },
+        "box": {
+         "moves": 0,
+         "first": null
+        }
+       },
+       "coalesced": {
+        "mean": 1,
+        "max": 1,
+        "over1": 0
+       },
+       "predicted": {
+        "mean": 0,
+        "max": 0,
+        "over0": 0
+       },
+       "rawupdates": 1,
+       "sampleGapMs": {
+        "median": null,
+        "range": null,
+        "wholeMs": null
+       },
+       "moveGapMs": {
+        "median": null,
+        "range": null
+       },
+       "fractional": {
+        "pointer": 0,
+        "mouse": 0,
+        "samples": 0
+       },
+       "movementMismatch": 0,
+       "jumpsOver100": 1,
+       "pressureOnMoves": [
+        0
+       ],
+       "handlerLagMs": {
+        "move": 0.7,
+        "down": 0.9
+       },
+       "pauseBeforePressMs": 0.2,
+       "pressMs": 0.2,
+       "mousePressMs": 0.2,
+       "upToClickMs": 0,
+       "down": {
+        "frame": "top",
+        "target": "#far",
+        "pointerType": "mouse",
+        "pointerId": 1,
+        "isPrimary": 1,
+        "pressure": 0.5,
+        "tangentialPressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "tiltY": 0,
+        "twist": 0,
+        "altitudeAngle": 1.571,
+        "azimuthAngle": 0,
+        "button": 0,
+        "buttons": 1,
+        "detail": 0,
+        "firesTouchEvents": null,
+        "screenMinusClient": [
+         0,
+         143
+        ],
+        "at": [
+         120,
+         677
+        ],
+        "userActivation": [
+         1,
+         1
+        ]
+       },
+       "upPressure": 0,
+       "order": "scroll pointerout pointerover mouseout mouseover pointerdown mousedown pointerup mouseup click",
+       "presses": 1,
+       "boundary": {
+        "pointerover": "1/0",
+        "pointerenter": "0/0",
+        "pointerout": "1/0",
+        "pointerleave": "0/0"
+       }
+      },
+      "wheel": {
+       "wheels": 0,
+       "deltaY": [],
+       "deltaX": [],
+       "deltaMode": [],
+       "wheelDeltaY": [],
+       "gapMs": {
+        "median": null,
+        "range": null
+       },
+       "scrolls": 1,
+       "scrollsWithNoWheelOrKey": 1,
+       "fractionalDelta": 0
+      }
+     },
+     "cdp": "Runtime.callFunctionOn x4, Runtime.releaseObject, Runtime.callFunctionOn, DOM.scrollIntoViewIfNeeded, DOM.getContentQuads, Runtime.callFunctionOn x2, dispatchMouseEvent(mouseMoved), dispatchMouseEvent(mousePressed), dispatchMouseEvent(mouseReleased), Runtime.callFunctionOn, Runtime.releaseObject, Page.enable, Runtime.releaseObject"
+    }
+   ]
+  }
+ }
+}
