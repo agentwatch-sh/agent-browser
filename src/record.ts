@@ -26,7 +26,7 @@ import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { inflateSync } from "node:zlib";
 import { KEYS, keyFields, type Tab, type Viewport } from "./browser.ts";
-import { assertAllowedUrl, isAllowedUrl } from "./allowlist.ts";
+import { assertNavigationUrl, isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
@@ -93,9 +93,10 @@ const siteOf = (url: string) => (url === "about:blank" ? undefined : safeHost(ur
 
 /**
  * Check a step script (the parsed JSON array) before anything touches the tab. Every problem is a
- * usage error that names the step; a goto off the allowlist is refused here too.
+ * usage error that names the step. A standalone goto off the allowlist is refused here too; agentwatch's relay
+ * judges navigation when the step runs, so its refusal can make the operator's prompt.
  */
-export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly string[], what = "step"): Step[] {
+export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly string[], what = "step", relayNavigation = false): Step[] {
   if (!Array.isArray(raw)) throw new UsageError(`the ${what} script must be a JSON array of steps`);
   return raw.map((step, i) => {
     const bad = (why: string) => new UsageError(`${what} ${i + 1} (${describe(step)}): ${why}`);
@@ -117,7 +118,7 @@ export function parseSteps(raw: unknown, viewport: Viewport, allow: readonly str
       case "wait": ms("wait"); break;
       case "goto":
         if (typeof step.goto !== "string") throw bad("goto is a URL");
-        assertAllowedUrl(step.goto, allow);
+        assertNavigationUrl(step.goto, allow, relayNavigation);
         break;
       case "click": case "hover": target(action); ms("duration"); break;
       case "type":
@@ -1348,7 +1349,7 @@ async function encode(ffmpeg: string, dir: string, frames: { file: string; t: nu
  * (clip.mp4 -> clip.json) and never over a script.
  */
 export function planRecording(p: { out: string; script?: string; setup?: string; size?: string; fps?: number; scale?: number; noCursor?: boolean;
-  settle?: number; seed?: number; ffmpeg?: string }, allow: readonly string[]): RecordPlan {
+  settle?: number; seed?: number; ffmpeg?: string }, allow: readonly string[], relayNavigation = false): RecordPlan {
   if (typeof p.out !== "string" || !p.out) throw new UsageError("--out is required: the MP4 to write");
   const out = resolve(p.out);
   if (!/\.mp4$/i.test(out)) throw new UsageError(`--out must end in .mp4: ${p.out}`);
@@ -1373,7 +1374,7 @@ export function planRecording(p: { out: string; script?: string; setup?: string;
       throw new UsageError(`the provenance JSON (${provenance}) and the MP4 go beside each other and must not replace the ${what} script; name the output differently`);
     let raw: unknown;
     try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new UsageError(`cannot read the ${what} script ${path}: ${(e as Error).message}`); }
-    return { path, steps: parseSteps(raw, viewport, allow, what === "setup" ? "setup step" : "step") };
+    return { path, steps: parseSteps(raw, viewport, allow, what === "setup" ? "setup step" : "step", relayNavigation) };
   };
   const script = read(p.script, "step"), setup = read(p.setup, "setup");
   return { out, provenance, script: script.path, steps: script.steps, setupScript: setup.path, setup: setup.steps, viewport, fps, cursor: !p.noCursor,

@@ -982,9 +982,14 @@ daemon must send `set_scopes` (part 3): there is no backward compatibility.
   against the last line, which can have changed the scope's list during the hold.
 - Layer 1 of the guard. The relay refuses a `Page.navigate` of a tab's main frame and a
   `Target.createTarget` whose `http:`/`https:` host (or a `blob:` URL's inner host) the scope's list does
-  not cover: `Not allowed: <host> is not on the allowlist`, before any bridge request. A frame's
-  navigation is not refused. Links, redirects, page scripts and popups are the extension's to block (its
-  rules per tab).
+  not cover: `Not allowed: <host> is not on the allowlist`, before any request reaches Chrome.
+  The relay reports each refusal through C10 `daemon.blocked`, including the delayed `Target.createTarget`
+  after a list change. It checks the host and scope before sending the report. It waits at most 250 ms,
+  including time in its separate `blocked` queue. Only the carrier's `ok` answer adds this text:
+  `The operator has a Browser permission prompt in the agentwatch web viewer. Tell the operator; after the notice that the operator added <host>, start the step again.`
+  An older carrier, a failed args check, an error, or a timeout keeps the existing error text.
+  Permission-grant refusals make no navigation prompt. A frame's navigation is not refused.
+  The extension blocks links, redirects, page scripts and popups with its rules per tab.
 - Grants. `Browser.grantPermissions` with no origin covers the scope's own list; one with an origin needs
   a host of that list. At each line the relay sets again the grants that each connection's own list still
   covers, and allows automatic downloads for each entry of every list. A content setting acts on the whole
@@ -1670,6 +1675,31 @@ A failure:
 Error codes: `usage` (exit 2), `not_allowed`, `pin_required`, `read_first`, `tab_not_found`,
 `unreachable`, `approval_needed` (`--no-prompt` and no approved proxy), `error` (exit 1).
 
+When agentwatch manages the browser (`mode: "agent"` with `cdpUrl`), `open`, `goto`, and recording
+navigation steps let the relay enforce navigation. A refused navigation reports its host and scope
+to the carrier. The carrier creates a **Browser permission** prompt in the agentwatch web viewer.
+Only an acknowledged report lets the error name that prompt:
+
+```text
+Not allowed: <host> is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. Tell the operator; after the notice that the operator added <host>, start the step again.
+```
+
+The agent tells the operator: "You have a Browser permission prompt in the web viewer for <host>."
+The agent waits for this notice: "The operator added <host> to your browser list. Start the blocked browser step again."
+Then the agent starts the blocked step again. The agent must never work around a block.
+The carrier shares its host limit with the extension's block notices. Repeated blocks can share an existing prompt.
+An older carrier or a report without an acknowledgement keeps the existing refusal text.
+
+Fetches and downloads keep their local checks. In agentwatch, their errors say:
+`Ask the operator to add <host> to your browser list.` They do not create a navigation prompt.
+Standalone agent-browser keeps its existing refusal text and local navigation checks.
+Both modes keep the prior local scheme rules, including refusals of `data:`, `javascript:`, and `file:` URLs.
+Managed navigation leaves HTTP, HTTPS, and web blob host decisions to the relay.
+Relay host refusals keep the `not_allowed` error code and the complete relay message.
+The Python adapter raises `NotAllowedError` for that code.
+An extension block during a redirect can still report `navigation failed: net::ERR_BLOCKED_BY_CLIENT`.
+That error has no reliable destination host; the extension sends the prompt event separately.
+
 Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
 `not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
 (`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. With
@@ -1677,7 +1707,9 @@ Two messages name their cause and fix. When `open` or `goto` lands on another ho
 requested site in their own Chrome and to send that site's sign-in to the agent browser with the
 operator extension (agentwatch — operator mode). `record` gives the same hint when the tab goes to a
 sign-in page, with the site that the take was on last (the start page, a `goto` step's site, or an
-allowlisted page that the tab went to). With `--cdp-url`, `launch --login` refuses with the same
+allowlisted page that the tab went to). These sign-in hints stay separate from acknowledged relay refusals.
+An acknowledged relay refusal names the prompt; a later local redirect or recording refusal keeps its existing sign-in hint.
+With `--cdp-url`, `launch --login` refuses with the same
 step. When Chrome
 answers the connection with `403 Connection rejected` at once and shows no prompt, this Chrome run
 holds an earlier refusal (a cancelled, closed or unanswered prompt): the `unreachable` message says to

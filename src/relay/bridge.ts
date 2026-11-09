@@ -15,6 +15,8 @@ export const REQUEST_TOO_LARGE = "request too large";
 
 /** The wait of daemon.pointerAt (C10, the daemon's own ops). */
 export const POINTER_READ_WAIT_MS = 1200;
+/** C10: a refused navigation waits only this long for the carrier's prompt acknowledgement. */
+export const BLOCKED_WAIT_MS = 250;
 /** The text of a daemon op whose answer did not come in its wait: the relay's own timer ended it (C10). */
 export const RELAY_TIMER = "the relay's timer";
 
@@ -30,7 +32,7 @@ export class BridgeError extends Error {
 
 /** The ops whose in-flight key is a tab: the first arg, or the target of debugger.sendCommand. Every other op shares one key. */
 const TAB_OPS = new Set(["debugger.attach", "debugger.detach", "debugger.sendCommand", "tabs.get", "tabs.update", "tabs.remove", "bridge.release"]);
-/** The daemon's own ops (C10): they have the in-flight key `pointer` of their own, and the relay's own timer ends their wait. */
+/** The daemon's own ops (C10): the relay's own timer ends their wait, including time in the queue. */
 const isDaemonOp = (op: string) => op.startsWith("daemon.");
 
 type Request = { id: string; line: string; key: string; wait: number; resolve: (v: any) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout };
@@ -51,19 +53,18 @@ export class Bridge {
   }
 
   /**
-   * Send one op. The relay sends each op's default wait, and the daemon always answers, so no timer runs here; the two
-   * daemon ops are the exception (C10, the daemon's own ops): daemon.pointerAt has POINTER_READ_WAIT_MS, daemon.movePointer
-   * the wait of its request (`o.wait`), and at that wait the relay's own timer ends the call with RELAY_TIMER and drops
-   * a late answer.
+   * Send one op. The daemon normally answers every request. The daemon ops also have a relay timer (C10):
+   * daemon.pointerAt has POINTER_READ_WAIT_MS, daemon.movePointer the wait of its request, and daemon.blocked
+   * BLOCKED_WAIT_MS. The timer includes time in the queue, ends the call with RELAY_TIMER, and drops a late answer.
    */
   call<T = any>(op: string, args: unknown[] = [], o: { wait?: number } = {}): Promise<T> {
     const daemon = isDaemonOp(op);
-    const wait = o.wait ?? (daemon ? POINTER_READ_WAIT_MS : op === "debugger.sendCommand" ? WAIT_MAX_MS : WAIT_DEFAULT_MS);
+    const wait = o.wait ?? (op === "daemon.blocked" ? BLOCKED_WAIT_MS : daemon ? POINTER_READ_WAIT_MS : op === "debugger.sendCommand" ? WAIT_MAX_MS : WAIT_DEFAULT_MS);
     const id = `${this.prefix}-${this.next++}`;
     const line = JSON.stringify({ t: "req", id, op, args, wait });
     if (Buffer.byteLength(line) > this.maxRequest) return Promise.reject(new BridgeError(REQUEST_TOO_LARGE, wait));
     const tab = op === "debugger.sendCommand" ? (args[0] as { tabId?: number } | undefined)?.tabId : args[0];
-    const key = daemon ? "pointer" : TAB_OPS.has(op) ? `tab ${tab}` : "shared";
+    const key = op === "daemon.blocked" ? "blocked" : daemon ? "pointer" : TAB_OPS.has(op) ? `tab ${tab}` : "shared";
     return new Promise<T>((resolve, reject) => {
       const req: Request = { id, line, key, wait, resolve, reject };
       if (daemon) req.timer = setTimeout(() => this.expire(req), wait);

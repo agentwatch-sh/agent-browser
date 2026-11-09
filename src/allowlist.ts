@@ -45,3 +45,17 @@ export function isAllowedUrl(url: string, allow: readonly string[]): boolean {
 export function assertAllowedUrl(url: string, allow: readonly string[]): void {
   if (!isAllowedUrl(url, allow)) throw new NotAllowedError(url);
 }
+
+/** The relay enforces navigation and reports refusals to agentwatch; a standalone browser checks locally. */
+export const usesAgentRelay = (s: { mode: string; cdpUrl?: string }): boolean => s.mode === "agent" && !!s.cdpUrl;
+
+/** Keep the standalone scheme rules. Only a managed web host decision belongs to the relay. */
+export function assertNavigationUrl(url: string, allow: readonly string[], relayNavigation = false): void {
+  if (relayNavigation) {
+    let parsed: URL | undefined;
+    try { parsed = new URL(url); } catch { /* The local refusal below keeps the existing code and text. */ }
+    if (parsed && (["http:", "https:"].includes(parsed.protocol)
+      || (parsed.protocol === "blob:" && /^https?:\/\//.test(parsed.origin)))) return;
+  }
+  assertAllowedUrl(url, allow);
+}

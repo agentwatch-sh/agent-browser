@@ -666,6 +666,11 @@ test("open closes the empty tab for the relay's refusal text TEXT.notAllowed, so
   const before = new Set(fake.pages.keys());
   // The text that the relay sends (src/relay/policy.ts), not a copy of it: open's match must follow it.
   fake.failOnce.set("Page.navigate", TEXT.notAllowed("other.example.org"));
-  await assert.rejects(browser.open(base), /^Error: Page\.navigate: Not allowed: other\.example\.org/);
+  await assert.rejects(browser.open(base), (e: Error) => {
+    assert.ok(e instanceof NotAllowedError);
+    assert.equal(e.code, "not_allowed");
+    assert.match(e.message, /^Page\.navigate: Not allowed: other\.example\.org/);
+    return true;
+  });
   assert.deepEqual([...fake.pages.keys()].filter((id) => !before.has(id)), [], "the empty tab is closed");
 });
