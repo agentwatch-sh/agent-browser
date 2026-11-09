@@ -403,12 +403,25 @@ class AgentBrowser:
         share = max(self.timeout / 2.0, self.timeout - READ_WORK)
         return max(1, int(min(self._timing("lockWaitMs", LOCK_WAIT_MS), share * 1000.0)))
 
-    def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False) -> ClickResult:
-        """Trusted click on `target` (#N from outline, or a CSS selector), or on the element whose text is `text`."""
+    def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False,
+              *, download: Optional[PathLike] = None, timeout: Optional[int] = None) -> ClickResult:
+        """Trusted click on `target` (#N or CSS), or exact `text`.
+
+        `download` captures a file in that directory. `timeout` is its positive wait in milliseconds
+        (default 120000), and needs `download`. The adapter adds this wait to its process timeout.
+        """
         if (target is None) == (text is None):
             raise ValueError("click needs target or text, not both")
         args = [tab, target] if target is not None else [tab, "--text", text or ""]
-        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json, extra_timeout=self._input_wait())
+        directory = _path("download", download)
+        if timeout is not None and (directory is None or isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0 or timeout > 2_147_483_647):
+            raise ValueError("timeout needs download and a positive integer of at most 2147483647 milliseconds")
+        if directory is not None:
+            args += ["--download", os.fspath(directory)]
+        if timeout is not None:
+            args += ["--timeout", str(timeout)]
+        wait = (120.0 if timeout is None else timeout / 1000.0) if directory is not None else 0.0
+        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json, extra_timeout=self._input_wait() + wait)
 
     def hover(self, tab: str, target: str, any_scope: bool = False) -> HoverResult:
         """Move the mouse over `target` (#N or a CSS selector)."""

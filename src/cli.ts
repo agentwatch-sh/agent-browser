@@ -219,7 +219,8 @@ export function human(r: any): string {
       return r.tabs.length ? lines(r.tabs.map(tabLine)) : "";
     case "open": case "goto": return lines([`${r.tab.id}  ${r.tab.url}`]);
     case "outline": return lines([outlineText(r.elements)]);
-    case "click": return lines([`clicked ${r.text !== null ? JSON.stringify(r.text) : r.target} in ${r.tab.id}`]);
+    case "click": return lines([`clicked ${r.text !== null ? JSON.stringify(r.text) : r.target} in ${r.tab.id}`,
+      ...(r.download ? [`path: ${r.download.path}`, `name: ${r.download.suggestedFilename}`, `url: ${r.download.url}`, `${r.download.bytes} bytes`] : [])]);
     case "hover": return lines([`hovering ${r.target} in ${r.tab.id}`]);
     case "type": return lines([`typed ${r.length} characters in ${r.tab.id}`]);
     case "press": return lines([`pressed ${r.key} in ${r.tab.id}`]);

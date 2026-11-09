@@ -299,14 +299,30 @@ class OutlineResult:
 
 
 @dataclass(frozen=True)
+class CapturedDownload:
+    path: str
+    suggested_filename: str
+    url: str
+    bytes: int
+
+    @classmethod
+    def from_json(cls, value: object, where: str = "click.download") -> "CapturedDownload":
+        d = _obj(value, where)
+        return cls(path=_str(d, "path", where), suggested_filename=_str(d, "suggestedFilename", where),
+                   url=_str(d, "url", where), bytes=_int(d, "bytes", where))
+
+
+@dataclass(frozen=True)
 class ClickResult:
     tab: TabRef
     target: Optional[str]
     text: Optional[str]
+    download: Optional[CapturedDownload] = None
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "click") -> "ClickResult":
-        return cls(tab=_tab(d, where), target=_opt_str(d, "target", where), text=_opt_str(d, "text", where))
+        return cls(tab=_tab(d, where), target=_opt_str(d, "target", where), text=_opt_str(d, "text", where),
+                   download=CapturedDownload.from_json(d["download"], f"{where}.download") if "download" in d else None)
 
 
 @dataclass(frozen=True)

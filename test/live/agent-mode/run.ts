@@ -96,6 +96,7 @@ import { fileURLToPath } from "node:url";
 import { TEXT } from "../../../src/relay/policy.ts";
 import { bothFocusedMs, rates, startServer, stepSignals, type Rec } from "../anti-detect/probe.ts";
 import { StandInDaemon } from "./daemon.ts";
+import { CSV, downloadSite } from "../download-site.ts";
 import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
@@ -135,6 +136,7 @@ if (![undefined, "", "8781", "0"].includes(process.env.SITE_PORT)) {
 const SITE_PORT = Number(process.env.SITE_PORT || 8781);
 const CASES = (process.env.CASES ?? "playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,pointer,scopes,link-up").split(",");
 /** The group `peer` runs the relay with --peer-check, under which every scope needs its session's roots: so it runs alone. */
+if (EXTERNAL && CASES.includes("downloads")) { process.stderr.write("the downloads group uses own mode only; external mode is refused\n"); process.exit(2); }
 const PEER = CASES.includes("peer");
 if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
 /** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
@@ -384,6 +386,7 @@ try {
   if (CASES.includes("mcp")) await probeScript("mcp", "mcp-probe.mjs", { ENDPOINT: url("mcp"), OUT: join(RUN, "mcp.json"), MCP_OUT_DIR: join(RUN, "mcp-out"), SITE_LOG: join(RUN, "site-log.jsonl") },
     (r) => (r.expect === "refused" && r.tool === "browser_navigate" ? { refusedSaw: OFF_LIST("b.localhost") } : {}));
   if (CASES.includes("agent-browser")) await agentBrowserCases();
+  if (CASES.includes("downloads")) await downloadCases();
   if (CASES.includes("windows")) await windowCases(pw, WS);
   // The agent pointer design's live check (ab-v16.71): the stand-in daemon's pointer ops on this run's own Xvfb.
   if (CASES.includes("pointer") && (EXTERNAL || process.env.POINTER_DAEMON === "old")) skip("pointer", "the group pointer (the pointer design's live check)",
@@ -852,6 +855,26 @@ async function agentBrowserCases() {
   await run("close", ["close", "main"], (r) => r.ok === true);
   await step(G, "quit refuses: agentwatch owns the agent browser", async () => cli("quit"), { want: (r) => r.ok === false && r.error.code === "usage" });
   await step(G, "no proxy socket in the state folder", async () => existsSync(join(state, "chrome-proxy.sock")), { want: (d) => d === false });
+}
+
+// ab-b84.25: the CLI captures attachment and blob downloads through the real receiver and relay.
+// Run CASES=downloads in own mode. The group never connects to an external browser.
+async function downloadCases() {
+  const G = "CLI downloads", site = await downloadSite();
+  const state = join(RUN, "download-state"), allow = join(RUN, "download-allow.json");
+  writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
+  const cli = (...args: string[]) => new Promise<any>((resolve, reject) => {
+    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("download-cli"), "--state-dir", state, "--allowlist", allow, "--json"], { encoding: "utf8", timeout: 30000 }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stdout + stderr)); else { try { resolve(JSON.parse(stdout)); } catch (e) { reject(e); } }
+    }));
+  });
+  try {
+    await cli("open", site.base, "--name", "export");
+    for (const name of ["attachment", "blob"]) await step(G, `click captures ${name}`, async () => {
+      const r = await cli("click", "export", ...(name === "blob" ? ["--text", "Export blob"] : ["#attachment"]), "--download", join(RUN, "downloads"), "--timeout", "15000");
+      return { ...r.download, content: readFileSync(r.download.path, "utf8") };
+    }, { want: (d) => d.content === CSV && d.bytes === CSV.length && d.suggestedFilename === name + ".csv" && d.url.startsWith(name === "blob" ? "blob:" : site.base) });
+  } finally { await cli("close", "export").catch(() => {}); await site.close(); }
 }
 
 // ---------------------------------------------------------------- one window per page, on the anti-detect probe's page (ab-v16.28)

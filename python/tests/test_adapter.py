@@ -182,6 +182,23 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(flags[flags.index("--cdp-url") + 1], url)
         self.assertNotIn("--cdp-url", AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)._global_flags())
 
+    def test_click_captures_a_download(self) -> None:
+        b = self.browser
+        b.open(self.fake.base + "/", name="export-download")
+        try:
+            result = b.click("export-download", "#dl", download=self.consumer.dir / "downloads", timeout=5000)
+            self.assertEqual(result.download.suggested_filename, "out.bin")
+            self.assertEqual(result.download.url, self.fake.base + "/file.bin")
+            self.assertEqual(Path(result.download.path).stat().st_size, result.download.bytes)
+            self.assertGreater(result.download.bytes, 0)
+            self.assertIsNone(b.click("export-download", text="Go").download)
+            self.assertIsNone(b.click("export-download", "#b", None, True).download,
+                              "any_scope keeps its existing fourth positional slot")
+            with self.assertRaises(TypeError):
+                b.click("export-download", "#b", None, False, self.consumer.dir / "downloads", 5000)
+        finally:
+            b.close("export-download")
+
     def test_cli_failures_raise_typed_errors(self) -> None:
         with self.assertRaises(UsageError) as caught:
             self.browser.net("any-tab", seconds=0)
