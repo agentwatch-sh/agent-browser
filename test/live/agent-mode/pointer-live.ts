@@ -54,6 +54,14 @@ function probeServer(log: Rec[]): Promise<{ server: Server; port: number }> {
       return;
     }
     const tab = u.searchParams.get("tab") ?? "x";
+    if (u.pathname === "/cache") {
+      // No unload handler, fetch loop or no-store header: this page can enter Chromium's back-forward cache.
+      res.writeHead(200, { "content-type": "text/html", "cache-control": "max-age=3600" }).end(`<html><title>${tab}</title><body>${tab}<script>
+        window.cachePage = ${JSON.stringify(tab)}; window.restored = false;
+        addEventListener('pageshow', e => { window.restored = e.persisted; });
+      </script></body></html>`);
+      return;
+    }
     const extra = u.pathname === "/wide" ? '<div style="position:absolute;left:0;top:30px;width:3200px;height:4px;background:#ccc"></div>'
       : u.pathname === "/dialog" ? "<script>document.addEventListener('mousemove', () => { if (window.__arm) { window.__arm = false; alert('hover'); } }, true);</script>" : "";
     if (!["/p", "/wide", "/dialog"].includes(u.pathname)) { res.writeHead(404).end(); return; }
@@ -160,6 +168,92 @@ export async function pointerCases(o: PointerContext): Promise<void> {
   };
 
   try {
+    await guard("ab-v16.84: native world lookups keep the read's id, including after a back-forward cache restore", async () => {
+      const raw = await rawCdp(o.WebSocket, o.url("ptr-cache"));
+      const made: string[] = [], reads: { tabId: number; id: number }[] = [];
+      let worldName = "";
+      // Observe only this harness's relay. Its private world name never goes to the raw client or the report.
+      let pendingLines = "";
+      const observe = (chunk: Buffer) => {
+        pendingLines += String(chunk);
+        const lines = pendingLines.split("\n");
+        pendingLines = lines.pop()!;
+        for (const line of lines) {
+          let r: any;
+          try { r = JSON.parse(line); } catch { continue; }
+          if (r.op !== "debugger.sendCommand") continue;
+          if (r.args[1] === "Page.createIsolatedWorld") worldName = r.args[2].worldName;
+          if (r.args[1] === "Runtime.evaluate" && r.args[2].expression === GEO_EXPRESSION) reads.push({ tabId: r.args[0].tabId, id: r.args[2].contextId });
+        }
+      };
+      o.daemon.relay.stdout!.on("data", observe);
+      try {
+        const make = async (tab: string) => {
+          const { targetId } = await raw.send("Target.createTarget", { url: pageUrl(tab, "cache") });
+          made.push(targetId);
+          const { sessionId } = await raw.send("Target.attachToTarget", { targetId, flatten: true });
+          return { targetId, sessionId };
+        };
+        const p = await make("CACHE1"), q = await make("CACHE-OTHER");
+        const value = async (session: string, expression: string) => (await raw.send("Runtime.evaluate", { expression, returnByValue: true }, session)).result?.value;
+        const ready = async (tab: string) => {
+          for (const end = Date.now() + 10000; Date.now() < end; await sleep(50)) if (await value(p.sessionId, "window.cachePage") === tab) return;
+          throw new Error("cache page did not load: " + tab);
+        };
+        const click = async (session: string) => {
+          await raw.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 100, y: 100, button: "none" }, session);
+          await raw.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 100, y: 100, button: "left", clickCount: 1 }, session);
+          await raw.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 100, y: 100, button: "left", clickCount: 1 }, session);
+        };
+        await ready("CACHE1");
+        await raw.send("Page.enable", {}, p.sessionId);
+        await click(q.sessionId); await click(p.sessionId);
+        const targets = await o.daemon.ask("debugger.getTargets");
+        const tabId = targets.find((t: any) => String(t.url).includes("tab=CACHE1"))?.tabId;
+        const first = reads.filter((r) => r.tabId === tabId).at(-1)?.id;
+        if (!first || !worldName) throw new Error("no relay geometry read in the cache page");
+        const { frameTree } = await raw.send("Page.getFrameTree", {}, p.sessionId);
+        const lookup = async () => (await o.daemon.ask("debugger.sendCommand", [{ tabId }, "Page.createIsolatedWorld", {
+          frameId: frameTree.frame.id, worldName, grantUniversalAccess: false,
+        }])).executionContextId;
+        const before = await lookup();
+        const { entries, currentIndex } = await raw.send("Page.getNavigationHistory", {}, p.sessionId);
+        const entry = entries[currentIndex].id;
+        await raw.send("Page.navigate", { url: pageUrl("CACHE2", "cache") }, p.sessionId);
+        await ready("CACHE2");
+        await click(q.sessionId); await click(p.sessionId);
+        const second = reads.filter((r) => r.tabId === tabId).at(-1)?.id;
+        // A cached context must also be inaccessible through the active document's debugger session.
+        let awayTitle: string | null = null;
+        try { awayTitle = (await raw.send("Runtime.evaluate", { expression: "document.title", contextId: first, returnByValue: true }, p.sessionId)).result?.value ?? null; }
+        catch { /* Chrome rejects the inactive document's context, or the relay refuses its id. */ }
+        const cachedContextReachable = awayTitle === "CACHE1";
+        const readsBeforeRestore = reads.filter((r) => r.tabId === tabId).length;
+        await raw.send("Page.navigateToHistoryEntry", { entryId: entry }, p.sessionId);
+        await ready("CACHE1");
+        const cached = await value(p.sessionId, "window.restored");
+        const after = await lookup(), afterAgain = await lookup();
+        const noReadAfterRestore = reads.filter((r) => r.tabId === tabId).length === readsBeforeRestore;
+        const refused: string[] = [];
+        if (cached) for (const [method, params] of [
+          ["Runtime.evaluate", { expression: "screenX = 10000", contextId: first }],
+          ["Runtime.callFunctionOn", { functionDeclaration: "function () { screenX = 10000; }", executionContextId: first }],
+          ["Runtime.callFunctionOn", { functionDeclaration: "function () { this.screenX = 10000; }", objectId: `-1.${first}.1` }],
+        ] as [string, object][]) {
+          try { await raw.send(method, params, p.sessionId); }
+          catch (e) { if (String((e as Error).message).includes(TEXT.relayWorld(method))) refused.push(method); else throw e; }
+        }
+        const reasons = raw.events.filter((e: any) => e.method === "Page.backForwardCacheNotUsed").map((e: any) => e.params.notRestoredExplanations);
+        const ok = before === first && afterAgain === after && !cachedContextReachable && noReadAfterRestore && (!cached || (after === first && refused.length === 3));
+        o.record({ group: G, case: "ab-v16.84: native world lookups keep the read's id, including after a back-forward cache restore", status: ok ? "pass" : "fail", ms: 0,
+          detail: { first, before, second, after, afterAgain, cached, cachedContextReachable, awayTitle, noReadAfterRestore, refused, reasons } });
+      } finally {
+        o.daemon.relay.stdout!.off("data", observe);
+        for (const targetId of made) await raw.send("Target.closeTarget", { targetId }).catch(() => {});
+        raw.close();
+      }
+    });
+
     // agent-browser's commands (the probe's design): two pages in two windows in turn, 3 rounds, each command activates its page.
     await guard("agent-browser over --cdp-url (design): two pages in two windows in turn, 3 rounds", async () => {
       await must("open ab1", cli("ptr-ab", "open", pageUrl("AB1"), "--name", "ab1"));
@@ -490,12 +584,12 @@ async function rawCdp(WebSocket: any, url: string) {
   const ws = new WebSocket(url);
   await new Promise((r, j) => { ws.once("open", r); ws.once("error", j); });
   let next = 1;
-  const waits = new Map<number, (m: any) => void>();
-  ws.on("message", (raw: Buffer) => { const m = JSON.parse(String(raw)); if (m.id !== undefined) { waits.get(m.id)?.(m); waits.delete(m.id); } });
-  const send = (method: string, params: object = {}) => new Promise<any>((resolve, reject) => {
+  const waits = new Map<number, (m: any) => void>(), events: any[] = [];
+  ws.on("message", (raw: Buffer) => { const m = JSON.parse(String(raw)); if (m.id !== undefined) { waits.get(m.id)?.(m); waits.delete(m.id); } else events.push(m); });
+  const send = (method: string, params: object = {}, sessionId?: string) => new Promise<any>((resolve, reject) => {
     const id = next++;
     waits.set(id, (m) => (m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result)));
-    ws.send(JSON.stringify({ id, method, params }));
+    ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
-  return { send, close: () => ws.close() };
+  return { send, events, close: () => ws.close() };
 }
