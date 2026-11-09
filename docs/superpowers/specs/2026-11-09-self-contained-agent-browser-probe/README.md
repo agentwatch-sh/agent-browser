@@ -115,3 +115,15 @@ Chromium as above, a new Chromium for each part.
 - `browser_run_code_unsafe` is in the `core` tool set; its description in `playwright-core` reads "Unsafe: executes
   arbitrary JavaScript in the Playwright server process and is RCE-equivalent". Part C's transport refuses it.
 - The probe's endpoint is a plain bridge to Chromium, for one client at a time, not the relay's model.
+
+## The limits
+
+- M1 used the probe's own test extension, which copies the receiver's 1 s reconnect. It did not use the
+  real receiver, branded Google Chrome or the CRX install.
+- M2 did not test a client of another OS user, and nothing ran on the Mac.
+- M3 drove a plain bridge to Chromium, not agent-browser's relay model, and it had no peer check. Its shim
+  posted to `/mcp/<scope>`, not to `/mcp` alone, so the scope from the walk is not measured for the MCP.
+- The memory of today's Playwright MCP for each session is not measured here.
+- A dry run of `m3-mcp-http.ts` with a stand-in Chromium that answered nothing (not kept in `results/`)
+  answered `initialize` and `tools/list`, and its `browser_navigate` waited until the client's time limit:
+  the MCP connects to the browser only at its first browser tool.
