@@ -409,6 +409,8 @@ class AgentBrowser:
 
         `download` captures a file in that directory. `timeout` is its positive wait in milliseconds
         (default 120000), and needs `download`. The adapter adds this wait to its process timeout.
+        A capture is for agent mode only: personal mode refuses it with `UsageError`, before it connects,
+        because a capture changes download behavior for the operator's whole Chrome.
         """
         if (target is None) == (text is None):
             raise ValueError("click needs target or text, not both")

@@ -963,12 +963,23 @@ export class FakeChrome {
       setTimeout(() => { if (this.pages.has(opener.targetId) && ![...this.pages.values()].some((q) => q.windowId === opener.windowId && q !== opener && !q.background)) this.selectTab(opener); }, this.reshowMs);
   }
 
+  /**
+   * As in Chromium 156 (a probe with a 302 from an allowlisted host to another host): downloadWillBegin comes after the
+   * response's headers, and its url is the URL after every redirect, not the URL that the click requested.
+   */
   async download(page: FakePage, url: string, suggestedFilename: string) {
     const { behavior, downloadPath } = this.downloadBehavior;
     if (behavior !== "allowAndName" || !downloadPath) return;
     const guid = randomUUID();
-    this.broadcast("Browser.downloadWillBegin", { frameId: `F-${page.targetId}`, guid, url, suggestedFilename });
-    const data = Buffer.from(await (await globalThis.fetch(this.local(url))).arrayBuffer());
+    let final = url, response = await globalThis.fetch(this.local(final), { redirect: "manual" });
+    for (let hops = 1; response.status >= 300 && response.status < 400 && response.headers.has("location"); hops++) {
+      if (hops > 20) throw new Error("the fake Chrome follows at most 20 redirects");
+      final = new URL(response.headers.get("location")!, final).href;
+      await response.body?.cancel();
+      response = await globalThis.fetch(this.local(final), { redirect: "manual" });
+    }
+    this.broadcast("Browser.downloadWillBegin", { frameId: `F-${page.targetId}`, guid, url: final, suggestedFilename });
+    const data = Buffer.from(await response.arrayBuffer());
     writeFileSync(join(downloadPath, guid), data);
     setTimeout(() => this.broadcast("Browser.downloadProgress", { guid, totalBytes: data.length, receivedBytes: data.length, state: "completed" }), 50);
   }

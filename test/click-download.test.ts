@@ -2,11 +2,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs, { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
-import { NotAllowedError } from "../src/errors.ts";
+import { NotAllowedError, UsageError } from "../src/errors.ts";
 import { withInputLock } from "../src/input.ts";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
@@ -216,6 +217,18 @@ test("personal mode refuses library and CLI capture without a directory or downl
   } finally { await b.disconnect(); await f.close(); }
 });
 
+test("commands.click refuses a personal-mode capture before it connects or attaches a tab", async () => {
+  const f = await setup();
+  try {
+    const dir = join(f.c.dir, "personal-before-connect"), connections = f.chrome.connections, from = f.chrome.calls.length;
+    await assert.rejects(commands.click({ ...f.o, mode: "personal" }, { tab: "export", target: "#b", download: dir, timeout: 200 }),
+      (e: unknown) => e instanceof UsageError && /personal mode.*operator.*Chrome/.test(e.message));
+    assert.equal(f.chrome.connections, connections, "no connection to Chrome");
+    assert.deepEqual(f.chrome.calls.slice(from).map((x) => x.method), [], "no CDP call: no tab is resolved or attached");
+    assert.equal(existsSync(dir), false);
+  } finally { await f.close(); }
+});
+
 test("capture rechecks the page after another chain releases the input lock", async () => {
   const f = await setup(), b = await AgentBrowser.connect(f.o);
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), checked = Promise.withResolvers<void>();
@@ -270,6 +283,41 @@ for (const agent of [false, true]) test(`${agent ? "agent relay" : "default prox
   } finally { await f.close(); }
 });
 
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: capture refuses a malformed download URL as not_allowed and names it`, async () => {
+  const f = await setup(agent);
+  try {
+    const url = "http://[malformed/export.csv";
+    f.download(url);
+    const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "not_allowed", r.stdout);
+    assert.equal(r.json.error.message, `refusing download from ${url}: not a valid URL`);
+    assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
+  } finally { await f.close(); }
+});
+
+test("default proxy: a download that an allowlisted URL redirects to an off-list host is refused by its URL after the redirect", async () => {
+  const f = await setup();
+  // One local server for two names (the fake Chrome sends each *.localhost name to 127.0.0.1): fixture.localhost is on
+  // the list (at any port), and its /export redirects to elsewhere.localhost, which is off the list.
+  const server = createServer((req, res) => {
+    const port = (server.address() as { port: number }).port;
+    if (req.url === "/export") { res.writeHead(302, { location: `http://elsewhere.localhost:${port}/private.csv` }); res.end(); return; }
+    if (req.url === "/private.csv") { res.writeHead(200, { "content-type": "text/csv", "content-disposition": 'attachment; filename="private.csv"' }); res.end(CONTENT); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (server.address() as { port: number }).port;
+    f.page.select("#b")[0].onclick = (page) => { void f.chrome.download(page, `http://${FIXTURE_HOST}:${port}/export`, "private.csv"); };
+    const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.equal(r.json.error.code, "not_allowed", r.stdout);
+    assert.equal(r.json.error.message, `refusing download from http://elsewhere.localhost:${port}/private.csv: URL is not on the allowlist`);
+    assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await f.close(); }
+});
+
 test("the start URL check refuses an off-list download before it completes", async () => {
   const f = await setup();
   try {
@@ -319,8 +367,8 @@ test("a timeout explains that iframe and new-tab downloads are ignored", async (
   } finally { await b.disconnect(); await f.close(); }
 });
 
-test("staging cleanup failure preserves the original click error", async (t) => {
-  const f = await setup(), b = await AgentBrowser.connect(f.o);
+test("staging cleanup failure preserves the original click error and logs the folder, code and message", async (t) => {
+  const f = await setup(), logs: string[] = [], b = await AgentBrowser.connect({ ...f.o, log: (line) => { logs.push(line); } });
   const original = fs.rmSync;
   try {
     const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "cleanup-error");
@@ -330,5 +378,9 @@ test("staging cleanup failure preserves the original click error", async (t) => 
     });
     syncBuiltinESMExports();
     await assert.rejects(tab.expectDownload(async () => { throw new Error("original click error"); }, dir, 100), /original click error/);
+    const [staging] = readdirSync(dir);
+    assert.match(staging, /^\.download-/, "the staging folder stays when its cleanup fails");
+    const line = logs.find((l) => l.includes("download staging folder"));
+    assert.equal(line, `agent-browser: could not remove download staging folder ${join(dir, staging)}; it stays and can hold an unfinished or refused file: EBUSY: late copy blocks cleanup`);
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); await b.disconnect(); await f.close(); }
 });
