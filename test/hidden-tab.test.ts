@@ -866,9 +866,82 @@ for (const drive of ["window", "hidden"] as const) {
       assert.ok(!methodsOf(click.calls).includes("Emulation.clearDeviceMetricsOverride"), "and no clear");
       const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
       endedFirst(page, calls, (x) => x.method === "Page.navigate");
+      // review-70 note 2 (ab-b84.23): as on a page off the allowlist, no code of ours there before the navigation.
+      const nav = methodsOf(calls).indexOf("Page.navigate");
+      assert.deepEqual(methodsOf(calls.slice(0, nav)).filter((x) => x === "Runtime.evaluate" || x === "Page.createIsolatedWorld"), [], "no page code in the page out of the pinned window");
       assert.equal(page.url, fx.base + "/next");
       assert.equal(page.override, undefined);
     } finally { page.windowId = win; await b.pinWindow(undefined); await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  for (const first of ["goto", "click"] as const)
+    test(`${label}: Tab.goto and a click at the same time (${first} first) on a tab kept attached whose page went off the allowlist, after a Tab.screenshot with a size left the override set: the click refuses before the clear, with no capture or clear of its own; goto ends those captures, clears the override and leaves the page`, async () => {
+      // review-70 note 1 (ab-b84.23): each caller but goto checks the page before it joins the ending that runs
+      // (endSizeLeft). A click that came during goto's ending and joined it before its check would wait for those
+      // captures and the clear, and check the page only after them; a click that came first and started an ending
+      // with its check in it would make goto fail with it. The clear's answer waits 500 ms, so that the ending still
+      // runs when the click's check ends.
+      const { b, tab, page, name } = await withSizeLeft(drive);
+      try {
+        fake.delays.set("Emulation.clearDeviceMetricsOverride", 500);
+        page.url = "https://off-the-list.example/"; // for example a redirect
+        let atRefusal: unknown = "the click did not refuse";
+        const { calls } = await callsOf(page, () => {
+          const go = () => tab.goto(fx.base + "/next");
+          const click = () => assert.rejects(tab.click("#b"), /off-the-list\.example is not on the allowlist/).then(() => { atRefusal = page.override; });
+          return Promise.all(first === "goto" ? [go(), click()] : [click(), go()]);
+        });
+        assert.deepEqual(atRefusal, { width: 800, height: 600, deviceScaleFactor: 1 }, "the click refused before the clear: it did not wait for goto's ending");
+        endedFirst(page, calls, (x) => x.method === "Page.navigate");
+        const m = methodsOf(calls), nav = m.indexOf("Page.navigate");
+        assert.deepEqual(m.slice(0, nav).filter((x) => x !== "Page.captureScreenshot" && x !== "Emulation.clearDeviceMetricsOverride"), ["Target.getTargetInfo"],
+          `before the navigation, only the click's check (on Chrome's browser side), goto's captures and its clear: ${JSON.stringify(m)}`);
+        assert.equal(m.filter((x) => x === "Emulation.clearDeviceMetricsOverride").length, 1, "one clear: goto's");
+        assert.equal(page.url, fx.base + "/next");
+        assert.equal(page.override, undefined);
+      } finally { fake.delays.delete("Emulation.clearDeviceMetricsOverride"); await b.disconnect(); }
+      await commands.close(mode(), { tab: name });
+    });
+
+  test(`${label}: a second Tab.goto on a tab kept attached, after the first one ended the size that a Tab.screenshot left set and left a page that went off the allowlist: it navigates at once, with no capture and no clear`, async () => {
+    // review-70 note 3 (ab-b84.23): the first ending sets sizeLeft false, so each later goto on that Tab navigates with
+    // no size logic (review-65c N1: each later goto refused there).
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      page.url = "https://off-the-list.example/"; // for example a redirect
+      const one = await callsOf(page, () => tab.goto(fx.base + "/next"));
+      endedFirst(page, one.calls, (x) => x.method === "Page.navigate");
+      page.url = "https://off-the-list.example/again"; // a redirect again
+      const { calls } = await callsOf(page, () => tab.goto(fx.base + "/"));
+      assert.equal(methodsOf(calls)[0], "Page.navigate", `nothing before the navigation: ${JSON.stringify(methodsOf(calls))}`);
+      assert.deepEqual(captures(calls), [], "no capture");
+      assert.ok(!methodsOf(calls).includes("Emulation.clearDeviceMetricsOverride"), "and no clear");
+      assert.equal(page.url, fx.base + "/");
+      assert.equal(page.override, undefined);
+      assert.equal(await tab.evaluate(() => `${innerWidth}x${innerHeight}`), "1280x800");
+    } finally { await b.disconnect(); }
+    await commands.close(mode(), { tab: name });
+  });
+
+  test(`${label}: Tab.endSizeLeft on a tab kept attached whose page went off the allowlist, after a Tab.screenshot with a size left the override set: it checks the page and refuses with no capture and no clear, also for a program that passes { leaving: true }; goto still leaves the page`, async () => {
+    // review-70 note 5 (ab-b84.23): endSizeLeft({ leaving: true }) was public (@internal): a library program could send
+    // those captures and the clear to a page off the allowlist, with no navigation after them. The ending with no page
+    // check is goto's own now.
+    const { b, tab, page, name } = await withSizeLeft(drive);
+    try {
+      page.url = "https://off-the-list.example/"; // for example a redirect
+      const asProgram = tab as unknown as { endSizeLeft(opts?: { leaving?: boolean }): Promise<void> };
+      for (const opts of [undefined, { leaving: true }]) {
+        const { calls } = await callsOf(page, () => assert.rejects(asProgram.endSizeLeft(opts), /off-the-list\.example is not on the allowlist/));
+        assert.deepEqual(methodsOf(calls), ["Target.getTargetInfo"], `${JSON.stringify(opts)}: the check alone, on Chrome's browser side; no capture and no clear`);
+      }
+      assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "still left set");
+      const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
+      endedFirst(page, calls, (x) => x.method === "Page.navigate");
+      assert.equal(page.url, fx.base + "/next");
+      assert.equal(page.override, undefined);
+    } finally { await b.disconnect(); }
     await commands.close(mode(), { tab: name });
   });
 

@@ -694,7 +694,9 @@ person's input**) and `log` (progress lines; default standard error).
     `waitFor`) sees the shot's size. Input, a shot and record first check the page, and refuse a page
     off the allowlist or out of the pinned window with no capture. `goto` does not check the page that
     it leaves (only the URL that it goes to), so it can still leave such a page: there only those
-    captures and the clear go before the navigation, and no page code.
+    captures and the clear go before the navigation, and no code of agent-browser's. The page's own
+    code can still run for them: a capture makes Chrome draw the page, so its `requestAnimationFrame`
+    callbacks run, and the clear can fire its `resize` handlers.
     In the default mode every page is `visible`, so a tab in front gets the capture
     in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
     mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of

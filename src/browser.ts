@@ -1019,12 +1019,23 @@ export class Tab {
    *
    * Each caller checks the page first (assertAllowed), outside the shared ending: a page off the allowlist or out of
    * the pinned window gets no capture for input, a shot or a record. goto alone ends it with no page check
-   * (`leaving`): it leaves the page at once, to a URL that it checked itself, and it must be able to leave a page
-   * that went off the list or out of the pinned window (review-65c N1: it refused there, and so did each later goto on
-   * that Tab). Then only the captures (their pictures dropped) and the clear go to that page, no page code.
+   * (endSizeLeftFor, `leaving`).
    * @internal
    */
-  async endSizeLeft(opts: { leaving?: boolean } = {}): Promise<void> {
+  endSizeLeft(): Promise<void> {
+    return this.endSizeLeftFor({ leaving: false });
+  }
+
+  /**
+   * endSizeLeft; for goto alone (`leaving`) with no page check: goto leaves the page at once, to a URL that it checked
+   * itself, and it must be able to leave a page that went off the list or out of the pinned window (review-65c N1: it
+   * refused there, and so did each later goto on that Tab). Then only the captures (their pictures dropped) and the
+   * clear go to that page, and no code of ours; the page's own code can still run for them (a capture makes Chrome draw
+   * the page, so its requestAnimationFrame callbacks run; the clear can fire its resize handlers; review-70 note 4).
+   * Private (review-70 note 5): as an option of the public endSizeLeft, a library program could send those captures
+   * and the clear to such a page, with no navigation after them.
+   */
+  private async endSizeLeftFor(opts: { leaving: boolean }): Promise<void> {
     if (!this.sizeLeft) return;
     if (!opts.leaving) await this.assertAllowed();
     // The ending that runs now, also when its clear is still on its way; else a new one, if the size is still left.
@@ -1188,8 +1199,8 @@ export class Tab {
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     assertNavigationUrl(url, this.browser.allow, usesAgentRelay(this.browser.settings));
     // With no check of the current page: goto must be able to leave a page that went off the list or out of the
-    // pinned window (endSizeLeft).
-    await this.endSizeLeft({ leaving: true });
+    // pinned window (endSizeLeftFor).
+    await this.endSizeLeftFor({ leaving: true });
     const loaded = this.browser.conn.waitForEvent("Page.loadEventFired", {
       sessionId: this.sessionId,
       timeoutMs: opts.timeoutMs ?? 45_000,
