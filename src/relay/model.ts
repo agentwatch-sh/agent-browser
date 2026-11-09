@@ -998,6 +998,8 @@ export class Model {
     } catch (e) { read = TIMEOUT; this.log(`relay: the activation of tab ${tab.id} failed: ${(e as Error).message}`); }
     if (read === TIMEOUT) {
       if (Date.now() - t0 >= ACTIVATE_MAX_MS) this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
+      // These explicit client raises still go after failed reads; keep the leaving page's catch-up mark.
+      if (kind !== "input" && this.front && this.front !== tab) this.front.covered = true;
       this.front = null; this.frontWindow = null;
       // The client's own call still goes, as with the paths off.
       if (kind === "bringToFront") void bring!().catch(() => {});
@@ -1791,6 +1793,7 @@ export class Model {
       const change = async () => {
         // Any client's window change can change which window is on top (a "normal" state brings a minimized one up):
         // the front page is unknown (C11). It can move or resize a window: no kept geometry stays.
+        if (Object.keys(update).length && this.front) this.front.covered = true;
         this.front = null; this.frontWindow = null;
         for (const t of this.tabs.values()) this.dropGeo(t);
         if (Object.keys(update).length) await this.bridge.call("windows.update", [p.windowId, update]);

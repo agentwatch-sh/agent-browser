@@ -249,7 +249,9 @@ answer after the step.
    Then open the front page's gate.
    The mark applies even when no X path plays or `at` is T. It precedes the raise because a failed
    or late answer can still have raised the window. A new tab that comes on top also marks the old front
-   page. The mark changes no last point. Each raise stays within one `ACTIVATE_MAX_MS`.
+   page. The mark changes no last point.
+   A raise with an unknown front page sets no cover mark.
+   Each raise stays within one `ACTIVATE_MAX_MS`.
    This includes `Target.activateTarget`'s `tabs.update` after failed reads in steps 1 and 2 (review-68 N3).
 8. The input that needed the activation goes (after a `Page.bringToFront`, the client sends its input
    after the answer). A press's catch-up (if any) then runs inside its chain step, from step 6's record.
@@ -614,8 +616,11 @@ catch-up over a scrollbar: ab-lead's decisions on points 1 and 5.
 The added case uses two clients and both pages, with no raw-move exclusions.
 Each page has 0 jumps, 0 unexplained changes and 0 zero-movement path moves.
 The case has 3 activation steps and 1 X path; both covers need no X path because `at` is T.
-The leaving page sees 62 moves in that X path, with a maximum movement of 31 px.
-The whole group measures 1010 timing pairs: error median 0 ms, p90 1 ms, maximum 1 ms.
+After review-83, the leaving page sees 58 moves in that X path, with a maximum movement of 30 px.
+The whole group measures 987 timing pairs: error median 0 ms, p90 1 ms, maximum 2 ms.
+The live check gives no fallback exemption to an `at`-is-T step. All 19 cases still pass.
+The jump and unexplained-change counts stay unchanged in every case.
+The 3 s held press and the moved window each retain one jump at an actual fallback activation.
 
 ## 8. The build split and the limits
 

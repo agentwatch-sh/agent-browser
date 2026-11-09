@@ -120,7 +120,8 @@ export async function pointerCases(o: PointerContext): Promise<void> {
       const c = pageCounts(log, tab, from, t1 + 300, acts.filter((s) => s.t >= from).map((s) => s.t - s.ms), ps.filter((p) => leaving.get(p) === tab), o2.own?.[tab] ?? []);
       // A jump or an unexplained change of a page in the second after its own step with no path: that activation is as
       // today (it enters at the X pointer; section 5), counted apart.
-      const asToday = countAsToday(log, tab, from, t1 + 300, all.filter((s) => s.tab === id && noPath(s) && /no path/.test(s.what)), o2.own?.[tab] ?? []);
+      // "No path needed (at is T)" is continuous; only an actual fallback gets the as-today exemption.
+      const asToday = countAsToday(log, tab, from, t1 + 300, all.filter((s) => s.tab === id && noPath(s) && /^no path \(/.test(s.what)), o2.own?.[tab] ?? []);
       per[tab] = { ...c, dt: undefined, asToday, activations: acts.filter((s) => s.t >= t0 && s.t <= t1 + 300).map((s) => `${s.kind} ${playedStep(s) ? "path" : s.what.replace(/^no path \((.*)\)$/, "no path: $1")} ${s.ms} ms`) };
       allDt.push(...c.dt);
       if (c.jumps - asToday.jumps > 0) fails.push(`${tab}: ${c.jumps - asToday.jumps} jumps`);
@@ -227,7 +228,7 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         await pa.mouse.move(900, 600); // A was covered with its own client point, not an X record.
         await pa.bringToFront(); // the path ends at (900, 600) in both pages
         await pb.mouse.move(900, 600); // B's point is its client's again
-        await pb.bringToFront(); // at is T; A is covered with its client point
+        await pb.bringToFront(); // at is T; A still has the X record from its path at (900, 600)
         await pb.mouse.click(900, 600); // B also has a client point
         await pa.bringToFront(); // at is T; B is covered with its client point
         await pb.mouse.move(100, 200);
