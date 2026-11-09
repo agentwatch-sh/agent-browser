@@ -1,0 +1,235 @@
+{
+  "port": 43007,
+  "roots": {
+    "sa": [
+      802948,
+      26357263
+    ],
+    "sb": [
+      802970,
+      26357284
+    ]
+  },
+  "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-<uuid>.scope",
+  "kernel": "6.12.115+deb13.1-cloud-amd64",
+  "node": "v26.12.0",
+  "anotherUser": {
+    "procOneFd": "EACCES",
+    "rule": "the uid column of the client's /proc/net/tcp line is the socket's owner (set at socket creation); a line with another uid is refused before any scan; another user's /proc/<pid>/fd cannot be read either (denied count in the scans)"
+  },
+  "cases": {
+    "full": {
+      "in-scope (full)": {
+        "admit": true,
+        "why": "every holder walks to a root of the scope",
+        "holders": 1,
+        "client": "8\r\nadmitted\r\n0"
+      },
+      "other session (full)": {
+        "admit": false,
+        "why": "a holder is not in scope sa: [\"sb\"]",
+        "holders": 1,
+        "client": "2c\r\nrefused: a holder is not in scope sa: [\"sb\"]\r\n0"
+      },
+      "no session (full)": {
+        "admit": false,
+        "why": "a holder is not in scope sa: [null]",
+        "holders": 1,
+        "client": "2c\r\nrefused: a holder is not in scope sa: [null]\r\n0"
+      },
+      "forked holders (full)": {
+        "admit": true,
+        "why": "every holder walks to a root of the scope",
+        "holders": 2,
+        "client": "8\r\nadmitted\r\n0"
+      }
+    },
+    "timing-full": {
+      "connections": 200,
+      "admitted": 200,
+      "lookup": {
+        "n": 200,
+        "p50": 3.52,
+        "p90": 3.979,
+        "p99": 5.236,
+        "max": 5.307
+      },
+      "scan": {
+        "n": 200,
+        "p50": 15.911,
+        "p90": 18.852,
+        "p99": 25.856,
+        "max": 28.209
+      },
+      "walk": {
+        "n": 200,
+        "p50": 0.13,
+        "p90": 0.193,
+        "p99": 0.264,
+        "max": 0.369
+      },
+      "again": {
+        "n": 200,
+        "p50": 3.531,
+        "p90": 4.069,
+        "p99": 5.669,
+        "max": 6.036
+      },
+      "total": {
+        "n": 200,
+        "p50": 23.099,
+        "p90": 26.769,
+        "p99": 34.32,
+        "max": 38.746
+      },
+      "tcpLines": {
+        "n": 200,
+        "p50": 139,
+        "p90": 219,
+        "p99": 237,
+        "max": 238
+      },
+      "pidsScanned": {
+        "n": 200,
+        "p50": 91,
+        "p90": 101,
+        "p99": 102,
+        "max": 102
+      },
+      "fdsScanned": {
+        "n": 200,
+        "p50": 1316,
+        "p90": 1399,
+        "p99": 1405,
+        "max": 1412
+      },
+      "denied": {
+        "n": 200,
+        "p50": 393,
+        "p90": 394,
+        "p99": 398,
+        "max": 399
+      }
+    },
+    "cgroup": {
+      "in-scope (cgroup)": {
+        "admit": true,
+        "why": "every holder walks to a root of the scope",
+        "holders": 1,
+        "client": "8\r\nadmitted\r\n0"
+      },
+      "other session (cgroup)": {
+        "admit": false,
+        "why": "a holder is not in scope sa: [\"sb\"]",
+        "holders": 1,
+        "client": "2c\r\nrefused: a holder is not in scope sa: [\"sb\"]\r\n0"
+      },
+      "no session (cgroup)": {
+        "admit": false,
+        "why": "a holder is not in scope sa: [null]",
+        "holders": 1,
+        "client": "2c\r\nrefused: a holder is not in scope sa: [null]\r\n0"
+      },
+      "forked holders (cgroup)": {
+        "admit": true,
+        "why": "every holder walks to a root of the scope",
+        "holders": 2,
+        "client": "8\r\nadmitted\r\n0"
+      }
+    },
+    "timing-cgroup": {
+      "connections": 200,
+      "admitted": 200,
+      "lookup": {
+        "n": 200,
+        "p50": 4.131,
+        "p90": 4.79,
+        "p99": 6.763,
+        "max": 7.039
+      },
+      "scan": {
+        "n": 200,
+        "p50": 2.067,
+        "p90": 2.49,
+        "p99": 3.613,
+        "max": 3.698
+      },
+      "walk": {
+        "n": 200,
+        "p50": 0.111,
+        "p90": 0.166,
+        "p99": 0.457,
+        "max": 0.522
+      },
+      "again": {
+        "n": 200,
+        "p50": 4.073,
+        "p90": 4.611,
+        "p99": 6.782,
+        "max": 6.964
+      },
+      "total": {
+        "n": 200,
+        "p50": 10.448,
+        "p90": 11.674,
+        "p99": 17.031,
+        "max": 17.358
+      },
+      "tcpLines": {
+        "n": 200,
+        "p50": 343,
+        "p90": 424,
+        "p99": 442,
+        "max": 443
+      },
+      "pidsScanned": {
+        "n": 200,
+        "p50": 23,
+        "p90": 23,
+        "p99": 23,
+        "max": 23
+      },
+      "fdsScanned": {
+        "n": 200,
+        "p50": 263,
+        "p90": 263,
+        "p99": 263,
+        "max": 263
+      },
+      "denied": {
+        "n": 200,
+        "p50": 0,
+        "p90": 0,
+        "p99": 0,
+        "max": 0
+      }
+    },
+    "exit at once (50 tries)": {
+      "atAccept": {
+        "no holder found: the client has gone": 50
+      },
+      "fiftyMsLater": {
+        "no line: the client's socket is gone": 50
+      }
+    },
+    "unix SO_PEERCRED": {
+      "form": "pidfd",
+      "connections": 200,
+      "admitted": 200,
+      "peercred": {
+        "n": 200,
+        "p50": 0.022,
+        "p90": 0.048,
+        "p99": 0.102,
+        "max": 0.139
+      },
+      "walk": {
+        "n": 200,
+        "p50": 0.103,
+        "p90": 0.177,
+        "p99": 37.782,
+        "max": 39.947
+      }
+    }
+  }
+}

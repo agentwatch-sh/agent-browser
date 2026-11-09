@@ -1,0 +1,62 @@
+{
+  "chromium": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)",
+  "node": "v26.12.0",
+  "mode": "--headless=new",
+  "extensionId": "pmhjncjndkgiodlddccpmhfbhmpoigoh",
+  "firstLinkMs": 509.1,
+  "firstHelloMs": 510.9,
+  "shim": {
+    "pid": 913631,
+    "parentIsChrome": true,
+    "parentOnProfile": true,
+    "cmd": [
+      "/usr/bin/node",
+      "<probe>/m1-host.mjs"
+    ]
+  },
+  "shimRssKiB": 50648,
+  "rttSmall": {
+    "n": 1000,
+    "p50": 0.792,
+    "p90": 1.05,
+    "p99": 1.974,
+    "max": 4.322
+  },
+  "rtt64KiB": {
+    "n": 200,
+    "p50": 2.661,
+    "p90": 3.315,
+    "p99": 5.488,
+    "max": 5.891
+  },
+  "burst100": {
+    "wallMs": 14,
+    "rtt": {
+      "n": 100,
+      "p50": 11.235,
+      "p90": 12.791,
+      "p99": 13.11,
+      "max": 13.11
+    }
+  },
+  "strangerRefused": {
+    "pid": 913351,
+    "ppid": 913350,
+    "why": "its parent is not the service's Chrome"
+  },
+  "relink": {
+    "ms": 1064.8,
+    "newShim": true,
+    "newManifestUsed": true,
+    "parentIsChrome": true,
+    "chromePidSame": true
+  },
+  "rttAfterRelink": {
+    "n": 200,
+    "p50": 0.815,
+    "p90": 1.073,
+    "p99": 1.413,
+    "max": 2.516
+  },
+  "ok": true
+}
