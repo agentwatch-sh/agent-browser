@@ -330,7 +330,7 @@ What a provider flow needs in the agent browser:
 - **The frame's silent renew** needs both the provider's cookie and a third-party cookie that Chromium sends.
   The agent unit on taylor runs `/usr/bin/chromium` today (agentwatch `daemon/browser/unit.py`,
   `DEFAULT_CHROME`), which blocks them by default. The unit moves to Google Chrome stable in agentwatch's
-  stage 4 step C; that Chrome's default is not measured yet (aw-lead checks it in step C's live run). Google
+  stage 4 step C; that Chrome's default is not measured yet (the live run in step C checks it). Google
   Chrome stable may allow third-party cookies by default; then the frame's silent renew works there with no
   change. The receiver has the `contentSettings` permission, so it can allow the provider's cookies in frames
   under the list's sites only (the `*.` rows). Without that, a site whose script falls back to a top-level

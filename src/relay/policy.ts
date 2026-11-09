@@ -4,6 +4,16 @@
 // Chrome.
 
 import { BridgeError, REQUEST_TOO_LARGE } from "./bridge.ts";
+import { normalizeEntry, SCOPE } from "./scopes.ts";
+
+/** C10 daemon.blocked: never send a host or scope that the carrier cannot accept. */
+export function blockedArgsFit(args: unknown): args is [{ host: string; scope: string | null }] {
+  if (!Array.isArray(args) || args.length !== 1) return false;
+  const b = args[0];
+  return b !== null && typeof b === "object" && !Array.isArray(b) && Object.keys(b).length === 2
+    && Object.hasOwn(b, "host") && Object.hasOwn(b, "scope") && typeof b.host === "string"
+    && normalizeEntry(b.host) === b.host && (b.scope === null || (typeof b.scope === "string" && SCOPE.test(b.scope)));
+}
 
 /** The one browser context: every target names it, also in Chrome's answers and events that the model passes on. */
 export const DEFAULT_CONTEXT = "agentwatch-default";
@@ -23,7 +33,8 @@ export const TEXT = {
   generic: (method: string) => `${NA}${method}.`,
   cookies: (method: string) => `${NA}cookies (${method}). The browser sends its cookies to sites itself. Programs cannot read, set or remove them.`,
   scheme: (scheme: string, method: string) => `${NA}${scheme} URLs (${method}). Agent mode opens web pages only.`,
-  notAllowed: (host: string) => `Not allowed: ${host} is not on the allowlist`,
+  notAllowed: (host: string, prompt = false) => `Not allowed: ${host} is not on the allowlist${prompt
+    ? `. The operator has a Browser permission prompt in the agentwatch web viewer. Tell the operator; after the notice that the operator added ${host}, start the step again.` : ""}`,
   permission: (name: string) => `${NA}the permission ${name}`,
   relayWorld: (method: string) => `${NA}the relay's own isolated world (${method} names its execution context, or an object or a call frame in it). Use the page's main world or a world of your own (Page.createIsolatedWorld).`,
 };

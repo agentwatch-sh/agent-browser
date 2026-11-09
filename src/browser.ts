@@ -10,10 +10,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, statSync, rmSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
-import { assertAllowedUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
+import { assertAllowedUrl, isAllowedUrl, loadAllowlist, usesAgentRelay, validateAllowlist } from "./allowlist.ts";
 import { launchAgentChrome } from "./agent.ts";
 import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
-import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
+import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, safeHost, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, macWindows, personalUserDataDir, recordDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
 import { withFileLock } from "./lock.ts";
@@ -375,7 +375,7 @@ export class AgentBrowser {
    * without stealing focus.
    */
   async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
-    assertAllowedUrl(url, this.allow);
+    if (!usesAgentRelay(this.settings)) assertAllowedUrl(url, this.allow);
     this.noteDisplay();
     const win = this.pinnedWindow();
     const agent = this.mode === "agent", windows = this.windows;
@@ -610,16 +610,33 @@ function notEmpty(path: string, method: string): void {
   if (path === "") throw new UsageError(`${method}: the path is empty`);
 }
 
+/** Transfers never make a navigation prompt; name the host and the operator's list addition instead. */
+function transferRefusal(url: string, s: Settings, message?: string): NotAllowedError {
+  const origin = url.startsWith("blob:") ? new URL(url).origin : url;
+  const host = safeHost(origin);
+  const e = new NotAllowedError(usesAgentRelay(s) ? origin : url, message);
+  if (usesAgentRelay(s)) {
+    if (message) e.message = message.replace(url, host);
+    e.message += `. Ask the operator to add ${host} to your browser list.`;
+  }
+  return e;
+}
+
+/** Transfers make no main-frame block event, so they must not promise a prompt. */
+function assertTransferUrl(url: string, allow: readonly string[], s: Settings): void {
+  if (!isAllowedUrl(url, allow)) throw transferRefusal(url, s);
+}
+
 /** A captured URL is checked once, at its start, against this connection's allowlist. */
-function assertDownloadUrl(url: string, allow: readonly string[]): void {
+function assertDownloadUrl(url: string, allow: readonly string[], s: Settings): void {
   const parsed = new URL(url);
   if (parsed.protocol === "data:") return;
   if (parsed.protocol === "blob:") {
     if (/^https?:/.test(parsed.origin) && !isAllowedUrl(parsed.origin, allow))
-      throw new NotAllowedError(url, `refusing download from ${url}: blob origin is not on the allowlist`);
+      throw transferRefusal(url, s, `refusing download from ${url}: blob origin is not on the allowlist`);
     return;
   }
-  if (!isAllowedUrl(url, allow)) throw new NotAllowedError(url, `refusing download from ${url}: URL is not on the allowlist`);
+  if (!isAllowedUrl(url, allow)) throw transferRefusal(url, s, `refusing download from ${url}: URL is not on the allowlist`);
 }
 
 /** An exact page size for a screenshot or a recording: CSS pixels and a device pixel ratio. */
@@ -1167,7 +1184,7 @@ export class Tab {
   }
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    assertAllowedUrl(url, this.browser.allow);
+    if (!usesAgentRelay(this.browser.settings)) assertAllowedUrl(url, this.browser.allow);
     // With no check of the current page: goto must be able to leave a page that went off the list or out of the
     // pinned window (endSizeLeft).
     await this.endSizeLeft({ leaving: true });
@@ -1617,7 +1634,7 @@ export class Tab {
    */
   async fetchToFile(url: string, path: string, chunkBytes = 8 * 1024 * 1024): Promise<{ bytes: number; contentType: string }> {
     notEmpty(path, "fetchToFile");
-    assertAllowedUrl(url, this.browser.allow);
+    assertTransferUrl(url, this.browser.allow, this.browser.settings);
     await this.assertAllowed();
     const key = `__agent_browser_${Math.random().toString(36).slice(2)}`;
     const head = await this.evaluate(async (u: string, k: string) => {
@@ -1655,7 +1672,7 @@ export class Tab {
    */
   async download(url: string, path: string): Promise<{ bytes: number; status: number }> {
     notEmpty(path, "download");
-    assertAllowedUrl(url, this.browser.allow);
+    assertTransferUrl(url, this.browser.allow, this.browser.settings);
     await this.assertAllowed();
     const { frameTree } = await this.send("Page.getFrameTree");
     const { resource } = await this.send("Network.loadNetworkResource", {
@@ -1717,7 +1734,7 @@ export class Tab {
             if (started || p.frameId !== frame) return;
             started = p;
             try {
-              assertDownloadUrl(p.url, this.browser.allow);
+              assertDownloadUrl(p.url, this.browser.allow, this.browser.settings);
             } catch (e) { reject(e); }
           });
           offProgress = conn.on("Browser.downloadProgress", (p) => {

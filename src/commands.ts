@@ -8,7 +8,7 @@ import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from ".
 import { listAgentChromes, type AgentChrome } from "./chromes.ts";
 import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
-import { isAllowedUrl } from "./allowlist.ts";
+import { isAllowedUrl, usesAgentRelay } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, operatorSignIn, redirectError } from "./errors.ts";
 import { macWindows, resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
@@ -437,7 +437,7 @@ export const commands = {
   async record(o: BrowserOptions | Settings, p: { tab: string; out: string; script?: string; setup?: string; size?: string; fps?: number; scale?: number;
     noCursor?: boolean; settle?: number; seed?: number; ffmpeg?: string; anyScope?: boolean }): Promise<RecordResult> {
     const s = resolveOptions(o);
-    const plan = planRecording(p, allowlistOf(s));
+    const plan = planRecording(p, allowlistOf(s), usesAgentRelay(s));
     return onTab(s, p, async (tab, info) => {
       // In a window of its own (Linux), the take is an input command: the window comes forward, and the take (not the
       // encode) holds the input lock.
