@@ -76,10 +76,11 @@ test("visibleSpans: window drive includes the visible span that began before the
 
 test("failures: window pages stay visible during the drive, also away from the front window", () => {
   const windowRun = run({ windowDrive: true,
-    drives: [drive("b", { visibility: "visible", expected: "visible" })],
+    drives: [drive("b", { visibility: "visible", expected: "visible", throughout: "visible" })],
     timers: [timer("b", "visible", 50)], idles: [idle("b", "visible")] });
   assert.deepEqual(failures(windowRun), []);
-  assert.match(failures({ ...windowRun, drives: [drive("b", { visibility: "visible", expected: "visible", during: "hidden" })] }).join(), /during its drive/);
+  assert.match(failures({ ...windowRun, drives: [drive("b", { visibility: "visible", expected: "visible", during: "hidden", throughout: "visible" })] }).join(), /during its drive/);
+  assert.match(failures({ ...windowRun, drives: [drive("b", { visibility: "visible", expected: "visible", throughout: "visible, hidden, visible" })] }).join(), /throughout its drive/);
   assert.match(failures({ ...windowRun, timers: [timer("b", "visible", 1000)] }).join(), /expected at most 100 ms/);
   assert.match(failures({ ...windowRun, idles: [idle("b", "visible", { frames: 0 })] }).join(), /drew no animation frame/);
 });

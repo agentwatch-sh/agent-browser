@@ -14,6 +14,9 @@
 // reports performance.timeOrigin as documentId. Only the pre-command document's hide before a load
 // with a different documentId counts as navigationHides. The new document must load visible and stay
 // visible. Other visibilitychange events fail this mode. The summary reports both navigation fields.
+// The page's pagehide listener sets unloading before it reports the unload visibilitychange. Only a
+// hide with unloading=true can count as navigationHides. Hidden events between commands, including
+// the pause after the final command, fail the window drive too.
 //
 // Without either drive flag the check runs the default tab mode (focus emulation while a command
 // is attached: the page is visible for the command); with it, the hiddenDrive option (the page stays
@@ -43,6 +46,9 @@
 //   exit 0  every command worked. With --hidden-drive also: a command on a hidden tab left the page
 //           hidden (no visible time and no visibilitychange), except record (its span is reported), and
 //           a hidden page drew no frame after a command.
+//           With --window-drive, pages stay visible during and between commands, and draw frames
+//           afterward. Only goto's identified old-document hide marked by pagehide is allowed;
+//           the new document loads visible and stays visible.
 //   exit 1  a failure in the summary, or an error with a stack trace and no summary.
 //   exit 2  nothing was driven: a usage error, not Linux, a display in use, Xvfb did not start, or
 //           agent-browser could not start its Chrome or connect to it.
@@ -80,7 +86,7 @@ import { commands } from "../../../src/commands.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, type BrowserOptions } from "../../../src/options.ts";
 import { stopProxy } from "../../../src/proxy.ts";
 import { findFfmpeg, pngPixels } from "../../../src/record.ts";
-import { failures, navigationVisibility, visibleMs, visibleSpans, type Measured, type PageEvent } from "./spans.ts";
+import { failures, navigationVisibility, visibleMs, visibleSpans, windowIdleFailures, type Measured, type PageEvent } from "./spans.ts";
 import { driveConflict } from "./rules.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
 
@@ -154,7 +160,9 @@ const PAGE = (name: string) => `<!doctype html><title>tab ${name}</title>
 <div id="box"></div><input id="f" autocomplete="off"><button id="b">Click</button><p id="s">clicks: 0</p>
 <script>
 const colours = ${JSON.stringify(COLOURS.map((c) => `rgb(${c})`))};
-const send = (ev, extra) => navigator.sendBeacon("/log", JSON.stringify({ t: Date.now(), tab: ${JSON.stringify(name)}, documentId: performance.timeOrigin, ev, vis: document.visibilityState, focus: document.hasFocus(), ...extra }));
+let unloading = false;
+const send = (ev, extra) => navigator.sendBeacon("/log", JSON.stringify({ t: Date.now(), tab: ${JSON.stringify(name)}, documentId: performance.timeOrigin, unloading, ev, vis: document.visibilityState, focus: document.hasFocus(), ...extra }));
+addEventListener("pagehide", () => { unloading = true; send("pagehide"); });
 document.addEventListener("visibilitychange", () => send("visibilitychange"));
 addEventListener("focus", () => send("focus"));
 addEventListener("blur", () => send("blur"));
@@ -220,6 +228,7 @@ async function measure(command: string, tab: string, front: string, fn: () => Pr
   const during = events(tab, t0, t1 + 200);
   const framesAfter = log.filter((e) => e.tab === tab && e.ev === "frames").flatMap((e) => e.list ?? []).filter((t) => t >= t1 + 300 && t <= t1 + 1300).length;
   run.push({ command, tab, front, ms: t1 - t0, ok: detail === undefined, ...(detail === undefined ? {} : { detail }),
+    ...(windowDrive ? { from: t0, to: t1 + 200 } : {}),
     visibleMs: visibleMs(spans, t0, t1 + 200), visibilityChanges: during.filter((e) => e.ev === "visibilitychange").length,
     focusEvents: during.filter((e) => e.ev === "focus" || e.ev === "blur").map((e) => `${e.ev}@${e.t - t0}`), framesAfter });
   if (windowDrive && command === "goto") {
@@ -292,10 +301,10 @@ await sleep(1000);
 await click("a");
 await shot("a", "a-front");
 
-const failed = failures(run, hiddenDrive, windowDrive);
+const failed = [...failures(run, hiddenDrive, windowDrive), ...(windowDrive ? windowIdleFailures(log, run) : [])];
 const summary = {
   ok: failed.length === 0, chrome: product, flags: AGENT_ARGS, hiddenDrive, windowDrive, ffmpeg: !!ffmpeg,
-  commands: run.map((m) => ({ command: m.command, tab: m.tab, front: m.front, ok: m.ok, ms: m.ms, visibleMs: m.visibleMs, visibilityChanges: m.visibilityChanges, focusEvents: m.focusEvents, framesAfter: m.framesAfter, ...(windowDrive && m.command === "goto" ? { navigationHides: m.navigationHides, navigationStartsVisible: m.navigationStartsVisible } : {}), ...(m.detail ? { detail: m.detail } : {}) })),
+  commands: run.map((m) => ({ command: m.command, tab: m.tab, front: m.front, ok: m.ok, ms: m.ms, visibleMs: m.visibleMs, visibilityChanges: m.visibilityChanges, focusEvents: m.focusEvents, framesAfter: m.framesAfter, ...(windowDrive ? { from: m.from, to: m.to } : {}), ...(windowDrive && m.command === "goto" ? { navigationHides: m.navigationHides, navigationStartsVisible: m.navigationStartsVisible } : {}), ...(m.detail ? { detail: m.detail } : {}) })),
   failures: failed, run: RUN,
 };
 writeFileSync(join(RUN, "summary.json"), JSON.stringify({ ...summary, log }, null, 2) + "\n");

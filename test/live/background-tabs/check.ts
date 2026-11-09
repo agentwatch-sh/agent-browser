@@ -65,6 +65,8 @@
 //           frame and a visible one drew some, both tabs were listed, a visible tab's timer ran at full
 //           rate (median at most 100 ms), and a hidden tab's timer was throttled (median at least
 //           500 ms; with --before, at most 100 ms). The recordings must not fail.
+//           With --window-drive, every page stays visible throughout each drive and afterward,
+//           draws frames, and runs its timer at full rate, in every window.
 //   exit 1  a failure in the summary, or an error with a stack trace and no summary.
 //   exit 2  nothing was driven, and stderr says why in one line: a usage error, not Linux, a display in
 //           use, Xvfb did not start, or agent-browser could not start its Chrome or connect to it.
@@ -292,7 +294,8 @@ async function drive(phase: string, front: string, tab: string, only?: readonly 
     return problem;
   });
   const end = Date.now(), logs = await idle(phase, front, tab);
-  drives.push({ phase, tab, front, visibility, during, visibleMs: visibleSpans(logs[tab], t0, end, mode.windowDrive), expected: expect(tab, front), steps });
+  drives.push({ phase, tab, front, visibility, during, ...(mode.windowDrive ? { throughout: visibilityIn(logs[tab], t0, end) } : {}),
+    visibleMs: visibleSpans(logs[tab], t0, end, mode.windowDrive), expected: expect(tab, front), steps });
 }
 
 /**
@@ -363,7 +366,7 @@ const summary = {
   ok: failed.length === 0, chrome: product, launch: "agent-browser's own (launchAgentChrome, the proxy, approve: xdotool)", launchMs,
   flags: [...AGENT_ARGS, ...(mode.before ? TIMER_FLAGS : [])], hiddenDrive: mode.hiddenDrive, windowDrive: mode.windowDrive, tabs: listed,
   timers: timers.map((t) => ({ phase: t.phase, tab: t.tab, front: t.front, visibility: t.visibility, ...t.stats, windowMs: mode.hiddenMs, askedMs: TIMER_MS })),
-  drives: drives.map((d) => ({ phase: d.phase, tab: d.tab, front: d.front, visibility: d.visibility, during: d.during, visibleMs: d.visibleMs, ok: d.steps.every((x) => x.ok), ms: ms(d) })),
+  drives: drives.map((d) => ({ phase: d.phase, tab: d.tab, front: d.front, visibility: d.visibility, during: d.during, ...(mode.windowDrive ? { throughout: d.throughout } : {}), visibleMs: d.visibleMs, ok: d.steps.every((x) => x.ok), ms: ms(d) })),
   idles: idles.map((i) => `${i.phase} after ${i.driven}: ${i.tab} ${i.visibility}, ${i.frames} frames`),
   recordings, shots, failures: failed, run: RUN,
 };

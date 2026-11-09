@@ -3,7 +3,7 @@
 // `npm test`.
 
 /** One event that a probe page reported (navigator.sendBeacon): its time (Date.now()), its tab, what. */
-export type PageEvent = { t: number; tab: string; ev: string; vis: string; focus: boolean; documentId?: number };
+export type PageEvent = { t: number; tab: string; ev: string; vis: string; focus: boolean; documentId?: number; unloading?: boolean };
 
 /** A span in which the page reported "visible": from its visibilitychange to "visible" to the next one to "hidden" (`to` null: still visible). */
 export type Span = { from: number; to: number | null };
@@ -32,14 +32,14 @@ export function visibleMs(spans: readonly Span[], from: number, to: number): num
 
 /** Time origins identify documents: only the pre-command document's hide before a new visible load is an unload. */
 export function navigationVisibility(events: readonly PageEvent[], tab: string, previousDocument: number | undefined): { hides: number; startsVisible: boolean } {
-  const changes = events.filter((e) => e.tab === tab && (e.ev === "visibilitychange" || e.ev === "load"));
+  const changes = events.filter((e) => e.tab === tab && (e.ev === "visibilitychange" || e.ev === "load")).sort((a, b) => a.t - b.t);
   if (previousDocument === undefined) return { hides: 0, startsVisible: false };
   const loads = changes.filter((e) => e.ev === "load");
   const newVisibleLoad = (e: PageEvent | undefined) => e?.ev === "load" && e.vis === "visible"
     && e.documentId !== undefined && e.documentId !== previousDocument;
   return {
     hides: changes.filter((e, i) => e.ev === "visibilitychange" && e.vis === "hidden"
-      && e.documentId === previousDocument && newVisibleLoad(changes[i + 1])).length,
+      && e.unloading === true && e.documentId === previousDocument && newVisibleLoad(changes[i + 1])).length,
     startsVisible: loads.length > 0 && loads.every(newVisibleLoad),
   };
 }
@@ -54,7 +54,16 @@ export type Measured = {
   visibleMs: number; visibilityChanges: number; focusEvents: string[]; framesAfter: number;
   navigationHides?: number;
   navigationStartsVisible?: boolean;
+  from?: number;
+  to?: number;
 };
+
+/** The command rules cover their intervals; a hidden page outside those intervals always fails the window drive. */
+export function windowIdleFailures(log: readonly PageEvent[], run: readonly Measured[]): string[] {
+  return log.filter((e) => (e.ev === "visibilitychange" || e.ev === "load") && e.vis === "hidden"
+    && !run.some((m) => m.tab === e.tab && m.from !== undefined && m.to !== undefined && e.t >= m.from && e.t <= m.to))
+    .map((e) => `tab ${e.tab}: the window page reported hidden outside a command at ${e.t}`);
+}
 
 /**
  * Why the run failed, or nothing. Every command must work. With `hiddenDrive` (agent-browser's option of

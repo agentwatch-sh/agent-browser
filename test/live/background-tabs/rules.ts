@@ -145,7 +145,7 @@ export type Step = { step: StepName; ok: boolean; ms: number; detail?: string };
  * visible spans during the drive (visibleSpans; for a hidden tab, one for each command). Both are
  * information only.
  */
-export type Drive = { phase: string; tab: string; front: string; visibility: string; during: string; visibleMs?: number[]; expected: "visible" | "hidden"; steps: Step[] };
+export type Drive = { phase: string; tab: string; front: string; visibility: string; during: string; throughout?: string; visibleMs?: number[]; expected: "visible" | "hidden"; steps: Step[] };
 /** One tab's timer over a window with no command; `visibility` is the page's own (visibilityIn). */
 export type Timer = { phase: string; tab: string; front: string; visibility: string; expected: "visible" | "hidden"; stats: TimerStats };
 /**
@@ -181,6 +181,7 @@ export function failures(run: Run): string[] {
     for (const s of d.steps) if (!s.ok) out.push(`${d.phase}: tab ${d.tab} (front: ${d.front}) ${s.step}: ${s.detail ?? "failed"}`);
     if (d.visibility !== d.expected) out.push(`${d.phase}: tab ${d.tab} was ${d.visibility} before its drive, expected ${d.expected} (front: ${d.front})`);
     if (run.windowDrive && d.during !== "visible") out.push(`${d.phase}: tab ${d.tab} was ${d.during} during its drive, expected visible (its own window)`);
+    if (run.windowDrive && d.throughout !== "visible") out.push(`${d.phase}: tab ${d.tab} was ${d.throughout} throughout its drive, expected visible (its own window)`);
   }
   for (const t of run.timers) {
     const where = `${t.phase}: tab ${t.tab}'s timer (front: ${t.front})`;
