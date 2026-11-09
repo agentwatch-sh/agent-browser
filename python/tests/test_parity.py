@@ -51,7 +51,15 @@ class ParityTest(unittest.TestCase):
             assert method is not None
             params = inspect.signature(method).parameters
             names = [p for p in params if p != "self"]
-            self.assertEqual(names, [snake(p.name) for p in spec.params], f"{spec.name}: parameters differ from the CLI's")
+            expected = [snake(p.name) for p in spec.params]
+            # Preserve the CLI spec's order for every argument Python callers can pass by position.
+            # Only keyword-only arguments can have a different order.
+            self.assertEqual(set(names), set(expected), f"{spec.name}: parameters differ from the CLI's")
+            positional = [name for name in names if params[name].kind in
+                          (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+            expected_positional = [name for name in expected if name in positional]
+            self.assertEqual(positional, expected_positional,
+                             f"{spec.name}: positional parameters differ from the CLI's")
             for p in spec.params:
                 has_default = params[snake(p.name)].default is not inspect.Parameter.empty
                 self.assertEqual(not has_default, p.required, f"{spec.name}.{p.name}: required must match")

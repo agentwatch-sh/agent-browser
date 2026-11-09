@@ -95,7 +95,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 `chromeBin`, `personalUserDataDir`) must be absolute; a relative one is a usage error. Their CLI
 flags (`--state-dir`, `--allowlist`, `--profile`, `--socket`, `--chrome-bin`,
 `--personal-user-data-dir`) also take a relative path, and the CLI resolves it from its current
-folder. The path of `shot`, `fetch` and `download`, and `record`'s `--out`, `--script` and `--setup`,
+folder. The path of `shot`, `fetch` and `download`, `click`'s `--download` directory, and `record`'s `--out`, `--script` and `--setup`,
 resolve from the current folder in the CLI and in the library alike. `--ffmpeg` is the exception: it
 must be absolute. An empty path is a usage error, never the current folder: in the Node options, the
 CLI flags, the command paths and the `Tab` methods that take a path. In the Python constructor an
@@ -1579,7 +1579,7 @@ TypeScript consumers get types from `src/index.ts` (the `types` condition in `pa
 result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)`,
 `status(o, { notify })`, `connect(o, { endpoint })`, `stop(o)`, `window(o, { pin, unpin, anyScope })`,
 `tabs(o, { anyScope })`, `open(o, { url, name, tab })`, `goto(o, { tab, url })`, `outline(o, { tab, all })`,
-`click(o, { tab, target, text })`, `hover(o, { tab, target })`, `type(o, { tab, text, into })`,
+`click(o, { tab, target, text, download, timeout })`, `hover(o, { tab, target })`, `type(o, { tab, text, into })`,
 `press(o, { tab, key })`, `text(o, { tab, selector })`, `eval(o, { tab, expression })`,
 `shot(o, { tab, path, full, size, scale })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
 `close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`,
@@ -1608,7 +1608,7 @@ Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
 `clickText(text, { within })`, `clickAt(x, y)`, `hover(selector)`, `type(text, selector?)`,
 `press(key)`, `setFiles(selector, paths)`, `text(selector?)`, `screenshot(path, { fullPage, viewport })`,
-`fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir)` (a download that a
+`fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir, timeoutMs=120000)` (a download that a
 click starts), `expectResponse(match, action)` (capture an API response body; a CORS preflight's
 response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, transform, action)`
 (rewrite a request body in flight; a CORS preflight is continued untouched), `close()`. Property
@@ -1687,7 +1687,7 @@ opened under a tab scope.
 | `open <url> [--name N] [--tab]` | `tab` TabRef, `window` int\|null |
 | `goto <tab> <url>` | `tab` TabRef (live URL and title) |
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
-| `click <tab> <selector\|#N>` or `click <tab> --text LABEL` | `tab`, `target` string\|null, `text` string\|null |
+| `click <tab> <selector\|#N>` or `click <tab> --text LABEL`, with `[--download DIR] [--timeout MS]` for either form | `tab`, `target` string\|null, `text` string\|null; with `--download`, also `download: {path, suggestedFilename, url, bytes}` |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
 | `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). Into an input or a textarea it types inserted text, and key events when the field ignores that. Into an editable element (an app's own editor, such as the Google Sheets cell editor) it types one key event per character at once: inserted text can reach that DOM and never reach the app. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. A tab or a newline in the text is a Tab or an Enter key: only the text before the first one is checked, so `type sheet $'a\tb\tc\n'` fills a row of cells in a spreadsheet without the clipboard. |
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12; a function key goes to the page only, never to Chrome's own shortcuts) |
@@ -1707,6 +1707,43 @@ opened under a tab scope.
 must be allowlisted too. A media CDN on another host (for example Suno's `cdn1.suno.ai`) needs its
 own entry in the consumer's allowlist file. `fetch` follows the page's same-origin and CORS rules;
 `download` uses Chrome's network stack.
+
+### Downloads that a click starts
+
+Use `click TAB SELECTOR --download DIR` or `click TAB --text LABEL --download DIR`.
+The option uses the same trusted click and the same allowlist checks as a normal click.
+This option keeps the command list small.
+The CLI resolves `DIR` from its current folder, like the path of `shot`.
+An empty directory is a usage error.
+
+```sh
+agent-browser click exports --text 'Export to CSV' --download /tmp/exports --timeout 120000 --json
+# {"ok":true,"command":"click",...,"download":{"path":"/tmp/exports/export.csv","suggestedFilename":"export.csv","url":"blob:https://example.org/...","bytes":1234}}
+```
+
+The JSON result includes the saved path, Chrome's suggested filename, the download URL, and the file size in bytes.
+The text result prints these four fields too.
+A later download keeps an existing file and uses a unique filename.
+Without `--download`, the click result stays the same.
+
+`--timeout MS` takes a positive integer in milliseconds and requires `--download`.
+The default is 120000 ms.
+The timeout starts before the click, after the input lock becomes available.
+The capture lets the click finish before it restores Chrome's download behavior.
+The click retains its input timing and input limits.
+A timeout removes this capture's unfinished output.
+The error explains that Chrome can wait for a person to approve a dangerous file.
+Agent mode never approves these files.
+The relay can also cancel a file that Chrome marks as dangerous.
+
+The capture checks the live page before it changes download behavior or starts a capture or size clear.
+It accepts `blob:` and `data:` download URLs from that checked page.
+It refuses an off-list HTTP(S) download URL, reports that URL in the error, and removes its output.
+Chrome has already fetched the URL with the profile's cookies by then.
+This refusal stops the saved file, not the request.
+The operator must add a download host to the allowlist if the export uses another host.
+The capture uses `Tab.expectDownload` in both modes.
+In agent mode, the relay copies the completed file from Chrome's download folder to the caller's directory.
 
 ## Python adapter (`python/agent_browser`)
 
@@ -1754,7 +1791,7 @@ dataclass:
 | `open(url, name=None, tab=False)` | `OpenResult(tab: TabRef, window)` |
 | `goto(tab, url)` | `GotoResult(tab)` |
 | `outline(tab, all=False)` | `OutlineResult(tab, elements: list[OutlineElement(index, role, type, label, href)])` |
-| `click(tab, target=None, text=None)` | `ClickResult(tab, target, text)` |
+| `click(tab, target=None, text=None, *, download=None, timeout=None)` | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
 | `hover(tab, target)` | `HoverResult(tab, target)` |
 | `type(tab, text, into=None)` | `TypeResult(tab, into, length)`; the text goes on stdin |
 | `press(tab, key)` | `PressResult(tab, key)` |
@@ -1770,7 +1807,9 @@ dataclass:
 | `front()` | `FrontResult(chrome_pid, profile_dir, state_dir, window_name, via)`: macOS only (elsewhere `UsageError`); for a person only |
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
-Each method that takes a `tab`, and `window`, also takes `any_scope=False` as its last argument (see
+`click` keeps `any_scope` in its existing fourth positional slot. Its new `download` and `timeout` options are keyword-only.
+
+Each method that takes a `tab`, and `window`, also takes `any_scope=False` (see
 **Tab scopes**). `TabRef(id, target_id, name, url, title, scope)`; `scope` is None for a tab with no
 scope. `tab_scope` must be a `str` or None: any other type raises `ValueError` in the constructor,
 before any call (the CLI checks the name itself). `node_version()` returns the node version as a tuple.

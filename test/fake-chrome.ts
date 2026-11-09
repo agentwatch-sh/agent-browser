@@ -952,7 +952,7 @@ export class FakeChrome {
     const { behavior, downloadPath } = this.downloadBehavior;
     if (behavior !== "allowAndName" || !downloadPath) return;
     const guid = randomUUID();
-    this.broadcast("Browser.downloadWillBegin", { frameId: page.targetId, guid, url, suggestedFilename });
+    this.broadcast("Browser.downloadWillBegin", { frameId: `F-${page.targetId}`, guid, url, suggestedFilename });
     const data = Buffer.from(await (await globalThis.fetch(this.local(url))).arrayBuffer());
     writeFileSync(join(downloadPath, guid), data);
     setTimeout(() => this.broadcast("Browser.downloadProgress", { guid, totalBytes: data.length, receivedBytes: data.length, state: "completed" }), 50);

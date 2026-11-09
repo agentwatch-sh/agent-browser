@@ -3,7 +3,7 @@
 // adapter runs the CLI. COMMAND_SPECS describes them all, and the parity tests read it.
 
 import { join, resolve } from "node:path";
-import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab } from "./browser.ts";
+import { AgentBrowser, allowlistOf, rememberEndpoint, type PageInfo, type Tab, type Download } from "./browser.ts";
 import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
 import { listAgentChromes, type AgentChrome } from "./chromes.ts";
 import { bringToFront, type FrontHow } from "./front.ts";
@@ -59,8 +59,8 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ANY_SCOPE] },
   { name: "outline", summary: "Number the interactive elements on screen (read this before a screenshot)", usage: "outline <tab> [--all]",
     params: [TAB, p("all", "boolean", false, "--all", "include elements outside the viewport"), ANY_SCOPE] },
-  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches", usage: "click <tab> <selector|#N> | click <tab> --text LABEL",
-    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), ANY_SCOPE] },
+  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS]",
+    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder)"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ANY_SCOPE] },
   { name: "hover", summary: "Move the mouse over an element (hover menus)", usage: "hover <tab> <selector|#N>",
     params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector"), ANY_SCOPE] },
   { name: "type", summary: "Type text into #N or a selector, else the focused field; fails when it did not arrive; never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
@@ -120,7 +120,7 @@ export type TabsResult = Ok<"tabs", { tabs: TabRef[]; window: number | null; sco
 export type OpenResult = Ok<"open", { tab: TabRef; window: number | null }>;
 export type GotoResult = Ok<"goto", { tab: TabRef }>;
 export type OutlineResult = Ok<"outline", { tab: TabRef; elements: OutlineElement[] }>;
-export type ClickResult = Ok<"click", { tab: TabRef; target: string | null; text: string | null }>;
+export type ClickResult = Ok<"click", { tab: TabRef; target: string | null; text: string | null; download?: Download }>;
 export type HoverResult = Ok<"hover", { tab: TabRef; target: string }>;
 export type TypeResult = Ok<"type", { tab: TabRef; into: string | null; length: number }>;
 export type PressResult = Ok<"press", { tab: TabRef; key: string }>;
@@ -323,11 +323,15 @@ export const commands = {
     });
   },
 
-  async click(o: BrowserOptions | Settings, p: { tab: string; target?: string; text?: string; anyScope?: boolean }): Promise<ClickResult> {
+  async click(o: BrowserOptions | Settings, p: { tab: string; target?: string; text?: string; download?: string; timeout?: number; anyScope?: boolean }): Promise<ClickResult> {
     if (!!p.target === !!p.text) throw new UsageError("click needs a target (#N or a selector) or --text, not both");
+    const dir = p.download === undefined ? undefined : resolve(need(p.download, "--download"));
+    if (p.timeout !== undefined && (dir === undefined || !Number.isSafeInteger(p.timeout) || p.timeout <= 0 || p.timeout > 2_147_483_647))
+      throw new UsageError("--timeout needs --download and a positive integer of at most 2147483647 milliseconds");
     return onTab(o, p, async (tab, info) => {
-      if (p.text) await tab.clickText(p.text); else await tab.click(idx(p.target!));
-      return { ok: true, command: "click", tab: info, target: p.target ?? null, text: p.text ?? null };
+      const click = () => p.text ? tab.clickText(p.text) : tab.click(idx(p.target!));
+      const download = dir === undefined ? (await click(), undefined) : await tab.expectDownload(click, dir, p.timeout);
+      return { ok: true, command: "click", tab: info, target: p.target ?? null, text: p.text ?? null, ...(download ? { download } : {}) };
     });
   },
 

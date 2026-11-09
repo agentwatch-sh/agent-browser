@@ -84,3 +84,25 @@ Before it connects, ends scopes or restarts a relay, the external mode compares 
 The run exits 2 for different paths, missing files or socket fields, invalid JSON, a failed status or a status timeout.
 
 Environment: `HARNESS_LOCK_WAIT` (seconds), `HARNESS_LOCK` (another lock file: for the tests only).
+
+## CLI click downloads
+
+`click-download.ts` uses a headless Chromium with its own profile, pipe endpoint, proxy and harness guard.
+It clicks a local `a.localhost` button that serves a CSV attachment.
+It then clicks a button that creates a blob download.
+Both results must name a file with the expected contents, name, URL and size.
+
+```sh
+flock /home/selden/.cache/ab-lead/heavy.lock timeout 1500 node test/live/click-download.ts
+```
+
+The agent-mode harness runs the same checks through its stand-in daemon, receiver and relay.
+Use its own mode only. The downloads group refuses external mode.
+
+```sh
+CHROME_EXTENSION=/absolute/path/to/chrome-extension CASES=downloads DISPLAY_N=124 \
+  flock /home/selden/.cache/ab-lead/heavy.lock timeout 1500 node test/live/agent-mode/run.ts
+```
+
+Both harnesses use `harnessGuard` and check `reservedDisplay` before they start Chromium.
+The default check starts no Xvfb and uses no display.
