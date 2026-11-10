@@ -1305,6 +1305,26 @@ files of the agent browser stay one of each in the state folder:
 - A scope's folder stays after its session ends: a few small files, with the entries of the tabs that
   were open at its last change.
 
+## The self-contained agent browser's service (`agent-browser service`, off by default)
+
+Stage 1a of the self-contained agent browser (board task ab-v16.94.2; the design:
+`docs/superpowers/specs/2026-11-09-self-contained-agent-browser-design.md`, sections 5, 7.1 and 13.1). Nothing starts
+it yet: agentwatch's unit starts it from stage 2, and no install step of this repository writes a unit for it. Its
+contract is C12, `docs/contracts/C12.md` (the command, the doors, the admission, the hello, the data of the reads, the
+ops of stage 1a and the fake).
+
+- `agent-browser service --agent-door <address> [--control-door <path>] [--daemon-unit <unit>] [--daemon-command <file>]`:
+  one process with two doors. The agent door is today's CDP endpoint with today's peer check (the relay's code,
+  `src/service/agent-door.ts`). The control door, `control.sock`, admits only the agentwatch daemon process: the
+  MainPID of agentwatch's unit or its direct child, with the command of the file that agentwatch's daemon writes at
+  its start (`src/service/admission.ts`). Stage 1a has no Chrome: it answers `config`, `set_sessions`, `session_ended`,
+  `status` and `endpoint`, and each other op `unsupported`.
+- `agent-browser service --hello [--fake]` prints the hello and exits.
+- `agent-browser service --fake --control-door <path> [--refuse]`: the fake for agentwatch's hermetic tests, with the
+  scripted state of `test/vectors/control.json` and no Chrome (`src/service/fake.ts`). It prints `{"t":"listening"}`
+  when its socket listens, and each event line on its standard input goes to the connected daemon. It never listens
+  in the service's run folder.
+
 ## Tab scopes
 
 One agent browser can serve several callers at the same time, for example the agent sessions of one
@@ -2361,5 +2381,6 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 | `src/options.ts` | consumer options and their checks |
 | `src/lock.ts` | the lock file of the proxy start and of the tab record |
 | `src/cdp.ts` | minimal CDP client on `ws` (Node's built-in WebSocket caps messages at 4 MB) |
+| `src/service/` | `agent-browser service` (off by default): the control door, its admission, the agent door, stage 1a's ops and the fake (C12) |
 | `index.js`, `loader.js`, `bin/agent-browser.js` | JavaScript entry points (see "Why there is a `loader.js`") |
 | `python/agent_browser/` | the Python adapter |

@@ -14,6 +14,7 @@ import { outlineText, type NetEntry } from "./outline.ts";
 import { runProxy } from "./proxy.ts";
 import { runWatchBack } from "./watchback.ts";
 import { startRelay } from "./relay/endpoint.ts";
+import { SERVICE_USAGE, serviceMain } from "./service/main.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
 
@@ -48,6 +49,11 @@ const PROXY_FLAGS: Record<string, Flag> = { attempt: { type: "string" }, "timeou
 const RELAY_FLAGS: Record<string, Flag> = { "peer-check": { type: "boolean" } };
 /** Flags of the internal `give-back-watch` command, which a command on the Mac starts in the background (watchback.ts). */
 const WATCH_FLAGS: Record<string, Flag> = { "chrome-pid": { type: "string" }, "watch-back-command": { type: "string" } };
+/** The flags of `service` (contract C12, "The command"; board ab-v16.94.2): only `service` takes them, and it takes no other flag. */
+const SERVICE_FLAGS: Record<string, Flag> = {
+  "agent-door": { type: "string" }, "control-door": { type: "string" }, "daemon-unit": { type: "string" }, "daemon-command": { type: "string" },
+  hello: { type: "boolean" }, fake: { type: "boolean" }, refuse: { type: "boolean" },
+};
 
 /** The command flags in the spec (`--name`), plus --stdin for a command with a parameter that can come from stdin. */
 function commandFlags(spec: CommandSpec): Record<string, Flag> {
@@ -59,7 +65,7 @@ function commandFlags(spec: CommandSpec): Record<string, Flag> {
   return out;
 }
 
-const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS, RELAY_FLAGS, WATCH_FLAGS,
+const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS, RELAY_FLAGS, WATCH_FLAGS, SERVICE_FLAGS,
   Object.fromEntries(Object.entries(GLOBAL_FLAGS).map(([k, { type, short }]) => [k, short ? { type, short } : { type }])));
 
 export const USAGE = `agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
@@ -269,6 +275,13 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     if (!name || name === "help" || values.help) { await write(io.stdout, json ? JSON.stringify({ ok: true, command: "help", usage: USAGE }) + "\n" : USAGE + "\n"); return 0; }
     // The watcher's own flags (review-69c N6): only give-back-watch takes them, not proxy, relay or a command.
     if (name !== "give-back-watch") for (const k of Object.keys(WATCH_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for give-back-watch (started by a command on the Mac), not ${name}`);
+    if (name !== "service") for (const k of Object.keys(SERVICE_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for service (started by agentwatch's unit), not ${name}`);
+    if (name === "service") {
+      // The self-contained agent browser's service (stage 1a): off by default; agentwatch's unit starts it from stage 2.
+      for (const k of Object.keys(values)) if (!(k in SERVICE_FLAGS)) throw new UsageError(`--${k} is not an option of service; ${SERVICE_USAGE}`);
+      if (rest.length) throw new UsageError(SERVICE_USAGE);
+      return await serviceMain(values, io, log);
+    }
     if (name === "proxy") {
       if (!rest[0]) throw new UsageError("usage: agent-browser proxy <ws-url> --state-dir DIR (started by the library, not by hand)");
       const timeout = typeof values["timeout-ms"] === "string" ? Number(values["timeout-ms"]) : undefined;
