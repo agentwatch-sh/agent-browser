@@ -41,7 +41,9 @@ work opened a public site.
 2. **Every input path is in one table (section 5).** For each Playwright call: the CDP calls that the model
    sees, what the stage sends, and what the page sees. The page's result is the same as with Playwright's
    own input, with one named exception: a page's own key handler can act on typed keys where Playwright's
-   own `fill` inserts the text in one step (section 7.2 says how the stage limits it).
+   own `fill` inserts the text in one step (section 7.2 says how the stage limits it). One case gives a
+   better result: a `hover()` on an element whose own `:hover` layer covers its middle passes with the stage
+   and fails with Playwright's own input (M8).
 3. **Playwright's checks keep working (section 6).** A click's hit-target check reads the press, so a path
    that crosses other elements does not matter, unless the path opens an overlay over the target: then the
    stage leaves it and goes around (section 6.6; M7). A hover's check reads the first move, so the stage sends
@@ -143,7 +145,9 @@ What this design takes from them:
 The stage is a module of the model (`src/relay/stage.ts`), so it works in today's relay and in the service
 with no change. The model's refusals (policy.ts) run first: the stage sees only calls that the model sends
 to Chrome. The stage needs only facts that the model already has, or that it reads with its own calls on
-the tab's session in its own isolated world (as the geometry read does).
+the tab's session in its own isolated world (as the geometry read does). Two reads are the exception: the
+frame mapping (section 5.3) and the recovery's read at the hit point (section 6.6) run in Playwright's
+utility world, because they start from the node handle of the client's own call, which lives there.
 
 ### 4.2 Which calls the stage takes
 
@@ -182,22 +186,37 @@ answers of its own events, and a page with an open dialog answers no input event
 A has `onblur="alert(...)"`; a client fills field B; the stage's focus click on B blurs A; the alert opens;
 the press's answer does not come; Playwright's `Page.handleJavaScriptDialog` (its auto-dismiss) comes after
 the fill's utility call, which waits behind the stage's step. Measured (M9): with the dialog's answer in the
-gate, the fill failed at its 6 s timeout, and every later call of the page waited until the probe itself
-dismissed the dialog 25 s later. So these rules hold:
+gate, the fill's step did not end in 25 s, and every later call of the page waited until the probe itself
+dismissed the dialog 25 s later (the probe's own log call waits behind the same gate, so the record cannot
+show the fill's own error at its 6 s timeout). So these rules hold:
 
 - **A client's `Page.handleJavaScriptDialog` never waits.** The model sends it to Chrome at once, before the
-  tab's gate and before any stage step (M9: the fill then passed).
-- **A dialog stops the plan.** The stage watches `Page.javascriptDialogOpening` and `Page.javascriptDialogClosed`
-  of the tab (it sees the events that go to the client; when no client has `Page` enabled, its own wait limit
-  below applies). While a dialog is open, it sends no new event of a plan; after the close it goes on.
+  tab's gate and before any stage step (M9: the fill then passed). This change of order is safe: a client
+  sends that call only after `Page.javascriptDialogOpening`, so it expects no call of its own to go first.
+- **A dialog ends the plan** (review-96b, F1). The stage watches `Page.javascriptDialogOpening` of the tab (it
+  sees the events that go to the client; when no client has `Page` enabled, the wait limit below applies).
+  When a dialog opens during a plan, the plan ends at once:
+  1. The stage drops the plan's own events that no client call asked for (the rest of the path's samples,
+     the pauses).
+  2. It sends at once, in order, each event that a client call of the plan asked for and that has not gone
+     (the move to the client's point, the press, the release), and the release of each button and key that
+     the plan holds.
+  3. Then it frees the input lock and opens the tab's gate.
+  Chrome keeps these events until the dialog closes, as with Playwright's own input (open point 5). The stage
+  never goes on with a plan after its dialog closes, so no event of a plan goes after a later client call.
+- **Each client call of an ended plan gets Chrome's own answer to its event**, when that answer comes (after
+  the dialog closes) or Chrome's error. The stage gives no answer of its own, so "a client can trust an
+  answer" (section 4.5) still holds.
 - **Each read of the stage has a limit.** An element's box, the focused element, a hit test, a frame's offset:
   each waits at most `GEOMETRY_WAIT_MS` (200 ms, C11's geometry wait) and then fails open (the stage sends
   the client's call as it is, and the harness counts it).
 - **Each wait for an answer of the stage's own event has a limit**, `STAGE_EVENT_WAIT_MS` (first value
-  2 s). At the limit the stage sends the releases of what the plan holds (a button, a key), answers the
-  client's call, and opens the gate. A late answer changes nothing.
+  2 s), counted from the oldest event of the plan that has no answer. At the limit the plan ends as at a
+  dialog (above). This also covers a dialog that opens between two events of a plan when the stage sees no
+  `Page` event. A late answer changes nothing.
 - **A hold counts from the press's send**, not from its answer, so a `confirm()` in a `mousedown` handler
-  does not make the hold longer: the release goes at its time, and Chrome keeps it until the dialog closes.
+  does not make the hold longer. When the press's answer does not come, the plan ends by the rules above, and
+  the release goes at once; Chrome keeps it until the dialog closes.
 
 ### 4.4 The one input lock
 
@@ -310,7 +329,7 @@ section 7.2 (a page's key handler and typed keys).
 | `locator.scrollIntoViewIfNeeded()`, the scroll of an action | U and `DOM` calls, then `DOM.scrollIntoViewIfNeeded` | notches until the element is in view, then the answer `{}` (section 8.3) | wheel events and the scroll that they cause; no scroll with no wheel (measured: M6) |
 | `check()`, `setChecked()`, `uncheck()` | as a click, with a state read before and after | as a click | as a click; Playwright reads the new state (measured: M3) |
 | frame clicks: `frameLocator(...).locator(...).click()` | the element's checks on the frame's own session; the frame's owner and box on the top page's session; the move, the press and the release on the top page's session, in top-page points | as a click, on the top page's session | the top page sees the path up to the frame; the frame sees the entry at its edge, its own moves, the press (measured: M3) |
-| frame hovers | the hover's setup on the frame's session, with the hit point in the frame's own points | the stage maps the hit point to the top page (section 5.3), then as `hover` | as `hover` (designed; not measured) |
+| frame hovers | the hover's setup on the frame's session (a cross-origin frame) or on the top page's session (a same-origin frame), with the hit point in the frame's own points | the stage maps the hit point to the top page (section 5.3), then as `hover` | as `hover` (designed; not measured) |
 | `tap()`, `touchscreen.tap()` | nothing: Playwright refuses without `hasTouch`, and a context from `connectOverCDP` has none | nothing | nothing (R12) |
 | `keyboard.type(text)`, `pressSequentially(text)`, the old `type()` | `pressSequentially` and `type`: U x5, then U (`focusNode` with the caret reset) when the field has no focus; then for each character a `keyDown` with its text (a capital: `modifiers` 0) and a `keyUp`, each awaited; a character with no US key: `Input.insertText` | for the focus call: a click on the field when it does not have the focus (section 5.2); for each key: a person's timing (section 10.2), a Shift `rawKeyDown` before a shifted character and its release after, the release answered early for rollover; an `insertText` with a person's gap before it | the field gets the focus from a press; keys with a person's holds and gaps, about 25% overlap, a Shift key for each capital and symbol; the same text (measured: M5) |
 | `keyboard.type(text, { delay })`, `pressSequentially(text, { delay })` | for each character: `keyDown`, Playwright's own wait of `delay`, `keyUp` (each awaited); before an `insertText`, a wait of `delay` | as above; each release at the later of its arrival and the key's planned hold; each press at the later of its arrival and its planned time | a hold of at least the client's delay; the gaps of a person or longer |
@@ -1062,9 +1081,9 @@ runs each mutation once and records the red test in its pull request.
 | typed keys for a character with no US key | a unit test of the typing rule (rule 2) |
 | a line feed typed as Enter | the chat-field case (two messages) |
 | no residual of the notches | a unit test: ten calls of 100 px scroll the total within one notch |
-| no end of the notches after a round that does not move the scroller | the canvas-with-a-wheel-handler case (it must not zoom) |
+| no end of the notches after a round that does not move the scroller | a unit test: a scroller under a non-passive `wheel` listener on the window that calls `preventDefault` (the wheel-point rule does not count window listeners); the notches end after one round |
 | a wheel point over a number input or a frame | the number-input case (M11: the value changes) |
-| no fallback after 4 rounds | a unit test with a scroller that the wheel does not move |
+| no fallback after 4 rounds | a unit test with a scroller that moves a small distance in each round but does not bring the target into view in 4 rounds |
 | no frame mapping (the hit point in the frame's own points) | the same-origin frame case (M10) |
 | no release of a held button or key at an event's error | a unit test: an error at the press, then no button is down |
 | no `STAGE_ACTION_MAX_MS` | the long `pressSequentially` case (it must not reach 30 s) |
@@ -1073,6 +1092,14 @@ runs each mutation once and records the red test in its pull request.
 | a later non-key call that does not wait for an early-answered release | a unit test: a `Runtime.evaluate` after `keyboard.type` sees every `keyup` |
 | a client's `Page.handleJavaScriptDialog` in the gate | the dialog-at-a-focus-click case (M9: the fill times out) |
 | a hold that counts from the press's answer | the dialog-at-a-press case (the hold grows by the dialog's time) |
+| the plan goes on after its dialog closes | a unit test: a dialog at a press, then a client call after the close; no event of the plan goes after that call |
+| a dialog that does not end the plan | a unit test: a `mouseover` handler on the path opens an `alert()`; the client's press and release go at once and the lock is free |
+| an ended plan's client calls answered by the stage, not by Chrome | a unit test: a dialog that the client answers after 20 s; each input call answers only after Chrome's answer |
+| no `GEOMETRY_WAIT_MS` limit, or no fail-open at it | a unit test: a read that never answers; the client's call goes as it is after 200 ms |
+| no `STAGE_EVENT_WAIT_MS` limit | a unit test: an event whose answer never comes; at 2 s the held button is released, the lock is free, and the client's next call goes |
+| no notches before the focus click on a field out of view | a unit test: a field below the fold gets notches before its focus click, and no `DOM.scrollIntoViewIfNeeded` |
+| the stage's own `dragEnter` left out | the `dragTo` case (M12: no `dragover` and no drop) |
+| the client's `dragEnter` sent as a `dragEnter`, not as a `dragOver` | the `dragTo` case (the page gets two `dragenter` events) |
 | a pending release sent before its hold (the probe's run 1 fault) | K1 (a hold below 50 ms) |
 
 ## 14. The build tasks, in order
@@ -1134,7 +1161,7 @@ Each question gives its options, their effects, a recommendation, and what the b
 - **a. Yes, always, for every client and every site (recommended).** A click takes about 1 to 1.6 s (2.6 s
   with a long scroll; M3) and typed text about 5 characters a second (M5), so a long agent task takes longer
   than with plain Playwright. A test of `@playwright/test` with 15 to 20 clicks and a 60-character fill
-  goes over its default 30 s test timeout through agent mode; its owner must raise that timeout (for example to
+  can go over its default 30 s test timeout through agent mode; its owner must raise that timeout (for example to
   120 s; section 6.3). No site and no client needs a setting, as "the caller doesn't worry about it" says. A
   check like a click box can appear on any site, so the agent never knows in advance where it matters. No
   change in agentwatch.
@@ -1212,6 +1239,13 @@ the build must show. The operator sees them with the questions.
 4. **A hover or a click in a cross-origin frame, `dragTo` onto a drop zone that accepts the drop, and the
    press point's spread** are designed but not measured. Build tasks 5 and 8 measure them in the live tests
    before their merge.
+5. **Dialogs during a plan** (review-96b, F1). Section 4.3a ends a plan at a dialog and at
+   `STAGE_EVENT_WAIT_MS`, and sends the client's own events at once. It rests on one fact that the probe did
+   not measure: Chrome keeps input events, and holds their answers, while a dialog is open, and then gives
+   them to the page in order after the close. Build task 5 must measure this. Its unit tests must show a
+   dialog at a press, a dialog between two moves of a path, and a dialog that a client answers after 20 s;
+   in each, no event goes after a later client call. If Chrome drops input events during a dialog, the
+   client's calls of the ended plan get an error that names the dialog.
 
 ## 17. What this design does not cover
 
@@ -1236,7 +1270,7 @@ command; `results/` holds the runs.
 Four runs: run 1 (02:15 to 02:16 UTC on 2026-11-10), run 2 (02:33 to 02:35 UTC), and runs 3 and 4 (03:18 and
 about 03:35 UTC) of the review's cases (scenarios `cases-raw` and `cases`, M7 to M12). Run 3's menu was
 narrow, so the stage's random path missed its trigger in the step with the recovery; run 4 (the code in the
-folder) has a wider menu, and its numbers are the ones below; run 3's other results were the same. Run 1's
+folder) has a wider menu, and its numbers are the ones below; run 3's other results were the same (run 3's files are not kept). Run 1's
 stage had two faults of the probe, which run 2 fixed: its decoder read Playwright's argument in a wrong form,
 so its hover recognizer missed and both of its hovers went the naive way; and its events carried the send time
 with no latency. The folder holds run 4's code; its `stage` scenario sets run 2's options (the hover's whole
@@ -1313,10 +1347,10 @@ timeout; the stage prototype with the rules of sections 4.3a, 5.3, 6.2 and 6.6, 
 
 | Case | Playwright's own input | The stage with the rule off | The stage with the rule |
 | --- | --- | --- | --- |
-| M7: a click on a button under a hover menu's panel, from above the menu | passed, 0.11 s | failed at 6 s: the path opened the panel, the press hit it (a miss at the stop), and 13 more setups missed (the pointer stayed in the panel; no input) | passed, 2.4 s: one miss at the stop, then the recovery at the second setup moved the pointer out of the menu's root, and the second attempt's press hit the button |
+| M7: a click on a button under a hover menu's panel, from above the menu | passed, 0.10 s | failed at 6 s: the path opened the panel, the press hit it (a miss at the stop), and 13 more setups missed (the pointer stayed in the panel; no input) | passed, 2.4 s: one miss at the stop, then the recovery at the second setup moved the pointer out of the menu's root, and the second attempt's press hit the button |
 | M8: `hover()` on a card whose `:hover` shows a layer over its middle | failed at 6 s (the layer covered the hit point at the first `mousemove`) | the whole path before the setup: failed at 6 s, 11 setups missed | the samples outside the card before the setup: passed, 0.58 s, one setup |
 | M10: `hover()` on an element of a same-origin frame (no session of its own) | passed, 0.13 s | the hit point in the frame's own points: failed at 6 s (4 setups, 3 misses at the stop) | the hit point mapped to the top page: passed, 0.72 s, one setup |
-| M9: `fill()` of a field while the field with the focus has `onblur="alert(...)"` | passed, 0.03 s (Playwright dismissed the alert) | the client's dialog answer in the gate: the fill failed at 6 s, and the page's later calls waited until the probe dismissed the alert at 25 s | the dialog answer passes the gate: passed, 1.1 s, with the focus click and 3 typed keys |
+| M9: `fill()` of a field while the field with the focus has `onblur="alert(...)"` | passed, 0.03 s (Playwright dismissed the alert) | the client's dialog answer in the gate: the fill's step did not end in 25 s (the record cannot show the fill's own 6 s error: the probe's log call waits behind the same gate), and the page's later calls waited until the probe dismissed the alert at 25 s | the dialog answer passes the gate: passed, 1.1 s, with the focus click and 3 typed keys |
 
 In M7 the second attempt's path went straight from the exit point to the button, so the way around (rule 4
 of section 6.6) did not come into play; its unit test is in build task 5.
