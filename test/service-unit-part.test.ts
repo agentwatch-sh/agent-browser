@@ -91,6 +91,34 @@ test("start and stop through the control door: the answer after Chrome runs or i
   } finally { await r.close(); }
 });
 
+test("a requested stop is a stop, not a crash: after the stop op, or a stop through the part's own stopBrowser (the later use rule, board ab-v16.94.11), neither the supervisor nor the watch starts or stops anything", async () => {
+  const r = await rig({ watchLimitMs: 60_000 });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    for (const how of ["op", "function"] as const) {
+      if (how === "op") await req(c, `a-${how}`, "start", TOKEN);
+      else assert.deepEqual(await r.part.startBrowser(null), { data: {} });
+      const pid = r.w.named("chromium")[0].pid;
+      await c.next((l) => l.t === "ev" && l.ev === "ready" && l.chrome_pid === pid, 10_000);
+      const stops = events(c).filter((l) => l.ev === "stopped").length;
+      if (how === "op") await req(c, `b-${how}`, "stop", WEB);
+      else assert.deepEqual(await r.part.stopBrowser(null), { data: {} });
+      while (events(c).filter((l) => l.ev === "stopped").length === stops) await sleep(5);
+      assert.equal(r.w.alive(pid), false);
+      const spawned = r.w.spawned.length, evs = events(c).length;
+      await sleep(200); // twenty checks of the supervisor and forty of the watch
+      r.w.now += 61_000;
+      await sleep(100);
+      assert.equal(r.w.spawned.length, spawned, `${how}: no restart after a requested stop`);
+      assert.equal(events(c).length, evs, `${how}: no event after the stop's own`);
+      assert.equal(r.part.watch.missingFor(), null, `${how}: the watch counts no Chrome`);
+      assert.equal((await status(c, `s-${how}`)).state, "off");
+    }
+    assert.deepEqual(events(c).filter((l) => l.ev === "stopped"), [{ t: "ev", ev: "stopped", reason: "stop", by: WEB }, { t: "ev", ev: "stopped", reason: "stop" }], "the function's stop has no by");
+  } finally { await r.close(); }
+});
+
 test("a start that fails answers its reason; a start or a stop while the service does not own answers that it does not own, and starts nothing", async () => {
   const r = await rig();
   try {
@@ -152,8 +180,9 @@ test("build note 8: at the service's start a record that wants the browser and w
     assert.equal(r.w.spawned.length, 0, "nothing before the config");
     assert.deepEqual(events(c), [], "no start_failed before the config");
     c.send(CONFIG); await c.answer("cfg");
-    await c.next((l) => l.t === "ev" && l.ev === "ready", 10_000);
+    const ready = await c.next((l) => l.t === "ev" && l.ev === "ready", 10_000);
     assert.equal(r.w.named("chromium").length, 1);
+    assert.equal(ready.chrome_pid, r.w.named("chromium")[0].pid, "ready names the new Chrome's pid");
   } finally { await r.close(); }
   // Google Chrome with no copy yet: the start at the first config installs it (a restart by the supervisor never installs).
   const r3 = await rig({ before: (w, tools) => {

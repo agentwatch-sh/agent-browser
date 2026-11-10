@@ -97,10 +97,11 @@ async function moving(o: Partial<Activity> = {}) {
   updater.noteGood("157.0.7000.1-1");
   const act: Activity = { inFlight: () => 0, idleFor: () => Infinity, importing: () => false, clients: () => false, sinceSend: () => Infinity, ...o };
   const asked: string[] = [];
-  const mover = new ChromeMover({ unit, updater, activity: act, clock: () => w.now, wall: () => 1_762_750_000_000 + w.now, mayAct: async (x) => { asked.push(x); return true; }, log: (l) => w.logs.push(l) });
+  const starts: (number | null)[] = [];
+  const mover = new ChromeMover({ unit, updater, activity: act, clock: () => w.now, wall: () => 1_762_750_000_000 + w.now, mayAct: async (x) => { asked.push(x); return true; }, log: (l) => w.logs.push(l), onStarted: () => starts.push(unit.chromePid()) });
   tools.versions.push("158.0.7100.1-1");
   (updater as any).ready = "158.0.7100.1-1";
-  return { w, tools, updater, unit, mover, asked };
+  return { w, tools, updater, unit, mover, asked, starts };
 }
 const settle = async () => { for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r)); };
 
@@ -155,18 +156,21 @@ test("a client that stays: the move comes after the update waited 24 h (kept in 
 });
 
 test("a move whose new Chrome gets no confirm in 60 s takes the way back: the version is noted, never started again, and the last good copy starts exactly", async () => {
-  const { w, unit, mover, updater } = await moving();
+  const { w, unit, mover, updater, starts } = await moving();
   try {
     w.now += H;
     mover.tick(true);
     while (mover.moving) await settle();
     assert.equal(unit.chromeFacts()!.version, "158.0.7100.1-1");
+    assert.deepEqual(starts, [unit.chromePid()], "the move's start: ready with the new pid");
     w.now += 60_000;
     mover.tick(false);
     await settle();
     while ((mover as any).reverting) await settle();
     assert.deepEqual([...updater.refused()], ["158.0.7100.1-1"]);
     assert.equal(unit.chromeFacts()!.version, "157.0.7000.1-1");
+    assert.equal(starts.length, 2);
+    assert.equal(starts[1], unit.chromePid(), "the way back's start: ready with the new pid");
     assert.equal(mover.updateState(), "failed");
     await unit.stop();
     await unit.start();

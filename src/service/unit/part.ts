@@ -104,10 +104,10 @@ export class UnitPart implements ServicePart {
     });
     const a = o.activity ?? {};
     this.mover = new ChromeMover({
-      unit: this.unit, updater: this.updater, clock: this.clock, wall: this.wall, mayAct, log: o.log, onChange: () => this.chromeChanged(),
+      unit: this.unit, updater: this.updater, clock: this.clock, wall: this.wall, mayAct, log: o.log, onChange: () => this.chromeChanged(), onStarted: () => this.ready(),
       activity: { inFlight: a.inFlight ?? (() => 0), idleFor: a.idleFor ?? (() => Infinity), importing: a.importing ?? (() => false), clients: a.clients ?? (() => false), sinceSend: a.sinceSend ?? (() => Infinity) },
     });
-    this.ops = { start: (req) => this.startOp(req), stop: (req) => this.stopOp(req) };
+    this.ops = { start: (req) => this.startBrowser(req.by), stop: (req) => this.stopBrowser(req.by) };
   }
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emitFn = emit; }
@@ -164,7 +164,11 @@ export class UnitPart implements ServicePart {
 
   // ------------------------------------------------------------------ the ops
 
-  private async startOp(_req: Req): Promise<Answer> {
+  /**
+   * Start Chrome and Xvfb (the op `start`; the later use rule of board ab-v16.94.11 calls it too). `by` is the caller's
+   * provenance, or null for the service's own start. The answer of C12: `{}` when they run, else the error text.
+   */
+  async startBrowser(_by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a start"))) return { error: NOT_OWNER };
     const wasRunning = this.unit.running();
     try {
@@ -178,11 +182,16 @@ export class UnitPart implements ServicePart {
     }
   }
 
-  private async stopOp(req: Req): Promise<Answer> {
+  /**
+   * Stop Chrome and Xvfb (the op `stop`; the later use rule of board ab-v16.94.11 calls it too). A requested stop is a
+   * stop, not a crash: the record says `wanted: false`, so neither the supervisor nor the fail-closed watch starts or
+   * counts a Chrome after it. `by` is the caller's provenance (the `stopped` event's `by`), or null.
+   */
+  async stopBrowser(by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a stop"))) return { error: NOT_OWNER };
     this.pendingStart = false;
     const ran = await this.unit.stop();
-    if (ran) this.stopped("stop", { ...req.by });
+    if (ran) this.stopped("stop", by ? { ...by } : null);
     return { data: {} };
   }
 

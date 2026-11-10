@@ -204,6 +204,8 @@ export class ChromeMover {
   private readonly mayAct: (what: string) => Promise<boolean>;
   private readonly log: (line: string) => void;
   private readonly onChange: () => void;
+  /** Each start of Chrome by a move or its way back (the part sends `ready` with the new pid). */
+  private readonly onStarted: () => void;
   private readonly startedAt: number;
   private updateSince: number | null = null;
   private probation: Probation | null = null;
@@ -212,9 +214,9 @@ export class ChromeMover {
   private reverting = false;
   lastMoveFailed = false;
 
-  constructor(o: { unit: ChromeUnit; updater: ChromeUpdater; activity: Activity; clock: () => number; wall?: () => number; mayAct: (what: string) => Promise<boolean>; log: (line: string) => void; onChange?: () => void }) {
+  constructor(o: { unit: ChromeUnit; updater: ChromeUpdater; activity: Activity; clock: () => number; wall?: () => number; mayAct: (what: string) => Promise<boolean>; log: (line: string) => void; onChange?: () => void; onStarted?: () => void }) {
     this.unit = o.unit; this.updater = o.updater; this.activity = o.activity; this.clock = o.clock; this.wall = o.wall ?? Date.now;
-    this.mayAct = o.mayAct; this.log = o.log; this.onChange = o.onChange ?? (() => {});
+    this.mayAct = o.mayAct; this.log = o.log; this.onChange = o.onChange ?? (() => {}); this.onStarted = o.onStarted ?? (() => {});
     this.startedAt = o.clock();
   }
 
@@ -357,6 +359,7 @@ export class ChromeMover {
         if (e instanceof StartError) { await this.takeWayBack({ old, new: next, deadline: 0, stops: this.unit.stopCount, pid: null }, e.message); return; }
         throw e;
       }
+      if (this.unit.running()) this.onStarted();
       const started = this.runningGoogle();
       if (started !== next) { this.blockMoves(`the start ran ${started ?? "no Google Chrome"}, not ${next}`); return; }
       this.log(`update: Google Chrome moved from ${old} to ${started}`);
@@ -391,6 +394,7 @@ export class ChromeMover {
       this.log(`update: the agent browser could not start again after the failed start of Google Chrome ${p.new}: ${(e as Error).message.slice(0, 300)}`);
       return;
     }
+    if (this.unit.running()) this.onStarted();
     this.log(`update: Google Chrome ${this.runningGoogle() ?? "no Google Chrome"} runs after the failed start of ${p.new}`);
   }
 }
