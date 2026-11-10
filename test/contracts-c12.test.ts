@@ -59,8 +59,13 @@ const RULES = part(C12, "The field rules (the shape step).");
 const PATTERN = /`(\^[^`]+\$)`/.exec(RULES)?.[1] ?? "^$";
 const scope = (x: unknown) => typeof x === "string" && new RegExp(PATTERN).test(x);
 const isRoot = (r: any) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid >= 2 && Number.isSafeInteger(r.start) && r.start >= 0;
-const FIELD_RULES: [string, (f: string, v: any) => boolean | null][] = [
-  ["`scope` and `list` match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.", (f, v) => (f === "scope" || f === "list" ? scope(v) : null)],
+// A rule checks one field (f, its value), or the whole request against the fields of its row (whole).
+type FieldRule = [string, (f: string, v: any) => boolean | null, ((req: any, fields: string[]) => boolean)?];
+const FIELD_RULES: FieldRule[] = [
+  ["A request carries each field of its row of the requests (for `config`, the four fields that it names). A request that omits one of them gets `bad request`. The shape step checks no field outside its row: a side ignores a field that it does not know, and `config` passes agentwatch's other `browser.*` keys as data.",
+    () => null, (req, fields) => fields.every((f) => Object.hasOwn(req, f))],
+  ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
+    (f, v) => (f === "scope" || f === "list" ? scope(v) : null)],
   ["A root (`roots` of `set_sessions`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
   ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots) and a `cgroup` (a string or `null`). `remote` is a list of objects with the strings `scope`, `box` and `list`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
     (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string"))
@@ -74,6 +79,7 @@ const FIELD_RULES: [string, (f: string, v: any) => boolean | null][] = [
     (f, v) => (f === "payload" ? isObj(v) : null)],
 ];
 const fieldFits = (f: string, v: unknown) => FIELD_RULES.every(([, check]) => check(f, v) !== false);
+const requestFits = (req: any, fields: string[]) => FIELD_RULES.every(([, , whole]) => !whole || whole(req, fields));
 // Each op of C12: its fields (from C12's table) and the kinds that it takes (null: any kind).
 const OWN = ["daemon"], ACT = ["operator"], START = ["operator", "token"];
 const OPS: Record<string, { fields: string[]; kinds: string[] | null }> = {
@@ -99,7 +105,7 @@ type Prompt = { id: string; host: string; list: string };
 function serviceError(req: any, state: { prompts: Prompt[] }): string | null {
   const o = OPS[req.op];
   if (!o) return "unsupported";
-  if (!byFits(req.by) || !o.fields.every((f) => Object.hasOwn(req, f) && fieldFits(f, req[f]))) return "bad request";
+  if (!byFits(req.by) || !requestFits(req, o.fields) || !o.fields.every((f) => fieldFits(f, req[f]))) return "bad request";
   if (o.kinds !== null && !o.kinds.includes(req.by.kind)) return o.kinds === ACT ? "not the operator" : "bad request";
   const p = state.prompts.find((x) => x.id === req.prompt);
   if (req.op === "prompt_dismiss" && !p) return "this prompt is gone";
