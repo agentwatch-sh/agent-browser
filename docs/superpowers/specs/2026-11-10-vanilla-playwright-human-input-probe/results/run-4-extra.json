@@ -1,0 +1,700 @@
+{
+ "chrome": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)",
+ "playwright": "1.65.0",
+ "stats": {
+  "cases": {
+   "pathMoves": 1818,
+   "scrollsByWheel": 0,
+   "setupCalls": 33,
+   "presses": 3,
+   "stopMisses": 6,
+   "setupMisses": 24,
+   "leaves": 1,
+   "hoverPathsBeforeSetup": 17,
+   "hoverRestKept": 2,
+   "focusClicks": 2,
+   "keys": 5,
+   "earlyReleaseAnswers": 1,
+   "insertsAsKeys": 1
+  }
+ },
+ "steps": {
+  "cases-raw": [
+   {
+    "name": "wheel notch over #num with no focus",
+    "ok": true,
+    "note": {
+     "value": "5",
+     "scrollY": 43
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 2,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1.9
+     ],
+     [
+      "dispatchMouseEvent",
+      2.5
+     ]
+    ]
+   },
+   {
+    "name": "click #num, then wheel notches down and up over it",
+    "ok": true,
+    "note": {
+     "focused": "num",
+     "down": {
+      "value": "4",
+      "scrollY": 0
+     },
+     "up": {
+      "value": "5",
+      "scrollY": 0
+     },
+     "inputs": "[{\"e\":\"input\",\"tg\":\"num\",\"tr\":true},{\"e\":\"input\",\"tg\":\"num\",\"tr\":true}]"
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 4,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      2.9
+     ],
+     [
+      "dispatchMouseEvent",
+      1.6
+     ],
+     [
+      "dispatchMouseEvent",
+      15.8
+     ],
+     [
+      "dispatchMouseEvent",
+      11.8
+     ]
+    ]
+   },
+   {
+    "name": "drag #ds to #dz by Input.dispatchDragEvent, with dragEnter",
+    "ok": true,
+    "note": {
+     "intercepted": true,
+     "log": "[\"dragstart:ds\",\"dragenter:dz\",\"drop:dz\",\"dragend:ds\"]",
+     "overs": 4
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 15,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "setInterceptDrags",
+      0.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1.7
+     ],
+     [
+      "dispatchMouseEvent",
+      1.4
+     ],
+     [
+      "dispatchMouseEvent",
+      3.1
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchDragEvent",
+      1.3
+     ],
+     [
+      "dispatchDragEvent",
+      1
+     ],
+     [
+      "dispatchDragEvent",
+      0.9
+     ],
+     [
+      "dispatchDragEvent",
+      1
+     ]
+    ]
+   },
+   {
+    "name": "drag #ds to #dz by Input.dispatchDragEvent, with no dragEnter",
+    "ok": true,
+    "note": {
+     "intercepted": true,
+     "log": "[\"dragstart:ds\",\"dragend:ds\"]",
+     "overs": 0
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 15,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "setInterceptDrags",
+      0.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1.8
+     ],
+     [
+      "dispatchMouseEvent",
+      1.6
+     ],
+     [
+      "dispatchMouseEvent",
+      3.1
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.4
+     ],
+     [
+      "dispatchDragEvent",
+      1.3
+     ],
+     [
+      "dispatchDragEvent",
+      1.3
+     ],
+     [
+      "dispatchDragEvent",
+      1.3
+     ],
+     [
+      "dispatchDragEvent",
+      1.4
+     ]
+    ]
+   }
+  ],
+  "cases": [
+   {
+    "name": "plain: locator('#ub').click() from above the menu",
+    "ok": true,
+    "note": {
+     "ms": 100,
+     "stage": {},
+     "page": [
+      {
+       "e": "mouseenter",
+       "tg": "ub",
+       "tr": true
+      },
+      {
+       "e": "click",
+       "tg": "ub",
+       "tr": true
+      }
+     ]
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 3,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1.8
+     ],
+     [
+      "dispatchMouseEvent",
+      2.7
+     ],
+     [
+      "dispatchMouseEvent",
+      3
+     ]
+    ]
+   },
+   {
+    "name": "stage, no recovery: locator('#ub').click() from above the menu",
+    "ok": false,
+    "error": "locator.click: Timeout 6000ms exceeded.",
+    "note": {
+     "ms": 6005,
+     "error": "locator.click: Timeout 6000ms exceeded.",
+     "stage": {
+      "pathMoves": 61,
+      "setupCalls": 14,
+      "presses": 1,
+      "stopMisses": 1,
+      "setupMisses": 13
+     },
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 14,
+    "clientInput": 3,
+    "stageCalls": 71,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      571.6
+     ],
+     [
+      "dispatchMouseEvent",
+      559.6
+     ],
+     [
+      "dispatchMouseEvent",
+      666.5
+     ],
+     [
+      "dispatchMouseEvent",
+      766
+     ]
+    ]
+   },
+   {
+    "name": "stage, recovery: locator('#ub').click() from above the menu",
+    "ok": true,
+    "note": {
+     "ms": 2433,
+     "stage": {
+      "pathMoves": 210,
+      "setupCalls": 2,
+      "presses": 2,
+      "stopMisses": 1,
+      "leaves": 1
+     },
+     "page": [
+      {
+       "e": "mouseenter",
+       "tg": "ub",
+       "tr": true
+      },
+      {
+       "e": "click",
+       "tg": "ub",
+       "tr": true
+      }
+     ]
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 2,
+    "clientInput": 6,
+    "stageCalls": 218,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      555.6
+     ],
+     [
+      "dispatchMouseEvent",
+      561.1
+     ],
+     [
+      "dispatchMouseEvent",
+      677.2
+     ],
+     [
+      "dispatchMouseEvent",
+      797.7
+     ],
+     [
+      "dispatchMouseEvent",
+      636.2
+     ],
+     [
+      "dispatchMouseEvent",
+      777.9
+     ],
+     [
+      "dispatchMouseEvent",
+      882.6
+     ]
+    ]
+   },
+   {
+    "name": "plain: locator('#card').hover()",
+    "ok": false,
+    "error": "locator.hover: Timeout 6000ms exceeded.",
+    "note": {
+     "ms": 6010,
+     "error": "locator.hover: Timeout 6000ms exceeded.",
+     "stage": {},
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 15,
+    "clientInput": 1,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      2.2
+     ],
+     [
+      "dispatchMouseEvent",
+      12.5
+     ]
+    ]
+   },
+   {
+    "name": "stage, the whole path before the setup: locator('#card').hover()",
+    "ok": false,
+    "error": "locator.hover: Timeout 6000ms exceeded.",
+    "note": {
+     "ms": 6003,
+     "error": "locator.hover: Timeout 6000ms exceeded.",
+     "stage": {
+      "pathMoves": 211,
+      "setupCalls": 11,
+      "setupMisses": 11,
+      "hoverPathsBeforeSetup": 11
+     },
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 11,
+    "clientInput": 0,
+    "stageCalls": 228,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      527.9
+     ]
+    ]
+   },
+   {
+    "name": "stage, the samples outside the target before the setup: locator('#card').hover()",
+    "ok": true,
+    "note": {
+     "ms": 575,
+     "stage": {
+      "pathMoves": 57,
+      "setupCalls": 1,
+      "hoverPathsBeforeSetup": 1,
+      "hoverRestKept": 1
+     },
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 1,
+    "stageCalls": 60,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      521.2
+     ],
+     [
+      "dispatchMouseEvent",
+      266.2
+     ]
+    ]
+   },
+   {
+    "name": "plain: frameLocator('#sf').locator('#sft').hover()",
+    "ok": true,
+    "note": {
+     "ms": 131,
+     "stage": {},
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 1,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      2.2
+     ],
+     [
+      "dispatchMouseEvent",
+      2.2
+     ]
+    ]
+   },
+   {
+    "name": "stage, no frame mapping: frameLocator('#sf').locator('#sft').hover()",
+    "ok": false,
+    "error": "locator.hover: Timeout 6000ms exceeded.",
+    "note": {
+     "ms": 6001,
+     "error": "locator.hover: Timeout 6000ms exceeded.",
+     "stage": {
+      "pathMoves": 606,
+      "setupCalls": 4,
+      "stopMisses": 3,
+      "hoverPathsBeforeSetup": 4
+     },
+     "page": [
+      {
+       "e": "mouseenter",
+       "tg": "ub",
+       "tr": true
+      },
+      {
+       "e": "mouseenter",
+       "tg": "ub",
+       "tr": true
+      },
+      {
+       "e": "mouseenter",
+       "tg": "ub",
+       "tr": true
+      }
+     ]
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 4,
+    "clientInput": 4,
+    "stageCalls": 689,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      633.5
+     ],
+     [
+      "dispatchMouseEvent",
+      714.7
+     ],
+     [
+      "dispatchMouseEvent",
+      697.3
+     ],
+     [
+      "dispatchMouseEvent",
+      698.1
+     ],
+     [
+      "dispatchMouseEvent",
+      681.7
+     ]
+    ]
+   },
+   {
+    "name": "stage, frame mapping: frameLocator('#sf').locator('#sft').hover()",
+    "ok": true,
+    "note": {
+     "ms": 720,
+     "stage": {
+      "pathMoves": 75,
+      "setupCalls": 1,
+      "hoverPathsBeforeSetup": 1,
+      "hoverRestKept": 1
+     },
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 1,
+    "stageCalls": 80,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      661.7
+     ],
+     [
+      "dispatchMouseEvent",
+      133.3
+     ]
+    ]
+   },
+   {
+    "name": "plain: locator('#b2').fill('abc') while #a1 (blur: alert) has the focus",
+    "ok": true,
+    "note": {
+     "ms": 31,
+     "stage": {},
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "insertText",
+      4.9
+     ]
+    ]
+   },
+   {
+    "name": "stage, the dialog answer passes the gate: locator('#b2').fill('abc') while #a1 (blur: alert) has the focus",
+    "ok": true,
+    "note": {
+     "ms": 1143,
+     "stage": {
+      "pathMoves": 64,
+      "focusClicks": 1,
+      "keys": 3,
+      "earlyReleaseAnswers": 1,
+      "insertsAsKeys": 1
+     },
+     "page": []
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 74,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchKeyEvent",
+      7.2
+     ],
+     [
+      "dispatchKeyEvent",
+      133.2
+     ],
+     [
+      "dispatchKeyEvent",
+      139.3
+     ],
+     [
+      "dispatchKeyEvent",
+      139.5
+     ],
+     [
+      "dispatchKeyEvent",
+      248.6
+     ],
+     [
+      "dispatchKeyEvent",
+      360.8
+     ],
+     [
+      "insertText",
+      361
+     ]
+    ]
+   },
+   {
+    "name": "stage, the dialog answer waits in the gate: locator('#b2').fill('abc') while #a1 (blur: alert) has the focus",
+    "ok": false,
+    "error": "no end in 25 s",
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 0,
+    "stageCalls": 70,
+    "inputAnswersHeldMs": []
+   }
+  ]
+ }
+}
