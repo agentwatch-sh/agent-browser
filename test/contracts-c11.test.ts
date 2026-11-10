@@ -702,9 +702,12 @@ test("at each allowlist line: each close vector follows C11", () => {
   assert.ok(endpoint.lineCloses.some((c) => c.close === "root" && applyLine(endpoint.lines[c.line], true).roots[c.connection.scope]?.some((r) => r.pid === c.connection.root.pid && r.start !== c.connection.root.start)), "the same pid with another start closes");
 });
 
-// Where a call goes (C11's table): the model, Chrome, or a refusal.
+// Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are
+// the service's model's from stage 1e: on a page session they are refused, and they are in no vector of the relay.
+const SIGN_IN_METHODS = ["AgentBrowser.signIn", "AgentBrowser.signIns"];
 function route(session, method, params = {}, child = false) {
-  if (session === "root") return endpoint.modelSet.includes(method) ? "the model" : "refused";
+  if (session === "root") return endpoint.modelSet.includes(method) || SIGN_IN_METHODS.includes(method) ? "the model" : "refused";
+  if (/^AgentBrowser\./.test(method)) return "refused";
   if (method === "Target.setAutoAttach") return "Chrome";
   if (method === "Target.getTargetInfo") return params.targetId === undefined ? "Chrome" : "the model";
   if (method === "Target.detachFromTarget") return child ? "Chrome" : "the model";
@@ -714,7 +717,8 @@ function route(session, method, params = {}, child = false) {
 
 test("C11's table says where each call of the model's set goes, and the routing vectors agree", () => {
   const rows = table(C11, "| Method | On the root or a browser session | On a page session |");
-  assert.deepEqual([...rows.keys()].sort(), [...endpoint.modelSet].sort());
+  assert.deepEqual([...rows.keys()].sort(), [...endpoint.modelSet, ...SIGN_IN_METHODS].sort());
+  for (const m of SIGN_IN_METHODS) assert.deepEqual(rows.get(m), ["the model", "refused"], `${m}: the model; refused on a page session`);
   for (const [method, cells] of rows) {
     assert.equal(cells[0], "the model", method);
     assert.ok(cells[1].startsWith(route("page", method)), `${method}: ${cells[1]}`);
@@ -1071,11 +1075,11 @@ test("C11 states the MCP inside the service and how a session gets the MCP (the 
   sayAll(partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2)."), [
     "The service makes one Playwright MCP server object for each MCP session, from the pinned `@playwright/mcp` package's public entry. At most 4 MCP sessions for each scope and 32 for each service (first values).",
     "Its configuration is fixed: the scope's CDP endpoint and the default context; the capabilities named explicitly, never `core-install`, `storage`, `devtools`, `testing` or `config`; `allowUnrestrictedFileAccess: false`; and an output folder for each scope in the state folder.",
-    "Tools and argument keys pass only through the allow list (`docs/contracts/mcp-allow-list.md`).",
+    "Tools and argument keys pass only through the allow list (`docs/contracts/mcp-allow-list.md`), and the service's own tools of the allow list's `service_tools` only for a request that the MCP port admitted with the walk (a local admission: the sign-in act, below).",
     "The service refuses each argument that the allow list marks as a path when the path is outside the scope's folder, `<state>/mcp/<scope>/`, after `realpath`.",
     "The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection.",
     "The MCP code of each scope runs in one worker thread of the service, with a heap limit (first value 512 MiB). A worker that passes it ends with its MCP sessions, and their clients get an error.",
-    "No log line of the MCP path holds a tool argument, page content, a cookie, a URL path or a payload, and a request that the service refuses for its size or its shape is never logged (the log rule of C12).",
+    "No log line of the MCP path holds a tool argument, page content, a cookie, a URL path, a payload, a username, a password or a form value, and a request that the service refuses for its size or its shape is never logged (the log rule of C12).",
   ]);
   const how = partOr("How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).");
   sayAll(how, [
@@ -1876,4 +1880,208 @@ test("each stage vector's answers follow C11's rules: each call once, held until
       for (const k of v.out.map((x: any, i: number) => i).filter((i: number) => i > opens && v.out[i].for !== c.id)) assert.ok(within(v.out[k].at, [0, 1]), `${w} out:${k}: after the dialog, the plan's client events go at once`);
     }
   }
+});
+
+// ---- The sign-in act (board ab-v16.97.1; the stored sign-ins design, section 10) ----
+// Stage 1e part 2 (board ab-v16.97.4) builds the act in the service's model, and the MCP tools come with stage 1d (board
+// ab-v16.97.5): C11's part "The sign-in act" is the contract that they follow. The tests assert each sentence of the part
+// exactly, and that the part holds no other text; they assert the changed sentences in the other parts of C11; and they
+// check the table of what the agent sees: one result code and one text for each cause, no value of a page, and I2.
+
+const SIGN_IN_DESIGN = readOr("docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md");
+const SIGN_IN_HEADING = "The sign-in act (from stage 1e; the stored sign-ins design, board ab-v16.95).";
+// Every sentence of the part, in order (a list item and a table row are one item). The part holds exactly these.
+const SIGN_IN_ITEMS: string[] = [
+  "**The sign-in act (from stage 1e; the stored sign-ins design, board ab-v16.95).** The design is `docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, sections 4, 7 and 8, with the operator's answers of 2026-11-10 (board item ab-8w8: Q1 a, Q2 b, Q3 b, Q4 a). The service's model builds the act in stage 1e part 2 (board ab-v16.97.4), off by default, and it serves sessions from stage 3. The store, its ops and the act's events are C12's (the stored sign-ins). The relay has no sign-in act: it refuses both methods as calls outside its set (`Not available in the agent browser: <method>.`). On the Mac the store and the act stay off until stage 4 measures whether another program of the same user can read the service's memory.",
+  "What the act does. An agent asks for a sign-in by the name of a credential that the operator stored. The service types the credential's username and password into a tab of its own that no client can reach, and moves the sign-in's cookies and `localStorage` into the default context. No answer, event, status or log line holds a username, a password or a form value.",
+  "The entry.",
+  "CDP: `AgentBrowser.signIn` with `{\"name\":\"<name>\"}` and `AgentBrowser.signIns` with `{}`, on the root session or on a browser session of the agent door. The model answers both (where each call goes, above). On a page session the model refuses both with `Not available in the agent browser: <method>.`, and they never reach Chrome. Playwright sends them on a browser CDP session: `const s = await browser.newBrowserCDPSession(); await s.send(\"AgentBrowser.signIn\", { name: \"staging\" })`.",
+  "The CLI: `agent-browser sign-in <name>` and `agent-browser sign-ins`, and `agentwatch browser sign-in <name>`, a thin wrapper. They send the method over the agent door, so the walk gives the scope.",
+  "The MCP: the service's own tools `browser_sign_in` (`name`) and `browser_sign_ins` (no argument), of the allow list's `service_tools`. The service runs them as the method for the MCP session's scope, only for a request that the MCP port admitted with the uid check and the walk (a local admission). A request that a remote token admitted (stage 5: the token design, section 10) gets a `tools/list` without them, and a call of either name gets the refusal of check 1.",
+  "`AgentBrowser.signIns` answers the store's state and the names and the origins that the caller's scope may use (checks 2 and 3, below): `{\"state\":\"none\"|\"locked\"|\"open\",\"signIns\":[{\"name\":\"<name>\",\"origin\":\"<origin>\"}]}`. Names and origins are not secrets. It refuses only by check 1.",
+  "The checks before the act, in this order. The first check that fails gives its text (what the agent sees, below), and no act starts.",
+  "The request came by a local admission: the agent door (the kernel's peer check and the walk), or the MCP port with the uid check and the walk. A request that a remote token admitted never reaches a later check. The agent browser is ready (the readiness, before the upgrade).",
+  "The last `sign_ins` (C12) holds a record of that `name` whose `approved` is `true`, and the scope's list covers the record's host. With the answer Q2 b, each scope whose list covers the host may use the credential: a credential names no repos. No such name, a name whose host the scope's list does not cover, and an offer that waits get the same text.",
+  "The scope's list covers each host of the record's `send_to`.",
+  "The store is open (C12).",
+  "The record opens: its seal's tag holds with its plain fields as the additional data, so its `approved` is `true` in the seal too; its `gen` is not lower than the highest `gen` that the service saw for its `id`; and its `id` is not a removed id.",
+  "The credential is not stopped, and fewer than 6 of its acts started in the last hour.",
+  "No other act runs. An act waits for the act before it, at most 60 s.",
+  "The act is a use for the start and the stop by use (board ab-v16.94.11): an act that finds Chrome down starts it, and Chrome does not stop while an act runs.",
+  "The act window and its context.",
+  "The receiver opens the act window with C10's `windows.create`, `incognito: true` and the mark of an act (the receiver's part of the stored sign-ins, board ab-v16.97.3), with the caller's scope for the list rules (C4, C5), at `about:blank`, held as C10 says. The window has an incognito browser context of its own. It shares no cookie, storage, Cache Storage, service worker, `BroadcastChannel`, HTTP cache or history with the default context, and Chrome drops it when its last window closes. The act tab also bypasses service workers (`Network.setBypassServiceWorker`).",
+  "One act context at a time. Before an act the receiver closes an act window that a crash left. The act refuses while another incognito window is open.",
+  "The model marks each act tab, and a popup of an act tab is an act tab. No connection sees an act tab, attaches it or gets an event of it. `Target.getTargets` leaves it out; no `Target.targetCreated`, `Target.targetInfoChanged`, `Target.targetDestroyed`, `Target.attachedToTarget` or `Target.detachedFromTarget` of it goes to a client; a client's `Target.setAutoAttach` attaches nothing of it; and each call with its target id gets `No target with given id found`. Its window is in no window lookup: `Browser.getWindowForTarget` with its id gets `No target with given id found`, and `Browser.getWindowBounds` and `Browser.setWindowBounds` with its window id get `Browser window not found` (the refusals, above). No client's screenshot, recording or close reaches it.",
+  "The service attaches its own session to the act tab, inside its own process. No socket carries that session. The act tab is new: a new document in a new context, with no opener and no window name, and no client has a script, a binding or an init script in it.",
+  "Before the first key, the service moves the act window at the X level to the right of the screen's area. It types no key until `windows.get` reports the window outside the screen.",
+  "From the act's start to its end, agentwatch's live view sends no frame of the display to a viewer and plays no input from one (C12's `sign_in` event).",
+  "The fallback. When the incognito window cannot be had, the act can run in a window of the default context, with the service-worker bypass, and the model freezes each client tab of the credential's origin during the act (`Page.setWebLifecycleState` with `frozen`). An agent's tab of that origin then still shares its storage, Cache Storage and `BroadcastChannel` with the act tab, and the Browser pane says so. The fallback is a build decision only for that case.",
+  "The form rules. The service reads the page only in an isolated world of its own (`Page.createIsolatedWorld`).",
+  "The service navigates the act tab to the record's `origin` and `path`. After the load, the main frame's origin must be the record's exact origin.",
+  "The main frame has exactly one visible, enabled password field. With two or more the act ends. With none and exactly one visible username field, the sign-in has two steps (rule 5).",
+  "The username field is the visible text, email or tel field before the password field in its form; a field with `autocomplete=\"username\"` or `type=\"email\"` comes first. A credential with an empty username skips it.",
+  "When the password field is in a `<form>`, the form's method is `post` and its action's origin is in `send_to`. This check comes before the first key. A password field with no `<form>` (a sign-in by script) goes on, with the block and the guard as its checks.",
+  "A sign-in in two steps: the act fills the username, submits, waits for the next page, and applies rules 1 to 4 again. At most one such step.",
+  "At the first key, a WebSocket or a WebTransport session of the page to a host outside `send_to` that is still open ends the act.",
+  "The type watch. Before the first key, the service puts a `MutationObserver` on the password field's `type` attribute in its isolated world. When the type changes, the observer empties the field in its own callback, and the act ends.",
+  "The first build reads only the main frame: a sign-in form in a frame gets the text of no form.",
+  "The fill and the submit.",
+  "The service takes the input lock of the browser (the input design, section 4.4) for its clicks and keys, and a client's input calls wait for it.",
+  "It clicks each field and types its value with the person's input of the input design: the generator's keys when each character has a key on the US layout and the plan fits in 10 s, else `Input.insertText`. The values reach Chrome only in the act tab's `Input` calls, over the native link.",
+  "It submits as a person does: a click on the form's visible submit button, else Enter in the password field.",
+  "The block and the guard.",
+  "From the first key to the act's end, the receiver holds the act's session rules (C5, rules A to E of the receiver's part of the stored sign-ins). They block each request of the act tab, of its popups and of the site's workers to a host outside `send_to`, every resource type, the WebSocket included, except a top-level GET. The act types no key until the receiver confirms the rules, and the receiver removes them at the act's end, also after a failure.",
+  "The guard. The service keeps `Fetch` on in the act tab for every URL, at the request stage. It fails (`Fetch.failRequest` with `BlockedByClient`) a request whose URL holds the password, on any origin, and a request to an origin outside `send_to` whose body holds the password or whose body Chrome does not give. It looks for the password in five forms: plain, URL-encoded, JSON-escaped, base64 and base64url. Every other request continues unchanged.",
+  "A blocked or failed request does not end the act. The `end` event names the host of each one, never its path.",
+  "Not stopped, stated plainly: a send to an origin of `send_to` (any path, a hash, an encryption, a compression, a part of the value, a WebSocket); a service worker's WebSocket to a subdomain or another port of a `send_to` host; a top-level or popup GET to a host on the scope's list with a changed or partial value; DNS prefetch and preconnect; and WebRTC.",
+  "The outcome. The act watches the act tab for at most 30 s after the submit.",
+  "Signed in: the main frame commits a new page or its URL changes, and after 1 s with no navigation the main frame has no visible password field. A final host that the scope's list does not cover ends the act (C4 and C5 block it).",
+  "Not accepted: a visible password field is still there after that 1 s.",
+  "A second factor: a visible field for a code and no password field: `autocomplete=\"one-time-code\"`, or an input whose name or id holds `otp`, `totp`, `2fa`, `mfa` or `code` and whose `maxlength` is 4 to 10. The act fills nothing there (the answer Q4 a).",
+  "Timeout: none of these in 30 s.",
+  "The lockout guard. Three results in a row of not accepted, timeout or a second factor stop the credential, until the operator's \"Start again\" in the Browser pane. A signed-in result sets the count to zero. At most 6 acts of one credential start in one hour, whatever their results. The service keeps the count, the stop and the hour's acts in its state file (C12), so a restart of the service does not clear them.",
+  "The clean end and the move, in this order, also after a refusal in the middle of the act:",
+  "The service empties each input of the main frame.",
+  "Only after signed in: the leak check, then the move. The service reads the act context's cookies of the credential's host and its subdomains, and the origin's `localStorage`. When a cookie value or a `localStorage` value holds the password in one of the five forms, the act makes no move. Else the service builds a C2 payload: `domain` the credential's host, `origin` its origin, `url` the origin with the path `/`, the cookies of the host and its subdomains, `storage.local` the `localStorage` items, and `storage.session` and `storage.idb` empty. It checks the payload as stage 1c checks an import (the C2 rules and the box's own sign-in rule), and gives it to the receiver's `import` (C4, C6). This is the import's code path inside the service, not C12's op `import`. C6's import closes each tab of the default context whose origin is the credential's origin, and replaces the host's cookies.",
+  "It clears the tab's history (`Page.resetNavigationHistory`).",
+  "It turns `Fetch` off, has the receiver remove the act's rules, and closes the act window and its popups. Chrome drops the act's context with its last window.",
+  "It fills the buffers of the values with zeros, and drops the opened record.",
+  "What the agent sees.",
+  "Success: the answer `{\"signedIn\":true,\"name\":\"<name>\",\"origin\":\"<origin>\"}`. The CLI and the MCP tool give the text `Signed in to <origin>. Your tabs of this site were closed for the sign-in; open the site again: it loads signed in.`",
+  "A refusal: the CDP error `{\"code\":-32000,\"message\":\"Not signed in: <text>\"}`, with one text of the table below. The CLI prints it and exits with 1, and the MCP tool gives it as its error. The result is the code in C12's `end` event and in the log line. `<name>` is the asked name (as a JSON string when it is not a string that matches the scope pattern), `<host>` is the host that the list does not cover, and `<origin>` is the record's origin.",
+  "| The cause | The result | The text |",
+  "| Signed in | `signed_in` | the success above |",
+  "| A remote admission (check 1) | `remote` | `Stored sign-ins work only for sessions of this box.` |",
+  "| Not ready (check 1) | `not_ready` | the 503 body of the readiness, for example `The agent browser is not ready: its extension is not connected.` |",
+  "| No such name for the scope (check 2) | `no_such_name` | `There is no stored sign-in named <name> for this repo.` |",
+  "| A host of `send_to` that the list does not cover (check 3) | `not_allowed` | `Not allowed: <host> is not on the allowlist` |",
+  "| Locked (check 4) | `locked` | `The stored sign-ins are locked. The operator unlocks them in the Browser pane.` |",
+  "| The record (check 5) | `cannot_open` | `The stored sign-in cannot be opened. The operator adds it again.` |",
+  "| Stopped (check 6) | `stopped` | `The site did not accept this stored sign-in three times. The operator checks it in the Browser pane.` |",
+  "| The hour's limit (check 6) | `hour_limit` | `This stored sign-in was used often in the last hour. Try again later.` |",
+  "| Busy for 60 s (check 7) | `busy` | `Another sign-in runs now. Try again in a minute.` |",
+  "| Another private window | `private_window` | `Another private window is open in the agent browser.` |",
+  "| Another origin (form rule 1) | `other_origin` | `The sign-in page is on another origin than the stored sign-in names.` |",
+  "| More than one password field (form rule 2) | `password_fields` | `The page has more than one password field.` |",
+  "| No form (form rule 2, or a form in a frame) | `no_form` | `There is no sign-in form that the agent browser can fill.` |",
+  "| The form's target (form rule 4) | `form_target` | `The sign-in form sends to another place than the stored sign-in names.` |",
+  "| An open connection (form rule 6) | `open_connection` | `The sign-in page keeps a connection to another site open.` |",
+  "| The type watch (form rule 7) | `type_watch` | `The page showed the password field as text, so the agent browser ended the sign-in.` |",
+  "| The act's rules | `rules` | `The agent browser could not hold the sign-in's rules.` |",
+  "| The window | `window` | `The agent browser could not move the sign-in window off the screen.` |",
+  "| Not accepted | `not_accepted` | `The site did not accept the stored sign-in.` |",
+  "| A second factor | `second_factor` | `The site asks for a second factor. The agent browser cannot answer it: ask the operator.` |",
+  "| A host on no list | `off_list` | `The site went to a host on no list after the sign-in.` |",
+  "| Timeout | `timeout` | `The site did not finish the sign-in in 30 s.` |",
+  "| A leak of the site | `leak` | `The site keeps the password where its pages can read it, so the agent browser did not keep the sign-in.` |",
+  "| The move | `move` | `The sign-in worked, but the agent browser could not move it to your tabs.` |",
+  "No text holds a value of the page: a site's own error text can name the username, so the act never passes it on. No text names a stop or a start of the agent browser (I2).",
+  "During and after the act.",
+  "During the act each call on the agent's own tabs works as before, and its input calls wait for the input lock while the act types and clicks. The agent's own tabs of the site, in the default context, share nothing with the act's context.",
+  "After the act the move has closed the agent's tabs of the credential's origin. The agent opens them again, and they load signed-in pages. The act window, its context and its history are gone.",
+  "A site that keeps its sign-in in one tab's `sessionStorage` or in IndexedDB gives the agent's tabs no sign-in in the first build.",
+  "The log. The service logs one line for each act: the user, the scope, the session's `repo`, the credential's id and name, the origin, the result and the time that the act took, and the host of each request that the block or the guard stopped. The move logs stage 1c's import line (counts only). A request that check 1, 2 or 3 refuses is no act: it sends no event, and its log line names only the scope and the result. No log line holds a username, a password, a form value, a page's text, a URL path or a query.",
+  "The limits, stated plainly.",
+  "The move puts the sign-in's session into the one default context, so each scope whose list covers the host gets the signed-in pages (what one profile shares between scopes, above). The answer Q2 decides who may start a sign-in, not who rides the session after it.",
+  "A site's own pages can show the username after the sign-in.",
+  "A program of the user with the display's X authority can read the display and the act window's title, move the window back onto the screen, and send it input.",
+  "A hostile process of the same OS user can replace the service and wait for the operator's next unlock (the limits of the MCP path's admission, above).",
+];
+
+test("C11's part on the sign-in act holds exactly its sentences, and it is the last part of C11", () => {
+  const p = partOr(SIGN_IN_HEADING);
+  for (const s of SIGN_IN_ITEMS) assert.ok(says(p, s), `C11 says: ${s}`);
+  assert.equal(clean(p), SIGN_IN_ITEMS.join(" "), "the part holds no other text");
+  const at = C11.indexOf(`**${SIGN_IN_HEADING}`);
+  assert.ok(C11.indexOf("**How a session gets the MCP (from stage 2;") < at && C11.indexOf("\n**", at + 2) < 0, "the part comes after how a session gets the MCP, at the end");
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/\/home\//.test(p), "no box path");
+});
+
+// The changed sentences of the sign-in design's section 10 in the other parts of C11.
+const SIGN_IN_CHANGED: Record<string, string[]> = {
+  "The self-contained agent browser (board ab-v16.94).": [
+    "| The sign-in act (`AgentBrowser.signIn`, `AgentBrowser.signIns`), the act window and its context (the sign-in act, below) | agent-browser's service | stage 1e builds it, off by default; it serves sessions from stage 3 |",
+    "The row of the sign-in act comes from the stored sign-ins design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, board ab-v16.95, section 10) and the operator's answers of 2026-11-10 (board item ab-8w8).",
+  ],
+  "Where each call goes.": [
+    "The model answers the calls of its set (two-modes design, section 4.3) on the root session and on a browser session (`Target.attachToBrowserTarget`), and `AgentBrowser.signIn` and `AgentBrowser.signIns` (the sign-in act, below).",
+    "| `AgentBrowser.signIn` | the model | refused |",
+    "| `AgentBrowser.signIns` | the model | refused |",
+  ],
+  "The scope, and one connection per tab.": [
+    "Every other tab is in no scope, and no connection sees it: the operator's tabs, the restore tab of an import, a tab that the receiver's map does not hold. An act tab of the sign-in act is in its caller's scope for the list rules, but no connection sees it, attaches it or gets an event of it; a popup of an act tab is an act tab.",
+    "There is one browser context. Every target has `\"browserContextId\":\"agentwatch-default\"`, also in the answers and events from Chrome that the model passes on. The sign-in act's window is in an incognito context of its own; no answer and no event of any client holds it or its tab.",
+  ],
+  "Permissions and content settings.": [
+    "What one profile shares between scopes, stated plainly: a content setting is per origin pattern and acts on the whole profile, so a grant of one scope applies to another scope's tab on the same host; the sent sign-ins (cookies, storage, workers) and the sessions that the sign-in act moves into it are in the profile for every scope; only navigation is guarded per scope.",
+  ],
+  "Refusals.": [
+    "| A tab of another scope, an act tab of the sign-in act, or no such tab | `Target.attachToTarget`, `Target.closeTarget`, `Target.activateTarget`, `Target.getTargetInfo`, `Browser.getWindowForTarget` | `No target with given id found` |",
+    "| A window with no tab of the scope, or the sign-in act's window | `Browser.getWindowBounds`, `Browser.setWindowBounds` | `Browser window not found` |",
+  ],
+  "The limits of the MCP path's admission (from stage 1d; the self-contained design, sections 8.3 and 18, M2).": [
+    "As on the endpoint, the check does not stop a hostile process of the same OS user. The stored sign-ins do not change this: such a process can replace the service and wait for the operator's next unlock, or use the display's X authority during an act.",
+  ],
+};
+const SIGN_IN_GONE = [
+  "(`Target.attachToBrowserTarget`). Every other call there is refused",
+  "| A tab of another scope, or no such tab |",
+  "| A window with no tab of the scope |",
+  "the sent sign-ins (cookies, storage, workers) are in the profile for every scope",
+  "Tools and argument keys pass only through the allow list (`docs/contracts/mcp-allow-list.md`).",
+  "a cookie, a URL path or a payload, and a request that the service refuses",
+];
+
+test("C11 states the changed rules of the sign-in act in their parts: the part table, where each call goes, the scope and the context, what one profile shares, the refusals, the MCP's tools and log, and the limit", () => {
+  for (const [heading, list] of Object.entries(SIGN_IN_CHANGED)) sayAll(partOr(heading), list);
+  for (const s of SIGN_IN_GONE) assert.ok(!says(C11, s), `C11 no longer says: ${s}`);
+  // The two methods route as the table says: the model on the root, refused on a page session.
+  for (const m of SIGN_IN_METHODS) assert.deepEqual([route("root", m), route("page", m)], ["the model", "refused"], m);
+});
+
+// The table of what the agent sees: the cause, the result (C12's `end` event and the log line) and the text.
+function actTable() {
+  const lines = C11.split("\n");
+  const at = lines.indexOf("| The cause | The result | The text |");
+  assert.ok(at >= 0, "C11's table of what the agent sees");
+  const rows: { cause: string; result: string; texts: string[] }[] = [];
+  for (const l of lines.slice(at + 2)) {
+    if (!l.startsWith("| ")) break;
+    const [cause, result, text] = l.slice(2, -2).split(" | ");
+    rows.push({ cause, result: /^`([a-z_]+)`$/.exec(result)?.[1] ?? result, texts: [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1]) });
+  }
+  return rows;
+}
+
+test("the sign-in act's table: one result and one text for each cause, the design's texts, no value of a page, no stop or start (I2), and C11's own texts where it reuses them", () => {
+  const rows = actTable();
+  const results = rows.map((r) => r.result);
+  assert.equal(new Set(results).size, rows.length, "one result for each cause");
+  for (const r of results) assert.match(r, /^[a-z_]+$/, r);
+  assert.equal(results[0], "signed_in", "the success first");
+  assert.deepEqual(rows[0].texts, [], "the success's text is above the table");
+  const texts = rows.slice(1).map((r) => r.texts[0]);
+  assert.equal(new Set(texts).size, texts.length, "one text for each cause");
+  for (const t of texts) {
+    assert.doesNotMatch(t, /\b(stop|stops|stopped|start|starts|restart)\b/i, `I2: ${t}`);
+    for (const ph of t.match(/<[a-z]+>/g) ?? []) assert.ok(["<name>", "<host>"].includes(ph), `${t}: only the asked name or a host of the record`);
+  }
+  // The texts of the design's section 7.9, except one: the type watch's text names no stop of the agent browser (I2).
+  const design = SIGN_IN_DESIGN.slice(SIGN_IN_DESIGN.indexOf("### 7.9"), SIGN_IN_DESIGN.indexOf("### 7.10"));
+  for (const r of rows.slice(1)) {
+    if (r.result === "type_watch") assert.equal(r.texts[0], "The page showed the password field as text, so the agent browser ended the sign-in.");
+    else if (r.result !== "not_ready") assert.ok(design.includes("`" + r.texts[0] + "`"), `the design's text: ${r.texts[0]}`);
+  }
+  // Reused texts are C11's own: the readiness's 503 body, and the refusal off the scope's list.
+  const bodies = new Set(endpoint.upgradeAnswers.map((a) => a.body));
+  assert.ok(bodies.has(rows.find((r) => r.result === "not_ready")!.texts[0]), "the readiness's body");
+  assert.ok(endpoint.templates.includes(rows.find((r) => r.result === "not_allowed")!.texts[0]), "C11's text off the list");
+  // Every cause of the design's table has a row (its row "the form" has three texts: three rows here).
+  assert.equal(rows.length, 1 + 22 + 2, "the success, the design's 22 rows, and two more rows for the form's three texts");
+  // The success's text and the refusal's form.
+  sayAll(partOr(SIGN_IN_HEADING), [
+    "Success: the answer `{\"signedIn\":true,\"name\":\"<name>\",\"origin\":\"<origin>\"}`.",
+    "A refusal: the CDP error `{\"code\":-32000,\"message\":\"Not signed in: <text>\"}`, with one text of the table below.",
+  ]);
 });

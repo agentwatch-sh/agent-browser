@@ -33,6 +33,8 @@ export const MAX_ADMISSIONS = 4;
 export const admissionLimitText = (n: number) => `The control door checks ${n} other connections now, so it refuses this one: connect again.`;
 
 const OWN = ["daemon"] as const, ACT = ["operator"] as const, START = ["operator", "token"] as const;
+/** `sign_ins_lock`: the operator, or the daemon at the uninstall; `sign_in_seal` with `"offer":true`: only an agent's offer. */
+const LOCK = ["operator", "daemon"] as const, OFFER = ["token"] as const;
 /** Each op of C12's table: its fields (the shape step) and the kinds that it takes (null: any kind, the reads). */
 export const OPS: Readonly<Record<string, { readonly fields: readonly string[]; readonly kinds: readonly string[] | null }>> = {
   config: { fields: ["enabled", "control", "chrome_bin", "chrome_args"], kinds: OWN },
@@ -50,7 +52,17 @@ export const OPS: Readonly<Record<string, { readonly fields: readonly string[]; 
   prompts_get: { fields: [], kinds: null },
   endpoint: { fields: ["scope"], kinds: null },
   sender: { fields: [], kinds: null },
+  // The stored sign-ins (C12, "The stored sign-ins"; board ab-v16.97.1): only a service with the feature sign_ins has them.
+  sign_ins_setup: { fields: ["sealed"], kinds: ACT },
+  sign_ins_unlock: { fields: ["sealed"], kinds: ACT },
+  sign_ins_lock: { fields: [], kinds: LOCK },
+  sign_ins_rekey: { fields: ["sealed"], kinds: ACT },
+  sign_in_seal: { fields: ["record", "offer", "sealed"], kinds: ACT },
+  sign_in_reseal: { fields: ["record"], kinds: ACT },
+  sign_ins: { fields: ["key", "records"], kinds: OWN },
 };
+/** The ops of the stored sign-ins (the feature `sign_ins`). */
+export const SIGN_IN_OPS = ["sign_ins_setup", "sign_ins_unlock", "sign_ins_lock", "sign_ins_rekey", "sign_in_seal", "sign_in_reseal", "sign_ins"] as const;
 /** The reads: no act, so the door does not log them. */
 export const READS: ReadonlySet<string> = new Set(["status", "lists_get", "prompts_get", "endpoint", "sender"]);
 
@@ -61,6 +73,8 @@ export const EVENTS: Readonly<Record<string, readonly string[]>> = {
   stopped: ["reason"],
   chrome: ["version", "update"],
   error: ["op", "user", "domain", "counts"],
+  sign_in: ["phase", "scope", "repo", "id", "name", "origin", "at"],
+  sign_ins: ["state", "pane_key"],
 };
 
 const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
@@ -82,6 +96,11 @@ export function fieldFits(f: string, v: unknown): boolean {
     case "chrome_args": case "add": case "remove": return strings(v);
     case "prompt": case "host": return text1(v);
     case "payload": return isObj(v);
+    case "sealed": return isObj(v) && ["text", "sender", "rid", "at"].every((k) => typeof v[k] === "string");
+    case "record": return isObj(v) && ["id", "name", "origin", "path"].every((k) => typeof v[k] === "string") && strings(v.send_to);
+    case "offer": return typeof v === "boolean";
+    case "key": return v === null || isObj(v);
+    case "records": return Array.isArray(v) && v.every(isObj);
     default: return true;
   }
 }
@@ -96,14 +115,19 @@ export function checkRequest(req: Record<string, unknown>, has: (op: string) => 
   const op = typeof req.op === "string" && Object.hasOwn(OPS, req.op) && has(req.op) ? OPS[req.op] : null;
   if (!op) return ERR.unsupported;
   if (!byFits(req.by) || !op.fields.every((f) => Object.hasOwn(req, f) && fieldFits(f, req[f]))) return ERR.bad;
-  if (op.kinds !== null && !op.kinds.includes((req.by as By).kind)) return op.kinds === ACT ? ERR.notOperator : ERR.bad;
+  // An offer of a stored sign-in takes only an agent's kind; every other seal is the operator's act.
+  const kinds = req.op === "sign_in_seal" && req.offer === true ? OFFER : op.kinds;
+  if (kinds !== null && !kinds.includes((req.by as By).kind)) return kinds === ACT ? ERR.notOperator : ERR.bad;
   return null;
 }
 
-/** An event of C12's table with exactly its fields, and a `by` of the right shape for a stop (the fake's standard input). */
+/**
+ * An event of C12's table with exactly its fields, and a `by` of the right shape for a stop (the fake's standard input).
+ * A stop also has `by`, and the end of a sign-in act also has `result`, `ms` and `blocked`.
+ */
 export function eventFits(ev: unknown): boolean {
   if (!isObj(ev) || ev.t !== "ev" || typeof ev.ev !== "string" || !Object.hasOwn(EVENTS, ev.ev)) return false;
-  const want = ["t", "ev", ...EVENTS[ev.ev], ...(ev.ev === "stopped" && ev.reason === "stop" ? ["by"] : [])].sort();
+  const want = ["t", "ev", ...EVENTS[ev.ev], ...(ev.ev === "stopped" && ev.reason === "stop" ? ["by"] : []), ...(ev.ev === "sign_in" && ev.phase === "end" ? ["result", "ms", "blocked"] : [])].sort();
   const keys = Object.keys(ev).sort();
   return keys.length === want.length && keys.every((k, i) => k === want[i]) && (ev.by === undefined || byFits(ev.by));
 }

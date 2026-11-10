@@ -43,7 +43,10 @@ export { serviceHello };
 /** The ops of stage 1a (C12, "The ops of stage 1a"). */
 export const STAGE_1A_OPS = ["config", "set_sessions", "session_ended", "status", "endpoint"] as const;
 /** Each op of C12 that no part of this service has yet, and the stage that adds it; until then it gets `unsupported`. */
-export const LATER_OPS: Readonly<Record<string, string>> = {};
+export const LATER_OPS: Readonly<Record<string, "1e1">> = {
+  // The stored sign-ins (C12, board ab-v16.97.1): stage 1e part 1 (board ab-v16.97.2) adds them, with the feature sign_ins.
+  sign_ins_setup: "1e1", sign_ins_unlock: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_in_seal: "1e1", sign_in_reseal: "1e1", sign_ins: "1e1",
+};
 /** The op of stage 1b part 2 (C12, "The ops of stage 1b part 2"): the sender package. */
 export const STAGE_1B2_OPS = ["sender"] as const;
 

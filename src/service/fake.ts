@@ -7,13 +7,18 @@
 // sign-in, no Chrome and no data of the user. It refuses the default path of control.sock, so it never takes the place
 // of the service. Each line on its standard input that is an event of C12's table, with exactly its fields, goes to
 // each connection past the hellos.
+//
+// Its stored sign-ins (the feature sign_ins; C12, "The stored sign-ins" and the fake's part; board ab-v16.97.1): it opens
+// no seal, makes no key and seals nothing. It answers the vectors' fake values, and it follows each rule that needs no
+// key: the rules of `record`, the order of the checks, the snapshot, the state, the `rid` of a pane's seal, the KDF
+// bounds, the fields that the service seals, the generation and the removed ids.
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
-import { covers } from "../relay/scopes.ts";
+import { covers, SCOPE } from "../relay/scopes.ts";
 import { EntryError, hostOrNull, normalizeHost } from "./lists/hosts.ts";
 import { refusedRule } from "./admission.ts";
 import { agentDoorUrl } from "./agent-door.ts";
@@ -48,13 +53,136 @@ export const FAKE_STATE = {
     id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.2.0",
     package: { name: "agentwatch-sender-0.2.0.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
   },
+  /** The stored sign-ins' fake values: the pane key's public half, the key.json of a set-up and of a rekey, the sealed part of each seal, and the seal text that the fake takes as a wrong passphrase. */
+  sign_ins: {"pane_key":"cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=","key":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"XtlD_scc1BSqO7QI6IJgPg"},"wrapped":{"iv":"B4obup7UgkQF8GYX","ct":"ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6","tag":"jk4pUJmfRHDzXStJGojQwA"}},"rekeyed":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"0_XWx6Xj1oofUDswBrKe5g"},"wrapped":{"iv":"a3IUxpg3ws4tUVUs","ct":"2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU","tag":"hNF_MZqahErAHIr8y361MQ"}},"sealed":{"epk":"ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk","iv":"Thcyq0pYkHTUDuOs","ct":"eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3","tag":"JMg6-BFlhxw7HHdyxOgcnQ"},"wrong_passphrase":"aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA"},
 };
+/** The features of the fake's hello: `fake`, and `sign_ins` (it has the stored sign-ins' ops, C12). */
+export const FAKE_FEATURES = ["fake", "sign_ins"] as const;
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
 // The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
 const launchRefusal = (scope: string) => `A session named ${scope} ended a moment ago, and the agent browser could not record it (the file of ended scopes cannot be written: ENOSPC). Choose another name, or wait until the agent browser confirms its lists.`;
 
 const copy = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+
+// ---- The stored sign-ins of the fake (C12, "The stored sign-ins") ----
+type StoreState = "none" | "locked" | "open";
+type SnapRecord = { id: string; gen: unknown; origin: string; by: string };
+type RecordFields = { id: string; name: string; origin: string; path: string; send_to: string[] };
+const RID_MS = 120_000;
+const loopback = (h: string) => h === "localhost" || h.endsWith(".localhost") || h === "127.0.0.1";
+/** `origin`: a URL origin as the WHATWG URL parser gives it, `https:`, or `http:` with a loopback host (for tests). */
+function originFits(o: string): boolean {
+  if (!URL.canParse(o)) return false;
+  const u = new URL(o);
+  return u.origin === o && (u.protocol === "https:" || (u.protocol === "http:" && loopback(u.hostname)));
+}
+/** The first field of `record` that breaks its rule (C12's order), or null. */
+function recordBreaks(r: RecordFields): string | null {
+  if (!/^c-[0-9a-f]{8}$/.test(r.id)) return "id";
+  if (!SCOPE.test(r.name)) return "name";
+  if (!originFits(r.origin)) return "origin";
+  if (!/^\/[^?#]*$/.test(r.path)) return "path";
+  if (!r.send_to.includes(r.origin) || !r.send_to.every(originFits) || new Set(r.send_to).size !== r.send_to.length) return "send_to";
+  return null;
+}
+/** The KDF bounds of a key.json: scrypt, N a power of two from 2^15 to 2^18, r 8, p 1, a salt of 16 bytes. */
+function kdfFits(key: Record<string, any>): boolean {
+  const k = key.kdf;
+  return isObj(k) && k.name === "scrypt" && Number.isSafeInteger(k.n) && k.n >= 2 ** 15 && k.n <= 2 ** 18 && (k.n & (k.n - 1)) === 0 && k.r === 8 && k.p === 1
+    && typeof k.salt === "string" && /^[A-Za-z0-9_-]+$/.test(k.salt) && Buffer.from(k.salt, "base64url").length === 16;
+}
+
+/** The fake's store: no key and no seal, only the rules of C12 that need none. */
+class FakeStore {
+  private snap: { key: Record<string, any> | null; records: SnapRecord[] } | null = null;
+  private open = false;
+  private openPublic: string | null = null;
+  private readonly highest = new Map<string, number>();
+  private readonly removed = new Set<string>();
+  /** Each `rid` of a pane's seal that the fake opened, and when (C12: a rid seen in the last 120 s does not open). */
+  private readonly rids = new Map<string, number>();
+  private readonly now: () => Date;
+  constructor(now: () => Date) { this.now = now; }
+
+  state(): StoreState { return this.open ? "open" : this.snap && this.snap.key !== null ? "locked" : "none"; }
+  status() { return { state: this.state(), records: this.snap?.records.length ?? 0, acts: 0, pane_key: FAKE_STATE.sign_ins.pane_key }; }
+
+  private seal(sealed: { rid: string }): boolean {
+    const t = this.now().getTime();
+    for (const [rid, at] of this.rids) if (t - at > RID_MS) this.rids.delete(rid);
+    if (this.rids.has(sealed.rid)) return false;
+    this.rids.set(sealed.rid, t);
+    return true;
+  }
+
+  private sealed(r: RecordFields, by: "operator" | "offer", approved: boolean): Answer {
+    const gen = (this.highest.get(r.id) ?? 0) + 1;
+    this.highest.set(r.id, gen);
+    const send_to = by === "offer" && !approved ? [r.origin] : [...r.send_to];
+    return { data: { record: { v: 1, id: r.id, gen, name: r.name, origin: r.origin, path: r.path, send_to, repos: null, by, approved }, sealed: copy(FAKE_STATE.sign_ins.sealed) } };
+  }
+
+  /** An op of the stored sign-ins after the door's checks (the op, the shape and the kind). */
+  handle(req: Req): Answer {
+    const err = (error: string): Answer => ({ error });
+    const record = req.record as RecordFields | undefined;
+    if (record) { const f = recordBreaks(record); if (f) return err(`the stored sign-in is not valid (field ${f})`); }
+    if (req.op === "sign_ins_lock") { this.open = false; return { data: {} }; }
+    if (req.op === "sign_ins") {
+      const records = req.records as SnapRecord[];
+      const key = req.key as Record<string, any> | null;
+      const ids = new Set(records.map((r) => r.id));
+      for (const r of this.snap?.records ?? []) if (!ids.has(r.id)) this.removed.add(r.id);
+      for (const r of records) if (typeof r.gen === "number" && Number.isSafeInteger(r.gen) && r.gen >= 1 && r.gen > (this.highest.get(r.id) ?? 0)) this.highest.set(r.id, r.gen);
+      if (key === null || key.public !== this.openPublic) this.open = false;
+      this.snap = { key, records: copy(records) };
+      return { data: { records: records.length } };
+    }
+    if (!this.snap) return err("the stored sign-ins have no snapshot yet");
+    const state = this.state();
+    const sealed = req.sealed as { text: string; rid: string } | undefined;
+    switch (req.op) {
+      case "sign_ins_setup":
+        if (this.snap.key !== null || this.open) return err("the store is set up already");
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        this.open = true; this.openPublic = FAKE_STATE.sign_ins.key.public;
+        return { data: { key: copy(FAKE_STATE.sign_ins.key) } };
+      case "sign_ins_unlock":
+        if (this.open) return { data: {} };
+        if (this.snap.key === null) return err("the store is not set up");
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        if (!kdfFits(this.snap.key)) return err("the store's key file is not valid");
+        if (sealed!.text === FAKE_STATE.sign_ins.wrong_passphrase) return err("the passphrase does not open the store");
+        this.open = true; this.openPublic = this.snap.key.public;
+        return { data: {} };
+      case "sign_ins_rekey":
+        if (state === "none" || this.snap.key === null) return err("the store is not set up");
+        if (state === "locked") return err("the store is locked");
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        if (!kdfFits(this.snap.key)) return err("the store's key file is not valid");
+        if (sealed!.text === FAKE_STATE.sign_ins.wrong_passphrase) return err("the passphrase does not open the store");
+        return { data: { key: copy(FAKE_STATE.sign_ins.rekeyed) } };
+      case "sign_in_seal":
+        if (state === "none") return err("the store is not set up");
+        if (state === "locked") return err("the store is locked");
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        if (this.removed.has(record!.id)) return err("the stored sign-in was removed");
+        return req.offer === true ? this.sealed(record!, "offer", false) : this.sealed(record!, "operator", true);
+      case "sign_in_reseal": {
+        if (state === "none") return err("the store is not set up");
+        if (state === "locked") return err("the store is locked");
+        const old = this.snap.records.find((x) => x.id === record!.id);
+        if (!old) return err("there is no stored sign-in with this id");
+        if (old.origin !== record!.origin) return err("a change of the origin needs a new seal of the password");
+        const gen = old.gen;
+        if (typeof gen !== "number" || !Number.isSafeInteger(gen) || gen < 1 || gen < (this.highest.get(old.id) ?? 0) || this.removed.has(old.id)) return err("the stored sign-in cannot be opened");
+        return this.sealed(record!, old.by === "offer" ? "offer" : "operator", true);
+      }
+    }
+    return err(ERR.unsupported);
+  }
+}
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const len = (x: unknown) => (Array.isArray(x) ? x.length : 0);
 const keys = (x: unknown) => (isObj(x) ? Object.keys(x).length : 0);
@@ -84,11 +212,13 @@ export class FakeService implements Handler {
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
+  private readonly store: FakeStore;
 
   constructor(o: { agentDoor?: string; now?: () => Date }) {
     this.agentDoor = o.agentDoor ?? FAKE_STATE.agent_door;
     this.now = o.now ?? (() => new Date());
-    this.hello = serviceHello(packageInfo().version, null, ["fake"]);
+    this.store = new FakeStore(this.now);
+    this.hello = serviceHello(packageInfo().version, null, FAKE_FEATURES);
   }
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
@@ -128,6 +258,7 @@ export class FakeService implements Handler {
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo) })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
+      sign_ins: this.store.status(),
     };
   }
 
@@ -178,6 +309,13 @@ export class FakeService implements Handler {
         if (!this.sessions.some((s) => s.scope === req.scope)) return { error: ERR.noSession };
         return { data: { url: agentDoorUrl(this.agentDoor, req.scope as string) } };
       case "sender": return { data: copy(FAKE_STATE.sender) };
+      case "sign_ins_setup": case "sign_ins_unlock": case "sign_ins_lock": case "sign_ins_rekey": case "sign_in_seal": case "sign_in_reseal": case "sign_ins": {
+        const before = this.store.state();
+        const a = this.store.handle(req);
+        const after = this.store.state();
+        if (after !== before) this.emit({ t: "ev", ev: "sign_ins", state: after, pane_key: FAKE_STATE.sign_ins.pane_key });
+        return a;
+      }
       default: return { error: ERR.unsupported };
     }
   }

@@ -54,7 +54,7 @@ async function hello(path: string): Promise<{ c: DaemonClient; hello: any }> {
 
 // ------------------------------------------------------------------ the hello
 
-test("the service's hello is its first line after the admission: v 1, side service, the package's version, the commit that it runs, and the features ([] for stage 1a, [\"fake\"] with commit null for the fake)", async () => {
+test("the service's hello is its first line after the admission: v 1, side service, the package's version, the commit that it runs, and the features ([] for stage 1a, [\"fake\",\"sign_ins\"] with commit null for the fake)", async () => {
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
   assert.deepEqual(packageInfo(), { version: VERSION, commit: head }, "this checkout's version and commit");
   const real = await openDoor(stage1a());
@@ -186,6 +186,8 @@ test("the fake answers every request vector and every bad request vector as the 
       { t: "ev", ev: "prompt", id: "p1", state: "closed", host: p1.host, scope: "web-1", list: p1.list, from: null, warnings: [] },
       { t: "ev", ev: "prompt", id: "p2", state: "closed", host: p2.host, scope: "web-1", list: p2.list, from: null, warnings: [] },
       { t: "ev", ev: "stopped", reason: "stop", by: control.requests.find((v: any) => v.req.id === "r12").req.by },
+      // The stored sign-ins: each change of the store's state (s4 open, s14 locked, s17 open, s24 locked, s27 none).
+      ...["open", "locked", "open", "locked", "none"].map((state) => ({ t: "ev", ev: "sign_ins", state, pane_key: control.state.sign_ins.pane_key })),
     ]);
     c.end();
   } finally { await d.close(); }
@@ -194,8 +196,9 @@ test("the fake answers every request vector and every bad request vector as the 
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
   // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts), stage 1b part 1's part start and stop
-  // (test/service-unit-part.test.ts), stage 1b part 2's part sender (test/service-native.test.ts): no op is later now.
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), {});
+  // (test/service-unit-part.test.ts), stage 1b part 2's part sender (test/service-native.test.ts); the stored sign-ins'
+  // seven ops come with stage 1e part 1 (board ab-v16.97.2).
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sign_in_reseal: "1e1", sign_in_seal: "1e1", sign_ins: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_ins_setup: "1e1", sign_ins_unlock: "1e1" });
   assert.deepEqual([...STAGE_1B1_OPS], ["start", "stop"]);
   assert.deepEqual([...STAGE_1B2_OPS], ["sender"]);
   assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...STAGE_1B2_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
@@ -278,7 +281,8 @@ test("the log rule: the service logs each act with its provenance, and no log li
   const secrets = new Set<string>();
   for (const v of [...control.requests, ...control.badRequests]) {
     const { t, id, op, by, ...fields } = v.req;
-    for (const s of strs(fields)) if (s.length >= 4) secrets.add(s);
+    // The words of provenance are logged by design (a record file of the stored sign-ins holds "by":"operator").
+    for (const s of strs(fields)) if (s.length >= 4 && !["operator", "token", "daemon", "config", "send"].includes(s)) secrets.add(s);
   }
   secrets.add("lt-1a2b");
   for (const make of [stage1a, () => new FakeService({ agentDoor: AGENT_DOOR })]) {
