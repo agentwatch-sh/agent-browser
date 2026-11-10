@@ -228,6 +228,11 @@ test("keys rule Shift: a Shift rawKeyDown 45 to 95 ms before a shifted character
       if (next) assert.ok(next.t > up.t, `${next.key} waits for the Shift release`);
     }
   }
+  // Rollover into a capital: a key whose release comes after the next key's Shift press goes up with Shift down (modifiers 8).
+  const roll = new KeyStream(MID, seededRandom(5), { holdMs: [200, 210], keyMs: [10, 12] });
+  const pa = roll.next(k("a"), 0), ra = roll.release(k("a"), pa[0].t), pb = roll.next(k("B"), pa[0].t);
+  assert.ok(ra.early && pb[0].key === "Shift" && pb[0].t < ra.events[0].t, "the Shift press comes in a's hold");
+  assert.equal(ra.events[0].modifiers, SHIFT, "a's keyUp, planned before the Shift press, has Shift down at its time");
   // Hands' chords keep the rule: a run of Shift+ArrowRight keeps Shift down.
   const s = new KeyStream(MID, seededRandom(2)), right = parseKey("Shift+ArrowRight"), all: KeyEv[] = [];
   let at = 0;
@@ -278,6 +283,13 @@ test("keys rule no corrections: the plan types exactly its text, with no Backspa
     assert.ok(!ev.some((e) => /^(Backspace|Delete)$/.test(e.key)));
     assert.ok(ev.filter((e) => e.own).every((e) => e.key === "Shift"), "the plan's own keys are Shift only");
     assert.equal(ev.filter((e) => e.type !== "keyUp").length, ev.filter((e) => e.type === "keyUp").length, "each press has its release");
+    // A key goes down only while it is up ("ll", "oo": the second press after the first's release).
+    const down = new Set<string>();
+    for (const e of ev) {
+      if (e.type === "keyUp") { down.delete(e.code); continue; }
+      assert.ok(!down.has(e.code), `${e.key} goes down twice (seed ${seed})`);
+      down.add(e.code);
+    }
   }
 });
 
