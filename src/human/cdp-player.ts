@@ -41,6 +41,8 @@ export type PlayerOptions = {
   minGapMs?: number;
   /** Runs before each send (agent-browser's guard); a throw stops the plan. */
   before?: () => void;
+  /** One latency for all the moves of a plan (a device's latency over one path), not one for each move. */
+  latencyPerPlan?: boolean;
 };
 
 export type MovesResult = { sent: number; stopped: boolean };
@@ -58,10 +60,11 @@ export class CdpPlayer {
   }
 
   /** The CDP timestamp of an event sent now (seconds): a latency before the send, in whole ms when wholeMs. */
-  timestamp(): number {
-    const ms = this.stamp() - uniform(this.o.random, this.o.latencyMs[0], this.o.latencyMs[1]);
+  timestamp(latency = this.latency()): number {
+    const ms = this.stamp() - latency;
     return (this.o.wholeMs ? Math.round(ms) : ms) / 1000;
   }
+  private latency(): number { return uniform(this.o.random, this.o.latencyMs[0], this.o.latencyMs[1]); }
 
   /** One event, with its timestamp, after the `before` check; its answer awaited. */
   async event(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -77,6 +80,7 @@ export class CdpPlayer {
   async moves(samples: readonly Sample[], extra: Record<string, unknown> = {}): Promise<MovesResult> {
     const t0 = this.clock.now(), scale = this.o.scale ?? 1, gap = this.o.minGapMs ?? 0, pending: Promise<void>[] = [];
     let inFlight = 0, sent = 0, stopped = false, last = -Infinity, failed: { e: unknown } | undefined;
+    const lat = this.o.latencyPerPlan ? this.latency() : undefined;
     const settle = () => Promise.all(pending);
     for (const s of samples) {
       const due = Math.max(t0 + s.t * scale, last + gap), wait = due - this.clock.now();
@@ -84,7 +88,7 @@ export class CdpPlayer {
       if (failed) break;
       if (inFlight >= this.o.maxInFlight) { stopped = true; break; }
       try { this.o.before?.(); } catch (e) { await settle(); throw e; }
-      const p = this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s.x, y: s.y, button: "none", buttons: 0, ...extra, timestamp: this.timestamp() });
+      const p = this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s.x, y: s.y, button: "none", buttons: 0, ...extra, timestamp: this.timestamp(lat ?? this.latency()) });
       inFlight++;
       sent++;
       pending.push(p.then(() => { inFlight--; }, (e) => { inFlight--; failed ??= { e }; }));

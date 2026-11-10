@@ -885,3 +885,62 @@ for (const disposition of ["newTab", "newWindow"]) test(`an off-list ${dispositi
     assert.equal(page.url, `${fx.base}/`);
   } finally { await commands.close(linux(), { tab: name }).catch(() => {}); }
 });
+
+// ---------- the generator of src/human/ (board ab-t30.3; the input design, sections 10.1 and 11.2) ----------
+
+test("the generator's player: a click's moves go at the plan's rate with no wait for each answer, each event with a person's timestamp; the hold counts from the press's send", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  fake.delays.set("Input.dispatchMouseEvent", 25); // each answer comes 25 ms after the event
+  try {
+    const calls = await callsOf(page, () => commands.click(linux({ inputTiming: { ...FAST, moveScale: 1, pressMs: [150, 160] } }), { tab: name, target: "#b" }));
+    const ev = mouse(calls), moves = ev.filter((x) => x.params.type === "mouseMoved");
+    assert.ok(moves.length >= 20, `${moves.length} moves`);
+    const gaps = moves.slice(1).map((x, i) => x.t - moves[i].t).sort((a, b) => a - b);
+    assert.ok(gaps[Math.floor(gaps.length / 2)] <= 12, `the moves 8 ms apart, not one answer apart: median gap ${gaps[Math.floor(gaps.length / 2)]} ms`);
+    for (const x of ev) {
+      const ts = x.params.timestamp * 1000;
+      assert.ok(Number.isInteger(Math.round(ts * 1000) / 1000) && Math.abs(ts - Math.round(ts)) < 1e-6, `whole ms: ${ts}`);
+      assert.ok(x.t - ts >= 2.5 && x.t - ts <= 8, `a latency of 3 to 5 ms before the send: ${x.t - ts} ms`);
+    }
+    const press = ev.find((x) => x.params.type === "mousePressed")!, release = ev.find((x) => x.params.type === "mouseReleased")!;
+    assert.ok(release.t - press.t >= 148 && release.t - press.t <= 172, `a hold of 150 to 160 ms from the press's send, not from its answer: ${release.t - press.t} ms`);
+  } finally { fake.delays.delete("Input.dispatchMouseEvent"); }
+  assert.equal(page.title, "clicked");
+  await commands.close(linux(), { tab: name });
+});
+
+test("the generator's press point: a person's spread around the element's middle, at most 1/4 of its smaller side; the scope's person keeps its seed in pointer.json", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const points = new Set<string>();
+  for (let i = 0; i < 8; i++) {
+    const ev = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: i % 2 ? "#b" : "#hov" })));
+    const p = ev.find((x) => x.params.type === "mousePressed")!.params;
+    const [cx, cy, side] = i % 2 ? [100, 115, 30] : [350, 115, 30];
+    assert.ok(Math.hypot(p.x - cx, p.y - cy) <= side / 4 + 1e-9, `${p.x},${p.y}: at most ${side / 4} px from the middle`);
+    assert.ok(Number.isInteger(p.x) && Number.isInteger(p.y));
+    points.add(`${p.x},${p.y}`);
+  }
+  assert.ok(points.size >= 4, `spread: ${[...points].join(" ")}`);
+  const seed = JSON.parse(readFileSync(join(c.stateDir, "pointer.json"), "utf8")).seed;
+  assert.ok(Number.isInteger(seed), "the scope's person: a seed in pointer.json");
+  await commands.click(linux(), { tab: name, target: "#b" });
+  assert.equal(JSON.parse(readFileSync(join(c.stateDir, "pointer.json"), "utf8")).seed, seed, "kept for the state folder's life");
+  await commands.close(linux(), { tab: name });
+});
+
+test("the generator's start: a page with no last point and no X pointer starts its path in the viewport's middle 30% to 70%, never at a fixed point", async () => {
+  const firsts: { x: number; y: number }[] = [];
+  for (let i = 0; i < 5; i++) {
+    operatorInFront();
+    const { name, page } = await windowPage();
+    const first = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })))[0].params;
+    // One step of at most 28 px (3.5 px/ms for 8 ms) from a start in the middle 30% to 70% of the fake's 1280 x 800 view.
+    assert.ok(first.x >= 0.3 * 1280 - 28 && first.x <= 0.7 * 1280 + 28 && first.y >= 0.3 * 800 - 28 && first.y <= 0.7 * 800 + 28, `${first.x},${first.y}`);
+    firsts.push(first);
+    await commands.close(linux(), { tab: name });
+  }
+  const xs = firsts.map((p) => p.x), ys = firsts.map((p) => p.y);
+  assert.ok(Math.max(...xs) - Math.min(...xs) > 60 || Math.max(...ys) - Math.min(...ys) > 60, `no fixed start: ${firsts.map((p) => `${p.x},${p.y}`).join(" ")}`);
+});

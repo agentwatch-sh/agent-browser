@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { CdpPlayer, type Clock } from "../src/human/cdp-player.ts";
 import { buildTrajectory, drawShape, fittsMs, peakSpeed, planPath, startPoint, type Pt, type Sample } from "../src/human/path.ts";
 import { drawPerson, middlePerson, paramsFor, personFor, type Person } from "../src/human/person.ts";
@@ -96,6 +97,22 @@ test("person: the parameter files hold the first values of design 10.1 (Linux; t
     assert.ok(typeof (p as any).sources[k] === "string" && (p as any).sources[k].length > 10, `${p.platform}: the source of ${k}`);
 });
 
+test("person: the parameter files agree with C11's input stage (test/vectors/stage.json): its constants and its pointer's first values; each plan's time is in its ranges", () => {
+  const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8")), c = V.constants, f = V.firstValues;
+  for (const p of [LINUX, MAC]) {
+    assert.deepEqual([p.device.rateMs, p.device.latencyMs, p.device.movesInFlight, p.wheel.notchPx], [c.STAGE_MOVE_MS, c.STAGE_LATENCY_MS, c.STAGE_MOVES_IN_FLIGHT, c.STAGE_NOTCH_PX]);
+    assert.deepEqual([[p.path.fitts.minMs, p.path.fitts.maxMs], p.path.overshoot.maxMs, p.path.overshoot.minPx, p.device.maxPxPerMs], [f.pathMs, f.longPathMs[1], f.longPathPx, f.maxSpeedPxPerMs]);
+    const pause = p.press.pauseMs as { min: number; max: number }, hold = p.press.holdMs as { min: number; max: number };
+    assert.deepEqual([[pause.min, pause.max], [hold.min, hold.max], (p.press.doubleGapMs as { uniform: number[] }).uniform, (p.wheel.gapMs as { uniform: number[] }).uniform, p.press.spread.sdShare, p.press.spread.maxShare],
+      [f.pauseMs, f.holdMs, f.dblGapMs, f.notchGapMs, f.spreadSd, f.spreadMax]);
+  }
+  for (const [i, [a, b]] of pairs(300, 15, 3, 1500).entries()) {
+    const p = plan(a, b, i % 3 ? 24 : 80, i);
+    const [lo, hi] = p.trajectory.shape.overshoot ? f.longPathMs : f.pathMs;
+    assert.ok(p.ms >= lo && p.ms <= hi + 1e-9, `${p.ms} ms for ${dist(a, b).toFixed(0)} px`);
+  }
+});
+
 // ================================================================ the path (design 10.1)
 
 test("path rule the start: a path starts at its start point, never at a fixed point; a page with no last point starts in the viewport's middle 30% to 70%", () => {
@@ -124,6 +141,11 @@ test("path rule the time: Fitts's law a + b log2(1 + D / W) times a lognormal sp
   const logs = ratios.map(Math.log), m = logs.reduce((x, y) => x + y, 0) / logs.length, sd = Math.sqrt(logs.reduce((x, y) => x + (y - m) ** 2, 0) / logs.length);
   assert.ok(Math.abs(m) < 0.04, `the log's mean ${m}`);
   assert.ok(sd > 0.15 && sd < 0.22, `the log's sd ${sd} (sigma 0.2, bounded at 0.6 and 1.6)`);
+  // The bounds: a short move takes 300 ms or more, a long one to a small target 1000 ms or less (before the speed rule's stretch).
+  for (let i = 0; i < 100; i++) {
+    assert.ok(drawShape({ x: 0, y: 0 }, { x: 3, y: 0 }, 24, MID, seededRandom(i)).fittsMs >= 300);
+    assert.ok(drawShape({ x: 0, y: 0 }, { x: 2000, y: 0 }, 4, MID, seededRandom(i)).fittsMs <= 1000);
+  }
   // The person's speed scales the time.
   const slow = { ...MID, speed: 1.2 };
   assert.ok(Math.abs(drawShape({ x: 0, y: 0 }, { x: 300, y: 0 }, 24, slow, seededRandom(1)).fittsMs / drawShape({ x: 0, y: 0 }, { x: 300, y: 0 }, 24, MID, seededRandom(1)).fittsMs - 1.2) < 1e-9);
@@ -243,6 +265,7 @@ test("path rule the rate: one sample each 8 ms, in whole px, no sample that does
     }
     assert.deepEqual({ x: prev.x, y: prev.y }, b, "the target last");
     for (let k = 1; k < p.samples.length; k++) assert.ok(p.samples[k].t > p.samples[k - 1].t);
+    if (dist(a, b) > 200) assert.ok(p.samples.filter((x, k) => k > 0 && x.t - p.samples[k - 1].t === 8).length > p.samples.length / 2, "most samples 8 ms apart");
   }
   assert.deepEqual(plan({ x: 5, y: 5 }, { x: 5.3, y: 4.8 }).samples, [], "a move of less than 1 px: nothing");
   const half = planPath({ x: 10.4, y: 10.6 }, { x: 300.5, y: 200.5 }, 24, MID, seededRandom(1));

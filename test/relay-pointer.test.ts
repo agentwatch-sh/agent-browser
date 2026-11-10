@@ -169,6 +169,17 @@ test("the stretch: a long fast move gets one longer time for its whole trajector
   assert.ok(path.reduce((a, p) => a + p.dt, 0) > fast.reduce((a, p) => a + p.dt, 0), "it takes longer");
 });
 
+test("a long move whose overshoot does not fit C10's 1500 ms after the stretch: the path without its overshoot", async () => {
+  // With this seed the middle person's move overshoots, and its stretched time is about 1550 ms.
+  const S = { x: 30, y: 450 }, T = { x: 1880, y: 520 }, person = middlePerson();
+  assert.equal(drawShape(S, T, 24, person, seededRandom(5)).overshoot, true);
+  const path = (await planPath(S, T, { random: seededRandom(5), person }))!;
+  assert.ok(path, "a path");
+  assertPath(path, S, T, null, "without the overshoot");
+  const past = Math.max(...path.map((p) => p.x));
+  assert.ok(past <= T.x, `no point past the target: ${past}`);
+});
+
 test("no path when it does not fit the limits (more than 1500 ms: a far target on a large display)", async () => {
   assert.equal(await planPath({ x: 5, y: 5 }, { x: 3800, y: 2100 }, { random: seededRandom(9) }), null);
 });
