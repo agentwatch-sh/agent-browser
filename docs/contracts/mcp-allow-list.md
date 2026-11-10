@@ -5,7 +5,8 @@ allow list. It is a part of C11 (`docs/contracts/C11.md`, the MCP inside the ser
 `docs/superpowers/specs/2026-11-09-self-contained-agent-browser-design.md`, section 8.2, and the operator's
 answer Q4 of 2026-11-10 (the standard Playwright MCP, pinned, under the allow list; the design's section 19).
 Stage 1d (board ab-v16.94.5) writes the first list for the pinned version of `@playwright/mcp`, and its test.
-Stage 0 adds no package. The vectors of the format: `test/vectors/mcp-allow-list.json`.
+Stage 1d's first list holds the 24 tools of M3's part C (the self-contained design, section 8.2), and no
+`browser_run_code_unsafe`. Stage 0 adds no package. The vectors of the format: `test/vectors/mcp-allow-list.json`.
 
 **Why an allow list.** The service serves only the tools and the argument keys that the list names, not every
 tool except some. So a new tool or a new argument in a newer `@playwright/mcp` reaches no client until a review

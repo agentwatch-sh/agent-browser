@@ -1,12 +1,20 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines: the open prompts p1 and p2.",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines: the open prompts p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo).",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
  "state": {
   "prompts": [
-   "p1",
-   "p2"
+   {
+    "id": "p1",
+    "host": "login.example",
+    "list": "owner-repo"
+   },
+   {
+    "id": "p2",
+    "host": "cdn.example",
+    "list": "owner-repo"
+   }
   ]
  },
  "hellos": [
@@ -59,12 +67,59 @@
    "newer": true
   }
  ],
+ "badHellos": [
+  {
+   "note": "the daemon reads a hello whose side is not service (a process that is not the service, or a mixed-up peer): it closes the connection",
+   "reader": "daemon",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "daemon",
+    "version": "0.9.0",
+    "features": []
+   },
+   "closes": true
+  },
+  {
+   "note": "the service reads a hello whose side is not daemon: it closes the connection",
+   "reader": "service",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "service",
+    "version": "0.3.0",
+    "commit": null,
+    "features": []
+   },
+   "closes": true
+  },
+  {
+   "note": "a hello whose v is not 1 is a new door: the reader closes the connection and sends no request and no answer",
+   "reader": "daemon",
+   "line": {
+    "t": "hello",
+    "v": 2,
+    "side": "service",
+    "version": "0.9.0",
+    "commit": null,
+    "features": []
+   },
+   "closes": true
+  }
+ ],
  "refused": [
   {
    "note": "the systemd query failed (m1): one line with the reason, then the service closes the connection",
    "line": {
     "t": "refused",
     "reason": "The control door cannot read the MainPID of agentwatch's unit, so it admits no connection."
+   }
+  },
+  {
+   "note": "a peer that fails a rule of 1 to 4 (here rule 2: its parent is not the MainPID): one line that names the rule, then the service closes the connection",
+   "line": {
+    "t": "refused",
+    "reason": "The control door admits only the agentwatch daemon process: rule 2 failed (its parent is not the MainPID of agentwatch's unit)."
    }
   }
  ],
@@ -232,7 +287,7 @@
    }
   },
   {
-   "note": "an operator act from the web viewer with a password login: list_set",
+   "note": "an operator act from the web viewer with a password login: list_set adds and removes entries of one list (it never replaces the list)",
    "req": {
     "t": "req",
     "id": "r7",
@@ -243,9 +298,12 @@
      "via": "web"
     },
     "list": "owner-repo",
-    "allow": [
+    "add": [
      "example.com",
      "https://bad/x"
+    ],
+    "remove": [
+     "old.example"
     ]
    },
    "res": {
@@ -253,6 +311,10 @@
     "id": "r7",
     "ok": true,
     "data": {
+     "allow": [
+      "a.example",
+      "example.com"
+     ],
      "refused": [
       {
        "entry": "https://bad/x",
@@ -263,7 +325,7 @@
    }
   },
   {
-   "note": "an operator act: the allow of a prompt (its field prompt names the prompt's id)",
+   "note": "an operator act: the allow of a prompt, with the host and the list that the operator saw",
    "req": {
     "t": "req",
     "id": "r8",
@@ -273,13 +335,20 @@
      "user": "ann",
      "via": "web"
     },
-    "prompt": "p1"
+    "prompt": "p1",
+    "host": "login.example",
+    "list": "owner-repo"
    },
    "res": {
     "t": "res",
     "id": "r8",
     "ok": true,
     "data": {
+     "allow": [
+      "a.example",
+      "example.com",
+      "login.example"
+     ],
      "refused": []
     }
    }
@@ -417,9 +486,10 @@
      "via": "cli"
     },
     "list": "owner-repo",
-    "allow": [
+    "add": [
      "example.com"
-    ]
+    ],
+    "remove": []
    },
    "res": {
     "t": "res",
@@ -439,7 +509,9 @@
      "user": "ann",
      "via": "daemon"
     },
-    "prompt": "p1"
+    "prompt": "p1",
+    "host": "login.example",
+    "list": "owner-repo"
    },
    "res": {
     "t": "res",
@@ -589,7 +661,9 @@
      "user": "ann",
      "via": "web"
     },
-    "prompt": "p-gone"
+    "prompt": "p-gone",
+    "host": "login.example",
+    "list": "owner-repo"
    },
    "res": {
     "t": "res",
@@ -614,6 +688,156 @@
    "res": {
     "t": "res",
     "id": "b11",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "the allow of a prompt whose host is not the one that the operator saw (the prompt changed): this prompt is gone",
+   "req": {
+    "t": "req",
+    "id": "b12",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p1",
+    "host": "other.example",
+    "list": "owner-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "b12",
+    "ok": false,
+    "error": "this prompt is gone"
+   }
+  },
+  {
+   "note": "the allow of a prompt whose list is not the one that the operator saw",
+   "req": {
+    "t": "req",
+    "id": "b13",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p2",
+    "host": "cdn.example",
+    "list": "other-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "b13",
+    "ok": false,
+    "error": "this prompt is gone"
+   }
+  },
+  {
+   "note": "a list_set of the design's old form (the whole list in allow, no add and no remove)",
+   "req": {
+    "t": "req",
+    "id": "b14",
+    "op": "list_set",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "list": "owner-repo",
+    "allow": [
+     "example.com"
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "b14",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with one root that breaks C11's root rule (pid 1): the whole snapshot is a bad request",
+   "req": {
+    "t": "req",
+    "id": "b15",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       },
+       {
+        "pid": 1,
+        "start": 0
+       }
+      ],
+      "cgroup": null
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b15",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a config whose chrome_args is not a list of strings",
+   "req": {
+    "t": "req",
+    "id": "b16",
+    "op": "config",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "config"
+    },
+    "enabled": true,
+    "control": true,
+    "chrome_bin": null,
+    "chrome_args": "--flag"
+   },
+   "res": {
+    "t": "res",
+    "id": "b16",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a stop with the token: allowed today; a stop by the daemon itself is a bad request",
+   "req": {
+    "t": "req",
+    "id": "b17",
+    "op": "stop",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b17",
     "ok": false,
     "error": "bad request"
    }
@@ -733,6 +957,17 @@
      "errors": 1
     }
    }
+  }
+ ],
+ "newerEvents": [
+  {
+   "note": "an event of a newer service that the daemon does not know: it ignores it, as a field that it does not know",
+   "ev": {
+    "t": "ev",
+    "ev": "later_event",
+    "count": 1
+   },
+   "ignored": true
   }
  ]
 }

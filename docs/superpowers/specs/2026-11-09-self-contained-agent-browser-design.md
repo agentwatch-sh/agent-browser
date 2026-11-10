@@ -701,7 +701,7 @@ How the service runs it:
   other scopes go on. At most 4 MCP sessions for each scope and 32 for each service (first values). The
   memory of a worker is not measured; the build measures it and sets the values. The daemon's memory
   guard no longer caps one session's MCP alone, because the MCP is no longer in the session's cgroup.
-- **The transport** is a small Streamable HTTP transport of the service's own on the agent door, at
+- **The transport** is a small Streamable HTTP transport of the service's own on the MCP port (section 19), at
   `/mcp/<scope>`. The MCP server object needs only `start`, `send` and `close` from a transport, and M3's
   part C ran `initialize`, `tools/list` and `browser_navigate` through such a transport with no MCP SDK
   package. With the operator's answer Q1 (section 19) the agents' own HTTP MCP clients talk to this
@@ -787,10 +787,12 @@ The operator's answer Q2 (section 19): agentwatch adds the MCP's HTTP entry to t
 session that it launches when the session's scope has a list with at least one site. The entry holds the URL
 with the session's scope (a label: the walk decides the scope) and no secret. agentwatch writes it into a
 configuration of the session's own at the launch (Claude Code: a generated file with `--mcp-config`; Codex: a
-`-c` override or the account's own `CODEX_HOME`), never into the user's global files. Nothing goes into the
+`-c` override for each launch), never into the user's global files. The entry names `127.0.0.1`, never
+`localhost`, and agentwatch writes it only when the `LISTEN` line of `127.0.0.1:<port>` in `/proc/net/tcp` has
+the user's uid (else `agentwatch health` shows red). Nothing goes into the
 session's environment: the operator's answer age-4ks ("env: no") stays. agentwatch does not rewrite a running
 session's configuration, so a list that gets its first site after the launch takes effect at the session's
-next launch; the skill says how to add the entry by hand. Each session that has the entry loads the MCP's
+next launch, and the session needs a restart. Each session that has the entry loads the MCP's
 tool list into its context.
 
 ## 9. Another box (task item 5)
@@ -966,7 +968,7 @@ agentwatch's `SECURITY.md`). Each stage is live-checked on taylor first.
 | Stage | Repository | What | Tests | Rollback |
 | --- | --- | --- | --- | --- |
 | 0. Contracts | chrome-extension (`docs/protocol.md`), agent-browser | C1, C4 and C10 texts of section 6, the C4 and C10 parts marked "from stage 3"; C11's master text moves to agent-browser; C12 (the control door) and the format of the MCP's allow list in agent-browser | the vectors (`test/vectors/`) gain the control door's lines | a text revert |
-| 1. The service, off by default | agent-browser | `agent-browser service`: both doors with the admission of section 7.1, the hello, the host shim, the model in-process, the Chrome unit, which the service runs only while its unit is active (section 13.2), with the end of the old owner's host, `--hello`, and a host shim that tries its socket again every second, Xvfb, the pointer, the lists in today's files, the prompts, the status texts (I2), `launch_check`, `sender`, `endpoint`, the import, the events, the MCP with its allow list and its worker limits; the CLI's refusals of the internal commands and flags; `--fake`, `--test`, `stop --all` | unit tests with fakes (the model's tests stay); the allow-list test; the control door's admission (the MainPID, its child with the daemon's command line and the parent's start time, a process of agentwatch's cgroup refused, a child of the daemon refused, a new pid after a restart, a failed systemd query refused); a live test in the harness with `--test` (its own Xvfb, its own Chromium with the real agent package, no stand-in daemon); a start, a crash and a stop of the service under a test systemd unit, with Chrome kept and a stand-in daemon host ended | nothing uses it yet |
+| 1. The service, off by default | agent-browser | `agent-browser service`: the three doors (the agent door, the MCP port and the control door) with their admission (sections 7.1 and 19), the hello, the host shim, the model in-process, the Chrome unit, which the service runs only while its unit is active (section 13.2), with the end of the old owner's host, `--hello`, and a host shim that tries its socket again every second, Xvfb, the pointer, the lists in today's files, the prompts, the status texts (I2), `launch_check`, `sender`, `endpoint`, the import, the events, the MCP with its allow list and its worker limits; the CLI's refusals of the internal commands and flags; `--fake`, `--test`, `stop --all` | unit tests with fakes (the model's tests stay); the allow-list test; the control door's admission (the MainPID, its child with the daemon's command line and the parent's start time, a process of agentwatch's cgroup refused, a child of the daemon refused, a new pid after a restart, a failed systemd query refused); a live test in the harness with `--test` (its own Xvfb, its own Chromium with the real agent package, no stand-in daemon); a start, a crash and a stop of the service under a test systemd unit, with Chrome kept and a stand-in daemon host ended | nothing uses it yet |
 | 2. The client in agentwatch, off by default | agentwatch (the daemon lead) | the control door client behind the hello's features; `config`, `set_sessions`, `launch_check`; the gateway's operator field (R7); the switch, a config key per box (`browser.service`, default off), with section 13.2's steps; `panes.py` to `agentwatch/daemon/`; the unit file (only while `browser.enabled` is true; `KillMode=process`, `Restart=on-failure`, the start limit, `Before` and `After`), the daemon's reads of the unit state, its health rule for a hung service, restart at a pin change, and its `agentwatch health` line; the memory guard's pid from the service; the update and rollback commands' refusal of a release from before stage 2 while the switch is on; the old path stays the default and unchanged | `make check` with `--fake`, in both unit states (no owner part of the daemon starts while the unit is active; a slow `launch_check`); the live suite with the test browser on taylor: every case of section 13.2's test list, a daemon restart in each mode keeps Chrome, and a pin change | the switch off; then, for the code, the previous agentwatch release with the service's unit removed (the update command switches off first, section 13.2 rule 6) |
 | 3. Switch taylor | agentwatch config, with the operator's approval | the switch on for the operator's agent browser on taylor; the service listens at today's endpoint path, which the daemon gives | the live check: Chrome's pid stays, every session's endpoint works, a sign-in send works, a blocked prompt reaches the pane, start and stop behave as today | the switch off (stage 2's tested steps) |
 | 4. The Mac | agent-browser, agentwatch | the Mac paths of section 10 (ab-v16.8, age-0kh.23 go straight to the service); the control door's admission for the launchd job | the Mac checks of section 10, through the manager with the operator | the Mac stays without agent mode |
@@ -1444,7 +1446,7 @@ build:
    reader (`libproc`) is built and measured, before stage 4.
 4. agentwatch writes the MCP's HTTP entry into each session's own MCP configuration at the launch, never into
    the user's global files: for Claude Code a generated file for the session with `--mcp-config`, for Codex a
-   `-c` override for the session or the account's own `CODEX_HOME`. It writes it only when the session's scope
+   `-c` override for each launch (the daemon lead's change D19). It writes it only when the session's scope
    has a list with a site (Q2), and nothing into the environment. A list change during a session does not
    rewrite the session's configuration: the change takes effect at the session's next launch, so the session
    needs a restart.
@@ -1457,7 +1459,7 @@ Q1 is about a local session. Section 9's path for a session of another box does 
 allowlist" (free text).** agentwatch adds the MCP's HTTP entry to a session's MCP configuration at the
 session's launch when the session's scope has a list with at least one site. Nothing goes into the session's
 environment: the answer age-4ks stays. A list that gets its first site after the launch takes effect at the
-next launch (an internal choice), and the skill says how to add the entry by hand.
+next launch (an internal choice): the session needs a restart (the daemon lead's change D19).
 
 **Q3. What does the browser grant for another box give? The answer: a, one grant per box (the
 recommendation).** One Mac list for all sessions of that box.
@@ -1493,12 +1495,23 @@ answered "Q1 a" before the operator's answer.
 
 **Build notes from the answers.** These are not decisions; the stages take them into account.
 
-1. A systemd socket unit starts its service at the first connection to its socket. Such a start would start the
-   service's unit from outside the switch-on (open point 2 of section 17), and it would give the Chrome unit to
-   the service on a box whose switch is off. So stage 1d holds the port with no start of the service's unit
-   by a connection, or it shows why such a start is safe. Its test connects to the held port while the daemon
-   owns.
-2. The port is one port for each OS user and box. Which port, and who picks it (agentwatch's install writes the
-   socket unit and the session's entry), is a build point of stages 1d and 2.
-3. The agents' own HTTP MCP clients talk to the service's transport directly. Stage 1d checks the transport's
+1. The units that hold the MCP port: the daemon lead's proposal for stage 1d (2026-11-10). It is a proposal that
+   stage 1d proves, not a decision.
+   - No connection may ever start `agent-browser.service`: a start from a connection would start the service's
+     unit from outside the switch-on (open point 2 of section 17), and would give the Chrome unit to the
+     service on a box whose switch is off.
+   - Two other forms are rejected. A passive service: a queued start job makes the daemon stand down and
+     leaves no owner. An `ExecCondition` gate: 20 triggers in 2 s with `Accept=no` put the socket unit in the
+     `failed` state, and then another user can take the port.
+   - `agent-browser-mcp.socket` has `ListenStream=127.0.0.1:<port>`, `Accept=no` and
+     `Service=agent-browser-mcp-hold.service`. The holder is `Type=oneshot`, `RemainAfterExit=yes` and
+     `ExecStart=/bin/true`, and it never touches Chrome. `agent-browser.service` takes the socket's fd through
+     `Sockets=`. While the service is down, a connection waits with no answer (fail closed).
+   - Stage 1d's three tests: a connect while the daemon owns leaves the service `inactive` with no job; 300
+     connects in 2 s leave the socket unit active and its `LISTEN` line with the user's uid; a
+     `daemon-reload` and a restart of the holder keep the port held.
+   - agentwatch's install writes both units, picks the port (one for each OS user and box) and requires
+     linger. An update never restarts the socket unit unless the port changes. The Mac uses a launchd holder
+     that accepts and closes each connection until stage 4.
+2. The agents' own HTTP MCP clients talk to the service's transport directly. Stage 1d checks the transport's
    JSON answers with Claude Code's and Codex's clients before stage 3.

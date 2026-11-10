@@ -969,26 +969,28 @@ for (const sentence of [
 
 // The part of C11 from a bold heading to the next bold heading, or "" when it is missing (so each assertion fails alone).
 const partOr = (heading: string) => (C11.includes(`**${heading}`) ? part(C11, heading) : "");
+const sayAll = (text: string, list: string[]) => { for (const s of list) assert.ok(says(text, s), `C11 says: ${s}`); };
 
 test("C11's master is this file since board ab-v16.94.1: where the text and the vectors came from, the names of the other contracts, the parties", () => {
-  assert.ok(C11.startsWith("# C11. The endpoint (agent-browser's relay; from stage 1 also the service)\n"), "the heading");
-  const master = partOr("The master of C11 (board task ab-v16.94.1).");
-  for (const s of [
+  assert.ok(C11.startsWith("# C11. The endpoint (agent-browser's relay; from stage 3 also the service)\n"), "the heading: the service serves only from stage 3");
+  sayAll(partOr("The master of C11 (board task ab-v16.94.1)."), [
     "This file is the master for C11 since board task ab-v16.94.1, stage 0 of the self-contained agent browser.",
     "Its text came from chrome-extension `docs/protocol.md` (main `66078cd`), where C11 was before, with no change of a rule.",
     "That file keeps a short C11 that names this file.",
     "The vectors came with the text: this repository's `test/vectors/endpoint.json` is a copy of chrome-extension's `test/vectors/endpoint.json` at `66078cd`, and it is the master of C11's vectors from then on.",
     "In this file, C1 to C10 are the contracts of chrome-extension `docs/protocol.md`, and `test/vectors/scopes.json` and `test/vectors/bridge.json` are chrome-extension's vectors of C4 and C10.",
     "C12 is the control door, `docs/contracts/C12.md`.",
-    "C11 binds this repository (the relay, and from stage 1 the service) and agentwatch (the daemon). The receiver's own rules stay in C4, C5 and C10.",
-  ]) assert.ok(says(master, s), `C11 says: ${s}`);
+    "C11 binds this repository (the relay, and the service, which stage 1 builds and which serves from stage 3) and agentwatch (the daemon). The receiver's own rules stay in C4, C5 and C10.",
+  ]);
+  assert.ok(!says(C11, "from stage 1 the service") && !says(C11, "from stage 1 also the service"), "no text puts the service as a party before stage 3");
   // The old intro's own sentence still holds here, and the text names this repository's vectors.
   assert.ok(says(C11, "This file is the master for C11. The vectors: `test/vectors/endpoint.json`."), "the old intro's sentence");
+  // The moved sentence stays, and the new one after it separates the endpoint from the MCP port (review-95 N3).
+  assert.ok(says(partOr("The socket and the URL."), "A path is at most 103 bytes. There is no TCP port. The endpoint has no TCP port; the MCP port of stage 1d is a separate port (the MCP path, below)."), "the endpoint has no TCP port");
 });
 
 test("C11 states the stages of the self-contained agent browser, and that stage 0 changes no rule", () => {
-  const sc = partOr("The self-contained agent browser (board ab-v16.94).");
-  for (const s of [
+  sayAll(partOr("The self-contained agent browser (board ab-v16.94)."), [
     "The self-contained design is `docs/superpowers/specs/2026-11-09-self-contained-agent-browser-design.md`, and its section 19 records the operator's answers of 2026-11-10.",
     "Stage 0 changes no rule of this file.",
     "| The endpoint of this file at the endpoint path that the daemon gives, with every rule of this file, on a box whose switch is on | agent-browser's service (`agent-browser service`), in place of the relay | stage 3 (stage 1 builds it, off by default) |",
@@ -1002,51 +1004,57 @@ test("C11 states the stages of the self-contained agent browser, and that stage 
     "The readiness, the answers, the closes and the refusals stay as this file says.",
     "From stage 3, on a box whose switch is on, `browser.control: false` (C12, `config`) makes the service answer each request on the endpoint and on the MCP path with 503 `The agent browser is off: the operator turned agent control off.`",
     "This answer is the first check of the readiness: step 4 before the upgrade, and step 7 of the MCP path's admission (below). Today the endpoint does not exist then (the self-contained design, section 14).",
-  ]) assert.ok(says(sc, s), `C11 says: ${s}`);
+  ]);
 });
 
 test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi3), its URL, its label scope and its held port", () => {
-  const mcp = partOr("The MCP path (from stage 1d; the operator's answer Q1 of board item ab-bi3, 2026-11-10).");
-  for (const s of [
+  sayAll(partOr("The MCP path (from stage 1d; the operator's answer Q1 of board item ab-bi3, 2026-11-10)."), [
     "The service serves the standard Playwright MCP (the answer Q4) over Streamable HTTP on a loopback TCP port. Nothing serves it before stage 1d, and no session gets it before stage 3.",
     "Board item ab-6ng asks the operator to check this reading of the answer \"HTTP\". If the operator picks HTTP on the private socket with a helper instead, this part changes before stage 1d builds it.",
-    "The URL is `http://127.0.0.1:<port>/mcp/<scope>`. The service listens on `127.0.0.1` only, on one port for each OS user and box.",
+    "The URL is `http://127.0.0.1:<port>/mcp/<scope>`. The service listens on `127.0.0.1` only, on one port for each OS user and box. It holds no `[::1]` port.",
     "No secret is in the URL or in a session's MCP configuration: no key and no token.",
     "The scope in the path is a label, and it gives no right: the walk decides the scope (the admission, below).",
     "A request whose path names another scope than the walk's gets the session's 403. A request to `/mcp` alone names no scope, and the walk's scope applies.",
     "A local session reaches the MCP only through this URL. No stdio shim runs for it.",
     "On the endpoint's Unix socket the MCP path serves no local session: a request for `/mcp` there gets the 404 of step 2, as today.",
-    "The port stays held while the service is down: on Linux a systemd user socket unit holds it, and on the Mac the launchd equivalent, so another OS user cannot listen on it.",
-    "On the Mac the port refuses every connection (fail closed) until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4).",
-  ]) assert.ok(says(mcp, s), `C11 says: ${s}`);
+    "The port stays held while the service is down, so another OS user cannot listen on it, and no connection ever starts `agent-browser.service`.",
+    "On Linux a systemd user socket unit holds the port, and the service takes its socket from that unit; while the service is down, a connection waits with no answer (fail closed).",
+    "The units are the daemon lead's proposal, which stage 1d proves (the self-contained design, section 19, build note 1).",
+    "On the Mac the port refuses every connection (fail closed) until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4). Until then a launchd holder accepts and closes each connection.",
+  ]);
 });
 
-test("C11 states the admission of the MCP path: the uid first, then the walk, before any request byte; Origin, Host, path, label, readiness; the limits", () => {
-  const adm = partOr("The admission of the MCP path (from stage 1d; the daemon lead's conditions for the TCP choice).");
-  for (const s of [
+test("C11 states the admission of the MCP path: the uid by the full tuple first, then the walk, before any request byte; Origin, Host, path, label, readiness; the pid, the closes and the limits", () => {
+  sayAll(partOr("The admission of the MCP path (from stage 1d; the daemon lead's conditions for the TCP choice)."), [
     "At each new TCP connection the service runs these checks in this order. The first check that fails gives its answer at once, and the service then closes the connection. Steps 1 and 2 run before the service reads any byte of the request.",
-    "1. The uid. The service finds the client's socket in `/proc/net/tcp` by the client's port, and reads its uid column. A uid other than the service's gets the peer's 403 (`The agent browser cannot tell which program connects, so it refuses the connection.`), before any other check.",
+    "1. The uid. The service finds the client's socket in `/proc/net/tcp` by the full tuple: the local address is the client's address and port, and the remote address is `127.0.0.1:<port>`.",
+    "Exactly one line must match; no line or more than one gets the peer's 403. (A match by the client's port alone can match the service's own accepted socket.)",
+    "The service reads the uid column of that line. A uid other than the service's gets the peer's 403 (`The agent browser cannot tell which program connects, so it refuses the connection.`), before any other check.",
     "2. The walk. The service finds each process that holds the socket's inode (`/proc/<pid>/fd`), and walks each holder by the rules of the scope's session (above).",
     "Each holder must reach a root that counts, and all holders the roots of one scope: that scope is the connection's scope.",
-    "No holder, a holder that reaches no root, or holders of two scopes get the session's 403, with the lowest pid that the walk refused. So the walk refuses a browser process: Chrome is no session's process.",
+    "No holder, a holder that reaches no root, or holders of two scopes get the session's 403. So the walk refuses a browser process: Chrome is no session's process.",
     "The service then reads the client's line of `/proc/net/tcp` again, and a line that changed gets the session's 403 too.",
     "3. A request with an `Origin` header: its 403 (`A web page cannot connect to the agent browser.`).",
-    "4. A `Host` header that is not exactly `127.0.0.1:<port>` or `localhost:<port>`, or no `Host` header: 403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.` This check stops DNS rebinding.",
+    "4. A `Host` header that is not exactly `127.0.0.1:<port>` or `localhost:<port>`, or no `Host` header: 403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.` This check stops DNS rebinding. It keeps both forms, although each entry that agentwatch writes names `127.0.0.1`.",
     "5. A path that is not `/mcp` or `/mcp/<scope>` with a scope that matches the scope pattern: 404 `Not found. Connect an MCP client to /mcp/<scope>.`",
     "6. A path whose scope is not the connection's scope: the session's 403.",
     "7. The readiness and the scope's list: the 503s of steps 4, 5 and 7 before the upgrade, with their texts.",
+    "The self-test's 503 of step 3 before the upgrade does not apply here: this check reads `/proc/net/tcp`, `/proc/<pid>/fd` and the `stat` files, and needs no `node:ffi`. When the service cannot read `/proc/net/tcp`, each connection gets the peer's 403 at step 1.",
+    "The pid of the session's 403 (`<pid>`): the lowest pid among the holders that the walk refused. When the walk refused no holder (holders of two scopes, a line that changed, or step 6), it is the lowest pid among all the holders.",
     "Steps 1 and 2 run once for each connection, and a connection keeps its scope until it closes. Steps 3 to 7 run for each request on the connection.",
-    "A request with the MCP session id of another scope gets the 404 of an unknown MCP session.",
+    "A request with the MCP session id of another scope, or with an MCP session id that the service does not know, gets the 404 of an unknown MCP session: the transport's answer to an unknown `Mcp-Session-Id` (the self-contained design, section 8.2, M3).",
     "An `Origin` header, a wrong `Host` and the walk's refusal of a browser process are three separate checks, and the service keeps all three.",
-  ]) assert.ok(says(adm, s), `C11 says: ${s}`);
-  const lim = partOr("The limits of the MCP path's admission (the self-contained design, sections 8.3 and 18, M2).");
-  for (const s of [
+    "At C12's `session_ended`, the service closes the scope's MCP connections and ends its MCP sessions.",
+    "At each C12 `set_sessions`, the service closes each MCP connection whose admitting root is no longer a root of its scope that counts, as the endpoint's 1008 close does at an `allowlist` line (when a connection ends, above).",
+  ]);
+  assert.ok(!says(C11, "by the client's port, and reads its uid"), "no match by the client's port alone (F5)");
+  sayAll(partOr("The limits of the MCP path's admission (from stage 1d; the self-contained design, sections 8.3 and 18, M2)."), [
     "The check finds the holders of the socket, not the process that connected. A process that forks after its connect has a child that holds the socket too, and that child must be in the same session.",
     "A client that writes its request and exits at once is refused: no process holds the socket at the check (M2: 50 of 50).",
     "The check costs 10.4 ms p50 to 23.1 ms p50 on taylor (M2), once for each connection.",
     "A client of another OS user is refused by the uid column; M2 reasoned this case and did not run it.",
     "As on the endpoint, the check does not stop a hostile process of the same OS user.",
-  ]) assert.ok(says(lim, s), `C11 says: ${s}`);
+  ]);
   // The texts of the MCP path that are new: each has its status, once.
   for (const t of ["403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.`", "404 `Not found. Connect an MCP client to /mcp/<scope>.`", "503 `The agent browser is off: the operator turned agent control off.`"]) {
     assert.equal(flat(C11).split(flat(t)).length, 2, `C11 has ${t} once`);
@@ -1056,29 +1064,32 @@ test("C11 states the admission of the MCP path: the uid first, then the walk, be
   for (const b of ["The agent browser cannot tell which program connects, so it refuses the connection.", "A web page cannot connect to the agent browser."]) assert.ok(bodies.has(b), `an answer of the endpoint: ${b}`);
 });
 
-test("C11 states the MCP inside the service and how a session gets the MCP (the answers Q2 and Q4; the daemon lead's condition 4)", () => {
-  const inside = partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2).");
-  for (const s of [
+test("C11 states the MCP inside the service and how a session gets the MCP (the answers Q2 and Q4; the daemon lead's condition 4 and D19)", () => {
+  sayAll(partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2)."), [
     "The service makes one Playwright MCP server object for each MCP session, from the pinned `@playwright/mcp` package's public entry. At most 4 MCP sessions for each scope and 32 for each service (first values).",
     "Its configuration is fixed: the scope's CDP endpoint and the default context; the capabilities named explicitly, never `core-install`, `storage`, `devtools`, `testing` or `config`; `allowUnrestrictedFileAccess: false`; and an output folder for each scope in the state folder.",
     "Tools and argument keys pass only through the allow list (`docs/contracts/mcp-allow-list.md`).",
     "The service refuses each argument that the allow list marks as a path when the path is outside the scope's folder, `<state>/mcp/<scope>/`, after `realpath`.",
     "The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection.",
     "The MCP code of each scope runs in one worker thread of the service, with a heap limit (first value 512 MiB). A worker that passes it ends with its MCP sessions, and their clients get an error.",
-  ]) assert.ok(says(inside, s), `C11 says: ${s}`);
+    "No log line of the MCP path holds a tool argument, page content, a cookie, a URL path or a payload, and a request that the service refuses for its size or its shape is never logged (the log rule of C12).",
+  ]);
   const how = partOr("How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).");
-  for (const s of [
+  sayAll(how, [
     "agentwatch writes the MCP's HTTP entry into a session's own MCP configuration at the session's launch, only when the session's scope has a list with at least one site.",
-    "agentwatch never writes the entry into the user's global files. For Claude Code it writes a file for the session, which the launch passes with `--mcp-config`. For Codex it uses a `-c` override for the session or the account's own `CODEX_HOME`.",
+    "Each entry that agentwatch writes names `127.0.0.1`, never `localhost`: the service listens only on `127.0.0.1`.",
+    "agentwatch writes the entry only when the `LISTEN` line of `127.0.0.1:<port>` in `/proc/net/tcp` has the user's uid. Otherwise it writes no entry, and `agentwatch health` shows red.",
+    "agentwatch never writes the entry into the user's global files. For Claude Code it writes a file for the session, which the launch passes with `--mcp-config`. For Codex it uses a `-c` override for each launch.",
     "Nothing goes into the session's environment: the operator's answer age-4ks (\"env: no\") stays.",
-    "agentwatch does not change a running session's MCP configuration. A list that gets its first site after a session's launch takes effect at that session's next launch, so the session needs a restart (or the agent adds the entry by hand, as the skill says).",
-  ]) assert.ok(says(how, s), `C11 says: ${s}`);
+    "agentwatch does not change a running session's MCP configuration. A list that gets its first site after a session's launch takes effect at that session's next launch, so the session needs a restart.",
+  ]);
+  for (const s of ["CODEX_HOME", "by hand"]) assert.ok(!says(C11, s), `C11: no ${s} (D19)`);
 });
 
 test("C11 keeps no sentence of the stdio shim as the local MCP path, and no rule of the self-contained browser before its stage", () => {
   for (const s of ["agent-browser mcp", "a stdio shim, `agent-browser mcp`", "The MCP's local path is the stdio shim", "{\"command\":\"agent-browser\",\"args\":[\"mcp\"]}"]) assert.ok(!says(C11, s), `C11: no ${s}`);
   // Each new part names its stage in its heading, so no reader takes it for a rule of today.
-  for (const h of ["The MCP path (from stage 1d;", "The admission of the MCP path (from stage 1d;", "The MCP inside the service (from stage 1d;", "How a session gets the MCP (from stage 2;"]) {
+  for (const h of ["The MCP path (from stage 1d;", "The admission of the MCP path (from stage 1d;", "The limits of the MCP path's admission (from stage 1d;", "The MCP inside the service (from stage 1d;", "How a session gets the MCP (from stage 2;"]) {
     assert.ok(C11.includes(`**${h}`), `the part ${h}`);
   }
   // The new parts come after the old text: the old text's last part is still the scope's session, before them.
