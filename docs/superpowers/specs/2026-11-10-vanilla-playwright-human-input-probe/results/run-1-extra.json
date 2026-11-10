@@ -1,0 +1,1412 @@
+{
+ "chrome": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)",
+ "playwright": "1.65.0",
+ "stats": {
+  "stage": {
+   "scrollsByWheel": 1,
+   "setupCalls": 11,
+   "pathMoves": 1410,
+   "presses": 9,
+   "sameMovesAnswered": 2,
+   "keys": 54,
+   "shiftDowns": 6,
+   "shiftUps": 6,
+   "earlyReleaseAnswers": 18,
+   "shiftKeptDown": 2,
+   "focusClicks": 2,
+   "insertsAsKeys": 1,
+   "notches": 47
+  }
+ },
+ "steps": {
+  "source": [
+   {
+    "name": "x: path at 125 Hz to target 1 (117 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 117
+    },
+    "top": {
+     "pointermove": 60,
+     "mousemove": 60,
+     "mouseover": 8
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 0,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": []
+   },
+   {
+    "name": "x: path at 125 Hz to target 2 (112 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 112
+    },
+    "top": {
+     "pointermove": 60,
+     "mousemove": 60,
+     "mouseover": 4
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 0,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": []
+   },
+   {
+    "name": "x: path at 125 Hz to target 3 (118 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 118
+    },
+    "top": {
+     "pointermove": 60,
+     "mousemove": 60,
+     "mouseover": 4
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 0,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": []
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, timestamp in whole ms, to target 1 (120 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 120
+    },
+    "top": {
+     "pointermove": 65,
+     "mousemove": 65,
+     "mouseover": 8
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 122,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8
+     ],
+     [
+      "dispatchMouseEvent",
+      7.9
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      2.7
+     ],
+     [
+      "dispatchMouseEvent",
+      8.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.5
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, timestamp in whole ms, to target 2 (109 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 109
+    },
+    "top": {
+     "pointermove": 58,
+     "mousemove": 58,
+     "mouseover": 4
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 111,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      9.3
+     ],
+     [
+      "dispatchMouseEvent",
+      9.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      3.3
+     ],
+     [
+      "dispatchMouseEvent",
+      8.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, timestamp in whole ms, to target 3 (119 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 119
+    },
+    "top": {
+     "pointermove": 67,
+     "mousemove": 67,
+     "mouseover": 7
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 121,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      9.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      1.7
+     ],
+     [
+      "dispatchMouseEvent",
+      8.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      4.2
+     ],
+     [
+      "dispatchMouseEvent",
+      10.3
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, fractional timestamp, to target 1 (120 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 120
+    },
+    "top": {
+     "pointermove": 65,
+     "mousemove": 65,
+     "mouseover": 6
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 122,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      10.1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      10.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      7.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      8.2
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, fractional timestamp, to target 2 (114 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 114
+    },
+    "top": {
+     "pointermove": 67,
+     "mousemove": 67,
+     "mouseover": 6
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 116,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      11.3
+     ],
+     [
+      "dispatchMouseEvent",
+      10.1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.5
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      9.4
+     ],
+     [
+      "dispatchMouseEvent",
+      4.5
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, fractional timestamp, to target 3 (119 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 119
+    },
+    "top": {
+     "pointermove": 72,
+     "mousemove": 72,
+     "mouseover": 3
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 121,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      9.9
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      10.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      7.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      8.2
+     ],
+     [
+      "dispatchMouseEvent",
+      0.9
+     ],
+     [
+      "dispatchMouseEvent",
+      9.3
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, no timestamp, to target 1 (117 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 117
+    },
+    "top": {
+     "pointermove": 72,
+     "mousemove": 72,
+     "mouseover": 6
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 119,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      9.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8.9
+     ],
+     [
+      "dispatchMouseEvent",
+      2.8
+     ],
+     [
+      "dispatchMouseEvent",
+      8.1
+     ],
+     [
+      "dispatchMouseEvent",
+      3.4
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      3.4
+     ],
+     [
+      "dispatchMouseEvent",
+      9.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, no timestamp, to target 2 (111 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 111
+    },
+    "top": {
+     "pointermove": 59,
+     "mousemove": 59,
+     "mouseover": 6
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 113,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      10
+     ],
+     [
+      "dispatchMouseEvent",
+      9.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      8.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1
+     ],
+     [
+      "dispatchMouseEvent",
+      9.2
+     ]
+    ]
+   },
+   {
+    "name": "cdp: path at 125 Hz, not awaited, no timestamp, to target 3 (116 moves), press 90 ms",
+    "ok": true,
+    "note": {
+     "moves": 116
+    },
+    "top": {
+     "pointermove": 63,
+     "mousemove": 63,
+     "mouseover": 3
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 118,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      9.7
+     ],
+     [
+      "dispatchMouseEvent",
+      9.3
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      9.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1.2
+     ],
+     [
+      "dispatchMouseEvent",
+      8.5
+     ]
+    ]
+   },
+   {
+    "name": "cdp: a move to the point where the pointer is (700,650), twice",
+    "ok": true,
+    "top": {
+     "pointermove": 2,
+     "mousemove": 2,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 2,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      15.7
+     ],
+     [
+      "dispatchMouseEvent",
+      16.2
+     ]
+    ]
+   }
+  ],
+  "stage": [
+   {
+    "name": "idle 2 s",
+    "ok": true,
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 0
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 0,
+    "stageCalls": 0,
+    "inputAnswersHeldMs": []
+   },
+   {
+    "name": "locator('#b').click() from 900,700",
+    "ok": true,
+    "note": {
+     "ms": 1425,
+     "stage": {
+      "setupCalls": 1,
+      "pathMoves": 124,
+      "presses": 1
+     }
+    },
+    "top": {
+     "pointermove": 68,
+     "mousemove": 68,
+     "mouseover": 9
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 3,
+    "stageCalls": 128,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1085.7
+     ],
+     [
+      "dispatchMouseEvent",
+      1198.4
+     ],
+     [
+      "dispatchMouseEvent",
+      1309.5
+     ]
+    ]
+   },
+   {
+    "name": "locator('#hov').hover(): the path before the hit-target check",
+    "ok": true,
+    "note": {
+     "ms": 616,
+     "stage": {
+      "setupCalls": 2,
+      "pathMoves": 59,
+      "sameMovesAnswered": 1
+     }
+    },
+    "top": {
+     "pointermove": 32,
+     "mousemove": 32,
+     "mouseover": 4
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 2,
+    "clientInput": 2,
+    "stageCalls": 61,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      526.1
+     ],
+     [
+      "dispatchMouseEvent",
+      0.1
+     ]
+    ]
+   },
+   {
+    "name": "mouse.move(900, 700)",
+    "ok": true,
+    "note": {
+     "ms": 1035,
+     "stage": {
+      "pathMoves": 118
+     }
+    },
+    "top": {
+     "pointermove": 63,
+     "mousemove": 63,
+     "mouseover": 4
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 118,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1033.1
+     ]
+    ]
+   },
+   {
+    "name": "locator('#hov').hover(): the path after the hit-target check (naive)",
+    "ok": true,
+    "note": {
+     "ms": 1126,
+     "stage": {
+      "setupCalls": 2,
+      "pathMoves": 118,
+      "sameMovesAnswered": 1
+     }
+    },
+    "top": {
+     "pointermove": 68,
+     "mousemove": 68,
+     "mouseover": 6
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 2,
+    "clientInput": 2,
+    "stageCalls": 120,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1043.5
+     ],
+     [
+      "dispatchMouseEvent",
+      0.1
+     ]
+    ]
+   },
+   {
+    "name": "mouse.move(900, 700) again",
+    "ok": true,
+    "note": {
+     "ms": 1076,
+     "stage": {
+      "pathMoves": 121
+     }
+    },
+    "top": {
+     "pointermove": 69,
+     "mousemove": 69,
+     "mouseover": 7
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 121,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1074.1
+     ]
+    ]
+   },
+   {
+    "name": "locator('#chk').check()",
+    "ok": true,
+    "note": {
+     "ms": 1432,
+     "out": {
+      "checked": true
+     },
+     "stage": {
+      "setupCalls": 1,
+      "pathMoves": 120,
+      "presses": 1
+     }
+    },
+    "top": {
+     "pointermove": 65,
+     "mousemove": 65,
+     "mouseover": 7
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 3,
+    "stageCalls": 124,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1076
+     ],
+     [
+      "dispatchMouseEvent",
+      1257.9
+     ],
+     [
+      "dispatchMouseEvent",
+      1384.3
+     ]
+    ]
+   },
+   {
+    "name": "locator('#b').dblclick()",
+    "ok": true,
+    "note": {
+     "ms": 1104,
+     "stage": {
+      "setupCalls": 1,
+      "pathMoves": 69,
+      "presses": 2
+     }
+    },
+    "top": {
+     "pointermove": 48,
+     "mousemove": 48,
+     "mouseover": 9
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 5,
+    "stageCalls": 75,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      609.6
+     ],
+     [
+      "dispatchMouseEvent",
+      778.8
+     ],
+     [
+      "dispatchMouseEvent",
+      862.1
+     ],
+     [
+      "dispatchMouseEvent",
+      979.1
+     ],
+     [
+      "dispatchMouseEvent",
+      1061.4
+     ]
+    ]
+   },
+   {
+    "name": "frameLocator('#box').locator('#cb').click()",
+    "ok": true,
+    "note": {
+     "ms": 1078,
+     "stage": {
+      "pathMoves": 80,
+      "presses": 1
+     }
+    },
+    "top": {
+     "pointermove": 35,
+     "mousemove": 35,
+     "mouseover": 5
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 3,
+    "stageCalls": 82,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      692.2
+     ],
+     [
+      "dispatchMouseEvent",
+      848
+     ],
+     [
+      "dispatchMouseEvent",
+      955.1
+     ]
+    ]
+   },
+   {
+    "name": "locator('#b').click({ modifiers: ['Shift'] })",
+    "ok": true,
+    "note": {
+     "ms": 1001,
+     "stage": {
+      "setupCalls": 1,
+      "pathMoves": 79,
+      "presses": 1,
+      "keys": 1
+     }
+    },
+    "top": {
+     "pointermove": 35,
+     "mousemove": 35,
+     "mouseover": 8
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 5,
+    "stageCalls": 85,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchKeyEvent",
+      3.8
+     ],
+     [
+      "dispatchMouseEvent",
+      705
+     ],
+     [
+      "dispatchMouseEvent",
+      831.4
+     ],
+     [
+      "dispatchMouseEvent",
+      948.1
+     ],
+     [
+      "dispatchKeyEvent",
+      3.2
+     ]
+    ]
+   },
+   {
+    "name": "locator('#f').click(); keyboard.type('Hello World, OK!')",
+    "ok": true,
+    "note": {
+     "ms": 3866,
+     "out": {
+      "value": "Hello World, OK!"
+     },
+     "stage": {
+      "setupCalls": 1,
+      "pathMoves": 64,
+      "presses": 1,
+      "keys": 16,
+      "shiftDowns": 3,
+      "shiftUps": 3,
+      "earlyReleaseAnswers": 4,
+      "shiftKeptDown": 2
+     }
+    },
+    "top": {
+     "pointermove": 34,
+     "mousemove": 34,
+     "mouseover": 4
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 35,
+    "stageCalls": 106,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      558.9
+     ],
+     [
+      "dispatchMouseEvent",
+      670.4
+     ],
+     [
+      "dispatchMouseEvent",
+      758.2
+     ],
+     [
+      "dispatchKeyEvent",
+      5.8
+     ],
+     [
+      "dispatchKeyEvent",
+      85.3
+     ],
+     [
+      "dispatchKeyEvent",
+      236.3
+     ],
+     [
+      "dispatchKeyEvent",
+      108.4
+     ],
+     [
+      "dispatchKeyEvent",
+      74.5
+     ],
+     [
+      "dispatchKeyEvent",
+      101.4
+     ],
+     [
+      "dispatchKeyEvent",
+      139.4
+     ],
+     [
+      "dispatchKeyEvent",
+      0.1
+     ],
+     [
+      "dispatchKeyEvent",
+      240.9
+     ]
+    ]
+   },
+   {
+    "name": "locator('#ta').pressSequentially('Meet me at 10:45.') (no focus)",
+    "ok": true,
+    "note": {
+     "ms": 4056,
+     "out": {
+      "value": "Meet me at 10:45."
+     },
+     "stage": {
+      "pathMoves": 47,
+      "keys": 17,
+      "shiftDowns": 2,
+      "shiftUps": 2,
+      "earlyReleaseAnswers": 5,
+      "focusClicks": 1
+     }
+    },
+    "top": {
+     "pointermove": 26,
+     "mousemove": 26,
+     "mouseover": 2
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 34,
+    "stageCalls": 89,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchKeyEvent",
+      5.4
+     ],
+     [
+      "dispatchKeyEvent",
+      145.7
+     ],
+     [
+      "dispatchKeyEvent",
+      114.3
+     ],
+     [
+      "dispatchKeyEvent",
+      95.2
+     ],
+     [
+      "dispatchKeyEvent",
+      58.4
+     ],
+     [
+      "dispatchKeyEvent",
+      111.5
+     ],
+     [
+      "dispatchKeyEvent",
+      285
+     ],
+     [
+      "dispatchKeyEvent",
+      77.8
+     ],
+     [
+      "dispatchKeyEvent",
+      160.6
+     ],
+     [
+      "dispatchKeyEvent",
+      70
+     ],
+     [
+      "dispatchKeyEvent",
+      143.5
+     ],
+     [
+      "dispatchKeyEvent",
+      104.7
+     ]
+    ]
+   },
+   {
+    "name": "locator('#f').fill('jane.doe@example.com') (no focus, text in it)",
+    "ok": true,
+    "note": {
+     "ms": 4193,
+     "out": {
+      "value": "jane.doe@example.com"
+     },
+     "stage": {
+      "pathMoves": 65,
+      "keys": 20,
+      "shiftDowns": 1,
+      "shiftUps": 1,
+      "earlyReleaseAnswers": 9,
+      "focusClicks": 1,
+      "insertsAsKeys": 1
+     }
+    },
+    "top": {
+     "pointermove": 35,
+     "mousemove": 35,
+     "mouseover": 6
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 111,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchKeyEvent",
+      3.9
+     ],
+     [
+      "dispatchKeyEvent",
+      4
+     ],
+     [
+      "dispatchKeyEvent",
+      174.6
+     ],
+     [
+      "dispatchKeyEvent",
+      174.7
+     ],
+     [
+      "dispatchKeyEvent",
+      315.5
+     ],
+     [
+      "dispatchKeyEvent",
+      315.5
+     ],
+     [
+      "dispatchKeyEvent",
+      479.7
+     ],
+     [
+      "dispatchKeyEvent",
+      562.5
+     ],
+     [
+      "dispatchKeyEvent",
+      687.2
+     ],
+     [
+      "dispatchKeyEvent",
+      788.8
+     ],
+     [
+      "dispatchKeyEvent",
+      966.5
+     ],
+     [
+      "dispatchKeyEvent",
+      1063.7
+     ]
+    ]
+   },
+   {
+    "name": "mouse.wheel(0, 600)",
+    "ok": true,
+    "note": {
+     "ms": 837,
+     "out": {
+      "scrollY": 600
+     },
+     "stage": {
+      "notches": 5
+     }
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 3
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 5,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      331.3
+     ]
+    ]
+   },
+   {
+    "name": "mouse.wheel(0, -600)",
+    "ok": true,
+    "note": {
+     "ms": 880,
+     "out": {
+      "scrollY": 0
+     },
+     "stage": {
+      "notches": 5
+     }
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 3
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 5,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      376.7
+     ]
+    ]
+   },
+   {
+    "name": "locator('#far').click() (below the fold)",
+    "ok": true,
+    "note": {
+     "ms": 2688,
+     "out": {
+      "scrollY": 1743
+     },
+     "stage": {
+      "scrollsByWheel": 1,
+      "setupCalls": 1,
+      "pathMoves": 109,
+      "presses": 1,
+      "notches": 17
+     }
+    },
+    "top": {
+     "pointermove": 62,
+     "mousemove": 62,
+     "mouseover": 7
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 3,
+    "stageCalls": 132,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      976.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1105.9
+     ],
+     [
+      "dispatchMouseEvent",
+      1229.4
+     ]
+    ]
+   },
+   {
+    "name": "mouse.wheel(0, -2400)",
+    "ok": true,
+    "note": {
+     "ms": 2044,
+     "out": {
+      "scrollY": 0
+     },
+     "stage": {
+      "notches": 20
+     }
+    },
+    "top": {
+     "pointermove": 0,
+     "mousemove": 0,
+     "mouseover": 2
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 0,
+    "clientInput": 1,
+    "stageCalls": 20,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1340
+     ]
+    ]
+   },
+   {
+    "name": "mouse.move(900, 700); locator('#b').click({ timeout: 3000 })",
+    "ok": true,
+    "note": {
+     "ms": 2353,
+     "stage": {
+      "setupCalls": 1,
+      "pathMoves": 237,
+      "presses": 1
+     }
+    },
+    "top": {
+     "pointermove": 135,
+     "mousemove": 135,
+     "mouseover": 8
+    },
+    "eventAfterHandler": 0,
+    "clientSetupCalls": 1,
+    "clientInput": 4,
+    "stageCalls": 241,
+    "inputAnswersHeldMs": [
+     [
+      "dispatchMouseEvent",
+      1024.8
+     ],
+     [
+      "dispatchMouseEvent",
+      1057.2
+     ],
+     [
+      "dispatchMouseEvent",
+      1162.8
+     ],
+     [
+      "dispatchMouseEvent",
+      1279.6
+     ]
+    ]
+   }
+  ]
+ }
+}
