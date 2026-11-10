@@ -1271,7 +1271,7 @@ const STAGE_ITEMS: string[] = [
   "The path then ends at the spread point.",
   "The stage uses it only when all of these are true;",
   "else it presses at the client's point, rounded:",
-  "a locator click: a hit-target setup of the action `mouse` before it, and `clickCount` 1;",
+  "a locator click: a hit-target setup of the action `mouse` before it, `clickCount` 1, and no press of the same action with `clickCount` 2 or 3 (so never a press of a `dblclick` or of a triple click);",
   "no `position`: the client's point is within 1 px of the middle of the element's content quad (the answer of the client's own `DOM.getContentQuads`);",
   "an element whose effect does not depend on the point:",
   "`button`, `a[href]`, an `input` of the type `button`, `submit`, `reset`, `checkbox` or `radio`, `label`, `summary`, or an element with the role `button`, `link`, `checkbox`, `radio`, `tab`, `menuitem` or `switch`;",
@@ -1314,7 +1314,7 @@ const STAGE_ITEMS: string[] = [
   "The typing rule.",
   "The stage sends typed keys in place of the text of an `Input.insertText` only when all of these are true;",
   "else it sends the call as it is:",
-  "The focused element (the stage's own read at the call) is an `input` of a text type (`text`, `search`, `email`, `url`, `tel`, `password`, `number`, or no type) or a `textarea`.",
+  "The focused element (the stage's own read at the call; when the focus is in a cross-origin frame, the stage reads it on that frame's own session) is an `input` of a text type (`text`, `search`, `email`, `url`, `tel`, `password`, `number`, or no type) or a `textarea`.",
   "A contenteditable keeps the inserted text, because the editor of a page can change typed keys.",
   "Each character has a key on the US layout (`src/record.ts` `charKey`), and the text has no line feed and no tab.",
   "A line feed would send a message in a chat field with Enter-to-send, and a tab moves the focus.",
@@ -1435,7 +1435,7 @@ const STAGE_ITEMS: string[] = [
   "`setInputFiles` with buffers, `locator.drop`, `dispatchEvent` and `blur`;",
   "`focus` on an element that is not a text field, and `selectText` on an element that is not an `input` or a `textarea`.",
   "The page sees the script's events (`isTrusted` false), as with Playwright's own input.",
-  "A later task adds the translations of Q3 a, and it changes this part first: a select gets a click, the arrow keys and Enter;",
+  "Board task ab-t30.12 adds the translations of Q3 a, and it changes this part first: a select gets a click, the arrow keys and Enter;",
   "a date input gets a click and typed digits;",
   "files from buffers get a click on the input, with the files in the scope's own folder.",
   "The cases of no change.",
@@ -1735,6 +1735,7 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
           // The spread point: a locator click (a hit-target setup of the action mouse), clickCount 1, at the middle of an element of condition 3.
           const setup = v.in.find((x: any) => recognizerOf(V, x) === "hit-target check");
           assert.ok(setup && argOf(setup.params, "actionType") === "mouse" && o.fields.clickCount === 1, `${at}: the spread point only for a locator click with clickCount 1`);
+          assert.ok(!v.in.some((x: any) => x.method === "Input.dispatchMouseEvent" && x.params?.type === "mousePressed" && x.params?.clickCount >= 2), `${at}: no spread point in an action with a press of clickCount 2 or 3 (a dblclick, a triple click)`);
           const n = v.page.nodes[nodeOf(setup.params)], b = n.box, max = F.spreadMax * Math.min(b.width, b.height);
           const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
           assert.ok(spreads(n), `${at}: condition 3`);
