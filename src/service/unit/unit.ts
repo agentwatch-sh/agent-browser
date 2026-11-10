@@ -168,9 +168,10 @@ export type UnitDeps = {
   /**
    * The agent package (stage 1b part 2, board ab-v16.94.9; package/crx.ts): before each start of a Google Chrome copy,
    * check the pinned CRX, stage it and write the copy's external extensions file; returns the staged CRX's version.
-   * `hasFile`: the copy has an extensions file of an earlier start. Without it, Chrome starts with no agent package.
+   * `lastFile`: the version of the copy's extensions file of an earlier start, only when its staged CRX still has the
+   * pinned SHA-256 (review-110 B1); else null, and Chrome then starts with no agent package.
    */
-  prepare?: { run: (copy: ChromeCopy) => string; hasFile: (copy: ChromeCopy) => boolean };
+  prepare?: { run: (copy: ChromeCopy) => string; lastFile: (copy: ChromeCopy) => string | null };
 };
 
 export class ChromeUnit {
@@ -454,9 +455,11 @@ export class ChromeUnit {
     if (!p) return plan;
     try { this.staged = p.run(copy); return plan; }
     catch (e) {
-      const reason = (e as Error).message || (e as Error).name;
+      // A file error's message holds a path of the tools folder: the log takes its code only (review-110 note 3).
+      const code = (e as NodeJS.ErrnoException).code, reason = typeof code === "string" ? code : (e as Error).message || (e as Error).name;
       if (fetch) throw new StartError(chromeFailed(reason));
-      if (!p.hasFile(copy)) {
+      const last = p.lastFile(copy);
+      if (last === null) {
         const recorded = this.recordedChromium();
         if (!recorded) throw new StartError(chromeFailed(reason));
         this.d.log(`unit: could not write the agent package for Google Chrome ${copy.version} (${reason.slice(0, 200)}); starting the recorded Chromium again`);
@@ -464,6 +467,7 @@ export class ChromeUnit {
         if (!found) throw new StartError(`Chromium not found: ${recorded}`);
         return { binary: found, kind: KIND_CHROMIUM, version: "", recordedBin: found };
       }
+      this.staged = last;
       this.d.log(`unit: could not write the agent package (${reason.slice(0, 200)}); Google Chrome starts with the package file of its last start`);
       return plan;
     }

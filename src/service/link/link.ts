@@ -331,7 +331,7 @@ export class NativeLink {
     // Each hello that lists `scopes` is a new link for stage 1c (its push goes again); one without it ends the last.
     if (c.features.has(SCOPES_FEATURE)) { c.scopesUp = true; this.safe(() => this.events?.up()); }
     else if (c.scopesUp) { c.scopesUp = false; this.safe(() => this.events?.down()); }
-    this.o.log(`link: the receiver ${version} said hello (${bridge ? "bridge" : "no bridge"}, ${c.features.has(SCOPES_FEATURE) ? "scopes" : "no scopes"})`);
+    this.o.log(`link: the receiver ${String(version).slice(0, 64)} said hello (${bridge ? "bridge" : "no bridge"}, ${c.features.has(SCOPES_FEATURE) ? "scopes" : "no scopes"})`);
   }
 }
 

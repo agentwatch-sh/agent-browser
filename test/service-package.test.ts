@@ -9,7 +9,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkCrx, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, prepareAgentPackage, stageCrx, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
+import { checkCrx, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, pinnedLastFile, prepareAgentPackage, stageCrx, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, OPERATOR_BLOBS, OPERATOR_DIR, RECEIVER_ID, SENDER_ID } from "../src/service/package/pins.ts";
 import { filesOf, senderData, storedZip } from "../src/service/package/sender.ts";
 
@@ -191,6 +191,23 @@ test("the extension file goes next to the copy's binary only: extensions/<receiv
   // A second start writes the same file again (a new file, then a rename).
   prepareAgentPackage(copy, tools, join(tools, "google-chrome"));
   assert.deepEqual(readdirSync(join(file, "..")), [`${RECEIVER_ID}.json`]);
+});
+
+test("the file of the last start is used only while its staged CRX has the pinned SHA-256 and is in agent-crx/ (review-110 B1)", (t) => {
+  const tools = tmp(t);
+  const copy = copyIn(tools);
+  assert.equal(pinnedLastFile(copy, tools), null, "no file yet");
+  prepareAgentPackage(copy, tools, join(tools, "google-chrome"));
+  assert.equal(pinnedLastFile(copy, tools), "0.3.6", "the pinned staged CRX");
+  assert.equal(pinnedLastFile(copy, tools, "0".repeat(64)), null, "another pin: the old package never starts");
+  // The staged CRX changed on disk (another SHA-256): no fallback.
+  const staged = JSON.parse(readFileSync(extensionFile(copy), "utf8")).external_crx;
+  writeFileSync(staged, Buffer.concat([readFileSync(staged), Buffer.from([0])]));
+  assert.equal(pinnedLastFile(copy, tools), null, "a staged CRX with another SHA-256");
+  // A file that names a CRX outside agent-crx/: no fallback, also with the pinned bytes.
+  const outside = writeCrx(tools, REAL, "elsewhere.crx");
+  writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: outside, external_version: "0.3.6" }));
+  assert.equal(pinnedLastFile(copy, tools), null, "a CRX outside agent-crx/");
 });
 
 test("a copy outside the tools folder, or whose root links outside it, is refused, and nothing is written", (t) => {

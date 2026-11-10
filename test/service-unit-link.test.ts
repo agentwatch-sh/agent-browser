@@ -35,7 +35,7 @@ test("each start of a Google Chrome copy runs the agent package first, and the u
   const w = new World();
   try {
     const seen: string[] = [];
-    const { u, tools } = google(w, { run: (copy) => { seen.push(copy.binary); return "0.3.6"; }, hasFile: () => false });
+    const { u, tools } = google(w, { run: (copy) => { seen.push(copy.binary); return "0.3.6"; }, lastFile: () => null });
     await u.start();
     assert.deepEqual(seen, [tools.copy("158.0.7100.1-1").binary]);
     assert.equal(u.stagedPackage(), "0.3.6");
@@ -49,11 +49,11 @@ test("each start of a Google Chrome copy runs the agent package first, and the u
 test("a start whose agent package fails is a start failure with the package's reason; a Chromium of chrome_bin runs no package", async () => {
   const w = new World();
   try {
-    const { u } = google(w, { run: () => { throw new Error("the agent extension package does not match its pinned SHA-256"); }, hasFile: () => true });
+    const { u } = google(w, { run: () => { throw new Error("the agent extension package does not match its pinned SHA-256"); }, lastFile: () => "0.3.6" });
     await assert.rejects(u.start(), (e: Error) => e instanceof StartError && e.message === "Google Chrome could not be set up: the agent extension package does not match its pinned SHA-256. To keep the box's Chromium, set browser.chrome_bin: /usr/bin/chromium");
     assert.equal(w.spawned.filter((p) => !p.argv[0].endsWith("Xvfb")).length, 0, "no Chrome started");
     const seen: string[] = [];
-    const u2 = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, prepare: { run: () => { seen.push("x"); return "0.3.6"; }, hasFile: () => false } }));
+    const u2 = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, prepare: { run: () => { seen.push("x"); return "0.3.6"; }, lastFile: () => null } }));
     u2.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
     await u2.start();
     assert.deepEqual(seen, []);
@@ -64,8 +64,8 @@ test("a start whose agent package fails is a start failure with the package's re
 test("the supervisor's start with a failed package: the copy's file of its last start keeps Google Chrome; with no file the recorded Chromium starts", async () => {
   const w = new World();
   try {
-    let fail = false, hasFile = true;
-    const { u } = google(w, { run: () => { if (fail) throw new Error("the agent extension could not be written: ENOSPC"); return "0.3.6"; }, hasFile: () => hasFile });
+    let fail = false, lastFile: string | null = "0.3.6";
+    const { u } = google(w, { run: () => { if (fail) throw new Error("the agent extension could not be written: ENOSPC"); return "0.3.6"; }, lastFile: () => lastFile });
     await u.start();
     const first = w.named("chrome")[0] ?? w.spawned.find((p) => p.argv[0].endsWith("/chrome"))!;
     fail = true;
@@ -74,12 +74,12 @@ test("the supervisor's start with a failed package: the copy's file of its last 
     for (let i = 0; i < 50 && !u.running(); i++) await u.superviseOnce(() => {});
     assert.equal(u.chromeFacts()?.kind, KIND_GOOGLE, "the copy starts again with the file of its last start");
     assert.ok(w.logs.some((l) => l.includes("Google Chrome starts with the package file of its last start")));
-    assert.equal(u.stagedPackage(), null, "no package was staged by this start");
+    assert.equal(u.stagedPackage(), "0.3.6", "the version of the last start's pinned package (review-110 B2)");
   } finally { w.close(); }
   const w2 = new World();
   try {
     let fail = false;
-    const { u } = google(w2, { run: () => { if (fail) throw new Error("bad"); return "0.3.6"; }, hasFile: () => false });
+    const { u } = google(w2, { run: () => { if (fail) throw new Error("bad"); return "0.3.6"; }, lastFile: () => null });
     await u.start();
     // The record names a Chromium of chrome_bin: the supervisor's way back when the copy has no package file.
     const rec = JSON.parse(readFileSync(w2.paths.unitFile, "utf8"));

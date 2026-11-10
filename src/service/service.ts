@@ -10,7 +10,7 @@
 // start and stop (unit/part.ts); stage 1b part 2 (board ab-v16.94.9) the native link (link/), the agent package
 // (package/) and the model in this process, the X pointer, and the op sender.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,7 @@ import { shimArgv, writeHostFiles } from "./link/manifest.ts";
 import { endOldHosts, loadPidfds, type Pidfds } from "./link/old-host.ts";
 import { linkPeerCheck } from "./link/peer.ts";
 import { PointerOps, xWorld } from "./link/pointer-ops.ts";
-import { extensionFile, prepareAgentPackage } from "./package/crx.ts";
+import { pinnedLastFile, prepareAgentPackage } from "./package/crx.ts";
 import { RECEIVER_ID } from "./package/pins.ts";
 import { senderData, type SenderData } from "./package/sender.ts";
 import type { ServicePart } from "./part.ts";
@@ -296,7 +296,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     ...o.unit.part,
     unit: {
       displayFs: realDisplayFs(() => procs.netUnix()), which: (n) => which(n),
-      ...(L ? { prepare: { run: (copy) => prepareAgentPackage(copy, o.unit!.paths.tools, o.unit!.paths.chromes, L.agentPackage), hasFile: (copy) => { try { return existsSync(extensionFile(copy)); } catch { return false; } } } } : {}),
+      ...(L ? { prepare: { run: (copy) => prepareAgentPackage(copy, o.unit!.paths.tools, o.unit!.paths.chromes, L.agentPackage), lastFile: (copy) => pinnedLastFile(copy, o.unit!.paths.tools) } } : {}),
       ...o.unit.part?.unit,
     },
   }) : null;

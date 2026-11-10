@@ -207,6 +207,22 @@ export function extensionFile(copy: ChromeCopy, id: string = RECEIVER_ID): strin
   return join(dirname(realpathSync(copy.binary)), "extensions", `${id}.json`);
 }
 
+/**
+ * The version of the external extensions file of `copy` from an earlier start, when that file is still good for the
+ * current pin: it names a staged CRX in <tools>/agent-crx/ whose bytes have the pinned SHA-256; else null (review-110
+ * B1: after a pin change the old receiver never starts).
+ */
+export function pinnedLastFile(copy: ChromeCopy, tools: string, sha: string = AGENT_CRX_SHA256): string | null {
+  try {
+    const j = JSON.parse(readFileSync(extensionFile(copy), "utf8"));
+    if (typeof j?.external_crx !== "string" || typeof j?.external_version !== "string") return null;
+    const folder = realpathSync(join(tools, "agent-crx")), crx = realpathSync(j.external_crx);
+    if (dirname(crx) !== folder || sha256(readFileSync(crx)) !== sha) return null;
+    checkVersion(j.external_version);
+    return j.external_version;
+  } catch { return null; }
+}
+
 /** True when `child` is `root` or under it. */
 const under = (child: string, root: string) => child === root || child.startsWith(root.endsWith(sep) ? root : root + sep);
 

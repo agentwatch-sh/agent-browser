@@ -456,9 +456,9 @@ const PROFILE_ARGV = ["/opt/chrome", "--user-data-dir=/s/profile", "--no-first-r
 
 test("the link's peer check: the shim's parent is the service's Chrome by pid and start time, on the agent profile", async () => {
   const procs = { 200: { ppid: 100, start: 6000, state: "S" }, 100: { ppid: 1, start: 5000, state: "S" } };
-  const check = (o: { procs?: Record<number, Proc>; peer?: RawPeer | null; chrome?: typeof CHROME | null; argv?: string[]; alive?: () => boolean; form?: "pidfd" | "stat" } = {}) => {
+  const check = (o: { procs?: Record<number, Proc>; peer?: RawPeer | null; chrome?: typeof CHROME | null; argv?: string[]; peerArgv?: string[]; alive?: () => boolean; form?: "pidfd" | "stat" } = {}) => {
     const reader = fakeReader(o.procs ?? procs, o.peer === undefined ? { pid: 200, uid: 1000, pidfd: 33, start: null } : o.peer, { alive: o.alive, form: o.form });
-    return { reader, run: linkPeerCheck({ reader, chrome: () => (o.chrome === undefined ? CHROME : o.chrome), profile: "/s/profile", cmdline: () => o.argv ?? PROFILE_ARGV, uid: 1000 })(SOCK) };
+    return { reader, run: linkPeerCheck({ reader, chrome: () => (o.chrome === undefined ? CHROME : o.chrome), profile: "/s/profile", cmdline: (pid) => (pid === 200 ? o.peerArgv ?? ["/s/state/host.sh", "chrome-extension://x/"] : o.argv ?? PROFILE_ARGV), uid: 1000 })(SOCK) };
   };
   const ok = check();
   assert.deepEqual(await ok.run, { ok: true, pid: 200 });
@@ -470,6 +470,7 @@ test("the link's peer check: the shim's parent is the service's Chrome by pid an
   assert.deepEqual(await check({ procs: { ...procs, 100: { ppid: 1, start: 5001, state: "S" } } }).run, { ok: false, reason: WHY.parentStart });
   assert.deepEqual(await check({ argv: ["/opt/chrome", "--user-data-dir=/s/profile2"] }).run, { ok: false, reason: WHY.profile });
   assert.deepEqual(await check({ alive: () => false }).run, { ok: false, reason: WHY.changed });
+  assert.deepEqual(await check({ peerArgv: ["/opt/chrome", "--type=gpu-process", "--user-data-dir=/s/profile"] }).run, { ok: false, reason: WHY.helper }, "a helper of Chrome is no native host (review-110)");
   assert.deepEqual(await check({ form: "stat", peer: { pid: 200, uid: 1000, pidfd: null, start: 5999 } }).run, { ok: false, reason: WHY.unread }, "the stat form: the start at the accept is not the process's");
   assert.deepEqual(await check({ form: "stat", peer: { pid: 200, uid: 1000, pidfd: null, start: 6000 } }).run, { ok: true, pid: 200 });
   assert.deepEqual(await linkPeerCheck({ reader: { failed: "no ffi" }, chrome: () => CHROME, profile: "/p", cmdline: () => [] })(SOCK), { ok: false, reason: WHY.noRun("no ffi") });

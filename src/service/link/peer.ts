@@ -24,6 +24,7 @@ export const WHY = {
   parent: "its parent is not the service's Chrome",
   parentStart: "its parent's start time is not the service's Chrome's",
   profile: "the service's Chrome is not on the agent profile",
+  helper: "it is one of Chrome's own helper processes (--type=), not a native host",
   changed: "the peer changed during the check",
 } as const;
 
@@ -54,6 +55,8 @@ export function linkPeerCheck(d: {
       const parent = reader.proc(chrome.pid);
       if (!parent || parent.start !== chrome.start) return { ok: false, reason: WHY.parentStart };
       if (!namesProfile(d.cmdline(chrome.pid), d.profile)) return { ok: false, reason: WHY.profile };
+      // A native host has no --type=; Chrome's own helpers (a GPU or utility process) are also its direct children (review-110).
+      if (d.cmdline(peer.pid).some((a) => a.startsWith("--type="))) return { ok: false, reason: WHY.helper };
       const after = reader.proc(peer.pid);
       const alive = peer.pidfd === null || (reader.poll(peer.pidfd) === 0 && reader.fdinfoPid(peer.pidfd) === peer.pid);
       if (!after || after.start !== before.start || after.ppid !== before.ppid || after.state === "Z" || !alive) return { ok: false, reason: WHY.changed };
