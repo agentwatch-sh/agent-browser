@@ -337,6 +337,7 @@ test("the self-test passes on this box from a child process: the pidfd form, the
     const r = await selfTest(socket, { onChild: (c) => { child = c; }, onFolder: (d) => { folder = d; } });
     assert.ok("reader" in r, JSON.stringify(r));
     assert.equal(r.reader.form, "pidfd", "taylor runs Linux 6.12: SO_PEERPIDFD");
+    assert.equal(child!.spawnargs[1], "--disable-sigusr1", "the child holds SIGUSR1 too (board ab-v16.96)");
     assert.ok(folder && folder.startsWith(join(dir, ".peer-test-")) && !existsSync(folder), "the 0700 folder next to the endpoint socket is gone");
     await until(() => child!.exitCode !== null || child!.signalCode !== null, "the child's end");
     assert.deepEqual(readdirSync(dir), []);
