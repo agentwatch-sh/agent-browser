@@ -1,10 +1,12 @@
 // Contract C12 (the control door between the service and the agentwatch daemon) and the format of the MCP's allow
 // list (a part of C11), board task ab-v16.94.1: docs/contracts/C12.md and docs/contracts/mcp-allow-list.md are their
-// masters, and test/vectors/control.json and test/vectors/mcp-allow-list.json their vectors. Nothing builds them yet:
-// stage 1 (the service) and agentwatch's stage 2 (the daemon's client) test against the same vectors. The small
-// reference rules below follow the text, so a vector that breaks a rule fails here first.
+// masters, and test/vectors/control.json and test/vectors/mcp-allow-list.json their vectors. Stage 1a (board
+// ab-v16.94.2) builds the service's control door: test/service-*.test.ts run the real service and its fake against the
+// same vectors, and agentwatch's stage 2 (the daemon's client) tests against them too. The small reference rules below
+// follow the text, so a vector that breaks a rule fails here first.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
@@ -67,8 +69,8 @@ const FIELD_RULES: FieldRule[] = [
   ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
     (f, v) => (f === "scope" || f === "list" ? scope(v) : null)],
   ["A root (`roots` of `set_sessions`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
-  ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots) and a `cgroup` (a string or `null`). `remote` is a list of objects with the strings `scope`, `box` and `list`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
-    (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string"))
+  ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots), a `cgroup` (a string or `null`) and a `lifetime_id` (a string or `null`). `remote` is a list of objects with the strings `scope`, `box` and `list`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
+    (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string") && (s.lifetime_id === null || typeof s.lifetime_id === "string"))
       : f === "remote" ? Array.isArray(v) && v.every((x: any) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string")
       : f === "box" ? isObj(v) && strings(v.hosts) && strings(v.cookie_names) : null],
   ["`enabled` and `control` are booleans; `chrome_bin` is a string or `null`; `chrome_args` is a list of strings.",
@@ -271,7 +273,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
     if (OPS[op].fields.length === 0) assert.equal(cells[0], "none", `${op}: no field`);
   }
   assert.deepEqual(spans(rows.get("list_set")![0]), ["list", "add", "remove"], "list_set: add and remove, no whole list");
-  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\"}]`), `remote` (`[{\"scope\",\"box\",\"list\"}]`, empty until stage 5), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions, remote and box");
+  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\"}]`), `remote` (`[{\"scope\",\"box\",\"list\"}]`, empty until stage 5), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11), remote and box");
   sayAll(C12, [
     "Applies agentwatch's `browser.*` config keys, as data. The daemon sends it at each connect and at each change. `chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` makes the endpoint and the MCP path answer their 503 (C11, from stage 3); `enabled: false` stops the browser.",
     "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4).",
@@ -291,7 +293,8 @@ test("C12's table of requests names exactly the ops of the reference, with their
     "| `lists_get`, `prompts_get` | none | The lists and the old single list (read only); the open prompts, each with its recipients. |",
     "The endpoint's URL for the scope (for `agentwatch browser endpoint` and `env`).",
     "The sender's ID, its version and its package (C1, C9).",
-    "Stage 1a fixes the keys of the `data` of `status`, `lists_get`, `prompts_get`, `endpoint` and `sender` in this table before it builds them, with the daemon lead's review. They must include:",
+    "Stage 1a (board ab-v16.94.2) fixes the keys of the `data` of `status`, `lists_get`, `prompts_get`, `endpoint` and `sender` in the part \"The data of the reads\", below, with the daemon lead's review. They include:",
+    "It keeps each session's `lifetime_id` (agentwatch's id of that run of the session) for the recipients of a prompt.",
     "the agent's text and the operator's text of a state as two separate keys, because the gateway gives the operator's text only to a password login;",
     "each prompt's recipients, the session name and the lifetime id of each session that the block stopped, because the daemon sends them the allow notice (today's gateway does, at an allow);",
     "the MCP port's state, for `agentwatch health`.",
@@ -383,6 +386,146 @@ test("C12 states what happens when the daemon drops, and the vectors' part", () 
     "The next complete `set_sessions` is the truth again.",
   ]);
   assert.ok(says(part(C12, "The vectors."), "`test/vectors/control.json` holds lines of each kind"), "C12 names its vectors");
+});
+
+// ---- Stage 1a (board ab-v16.94.2): the expected command, the data of the reads, the ops of stage 1a, the command, the fake ----
+
+test("C12 names the path and the format of the daemon's expected command (rule 3's file): agentwatch writes it, the service reads it at each accept", () => {
+  assert.ok(says(part(C12, "Who connects"), "The part \"The daemon's expected command\", below, names the file's path and its format."), "rule 3 points to the part");
+  sayAll(part(C12, "The daemon's expected command (rule 3's file; board ab-v16.94.2)."), [
+    "agentwatch's install writes this file, and agentwatch writes it again at each update and at each change of the daemon's command line. The service reads it at each accept, so a new file takes effect at the next connection, with no restart of the service.",
+    "The path: `$XDG_CONFIG_HOME/agent-browser/daemon-command.json`, or `~/.config/agent-browser/daemon-command.json` when `XDG_CONFIG_HOME` is not set, on Linux and on the Mac. The service's unit can name another file with `--daemon-command <file>` (the command, below).",
+    "The format: one JSON object in UTF-8, `{\"v\":1,\"interpreter\":\"<path>\",\"args\":[\"<argument>\",...]}`. `v` is 1.",
+    "`interpreter` is the absolute, resolved path (`realpath`) of the daemon's interpreter, because `/proc/<pid>/exe` resolves links: a path through a link never matches.",
+    "`args` is the daemon's command line from argv[1] on, one string for each argument, in order. The service ignores a key that it does not know.",
+    "The check: the target of the peer's `/proc/<pid>/exe` equals `interpreter`, and the peer's `/proc/<pid>/cmdline` from argv[1] on equals `args`, with the same count and each argument the same.",
+    "The file is a regular file, not a link, owned by the service's user, and not writable by its group or by others (agentwatch writes it with mode 0600).",
+    "A file that is missing, that breaks one of these rules, or whose content breaks the format fails rule 3 at each connection: the refused line names rule 3 and the reason.",
+  ]);
+  // The example in the text has the format: v 1, an absolute interpreter, args a list of strings, and no box path.
+  const m = /`(\{"v":1,"interpreter":"\/[^`]+\})`/.exec(part(C12, "The daemon's expected command"));
+  assert.ok(m, "an example of the file");
+  const ex = JSON.parse(m![1]);
+  assert.deepEqual(keysOf(ex), ["args", "interpreter", "v"]);
+  assert.ok(ex.interpreter.startsWith("/") && strings(ex.args) && ex.args.length > 0);
+  assert.ok(!/\/home\//.test(m![1]), "no box path in the example");
+});
+
+// The keys of the data of each read, from C12's table (stage 1a): a key with an object or a list of objects in braces names
+// its inner keys too.
+const READS: Record<string, string[]> = {
+  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "state", "update"],
+  lists_get: ["lists", "old_allow"],
+  prompts_get: ["prompts"],
+  endpoint: ["url"],
+  sender: ["id", "package", "version"],
+};
+const PROMPT_KEYS = ["from", "host", "id", "list", "recipients", "repo", "scopes", "warnings"];
+const LIST_KEYS = ["allow", "error", "name", "repo", "sessions"];
+
+test("C12 fixes the keys of the data of the reads (D11): the agent's text and the operator's text as two keys, each prompt's recipients with the session name and the lifetime id, and a transport-neutral MCP state", () => {
+  const rows = table(C12, "| Read | Its answer's `data` |");
+  assert.deepEqual([...rows.keys()].sort(), Object.keys(READS).sort(), "the five reads");
+  // The top-level keys of each row's shape, in the order of the text.
+  const top = (shape: string) => [...shape.slice(1, -1).matchAll(/"([a-z_]+)"(:(\[\{[^\]]*\]|\{[^}]*\}))?/g)].map((x) => x[1]);
+  for (const [op, [cell]] of rows) assert.deepEqual(top(spans(cell)[0]).sort(), READS[op], `${op}: its keys`);
+  assert.equal(spans(rows.get("prompts_get")![0])[0], "{\"prompts\":[{\"id\",\"host\",\"list\",\"repo\",\"scopes\",\"from\",\"warnings\",\"recipients\":[{\"session\",\"lifetime_id\"}]}]}");
+  assert.equal(spans(rows.get("lists_get")![0])[0], "{\"lists\":[{\"name\",\"repo\",\"allow\",\"sessions\",\"error\"}],\"old_allow\"}");
+  assert.equal(spans(rows.get("sender")![0])[0], "{\"id\",\"version\",\"package\":{\"name\",\"sha256\",\"base64\"}}");
+  sayAll(part(C12, "The data of the reads (stage 1a)."), [
+    "`state` is `off`, `starting`, `ready` or `failed closed`. `agent_text` is the state's text for an agent, and `operator_text` is the state's text for the operator: two keys, so the gateway drops `operator_text` for a caller with no password login. No `agent_text` names a stop or a start (I2).",
+    "`chrome_kind`, `chrome_version` and `chrome_pid` are Chrome's kind, version and pid, and `extension_version` is the agent extension's version. Each one is `null` while the service does not have that fact (no Chrome runs).",
+    "`update` is Chrome's update state, as the `update` of the `chrome` event, or `null`: it is the update state of the requests' table and of a daemon's connect.",
+    "`endpoint` is the endpoint's state, as in the `ready` event: `{\"form\":\"<form>\"}` or `{\"form\":null,\"reason\":\"<text>\"}`.",
+    "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>}`. `state` is `none` while the service has no MCP (before stage 1d), and then `address` is `null`. Stage 1d names the other states and fixes the form of `address`, an opaque text that the daemon shows as it is. This file fixes no transport of the MCP.",
+    "`sessions` holds each session of the last `set_sessions`, as `{\"scope\",\"repo\",\"list\"}`: `list` is the name of the scope's list, or `null` while the scope has no list. `lists` holds the names of the lists that the service has.",
+    "`last_stop` is `null`, or `{\"reason\",\"at\",\"by\"}`: the reason of the last `stopped` event, its time in UTC (ISO 8601, for example `2026-11-10T06:30:00Z`), and its `by` (`null` for a reason other than `stop`).",
+    "Each prompt has its `id`, `host` and `list`, the list's `repo` (or `null`), the `scopes` that its blocks came from, its `from` host (or `null`), its `warnings`, and its `recipients`: the session name (`session`) and the lifetime id (`lifetime_id`) of each session that a block of the prompt stopped, from that session's `lifetime_id` in `set_sessions`. The daemon sends each recipient the allow notice. No log line holds a lifetime id.",
+    "`lists_get`: each list with its `name`, its `repo` (or `null`), its entries (`allow`, as `list_set` names them), the scopes that use it (`sessions`), and its read error (`error`, `\"\"` when it has none); `old_allow` is the old single list, read only (`[]` when it cannot be read).",
+    "`endpoint`: `url` is the endpoint's URL for the scope, as a client gives it to Playwright (C11).",
+    "`sender`: `id` is the sender's extension ID, `version` its version, and `package` the sender package (C1): its file `name`, its `sha256` (64 hex digits) and its bytes in `base64`.",
+  ]);
+  // The status row of the requests' table keeps the MCP's state with no port number or URL form (the lead's transport rule).
+  assert.ok(!/"port"|mcp_port|http:\/\/127/.test(part(C12, "The data of the reads")), "no MCP port or URL in the data's keys");
+});
+
+test("the read vectors (q1 to q5) have exactly the keys of C12's data, and status keeps the agent's and the operator's texts apart", () => {
+  const reads = control.requests.filter((v: any) => Object.hasOwn(READS, v.req.op));
+  assert.deepEqual(reads.map((v: any) => v.req.op).sort(), Object.keys(READS).sort(), "one vector for each read");
+  for (const { note, req, res } of reads) {
+    assert.ok(res.ok, note);
+    assert.deepEqual(keysOf(res.data), READS[req.op], note);
+  }
+  const data = (op: string) => reads.find((v: any) => v.req.op === op).res.data;
+  const status = data("status");
+  assert.ok(["off", "starting", "ready", "failed closed"].includes(status.state));
+  assert.ok(text1(status.agent_text) && text1(status.operator_text), "two texts");
+  assert.doesNotMatch(status.agent_text, /\b(stop|start|restart)/i, "I2: the agent's text names no stop and no start");
+  assert.deepEqual(status.mcp, { state: "none", address: null }, "the MCP's state before stage 1d (the only vector of mcp now)");
+  assert.deepEqual(keysOf(status.endpoint), ["form"]);
+  for (const s of status.sessions) assert.deepEqual(keysOf(s), ["list", "repo", "scope"]);
+  assert.ok(strings(status.lists));
+  assert.equal(status.last_stop, null);
+  for (const p of [...status.prompts, ...data("prompts_get").prompts]) {
+    assert.deepEqual(keysOf(p), PROMPT_KEYS);
+    assert.ok(p.recipients.length > 0, "a prompt names its recipients");
+    for (const r of p.recipients) assert.deepEqual(keysOf(r), ["lifetime_id", "session"]);
+  }
+  assert.deepEqual(status.prompts, data("prompts_get").prompts, "status gives the open prompts as prompts_get does");
+  // Each recipient is a session of the snapshot, with its lifetime id from set_sessions (D11).
+  const snap = control.requests.find((v: any) => v.req.op === "set_sessions").req.sessions;
+  for (const p of status.prompts) for (const r of p.recipients) assert.ok(snap.some((s: any) => s.scope === r.session && s.lifetime_id === r.lifetime_id), `${p.id}: ${r.session}`);
+  for (const l of data("lists_get").lists) assert.deepEqual(keysOf(l), LIST_KEYS);
+  assert.ok(Array.isArray(data("lists_get").old_allow));
+  const ep = reads.find((v: any) => v.req.op === "endpoint");
+  assert.equal(ep.res.data.url, `ws+unix://${control.state.agent_door}:/devtools/browser/${ep.req.scope}`);
+  const sender = data("sender");
+  assert.match(sender.id, /^[a-p]{32}$/);
+  assert.deepEqual(keysOf(sender.package), ["base64", "name", "sha256"]);
+  assert.equal(createHash("sha256").update(Buffer.from(sender.package.base64, "base64")).digest("hex"), sender.package.sha256, "the package's sha256");
+  // A set_sessions whose session has no lifetime_id is a bad request (b18).
+  assert.ok(control.badRequests.some((v: any) => v.req.op === "set_sessions" && v.req.sessions.some((s: any) => !Object.hasOwn(s, "lifetime_id")) && v.res.error === "bad request"), "a session with no lifetime_id");
+});
+
+test("C12 states the ops of stage 1a: the five ops that it has, unsupported for each other op until its stage, and no Chrome, no list and no MCP", () => {
+  sayAll(part(C12, "The ops of stage 1a."), [
+    "Stage 1a's service (board ab-v16.94.2) has the ops `config`, `set_sessions`, `session_ended`, `status` and `endpoint`.",
+    "It answers each other op of the requests' table `unsupported`, as the hello says for an op that a service does not have, until a later stage adds that op: `start`, `stop` and `sender` come with the Chrome unit (stage 1b, board ab-v16.94.3); `launch_check`, `list_set`, `prompt_allow`, `prompt_dismiss`, `import`, `lists_get` and `prompts_get` come with the lists, the scopes, the prompts and the sign-ins (stage 1c, board ab-v16.94.4).",
+    "These stages add no feature name: the daemon's client (stage 2) needs every op of stage 1, and stage 2 comes after stage 1.",
+    "Stage 1a has no Chrome, no list and no MCP. `config` and `set_sessions` keep their data in memory. `session_ended` drops the scope's session and records the ended scope in memory.",
+    "Its `status` gives the state `off`, `null` for each fact of Chrome and the extension, the `mcp` state `none`, no list and no prompt. Its event stream sends no event, because each event comes from Chrome or a later stage.",
+    "`agent-browser service --fake` (below) has every op of the requests' table.",
+  ]);
+  // Each op of the requests' table is in stage 1a's list or in a later stage's list, once.
+  const p = part(C12, "The ops of stage 1a.");
+  const first = p.slice(0, p.indexOf("It answers"));
+  const later = p.slice(p.indexOf("It answers"), p.indexOf("These stages"));
+  const named = [...spans(first), ...spans(later)].filter((s) => Object.hasOwn(OPS, s));
+  assert.deepEqual([...named].sort(), Object.keys(OPS).sort(), "every op once");
+});
+
+test("C12 states the command of stage 1a and the fake service (the daemon lead's C10): the flags, the fake's admission, its own rules and its events from standard input", () => {
+  sayAll(part(C12, "The command (stage 1a)."), [
+    "agentwatch's unit runs `agent-browser service --agent-door <address> [--control-door <path>] [--daemon-unit <unit>] [--daemon-command <file>]`. Nothing starts it before stage 2, and no install step of this repository writes a unit for it.",
+    "`--agent-door` (required): the agent door's address, which the daemon gives (today's endpoint path during the move: the design, section 13). In stage 1a it is the path of a Unix socket, and the agent door is today's endpoint with today's peer check (C11).",
+    "`--control-door`: the path of `control.sock`. The default is `control.sock` in the run folder (the door, above).",
+    "`--daemon-unit`: agentwatch's unit, whose MainPID rule 1 reads. The default is `agentwatch.service`.",
+    "`--daemon-command`: the file of the daemon's expected command. The default is its path above.",
+    "`--hello` prints the hello and exits (the hello, above). `--fake` serves the fake (below).",
+    "The service runs until `SIGTERM` or `SIGINT`, and then it removes its sockets.",
+  ]);
+  sayAll(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), [
+    "`agent-browser service --fake --control-door <path>` serves the control door for agentwatch's hermetic tests, with the scripted state of the vectors (the `state` of `test/vectors/control.json`) and no Chrome. Its code is `src/service/fake.ts`.",
+    "Its hello has `\"commit\":null` and the feature `fake`. It has every op of the requests' table, and it gives each request vector its answer when the vectors run in their order on one connection.",
+    "It admits each connection that reaches its socket: the socket has mode 0600 in a folder of mode 0700, and the fake holds no list, no sign-in, no Chrome and no data of the user. It refuses the default path of `control.sock`, so it never takes the place of the service. With `--refuse`, each connection gets the refused line of rule 2 of the vectors, and the fake closes it.",
+    "Its own rules where the vectors stop: it starts in the state `ready`. A `start` in the state `off` sends the vectors' first `ready` event, and a `stop` in the state `ready` sends `stopped` with the reason `stop` and the stop's `by`. An allow or a dismissal closes the prompt, with a `prompt` event in the state `closed`. `session_ended` holds the ended scope until the next `set_sessions`. `endpoint` gives the URL of the address of `--agent-door` (no agent door listens), else of the vectors' address.",
+    "Each line on its standard input that is an event of the event table, with exactly its fields, goes to each connection that has sent its hello. The fake drops each other line. So a test sends the events that it needs.",
+  ]);
+  assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads."));
+  // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
+  for (const p of control.state.prompts) assert.deepEqual(keysOf(p), PROMPT_KEYS, p.id);
+  assert.equal(control.state.state, "ready", "the fake starts ready");
+  assert.deepEqual(control.state.mcp, { state: "none", address: null });
 });
 
 // ---- The MCP's allow list: the reference of the format ----

@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines: the open prompts p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo).",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2).",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -8,14 +8,85 @@
    {
     "id": "p1",
     "host": "login.example",
-    "list": "owner-repo"
+    "list": "owner-repo",
+    "repo": "owner/repo",
+    "scopes": [
+     "web-1"
+    ],
+    "from": "app.example",
+    "warnings": [],
+    "recipients": [
+     {
+      "session": "web-1",
+      "lifetime_id": "lt-1a2b"
+     }
+    ]
    },
    {
     "id": "p2",
     "host": "cdn.example",
-    "list": "owner-repo"
+    "list": "owner-repo",
+    "repo": "owner/repo",
+    "scopes": [
+     "web-1"
+    ],
+    "from": null,
+    "warnings": [],
+    "recipients": [
+     {
+      "session": "web-1",
+      "lifetime_id": "lt-1a2b"
+     }
+    ]
    }
-  ]
+  ],
+  "lists": [
+   {
+    "name": "owner-repo",
+    "repo": "owner/repo",
+    "allow": [
+     "a.example",
+     "old.example"
+    ],
+    "error": ""
+   }
+  ],
+  "old_allow": [],
+  "state": "ready",
+  "texts": {
+   "ready": {
+    "agent_text": "The agent browser is ready.",
+    "operator_text": "The agent browser is ready."
+   },
+   "off": {
+    "agent_text": "The agent browser is not running.",
+    "operator_text": "The agent browser is not running. A start on the Browser page starts it."
+   }
+  },
+  "chrome": {
+   "kind": "chrome",
+   "version": "157.0.7000.1",
+   "pid": 4242
+  },
+  "extension_version": "0.3.6",
+  "update": "current",
+  "endpoint": {
+   "form": "pidfd"
+  },
+  "mcp": {
+   "state": "none",
+   "address": null
+  },
+  "agent_door": "/run/user/1000/agent-browser/cdp.sock",
+  "sender": {
+   "id": "bpfkgknpndlpkcffmaaelkfcbpackiip",
+   "version": "0.3.6",
+   "package": {
+    "name": "agentwatch-sender-0.3.6.zip",
+    "sha256": "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85",
+    "base64": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="
+   }
+  }
  },
  "hellos": [
   {
@@ -171,7 +242,7 @@
    }
   },
   {
-   "note": "set_sessions: a complete snapshot of two local sessions, no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
+   "note": "set_sessions: a complete snapshot of two local sessions (each with its lifetime id, or null), no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
    "req": {
     "t": "req",
     "id": "r3",
@@ -191,7 +262,8 @@
         "start": 6000
        }
       ],
-      "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope"
+      "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope",
+      "lifetime_id": "lt-1a2b"
      },
      {
       "scope": "shell-2",
@@ -202,7 +274,8 @@
         "start": 6100
        }
       ],
-      "cgroup": null
+      "cgroup": null,
+      "lifetime_id": null
      }
     ],
     "remote": [],
@@ -220,6 +293,233 @@
     "id": "r3",
     "ok": true,
     "data": {}
+   }
+  },
+  {
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3, the lists, no stop yet, and the open prompts with their recipients",
+   "req": {
+    "t": "req",
+    "id": "q1",
+    "op": "status",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "q1",
+    "ok": true,
+    "data": {
+     "state": "ready",
+     "agent_text": "The agent browser is ready.",
+     "operator_text": "The agent browser is ready.",
+     "chrome_kind": "chrome",
+     "chrome_version": "157.0.7000.1",
+     "chrome_pid": 4242,
+     "extension_version": "0.3.6",
+     "update": "current",
+     "endpoint": {
+      "form": "pidfd"
+     },
+     "mcp": {
+      "state": "none",
+      "address": null
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "list": "owner-repo"
+      },
+      {
+       "scope": "shell-2",
+       "repo": null,
+       "list": null
+      }
+     ],
+     "lists": [
+      "owner-repo"
+     ],
+     "last_stop": null,
+     "prompts": [
+      {
+       "id": "p1",
+       "host": "login.example",
+       "list": "owner-repo",
+       "repo": "owner/repo",
+       "scopes": [
+        "web-1"
+       ],
+       "from": "app.example",
+       "warnings": [],
+       "recipients": [
+        {
+         "session": "web-1",
+         "lifetime_id": "lt-1a2b"
+        }
+       ]
+      },
+      {
+       "id": "p2",
+       "host": "cdn.example",
+       "list": "owner-repo",
+       "repo": "owner/repo",
+       "scopes": [
+        "web-1"
+       ],
+       "from": null,
+       "warnings": [],
+       "recipients": [
+        {
+         "session": "web-1",
+         "lifetime_id": "lt-1a2b"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "note": "lists_get: each list with its repo, its entries, the scopes that use it and its read error, and the old single list",
+   "req": {
+    "t": "req",
+    "id": "q2",
+    "op": "lists_get",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "q2",
+    "ok": true,
+    "data": {
+     "lists": [
+      {
+       "name": "owner-repo",
+       "repo": "owner/repo",
+       "allow": [
+        "a.example",
+        "old.example"
+       ],
+       "sessions": [
+        "web-1"
+       ],
+       "error": ""
+      }
+     ],
+     "old_allow": []
+    }
+   }
+  },
+  {
+   "note": "prompts_get: the open prompts, each with its recipients (the session name and the lifetime id of each session that a block stopped)",
+   "req": {
+    "t": "req",
+    "id": "q3",
+    "op": "prompts_get",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "q3",
+    "ok": true,
+    "data": {
+     "prompts": [
+      {
+       "id": "p1",
+       "host": "login.example",
+       "list": "owner-repo",
+       "repo": "owner/repo",
+       "scopes": [
+        "web-1"
+       ],
+       "from": "app.example",
+       "warnings": [],
+       "recipients": [
+        {
+         "session": "web-1",
+         "lifetime_id": "lt-1a2b"
+        }
+       ]
+      },
+      {
+       "id": "p2",
+       "host": "cdn.example",
+       "list": "owner-repo",
+       "repo": "owner/repo",
+       "scopes": [
+        "web-1"
+       ],
+       "from": null,
+       "warnings": [],
+       "recipients": [
+        {
+         "session": "web-1",
+         "lifetime_id": "lt-1a2b"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "note": "endpoint: the endpoint's URL for the scope",
+   "req": {
+    "t": "req",
+    "id": "q4",
+    "op": "endpoint",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "web-1"
+   },
+   "res": {
+    "t": "res",
+    "id": "q4",
+    "ok": true,
+    "data": {
+     "url": "ws+unix:///run/user/1000/agent-browser/cdp.sock:/devtools/browser/web-1"
+    }
+   }
+  },
+  {
+   "note": "sender: the sender's ID, its version and its package (here the fake's empty zip)",
+   "req": {
+    "t": "req",
+    "id": "q5",
+    "op": "sender",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "q5",
+    "ok": true,
+    "data": {
+     "id": "bpfkgknpndlpkcffmaaelkfcbpackiip",
+     "version": "0.3.6",
+     "package": {
+      "name": "agentwatch-sender-0.3.6.zip",
+      "sha256": "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85",
+      "base64": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="
+     }
+    }
    }
   },
   {
@@ -784,7 +1084,8 @@
         "start": 0
        }
       ],
-      "cgroup": null
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b"
      }
     ],
     "remote": [],
@@ -838,6 +1139,43 @@
    "res": {
     "t": "res",
     "id": "b17",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose session has no lifetime_id (D11: each session carries its lifetime id, or null): the whole snapshot is a bad request",
+   "req": {
+    "t": "req",
+    "id": "b18",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b18",
     "ok": false,
     "error": "bad request"
    }
