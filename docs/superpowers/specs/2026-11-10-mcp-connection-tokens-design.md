@@ -1,16 +1,16 @@
 # Connection tokens for the agent browser's MCP: one for each session — design
 
-**Status: Proposed, revised after the operator's answers.** The operator answered this design's five questions
-(A, B1, B2, C, D) and the address question on four board items (ab-0wv, ab-sxg, ab-ufy, ab-5t3) on 2026-11-10.
-This revision records the answers and changes the design to fit them. It asks one new question (E, section 17),
-about Codex. Nothing that fixes the MCP transport merges before this design's merge (the manager's rule). E's
-answer changes only the entry of a Codex session that runs with agentwatch's app server (build task 8). The
-lead decides whether the merge waits for E. E's no-answer behaviour builds nothing that the operator declined.
+**Status: Decided: the operator's answers of 2026-11-10 (section 17).** The operator answered this design's
+questions (A, B1, B2, C, D and E), the address question and the Cloudflare question on five board items
+(ab-0wv, ab-sxg, ab-ufy, ab-5t3, ab-h93) on 2026-11-10. The design records the answers and fits them. Nothing that
+fixes the MCP transport merges before this design's merge (the manager's rule).
 
 Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-v16.94.10, epic
 ab-v16.94). Branch `ab-v16.94.10-mcp-tokens-design` in agent-browser, from main `3fe1427`. Revisions: the first
 design; one fix round after a fresh review (review-103) and the daemon lead's read; a narrow re-check
-(review-103b); and this revision after the operator's answers. The file name keeps the first title ("per-repo"):
+(review-103b); a revision after the operator's answers; and the last text round after a fresh review of that
+revision (review-103c), the daemon lead's read of it and the answers to ab-h93. The file name keeps the first
+title ("per-repo"):
 by the answers, each session gets its own token. No product code and no contract file changes in this task:
 section 13 names each sentence that a later task changes.
 
@@ -29,7 +29,7 @@ This design builds on the service design
 ([2026-11-09-self-contained-agent-browser-design.md](2026-11-09-self-contained-agent-browser-design.md),
 "the service design" below) and on the contracts `docs/contracts/C11.md` and `docs/contracts/C12.md`. It keeps
 every decided rule of those documents, except the rules that the operator's answers to board items ab-6ng,
-ab-0wv, ab-sxg, ab-ufy and ab-5t3 change (section 2).
+ab-0wv, ab-sxg, ab-ufy, ab-5t3 and ab-h93 change (section 2).
 
 ## 1. The answer in short
 
@@ -43,16 +43,18 @@ ab-0wv, ab-sxg, ab-ufy and ab-5t3 change (section 2).
    operator alone issues and revokes a token" (section 2). The Browser pane has no token buttons. It shows which
    live sessions have the MCP (section 7.5).
 3. **The token is in the header of the session's own MCP entry (C and ab-ufy).** No header command, no bridge,
-   and no token in an argv or an environment. Claude Code: `--mcp-config` names the session's file
-   `tokens/agent-browser/sessions/<lifetime id>.json` (0600). Codex: `-p aw-<lifetime id>` selects a profile
-   whose file in the Codex home is a symbolic link to `tokens/agent-browser/sessions/<lifetime id>.toml` (0600).
-   The file holds the URL and the `Authorization` header. agentwatch writes it before the launch, and it removes
-   the file and the link at the session's end. A sweep removes what a crash leaves.
-4. **A new fact for Codex (question E).** agentwatch runs most Codex sessions with a per-session Codex app
-   server, and the app server makes the session's MCP connections. Codex 0.159.3 refuses `--profile` for its app
-   server, and its terminal program does not pass a profile's MCP servers to the app server. So the profile
-   gives the MCP only to a Codex session that runs without the app server. Until the operator answers E, a Codex
-   session with the app server gets no agent browser MCP.
+   and no token in an argv or an environment. Each run of a session gets a new random name (32 hex digits).
+   Claude Code: `--mcp-config` names the session's file `tokens/agent-browser/sessions/<random name>.json`
+   (0600). Codex: `-p aw-<random name>` selects a profile whose file in the Codex home is a symbolic link to
+   `tokens/agent-browser/sessions/<random name>.toml` (0600). The file holds the URL, the `Authorization` header
+   and the run's lifetime id, so no command line holds a lifetime id. agentwatch writes the file before the
+   launch, and it removes the file and the link at the session's end. A sweep removes what a crash leaves.
+4. **A fact for Codex (question E, answered a).** agentwatch runs most Codex sessions with a per-session Codex
+   app server, and the app server makes the session's MCP connections. Codex 0.159.3 refuses `--profile` for its
+   app server, and its terminal program does not pass a profile's MCP servers to the app server. So the profile
+   gives the MCP only to a Codex session that runs without the app server. By the operator's answer E a, a Codex
+   session with the app server gets no agent browser MCP until a Codex release lets the app server read a
+   profile. Until then it keeps the browser through Playwright, and nothing new is built.
 5. **The service sees only a fingerprint.** The fingerprint is the SHA-256 of the token. It rides in C12's
    `set_sessions`, on the session's own item (a new field `mcp_token`). The earlier op `mcp_tokens` goes. The
    service checks each MCP request: the SHA-256 of its bearer must equal the fingerprint of the walk's session,
@@ -69,16 +71,18 @@ ab-0wv, ab-sxg, ab-ufy and ab-5t3 change (section 2).
    gateway takes the token only on `/mcp/<box>/<session>`, only from the calling box's known IPv4 and IPv6
    addresses, and passes it unread to its service. The service checks the fingerprint. The calling box's daemon
    mints the remote token at the session's start and sends only the fingerprint over the link (the
-   recommendation of section 10). TLS ends at Cloudflare's edge, so Cloudflare sees each remote MCP request in
-   clear (section 18).
+   recommendation of section 10). The serving daemon takes the box of each list from the link's peer identity,
+   and it checks each calling box's list before it uses it: a bad list drops all fingerprints of that box alone.
+   TLS ends at Cloudflare's edge, so Cloudflare sees each remote MCP request in clear: the token, the tool
+   arguments and the page text. The operator chose this route with that fact (ab-h93), and the address check
+   stays.
 9. **The secret rules.** A token is never in an argv, an environment, a log line, a URL, git, a status, or a
    pane or a terminal that agentwatch writes. Only its fingerprint crosses the control door and the link. The
    token lives only in the session's entry file and in the client's memory. Tests scan for a canary token and its
    fingerprint, also in both clients' MCP and debug logs. A mutation of each scan shows that the scan finds a
    planted token.
-10. **Questions.** All five questions and the address question have answers (section 17). One new question, E,
-    asks how a Codex session with agentwatch's app server gets its token. Its recommendation, and its no-answer
-    behaviour: no MCP for those sessions until a Codex release lets the app server read the session's profile.
+10. **Questions.** All questions have the operator's answers (section 17): A, B1, B2, C, D, E, the address
+    question and the Cloudflare question. No question is open.
 
 ## 2. The operator's words and the rules
 
@@ -107,7 +111,15 @@ The operator's answers to this design's questions (2026-11-10, each confirmed on
   of the token then works from any computer on the Internet until you remove it.").
 - **The address check** (ab-5t3, 13:26Z), free text: "you can use an IP allowlist as long as you have the ipv4
   and ipv6 of each daemon." The reading: the serving box takes a remote token only from the calling box's known
-  addresses, IPv4 and IPv6 both.
+  addresses, IPv4 and IPv6 both. A second reading: a family in the state "none" (the box reports that it has no
+  global address of that family) counts as known. This reading adds no address that can match (section 10).
+- **E, Codex's app server** (ab-h93, 18:06Z): option a, "Wait for a Codex release that lets the app server read a
+  profile" ("Those sessions keep the browser through Playwright, with no MCP, until then. Nothing new is built,
+  and your "no extra command" stays.").
+- **The Cloudflare question** (ab-h93, 18:06Z): option "Keep direct HTTPS through Cloudflare" ("No program
+  between. Cloudflare sees the token, the tool arguments and the page text of each request. The address check
+  stays."). The operator chose it against the recommended link path, with the fact that the earlier text of D c
+  left out (section 10).
 
 "each repo gets its own connection token" (ab-6ng) holds in this form: each session's token is its own, so no two
 repos, and no two sessions, share a token.
@@ -168,6 +180,11 @@ The daemon lead's input (board task ab-v16.94.10, its comments; data for the des
   logs) is section 14.4. Point 4 ("New token" stops running sessions) falls away: there is no "New token". Points
   5 and 6 (the gateway route; who mints a remote token) are section 10, with this design's recommendation for
   point 6. Point 7 (the address check) is section 10.
+- The read of the revision (1dc6e66): the daemon lead agrees with `mcp_token` on `set_sessions` and takes (i),
+  the calling box mints (section 10). Three additions: the service's `bad request` answer never echoes the
+  snapshot (sections 6.3 and 13); the serving daemon takes each remote item's box from the link's peer identity
+  (section 10); and a random name for each run in the entry file's name and the Codex profile's name (sections 3
+  and 9.2).
 
 ## 3. Words
 
@@ -175,18 +192,22 @@ The daemon lead's input (board task ab-v16.94.10, its comments; data for the des
 - **The daemon**: agentwatch's per-user daemon.
 - **A lifetime id**: agentwatch's id of one run of a session (a UUID from `uuid4`), which C12's `set_sessions`
   already carries. A new run of a session gets a new lifetime id (C12: "A new run of a session comes with a new
-  `set_sessions` that carries its new `lifetime_id`"). It matches the UUID pattern, so it is a safe file name
-  and a valid Codex profile name with the prefix `aw-`.
+  `set_sessions` that carries its new `lifetime_id`"). No file name, no profile name and no command line holds
+  it (the daemon lead's addition).
+- **The random name**: a new random name for each run of a session, 32 lowercase hex digits
+  (`secrets.token_hex(16)`). It names the run's entry file and its Codex profile (`aw-<random name>`). The entry
+  file holds the run's lifetime id. The daemon keeps the map from each random name to its lifetime id in memory,
+  and it rebuilds the map from the files at its start (section 9.2).
 - **A token**: a session's connection token: `abt1_` and 43 base64url characters (32 random bytes). A session
   has a local token, and one remote token for each serving box whose entry it gets.
 - **A fingerprint**: the lowercase hex SHA-256 of the token's ASCII bytes, with the `abt1_` prefix (the daemon
   lead's change 3).
 - **The entry**: a session's MCP server entry, which agentwatch writes before the launch, with the token in its
   `Authorization` header.
-- **The entry file**: the 0600 file that holds a session's entries:
-  `~/.config/agentwatch/tokens/agent-browser/sessions/<lifetime id>.json` for Claude Code and
-  `.../<lifetime id>.toml` for Codex.
-- **The profile link** (Codex): `$CODEX_HOME/aw-<lifetime id>.config.toml`, a symbolic link to the session's
+- **The entry file**: the 0600 file that holds a session's entries and its run's lifetime id:
+  `~/.config/agentwatch/tokens/agent-browser/sessions/<random name>.json` for Claude Code and
+  `.../<random name>.toml` for Codex.
+- **The profile link** (Codex): `$CODEX_HOME/aw-<random name>.config.toml`, a symbolic link to the session's
   `.toml` entry file, in the session's own Codex home.
 - **The app-server launch** (Codex): agentwatch's usual Codex launch, a per-session `codex app-server` with the
   Codex terminal program (the TUI) connected to it by `--remote` (`daemon/spawner.py`, `_wrap_codex_app_server`).
@@ -219,8 +240,9 @@ check proves both kinds (section 14.4).
   `--strict-mcp-config` (an open-model profile) gets the entry in the same way.
 - Not known yet: whether Claude Code writes an `--mcp-config` server's headers into a log, its `--debug` file,
   its transcript or its `/mcp` view; whether it tries an OAuth login at a 401 when a static `Authorization`
-  header is present; and which server wins when a user's own configuration has a server of the same name. Stage
-  2 checks each one.
+  header is present; which server wins when a user's own configuration has a server of the same name; and
+  whether it takes the entry file's top-level key `agentwatch` beside `mcpServers` (section 9.2). Stage 2 checks
+  each one.
 
 **Codex 0.159.3.**
 
@@ -231,7 +253,7 @@ check proves both kinds (section 14.4).
   `http_headers`. A `-c` value holds its text in the argv (forbidden for the header).
 - **The profile (profile v2).** `-p, --profile <name>`: "Layer $CODEX_HOME/<name>.config.toml on top of the base
   user config" (the help text). From the source at the tag:
-  - a profile name has only ASCII letters, digits, `_` and `-` (`ProfileV2Name`), so `aw-<lifetime id>` passes;
+  - a profile name has only ASCII letters, digits, `_` and `-` (`ProfileV2Name`), so `aw-<random name>` passes;
   - a profile file that does not exist reads as an empty layer, with no error (`config/src/loader/mod.rs`);
   - Codex refuses the launch when the base `config.toml` has a legacy `[profiles.<name>]` table or
     `profile = "<name>"` with the same name;
@@ -242,23 +264,35 @@ check proves both kinds (section 14.4).
     link stays, the token stays under the tokens folder, and a crash during such a write can leave a temp file
     (`.tmp` and random characters) beside the entry file. The temp file's mode is the tempfile crate's 0600
     (stage 2 checks the mode after a write);
+  - the writer parses the file into a `toml_edit` document, applies its edits and writes the document back
+    (`core/src/config/edit.rs`, `apply_blocking_to_resolved_file`). One edit replaces the whole `mcp_servers`
+    table (`replace_mcp_servers`). Source, not proven: a comment at the document's end stays after such a write
+    (section 9.2);
+  - a key that Codex does not know in a user file gives a startup warning (`ignored_config_warning`), and
+    Codex's strict mode refuses it (`config/src/loader/mod.rs`, `strict_config`). So the `.toml` entry file holds
+    no key of agentwatch's own;
   - Source, not proven: Codex reads a linked profile file (the reader opens the path, which follows the link).
     The daemon lead's words: "If Codex refuses a symlinked profile file, say so and we re-decide."
 - **Which commands take a profile.** The source at the tag (`cli/src/main.rs`, `profile_v2_for_subcommand`)
   allows `--profile` for the TUI, `exec`, `review`, `resume`, `queue`, `archive`, `delete`, `unarchive`, `fork`,
   `mcp`, `sandbox` and `debug prompt-input`. For every other command it stops with "--profile only applies to
-  runtime commands and `codex mcp`". `app-server` is not in the list. The installed binary's text holds the same
-  refusal, with the same list of commands. The `app-server` command's help shows no `--profile` option.
+  runtime commands and `codex mcp`". `app-server` is not in the list. The designer's own reading, not in the
+  evidence that the review had: the installed binary's text holds the same refusal, with the same list of
+  commands, and the `app-server` command's help shows no `--profile` option.
 - **The app-server launch** (Source, not proven):
   - the app server builds its configuration with the default loader (`LoaderOverrides::default()`), so its only
     user layer is `$CODEX_HOME/config.toml`. A test hook for another user file exists only in a debug build
-    (`app-server/src/lib.rs`, `debug_assertions`), and the installed binary's text does not hold that hook's
-    warning;
+    (`app-server/src/lib.rs`, `debug_assertions`). The designer's own reading, not in the evidence that the review
+    had: the installed binary's text does not hold that hook's warning;
   - the TUI with `--remote` sends to the app server only a fixed list of its session-flag keys
     (`tui/src/app_server_session.rs`, `config_request_overrides_from_config`: `allow_login_shell`,
     `default_permissions`, `features`, `network`, `permissions`, `sandbox_workspace_write`,
     `shell_environment_policy`, `suppress_unstable_features_warning`, and the model settings). It sends no
-    `mcp_servers` key, and a profile is a user layer, not a session flag;
+    `mcp_servers` key from the profile, and a profile is a user layer, not a session flag;
+  - `thread/start` takes an MCP entry for each thread: its `config` map takes any config key
+    (`app-server-protocol/src/protocol/v2/thread.rs`), and in remote mode the TUI sends its own task-tools server
+    there (`mcp_servers.codex_tui`, `tui/src/app_server_session.rs`). Only the program that starts the thread can
+    use that map, and that program is the TUI, not agentwatch;
   - so a `-p` on the TUI gives the app server no agent browser entry. agentwatch's own question MCP shows the same
     shape: agentwatch passes its `-c mcp_servers.agentwatch.enabled=true` "on both the TUI and its app server"
     (`_question_mcp_args`).
@@ -280,15 +314,15 @@ check proves both kinds (section 14.4).
 share the `aw-*` links, because they are not in its list of shared entries.
 
 **taylor.** `/proc` is mounted with no `hidepid`, so every OS user can read every process's command line. A
-token in an argv is a token for every user of the box. The entry file's path and the profile name show a
-session's lifetime id to every OS user (section 5, the small leaks).
+token in an argv is a token for every user of the box. The entry file's path and the profile name show the run's
+random name to every OS user, and no lifetime id (section 5, the small leaks).
 
 ### 4.2 The entry forms for each client
 
 | Form | Claude Code 2.1.286 | Codex 0.159.3, standalone launch | Codex 0.159.3, app-server launch | Where the token lives | The operator's answers and the rules | State |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1. A static header in the session's own entry file under the tokens folder (chosen) | `--mcp-config <sessions>/<lifetime id>.json`, `type: http`, `url`, `headers` | `-p aw-<lifetime id>`; the profile link to `<sessions>/<lifetime id>.toml`, with `url` and `http_headers` | does not reach the MCP: the app server takes no profile, and the TUI passes no `mcp_servers` (question E) | the entry file (0600 in 0700 folders) and the client's memory | the answers C and ab-ufy; "http instead of stdio" kept; no new process | chosen (Claude Code, Codex standalone) |
-| 2. A header from a command (the earlier recommendation) | `headersHelper` | `http_headers_helper` | `http_headers_helper` in a `-c` value of the app server | a token file; the command prints it | against "no extra command" (C) | not chosen; question E b offers it for Codex's app server only |
+| 1. A static header in the session's own entry file under the tokens folder (chosen) | `--mcp-config <sessions>/<random name>.json`, `type: http`, `url`, `headers` | `-p aw-<random name>`; the profile link to `<sessions>/<random name>.toml`, with `url` and `http_headers` | does not reach the MCP: the app server takes no profile, and the TUI passes no `mcp_servers` from the profile (by the answer E a: no entry until a Codex release lets the app server read a profile) | the entry file (0600 in 0700 folders) and the client's memory | the answers C and ab-ufy; "http instead of stdio" kept; no new process | chosen (Claude Code, Codex standalone) |
+| 2. A header from a command (the earlier recommendation) | `headersHelper` | `http_headers_helper` | `http_headers_helper` in a `-c` value of the app server | a token file; the command prints it | against "no extra command" (C) | not chosen; question E b offered it for Codex's app server only, and the operator chose E a |
 | 3. A static header in the shared Codex `config.toml` | — | `http_headers` in `~/.codex/config.toml` | the same | a shared file outside the tokens folder, read by every Codex session | breaks "token files only under the tokens folder"; one file for all sessions | rejected |
 | 4. The environment | `${VAR}` in `headers` | `bearer_token_env_var`, `env_http_headers` | the same | every shell command of the agent | breaks "env: no" (age-4ks) | rejected (C d not chosen) |
 | 5. An argv | `claude mcp add --header`, or a JSON string to `--mcp-config` | `-c mcp_servers.<name>.http_headers...` | the same | every process's command line, readable by every OS user | breaks the argv rule | rejected |
@@ -299,8 +333,8 @@ session's lifetime id to every OS user (section 5, the small leaks).
 ## 5. The threat model
 
 Each row names a threat, what it could do, and the check that stops it. "Steps" are the admission steps of
-section 11. The token rule is for the MCP only: the local MCP port and the remote MCP route. The agent door
-takes no token (section 11).
+section 11. The token rule is for the MCP only: the local MCP port and the remote MCP route. The CDP path of the
+agent door takes no token (section 11).
 
 | Threat | What it could do | The checks that stop it | Result |
 | --- | --- | --- | --- |
@@ -308,19 +342,20 @@ takes no token (section 11).
 | T2. Another session's agent of the same OS user, also of another repo (the same-uid fact) | read every entry file of the user; use session B's token from session A; name session B's scope | the walk (step 2) gives the connection its own session; the path's scope (step 6) refuses another scope; the token (step 7) must be the walk's session's token, so B's token from A gets the 401 | an honest agent, a mistake and an injected instruction: stopped. A hostile program of the same user: not stopped, as today (C11's limit: `cgroup.procs`, `tmux send-keys`, a passed connection). The token does not change this limit |
 | T3. A token copied into a transcript, a screenshot, a pane or a commit | give the token to a reader of that text, also on the Internet | on the box: the copy works only from its own session, while it runs (steps 2 and 7); off the box: the port listens on `127.0.0.1` only; a remote token works only from the calling box's known addresses (the address check), until its session ends; fewer copies: agentwatch prints no token in any pane, terminal or answer, the entry files live outside every repo, the redactor masks `abt1_` in what the daemon forwards | no use off the box, except a remote token from the calling box's own addresses until its session ends; no new right on the box. An agent can still copy a token into its own transcript (T9) |
 | T4. A process that is not an agent session (the operator's own shell, a cron job outside agentwatch, `systemd-run`, a web page, Chrome) | connect with a token that it found | the walk (step 2): no root; a web page: the `Origin` 403 (step 3) and the `Host` 403 (step 4); the walk refuses a browser process | stopped, also with the token |
-| T5. Another box, or any computer on the Internet, on the remote route | use a remote token on the serving box; use a local token on another box | the local port listens on `127.0.0.1` only; the serving box's gateway takes a bearer only on `/mcp/<box>/<session>`, only when Cloudflare's `CF-Connecting-IP` is one of that box's known addresses, IPv4 and IPv6 (section 10); the service checks the fingerprint of that remote session; the browser grant (Q3) must be active and its list must have a site; the serving box's rules (quiet times, size, rate) | stopped from every other address. From the calling box's own address with a leaked remote token: admitted until the session ends (the operator accepted this risk for D c, and ab-5t3 bounds it to the calling box) |
+| T5. Another box, or any computer on the Internet, on the remote route | use a remote token on the serving box; use a local token on another box | the local port listens on `127.0.0.1` only; the serving box's gateway takes a bearer only on `/mcp/<box>/<session>`, only when Cloudflare's `CF-Connecting-IP` is one of that box's known addresses, IPv4 and IPv6 (section 10); the service checks the fingerprint of that remote session; the serving daemon takes each remote item's box from the link's peer identity, refuses a list that names another box, and checks each calling box's list before the merge (section 10); the browser grant (Q3) must be active and its list must have a site; the serving box's rules (quiet times, size, rate) | stopped from every other address. From the calling box's own address with a leaked remote token: admitted until the session ends (the operator accepted this risk for D c, and ab-5t3 bounds it to the calling box) |
 | T6. The Mac before its peer reader exists | connect to the Mac's local MCP port with a token | the Mac's local MCP port refuses every connection until the `libproc` reader is built and measured (the operator's Q1 rule 3, kept); a token does not open it. The remote route does not use that port (section 10) | stopped (fail closed) |
-| T7. A token that stays valid after its session ends | a process uses an ended session's token; a daemon crash leaves an entry file | at the session's end the daemon removes the link and the entry file, then sends `set_sessions` without the session; `session_ended` closes the scope's MCP connections; the walk refuses a root that is gone, so an ended session's token has no session to work from; the sweep removes what a crash leaves (section 6.5); on the remote route, the serving box drops the fingerprints of a calling box whose snapshot is more than 15 minutes old, and all of them when the grant ends | stopped locally at once; on the remote route at the latest 15 minutes after the last snapshot |
+| T7. A token that stays valid after its session ends | a process uses an ended session's token; a daemon crash leaves an entry file | at the session's end the daemon removes the link and the entry file, then sends `set_sessions` without the session; `session_ended` closes the scope's MCP connections; the walk refuses a root that is gone, so an ended session's token has no session to work from; the sweep removes what a crash leaves (section 6.5); on the remote route, the serving box drops the fingerprints of a calling box whose list is more than 15 minutes old, all of them when the grant ends, and all of them at once when the box's list fails the serving daemon's checks (a bad list never reaches `set_sessions`, section 10); a `set_sessions` that drops a session or a remote fingerprint and fails (`bad request`, or no answer in 5 s) goes again after 1 s, then with a delay that doubles up to 60 s, and at each reconnect, and a `bad request` on it turns the health line red (section 6.3) | stopped locally at once (while the daemon is down, C11's cgroup fallback keeps its limit of today, section 6.5); on the remote route at the latest 15 minutes after the last list, and at once at a bad list or at the grant's end, as soon as the service takes the snapshot |
 | T8. A copy of the token in a program's state | a log, a status, a crash report or a heap of the service, or the serving box's gateway, gives the token | the service gets only fingerprints; its log and its `status` name a scope and say whether it has a token, never a fingerprint; the gateway passes the header unread, logs no header and reads no token file; the daemon checks the service's pid before its hello, so only the real service gets the fingerprints | no token to give |
 | T9. An agent that reads an entry file itself | put a token into its tool output, its transcript and the model's context (which the client sends to its model provider) | not stopped: the same uid allows it, and the entry file's path is in the agent's own command line. The skill text tells agents never to read the tokens folder or a profile link. The copy works only from its own session while it runs (steps 2 and 7) | no new right for that agent; the copy is in its transcript |
-| T10. Cloudflare's edge on the remote route | read or keep a remote token, a tool argument or a page's text | TLS ends at Cloudflare's edge (D c has no seal of its own); a remote token works only from the calling box's addresses, and it ends with its session | the token gives Cloudflare no use from another address. Cloudflare sees the remote MCP traffic in clear (section 18) |
+| T10. Cloudflare's edge on the remote route | read or keep a remote token, a tool argument or a page's text | not stopped for what it sees: TLS ends at Cloudflare's edge (D c has no seal of its own), so Cloudflare sees the token, the tool arguments and the page text of each request; the operator chose this route with that fact (ab-h93, "Keep direct HTTPS through Cloudflare"). For the token's use: a remote token works only from the calling box's addresses (the address check stays), and it ends with its session | Cloudflare sees the remote MCP traffic in clear (the operator's choice); the token gives Cloudflare no use from another address |
 | T11. A shared or changed address on the remote route | another computer behind the calling box's address (a NAT) uses a leaked remote token; the calling box's address changes | the address check matches the exact addresses of the box's last status report; a request from a new address gets the gateway's 403 until the next report | a shared address admits only a leaked token; a changed address stops the box's remote sessions until the next report (section 10) |
 
 The small leaks:
 
-- every OS user on taylor sees each session's lifetime id in the client's command line (the entry file's path,
-  and Codex's `-p aw-<lifetime id>`). C12 keeps a lifetime id out of every log line, and a lifetime id gives no
-  right by itself;
+- every OS user on taylor sees each run's random name in the client's command line (the entry file's path, and
+  Codex's `-p aw-<random name>`). Only the daemon's memory and the 0600 entry file map it to the run's lifetime
+  id, so no command line holds a lifetime id (the daemon lead's addition). A random name gives no right by
+  itself;
 - the serving box's gateway logs the address of a refused remote request (an address is not a secret).
 
 The limit stays as C11 says: the checks stop mistakes, an agent that names another session, and an injected
@@ -337,13 +372,13 @@ lists' limit too.
 | --- | --- | --- |
 | Allow (the operator's act) | the repo's list in the Browser pane with a password login: the gateway builds `"operator":{"user":...,"login":"password"}` from the credential and drops any `operator` key from the request body, on each route that adds a site (the list edit, the prompt's allow and its confirm path, the sign-in targets path); the daemon reads the list's state from the service (`lists_get`), not from the files | owns the lists (C12, unchanged) |
 | Mint | the daemon, at each launch of an allowed session (section 9.1), never at another time: 32 bytes from `secrets.token_bytes`, `abt1_` and base64url. One local token; one remote token for each serving box whose entry the session gets (section 10) | never |
-| Hold | the entry file only: `tokens/agent-browser/sessions/<lifetime id>.json` or `.toml`, mode 0600; the folders `tokens/`, `tokens/agent-browser/` and `sessions/` mode 0700; an atomic write (a temp file in the same folder, `fchmod` 0600, then a rename), opened with no link followed. The daemon keeps each fingerprint in memory, and it reads the file again at its own restart. No other file holds a token or a fingerprint | only the fingerprints of the last `set_sessions`, in memory; nothing on disk |
+| Hold | the entry file only: `tokens/agent-browser/sessions/<random name>.json` or `.toml`, mode 0600, with the run's lifetime id in it (section 9.2); the folders `tokens/`, `tokens/agent-browser/` and `sessions/` mode 0700; an atomic write (a temp file in the same folder, `fchmod` 0600, then a rename), opened with no link followed. The daemon keeps each fingerprint and the map from each random name to its lifetime id in memory, and it reads the files again at its own restart. No other file holds a token or a fingerprint | only the fingerprints of the last `set_sessions`, in memory; nothing on disk |
 | Harden | the permissions sweep (`service/permissions.py`) covers `tokens/agent-browser/`, `sessions/` and each entry file, at each write and at each daemon start (today it covers only the tokens folder itself) | nothing |
-| Send | `set_sessions` carries each session's fingerprint in its item (`mcp_token`); the daemon waits for the answer before it launches a session with the entry (section 6.3) | answers it |
+| Send | `set_sessions` carries each session's fingerprint in its item (`mcp_token`); the daemon waits for the answer before it launches a session with the entry, and it sends a failed drop again (section 6.3) | answers it, and never echoes a refused snapshot |
 | Check | the serving box's gateway on the remote route: the route, the address check (section 10) | each request on the local MCP port and on the remote route (section 11) |
 | End | at the session's end: the link, then the entry file, then `set_sessions` without the session (section 6.5) | drops the fingerprint; closes the scope's MCP connections |
-| Sweep | at each daemon start (after it has adopted the live sessions) and every hour: each `aw-*` profile link in each Codex home that agentwatch uses, and each entry file, whose lifetime id is not live; each temp file in `sessions/`. It never touches a profile file whose name does not start with `aw-`, and it removes a link, never the link's target | nothing |
-| Remove at the uninstall | a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-*` link, on Linux and the Mac; an update (`install.sh --update`) keeps them; no vault or config sync copies the tokens folder | nothing |
+| Sweep | at each daemon start (after it has adopted the live sessions) and every hour: each entry file whose lifetime id (the sweep reads it from the file) is not live, or that holds no lifetime id; each profile link named `aw-<32 hex digits>.config.toml` in each Codex home that agentwatch uses, whose random name is not the name of a live run (by the map); each temp file in `sessions/` older than 10 minutes (a younger one can be a Codex write in progress). In a Codex home it touches only a link whose name is `aw-`, 32 hex digits and `.config.toml`: never another file (for example a person's own `aw-notes.config.toml`), and never a link's target | nothing |
+| Remove at the uninstall | a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-<32 hex digits>.config.toml` link, on Linux and the Mac; an update (`install.sh --update`) keeps them; no vault or config sync copies the tokens folder | nothing |
 
 Why this split (the operator's answer A, and the reasons of the first revision that still hold):
 
@@ -388,9 +423,14 @@ The rules of the recommended form:
 
 - **The field.** Each item of `sessions` gains `mcp_token`: `null`, or 64 lowercase hex digits (the
   fingerprint). Each item of `remote` gains the same field (stage 5).
-- **The field rules.** One fingerprint appears at most once in the whole snapshot. An item with
-  `"lifetime_id":null` has `"mcp_token":null`. A snapshot that breaks a rule gets `bad request`, and the service
-  keeps its old snapshot (C12's rule for a daemon snapshot).
+- **The field rules.** One fingerprint appears at most once in the whole snapshot. One scope appears at most once
+  in `sessions`, and one remote scope at most once in `remote` (review-103c note 2): so the item of the walk's
+  scope, and its `mcp_token`, are one item. An item with `"lifetime_id":null` has `"mcp_token":null`. A snapshot
+  that breaks a rule gets `bad request`, and the service keeps its old snapshot (C12's rule for a daemon
+  snapshot).
+- **The `bad request` answer** never echoes the snapshot or any field of it (the daemon lead's addition): it is
+  C12's fixed answer, with no scope, no lifetime id and no fingerprint in it. The daemon puts the error text into
+  its health line and its log.
 - **Provenance**: no change. `set_sessions` stays `kind: daemon`.
 - **The feature name** `mcp_token` goes into the service's hello: the service checks tokens. The daemon writes
   no entry for a service without it. A service with the MCP port always has it (stage 1d builds both).
@@ -403,6 +443,13 @@ The rules of the recommended form:
   - the Browser pane's session row and `agentwatch health` say why: "the agent browser did not take this
     session's connection token: <reason>";
   - its next snapshot carries `"mcp_token":null` for that session.
+- **A failed drop is sent again** (review-103c B1). When a `set_sessions` that drops a session or a remote
+  fingerprint fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again after 1 s,
+  then with a delay that doubles up to 60 s, and at each reconnect. A `bad request` on such a snapshot is a
+  fault: the health line is red. "Drops" compares with the last snapshot that the service took, so the resend
+  goes on until the service takes a snapshot without the session or the fingerprint. Each resend is the current
+  snapshot, so it also carries each later change. The drops of the remote route (the 15-minute end, the grant's
+  end, a bad list: section 10) are such snapshots too.
 - **The log rule**: no log line of either side holds a token, a fingerprint or a lifetime id (C12 already keeps a
   lifetime id out of every log line). The service logs a scope and whether it has a token.
 - The daemon checks the service before its hello (C12: the peer of `control.sock` must be the MainPID of
@@ -418,32 +465,35 @@ The rules of the recommended form:
   - Codex: its header is static too. The service no longer knows the old MCP session id. Whether Codex then
     opens a new MCP session by itself is a stage 2 check.
 - **The daemon's restart.** The service keeps its last `set_sessions` (C12, "when the daemon drops"). Admitted
-  sessions go on. At its start the daemon adopts the live sessions, reads each live session's entry file again to
-  get the fingerprint (it parses its own file and logs nothing of it), runs the sweep, and sends the full
-  snapshot. An entry file that the daemon cannot parse, or that fails its checks: the daemon removes it (and the
-  link), sends `"mcp_token":null` for that session, and `agentwatch health` says why. That session's MCP then gets
-  the 401 until the session restarts.
+  sessions go on. At its start the daemon adopts the live sessions, rebuilds the map from each random name to its
+  lifetime id from the entry files (each file holds its run's lifetime id), reads each live session's
+  fingerprint from its file (it parses its own file and logs nothing of it), runs the sweep, and sends the full
+  snapshot. An entry file that the daemon cannot parse, or that fails its checks (also a file with no lifetime
+  id, or with a lifetime id that is not a UUID): the daemon removes it (and the link), sends `"mcp_token":null`
+  for its session when it knows the session, and `agentwatch health` says why. That session's MCP then gets the
+  401 until the session restarts.
 
 ### 6.5 A session's life
 
 **At the launch**, when the rule of section 9.1 holds. agentwatch creates the session's pane before it sends the
 launch line (`daemon/sessions.py`), so the pane's root is known.
 
-1. The daemon mints the session's token (and each remote token) in memory.
+1. The daemon mints the session's token (and each remote token) and the run's random name, in memory.
 2. It sends `set_sessions` with the session's item, its root and its `mcp_token`, and it waits for the answer
    (section 6.3). At a failure it stops here: no file, a launch without the entry. For each remote token it
    sends the fingerprint over the link and waits for the serving box's answer (section 10). Without that answer,
    the entry file gets no remote entry for that box.
 3. It writes the entry file (the atomic write). For Codex it then makes the profile link in the session's Codex
    home: a `symlink()` that fails when the name exists, with the absolute path of the entry file as its target.
-4. It sends the launch line, with `--mcp-config <entry file>` (Claude Code) or `-p aw-<lifetime id>` (Codex).
+4. It sends the launch line, with `--mcp-config <entry file>` (Claude Code) or `-p aw-<random name>` (Codex).
 
 Why the fingerprint comes first: a client that reads the new file must find its fingerprint already in the
 service. A daemon crash between steps 2 and 3 leaves a fingerprint with no file. At its restart the daemon finds
 no file for that lifetime id and sends `"mcp_token":null`. The client never got the token, so nothing leaks.
 
 **A relaunch in the same run** (a launch line for a lifetime id that already has a token, for example a swap
-that keeps the lifetime id) reuses the token and its entry file, and the launch line carries the entry again. A
+that keeps the lifetime id) reuses the token, the random name and the entry file, and the launch line carries the
+entry again. A
 swap to another Codex home moves the profile link: the daemon makes it in the new home and removes it from the
 old home.
 
@@ -454,8 +504,13 @@ old home.
    fingerprint, closes the scope's MCP connections and ends its MCP sessions.
 
 A daemon crash during these steps leaves a file, a link, or a fingerprint in the service. The walk refuses the
-ended session's root, so nothing can use the token. The sweep at the daemon's next start removes the file and
-the link, and the next snapshot drops the session.
+ended session's root. One limit stays, as C11 has it today (review-103c note 3): while the daemon is down, the
+service keeps its last snapshot, and on Linux C11's cgroup fallback (the walk's step 3) can admit a job that the
+session left in the pane's cgroup, as long as that snapshot lists the session's root and the root still counts.
+Such a job can use the token from the entry file until the daemon restarts and its snapshot drops the session.
+That is the walk's limit today; the token does not widen it. The sweep at the daemon's next start removes the
+file and the link, and the next snapshot drops the session (and goes again until the service takes it, section
+6.3).
 
 **During the session:**
 
@@ -506,6 +561,12 @@ body (the daemon lead's build item).
 - the session's end: the token ends (section 6.5);
 - an operator act that removes the repo's last site or its list: the no-list 503 at once;
 - the end of the browser grant (the remote route): the serving box drops all fingerprints of that box;
+- a calling box's list that fails the serving daemon's checks (the remote route): the serving daemon drops all
+  fingerprints of that box, and the bad list never reaches `set_sessions` (section 10);
+- each of these ends acts through a `set_sessions` that drops a session or a fingerprint. When such a snapshot
+  fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again (after 1 s, then with
+  a delay that doubles up to 60 s, and at each reconnect), and a `bad request` on it is a fault with a red health
+  line (section 6.3);
 - `browser.enabled: false` and `browser.control: false`: the service's 503; the tokens stay for their sessions;
 - the uninstall of the agent browser: it removes the entry files and the links, then stops the service. Any agent
   of the user can run the uninstall (the same uid). Its effect only removes access, so it gives nobody a right.
@@ -529,13 +590,15 @@ There is no separate revoke: a token has no life outside its session.
 - A sessions part: each live session that agentwatch launched, with its repo, its client, and its MCP state:
   "connected", "has its token, not connected yet", or "no MCP: <reason>". The reasons: the repo's list has no
   site; the client is too old; the agent browser did not take the session's token; a Codex session with the app
-  server (question E); the port's listener is not the user's. For a remote entry: the same, for each serving
-  box.
-- On the serving box: the calling boxes' sessions that hold a remote token, and the address check's state for
-  each calling box ("both addresses known", or why not, section 10).
+  server (the answer E a: until a Codex release lets the app server read a profile); the port's listener is not
+  the user's. For a remote entry: the same, for each serving box.
+- On the serving box: the calling boxes' sessions that hold a remote token, the address check's state for each
+  calling box ("both addresses known", or why not, section 10), and a calling box whose list the daemon refused,
+  with the reason.
 - Never a token and never a fingerprint, so no screenshot of the pane holds one.
-- `agentwatch health` has a line for each session whose entry the daemon could not write, and for each failure
-  of the address check.
+- `agentwatch health` has a line for each session whose entry the daemon could not write, for each failure of
+  the address check and for each refused list of a calling box. A `bad request` on a snapshot that drops a
+  session or a fingerprint gives a red line (section 6.3).
 
 ## 8. Which sessions are allowed
 
@@ -569,8 +632,9 @@ At each launch, agentwatch adds the agent browser's local entry only when all of
 4. the `LISTEN` line of `127.0.0.1:<port>` in `/proc/net/tcp` has the user's uid (else `agentwatch health` shows
    red);
 5. the client takes the form: Claude Code at or after the first version that stage 2's live check passes; Codex
-   0.159.3 or later on the standalone launch. A Codex app-server launch gets the entry only by question E's
-   answer. An older client gets no entry, and `agentwatch health` says why;
+   0.159.3 or later on the standalone launch. A Codex app-server launch gets no entry (the operator's answer E
+   a) until a Codex release lets the app server read a profile and the check of section 14.4, point 3, passes
+   for it. An older client gets no entry, and `agentwatch health` says why;
 6. the service answered the `set_sessions` that carries the session's fingerprint (section 6.3).
 
 The entry never goes into the user's global files and never into the environment (age-4ks). agentwatch does not
@@ -578,8 +642,24 @@ rewrite a running session's entry.
 
 ### 9.2 The entry file
 
-- The path: `~/.config/agentwatch/tokens/agent-browser/sessions/<lifetime id>.json` (Claude Code) or `.toml`
-  (Codex). The daemon checks the lifetime id against the UUID pattern before it uses it in a path.
+- The path: `~/.config/agentwatch/tokens/agent-browser/sessions/<random name>.json` (Claude Code) or `.toml`
+  (Codex). The daemon makes a new random name for each run (`secrets.token_hex(16)`, 32 lowercase hex digits),
+  and it checks that form before it uses the name in a path. No path and no profile name holds a lifetime id (the
+  daemon lead's addition).
+- The lifetime id in the file. The file holds its run's lifetime id, so the sweep and the daemon's restart can
+  read it from the file:
+  - the JSON file (Claude Code): the top-level key `"agentwatch":{"lifetime_id":"<lifetime id>"}` beside
+    `mcpServers`. Not known yet: whether Claude Code takes a top-level key that it does not use. Stage 2 checks it.
+    If Claude Code refuses it, the daemon lead chooses another place for the lifetime id that holds no secret and
+    that no command line shows (for example a 0600 file beside the entry file);
+  - the TOML file (Codex): its last line, the comment `# agentwatch lifetime id: <lifetime id>`. A comment, because
+    Codex warns at a key that it does not know and its strict mode refuses one (section 4.1). The last line,
+    because a comment at the document's end stays when Codex's writer changes a table (source, not proven; stage 2
+    checks it);
+  - the daemon checks the lifetime id that it reads back against the UUID pattern. A file with no lifetime id, or
+    with one that is not a UUID, fails its checks (section 6.4).
+- The map: the daemon keeps the map from each random name to its run's lifetime id in memory. At its start it
+  rebuilds the map from the files.
 - The modes: the file 0600; the folders `tokens/`, `tokens/agent-browser/` and `sessions/` 0700, made with those
   modes and set again at each write and by the permissions sweep.
 - The write: a temp file in `sessions/`, `fchmod` 0600, the content, then a rename to the final name; the open
@@ -587,8 +667,8 @@ rewrite a running session's entry.
 - The content: the local entry and each remote entry (section 10), with the token only in the `Authorization`
   header's value. The writer builds the text with a JSON or TOML writer, never by joining strings, and a test
   proves the escaping of each value.
-- One file for each session and client. No log line names the file's path, because the path holds the lifetime
-  id.
+- One file for each session and client. No log line names the file's path or its random name, because the name
+  links the line to one session's entry file.
 
 ### 9.3 Claude Code
 
@@ -597,19 +677,21 @@ agentwatch passes the session's entry file with `--mcp-config`, beside agentwatc
 ```json
 {"mcpServers":{"agent-browser":{"type":"http",
   "url":"http://127.0.0.1:<port>/mcp/<scope>",
-  "headers":{"Authorization":"Bearer abt1_<43 base64url characters>"}}}}
+  "headers":{"Authorization":"Bearer abt1_<43 base64url characters>"}}},
+ "agentwatch":{"lifetime_id":"<lifetime id>"}}
 ```
 
 - A session that runs with `--strict-mcp-config` (an open-model profile) gets the entry in the same way, because
   `--mcp-config` carries it.
-- The argv holds the file's path: no secret, but the lifetime id (section 5, the small leaks).
+- The argv holds the file's path: no secret and no lifetime id, only the random name (section 5, the small
+  leaks).
 - Stage 2 checks that no Claude Code log, `--debug` file, transcript or `/mcp` view shows the header's value, and
   that a server of the same name in the user's own configuration does not replace the entry.
 
 ### 9.4 Codex
 
 **The standalone launch.** The daemon writes the session's `.toml` entry file and the profile link, and the
-launch passes `-p aw-<lifetime id>`:
+launch passes `-p aw-<random name>`:
 
 ```toml
 # agentwatch: the agent browser's MCP for one session; removed at the session's end
@@ -617,35 +699,38 @@ launch passes `-p aw-<lifetime id>`:
 url = "http://127.0.0.1:<port>/mcp/<scope>"
 http_headers = { Authorization = "Bearer abt1_<43 base64url characters>" }
 tool_timeout_sec = 120
+# agentwatch lifetime id: <lifetime id>
 ```
 
-- The profile link: `$CODEX_HOME/aw-<lifetime id>.config.toml`, in the session's own Codex home (`~/.codex` or
-  its account home), an absolute link to the entry file. The link holds no secret. `-p aw-<lifetime id>` holds no
-  secret.
+- The profile link: `$CODEX_HOME/aw-<random name>.config.toml`, in the session's own Codex home (`~/.codex` or
+  its account home), an absolute link to the entry file. The link holds no secret. `-p aw-<random name>` holds
+  no secret and no lifetime id.
 - The profile layer merges over the base `config.toml`. So the writer refuses the entry when the base
   `config.toml` of the session's home already defines `mcp_servers.agent-browser`, or has a legacy
-  `[profiles.aw-<lifetime id>]` table (Codex would then refuse the launch). `agentwatch health` says why.
+  `[profiles.aw-<random name>]` table (Codex would then refuse the launch). `agentwatch health` says why.
 - Codex writes its own config edits of the session into the entry file, through the link (section 4.1). The
   token stays under the tokens folder. Those edits end with the session. A temp file that a crash leaves in
-  `sessions/` goes at the next sweep.
+  `sessions/` goes at the first sweep after it is 10 minutes old.
 - The other `-c` values of agentwatch's launch stay. They are a higher layer than the profile, and none of them
   names `mcp_servers.agent-browser`.
 - Stage 2 proves that Codex reads the linked profile file, starts the MCP from it and sends the header, and that
-  a Codex write keeps the link, writes the target with mode 0600 and keeps the token under the tokens folder. If
-  Codex refuses a linked profile file, that goes back to the operator (the daemon lead: "we re-decide").
+  a Codex write keeps the link, writes the target with mode 0600, keeps the token under the tokens folder and
+  keeps the lifetime id line. If Codex refuses a linked profile file, that goes back to the operator (the daemon
+  lead: "we re-decide").
 
-**The app-server launch (question E).** The profile does not reach the app server (section 4.1). Until the
-operator answers E, agentwatch writes no entry for such a session, and the pane's session row says "no MCP: a
-Codex session with the app server cannot take the token in its entry yet". Stage 2 confirms the source reading
-(section 14.4). The options are in question E.
+**The app-server launch (the operator's answer E a).** The profile does not reach the app server (section 4.1).
+agentwatch writes no entry for such a session until a Codex release lets the app server read a profile. Until
+then the session keeps the browser through `agentwatch browser` and Playwright, and the pane's session row says
+"no MCP: a Codex session with the app server cannot take the token in its entry yet". Nothing new is built.
+Stage 2 confirms the source reading, and each new Codex version gets the same check (section 14.4, point 3).
 
 ### 9.5 The other forms
 
 The forms that the answers did not choose stay in the table of section 4.2 for the record:
 
 - **a header command** (`headersHelper`, `http_headers_helper`): the earlier recommendation, against the
-  operator's "no extra command". Question E b offers it for Codex's app server only. Its earlier specification
-  is in this design's revision 4ddae4f, section 9.2;
+  operator's "no extra command". Question E b offered it for Codex's app server only, and the operator chose E
+  a. Its earlier specification is in this design's revision 4ddae4f, section 9.2;
 - **a local stdio bridge**: against "http instead of stdio" (C b, not chosen);
 - **the environment**: against "env: no" (C d, not chosen).
 
@@ -684,7 +769,7 @@ browser on the operator's Mac. The path:
 - **The entry.** The session's entry file gets a second server, `agent-browser-<serving box>`, with the URL
   `https://<serving box's label>.agentwatch.sh/mcp/<calling box>/<session>` and the session's remote token in
   its `Authorization` header. The remote token is not the local token, so the token that crosses Cloudflare never
-  works on the calling box's own port. For a Codex session the same holds as in section 9.4 (question E for the
+  works on the calling box's own port. For a Codex session the same holds as in section 9.4 (the answer E a for the
   app-server launch).
 - **Which sessions of the calling box get it.** Every session that agentwatch launches on the calling box while
   the browser grant is active and the grant's list on the serving box has at least one site (Q3: one grant and
@@ -694,9 +779,12 @@ browser on the operator's Mac. The path:
   checks it with its own root store (Node's for Claude Code; Codex's for Codex). Cloudflare's tunnel then carries
   the request to the serving gateway's tunnel-origin socket. The serving box opens no port.
 - **What Cloudflare sees.** TLS ends at its edge, so Cloudflare sees each remote MCP request and answer in clear:
-  the token, the tool arguments and the page text that the tools give back. The link path of the earlier answer
+  the token, the tool arguments and the page text that the tools give back. The link path of the earlier option
   D a sealed these bytes to the other daemon's key. agentwatch's web viewer crosses Cloudflare in the same way as
-  D c. The operator's choice of D c stated the copy risk, not this effect (section 18).
+  D c. The text of D c on ab-sxg stated only the copy risk. So the question came back on ab-h93 with this fact,
+  and the operator chose "Keep direct HTTPS through Cloudflare" ("No program between. Cloudflare sees the token,
+  the tool arguments and the page text of each request. The address check stays."), against the recommended link
+  path. This route stays, and the address check stays.
 
 **The serving box's gateway** (the daemon lead's point 5):
 
@@ -726,8 +814,10 @@ browser on the operator's Mac. The path:
 - **One address not known: fail closed for the whole box.** The gateway takes no remote token from that box,
   because the operator's condition is "as long as you have the ipv4 and ipv6 of each daemon". The serving box's
   Browser pane says, for example, "taylor's IPv6 address is not known yet: taylor's sessions cannot use this
-  browser until taylor's next status report gives it". `agentwatch health` says the same on both boxes. A family
-  in the state "none" counts as known.
+  browser until taylor's next status report gives it". `agentwatch health` says the same on both boxes.
+- **A family in the state "none" counts as known.** This is the design's reading of "the ipv4 and ipv6 of each
+  daemon" (sections 2 and 17). It adds no address that can match: a box with no global IPv6 address sends no
+  request from an IPv6 address.
 - **An address change.** A request from the box's new address gets the gateway's 403 `This box's address is not
   the one that its last status report gave. Try again after its next report.` The box's sessions lose the remote
   browser until the serving box learns the new address from the box's next report. That is the failure mode of
@@ -739,17 +829,31 @@ browser on the operator's Mac. The path:
 - **A shared address** (a NAT, a shared IPv4 address) admits every computer behind it, but only with a leaked
   token (T11).
 
-**Who mints a remote session's token.** Both options, for the daemon lead's read:
+**Who mints a remote session's token.** Both options, as the design gave them for the daemon lead's read. The
+daemon lead takes (i) in the read of the revision, and withdraws point 6 (the grant is the act):
 
-- **(i) The calling box's daemon mints at the session's start (recommended).** It mints the remote token with the
-  local one, writes it into the session's entry file, and sends only the fingerprint over the link (signed and
-  sealed, as every link message). The serving box's daemon lists the remote session in its service's
+- **(i) The calling box's daemon mints at the session's start (recommended; chosen).** It mints the remote token
+  with the local one, writes it into the session's entry file, and sends only the fingerprint over the link
+  (signed and sealed, as every link message). The serving box's daemon lists the remote session in its service's
   `set_sessions`: `{"scope":"taylor/<session>","box":"taylor","list":<the grant's list>,"mcp_token":"<64 hex>"}`.
   The calling daemon sends the box's complete list of remote sessions at each change and every 5 minutes. The
   serving box drops a box's remote fingerprints 15 minutes after its last list (fail closed), and all of them at
   once when the grant ends. At a launch, the calling daemon waits for the serving box's answer that the
   fingerprint is in force (first value 5 s). With no answer, the session launches without the remote entry, and
   the pane says why.
+  - **The box comes from the link** (the daemon lead's addition). The serving daemon sets each remote item's
+    `box`, and the box part of its scope, from the link's peer identity, never from the message body. It refuses
+    a list that names another box, whole: such a list fails the check below.
+  - **The check of each list before the merge** (review-103c B1). The serving daemon checks each calling box's
+    list before it merges it into its service's `set_sessions`: the form of each fingerprint (64 lowercase hex
+    digits), each fingerprint once (in the list, against the other boxes' lists and against the local sessions),
+    each session once in the list (C12's rule of one remote scope once), and the limit of 64. A list that fails
+    these checks is refused for that box alone. The daemon then drops all fingerprints of that box (fail closed),
+    and the serving box's Browser pane and `agentwatch health` say why. Its answer to the calling box says that
+    the list was refused, and holds no fingerprint. A bad list never reaches `set_sessions`, so the other boxes'
+    fingerprints and the serving box's own sessions stay in force.
+  - Each of these drops is a snapshot that drops a remote fingerprint. When it fails, the daemon sends its
+    current snapshot again (section 6.3).
 - **(ii) The serving box mints and sends the token sealed over the link** (the daemon lead's point 6, written for
   per-repo tokens). The serving box keeps only the fingerprint, and the calling daemon writes the token into the
   session's entry file.
@@ -768,7 +872,8 @@ Why (i):
 
 What (i) costs: the serving box takes the calling box's word that a fingerprint belongs to one of its sessions.
 The link's signature and the grant already give that box the browser, so a fingerprint gives it nothing more. A
-limit of remote fingerprints for each box (first value 64) stops a flood.
+limit of remote fingerprints for each box (first value 64) stops a flood. The check of each list keeps a bad list
+of one box (a bug, or a hostile box) away from the other boxes and the serving box's own sessions.
 
 **What the remote route takes from the earlier path, and what goes.** Stage 5 builds no remote stdio program
 (`agentwatch browser mcp --box`), no remote MCP socket in the daemon and no Python walk. The link no longer
@@ -779,7 +884,8 @@ decides the carrier on that door: the gateway itself, or the serving box's daemo
 design already names.
 
 **Stage 5** (ab-v16.94.7 and agentwatch's age-q8t.5) builds this section. Its tests include: no `abt1_` token in
-a link message (only fingerprints), the gateway's route rules, and the address check's cases.
+a link message (only fingerprints), the gateway's route rules, the address check's cases, the box from the
+link's peer identity, and the check of each list before the merge.
 
 ## 11. The checks that stay, and the admission order
 
@@ -791,9 +897,10 @@ Mac's local port closed until its reader exists; the path's scope as a label tha
 have the entry (for example a `curl` that an agent runs without the entry file) fails. A token copied out of a
 session works nowhere else, and it ends with the session.
 
-**The agent door** (CDP, the Unix socket) takes no token. The operator's answer names the MCP over HTTP or
-HTTPS. The agent door keeps the kernel's peer check, and C11's sentence "No key, no token file and no
-environment variable take part" stays true for it.
+**The CDP path of the agent door** (the Unix socket) takes no token. The operator's answer names the MCP over
+HTTP or HTTPS. The CDP path keeps the kernel's peer check, and C11's sentence "No key, no token file and no
+environment variable take part" stays true for it. Remote MCP requests reach the agent door through the carrier,
+and the service checks their bearer (the remote route's admission, below).
 
 **No repo key on `set_sessions`.** The first revision added `repo_key` to `set_sessions` for the repo match (the
 daemon lead's change 4). The answers bind a token to one session, so the repo match goes, and this design needs
@@ -803,7 +910,7 @@ The admission of the local MCP port, with the new step 7 (C11's list, renumbered
 
 1. The uid (before any byte).
 2. The walk (before any byte). The connection's scope gives its session, and `set_sessions` gives the
-   session's `mcp_token`.
+   session's `mcp_token` (from the one item of that scope: C12's rule of one scope once).
 3. An `Origin` header: 403.
 4. The `Host` header: 403.
 5. The path: 404.
@@ -828,7 +935,8 @@ header in a log line or in an answer.
    against the path's box; the quiet times and the rate limit.
 2. The service: the carrier (identified on the agent door by the rule of the service design's section 7.1;
    stage 5 extends that rule if the carrier is the gateway); the remote scope that the last
-   `set_sessions` lists; the token against that remote session's `mcp_token`, with the texts of step 7; the
+   `set_sessions` lists (in one item); the token against that remote session's `mcp_token`, with the texts of
+   step 7; the
    grant's list (the 503s); the MCP path only; no path argument (the service design, section 9).
 
 ## 12. The secret rules and the log rule
@@ -848,7 +956,7 @@ those paths a token is never:
   body.
 
 **Where a token lives**: the session's entry file, the client's memory, and, for a remote token, the HTTPS
-request (and Cloudflare's edge, in clear).
+request (and Cloudflare's edge, in clear: the operator's choice on ab-h93).
 
 **The limit (the same-uid fact).** Every session of one OS user runs as one uid. An agent can read its own entry
 file (its path is in its own command line: `--mcp-config` or `-p`) and every other session's entry file. The
@@ -918,8 +1026,9 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   the session's own token in its `Authorization` header. agentwatch writes it into a 0600 file under its tokens
   folder before the launch, and it removes the file at the session's end." The parenthesis "(Claude Code: a
   generated file with `--mcp-config`; Codex: a `-c` override for each launch)" becomes "(Claude Code: the
-  session's file with `--mcp-config`; Codex: the session's profile `aw-<lifetime id>` with `-p`, a link in the
-  Codex home to the session's file; for Codex with agentwatch's app server, question E of the token design)".
+  session's file with `--mcp-config`; Codex: the session's profile `aw-<random name>` with `-p`, a link in the
+  Codex home to the session's file; Codex with agentwatch's app server gets no entry until a Codex release lets
+  the app server read a profile, by the operator's answer E a)".
   Add rules 3 and 6 of section 9.1. "Nothing goes into the session's environment" stays.
 - Section 9: the path becomes this design's section 10 (D c). The diagram changes. "**taylor.** The session's MCP
   configuration names `agentwatch browser mcp --box <mac>`, a stdio shim of agentwatch's." becomes "The
@@ -927,11 +1036,12 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   remote token in its `Authorization` header." The bullets on the new daemon socket and the Python walk go. "Each
   request and each answer travels sealed, as the link's seal rule says for every link message." becomes "The link
   carries the grant, the fingerprint lists of the calling box's sessions and the state of the grant's list. The
-  MCP requests go by direct HTTPS; TLS ends at Cloudflare's edge, so they are not sealed (the token design,
-  section 10)." "It connects to the Mac service's agent door for that scope and carries the bytes." becomes "Each
-  admitted request goes, unread, to the Mac service's agent door for that scope (stage 5 decides the carrier: the
-  Mac's gateway or the Mac's daemon)." The remote
-  `set_sessions` item gains `mcp_token`. The address check and the gateway's route rules are new bullets. The
+  MCP requests go by direct HTTPS; TLS ends at Cloudflare's edge, so they are not sealed, by the operator's
+  choice (ab-h93; the token design, section 10)." "It connects to the Mac service's agent door for that scope and
+  carries the bytes." becomes "Each admitted request goes, unread, to the Mac service's agent door for that scope
+  (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon)." The remote `set_sessions` item gains
+  `mcp_token`. The address check, the gateway's route rules, the box from the link's peer identity and the check
+  of each calling box's list before the merge are new bullets. The
   table "Part / Whose" changes: the gateway route, the address check and the fingerprint lists are agentwatch's;
   the remote token check is agent-browser's; the remote stdio shim and the remote MCP socket go.
 - Section 11, the row "Secrets": add "each session's token lives only in its 0600 entry file under agentwatch's
@@ -941,9 +1051,10 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   configuration in a 0600 file under agentwatch's tokens folder; the session's own token in the `Authorization`
   header only, checked against its fingerprint for each request."
 - Section 19, Q1 condition 4: "for Codex a `-c` override for each launch (the daemon lead's change D19)" becomes
-  "for Codex the session's profile (`-p aw-<lifetime id>`), whose file is a link to the session's 0600 file under
-  agentwatch's tokens folder (the operator's answers C and ab-ufy, the daemon lead's form; question E of the token
-  design for Codex with agentwatch's app server)".
+  "for Codex the session's profile (`-p aw-<random name>`), whose file is a link to the session's 0600 file under
+  agentwatch's tokens folder (the operator's answers C and ab-ufy, the daemon lead's form); Codex with
+  agentwatch's app server gets no entry until a Codex release lets the app server read a profile (the answer E a
+  of the token design)".
 - Section 19, Q1 condition 5: "No secret is in the URL or in the configuration. The scope in the path is a label:
   the walk decides the scope." becomes "No secret is in the URL. The session's own token is in its MCP entry's
   `Authorization` header, in a 0600 file under agentwatch's tokens folder (the operator's answers C and ab-ufy).
@@ -977,11 +1088,13 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   gains "agentwatch mints the session's token at the launch, sends its fingerprint in `set_sessions`, writes the
   entry file before the launch and removes it at the session's end". "For Claude Code it writes a file for the
   session, which the launch passes with `--mcp-config`." becomes "For Claude Code it writes a file for the session
-  under its tokens folder (`tokens/agent-browser/sessions/<lifetime id>.json`, 0600), which the launch passes with
-  `--mcp-config`." "For Codex it uses a `-c` override for each launch." becomes "For Codex it writes the session's
-  profile file under its tokens folder and a link to it in the session's Codex home
-  (`aw-<lifetime id>.config.toml`), and the launch passes `-p aw-<lifetime id>`; a Codex session with agentwatch's
-  app server follows question E of the token design." "Nothing goes into the session's environment" stays.
+  under its tokens folder (`tokens/agent-browser/sessions/<random name>.json`, 0600, with a new random name for
+  each run), which the launch passes with `--mcp-config`." "For Codex it uses a `-c` override for each launch."
+  becomes "For Codex it writes the session's profile file under its tokens folder and a link to it in the
+  session's Codex home (`aw-<random name>.config.toml`), and the launch passes `-p aw-<random name>`; a Codex
+  session with agentwatch's app server gets no entry until a Codex release lets the app server read a profile
+  (the token design's answer E a). No command line holds a lifetime id." "Nothing goes into the session's
+  environment" stays.
 - The table of parts at the top: the row "The remote MCP path for a session of another box" becomes "stage 5:
   direct HTTPS with a remote token and the address check (the token design, section 10)"; a new row "The
   per-session tokens: the daemon mints and holds; the service checks a fingerprint from `set_sessions` (the token
@@ -994,14 +1107,21 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   session's fingerprint with the session, and closes the MCP connections of a session that the snapshot drops or
   whose `mcp_token` changed.
 - The field rules: `mcp_token` is `null` or 64 lowercase hex digits; one fingerprint appears at most once in a
-  snapshot; an item with `"lifetime_id":null` has `"mcp_token":null`.
+  snapshot; one scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage
+  5); an item with `"lifetime_id":null` has `"mcp_token":null`.
+- The answer: "The `bad request` answer to `set_sessions` never echoes the snapshot or any field of it: no scope,
+  no lifetime id and no fingerprint." (the daemon lead's addition).
+- The resend: "When a `set_sessions` that drops a session or a remote fingerprint fails (`bad request`, or no
+  answer in 5 s), the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to
+  60 s, and at each reconnect. A `bad request` on such a snapshot is a fault: the daemon's health line is red."
 - No new op and no provenance change.
 - The hello's feature names: `mcp_token`.
 - The data of `status`: each item of `sessions` gains `mcp_token: true|false`, never the fingerprint.
 - "No side logs page content, a cookie, a URL path or a payload in any log line." gains "a token or a token's
   fingerprint".
 - The vectors (`test/vectors/control.json`): `set_sessions` lines with `mcp_token`; bad lines (63 hex digits,
-  uppercase hex, one fingerprint in two items, a fingerprint with `"lifetime_id":null`).
+  uppercase hex, one fingerprint in two items, one scope in two items, a fingerprint with `"lifetime_id":null`),
+  each with the fixed `bad request` answer.
 - The fake (`--fake`) keeps the field, as it keeps every field of the table.
 
 **Stage 1d (ab-v16.94.5).** "no secret anywhere" becomes "the token step of the token design (step 7): the
@@ -1017,21 +1137,27 @@ sessions, with the same entry files and links.
 scope with `<box>/`, `remote[].mcp_token`, the token texts, the grant's list, the answer size limit), and the
 tests. agentwatch's side (age-q8t.5): the gateway route and its rules, the address check with both families and
 its texts, both addresses in the status report, the fingerprint lists over the link and their 15-minute end, the
-remote entry for every session of the calling box while the grant is active and its list has a site, the quiet
-times and the rate limit. The remote stdio program, the remote MCP socket and the Python walk go from stage 5.
+box of each remote item from the link's peer identity, the check of each calling box's list before the merge
+(fail closed for that box alone), the remote entry for every session of the calling box while the grant is
+active and its list has a site, the quiet times and the rate limit. The remote stdio program, the remote MCP
+socket and the Python walk go from stage 5.
 
 **agentwatch's side (the daemon lead's tasks; their texts are on agentwatch's board).**
 
 - A new task (the daemon lead creates it when this design merges): the token store: the mint and the
-  fingerprint, the folder `tokens/agent-browser/sessions/` and its modes, the permissions sweep, the uninstall,
-  the update, no sync copy, the redactor's `abt1_`.
+  fingerprint, the run's random name, the folder `tokens/agent-browser/sessions/` and its modes, the permissions
+  sweep, the uninstall, the update, no sync copy, the redactor's `abt1_`.
 - age-q8t.1 (stage 2, the client and the switch): `mcp_token` in `set_sessions`, the wait for its answer before a
-  launch with the entry, the failure path, the feature check.
-- age-q8t.7 (the MCP entry writer): the entry files, the Codex profile link, the removal at the end, the relaunch
-  and swap rules, the sweep at each start and every hour, the pane's session rows and health lines, the
-  gateway's operator field on each route that adds a site.
-- age-q8t.5 (stage 5): the gateway route and section 10.
-- age-q8t.6 (stage 6, cleanup): remove `tokens/agent-browser/` and every `aw-*` link.
+  launch with the entry, the failure path, the resend of a failed drop and its red health line, the feature
+  check.
+- age-q8t.7 (the MCP entry writer): the entry files with their random names and the lifetime id in each file,
+  the map and its rebuild at the start, the Codex profile link, the removal at the end, the relaunch and swap
+  rules, the sweep at each start and every hour (`aw-<32 hex digits>.config.toml` only; temp files older than 10
+  minutes only), the pane's session rows and health lines, the gateway's operator field on each route that adds a
+  site.
+- age-q8t.5 (stage 5): the gateway route and section 10, with the box from the link's peer identity and the
+  check of each calling box's list before the merge.
+- age-q8t.6 (stage 6, cleanup): remove `tokens/agent-browser/` and every `aw-<32 hex digits>.config.toml` link.
 - The skill text: what an agent does at a 401 or at the no-list 503, and that it never reads the tokens folder or
   a profile link.
 
@@ -1044,7 +1170,9 @@ times and the rate limit. The remote stdio program, the remote MCP socket and th
   the session (its connection closed, then the walk's refusal); a changed `mcp_token` (its connection closed;
   the old token then gets the 401); the no-list 503 with a valid token; each with the peer and a fake process
   table, so both sides test with a fake reader.
-- `set_sessions`' `mcp_token`: each bad line of section 13's C12 list; the old snapshot kept after a bad request.
+- `set_sessions`' `mcp_token`: each bad line of section 13's C12 list (also one scope in two items); the old
+  snapshot kept after a bad request; the `bad request` answer holds no field of the refused snapshot (a scan of the
+  answer for the canary's fingerprint, the scopes and the lifetime ids of the line).
 - No byte of a request is read before steps 1 and 2 pass (a refused peer that sends a header gets closed with its
   403 and no read).
 - The constant-time compare: a spy shows `timingSafeEqual` on two 32-byte digests for each request, also for a
@@ -1056,32 +1184,44 @@ times and the rate limit. The remote stdio program, the remote MCP socket and th
 ### 14.2 Unit tests, agentwatch (the daemon lead)
 
 - The mint: the token's form (`abt1_`, 43 base64url characters, from `secrets.token_bytes(32)`); the fingerprint
-  input (lowercase hex SHA-256 of the ASCII bytes with the prefix); a new token for each run; the same token for a
-  relaunch in the same run; a local token and a remote token that differ.
+  input (lowercase hex SHA-256 of the ASCII bytes with the prefix); a new token and a new random name (32
+  lowercase hex digits) for each run; the same token and name for a relaunch in the same run; a local token and a
+  remote token that differ.
 - The order at the start: the fingerprint in `set_sessions` and its answer before the file, and the file before
   the launch line; at `bad request` and at no answer in 5 s: no file, a launch without the entry, the pane's row
   and the health line, and `"mcp_token":null` in the next snapshot.
-- The entry files: Claude Code's JSON (the token only in `headers.Authorization`); Codex's TOML (`http_headers`,
-  never `bearer_token`); the modes 0600 and 0700, also after a test changes them; the atomic write; no link
-  followed; a lifetime id that is not a UUID gets no file; the escaping of each value (a test with a URL and a
-  scope that hold each character that the rules allow).
+- The resend of a failed drop (review-103c B1): a snapshot that drops a session or a remote fingerprint gets
+  `bad request`, or no answer in 5 s: the daemon sends its current snapshot again after 1 s, then after 2 s, 4 s
+  and on up to 60 s, and at each reconnect; at a `bad request` the health line is red; the first answer
+  `data: {}` to a snapshot without the session ends the resend.
+- The entry files: Claude Code's JSON (the token only in `headers.Authorization`; the lifetime id in
+  `agentwatch.lifetime_id`); Codex's TOML (`http_headers`, never `bearer_token`; the lifetime id in the last line's
+  comment); the file's name is the run's random name, never its lifetime id; the modes 0600 and 0700, also after a
+  test changes them; the atomic write; no link followed; a lifetime id that is not a UUID gets no file; the
+  escaping of each value (a test with a URL and a scope that hold each character that the rules allow).
+- No lifetime id in a command line: the recorded launch argv holds the random name, and it holds no lifetime id.
 - The Codex profile link: in the session's own Codex home (`~/.codex` or an account home), named
-  `aw-<lifetime id>.config.toml`, an absolute link to the entry file; no other file under the Codex home changes;
-  the link moves at a swap to another home; the launch line has `-p aw-<lifetime id>`; no entry for an app-server
-  launch (until question E's answer); the refusal when the base `config.toml` defines `mcp_servers.agent-browser`
-  or a legacy `[profiles.aw-<lifetime id>]` table.
+  `aw-<random name>.config.toml`, an absolute link to the entry file; no other file under the Codex home changes;
+  the link moves at a swap to another home; the launch line has `-p aw-<random name>`; no entry for an app-server
+  launch (the answer E a); the refusal when the base `config.toml` defines `mcp_servers.agent-browser` or a
+  legacy `[profiles.aw-<random name>]` table.
 - The end: the link removed, then the file, then `set_sessions` without the session; a crash test after each step
   (the sweep at the next start removes what is left).
-- The sweep: at the start (after the adoption) and every hour, it removes each `aw-*` link and each entry file
-  whose lifetime id is not live, and each temp file in `sessions/`; it covers each Codex home that agentwatch
-  uses; it never touches a profile file whose name does not start with `aw-`, a file outside `sessions/`, or a live
-  session's file; it removes a planted `aw-*` link whose target is outside `sessions/`, and not that target.
-- The daemon's restart: it gets each live session's fingerprint from its entry file again; a file that it cannot
-  parse is removed, and the snapshot carries `null`.
+- The sweep: at the start (after the adoption) and every hour, it removes each entry file whose lifetime id (read
+  from the file) is not live or that holds none, each `aw-<32 hex digits>.config.toml` link whose random name is
+  not a live run's, and each temp file in `sessions/` older than 10 minutes; it keeps a younger temp file (a Codex
+  write in progress); it covers each Codex home that agentwatch uses; it never touches a planted
+  `aw-notes.config.toml`, a profile file whose name does not start with `aw-`, a file outside `sessions/`, or a
+  live session's file; it removes a planted `aw-<32 hex digits>.config.toml` link whose target is outside
+  `sessions/`, and not that target.
+- The daemon's restart: it rebuilds the map from the files (each file's lifetime id) and gets each live
+  session's fingerprint from its entry file again; a file that it cannot parse, or that holds no lifetime id, is
+  removed, and the snapshot carries `null`.
 - The permissions sweep covers `tokens/agent-browser/`, `sessions/` and each entry file.
-- The uninstall: a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-*` link in
-  each Codex home, on Linux and on the Mac; `install.sh --update` keeps them; the file list of each vault or
-  config sync leaves out the tokens folder.
+- The uninstall: a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each
+  `aw-<32 hex digits>.config.toml` link in each Codex home, on Linux and on the Mac, and never a planted
+  `aw-notes.config.toml`; `install.sh --update` keeps them; the file list of each vault or config sync leaves out
+  the tokens folder.
 - The redactor: a text with the canary comes out with the canary masked (kind `token`).
 - The allow paths: the pane's list edit and `prompt_allow` (also its confirm path) are operator acts only with a
   password login; a sign-in send allows nothing while a send joins no list; on each route the gateway drops an
@@ -1097,6 +1237,13 @@ times and the rate limit. The remote stdio program, the remote MCP socket and th
   address: refused until the next report; `CF-Connecting-IP` read only on the tunnel-origin socket); the
   fingerprint lists over the link (only fingerprints; the 5-minute send; the 15-minute end; the end at the
   grant's end; the limit of 64); the remote entry only while the grant is active and its list has a site.
+- Stage 5, the serving daemon's check of each list (review-103c B1, and the daemon lead's addition): a duplicate
+  fingerprint in one box's list: that box's fingerprints are dropped; the snapshot of the serving service is
+  applied. The same for a fingerprint of another box or of a local session in a list, a session twice in a list,
+  a fingerprint of the wrong form and a list of 65; each time the serving box's pane and `agentwatch health` say
+  why, and the calling box gets the refusal with no fingerprint. A list that names another box is refused whole,
+  and each remote item's box and the box part of its scope come from the link's peer identity, never from the
+  body.
 
 ### 14.3 The mutation for each rule
 
@@ -1109,6 +1256,10 @@ times and the rate limit. The remote stdio program, the remote MCP socket and th
 | The fingerprint before the file | the file written before the answer | the failure test finds a file |
 | The sweep removes what a crash leaves | the sweep skips entry files | the crash test finds the file after the restart |
 | One fingerprint once | a fingerprint in two items accepted | its bad-request vector gets `ok: true` |
+| One scope once | two items with one scope accepted | its bad-request vector gets `ok: true` |
+| The `bad request` answer echoes nothing | the answer holds the refused field | the answer scan finds the fingerprint |
+| A failed drop goes again | the daemon sends a failed drop once | the resend test finds no second snapshot |
+| No lifetime id in a command line | the writer names the file and the profile by the lifetime id | the argv scan finds the lifetime id |
 | The uid check and the walk first | the token read before steps 1 and 2 | the no-read test reads a byte |
 | No token in a log | the header logged at a refusal | the log scan finds the canary |
 | No token in an answer | the 401 echoes the header | the answer scan finds the canary |
@@ -1116,8 +1267,10 @@ times and the rate limit. The remote stdio program, the remote MCP socket and th
 | No token in an argv or an environment | the entry writer passes the header in a `-c` value or an environment variable | the spawn scan finds the canary |
 | No token on the door | `set_sessions` carries the token, not its fingerprint | the C12 line scan finds the canary |
 | The entry only for an allowed session | the writer ignores the list's site count | the no-site test finds an entry file |
-| No entry for a Codex app-server launch (until E) | the writer adds `-p` to an app-server launch | the app-server test finds a link |
+| No entry for a Codex app-server launch (E a) | the writer adds `-p` to an app-server launch | the app-server test finds a link |
 | The sweep never touches another profile | the sweep removes every `*.config.toml` | the planted profile that is not `aw-*` is gone |
+| The sweep matches only `aw-<32 hex digits>.config.toml` | the sweep matches `aw-*` | the planted `aw-notes.config.toml` is gone |
+| The sweep keeps a young temp file | the sweep removes each temp file, whatever its age | the young temp file is gone |
 | The sweep removes a link, never its target | it removes the resolved target | the planted target is gone |
 | The uninstall removes the tokens | the normal uninstall keeps `tokens/agent-browser/` or the links | the uninstall test |
 | The redactor knows `abt1_` | the prefix removed from the list | the redactor test |
@@ -1126,6 +1279,8 @@ times and the rate limit. The remote stdio program, the remote MCP socket and th
 | A bearer only on the MCP route (stage 5) | the gateway passes a bearer on another route | the route test |
 | No API token on `/mcp` (stage 5) | the gateway takes the API token there | the API-token test is admitted |
 | Only fingerprints on the link (stage 5) | the calling daemon sends the token | the link scan finds the canary |
+| A bad list stays with its box (stage 5) | the serving daemon merges a list without its check | the duplicate-fingerprint test: the serving service refuses the merged snapshot, so the serving box's own new snapshot is not applied |
+| The box comes from the link (stage 5) | the serving daemon takes the box from the message body | the other-box test: the list is applied |
 
 ### 14.4 The live check plan (local, on taylor)
 
@@ -1135,14 +1290,15 @@ not touch the operator's agent browser. Stage 3 runs it again on the real path w
 
 **What it must prove** (the claims of section 4.1 that only documentation or a source reading supports):
 
-1. Claude Code reads the session's `--mcp-config` file with `headers`, and sends the header, with no prompt in
-   an unattended session, also in a session rooted at the home folder.
-2. Codex on the standalone launch reads the linked profile file `aw-<lifetime id>.config.toml`, starts the MCP
+1. Claude Code reads the session's `--mcp-config` file with `headers` and the top-level key `agentwatch`, and
+   sends the header, with no prompt in an unattended session, also in a session rooted at the home folder.
+2. Codex on the standalone launch reads the linked profile file `aw-<random name>.config.toml`, starts the MCP
    from it with `http_headers`, and sends the header to `http://127.0.0.1`.
 3. Codex on the app-server launch: the profile gives the app server no agent browser entry (the source reading
-   of section 4.1). The result goes with question E, or confirms that E's answer is needed.
+   of section 4.1). By the answer E a, each new Codex version gets this check; the entry for such sessions comes
+   only when a Codex release passes it.
 4. A Codex config write in the session (for example a model change) keeps the link, writes the target with mode
-   0600 and keeps the token under the tokens folder.
+   0600, keeps the token under the tokens folder and keeps the lifetime id line at the file's end.
 5. No client starts an OAuth login at a 401.
 6. No client shows the header's value in its `/mcp` view, its logs or its transcript (with point 3 of the steps).
 7. Each client's behaviour after a service restart.
@@ -1157,7 +1313,10 @@ not touch the operator's agent browser. Stage 3 runs it again on the real path w
    its shell commands; the daemon's, the gateway's and the service's logs; the sessions' transcripts; the pane
    captures; Claude Code's per-server MCP logs and its `--debug` file; Codex's trace log and its rollout files;
    the Codex home, except the link's target; `git status` and `git diff` of the test repo. The fingerprint may
-   appear only in the C12 lines. The token is only in the entry file.
+   appear only in the C12 lines. The token is only in the entry file. The scan of the Codex home stays, because
+   Codex has a config edit that replaces the MCP servers (`replace_mcp_servers`, section 4.1): this scan finds a
+   token that Codex writes outside the entry file. The same search for the session's lifetime id finds it in no
+   `/proc/<pid>/cmdline`.
 4. An agent reads its entry file: in one session, the task tells the agent to print the file with its shell tool.
    The case records where the canary then appears (the tool output, the transcript), as the limit of section 12
    says.
@@ -1203,16 +1362,16 @@ Each named requirement has its test in section 14.
 | # | Side | Task and its named requirements | Tests | Waits for |
 | --- | --- | --- | --- | --- |
 | 1 | agent-browser | The contract texts: C11, C12 and the service design's sentences of section 13; `mcp_token` in `set_sessions` (sessions, and remote for stage 5); the hello's `mcp_token`; the vectors (C12's `set_sessions` lines with `mcp_token`, the MCP admission vectors with the token cases) | the vector files' own tests; the fake runs the new C12 vectors | this design's merge |
-| 2 | agentwatch (the new token store task) | The mint and the fingerprint; `tokens/agent-browser/sessions/` and its modes; the permissions sweep over `tokens/agent-browser/`, `sessions/` and each entry file; a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-*` link on Linux and the Mac, from this task on; `install.sh --update` keeps them; no vault or config sync copies the tokens folder; the redactor's `abt1_` | section 14.2: the mint, the uninstall, the redactor; the mode and sweep mutations | task 1 |
+| 2 | agentwatch (the new token store task) | The mint and the fingerprint; the run's random name; `tokens/agent-browser/sessions/` and its modes; the permissions sweep over `tokens/agent-browser/`, `sessions/` and each entry file; a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-<32 hex digits>.config.toml` link on Linux and the Mac, from this task on; `install.sh --update` keeps them; no vault or config sync copies the tokens folder; the redactor's `abt1_` | section 14.2: the mint, the uninstall, the redactor; the mode and sweep mutations | task 1 |
 | 3 | agent-browser | Stage 1d (ab-v16.94.5) with the token step: `mcp_token` from `set_sessions` and its field rules, step 7 and its texts, the close at a change, the log rule; the fake's field | section 14.1; the mutations of section 14.3; `npm test` under the heavy lock | task 1, stages 1a to 1c |
-| 4 | agentwatch (age-q8t.1) | `set_sessions` with `mcp_token`; the wait for its answer before a launch with the entry; the failure path (no file, a launch without the entry, the health line, `null` in the next snapshot); the feature check | section 14.2: the order, the failure; against `agent-browser service --fake` | tasks 2 and 3 |
-| 5 | agentwatch (age-q8t.7) | The MCP entry writer and the sweep: section 9's rule; the Claude Code entry file; the Codex entry file and profile link (the standalone launch only, until question E's answer); the removal at the end; the relaunch and swap rules; the sweep at each start (after the adoption) and every hour, with `aw-*` only, each Codex home and the temp files; the Browser pane's session rows and health lines; the gateway's operator field on each route that adds a site | section 14.2: the entry files, the link, the end, the sweep, the pane, the allow paths; the spawn scans | task 4 |
+| 4 | agentwatch (age-q8t.1) | `set_sessions` with `mcp_token`; the wait for its answer before a launch with the entry; the failure path (no file, a launch without the entry, the health line, `null` in the next snapshot); the resend of a failed drop (1 s, doubling to 60 s, at each reconnect; red at a `bad request`); the feature check | section 14.2: the order, the failure, the resend; against `agent-browser service --fake` | tasks 2 and 3 |
+| 5 | agentwatch (age-q8t.7) | The MCP entry writer and the sweep: section 9's rule; the random name of each run, the lifetime id in each file, and the map with its rebuild at the start; the Claude Code entry file; the Codex entry file and profile link (the standalone launch only, by the answer E a); the removal at the end; the relaunch and swap rules; the sweep at each start (after the adoption) and every hour, with `aw-<32 hex digits>.config.toml` links only, each Codex home, and temp files older than 10 minutes only; the Browser pane's session rows and health lines; the gateway's operator field on each route that adds a site | section 14.2: the entry files, the link, the end, the sweep, the pane, the allow paths; the spawn scans | task 4 |
 | 6 | agentwatch | The skill text: what an agent does at a 401 and at the no-list 503; never read the tokens folder or a profile link; never print a client's server configuration | a review of the text against sections 7.4 and 12 | task 5 |
 | 7 | both | The live check of section 14.4 (stage 2), with its proofs and its leak scan; then stage 3 with the operator's approval. A Codex refusal of a linked profile goes back to the operator (section 9.4) | section 14.4 | tasks 5 and 6 |
-| 8 | agentwatch (age-q8t.7) | The Codex app-server entry, by question E's answer: a, nothing to build until a Codex release lets the app server read a profile (each new Codex version gets the check of section 14.4, point 3); b, the header command for Codex's app server only; c, the standalone launch for an allowed Codex session | by the answer: b brings back the command's tests (revision 4ddae4f, section 14.2); c tests the launch choice | question E, task 7 |
+| 8 | agentwatch (age-q8t.7) | The Codex app-server entry, by the operator's answer E a: nothing to build until a Codex release lets the app server read a profile. Each new Codex version gets the check of section 14.4, point 3; when a release passes it, the entry for those sessions follows section 9.4 | the check of section 14.4, point 3, for each new Codex version | task 7; a Codex release that passes the check |
 | 9 | agent-browser, agentwatch | Stage 4, the Mac (ab-v16.94.6, age-q8t.4): the `libproc` reader, then the Mac's local MCP port opens; the Mac's daemon mints for the Mac's sessions | the Mac checks, through the manager with the operator | task 7 |
-| 10 | both | Stage 5 (ab-v16.94.7, age-q8t.5), section 10: agent-browser: the serving service's remote admission (the carrier, the remote scope with `<box>/`, `remote[].mcp_token`, the texts, the grant's list, the answer size limit); agentwatch: the gateway route and its rules, the address check with both families and its texts, both addresses in the status report, the fingerprint lists over the link and their end, the remote entry while the grant is active and its list has a site, the quiet times and the rate limit | sections 14.1 and 14.2, the stage 5 cases; no `abt1_` in a link message; the two-box live check with the operator | task 7; the remote route does not need task 9, so the lead may run it before task 9 |
-| 11 | agentwatch (age-q8t.6) | Stage 6: remove `tokens/agent-browser/` and every `aw-*` link with the old path's cleanup | the uninstall test | task 10 |
+| 10 | both | Stage 5 (ab-v16.94.7, age-q8t.5), section 10: agent-browser: the serving service's remote admission (the carrier, the remote scope with `<box>/`, `remote[].mcp_token`, the texts, the grant's list, the answer size limit); agentwatch: the gateway route and its rules, the address check with both families and its texts, both addresses in the status report, the fingerprint lists over the link and their end, the box of each remote item from the link's peer identity, the check of each calling box's list before the merge, the remote entry while the grant is active and its list has a site, the quiet times and the rate limit | sections 14.1 and 14.2, the stage 5 cases; no `abt1_` in a link message; the two-box live check with the operator | task 7; with a Linux serving box only, the lead may run it before task 9 (a Mac serving box needs task 9: the Mac service comes from stage 4) |
+| 11 | agentwatch (age-q8t.6) | Stage 6: remove `tokens/agent-browser/` and every `aw-<32 hex digits>.config.toml` link with the old path's cleanup | the uninstall test | task 10 |
 
 The answers remove these tasks of the earlier revision: the header command (its refusals, its tests and its run
 again at a 401), the operator's token acts ("Issue token", "New token", "Remove token"), the rotation and its
@@ -1221,9 +1380,9 @@ daemon's socket".
 
 ## 17. Questions for the operator
 
-The five questions of the earlier revision and the address question have the operator's answers (section 2).
-One new question, E, follows from a fact that the source reading found after the answers. A board item holds it
-alone.
+Every question has the operator's answer (section 2): the five questions of the earlier revision and the address
+question (ab-0wv, ab-sxg, ab-ufy, ab-5t3), and question E and the Cloudflare question (ab-h93). No question is
+open.
 
 **A. Which side makes, keeps and checks each token? Answered** (ab-0wv, 2026-11-10 13:24Z): "agentwatch mints
 the token and inserts it into the mcp configuration i think. can we do that? so it gets generated when the
@@ -1240,13 +1399,31 @@ the header? i think mcp protocol supports this. so it would be no extra command.
 headers." The lead's reading on ab-ufy, confirmed (13:27Z): "keep it. token goes in the mcp header." The design:
 a fixed `Authorization` header in each session's own entry file, no command (section 9).
 
-**D. Where does a token work? Answered** (ab-sxg): option c, direct HTTPS to the other box (section 10).
+**D. Where does a token work? Answered** (ab-sxg): option c, direct HTTPS to the other box (section 10). The
+Cloudflare question (below) asked it again with the fact that its text left out.
 
 **The address check. Answered** (ab-5t3, 13:26Z): "you can use an IP allowlist as long as you have the ipv4 and
 ipv6 of each daemon." The design: the serving box's gateway takes a remote token only from the calling box's
-known IPv4 and IPv6 addresses, and fails closed when one is not known (section 10).
+known IPv4 and IPv6 addresses, and fails closed when one is not known (section 10). The design's reading: a
+family in the state "none" (the box reports no global address of that family) counts as known. It adds no
+address that can match.
 
-**E. How does a Codex session that agentwatch runs with its app server get its token?** (new)
+**E. How does a Codex session that agentwatch runs with its app server get its token? Answered** (ab-h93,
+2026-11-10 18:06Z): option a, "Wait for a Codex release that lets the app server read a profile" ("Those
+sessions keep the browser through Playwright, with no MCP, until then. Nothing new is built, and your "no extra
+command" stays."). The design: no entry for a Codex session with the app server until a Codex release lets the
+app server read a profile; each new Codex version gets the check of section 14.4, point 3; nothing new is built
+(sections 9.4 and 16, task 8). The question as the design asked it stays below, for the record.
+
+**The Cloudflare question. Answered** (ab-h93, 18:06Z). The question: "A taylor session that uses your Mac's
+agent browser: keep direct HTTPS through Cloudflare, or use the agentwatch link?" The board item said that the
+earlier text of D c left out a fact: on that route the encryption ends at Cloudflare's edge, so Cloudflare sees
+each request in clear (the token, the tool arguments and the page text). The recommendation was the agentwatch
+link. The operator chose "Keep direct HTTPS through Cloudflare" ("No program between. Cloudflare sees the token,
+the tool arguments and the page text of each request. The address check stays."). The design: section 10 stays
+(direct HTTPS, the address check), and section 10 and T10 state what Cloudflare sees.
+
+The record of question E, as the design asked it:
 
 Context: you chose the token in each session's own MCP entry, with no extra command (ab-sxg, ab-ufy). For Codex,
 agentwatch writes the entry into a profile file for the session. Codex 0.159.3 reads a profile only in its
@@ -1271,8 +1448,8 @@ and any other session's. A copied token works only from its own session, and onl
   come as typed text again (against your Codex notice parity), and agentwatch reads the session only from the
   screen.
 
-Recommendation: a. It keeps your answers, it builds nothing new, and those sessions keep the agent browser
-through Playwright. No answer: a (it builds nothing that you declined).
+The recommendation was a: it keeps your answers, it builds nothing new, and those sessions keep the agent browser
+through Playwright. The no-answer behaviour was a. The operator chose a.
 
 ## 18. Limits and open points
 
@@ -1282,27 +1459,32 @@ through Playwright. No answer: a (it builds nothing that you declined).
   then goes into its transcript and the model's context. The copy gives no new right.
 - **The list is the allow** (B1 a), and a program of the same user can change a list file by hand. The MCP's
   allow has the lists' own limit.
-- **Codex with agentwatch's app server**: question E. The claims about the app server are source readings at the
-  tag; stage 2 confirms them (section 14.4, point 3).
+- **Codex with agentwatch's app server**: by the answer E a, no MCP for such a session until a Codex release lets
+  the app server read a profile; it keeps the browser through Playwright. The claims about the app server are
+  source readings at the tag; stage 2 confirms them, and each new Codex version gets the same check (section
+  14.4, point 3).
 - **Codex's own config edits** in a session go into the session's entry file, and they end with it. A person who
   changes a Codex setting in such a session does not keep the change.
 - **A linked profile file** is a source reading; stage 2 proves it. A refusal goes back to the operator.
-- **The lifetime id in an argv** (a small leak): every OS user on taylor sees each session's lifetime id in the
-  client's command line. If the daemon lead wants it hidden, the file and profile names can be a random name that
-  the daemon maps to the lifetime id.
+- **The random name in an argv** (a small leak): every OS user on taylor sees each run's random name in the
+  client's command line, and no lifetime id (the daemon lead's addition). A random name gives no right.
+- **The lifetime id in the entry file**: Claude Code's acceptance of the top-level key `agentwatch` and the stay
+  of the TOML comment after a Codex write are not proven; stage 2 checks both (section 14.4, points 1 and 4). A
+  refusal goes to the daemon lead, who chooses another place for the lifetime id with no secret and no command
+  line.
 - **Cloudflare sees the remote MCP traffic in clear** (D c): the remote token, the tool arguments and the page
-  text. The text of D c on ab-sxg stated the copy risk ("a copy of the token then works from any computer on the
-  Internet"), not this effect. The earlier link path sealed these bytes. The lead decides whether to tell the
-  operator before stage 5.
+  text. The operator chose this route with that fact (ab-h93, "Keep direct HTTPS through Cloudflare"), against
+  the recommended link path. The address check stays.
 - **The address check's failure modes** (section 10): a changed address stops the box's remote sessions until
   its next report; a box with IPv6 temporary addresses fails often; a shared address admits a leaked token.
 - **The remote route** no longer needs a stdio program, a daemon socket or a Python walk. Stage 5 gets smaller on
   agentwatch's side, and it adds the gateway route and the address check.
 - **A long session** keeps its token for its whole life (B2: no schedule).
-- **The agent door (CDP)** takes no token (section 11). If the operator wants a token there too, that is a later
-  design.
-- **First values**: the answer's wait (5 s), the remote fingerprint list's interval (5 minutes) and its end (15
-  minutes), the remote fingerprint limit for each box (64), the sweep's interval (1 hour), the remote rate limit
-  (10 a second, 4 at once) and the answer size limit (16 MiB). The build measures and records them.
+- **The CDP path of the agent door** takes no token (section 11). If the operator wants a token there too, that
+  is a later design.
+- **First values**: the answer's wait (5 s), the resend of a failed drop (after 1 s, doubling up to 60 s), the
+  remote fingerprint list's interval (5 minutes) and its end (15 minutes), the remote fingerprint limit for each
+  box (64), the sweep's interval (1 hour), the sweep's age for a temp file (10 minutes), the remote rate limit (10
+  a second, 4 at once) and the answer size limit (16 MiB). The build measures and records them.
 - **The title** of this file still says "per-repo" in its file name: by the answers, each session gets its own
   token.
