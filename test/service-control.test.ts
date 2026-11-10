@@ -242,16 +242,19 @@ test("the line limit: a line of CONTROL_MAX_LINE bytes with its newline is read;
   assert.equal(CONTROL_MAX_LINE, 33_619_968);
   const d = await openDoor(stage1a());
   try {
-    const head = { t: "req", id: "big", op: "status", by: { kind: "daemon", user: "ann", via: "daemon" }, pad: "" };
-    const pad = (total: number) => "x".repeat(total - 1 - Buffer.byteLength(JSON.stringify(head)));
-    const at = JSON.stringify({ ...head, pad: pad(CONTROL_MAX_LINE) });
-    assert.equal(Buffer.byteLength(at) + 1, CONTROL_MAX_LINE);
+    /** A status request of `id` whose line, with its newline, has `total` bytes. */
+    const sized = (id: string, total: number) => {
+      const head = { t: "req", id, op: "status", by: { kind: "daemon", user: "ann", via: "daemon" }, pad: "" };
+      const line = JSON.stringify({ ...head, pad: "x".repeat(total - 1 - Buffer.byteLength(JSON.stringify(head))) });
+      assert.equal(Buffer.byteLength(line) + 1, total);
+      return line + "\n";
+    };
     const ok = await hello(d.path);
-    ok.c.send(at + "\n");
+    ok.c.send(sized("big", CONTROL_MAX_LINE));
     assert.equal((await ok.c.answer("big", 30_000)).ok, true, "a line at the limit is read");
     ok.c.end();
     const over = await hello(d.path);
-    over.c.send(JSON.stringify({ ...head, id: "over", pad: pad(CONTROL_MAX_LINE + 1) }) + "\n");
+    over.c.send(sized("over", CONTROL_MAX_LINE + 1));
     assert.equal(await closesWithin(over.c, 30_000), true, "a line one byte longer closes the connection");
     assert.equal(over.c.lines.length, 1, "no answer");
     const open = await hello(d.path);
@@ -337,6 +340,13 @@ test("the fake's own rules: a start in the state off sends the vectors' first re
     assert.deepEqual((await c.answer("7")).data, { refusal: null });
     c.send({ t: "req", id: "8", op: "endpoint", by: own, scope: "web-1" });
     assert.deepEqual((await c.answer("8")).data, { url: `ws+unix://${control.state.agent_door}:/devtools/browser/web-1` });
+    // An allow whose host or list is not the open prompt's now: this prompt is gone, and the prompt stays open.
+    for (const [id, host, list] of [["9", "other.example", "owner-repo"], ["10", "login.example", "other-repo"]]) {
+      c.send({ t: "req", id, op: "prompt_allow", by: op, prompt: "p1", host, list });
+      assert.deepEqual(await c.answer(id), { t: "res", id, ok: false, error: "this prompt is gone" });
+    }
+    c.send({ t: "req", id: "11", op: "prompt_allow", by: op, prompt: "p1", host: "login.example", list: "owner-repo" });
+    assert.equal((await c.answer("11")).ok, true, "the prompt was still open");
     c.end();
   } finally { await d.close(); }
 });
