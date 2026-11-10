@@ -4,11 +4,14 @@
 // the tests stay beside the text that they read. The small reference rules below follow the text, so a vector that breaks
 // a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 8a3b66f
 // (its constants and pointer constants are the same at 66078cd). Tests for the parts that the self-contained agent
-// browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP configuration) are at the end.
+// browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP configuration) are at the end, and after them
+// the tests of the input stage (board ab-t30.6, task ab-t30.8): its part of C11 and test/vectors/stage.json.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { normalizeEntry } from "../src/relay/scopes.ts";
+import { PLAYWRIGHT_FOCUS } from "../src/relay/policy.ts";
+import { charKey } from "../src/record.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 // A missing file reads as "", so each assertion fails on its own (tests first).
@@ -1094,4 +1097,781 @@ test("C11 keeps no sentence of the stdio shim as the local MCP path, and no rule
   }
   // The new parts come after the old text: the old text's last part is still the scope's session, before them.
   assert.ok(C11.indexOf("**The scope's session (the peer check; board ab-v16.50).**") < C11.indexOf("**The MCP path (from stage 1d;"), "the order of the parts");
+});
+
+// ---- The input stage (board ab-t30.6; the input design's section 12.1; board task ab-t30.8) ----
+// The stage is not built yet (board tasks ab-t30.9 to ab-t30.12, behind a build switch): C11's part "The input stage" and
+// test/vectors/stage.json are the contract that the build follows. The tests assert each sentence of the part exactly, and
+// that the part holds no other text; they assert the changed rules in the other parts of C11; and small reference rules
+// check the vectors against the part's constants, first values, recognizers, typing rule and wheel rule.
+
+const stageText = readOr("test/vectors/stage.json");
+const S: any = stageText ? JSON.parse(stageText) : null;
+const DESIGN = readOr("docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md");
+const STAGE_HEADING = "The input stage (board ab-t30.6).";
+const stagePart = () => partOr(STAGE_HEADING);
+// The text of a part with no Markdown markup: no list marker, no table rule, one space for each run of white space.
+const clean = (text: string) => text.split("\n").filter((l) => !/^\|(?: --- \|)+$/.test(l.trim())).map((l) => l.trim().replace(/^(?:- |\d+\. )/, "")).join(" ").replace(/\s+/g, " ").trim();
+const vectorsOrFail = () => { assert.ok(S, "test/vectors/stage.json has the vectors"); return S; };
+
+// Every sentence of the part, in order (a table row is one item). The part holds exactly these, and no other text.
+const STAGE_ITEMS: string[] = [
+  "**The input stage (board ab-t30.6).**",
+  "The input design is agent-browser `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md` (board ab-t30.6).",
+  "The operator answered its questions Q1 to Q4 on 2026-11-10 with option a each (its section 15; board item ab-0z5).",
+  "The stage is a part of the model (`src/relay/stage.ts`), between the tab's gate and the bridge.",
+  "It keeps what each client call asks for: the point, the button, the keys, the text and the element to scroll to.",
+  "It changes how the call reaches the page: a person's path from the page's last point, a pause, a press of a person's length, keys with a person's holds and gaps, a real Shift key, and wheel notches.",
+  "The vectors:",
+  "`test/vectors/stage.json`.",
+  "The build switch.",
+  "Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch.",
+  "The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
+  "While the switch is off, the model sends each call as the rest of this file says, and no rule of this part applies.",
+  "In this file, \"with the stage on\" names a rule that applies only while the switch is on.",
+  "Every client.",
+  "With the stage on, the stage shapes the input of every client of agent mode on every site, on Linux and on the Mac:",
+  "Playwright, the Playwright MCP inside the service, and agent-browser's own commands over the endpoint (the answer Q1 a).",
+  "No client sets anything.",
+  "This part adds no op to C10 or C12, and no setting of the operator.",
+  "The source.",
+  "The stage sends CDP input (`Input.*` through `debugger.sendCommand`) on every platform.",
+  "Real X input stays only for the X pointer's path at an activation (the pointer at an activation, above).",
+  "On the Mac the stage uses no X input and never the operator's own pointer.",
+  "The calls that the stage takes.",
+  "On a page session of a tab (the tab's own session), the stage takes these calls:",
+  "`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.insertText`, of every `type`;",
+  "`Input.dispatchDragEvent` while a drag of the stage runs (the drag, below);",
+  "`DOM.scrollIntoViewIfNeeded` and `DOM.setFileInputFiles`;",
+  "each utility call that a recognizer matches (the recognizers, below).",
+  "It passes every other call as the rest of this file says.",
+  "On a child session of a cross-origin frame, the stage takes only `DOM.scrollIntoViewIfNeeded` and the utility calls of the hit-target, focus and fill recognizers.",
+  "Playwright sends the input of a frame on the top page's session, and the stage plays it there.",
+  "A same-origin frame has no session of its own: its utility calls come on the top page's session.",
+  "The gate.",
+  "The stage is a step of the tab's gate.",
+  "A tab's calls reach Chrome in the client's order: a call that comes after an input call waits until the stage has sent the events of that input.",
+  "So a `Runtime.evaluate` after a click sees the page after the click.",
+  "An ordinary call that the stage passes leaves the gate when the model sends it, not when Chrome answers (above).",
+  "The stage's own reads (an element's box, the focused element, a hit test, a frame's offset, a scroll position) go to Chrome inside the step, and no client sees them or their answers.",
+  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `DOMDebugger.getEventListeners`).",
+  "Three reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field, and the recovery's read at the hit point.",
+  "The input lock.",
+  "The agent browser has one input lock for all its pages, in memory (board ab-v16.46).",
+  "A translated action holds the lock from its first event to its last.",
+  "It takes the lock before its activation step, so that no window comes forward while the action of another page runs.",
+  "A pointer action is its path, its press and its release.",
+  "A key run is the keys of one tab with no other call between them: it ends at the tab's next call that is not a key, or 1 s after its last key.",
+  "Another tab's input waits for the lock, in the order of arrival, and that tab's later calls wait behind it in its own gate.",
+  "In the service, agent-browser's own commands reach Chrome through the endpoint and the stage, so they share the lock.",
+  "The file lock `input.lock` stays only for agent-browser's direct mode (its own Chrome, with no endpoint).",
+  "A hold has the limit `STAGE_ACTION_MAX_MS = 25000`: at the limit the stage sends the rest of the action at once, with no person's timing, and logs it.",
+  "The answers.",
+  "A held answer.",
+  "The stage answers a client call only after it has sent the events of that call and Chrome has answered them:",
+  "a move, after the last move of its path;",
+  "a press, after the pause and the press;",
+  "a release, after the hold and the release;",
+  "a wheel call, after its last notch;",
+  "a key press, after the key's `keyDown`.",
+  "Playwright sends the move, the press and the release of a click together, so the release arrives before the press has its answer.",
+  "The stage keeps their order.",
+  "The early answer of a key release.",
+  "Rollover needs the next key's press before this key's release, and Playwright waits for the answer of each key call.",
+  "So the stage answers a `keyUp` before it sends it when the plan says that the next key can overlap: the base part of the next interval (the interval less the part of the letter pair) is shorter than this key's hold.",
+  "The release then goes at its planned time.",
+  "Every later call of the tab that is not a key press waits until that release has gone.",
+  "In no other case does the stage answer a call before its events.",
+  "A client can trust an answer: the page has the events.",
+  "An error of an event.",
+  "When Chrome refuses an event of a plan, the stage stops the plan and sends no more of its events.",
+  "First it sends the release of each button and key that the plan holds.",
+  "The client call of the refused event gets Chrome's error, and each other client call of the plan whose events did not go gets the same error.",
+  "Shift and rollover.",
+  "A key with no Shift that follows a shifted key waits for the planned release of that key and for the release of Shift.",
+  "The stage never sends a release before its planned hold has passed.",
+  "Dialogs (the input design, section 4.3a).",
+  "A page with an open dialog answers no input event, and the stage waits for the answers of its own events.",
+  "A client's `Page.handleJavaScriptDialog` never waits.",
+  "With the stage on, the model sends it to Chrome at once, before the tab's gate and before any step of the stage, of an activation or of a world lookup.",
+  "A client sends that call only after `Page.javascriptDialogOpening`, so it expects no call of its own to go first.",
+  "A dialog ends the plan.",
+  "The stage watches the tab's `Page.javascriptDialogOpening` events that go to the client.",
+  "When a dialog opens during a plan, the plan ends at once:",
+  "The stage drops the events of the plan that no client call asked for (the rest of the path, the pauses).",
+  "It sends at once, in order, each event that a client call of the plan asked for and that has not gone (the move to the client's point, the press, the release), and the release of each button and key that the plan holds.",
+  "It frees the input lock and opens the tab's gate.",
+  "Chrome keeps these events until the dialog closes, as with Playwright's own input.",
+  "The stage never goes on with a plan after its dialog closes, so no event of a plan goes after a later client call.",
+  "Each client call of an ended plan gets Chrome's own answer to its event when that answer comes (after the dialog closes), or Chrome's error.",
+  "The stage gives no answer of its own.",
+  "If the build measures that Chrome drops input events while a dialog is open, this rule changes first: then the client calls of an ended plan get an error that names the dialog (the input design's open point 5).",
+  "Each read of the stage waits at most `GEOMETRY_WAIT_MS` (200 ms).",
+  "At the limit the read fails open: the stage sends the client's call as it is, and counts it.",
+  "Each wait for an answer of the stage's own event has the limit `STAGE_EVENT_WAIT_MS = 2000`, counted from the oldest event of the plan that has no answer.",
+  "At the limit the plan ends as at a dialog.",
+  "This also covers a dialog when no client has `Page` enabled, and a dialog between two events of a plan.",
+  "A late answer changes nothing.",
+  "A hold counts from the send of the press, not from its answer, so a `confirm()` in a `mousedown` handler does not make the hold longer.",
+  "When the answer of the press does not come, the plan ends by these rules, and the release goes at once.",
+  "The timestamps and the rate.",
+  "Each event that the stage sends has a CDP `timestamp` that is a person's input latency before its send:",
+  "`(Date.now() - latency) / 1000` on Linux, in whole milliseconds, as X11 gives the times of its events.",
+  "The latency is `STAGE_LATENCY_MS` = 3 to 5 (ms, a first value).",
+  "The time comes from the send, never from the plan, so no event has a time in the future.",
+  "On the Mac the timestamp keeps its fraction:",
+  "`(performance.timeOrigin + performance.now() - latency) / 1000`.",
+  "Pointer moves go at the rate of a device: one move each `STAGE_MOVE_MS = 8` ms (125 Hz, a first value).",
+  "The stage sends each move at its time, with no wait for the answer of the move before it.",
+  "Chromium then puts the moves of one frame into one `pointermove` with their samples, as for a real mouse.",
+  "At most `STAGE_MOVES_IN_FLIGHT = 8` moves of a tab are without an answer.",
+  "When a move is due while 8 wait, the stage stops the path, sends the client's own event, and logs it.",
+  "For the stage's paths this bound takes the place of `CATCH_UP_MAX_UNANSWERED`.",
+  "On Linux the stage rounds each point to a whole CSS px, as X11 gives its points.",
+  "Playwright's points can have a fraction.",
+  "A person's input (first values).",
+  "The generator (`src/human/`) draws each value with a seed, from the parameter files `src/human/params/linux.json` and `mac.json`.",
+  "A reviewed change of a parameter file changes these values, this part and the vectors together.",
+  "Each scope gets one person, drawn once for the life of the scope, so that a site cannot link two sessions by one rhythm.",
+  "A path starts at the page's last point, never at a fixed point.",
+  "When the page has no last point, the path starts at the X pointer's place mapped into the page (Linux, at an activation), else at a random point of the middle 30% to 70% of the viewport.",
+  "A path has one sample each `STAGE_MOVE_MS`, in whole px on Linux, with no sample that does not move, at a speed of at most 3.5 px/ms.",
+  "It ends at the client's point, or at the spread point of its press (below).",
+  "Its time is 300 to 1000 ms (Fitts's law).",
+  "A move of more than 500 px can add an overshoot leg, so its time is at most 1500 ms.",
+  "The pause before a press is 80 to 400 ms.",
+  "The press has `force` 0.5 and a hold of 60 to 180 ms.",
+  "The gap of a double click, from the first release to the second press, is 90 to 150 ms.",
+  "The hold of a key is 50 to 250 ms.",
+  "A Shift `rawKeyDown` comes 45 to 95 ms before a shifted character, which then has `modifiers` 8, and the release of Shift comes 15 to 60 ms after the release of the last key that it holds.",
+  "A run of shifted characters keeps Shift down.",
+  "In a chord, each modifier comes 40 to 120 ms before the key, and the releases come 20 to 80 ms apart, in reverse order.",
+  "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11), and the gaps between notches are 35 to 90 ms.",
+  "No idle moves: the pointer moves only for a client's call (the answer Q4 a).",
+  "The pointer:",
+  "`Input.dispatchMouseEvent`.",
+  "`mouseMoved` with no button down, to the page's last point: no event, because a mouse that does not move sends none.",
+  "The stage answers it at once.",
+  "`mouseMoved` with no button down, at most 50 px from the page's last point: samples of the client's line at the rate of the device.",
+  "Their speed is 0.5 to 1.5 px/ms, with 0 to 1 px of jitter across the line.",
+  "Such a move is a step of `mouse.move` with `steps` or of `click({ steps })`, or a short move.",
+  "`mouseMoved` with no button down, farther: a path from the page's last point to the client's point.",
+  "A hover (a hit-target setup with the action `hover`, below).",
+  "When the stage sees the setup, it plans the whole path to Playwright's point, sends the samples of the path that are outside the target's box, and then sends the setup.",
+  "It sends the rest of the path, from its first sample inside the box, at Playwright's `mouseMoved`.",
+  "When the pointer is inside the target's box already, the whole path goes after the setup.",
+  "With `hover({ modifiers })` the modifier's press goes as the client sends it, and the last leg has the client's `modifiers`.",
+  "`mousePressed`: a pause when the press follows a path, then the press, with the client's `button`, `buttons`, `clickCount` and `modifiers`, and `force` 0.5.",
+  "The press is at the client's point rounded to a whole px, or at the spread point (below).",
+  "A press with `clickCount` 2 or 3 comes one gap of a double click after the release before it.",
+  "`mouseReleased`: the release, at the later of its arrival and the send of the press plus the hold.",
+  "So a client's `delay` gives a hold of at least that delay.",
+  "The spread point.",
+  "A person's press spreads around the middle of a target: an offset from the middle with a standard deviation of 1/8 of the target's smaller side, at most 1/4 of that side.",
+  "The path then ends at the spread point.",
+  "The stage uses it only when all of these are true;",
+  "else it presses at the client's point, rounded:",
+  "a locator click: a hit-target setup of the action `mouse` before it, and `clickCount` 1;",
+  "no `position`: the client's point is within 1 px of the middle of the element's content quad (the answer of the client's own `DOM.getContentQuads`);",
+  "an element whose effect does not depend on the point:",
+  "`button`, `a[href]`, an `input` of the type `button`, `submit`, `reset`, `checkbox` or `radio`, `label`, `summary`, or an element with the role `button`, `link`, `checkbox`, `radio`, `tab`, `menuitem` or `switch`;",
+  "never a `canvas`, an `img` with a map, an `svg`, a `video`, an `input` of another type, a `textarea` or a contenteditable;",
+  "the stage's own hit test at the spread point gives the same element as at the client's point.",
+  "A click with a modifier (Playwright's `ensureModifiers`).",
+  "The modifier's `rawKeyDown` goes as it comes, because Playwright waits for its answer before the move.",
+  "The path and the press have the client's `modifiers`.",
+  "The stage holds the modifier's `keyUp` until 60 to 200 ms after the mouse release, and answers it after it has gone.",
+  "A click or a hover in a frame.",
+  "The client's input comes on the top page's session, in the top page's points, and the stage plays it there.",
+  "The hit point of a hover's setup in a frame is in the frame's own points, and the stage maps it to the top page (the frame mapping, below).",
+  "`Input.dispatchTouchEvent` and `Input.synthesizeTapGesture` go as they are.",
+  "Playwright refuses `tap()` without `hasTouch`, and a context from `connectOverCDP` has none.",
+  "The drag.",
+  "`mouseMoved` with the left button down while the client's `Input.setInterceptDrags` is on (Playwright's drag manager: `dragTo`, and `mouse.move` with a held button over an HTML5 draggable).",
+  "The stage first waits 100 to 300 ms after the press, as a person does.",
+  "Then it sends a short path with the button down, until Chrome reports `Input.dragIntercepted`.",
+  "It sends the rest of the path to the client's point as `Input.dispatchDragEvent`: first a `dragEnter` of its own at the first point after the report (with the data of `Input.dragIntercepted`), then `dragOver` events at the rate of the device.",
+  "When Chrome reports no drag, the whole path goes with the button down.",
+  "A client's `Input.dispatchDragEvent` in a drag of the stage: a `dragEnter` goes as a `dragOver` at its point, because the page has its `dragenter` already.",
+  "A `dragOver` goes as a path of `dragOver` events to its point.",
+  "A `drop` goes after a pause, as a press does.",
+  "A `dragCancel` goes as it is.",
+  "A drag event of a drag that the stage did not start goes as it is.",
+  "The keys and the text:",
+  "`Input.dispatchKeyEvent` and `Input.insertText`.",
+  "A key run (`keyboard.type`, `pressSequentially`, `type`, `press`, `keyboard.down` and `keyboard.up`): each key gets a person's timing.",
+  "That is the hold, the time from one press to the next with its pauses at the ends of words and lines, and rollover by the early answer.",
+  "A key press goes at the later of its arrival and its planned time.",
+  "A release goes at the later of its arrival and the end of the key's planned hold.",
+  "So a client's `delay` gives a hold of at least that delay.",
+  "A shifted character that comes with `modifiers` 0 (Playwright's capital or symbol): a Shift `rawKeyDown` before it, the key with `modifiers` 8, and the release of Shift after it.",
+  "In about 70% of cases the left Shift (`location` 1) comes for a key of the right hand, and the right Shift (`location` 2) for a key of the left hand.",
+  "A chord of `press` (for example `Control+A`): the client's modifier presses, the key and the releases in reverse order, with the times of a chord above.",
+  "`Input.insertText` (Playwright's `fill`, `keyboard.insertText`, and a character with no US key in `keyboard.type`): typed keys when the typing rule (below) allows them.",
+  "Else the text goes as it is, after one person's time from one press to the next.",
+  "The first typed key replaces the selection that Playwright's script made.",
+  "`clear()` (Playwright's script selects all, then the `Delete` key): the key with a person's hold.",
+  "The typing rule.",
+  "The stage sends typed keys in place of the text of an `Input.insertText` only when all of these are true;",
+  "else it sends the call as it is:",
+  "The focused element (the stage's own read at the call) is an `input` of a text type (`text`, `search`, `email`, `url`, `tel`, `password`, `number`, or no type) or a `textarea`.",
+  "A contenteditable keeps the inserted text, because the editor of a page can change typed keys.",
+  "Each character has a key on the US layout (`src/record.ts` `charKey`), and the text has no line feed and no tab.",
+  "A line feed would send a message in a chat field with Enter-to-send, and a tab moves the focus.",
+  "The plan at the person's speed fits in `STAGE_TYPE_MAX_MS = 10000`, or the plan at the fast end of the person's spread (100 to 120 ms a key) fits in it, and then the stage types at that speed.",
+  "A longer text goes as one `Input.insertText` (the answer Q2 a).",
+  "On the Mac the same, with the Mac's editing commands for keys such as Backspace (`src/record.ts` `macCommands`).",
+  "After the last key the stage reads the value of the field.",
+  "When it is not the text, the stage logs the difference and counts it, and it does not repair the field.",
+  "This is the one named exception to the same result as Playwright's own input: a key handler of a page (a tag input, an autocomplete, an input mask) can act on typed keys, where Playwright's own `fill` inserts the text in one step.",
+  "The time of a key run.",
+  "The stage does not know the length of a run in advance.",
+  "It types at the person's speed for the first `STAGE_RUN_SLOW_MS = 12000` of the run, then at the fast end of the person's spread.",
+  "At `STAGE_ACTION_MAX_MS` the rest of the run goes at Playwright's own speed, with no person's timing, and the stage counts it.",
+  "The focus click.",
+  "Before Playwright's script focus of a text field (the focus and fill recognizers, below), the stage clicks the field as a person does, by the rules of `src/input.ts` `focusField`.",
+  "The stage reads the field in Playwright's utility world on the node's own handle: whether it has the focus, its kind, and the length of its text.",
+  "A field with the focus gets no click.",
+  "Only a text field gets the click: an `input` of a text type, a `textarea` or a contenteditable.",
+  "On another element the utility call passes (the answer Q3 a).",
+  "The click goes where the script focus puts the caret.",
+  "In an `input` or a `textarea` with text, and in a contenteditable, the point is 2 to 5 px from the left edge (Playwright's caret reset puts the caret at 0).",
+  "In an empty `input` or `textarea`, it is a point from 25% to 75% across.",
+  "The point is 35% to 65% down in an `input`, and 6 to 12 px from the top in a `textarea` or a contenteditable.",
+  "When the caret is not where the script focus would put it after the click, the stage sends `Home` (an `input`) or `Control+Home` (a `textarea`).",
+  "A field out of view first gets notches into view (the scroll, below), then the click.",
+  "A field that has no box, or that another element covers at the point of the click (the stage's own hit test), gets no click.",
+  "The utility call alone gives it the focus, and the stage counts it.",
+  "A field in a cross-origin frame: the stage maps the point of the click to the top page (the frame mapping, below), and it sends the click on the top page's session.",
+  "`selectText()` on an `input` or a `textarea`: a click on it and the select-all chord (`Control+A`, on the Mac `Meta+A`), then the utility call.",
+  "The scroll and the wheel.",
+  "`mouseWheel` on Linux: notches of `STAGE_NOTCH_PX` in the direction of the call, on each axis, at the page's last point, with a person's gaps.",
+  "The stage keeps a residual for each axis of a page: what the page's wheel calls asked for, less what its notches gave.",
+  "A call gets `n = max(0, round((|delta| + r) / 120))` notches (round half up), where `r` is the residual in the direction of the call.",
+  "When `n` is 0 and `r` is 0 or more, the call gets one notch, so a call whose delta is not 0 gets a wheel event unless earlier notches have already given it.",
+  "So a series of wheel calls scrolls the asked total within one notch.",
+  "Playwright's `mouse.wheel` does not wait for the scroll and does not check it.",
+  "`DOM.scrollIntoViewIfNeeded` (Playwright's scroll before each pointer action, and `scrollIntoViewIfNeeded()`), on Linux:",
+  "The stage reads the element's box (`DOM.getContentQuads` with the node of the call) and the viewport (`Page.getLayoutMetrics`).",
+  "When the element is in view, the stage answers `{}` with no scroll.",
+  "An element is in view when all of it is inside the viewport on an axis, or when its middle is in the middle 60% (vertical) or 80% (horizontal) of the viewport.",
+  "Else the stage finds the element's scroller and a wheel point over it (below).",
+  "It moves the pointer there with a path when it is not there, and it sends the notches that bring the element's middle to the middle of the viewport.",
+  "It waits for the smooth scroll to end (350 ms, a first value), reads again, and repeats, at most `STAGE_SCROLL_ROUNDS = 4` rounds.",
+  "When the element is in view, it answers `{}`.",
+  "When the element is still not in view, or when a round did not move the scroller, the stage sends the client's call as it is (a script scroll), and logs it.",
+  "The wheel point.",
+  "A point over the visible part of the scroller is a wheel point only when all of these are true (the stage's own read):",
+  "The element under the point, and each ancestor of it up to the scroller, is not an `input`, `select`, `textarea`, contenteditable, `canvas`, `embed`, `object`, `video`, `audio` or `iframe`.",
+  "No element on that chain has a wheel listener (`wheel`, `mousewheel`) that is not passive (`DOMDebugger.getEventListeners`).",
+  "The listeners of the window and of the document do not count.",
+  "The element under the point scrolls the target scroller.",
+  "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller.",
+  "When no point passes, the stage sends the client's call as it is.",
+  "An element in a cross-origin frame: the frame's session sends the call.",
+  "The stage reads the box there, and it sends the notches on the top page's session at a point over the frame.",
+  "A retry's script scroll (the retry scroll recognizer, below) passes in the first build, and the stage counts it.",
+  "The Mac (with the stage on).",
+  "Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
+  "Files:",
+  "`DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser).",
+  "The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names.",
+  "It turns the interception on only for its click, when the client has it off, and turns it off after the click.",
+  "A `Page.fileChooserOpened` of the stage's own interception does not go to a client.",
+  "When the click opens no chooser in 2 s, when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.",
+  "The recognizers.",
+  "A utility call is a `Runtime.callFunctionOn` of Playwright's utility script, `(utilityScript, ...args) => utilityScript.evaluate(...args)`.",
+  "Its arguments are, in this order: the utility script, two flags, the text of Playwright's function (the `value` of the fourth argument), the count of arguments, Playwright's serialized argument, and then the handles.",
+  "In the serialized argument, a string, a number or a boolean is itself, `undefined` and `null` are `{\"v\": ...}`, a handle is `{\"h\": <index into the handles>}`, an array is `{\"a\": [...]}`, and an object is `{\"o\": [{\"k\": <key>, \"v\": <value>}]}`.",
+  "A recognizer matches the whole text of the function with its pattern (a JavaScript regular expression), as `PLAYWRIGHT_FOCUS` does:",
+  "| Recognizer | The pattern of the function's text | What the stage reads | What the stage does |",
+  "| hit-target check | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.setupHitTargetInterceptor\\([^)]*\\)\\s*$` | `actionType`, `hitPoint`, the node, and the answer of the setup (a string is a miss of Playwright's first check) | for `hover`, the samples of the path outside the target before the setup; after a miss, the recovery |",
+  "| the check's stop | `^\\(([A-Za-z_$][\\w$]*)\\)\\s*=>\\s*\\1\\.stop\\(\\)\\s*$`, with the handle that a hit-target setup of the tab returned as its first handle | its answer (`\"done\"`, or a miss at the first event) | after a miss, the recovery at the next setup |",
+  "| focus | `PLAYWRIGHT_FOCUS`: `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.focusNode\\([^)]*\\)\\s*$` | the node | the focus click |",
+  "| fill | `^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.fill\\(node,\\s*[\\w$]+\\);?\\s*\\}\\s*$` | the node | the focus click |",
+  "| select text | `^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.selectText\\(node\\);?\\s*\\}\\s*$` | the node | on an `input` or a `textarea`, a click and the select-all chord |",
+  "| retry scroll | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\bnode\\.scrollIntoView\\(\\{\\s*\\.\\.\\.[\\w$]+,\\s*behavior:\\s*\"instant\"\\s*\\}\\);[\\s\\S]*\\}\\s*$` | the node | nothing in the first build: the call passes, and the stage counts it |",
+  "| blur | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.blurNode\\([^)]*\\)\\s*$` | the node | nothing: the call passes, and the stage counts it |",
+  "| select option | `^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.selectOptions\\(node,\\s*[\\w$]+\\);?\\s*\\}\\s*$` | the node | nothing: the call passes, and the stage counts it |",
+  "| set files | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.setInputFiles\\([^)]*\\)\\s*$` | the node | nothing: the call passes, and the stage counts it |",
+  "A text that only contains one of these names, for example in a client's own function, does not match.",
+  "The vectors' `recognizers` hold the texts of Playwright 1.64.1, 1.65.0 and 1.66.0-alpha-2026-11-09 (the `playwright-core` of `@playwright/mcp` 0.0.85).",
+  "A test pins them.",
+  "A Playwright version with other texts matches no recognizer, and its calls pass unchanged;",
+  "a release adds its texts to the vectors.",
+  "A call that no recognizer matches passes unchanged, and the stage counts it.",
+  "No client's action fails because of it.",
+  "The stage never answers a utility call itself and never changes its arguments.",
+  "It only puts its own input before the call.",
+  "`locator.drop()` and `dispatchEvent()` run scripts of Playwright's in the page's main world, and they pass as any call.",
+  "The hit-target check and its misses.",
+  "The miss watch.",
+  "The stage reads the answer of each hit-target setup (a string is a miss of Playwright's first check) and of each stop (`\"done\"`, or a miss at the first event).",
+  "A miss marks the tab.",
+  "The recovery at the next setup.",
+  "Before the stage sends the next setup of a marked tab, it reads the element at the hit point, in Playwright's utility world on the node of the setup.",
+  "When that element is not the target or inside it, the stage takes its highest ancestor that does not hold the target (for example the root of a menu, which holds the trigger and the panel).",
+  "It moves the pointer out of both boxes, on the side away from the target, to a point 15 px outside.",
+  "It waits two frames, and it reads the box of the ancestor again.",
+  "Then it sends the setup.",
+  "The way around.",
+  "The next path to the target goes around that box: when the straight way crosses the box (10 px wider on each side), the path goes through the corner of the wider box that gives the shortest way, as two paths.",
+  "At most two recoveries in one action: the setups of one node with no setup of another node between them.",
+  "After them, the stage sends the rest of the action's input as Playwright sends it, with only the timestamps and the rate above, and counts it.",
+  "The frame mapping.",
+  "Playwright gives the hit point of a frame's element in the frame's own points, and it sends the input on the top page's session, in the top page's points.",
+  "So the stage maps a hit point by the frame of the node of the call, on every session:",
+  "A same-origin frame: one call in Playwright's utility world on the node's own handle gives the node's box in the top page's points.",
+  "For each frame level up to the top page, it adds the box of the frame element plus its border and padding (the sum of Playwright's `_checkFrameIsHitTarget`).",
+  "A cross-origin frame (a child session): the stage finds the frame's owner on the parent's session (`DOM.getFrameOwner` with the frame's id) and reads its content box (`DOM.getContentQuads`), level by level.",
+  "Within a level that is same-origin, rule 1 applies.",
+  "The top page's point is the hit point plus the sum, and the target's box is the node's box plus the sum.",
+  "When a read fails or reaches its limit, or when a frame has a transform (Playwright then gives no hit point), the stage plays no path before the setup, and the hover goes the naive way (a retry of Playwright's).",
+  "The stage counts it.",
+  "The script calls (the answer Q3 a).",
+  "In the first build these calls pass, and the stage counts them:",
+  "`selectOption`, until a probe shows that the popup of a select takes CDP keys;",
+  "the `fill` of a `date`, `time`, `datetime-local`, `month`, `week`, `color` or `range` input (a script sets the value);",
+  "`setInputFiles` with buffers, `locator.drop`, `dispatchEvent` and `blur`;",
+  "`focus` on an element that is not a text field, and `selectText` on an element that is not an `input` or a `textarea`.",
+  "The page sees the script's events (`isTrusted` false), as with Playwright's own input.",
+  "A later task adds the translations of Q3 a, and it changes this part first: a select gets a click, the arrow keys and Enter;",
+  "a date input gets a click and typed digits;",
+  "files from buffers get a click on the input, with the files in the scope's own folder.",
+  "The cases of no change.",
+  "The stage sends a call as the client sent it, in the order of the gate, and counts it, in these cases.",
+  "An input call then gets the stage's timestamp.",
+  "a call of a kind that this part does not name (for example `Input.synthesizeTapGesture`, or `Input.dispatchTouchEvent` of a client that turned on touch itself);",
+  "a utility call that no recognizer matches;",
+  "a text that the typing rule refuses (the answer Q2 a);",
+  "a script call that a person cannot make (the answer Q3 a);",
+  "a wheel or a scroll on the Mac, until the Mac's wheel model exists;",
+  "a drag event of a drag that the stage did not start;",
+  "a read that fails or reaches its limit.",
+  "The log and the counts.",
+  "No log line and no count of the stage holds a point, a key or a text (C10's log rule).",
+  "The stage counts each case of no change and each end of a plan (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_MOVES_IN_FLIGHT`, `STAGE_ACTION_MAX_MS`), for the harness (board ab-t30.2).",
+  "The time of a client's action.",
+  "A translated pointer action ends in about 2.5 s at most, plus the activation step and a scroll of up to `STAGE_SCROLL_ROUNDS` rounds.",
+  "That is inside Playwright's default action timeout of 30 s, and the limits of a key run keep a key run inside it too.",
+  "The default test timeout of `@playwright/test` is 30 s for a whole test, and the stage's time adds up over the actions of a test.",
+  "So a client that runs `@playwright/test` against agent mode must raise its test timeout (for example to 120 s).",
+  "The stage cannot see the timeout of a test.",
+  "The Playwright MCP inside the service gets an action timeout of 30 s (the MCP inside the service, below).",
+  "The constants (first values; the `constants` of the vectors):",
+  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`.",
+  "The vectors (`test/vectors/stage.json`) have one or more vectors for each row of the input design's table of every input path (its section 5.1).",
+  "Each vector gives the client calls in, the events out and the order of the answers, with a seed and a fake clock.",
+  "An event out has its method, its type and its key fields, and its time as a range.",
+  "The bounds of each range come from the first values above, and they hold for every seed.",
+  "The stage's tests (with a fake bridge and a fake clock) and the tests of this file read the same vectors.",
+];
+
+test("C11's part on the input stage holds exactly its sentences, after the pointer at an activation (the input design's section 12.1, point 1)", () => {
+  const p = stagePart();
+  for (const s of STAGE_ITEMS) assert.ok(says(p, s), `C11 says: ${s}`);
+  assert.equal(clean(p), STAGE_ITEMS.join(" "), "the part holds no other text");
+  const at = C11.indexOf(`**${STAGE_HEADING}`);
+  assert.ok(C11.indexOf("- The pointer at an activation (board ab-v16.70;") < at && at < C11.indexOf("**Permissions and content settings.**"), "the part comes after \"One window per page\", whose last bullet is the pointer at an activation");
+  assert.equal(C11.lastIndexOf("\n**", at - 2), C11.indexOf("\n**One window per page (board ab-v16.28).**"), "the part before it is \"One window per page\"");
+});
+
+// The changed rules of section 12.1 in the other parts of C11 (points 2, 3, 4, 7 and 8; point 5, the Mac, is in the part).
+const CHANGED: Record<string, string[]> = {
+  "One window per page (board ab-v16.28).": [
+    "With the stage on (the input stage, below), on Linux with one window per page, the first move of a translated pointer action is an input that starts an action too.",
+    "So the activation comes before the path, not only before the press, as a person brings a window forward before the hand moves in it.",
+    "A translated pointer action is a path that the stage sends for a client's call, with its press and its release: a move, a click, a hover, a drag, the stage's own focus click, or the way to a wheel point.",
+    "The activation decides, as for a press, whether the page comes forward.",
+    "The stage's own focus click is an input that starts an action.",
+    "With the stage on, a client's `Page.handleJavaScriptDialog` goes at once too: it never waits behind that input (the input stage, below).",
+    "With the stage on (the input stage, below), the events that the stage sent set it, not the client's points.",
+    "With the stage on (the input stage, below), the catch-up is the stage's path.",
+    "After an X record or a cover mark, the stage's next path starts at the recorded point.",
+    "The catch-up's own rules (the thresholds of 50 px and 2 px, the samples of 16 ms, `CATCH_UP_MAX_UNANSWERED`) give way to the stage's rules: each path starts at the page's last point, at the rate of a device, within the bound `STAGE_MOVES_IN_FLIGHT`.",
+  ],
+  "Refusals.": [
+    "The input stage (above) adds no refusal (the operator's answer Q3 a, board item ab-0z5): a call that a person cannot make passes, or it goes as a person's input that gives the same result.",
+  ],
+  "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
+    "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",
+  ],
+};
+
+test("C11 states the changed rules of the input stage in their parts: the window before the path, the dialog's answer, the last point and the catch-up, no new refusal, the MCP's action timeout", () => {
+  for (const [heading, list] of Object.entries(CHANGED)) sayAll(partOr(heading), list);
+  const win = flat(partOr("One window per page (board ab-v16.28)."));
+  const order = (a: string, b: string, c: string, what: string, text = win) => assert.ok(text.indexOf(flat(a)) >= 0 && text.indexOf(flat(a)) < text.indexOf(flat(b)) && text.indexOf(flat(b)) < text.indexOf(flat(c)), what);
+  order("3. It sends the input (`debugger.sendCommand`).", CHANGED["One window per page (board ab-v16.28)."][0], "- The order and the limit.", "point 2: in the bullet \"The window comes forward for input\", after the activation's steps");
+  order("The calls that the model answers go at once.", CHANGED["One window per page (board ab-v16.28)."][5], "When an activation does not end in 2 s", "point 7: in the bullet \"The order and the limit\"");
+  order("a child session's pointer input and touch input make it unknown.", CHANGED["One window per page (board ab-v16.28)."][6], "The pointer's place `at`, from the daemon's answers", "point 3: each page's last point, in \"What the relay keeps\"");
+  order("A step and a catch-up never overlap on one page.", CHANGED["One window per page (board ab-v16.28)."][7], "- The geometry read:", "point 3: the catch-up is the stage's path, at the end of the catch-up's bullet");
+  order("A rule applies on every session (the root, a browser session, a page session) unless it names one.", CHANGED["Refusals."][0], "A new context (board ab-jzg Q1: refuse).", "point 4: in the lead of the refusals", flat(partOr("Refusals.")));
+  assert.ok(!says(C11, "adds a refusal") && !/\bno refusal of its own\b/.test(C11), "point 4: no refusal of the stage anywhere");
+  // Point 5 and point 7 in the part itself.
+  sayAll(stagePart(), [
+    "The Mac (with the stage on). Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
+    "A client's `Page.handleJavaScriptDialog` never waits. With the stage on, the model sends it to Chrome at once, before the tab's gate and before any step of the stage, of an activation or of a world lookup.",
+    "Each read of the stage waits at most `GEOMETRY_WAIT_MS` (200 ms).",
+    "Each wait for an answer of the stage's own event has the limit `STAGE_EVENT_WAIT_MS = 2000`, counted from the oldest event of the plan that has no answer.",
+  ]);
+});
+
+test("C11's MCP inside the service changes by one sentence only (the input design's section 12.1, point 8)", () => {
+  const mcp = partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2).");
+  const bullets = mcp.split("\n- ").slice(1).map((b) => flat(b).trim());
+  assert.equal(bullets.length, 8, "the seven bullets of stage 0 and one new bullet");
+  assert.equal(bullets[2], flat(CHANGED["The MCP inside the service (from stage 1d; the self-contained design, section 8.2)."][0]), "the new bullet follows the configuration's bullet");
+  assert.equal(flat(mcp).split("timeouts.action").length, 2, "the MCP's part names the action timeout once");
+  // The other parts of the MCP keep their text: no transport, no admission and no configuration file changes (the existing tests assert them).
+  for (const h of ["The MCP path (from stage 1d;", "The admission of the MCP path (from stage 1d;", "How a session gets the MCP (from stage 2;"]) assert.ok(!partOr(h).includes("timeouts"), `${h}: no change`);
+});
+
+// The vectors.
+const sp = (cell: string) => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+function stageTable() {
+  const lines = C11.split("\n");
+  const at = lines.findIndex((l) => l.trim() === "| Recognizer | The pattern of the function's text | What the stage reads | What the stage does |");
+  assert.ok(at >= 0, "C11's table of the recognizers");
+  const rows = new Map<string, string[]>();
+  for (const l of lines.slice(at + 2)) {
+    const t = l.trim();
+    if (!t.startsWith("| ")) break;
+    const cells = t.slice(2, -2).split(" | ").map((c) => c.trim());
+    rows.set(cells[0], cells.slice(1));
+  }
+  return rows;
+}
+function designRows(): string[] {
+  const lines = DESIGN.split("\n");
+  const at = lines.findIndex((l) => l.startsWith("| Playwright call | CDP that the model sees |"));
+  assert.ok(at >= 0, "the input design's table of every input path (section 5.1)");
+  const rows: string[] = [];
+  for (const l of lines.slice(at + 2)) { if (!l.startsWith("| ")) break; rows.push(l.slice(2).split(" | ")[0].trim()); }
+  return rows;
+}
+
+test("the vectors' constants are C11's constants and the input design's (section 12.1, point 1), and its first values are C11's", () => {
+  const V = vectorsOrFail();
+  const design = DESIGN.slice(DESIGN.indexOf("### 12.1"), DESIGN.indexOf("### 12.2"));
+  const named = [...new Set([...design.matchAll(/`(STAGE_[A-Z_]+)/g)].map((m) => m[1]))];
+  assert.deepEqual(Object.keys(V.constants).sort(), named.sort(), "the constants of the design's section 12.1");
+  const p = stagePart();
+  for (const [name, v] of Object.entries(V.constants) as [string, any][]) {
+    if (Array.isArray(v)) {
+      assert.ok(says(p, `\`${name}\` = ${v[0]} to ${v[1]}`) && says(design, `\`${name}\` = ${v[0]} to ${v[1]}`), `${name} = ${v[0]} to ${v[1]}`);
+    } else {
+      assert.ok(says(p, `\`${name} = ${v}\``) && says(design, `\`${name} = ${v}\``), `\`${name} = ${v}\``);
+    }
+  }
+  assert.ok(says(p, "The constants (first values; the `constants` of the vectors):"), "the part names the vectors' constants");
+  assert.equal(V.constants.STAGE_MOVES_IN_FLIGHT, 8);
+  assert.ok(V.constants.STAGE_ACTION_MAX_MS < 30000, "a translated action ends inside Playwright's default action timeout of 30 s");
+  // Each first value of the vectors is a phrase of C11's part.
+  const F = V.firstValues;
+  const r = (k: string) => `${F[k][0]} to ${F[k][1]}`;
+  const phrases: Record<string, string> = {
+    pathMs: `Its time is ${r("pathMs")} ms (Fitts's law).`,
+    longPathMs: `so its time is at most ${F.longPathMs[1]} ms.`,
+    longPathPx: `A move of more than ${F.longPathPx} px can add an overshoot leg`,
+    maxSpeedPxPerMs: `at a speed of at most ${F.maxSpeedPxPerMs} px/ms.`,
+    shortMovePx: `at most ${F.shortMovePx} px from the page's last point: samples of the client's line`,
+    shortSpeedPxPerMs: `Their speed is ${r("shortSpeedPxPerMs")} px/ms`,
+    pauseMs: `The pause before a press is ${r("pauseMs")} ms.`,
+    holdMs: `The press has \`force\` 0.5 and a hold of ${r("holdMs")} ms.`,
+    dblGapMs: `from the first release to the second press, is ${r("dblGapMs")} ms.`,
+    keyHoldMs: `The hold of a key is ${r("keyHoldMs")} ms.`,
+    shiftBeforeMs: `A Shift \`rawKeyDown\` comes ${r("shiftBeforeMs")} ms before a shifted character`,
+    shiftAfterMs: `the release of Shift comes ${r("shiftAfterMs")} ms after the release of the last key that it holds.`,
+    chordBeforeMs: `In a chord, each modifier comes ${r("chordBeforeMs")} ms before the key`,
+    chordReleaseGapMs: `the releases come ${r("chordReleaseGapMs")} ms apart, in reverse order.`,
+    modifierAfterMs: `holds the modifier's \`keyUp\` until ${r("modifierAfterMs")} ms after the mouse release`,
+    notchGapMs: `the gaps between notches are ${r("notchGapMs")} ms.`,
+    scrollWaitMs: `It waits for the smooth scroll to end (${F.scrollWaitMs} ms, a first value)`,
+    dragWaitMs: `The stage first waits ${r("dragWaitMs")} ms after the press, as a person does.`,
+    fastKeyMs: `the plan at the fast end of the person's spread (${r("fastKeyMs")} ms a key)`,
+    spreadSd: `a standard deviation of 1/${1 / F.spreadSd} of the target's smaller side, at most 1/${1 / F.spreadMax} of that side.`,
+  };
+  assert.deepEqual(Object.keys(F).sort(), [...Object.keys(phrases), "spreadMax"].sort(), "each first value has its phrase");
+  for (const [k, s] of Object.entries(phrases)) assert.ok(says(p, s), `${k}: C11 says ${s}`);
+});
+
+test("the vectors' recognizers are C11's table: each pattern matches its Playwright texts of the three versions, and no client's function or other text", () => {
+  const V = vectorsOrFail();
+  const rows = stageTable();
+  assert.deepEqual([...rows.keys()].sort(), V.recognizers.map((x: any) => x.name).sort(), "the rows of C11's table");
+  assert.ok(says(stagePart(), "The vectors' `recognizers` hold the texts of Playwright 1.64.1, 1.65.0 and 1.66.0-alpha-2026-11-09"), "C11 names the three versions");
+  const all = V.recognizers.map((x: any) => ({ ...x, re: new RegExp(x.pattern) }));
+  for (const x of all) {
+    const pattern = sp(rows.get(x.name)![0]).find((c) => c.startsWith("^"));
+    assert.equal(pattern, x.pattern, `${x.name}: C11's pattern is the vectors' pattern`);
+    assert.deepEqual(Object.keys(x.texts).sort(), ["1.64.1", "1.65.0", "1.66.0-alpha-2026-11-09"], `${x.name}: the three versions`);
+    for (const [ver, t] of Object.entries(x.texts) as [string, string][]) {
+      assert.ok(x.re.test(t), `${x.name}: matches the text of ${ver}`);
+      for (const o of all) if (o !== x) assert.ok(!o.re.test(t), `${x.name}'s text of ${ver} matches no other recognizer (${o.name})`);
+    }
+    assert.ok(x.notTexts.length > 0, `${x.name}: a client's function that only contains the name`);
+    for (const t of x.notTexts) for (const o of all) assert.ok(!o.re.test(t), `${x.name}: ${JSON.stringify(t)} matches no recognizer (${o.name})`);
+  }
+  // The focus recognizer is the relay's PLAYWRIGHT_FOCUS of today (C11, "Playwright's focus call").
+  assert.equal(all.find((x: any) => x.name === "focus").pattern, PLAYWRIGHT_FOCUS.source, "the focus pattern is PLAYWRIGHT_FOCUS");
+  assert.ok(sp(rows.get("focus")![0]).includes("PLAYWRIGHT_FOCUS"), "C11's row names PLAYWRIGHT_FOCUS");
+  assert.ok(says(stagePart(), `\`${V.utility.functionDeclaration}\``), "C11 names the utility script's function");
+});
+
+// The vectors' reference rules (C11's part on the input stage).
+const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2 && x.every(isNum) && x[0] <= x[1];
+const within = (r: [number, number], b: [number, number]) => r[0] >= b[0] && r[1] <= b[1];
+const mid = (v: any) => (isNum(v) ? v : (v[0] + v[1]) / 2);
+const whole = (v: any) => (isNum(v) ? Number.isInteger(v) : isRange(v) && v.every(Number.isInteger));
+const STAGE_SENDS = ["Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText", "Input.dispatchDragEvent", "Page.setInterceptFileChooserDialog", "DOM.setFileInputFiles"];
+const TEXT_TYPES = ["text", "search", "email", "url", "tel", "password", "number", undefined];
+const isTextField = (n: any) => !!n && ((n.tag === "input" && TEXT_TYPES.includes(n.type)) || n.tag === "textarea" || n.contenteditable === true);
+const typesInto = (n: any) => !!n && ((n.tag === "input" && TEXT_TYPES.includes(n.type)) || n.tag === "textarea");
+// Condition 3 of the spread point: an element whose effect does not depend on the point.
+const spreads = (n: any) => !!n && (["button", "label", "summary"].includes(n.tag) || (n.tag === "a" && n.href) || (n.tag === "input" && ["button", "submit", "reset", "checkbox", "radio"].includes(n.type)) || ["button", "link", "checkbox", "radio", "tab", "menuitem", "switch"].includes(n.role));
+// Playwright's serialized argument (C11, the recognizers): its object's key, for [injected, node, { ... }].
+const argOf = (params: any, k: string) => params.arguments?.[5]?.value?.a?.[2]?.o?.find((e: any) => e.k === k)?.v;
+const nodeOf = (params: any) => params.arguments?.at(-1)?.objectId;
+const recognizerOf = (V: any, c: any) => {
+  if (c.method !== "Runtime.callFunctionOn" || c.params.functionDeclaration !== V.utility.functionDeclaration) return null;
+  const t = c.params.arguments?.[3]?.value;
+  const hits = V.recognizers.filter((x: any) => new RegExp(x.pattern).test(t));
+  assert.ok(hits.length <= 1, `at most one recognizer for ${JSON.stringify(t).slice(0, 60)}`);
+  return hits[0]?.name ?? null;
+};
+const ref = (s: string) => /^(start|in:\d+|out:\d+)$/.test(s);
+const outIndex = (s: string) => Number(s.slice(4));
+const pointsOf = (o: any) => [o.path?.from, o.path?.to, o.line?.from, o.line?.to, o.fields && "x" in o.fields ? o.fields : null].filter(Boolean);
+
+test("every row of the input design's table of every input path has a vector, and each other vector names a rule of C11's part", () => {
+  const V = vectorsOrFail();
+  const rows = designRows();
+  assert.equal(rows.length, 36, "the 36 rows of section 5.1");
+  const named = new Set(V.vectors.filter((v: any) => v.row !== undefined).map((v: any) => v.row));
+  for (const r of rows) assert.ok(named.has(r), `a vector for the row ${r}`);
+  for (const r of named) assert.ok(rows.includes(r as string), `${r}: a row of the design`);
+  const p = stagePart();
+  for (const v of V.vectors.filter((x: any) => x.row === undefined)) assert.ok(typeof v.rule === "string" && p.includes(`- ${v.rule}`), `${v.id}: the rule ${v.rule} is a bullet of C11's part`);
+  assert.ok(says(p, "The vectors:") && says(p, "`test/vectors/stage.json`.") && V.contract.includes("docs/contracts/C11.md") && V.contract.includes("The input stage (board ab-t30.6)"), "C11 and the vectors name each other");
+});
+
+test("each stage vector has the shape of its format: the client calls in, the events out, the answers", () => {
+  const V = vectorsOrFail();
+  assert.deepEqual(Object.keys(V).sort(), ["constants", "contract", "firstValues", "format", "recognizers", "utility", "vectors"]);
+  const ids = new Set<string>();
+  for (const v of V.vectors) {
+    const w = `${v.id}`;
+    assert.ok(!ids.has(v.id), `${w}: a unique id`); ids.add(v.id);
+    for (const k of Object.keys(v)) assert.ok(["id", "row", "rule", "note", "platform", "seed", "clock", "page", "chrome", "in", "out", "answers"].includes(k), `${w}: a known field ${k}`);
+    assert.ok((v.row === undefined) !== (v.rule === undefined), `${w}: a row or a rule`);
+    assert.ok(["linux", "mac"].includes(v.platform) && Number.isInteger(v.seed) && v.clock === 0 && typeof v.note === "string", `${w}: platform, seed, clock, note`);
+    assert.ok(isObj(v.page) && isObj(v.page.viewport) && isObj(v.page.nodes), `${w}: the page`);
+    v.in.forEach((c: any, i: number) => {
+      assert.equal(c.id, i + 1, `${w}: the calls in order`);
+      assert.equal([c.at, c.after, c.afterEvent].filter((x) => x !== undefined).length, 1, `${w} ${c.id}: one of at, after and afterEvent`);
+      if (c.after !== undefined) assert.ok(Number.isInteger(c.after) && c.after < c.id, `${w} ${c.id}: after an earlier call`);
+      for (const k of Object.keys(c)) assert.ok(["id", "at", "after", "afterEvent", "waitMs", "session", "method", "params"].includes(k), `${w} ${c.id}: a known field ${k}`);
+      assert.ok(typeof c.method === "string" && isObj(c.params) && (c.session === undefined || c.session === "child"), `${w} ${c.id}: method, params, session`);
+      if (c.method === "Runtime.callFunctionOn" && c.params.functionDeclaration === V.utility.functionDeclaration) assert.equal(typeof c.params.arguments[3].value, "string", `${w} ${c.id}: the function's text`);
+    });
+    const inIds = new Set(v.in.map((c: any) => c.id));
+    v.out.forEach((o: any, k: number) => {
+      const at = `${w} out:${k}`;
+      for (const f of Object.keys(o)) assert.ok(["method", "type", "for", "from", "at", "rule", "fields", "pass", "session", "path", "line", "gapMs", "durMs", "durRule", "count", "notches", "typing", "holdMs", "shift"].includes(f), `${at}: a known field ${f}`);
+      assert.ok(o.pass === true ? o.method === undefined : STAGE_SENDS.includes(o.method), `${at}: a method that the stage sends, or a pass`);
+      assert.ok(o.for === null || inIds.has(o.for), `${at}: for a client call, or null`);
+      assert.ok(ref(o.from) && (!o.from.startsWith("in:") || inIds.has(Number(o.from.slice(3)))) && (!o.from.startsWith("out:") || outIndex(o.from) < k), `${at}: from an earlier time`);
+      assert.ok(isRange(o.at), `${at}: at is a range`);
+      if (o.rule !== undefined) assert.ok(isRange(V.firstValues[o.rule]) && within(o.at, V.firstValues[o.rule]), `${at}: at within the first value ${o.rule}`);
+    });
+    for (const a of v.answers) {
+      for (const f of Object.keys(a)) assert.ok(["id", "after", "result", "mayBeEarly", "waits", "error", "from", "at", "rule"].includes(f), `${w} answer ${a.id}: a known field ${f}`);
+      assert.ok(a.after === "none" || (/^out:\d+$/.test(a.after) && outIndex(a.after) < v.out.length), `${w} answer ${a.id}: after an item or none`);
+    }
+  }
+});
+
+test("each stage vector's events follow C11's rules: paths, short moves, presses, the spread point, wheel notches, typed keys and the Mac's pass", () => {
+  const V = vectorsOrFail();
+  const K = V.constants, F = V.firstValues;
+  for (const v of V.vectors) {
+    const w = v.id, linux = v.platform === "linux";
+    const byId = new Map(v.in.map((c: any) => [c.id, c]));
+    let lastPointer: any = null;
+    let residual = 0, asked = 0, given = 0;
+    v.out.forEach((o: any, k: number) => {
+      const at = `${w} out:${k}`;
+      if (linux) for (const pt of pointsOf(o)) assert.ok(whole(pt.x) && whole(pt.y), `${at}: whole px on Linux`);
+      if (o.path) {
+        assert.equal(o.gapMs, K.STAGE_MOVE_MS, `${at}: one move each STAGE_MOVE_MS`);
+        const d = Math.hypot(mid(o.path.to.x) - o.path.from.x, mid(o.path.to.y) - o.path.from.y);
+        assert.ok(d > F.shortMovePx, `${at}: a path is longer than a short move`);
+        const rule = d > F.longPathPx ? "longPathMs" : "pathMs";
+        if (o.path.part === undefined) {
+          assert.equal(o.durRule, rule, `${at}: the path's time by its length`);
+          assert.ok(within(o.durMs, F[rule]), `${at}: its time within ${rule}`);
+          assert.ok(o.count[0] >= Math.ceil(d / (F.maxSpeedPxPerMs * o.gapMs)), `${at}: enough moves for a speed of at most ${F.maxSpeedPxPerMs} px/ms`);
+        } else {
+          assert.deepEqual(o.path.totalMs, F[rule], `${at}: the whole path's time by its length`);
+          assert.ok(within(o.durMs, [0, F[rule][1]]), `${at}: a part within the whole path's time`);
+        }
+        assert.ok(isRange(o.count) && o.count[0] >= 1 && o.count[1] <= Math.floor(o.durMs[1] / o.gapMs) + 1, `${at}: the count of moves fits the time`);
+        if (o.path.part !== "until dragIntercepted") lastPointer = o.path.to;
+      }
+      if (o.line) {
+        const d = Math.hypot(o.line.to.x - o.line.from.x, o.line.to.y - o.line.from.y);
+        assert.ok(d > 0 && d <= F.shortMovePx, `${at}: a short move is at most ${F.shortMovePx} px`);
+        assert.equal(o.gapMs, K.STAGE_MOVE_MS, `${at}: the rate of a device`);
+        assert.ok(o.durMs[0] >= d / F.shortSpeedPxPerMs[1] && o.durMs[1] <= d / F.shortSpeedPxPerMs[0], `${at}: a speed of ${F.shortSpeedPxPerMs[0]} to ${F.shortSpeedPxPerMs[1]} px/ms`);
+        lastPointer = o.line.to;
+      }
+      if (o.method === "Input.dispatchMouseEvent" && o.type === "mousePressed") {
+        assert.equal(o.fields.force, 0.5, `${at}: force 0.5`);
+        if (lastPointer) assert.deepEqual({ x: o.fields.x, y: o.fields.y }, { x: lastPointer.x, y: lastPointer.y }, `${at}: the press is where the path ended`);
+        const c: any = byId.get(o.for);
+        if (c?.method === "Input.dispatchMouseEvent" && isRange(o.fields.x)) {
+          // The spread point: a locator click (a hit-target setup of the action mouse), clickCount 1, at the middle of an element of condition 3.
+          const setup = v.in.find((x: any) => recognizerOf(V, x) === "hit-target check");
+          assert.ok(setup && argOf(setup.params, "actionType") === "mouse" && o.fields.clickCount === 1, `${at}: the spread point only for a locator click with clickCount 1`);
+          const n = v.page.nodes[nodeOf(setup.params)], b = n.box, max = F.spreadMax * Math.min(b.width, b.height);
+          const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+          assert.ok(spreads(n), `${at}: condition 3`);
+          assert.ok(Math.abs(c.params.x - cx) <= 1 && Math.abs(c.params.y - cy) <= 1, `${at}: condition 2, the client's point is the middle`);
+          assert.ok(within(o.fields.x, [cx - max, cx + max]) && within(o.fields.y, [cy - max, cy + max]), `${at}: at most 1/4 of the smaller side from the middle`);
+        } else if (c?.method === "Input.dispatchMouseEvent") {
+          assert.deepEqual([o.fields.x, o.fields.y], [Math.round(c.params.x), Math.round(c.params.y)], `${at}: the client's point, rounded half up`);
+          assert.equal(o.fields.clickCount, c.params.clickCount, `${at}: the client's clickCount`);
+          assert.equal(o.fields.button, c.params.button, `${at}: the client's button`);
+        } else {
+          // A click of the stage's own (the focus click, the file input's click): inside the field.
+          const n = v.page.nodes[nodeOf(c.params) ?? c.params.objectId];
+          assert.ok(n && within(o.fields.x, [n.box.x, n.box.x + n.box.width]) && within(o.fields.y, [n.box.y, n.box.y + n.box.height]), `${at}: the stage's click is inside its element`);
+        }
+      }
+      if (o.method === "Input.dispatchMouseEvent" && o.type === "mouseReleased") {
+        const p = v.out.slice(0, k).reverse().find((x: any) => x.type === "mousePressed");
+        assert.ok(p && p.fields.button === o.fields.button && o.fields.buttons === 0, `${at}: the release of the press before it`);
+        assert.deepEqual([o.fields.x, o.fields.y], [p.fields.x, p.fields.y], `${at}: at the press's point`);
+        assert.ok(o.rule === "holdMs" || o.from.startsWith("in:") || o.rule === undefined && within(o.at, [0, 1]), `${at}: the hold, or the client's later release, or at once at a dialog`);
+      }
+      if (o.method === "Input.dispatchMouseEvent" && o.type === "mouseWheel") {
+        assert.ok(linux, `${at}: no notch on the Mac`);
+        assert.deepEqual(o.gapMs, F.notchGapMs, `${at}: a person's gaps between notches`);
+        assert.equal(Math.abs(o.fields.deltaY) + Math.abs(o.fields.deltaX), K.STAGE_NOTCH_PX, `${at}: a notch of STAGE_NOTCH_PX`);
+      }
+      if (o.typing !== undefined) {
+        const t: string = o.typing;
+        for (const ch of t) assert.ok(charKey(ch), `${at}: ${JSON.stringify(ch)} has a US key (typing rule 2)`);
+        assert.ok(!/[\n\t]/.test(t), `${at}: no line feed and no tab (typing rule 2)`);
+        assert.ok(t.length * F.fastKeyMs[1] <= K.STAGE_TYPE_MAX_MS, `${at}: the plan fits in STAGE_TYPE_MAX_MS (typing rule 3)`);
+        const field = v.page.nodes[v.page.focused] ?? v.page.nodes[nodeOf(v.in.find((c: any) => recognizerOf(V, c) === "fill")?.params ?? {})];
+        assert.ok(typesInto(field), `${at}: typed keys only into an input of a text type or a textarea (typing rule 1)`);
+        assert.deepEqual(o.shift, [...new Set([...t].filter((ch) => charKey(ch)!.modifiers !== 0))], `${at}: a Shift for each shifted character`);
+        assert.deepEqual(o.holdMs, F.keyHoldMs, `${at}: the holds of keys`);
+      }
+      if (o.method === "Input.dispatchKeyEvent" && o.type === "keyDown") {
+        const ch = charKey(o.fields.key);
+        if (ch && ch.modifiers !== 0) {
+          const s = v.out[k - 1];
+          assert.ok(s?.type === "rawKeyDown" && s.fields.key === "Shift" && o.from === `out:${k - 1}` && o.rule === "shiftBeforeMs" && o.fields.modifiers === 8, `${at}: a Shift press before a shifted character`);
+        }
+      }
+      // A pass is the client's own call: only where C11 names a case of no change, a call that the stage does not take, or a recognizer that passes.
+      if (o.pass) {
+        const c: any = byId.get(o.for);
+        assert.ok(c, `${at}: the pass of a client call`);
+        if (c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseWheel") assert.ok(!linux, `${at}: a wheel passes only on the Mac`);
+        if (c.method === "Input.insertText") {
+          const t: string = c.params.text;
+          const field = v.page.nodes[v.page.focused];
+          assert.ok(/[\n\t]/.test(t) || [...t].some((ch) => !charKey(ch)) || t.length * F.fastKeyMs[0] > K.STAGE_TYPE_MAX_MS || !typesInto(field), `${at}: an Input.insertText passes only when the typing rule refuses it`);
+        }
+        if (c.method === "DOM.scrollIntoViewIfNeeded") assert.ok(!linux, `${at}: a scroll into view passes only on the Mac or at its fallback`);
+      }
+    });
+    // The wheel: n = max(0, round((|delta| + r) / 120)) notches, r the residual in the call's direction; one notch when n is 0 and r >= 0.
+    for (const c of v.in.filter((x: any) => x.method === "Input.dispatchMouseEvent" && x.params.type === "mouseWheel")) {
+      const items = v.out.filter((o: any) => o.for === c.id);
+      if (!linux) { assert.ok(items.length === 1 && items[0].pass, `${w} ${c.id}: the Mac's wheel passes`); continue; }
+      const d = c.params.deltaY, sign = Math.sign(d), r = (asked - given) * sign;
+      let n = Math.max(0, Math.round((Math.abs(d) + r) / K.STAGE_NOTCH_PX));
+      if (n === 0 && r >= 0) n = 1;
+      asked += d; given += n * K.STAGE_NOTCH_PX * sign; residual = asked - given;
+      if (n === 0) assert.equal(items.length, 0, `${w} ${c.id}: no notch`);
+      else assert.ok(items.length === 1 && items[0].notches === n && items[0].fields.deltaY === sign * K.STAGE_NOTCH_PX, `${w} ${c.id}: ${n} notches`);
+      assert.ok(Math.abs(residual) < K.STAGE_NOTCH_PX, `${w} ${c.id}: the total within one notch`);
+    }
+    // DOM.scrollIntoViewIfNeeded on Linux: in view, {} with no event; else the notches that bring the middle to the middle.
+    for (const c of v.in.filter((x: any) => x.method === "DOM.scrollIntoViewIfNeeded")) {
+      const n = v.page.nodes[c.params.objectId], b = n.box, vp = v.page.viewport;
+      const axis = (lo: number, size: number, view: number, share: number) => (lo >= 0 && lo + size <= view) || Math.abs(lo + size / 2 - view / 2) <= (view * share) / 2;
+      const inView = axis(b.x, b.width, vp.width, 0.8) && axis(b.y, b.height, vp.height, 0.6);
+      const items = v.out.filter((o: any) => o.for === c.id);
+      const a = v.answers.find((x: any) => x.id === c.id);
+      if (!linux) continue;
+      if (inView) assert.ok(items.length === 0 && a.after === "none" && isObj(a.result) && Object.keys(a.result).length === 0, `${w} ${c.id}: in view: {} with no event`);
+      else {
+        const want = Math.round((b.y + b.height / 2 - vp.height / 2) / K.STAGE_NOTCH_PX);
+        assert.ok(items.some((o: any) => o.notches === Math.abs(want) && o.fields.deltaY === Math.sign(want) * K.STAGE_NOTCH_PX), `${w} ${c.id}: ${want} notches bring the middle to the middle`);
+        assert.ok(a.rule === "scrollWaitMs" && a.at[0] >= F.scrollWaitMs && isObj(a.result), `${w} ${c.id}: {} after the smooth scroll's wait`);
+      }
+    }
+    // The recognizers' effects: a hover's path before the setup, a focus click before the script focus of a text field.
+    for (const c of v.in) {
+      const name = recognizerOf(V, c);
+      const passK = v.out.findIndex((o: any) => o.pass && o.for === c.id);
+      const before = v.out.slice(0, passK);
+      if (name === "hit-target check" && argOf(c.params, "actionType") === "hover") {
+        const move = v.in.find((x: any) => x.id > c.id && x.method === "Input.dispatchMouseEvent" && x.params.type === "mouseMoved");
+        assert.ok(before.some((o: any) => o.path?.part === "outside" && o.for === move.id), `${w} ${c.id}: the hover's samples outside the target before the setup`);
+        assert.ok(v.out.slice(passK + 1).some((o: any) => o.path?.part === "inside" && o.for === move.id), `${w} ${c.id}: the rest of the path at Playwright's move`);
+      }
+      if (["focus", "fill", "select text"].includes(name)) {
+        const n = v.page.nodes[nodeOf(c.params)];
+        const clicks = before.filter((o: any) => o.for === c.id && o.type === "mousePressed");
+        assert.equal(clicks.length, isTextField(n) && !n.focused && name !== "select text" || (name === "select text" && typesInto(n) && !n.focused) ? 1 : 0, `${w} ${c.id}: a focus click only for a text field with no focus`);
+      }
+      if (["retry scroll", "blur", "select option", "set files", null].includes(name) && c.method === "Runtime.callFunctionOn") {
+        assert.ok(v.out.filter((o: any) => o.for === c.id).every((o: any) => o.pass), `${w} ${c.id}: the call passes`);
+      }
+    }
+  }
+});
+
+test("each stage vector's answers follow C11's rules: each call once, held until its events, an early answer only for a key release, a dialog's answer first", () => {
+  const V = vectorsOrFail();
+  for (const v of V.vectors) {
+    const w = v.id;
+    assert.deepEqual(v.answers.map((a: any) => a.id).sort((x: number, y: number) => x - y), v.in.map((c: any) => c.id), `${w}: each call gets one answer`);
+    const byId = new Map(v.in.map((c: any) => [c.id, c]));
+    let last = -1;
+    const seen = new Set<number>();
+    for (const a of v.answers) {
+      const c: any = byId.get(a.id);
+      const mine = v.out.map((o: any, k: number) => (o.for === a.id ? k : -1)).filter((k: number) => k >= 0);
+      if (a.after === "none") {
+        assert.ok(mine.length === 0, `${w} ${a.id}: an answer with no event only for a call with no event`);
+        assert.ok(isObj(a.result) || a.error === "the same", `${w} ${a.id}: the stage's own result, or the plan's error`);
+      } else {
+        const k = outIndex(a.after);
+        assert.equal(v.out[k].for, a.id, `${w} ${a.id}: after an item of its own plan`);
+        assert.equal(k, Math.max(...mine), `${w} ${a.id}: a held answer comes after the last event of its call`);
+        if (a.waits === undefined) { assert.ok(k >= last, `${w} ${a.id}: the answers in the order of their events`); last = k; }
+      }
+      if (a.mayBeEarly) assert.ok(c.method === "Input.dispatchKeyEvent" && c.params.type === "keyUp", `${w} ${a.id}: an early answer only for a key release`);
+      if (a.waits !== undefined) assert.ok(seen.has(a.waits) && byId.get(a.waits)?.method === "Page.handleJavaScriptDialog", `${w} ${a.id}: Chrome's answer after the client's dialog answer`);
+      if (a.error === "chrome") assert.ok(isObj(v.chrome?.errors?.[a.after]), `${w} ${a.id}: Chrome refused that event`);
+      if (a.error === "the same") assert.ok(v.answers.some((x: any) => x.error === "chrome" && seen.has(x.id)), `${w} ${a.id}: the same error as the refused event`);
+      seen.add(a.id);
+    }
+    // A client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate (the dialog rules).
+    for (const c of v.in.filter((x: any) => x.method === "Page.handleJavaScriptDialog")) {
+      const o = v.out.find((x: any) => x.pass && x.for === c.id);
+      assert.ok(o && o.from === `in:${c.id}` && o.at[1] === 0, `${w} ${c.id}: the dialog's answer goes at once`);
+      const opens = outIndex(v.chrome.dialog.opensAt);
+      for (const k of v.out.map((x: any, i: number) => i).filter((i: number) => i > opens && v.out[i].for !== c.id)) assert.ok(within(v.out[k].at, [0, 1]), `${w} out:${k}: after the dialog, the plan's client events go at once`);
+    }
+  }
 });
