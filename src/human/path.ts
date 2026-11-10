@@ -20,7 +20,7 @@
 // - The speed: at most 3.5 px/ms between two samples; a faster plan is stretched in time until it holds.
 
 import type { Person } from "./person.ts";
-import { chance, draw, uniform, type Random } from "./random.ts";
+import { boundsOf, chance, draw, uniform, type Random } from "./random.ts";
 
 export type Pt = { x: number; y: number };
 /** A sample of a plan: its point and its time in ms from the start of the path. */
@@ -80,10 +80,14 @@ export function drawShape(from: Pt, to: Pt, width: number, person: Person, rando
       if (n === 2) { const k = uniform(random, 0.2, 0.4); ends.push({ x: e0.x * k, y: e0.y * k }); }
     }
   }
-  const px = person.tremorPx * uniform(random, 0.8, 1.2), share = uniform(random, 0.6, 0.8);
+  // The tremor stays in the design's band (section 10.1: 0.3 to 1.2 px at 8 to 12 Hz; review-109 B1): the path's size
+  // around the person's, clamped to the band, and a second, smaller wave at another frequency of the same band.
+  const [pxLo, pxHi] = boundsOf(P.jitter.px), [hzLo, hzHi] = boundsOf(P.jitter.hz);
+  const px = Math.min(pxHi, Math.max(pxLo, person.tremorPx * uniform(random, 0.8, 1.2))), share = uniform(random, 0.6, 0.8);
+  const hz2 = hzLo + ((person.tremorHz - hzLo + uniform(random, 1.5, 2.5)) % (hzHi - hzLo));
   const waves = [
     { px: px * share, hz: person.tremorHz, phase: uniform(random, 0, 2 * Math.PI) },
-    { px: px * (1 - share), hz: person.tremorHz * uniform(random, 1.3, 1.6), phase: uniform(random, 0, 2 * Math.PI) },
+    { px: px * (1 - share), hz: hz2, phase: uniform(random, 0, 2 * Math.PI) },
   ];
   return { fittsMs: time, deviationPx, side, warp, overshoot, ends, backMs, waves };
 }

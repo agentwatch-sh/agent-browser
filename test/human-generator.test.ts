@@ -224,7 +224,11 @@ test("path rule the overshoot: only past 500 px, in about 30% of moves, 2% to 8%
 
 test("path rule the jitter: a tremor of 0.3 to 1.2 px across the path at 8 to 12 Hz, faded out at both ends", () => {
   for (const [i, [a, b]] of pairs(40, 10, 300, 700).entries()) {
-    const person = personFor(`j${i}`, 3, LINUX), t = buildTrajectory(a, b, drawShape(a, b, 24, person, seededRandom(i)), person);
+    const person = personFor(`j${i}`, 3, LINUX), shape = drawShape(a, b, 24, person, seededRandom(i)), t = buildTrajectory(a, b, shape, person);
+    // The shape's own values (review-109 B1): the two waves together 0.3 to 1.2 px, each wave at 8 to 12 Hz.
+    const total = shape.waves.reduce((s, w) => s + w.px, 0);
+    assert.ok(total >= 0.3 - 1e-9 && total <= 1.2 + 1e-9, `the tremor's size ${total}`);
+    for (const w of shape.waves) assert.ok(w.hz >= 8 && w.hz <= 12, `a wave at ${w.hz} Hz`);
     const D = dist(a, b), ux = (b.x - a.x) / D, uy = (b.y - a.y) / D;
     const off: number[] = [];
     for (const s of [...Array.from({ length: Math.floor(t.ms) + 1 }, (_, k) => k), t.ms]) {
@@ -233,14 +237,14 @@ test("path rule the jitter: a tremor of 0.3 to 1.2 px across the path at 8 to 12
       off.push(-dx * uy + dy * ux);
     }
     const amp = Math.max(...off.map(Math.abs));
-    assert.ok(amp >= 0.3 * 0.8 * 0.5 && amp <= 1.2 * 1.2 + 1e-9, `amplitude ${amp}`);
+    assert.ok(amp > 0 && amp <= 1.2 + 1e-9, `amplitude ${amp}`);
     assert.ok(Math.abs(off[0]) < 1e-9 && Math.abs(off.at(-1)!) < 1e-9, "none at the ends");
     // Its frequency: the zero crossings of the middle part (the main wave, with a smaller one on it).
     const mid = off.slice(Math.round(t.ms * 0.2), Math.round(t.ms * 0.8));
     let cross = 0;
     for (let k = 1; k < mid.length; k++) if (Math.sign(mid[k]) !== Math.sign(mid[k - 1]) && mid[k] !== 0) cross++;
     const hz = cross / 2 / (mid.length / 1000);
-    assert.ok(hz >= 6 && hz <= 17, `about ${hz.toFixed(1)} Hz (the person's ${person.tremorHz.toFixed(1)} Hz and a faster one)`);
+    assert.ok(hz >= 6 && hz <= 14, `about ${hz.toFixed(1)} Hz (the person's ${person.tremorHz.toFixed(1)} Hz and another of the band)`);
   }
 });
 
@@ -303,6 +307,9 @@ test("path rule the approach to a small target: the speed falls in the last part
     inside.push(s.slice(first).filter(inFrame).length);
   }
   assert.ok(quantile(edges, 0.9) <= 10, `the entry at the frame's edge: 90% within ${quantile(edges, 0.9)} px`);
+  // Design 10.1 says 8 to 20 samples inside; with its own first values (Fitts's time and the minimum-jerk slow-down) the
+  // median is about 24 and the 90% value about 46 (31 with no overshoot). This test holds the low end only; part B's
+  // recording sets the upper end (board ab-t30.13; review-109 B2).
   assert.ok(quantile(inside, 0.1) >= 8, `samples inside: 10% below ${quantile(inside, 0.1)}, median ${median(inside)}`);
 });
 

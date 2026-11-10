@@ -30,7 +30,7 @@ export type PlayerOptions = {
   clock?: Clock;
   /** The epoch time (ms) of the send: linuxStamp, macStamp, or a test's. */
   stamp?: () => number;
-  /** The input latency (ms), drawn for each event. */
+  /** The input latency (ms), drawn once for each plan. */
   latencyMs: readonly [number, number];
   /** Timestamps in whole ms (Linux). */
   wholeMs: boolean;
