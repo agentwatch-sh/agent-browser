@@ -156,7 +156,7 @@ try {
   // binary, so Chrome's module folder (and its extensions folder) is the copy's.
   const installer = new GoogleChromeTools({ tools, source: { ...GOOGLE_SOURCE, repo: repo.repo, keyFile: repo.keyFile, fingerprints: [repo.fingerprint] }, log: (l) => log(`installer: ${l}`) });
   const copy = await installer.ensure();
-  cpSync(CHROMIUM_TREE, join(copy.binary, ".."), { recursive: true, errorOnExist: true, force: false });
+  for (const e of readdirSync(CHROMIUM_TREE)) cpSync(join(CHROMIUM_TREE, e), join(copy.binary, "..", e), { recursive: true, force: true }); // over the stand-in resources.pak of the fixture
   check("the copy of Google Chrome 158.0.7100.1-1 in the temp tools folder holds the Chromium tree", existsSync(join(copy.binary, "..", "chromium")) && statSync(copy.binary).isFile());
   writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["app.localhost"], repo: "local/test" }), { mode: 0o600 });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
