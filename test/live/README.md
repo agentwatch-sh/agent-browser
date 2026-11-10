@@ -79,8 +79,8 @@ display whose next one (its stable part's) is reserved: `--display 89`, `146` or
 
 The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), `background-tabs/`
 (`check.ts`, `visibility.ts`, `override.ts`), `anti-detect/` (`run.ts`, `extra.ts`, `mac.ts
---dry-run`, whose `mac-standin.ts` is a child of it), `function-keys/check.ts` and `parity/probe.ts` on
-Linux.
+--dry-run`, whose `mac-standin.ts` is a child of it), `function-keys/check.ts`, `input-harness/run.ts` and
+`parity/probe.ts` on Linux.
 
 No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
@@ -114,3 +114,37 @@ CHROME_EXTENSION=/absolute/path/to/chrome-extension CASES=downloads DISPLAY_N=12
 
 Both harnesses use `harnessGuard` and check `reservedDisplay` before they start Chromium.
 The default check starts no Xvfb and uses no display.
+
+## Input harness
+
+`input-harness/run.ts` (board ab-t30.2) scores agent input against a reference input, gap by gap, by the
+table of section 13.3 of `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md`.
+It runs on its own Xvfb (display 169 by default) with its own Chromium on a temporary profile, under the
+harness guard. The page is the input research's recorder on `rec.localhost`, with its box on
+`box.localhost`. No other host is reachable.
+
+The scenarios:
+
+- `source`: the reference, real X input (XTEST) at 125 Hz, then the design's M1 paths as CDP moves in
+  four forms of the `timestamp`.
+- `agent-browser`: today's input of `src/input.ts`, through agent-browser's commands.
+- `playwright`: plain Playwright. It needs `playwright-core` in a scratch folder, never in `package.json`.
+  Without it, the run skips this scenario and says so.
+
+```sh
+S=<a scratch folder>; (cd $S && npm init -y && npm install --ignore-scripts playwright-core@1.65.0)
+flock <heavy.lock> timeout 1500 node test/live/input-harness/run.ts --out-dir $S/out --playwright $S
+node test/live/input-harness/run.ts --rescore $S/out/run-XXXXXX/results.json [--reference FILE]
+```
+
+The run writes `results.json` (the page's records, which hold its state: keep them out of the
+repository), `reference.json`, `report.json` and `report.txt`, and prints the table.
+
+The reference: until part B (board ab-t30.7) exists, the run builds it from its own XTEST steps, and
+takes the values that XTEST cannot give from the literature (`LITERATURE` in `reference.ts`). Part B's
+numbers replace it through one file: `--reference FILE`. The file holds numbers only, in the fields of
+format 1 (the head of `reference.ts`; the fixture is `reference.fixture.json`). `checkReference` refuses
+any other field and any value that is not a number, so no user agent, screen or text can be in it.
+
+`test/input-harness.test.ts` (in `npm test`) tests the statistics, the measures, the reference file and
+each bar with no browser.
