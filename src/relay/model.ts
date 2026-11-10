@@ -26,6 +26,7 @@ import { basename, join } from "node:path";
 import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge.ts";
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
+import { drawPerson, paramsFor, type Person } from "../human/person.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
@@ -254,6 +255,8 @@ export class Model {
   /** A log line for each step and catch-up (times and counts, never a point): AGENT_BROWSER_POINTER_LOG=1 (the live check). */
   private readonly pointerLog: boolean;
   private readonly random: () => number;
+  /** The display's one pointer moves as one person (src/human/person.ts): the activation's paths and the catch-ups. */
+  private readonly person: Person;
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
     pointerLog?: boolean; random?: () => number } = {}) {
@@ -263,6 +266,7 @@ export class Model {
     this.onRoots = opts.onRoots;
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
+    this.person = drawPerson(paramsFor("linux"), this.random);
   }
 
   /** The client connections that are open now (the service's Chrome move waits while a client holds one). */
@@ -1159,7 +1163,7 @@ export class Model {
     if (this.at.x === Td.x && this.at.y === Td.y && this.views > 0) await this.readPointer();
     if (!this.at) return { ...base, why: "the pointer's place is unknown" };
     if (this.at.x === Td.x && this.at.y === Td.y) return { ...base, atIsT: true, Td };
-    const path = await planPath(Sd, Td, { clamp: rect, random: this.random });
+    const path = await planPath(Sd, Td, { clamp: rect, random: this.random, person: this.person });
     if (!path) return { ...base, why: "the path does not fit the limits" };
     const move: Move = { at: this.at, from: Sd, path, width: this.display.width, height: this.display.height, notAfter: notAfter(), views: this.views };
     if (moveProblem([move], monotonicMs()) !== null) return { ...base, why: "the move does not pass C10's checks" };
@@ -1265,7 +1269,7 @@ export class Model {
     if (!g) try { g = await this.geometry(tab, { keep: false }); } catch { g = null; }
     const clamp = usable(g, this.display) ? contentRect(g) : null;
     let path: PathPoint[] | null = null;
-    try { path = await planPath(from, to, { random: this.random, clamp, keepEnd: true }); } catch { path = null; }
+    try { path = await planPath(from, to, { random: this.random, clamp, keepEnd: true, person: this.person }); } catch { path = null; }
     if (!path) { this.notice("catch-up limits", "relay: a catch-up does not fit the path's limits; the event goes as it is"); return; }
     const moves = move ? path.slice(0, -1) : path;
     let t = 0, sent = 0;

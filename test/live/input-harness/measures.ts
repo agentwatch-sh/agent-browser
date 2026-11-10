@@ -35,8 +35,10 @@ const ACTIVATION_SAME_MS = 50, ACTIVATION_PAIRED_MS = 20, ACTIVATION_AFTER_MS = 
 const WINDOW = "[object Window]";
 
 export type PathMeasures = PathShape & { fittsRatio: number | null };
+/** `samplesEach`, `predictedEach`, `gapsMs`: P1's distributions (board ab-t30.3): each pointermove's nc and np, and each sample gap (ms). */
 export type PointerMeasures = {
   moves: number; samplesPerMove: number | null; predictedPerMove: number | null; sampleGaps: number; wholeMsGaps: number; wholeMsShare: number | null;
+  samplesEach: number[]; predictedEach: number[]; gapsMs: number[];
   eventsAfterHandler: number; handlerLagMs: number | null; fractional: number; jumps: number; movementMismatch: number;
   path: PathMeasures | null; pauseMs: number | null; pressMs: number | null; focusInPress: boolean | null;
   doubleClickGapMs: number | null; modifierLeadMs: number | null; modifierLagMs: number | null; heldMoves: number | null;
@@ -47,11 +49,14 @@ export type KeyMeasures = { keys: number; holds: number[]; downToDown: number[];
 export type TextMeasures = { inputs: number; chars: number; keyChars: number; keyEventsPerChar: number | null; textsWithNoKeys: number; longTextsWithNoKeys: number };
 /** `deltaModes`: null for an event with no deltaMode (never read as mode 0). */
 export type WheelMeasures = { events: number; absDeltaY: number[]; ratios: number[]; deltaModes: (number | null)[]; gapsMs: number[]; scrolls: number; scrollsWithNoWheelOrKey: number };
-export type BoxMeasures = { entryEdgePx: number; movesInside: number; entryToPressMs: number | null };
+/** `straightness`: the box frame's samples from the entry to the press, chord / length (P4; board ab-t30.3); null with fewer than 3. */
+export type BoxMeasures = { entryEdgePx: number; movesInside: number; entryToPressMs: number | null; straightness: number | null };
 export type StepMeasures = {
   name: string; source: string; kind: StepKind; ok: boolean; ms: number;
   pointer: PointerMeasures | null; box: BoxMeasures | null; keys: KeyMeasures | null; text: TextMeasures | null; wheel: WheelMeasures | null;
   focusinWithNoPress: number; untrusted: number; touch: number; idleMovesPerS: number | null;
+  /** P6 (board ab-t30.3): the time from the top page's load to its first trusted pointer move, on the step that holds that move; else null. */
+  loadToFirstMoveMs: number | null;
   /** The step's event records (the recorder gives each event `tr`; its own records, such as layout, state, frames and seq, have none). */
   events: number;
   /** R11: the jump (px) at each activation of the page's window in the step. */
@@ -124,6 +129,7 @@ export function pointerMeasures(recs: readonly Rec[], width?: number): PointerMe
   }
   return {
     moves: moves.length, samplesPerMove: mean(nc), predictedPerMove: mean(np), sampleGaps: gaps.length, wholeMsGaps: gaps.filter((g) => isWholeMs(g)).length,
+    samplesEach: nc, predictedEach: np, gapsMs: gaps.map((g) => Math.round(g * 1000) / 1000),
     wholeMsShare: wholeMsShare(gaps), eventsAfterHandler: list.filter((r) => num(r.h) && r.t > r.h + 0.05).length,
     handlerLagMs: median(moves.filter((r) => num(r.h)).map((r) => r.h - r.t)),
     fractional: pointerEvents.filter((r) => fractional(r.x) || fractional(r.y)).length + samples.filter((s) => fractional(s.x) || fractional(s.y)).length,
@@ -201,14 +207,37 @@ export function wheelMeasures(recs: readonly Rec[]): WheelMeasures | null {
     scrolls: scrolls.length, scrollsWithNoWheelOrKey: scrolls.filter((s) => !caused(s)).length };
 }
 
-/** The click box's own view (P4): the entry point's distance to the box's nearest edge, its moves before the press, and the time from the entry to the press. */
+/**
+ * The click box's own view (P4): the entry point's distance to the box's nearest edge, its moves before the press, the
+ * time from the entry to the press, and the straightness of its samples from the entry to the press (the entry's own
+ * point first, then the coalesced samples of the box's pointermoves).
+ */
 export function boxMeasures(recs: readonly Rec[], size = BOX_SIZE): BoxMeasures | null {
   const box = recs.filter((r) => r.f === "box").sort(byTime);
   const first = box.find((r) => /^pointer(over|enter|move)$/.test(r.e) && num(r.x) && num(r.y));
   if (!first) return null;
   const down = box.find((r) => r.e === "pointerdown");
+  const inside = box.filter((r) => r.e === "pointermove" && r.t >= first.t && (!down || r.t <= down.t));
+  const pts = [{ t: first.t, x: first.x, y: first.y }, ...samplesOf(inside).filter((s) => s.t >= first.t)]
+    .filter((p, i, a) => i === 0 || p.t > a[i - 1].t || p.x !== a[i - 1].x || p.y !== a[i - 1].y);
   return { entryEdgePx: Math.min(first.x, first.y, size.w - first.x, size.h - first.y),
-    movesInside: box.filter((r) => r.e === "pointermove" && (!down || r.t <= down.t)).length, entryToPressMs: down ? down.t - first.t : null };
+    movesInside: box.filter((r) => r.e === "pointermove" && (!down || r.t <= down.t)).length, entryToPressMs: down ? down.t - first.t : null,
+    straightness: pathShape(pts)?.straightness ?? null };
+}
+
+/**
+ * P6's load to the first move: when the step holds the first trusted pointer move (a pointermove or pointerover, in any
+ * frame) after a load of the top page (its state record "load"), the time from that load to that move; else null.
+ */
+export function loadToFirstMove(all: readonly Rec[], m: Pick<StepMark, "t0" | "t1">): number | null {
+  const list = all.filter((r) => num(r.t)).sort(byTime);
+  const loads = list.filter((r) => r.e === "state" && frame(r) === "top" && r.why === "load");
+  for (let i = 0; i < loads.length; i++) {
+    const next = loads[i + 1]?.t ?? Infinity;
+    const move = list.find((r) => r.t > loads[i].t && r.t < next && r.tr === 1 && /^pointer(move|over)$/.test(r.e));
+    if (move && move.t >= m.t0 - WINDOW_BEFORE_MS && move.t <= m.t1 + WINDOW_AFTER_MS) return Math.round((move.t - loads[i].t) * 10) / 10;
+  }
+  return null;
 }
 
 /**
@@ -246,7 +275,7 @@ export function measureStep(all: readonly Rec[], m: StepMark): StepMeasures {
     name: m.name, source: m.source, kind: m.kind, ok: m.ok, ms: m.t1 - m.t0,
     pointer, box: boxMeasures(recs), keys: keyMeasures(recs), text: textMeasures(recs), wheel: wheelMeasures(recs),
     focusinWithNoPress: focusinWithNoPress(recs), untrusted: recs.filter((r) => r.tr === 0).length, touch: recs.filter((r) => r.e.startsWith("touch")).length,
-    idleMovesPerS: m.kind === "idle" ? (pointer?.moves ?? 0) / Math.max(0.001, (m.t1 - m.t0) / 1000) : null,
+    idleMovesPerS: m.kind === "idle" ? (pointer?.moves ?? 0) / Math.max(0.001, (m.t1 - m.t0) / 1000) : null, loadToFirstMoveMs: loadToFirstMove(all, m),
     events: recs.filter((r) => r.tr === 0 || r.tr === 1).length, activationJumps: activationJumps(all, m), ...(m.path ? { path: m.path } : {}),
   };
 }

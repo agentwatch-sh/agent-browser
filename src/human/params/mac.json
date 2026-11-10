@@ -1,0 +1,48 @@
+{
+ "format": 1,
+ "platform": "darwin",
+ "note": "The Mac: the Linux first values, with timestamps that keep their fraction (C11), until part B records the Mac. First values of the input design, section 10.1 (docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md), until part B (board ab-t30.7) fits them; each value names its source in sources.",
+ "device": { "rateMs": 8, "latencyMs": [3, 5], "wholePx": true, "wholeMsTimestamps": false, "maxPxPerMs": 3.5, "movesInFlight": 8 },
+ "path": {
+  "fitts": { "aMs": 250, "bMs": 110, "minMs": 300, "maxMs": 1000, "spread": { "lognormal": [1, 0.2], "min": 0.6, "max": 1.6 } },
+  "arc": { "deviation": { "uniform": [0.02, 0.1] } },
+  "corrections": { "counts": [0.4, 0.4, 0.2], "lastShare": 0.1, "errorShare": { "uniform": [0.01, 0.04] }, "lateralShare": 0.01 },
+  "overshoot": { "minPx": 500, "share": 0.3, "past": { "uniform": [0.02, 0.08] }, "backShare": { "uniform": [0.3, 0.45] }, "backMinMs": 150, "maxMs": 1500 },
+  "jitter": { "px": { "uniform": [0.3, 1.2] }, "hz": { "uniform": [8, 12] }, "fadeShare": 0.1 },
+  "approach": { "smallPx": 40, "warpSmall": { "uniform": [0.62, 0.75] }, "warpLarge": { "uniform": [0.8, 0.95] } },
+  "start": { "middle": [0.3, 0.7] }
+ },
+ "press": {
+  "pauseMs": { "lognormal": [140, 0.402], "min": 80, "max": 400 },
+  "holdMs": { "lognormal": [100, 0.275], "min": 60, "max": 180 },
+  "force": 0.5,
+  "doubleGapMs": { "uniform": [90, 150] },
+  "spread": { "sdShare": 0.125, "maxShare": 0.25 }
+ },
+ "wheel": { "notchPx": 120, "gapMs": { "uniform": [35, 90] } },
+ "population": {
+  "speed": { "lognormal": [1, 0.1], "min": 0.8, "max": 1.25 },
+  "pause": { "lognormal": [1, 0.12], "min": 0.75, "max": 1.35 },
+  "hold": { "lognormal": [1, 0.1], "min": 0.8, "max": 1.25 },
+  "overshootShare": { "uniform": [0.2, 0.4] },
+  "side": { "uniform": [0.3, 0.7] }
+ },
+ "sources": {
+  "device.rateMs": "125 Hz, the rate of the research's X input; [7]: mice report typically at 100 Hz; part B measures the operator's device",
+  "device.latencyMs": "C11 STAGE_LATENCY_MS (3 to 5 ms); the design's probe M1: 4 ms before the send gave a frame phase of 5.4 to 5.6 ms",
+  "device.maxPxPerMs": "[13]: at most about 3500 px/s",
+  "path.fitts": "Fitts's law, a = 250 ms, b = 110 ms a bit, 300 to 1000 ms (src/record.ts fittsMs); a lognormal spread of sigma 0.2 [18]",
+  "path.arc": "one main sub-movement with a bell speed (minimum jerk) along an arc to one side, 2% to 10% of the distance [17]",
+  "path.corrections": "0 to 2 small corrective sub-movements in the last 10% of the time (first values; [14] models sub-movements)",
+  "path.overshoot": "for a move of more than 500 px, 2% to 8% past the target in about 30% of moves, then the way back (first values)",
+  "path.jitter": "0.3 to 1.2 px across the path at 8 to 12 Hz, a hand's tremor (first value, no source)",
+  "path.approach": "the speed falls in the last part for a small target (the research, P4): a later, slower end of the bell",
+  "path.start": "the page's last point; with none, a random point of the viewport's middle 30% to 70%",
+  "press.pauseMs": "a lognormal, median 140 ms, from 80 to 400 ms; sigma ln(400 / 80) / 4 (the harness's reference)",
+  "press.holdMs": "a lognormal, median 100 ms, from 60 to 180 ms; sigma ln(180 / 60) / 4; force 0.5 [1]",
+  "press.doubleGapMs": "90 to 150 ms from the first release to the second press (not measured; part B)",
+  "press.spread": "an offset from the target's middle, a normal with a standard deviation of 1/8 of its smaller side, at most 1/4 of it",
+  "wheel": "a notch of 120 px (X11); gaps of 35 to 90 ms (design 8.2, first value)",
+  "population": "each scope's person: factors drawn once from these spreads (design 10.4; first values until part B sets the population)"
+ }
+}

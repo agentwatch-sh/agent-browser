@@ -335,13 +335,20 @@ person's input**) and `log` (progress lines; default standard error).
     ms, a click in 1.28 s); `design-two` both pages focused 200 ms, 53 % longer than one agent alone;
     `design-two-sites` both pages focused 100 ms, 47 % longer, no `blur` inside a page's own commands,
     no jump, and a third agent on the first site 0 ms with two focused pages of that site.
-  - **A person's input.** A pointer path of ghost-cursor's curve (as `record`'s cursor: an overshoot past
-    500 px, a time of 300 to 1000 ms by Fitts's law), 12 to 60 moves in whole pixels (no move without
-    movement) to a point in the middle 40% of the element, a pause of 80 to 150 ms, then a press of 70 to
-    90 ms with `force: 0.5`. One key-event pair per character, 90 to 150 ms apart, each key down 20 to 50
-    ms, in place of `Input.insertText` (a character with no US-keyboard key still goes as inserted
-    text). An element out of view comes into view by the wheel (100 px a notch, 30 to 70 ms apart, with
-    the pointer over the element's scroller), in place of `scrollIntoView`. `type --into` clicks the
+  - **A person's input.** A pointer path of the generator in `src/human/` (board ab-t30.3; the input
+    design `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md`, section 10.1):
+    a time of 300 to 1000 ms by Fitts's law with a person's spread, one main sub-movement with a bell
+    speed along an arc (2% to 10% of the distance), 0 to 2 end corrections, an overshoot past 500 px in
+    about 30% of moves, a tremor of 0.3 to 1.2 px, a slow approach to a small target, at most 3.5 px/ms;
+    one sample each 8 ms in whole pixels (no move without movement), sent at its time with no wait for
+    each answer, each event with a timestamp 3 to 5 ms before its send (whole ms on Linux). It ends at a
+    person's spread around the element's middle (a standard deviation of 1/8 of its smaller side, at
+    most 1/4 of it, where a hit test finds the element), then a pause of 80 to 400 ms (median 140) and
+    a press of 60 to 180 ms (median 100) with `force: 0.5`. Each endpoint scope moves as one person of
+    its own (`pointer.json` keeps the seed). One key-event pair per character, 90 to 150 ms apart, each
+    key down 20 to 50 ms, in place of `Input.insertText` (a character with no US-keyboard key still goes
+    as inserted text). An element out of view comes into view by the wheel (120 px a notch, 35 to 90 ms
+    apart, with the pointer over the element's scroller), in place of `scrollIntoView`. `type --into` clicks the
     field in place of `el.focus()`, and `setFiles` clicks the file input (or its label) so that Chrome
     opens its file chooser, which agent-browser intercepts (`Page.setInterceptFileChooserDialog`: no
     dialog opens); the files go to the input that the chooser names only when it is the named input
@@ -420,9 +427,9 @@ person's input**) and `log` (progress lines; default standard error).
     (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8
     background tabs: 32 to 46 MB more for each window, and every agent page draws at full rate, also
     behind another window. The input timing is the `inputTiming` option (CLI `--input-timing JSON`,
-    Python `input_timing=`), in parts: `pressMs` [70, 90], `keyMs` [90, 150], `holdMs` [20, 50],
-    `settleMs` [80, 150], `wheelMs` [30, 70] (ranges in ms), `moveScale` 1 (a factor on each path's
-    time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`), `showMs` 2500 (on macOS, the wait
+    Python `input_timing=`), in parts: `pressMs` [60, 180], `keyMs` [90, 150], `holdMs` [20, 50],
+    `settleMs` [80, 400], `wheelMs` [35, 90] (ranges in ms: the pointer's ranges bound the person's
+    draws), `moveScale` 1 (a factor on each path's time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`), `showMs` 2500 (on macOS, the wait
     for a hidden window page to show again: **One window per agent page on the Mac**) and `lockWaitMs`
     600000.
   - **What a site can still see** (the research's section 8, and the runs of this build): the pace and

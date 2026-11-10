@@ -9,7 +9,7 @@ import {
   binomialZ, fittsMs, isWholeMs, ks1, ks2, ksBound, ksCdf, ksCritical, lognormalCdf, lognormalOf, mean, median, normalCdf, pathShape, speedPeaks, wholeMsChance, wholeMsShare, type Sample,
 } from "./live/input-harness/stats.ts";
 import {
-  activationJumps, boxMeasures, focusinWithNoPress, keyMeasures, lostBatches, measureStep, pointerMeasures, samplesOf, stepRecords, textMeasures, wheelMeasures,
+  activationJumps, boxMeasures, focusinWithNoPress, keyMeasures, loadToFirstMove, lostBatches, measureStep, pointerMeasures, samplesOf, stepRecords, textMeasures, wheelMeasures,
   type KeyMeasures, type PathMeasures, type PointerMeasures, type Rec, type StepMeasures, type TextMeasures,
 } from "./live/input-harness/measures.ts";
 import { buildReference, checkReference, LITERATURE, type Reference } from "./live/input-harness/reference.ts";
@@ -253,7 +253,7 @@ test("wheel measures: the notch size, wheelDeltaY / deltaY, the gaps, and scroll
 
 test("box measures: the entry from the box's edge, the moves inside, and the time from the entry to the press", () => {
   const inBox = movesOf(line(5, 2, 30, 4), { f: "box", perMove: 1 });
-  assert.deepEqual(boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ...inBox, ev("pointerdown", 1300, { f: "box" })]), { entryEdgePx: 2, movesInside: 5, entryToPressMs: 300 });
+  assert.deepEqual(boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ...inBox, ev("pointerdown", 1300, { f: "box" })]), { entryEdgePx: 2, movesInside: 5, entryToPressMs: 300, straightness: 1 });
   const pw = boxMeasures([ev("pointerover", 1000, { f: "box", x: 29, y: 33 }), ...movesOf(line(1, 29, 33, 0), { f: "box" }), ev("pointerdown", 1001, { f: "box" })])!;
   assert.equal(pw.entryEdgePx, 29);
   assert.equal(boxMeasures([ev("pointerover", 1000, { f: "box", x: 296, y: 40 })])!.entryEdgePx, 4, "the right edge is the nearest");
@@ -731,4 +731,74 @@ test("a drag step counts in R8 only: Chromium sends no pointer event during a dr
   const rows = scoreSource([stepM(), stepM({ kind: "drag", pointer: { jumps: 1, samplesPerMove: 1, heldMoves: 119 } })], ref);
   assert.deepEqual([verdict(rows, "R1/R2", /jumps/), verdict(rows, "P1", /samples/), verdict(rows, "R8", /button down/)], ["pass", "pass", "pass"]);
   assert.equal(rowOf(rows, "P1", /samples/).value, "1.90");
+});
+
+// ================================================================ the measures that the pointer build needs (board ab-t30.3; review-97)
+
+test("P1's distributions: each pointermove's samples (nc) and predicted points (np), and each sample gap, by KS against the reference's values", () => {
+  const moves = movesOf(line(9, 100, 200, 10), { perMove: 3, np: 2 });
+  moves[1].np = 3;
+  const p = pointerMeasures(moves)!;
+  assert.deepEqual([p.samplesEach, p.predictedEach, p.gapsMs], [[3, 3, 3], [2, 3, 2], [8, 8, 8, 8, 8, 8, 8, 8]]);
+  // The reference keeps every pointermove's and every gap's values of XTEST's paths.
+  const xt = stepM({ pointer: { path: pathM(), samplesEach: [2, 2, 1, 3], predictedEach: [2, 1, 2, 2], gapsMs: [8, 9, 8, 8] } });
+  const r = buildReference([xt, stepM({ kind: "box", box: { entryEdgePx: 1, movesInside: 9, entryToPressMs: 300, straightness: 0.9 } })]);
+  assert.deepEqual([r.pointer.samplesEach, r.pointer.predictedEach, r.pointer.sampleGapsMs, r.pointer.boxStraightness], [[2, 2, 1, 3], [2, 1, 2, 2], [8, 9, 8, 8], [0.9]]);
+  assert.deepEqual(checkReference(JSON.parse(JSON.stringify(r))), r);
+  // The rows: XTEST-like counts and gaps pass; one sample per move (awaited moves) and gaps of 16 ms fail; np is information with an XTEST reference.
+  const nc = Array.from({ length: 60 }, (_, i) => [2, 2, 1, 2, 3][i % 5]), gaps = Array.from({ length: 100 }, (_, i) => [8, 8, 9, 8][i % 4]);
+  const ref = refWith((x) => { x.pointer.samplesEach = nc; x.pointer.predictedEach = nc; x.pointer.sampleGapsMs = gaps; });
+  const like = scoreSource([stepM({ pointer: { samplesEach: nc, predictedEach: nc, gapsMs: gaps } })], ref);
+  assert.deepEqual([verdict(like, "P1", /samples per pointermove \(distribution/), verdict(like, "P1", /sample gaps \(distribution/), verdict(like, "P1", /predicted points per pointermove \(distribution/)],
+    ["pass", "pass", "not scored"]);
+  const ab = scoreSource([stepM({ pointer: { samplesEach: nc.map(() => 1), predictedEach: nc.map(() => 0), gapsMs: gaps.map(() => 16) } })], ref);
+  assert.deepEqual([verdict(ab, "P1", /samples per pointermove \(distribution/), verdict(ab, "P1", /sample gaps \(distribution/)], ["fail", "fail"]);
+  assert.match(rowOf(ab, "P1", /predicted points per pointermove \(distribution/).value, /^D 1 \/ 0\.\d+$/, "measured, with its D");
+  assert.equal(verdict(ab, "R10", /P1, P2 and P8/), "fail", "R10 counts the distribution rows");
+  const person = scoreSource([stepM({ pointer: { samplesEach: nc, predictedEach: nc.map(() => 0), gapsMs: gaps } })], refWith((x) => { x.source = 2; x.pointer.samplesEach = nc; x.pointer.predictedEach = nc; x.pointer.sampleGapsMs = gaps; }));
+  assert.equal(verdict(person, "P1", /predicted points per pointermove \(distribution/), "fail", "with a person's reference, the bar");
+  // No values in the reference (the fixture: format 1 with no distributions), or too few moves: no data.
+  const none = scoreSource([stepM({ pointer: { samplesEach: nc, gapsMs: gaps } })], checkReference(FIXTURE));
+  assert.equal(verdict(none, "P1", /samples per pointermove \(distribution/), "no data");
+  assert.equal(verdict(scoreSource([stepM({ pointer: { moves: 10, samplesEach: nc } })], ref), "P1", /samples per pointermove \(distribution/), "no data");
+});
+
+test("P1's samples: the numbers of open point 6's options b (the range with no margin) and c (KS of the counts on XTEST's same paths), as information", () => {
+  const ref = refWith((r) => { r.pointer.samplesPerMove = [1.9, 1.93]; });
+  const xc = Array.from({ length: 40 }, (_, i) => [2, 2, 1, 2, 3][i % 5]);
+  const rows = scoreSource([stepM({ path: "m1-b", pointer: { samplesPerMove: 1.82, samplesEach: xc.map((v, i) => (i % 6 ? v : 1)) } })], ref, { samePathCounts: { "m1-b": xc } });
+  assert.equal(verdict(rows, "P1", /samples per pointermove \(mean\)/), "pass", "option a: the range widened by 0.15");
+  assert.equal(verdict(rows, "P1", /option b/), "not scored");
+  assert.match(rowOf(rows, "P1", /option b/).value, /1\.82 \(outside\)/);
+  assert.equal(verdict(rows, "P1", /option c/), "not scored");
+  assert.match(rowOf(rows, "P1", /option c/).value, /^D 0\.\d+ \/ 0\.\d+ \(inside the bound\)/);
+  assert.equal(verdict(scoreSource([stepM({ pointer: { samplesEach: xc } })], ref, { samePathCounts: { "m1-b": xc } }), "P1", /option c/), "no data", "no step on XTEST's paths");
+});
+
+test("P4's straightness inside the box: the box frame's samples from the entry to the press; information with an XTEST reference, the bar with a person's", () => {
+  // In the box: the entry at 2,30, then a corner: 3 px right, 4 px down (straightness 5 / 7).
+  const inBox = [ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ...movesOf([{ t: 1008, x: 5, y: 30 }, { t: 1016, x: 5, y: 34 }], { f: "box", perMove: 1 }), ev("pointerdown", 1100, { f: "box" }),
+    ...movesOf([{ t: 1200, x: 60, y: 60 }], { f: "box", perMove: 1 })];
+  near(boxMeasures(inBox)!.straightness, 5 / 7);
+  assert.equal(boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ev("pointerdown", 1100, { f: "box" })])!.straightness, null, "fewer than 3 samples");
+  const box = (st: number | null, source = 1) => scoreSource([stepM({ kind: "box", box: { entryEdgePx: 2, movesInside: 12, entryToPressMs: 280, straightness: st } })],
+    refWith((r) => { r.source = source; r.pointer.boxStraightness = [0.97, 0.99]; }));
+  assert.equal(verdict(box(0.8), "P4", /straightness inside/), "not scored");
+  assert.match(rowOf(box(0.8), "P4", /straightness inside/).value, /^0\.8/);
+  assert.deepEqual([verdict(box(0.8, 2), "P4", /straightness inside/), verdict(box(0.98, 2), "P4", /straightness inside/), verdict(box(null, 2), "P4", /straightness inside/)], ["fail", "pass", "fail"]);
+  assert.equal(verdict(scoreSource([stepM({ kind: "box", box: { entryEdgePx: 2, movesInside: 12, entryToPressMs: 280, straightness: 0.9 } })], checkReference(FIXTURE)), "P4", /straightness inside/), "no data");
+});
+
+test("P6's load to the first move: the first trusted pointer move after the top page's load, on the step that holds it; measured, not scored", () => {
+  const all = [ev("state", 500, { why: "load" }), ev("state", 510, { f: "box", why: "load" }), ev("pointermove", 900, { tr: 0 }), ev("pointerover", 2500, { f: "box" }), ev("pointermove", 2510),
+    ev("state", 4000, { why: "load" }), ev("pointermove", 4700)];
+  assert.equal(loadToFirstMove(all, { t0: 2400, t1: 2600 }), 2000, "the untrusted move before it does not count; the box's own load does not");
+  assert.equal(loadToFirstMove(all, { t0: 1000, t1: 1500 }), null, "a step that does not hold that move");
+  assert.equal(loadToFirstMove(all, { t0: 4600, t1: 4800 }), 700, "each load has its own first move");
+  const s = measureStep(all, { name: "click", source: "x", kind: "click", ok: true, t0: 2400, t1: 2600 });
+  assert.equal(s.loadToFirstMoveMs, 2000);
+  const rows = scoreSource([stepM({ loadToFirstMoveMs: 2000 }), stepM({ loadToFirstMoveMs: null })], checkReference(FIXTURE));
+  assert.equal(verdict(rows, "P6", /load to the first move/), "not scored");
+  assert.equal(rowOf(rows, "P6", /load to the first move/).value, "2000");
+  assert.equal(verdict(scoreSource([stepM()], checkReference(FIXTURE)), "P6", /load to the first move/), "no data");
 });

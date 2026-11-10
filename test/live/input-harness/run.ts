@@ -14,8 +14,10 @@
 //                  for each step, at 125 Hz, with no CDP session on the page): paths with a press, paths into the box,
 //                  a double click, a click with Shift, typing, wheel notches and a click below the fold; then M1's planned
 //                  paths (its seed and width) as CDP moves at 125 Hz with no wait for each answer, in four forms of the
-//                  `timestamp` (the send time in whole ms, 4 ms before the send in whole ms, fractional, none), and the
-//                  design's form on XTEST's own three paths (cdp-4ms-same)
+//                  `timestamp` (the send time in whole ms, 4 ms before the send in whole ms, fractional, none), the
+//                  design's form on XTEST's own three paths (cdp-4ms-same), and the generator's CDP player
+//                  (src/human/cdp-player.ts, board ab-t30.3) on those three paths (human-same: design 9.1's bar), also at
+//                  XTEST's own rate of about 120 Hz (human-same-120)
 //   agent-browser  today's agent-browser input (src/input.ts) through its commands over the endpoint form (ws+unix://)
 //   playwright     plain Playwright (playwright-core from --playwright DIR, a scratch folder: never in package.json)
 //                  over connectOverCDP; skipped with a message when DIR has no playwright-core
@@ -46,6 +48,8 @@ import { CDPConnection } from "../../../src/cdp.ts";
 import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
 import { planMove, pointAt, seededRandom } from "../../../src/record.ts";
+import { CdpPlayer } from "../../../src/human/cdp-player.ts";
+import { middlePerson, paramsFor } from "../../../src/human/person.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
 import { Cleanup } from "./cleanup.ts";
 import { lostBatches, measureStep, type Rec, type StepKind, type StepMark, type StepMeasures } from "./measures.ts";
@@ -64,7 +68,7 @@ try {
 } catch (e) { refuse(`${(e as Error).message}\n${USAGE}`); }
 
 /** The sources in the report's order: the reference first. */
-const ORDER = ["xtest", "cdp-4ms", "cdp-4ms-same", "cdp-send", "cdp-frac", "cdp-none", "agent-browser", "playwright"];
+const ORDER = ["xtest", "cdp-4ms", "cdp-4ms-same", "human-same", "human-same-120", "cdp-send", "cdp-frac", "cdp-none", "agent-browser", "playwright"];
 type Scenario = { t0: number; t1: number; notes?: unknown; error?: string; marks: StepMark[]; recs: Rec[]; lostBatches?: number };
 type Results = { chrome?: string; display?: number; playwright?: string | null; scenarios: Record<string, Scenario> };
 
@@ -80,10 +84,10 @@ function scoreRun(out: Results, referenceFile?: string): { reference: Reference;
     for (const m of sc.marks) { (steps[m.source] ??= []).push(measureStep(sc.recs, m)); lost[m.source] = n; }
   }
   const reference = referenceFile ? checkReference(JSON.parse(readFileSync(referenceFile, "utf8"))) : buildReference(steps.xtest ?? []);
-  const samePaths: Record<string, number> = {};
-  for (const s of steps.xtest ?? []) if (s.ok && s.path && s.pointer?.predictedPerMove != null) samePaths[s.path] = s.pointer.predictedPerMove;
+  const samePaths: Record<string, number> = {}, samePathCounts: Record<string, number[]> = {};
+  for (const s of steps.xtest ?? []) if (s.ok && s.path && s.pointer?.predictedPerMove != null) { samePaths[s.path] = s.pointer.predictedPerMove; samePathCounts[s.path] = s.pointer.samplesEach ?? []; }
   const names = Object.keys(steps).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
-  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { samePaths, lostBatches: lost[n] })])), steps, lost };
+  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { samePaths, samePathCounts, lostBatches: lost[n] })])), steps, lost };
 }
 
 function writeReport(dir: string, out: Results, referenceFile?: string): string {
@@ -273,6 +277,12 @@ const between = (random: () => number, a: number, b: number) => a + (b - a) * ra
 const press = (holdMs: number, pauseMs = 150) => [`sleep ${(pauseMs / 1000).toFixed(3)}`, "mousedown 1", `sleep ${(holdMs / 1000).toFixed(3)}`, "mouseup 1"];
 const script = (lines: string[]) => xdo(["-"], lines.join("\n") + "\n");
 const TEXT = "Hello World, OK!";
+/**
+ * The rate of the harness's XTEST: xdotool's `sleep 0.008` and its move take about 8.33 ms together (the sample gaps are 8
+ * and 9 ms, about 2 to 1), so the reference is a device of about 120 Hz. The source human-same-120 plays XTEST's paths at
+ * that rate (board ab-t30.3: the predicted points depend on the rate).
+ */
+const XTEST_RATE = 25 / 24;
 
 // ------------------------------------------------------------------ Chromium over a pipe, and the bridge
 const BASE_ARGS = ["--remote-debugging-pipe", "--no-first-run", "--no-default-browser-check", "--ozone-platform=x11", "--password-store=basic",
@@ -488,6 +498,28 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
             await sleep(90);
             await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: end.x, y: end.y, button: "left", buttons: 0, clickCount: 1, ...extra() });
           }, { width: w, ...(source === "cdp-4ms-same" ? { path: `m1-${ids[i]}` } : {}) });
+        }
+      }
+      // The generator's CDP player (src/human/cdp-player.ts: the rate, the in-flight bound, a timestamp 3 to 5 ms before each
+      // send in whole ms) on XTEST's own three paths of M1, with the same press: P1's predicted points on the same paths
+      // (design 9.1's bar), and P1, P2 and P8 for the player.
+      {
+        const dev = middlePerson(paramsFor("linux")).params.device;
+        for (const [source, scale, label] of [["human-same", 1, "at 125 Hz (C11's STAGE_MOVE_MS)"], ["human-same-120", XTEST_RATE, "at XTEST's rate of about 120 Hz"]] as const) {
+          const player = new CdpPlayer((m, p) => send(m, p), { latencyMs: dev.latencyMs, wholeMs: dev.wholeMsTimestamps, random: seededRandom(3063), maxInFlight: dev.movesInFlight, scale });
+          const click = (type: string, p: Pt, extra: object) => player.event("Input.dispatchMouseEvent", { type, x: p.x, y: p.y, button: "left", clickCount: 1, ...extra });
+          for (let i = 0; i < 3; i++) {
+            const w = widthOf(ids[i]), pts = m1Paths[i];
+            await mv(starts[i]); await sleep(400);
+            await step(source, "click", `the generator's CDP player ${label} on XTEST's path to #${ids[i]} (${pts.length} moves), press 90 ms`, async () => {
+              await player.moves(pts.map(({ p, at }) => ({ x: p.x, y: p.y, t: at })));
+              await sleep(150);
+              const end = pts[pts.length - 1].p;
+              await click("mousePressed", end, { buttons: 1, force: 0.5 });
+              await sleep(90);
+              await click("mouseReleased", end, { buttons: 0 });
+            }, { width: w, path: `m1-${ids[i]}` });
+          }
         }
       }
       cdp.close();

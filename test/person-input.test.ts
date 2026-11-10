@@ -102,8 +102,8 @@ const keys = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatch
 const methods = (calls: Call[]) => calls.map((x) => x.method);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
 
-test("the input timing: the defaults of the research, a partial option, and the CLI's --input-timing", () => {
-  assert.deepEqual(INPUT_TIMING, { pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
+test("the input timing: the defaults of the input design (the pointer's bounds of design 10.1 and 8.2), a partial option, and the CLI's --input-timing", () => {
+  assert.deepEqual(INPUT_TIMING, { pressMs: [60, 180], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
   assert.deepEqual(resolveOptions(c.options()).inputTiming, INPUT_TIMING);
   assert.deepEqual(resolveOptions(c.options({ inputTiming: { pressMs: [10, 20] } })).inputTiming, { ...INPUT_TIMING, pressMs: [10, 20] });
   for (const bad of [{ pressMs: [20, 10] }, { keyMs: [-1, 5] }, { moveScale: 0 }, { activateMs: Number.NaN }, { nope: 1 }, { holdMs: [1] }])
@@ -134,13 +134,13 @@ test("click on a window page: the window comes forward first (Page.bringToFront)
   await commands.close(linux(), { tab: name });
 });
 
-test("the default timing: a press of 70 to 90 ms, a path of a person's length, and the click takes about half a second or more", async () => {
+test("the default timing: a press of 60 to 180 ms, a path of a person's length, and the click takes about half a second or more", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const t0 = Date.now();
   const calls = await callsOf(page, () => commands.click(linux({ inputTiming: undefined }), { tab: name, target: "#b" }));
   const ms = Date.now() - t0, ev = mouse(calls), press = ev.find((x) => x.params.type === "mousePressed")!, release = ev.find((x) => x.params.type === "mouseReleased")!;
-  assert.ok(release.t - press.t >= 65 && release.t - press.t <= 110, `press ${release.t - press.t} ms`);
+  assert.ok(release.t - press.t >= 55 && release.t - press.t <= 200, `press ${release.t - press.t} ms`);
   const moves = ev.filter((x) => x.params.type === "mouseMoved");
   assert.ok(moves.length >= 15, `${moves.length} moves`);
   assert.ok(press.t - moves[0].t >= 300, `the path and the settle took ${press.t - moves[0].t} ms`);
@@ -311,19 +311,19 @@ test("hover: a path to the element, no press; clickAt: a path to the point and a
   await commands.close(linux(), { tab: name });
 });
 
-test("click below the fold: wheel events until the element is in view, then the click; no scrollIntoView", async () => {
+test("click below the fold: wheel events of 120 px (X11's notch) until the element is in view, then the click; no scrollIntoView", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const calls = await callsOf(page, () => commands.click(linux(), { tab: name, target: "#far" }));
   assert.equal(page.title, "far");
   const wheels = mouse(calls).filter((x) => x.params.type === "mouseWheel");
   assert.ok(wheels.length >= 10, `${wheels.length} wheel events`);
-  assert.ok(wheels.every((x) => x.params.deltaY === 100 && x.params.deltaX === 0));
+  assert.ok(wheels.every((x) => x.params.deltaY === 120 && x.params.deltaX === 0));
   assert.equal(page.scriptScrolls, 0);
   const r = page.select("#far")[0].getBoundingClientRect();
   assert.ok(r.top > 0 && r.bottom < page.height, `in view: ${r.top}`);
   const clickText = await callsOf(page, () => commands.click(linux(), { tab: name, text: "Go" }));
-  assert.ok(mouse(clickText).filter((x) => x.params.type === "mouseWheel").every((x) => x.params.deltaY === -100), "back up with the wheel");
+  assert.ok(mouse(clickText).filter((x) => x.params.type === "mouseWheel").every((x) => x.params.deltaY === -120), "back up with the wheel");
   assert.equal(page.title, "clicked");
   assert.equal(page.scriptScrolls, 0);
   await commands.close(linux(), { tab: name });
@@ -884,4 +884,82 @@ for (const disposition of ["newTab", "newWindow"]) test(`an off-list ${dispositi
     assert.equal(page.title, "clicked");
     assert.equal(page.url, `${fx.base}/`);
   } finally { await commands.close(linux(), { tab: name }).catch(() => {}); }
+});
+
+// ---------- the generator of src/human/ (board ab-t30.3; the input design, sections 10.1 and 11.2) ----------
+
+test("the generator's player: a click's moves go at the plan's rate with no wait for each answer, each event with a person's timestamp; the hold counts from the press's send", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  fake.delays.set("Input.dispatchMouseEvent", 25); // each answer comes 25 ms after the event
+  try {
+    const calls = await callsOf(page, () => commands.click(linux({ inputTiming: { ...FAST, moveScale: 1, pressMs: [150, 160] } }), { tab: name, target: "#b" }));
+    const ev = mouse(calls), moves = ev.filter((x) => x.params.type === "mouseMoved");
+    assert.ok(moves.length >= 20, `${moves.length} moves`);
+    const gaps = moves.slice(1).map((x, i) => x.t - moves[i].t).sort((a, b) => a - b);
+    assert.ok(gaps[Math.floor(gaps.length / 2)] <= 12, `the moves 8 ms apart, not one answer apart: median gap ${gaps[Math.floor(gaps.length / 2)]} ms`);
+    for (const x of ev) {
+      const ts = x.params.timestamp * 1000;
+      assert.ok(Number.isInteger(Math.round(ts * 1000) / 1000) && Math.abs(ts - Math.round(ts)) < 1e-6, `whole ms: ${ts}`);
+      assert.ok(x.t - ts >= 2.5 && x.t - ts <= 8, `a latency of 3 to 5 ms before the send: ${x.t - ts} ms`);
+    }
+    const press = ev.find((x) => x.params.type === "mousePressed")!, release = ev.find((x) => x.params.type === "mouseReleased")!;
+    assert.ok(release.t - press.t >= 148 && release.t - press.t <= 172, `a hold of 150 to 160 ms from the press's send, not from its answer: ${release.t - press.t} ms`);
+  } finally { fake.delays.delete("Input.dispatchMouseEvent"); }
+  assert.equal(page.title, "clicked");
+  await commands.close(linux(), { tab: name });
+});
+
+test("the generator's press point: a person's spread around the element's middle, at most 1/4 of its smaller side; the scope's person keeps its seed in pointer.json", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const points = new Set<string>();
+  for (let i = 0; i < 8; i++) {
+    const ev = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: i % 2 ? "#b" : "#hov" })));
+    const p = ev.find((x) => x.params.type === "mousePressed")!.params;
+    const [cx, cy, side] = i % 2 ? [100, 115, 30] : [350, 115, 30];
+    assert.ok(Math.hypot(p.x - cx, p.y - cy) <= side / 4 + 1e-9, `${p.x},${p.y}: at most ${side / 4} px from the middle`);
+    assert.ok(Number.isInteger(p.x) && Number.isInteger(p.y));
+    points.add(`${p.x},${p.y}`);
+  }
+  assert.ok(points.size >= 4, `spread: ${[...points].join(" ")}`);
+  const seed = JSON.parse(readFileSync(join(c.stateDir, "pointer.json"), "utf8")).seed;
+  assert.ok(Number.isInteger(seed), "the scope's person: a seed in pointer.json");
+  await commands.click(linux(), { tab: name, target: "#b" });
+  assert.equal(JSON.parse(readFileSync(join(c.stateDir, "pointer.json"), "utf8")).seed, seed, "kept for the state folder's life");
+  await commands.close(linux(), { tab: name });
+});
+
+test("the generator's start: a page with no last point and no X pointer starts its path in the viewport's middle 30% to 70%, never at a fixed point", async () => {
+  const firsts: { x: number; y: number }[] = [];
+  for (let i = 0; i < 5; i++) {
+    operatorInFront();
+    const { name, page } = await windowPage();
+    const first = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })))[0].params;
+    // One step of at most 28 px (3.5 px/ms for 8 ms) from a start in the middle 30% to 70% of the fake's 1280 x 800 view.
+    assert.ok(first.x >= 0.3 * 1280 - 28 && first.x <= 0.7 * 1280 + 28 && first.y >= 0.3 * 800 - 28 && first.y <= 0.7 * 800 + 28, `${first.x},${first.y}`);
+    firsts.push(first);
+    await commands.close(linux(), { tab: name });
+  }
+  const xs = firsts.map((p) => p.x), ys = firsts.map((p) => p.y);
+  assert.ok(Math.max(...xs) - Math.min(...xs) > 60 || Math.max(...ys) - Math.min(...ys) > 60, `no fixed start: ${firsts.map((p) => `${p.x},${p.y}`).join(" ")}`);
+});
+
+test("the generator's press point and its hit test: a spread point over another element goes to the element's middle", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  // #hov covers the right part of #b (x 101 and more): only the points of x 100 or less are #b's own.
+  page.select("#hov")[0].rect = [101, 100, 59, 30];
+  const xs: number[] = [];
+  try {
+    for (let i = 0; i < 12; i++) {
+      page.title = "input";
+      const p = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" }))).find((x) => x.params.type === "mousePressed")!.params;
+      xs.push(p.x);
+      assert.equal(page.title, "clicked", `the press at ${p.x},${p.y} reached #b`);
+    }
+  } finally { page.select("#hov")[0].rect = [300, 100, 100, 30]; }
+  assert.ok(xs.every((x) => x <= 100), `no press on the cover: ${xs.join(" ")}`);
+  assert.ok(xs.some((x) => x < 100), `the spread stays where #b is its own: ${xs.join(" ")}`);
+  await commands.close(linux(), { tab: name });
 });

@@ -10,8 +10,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Bridge, BridgeError, MAX_IN_FLIGHT_PER_TAB, POINTER_READ_WAIT_MS, RELAY_TIMER } from "../src/relay/bridge.ts";
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, notAfter, planPath, POINTER,
-  sampleLegs, toDisplay, toPage, usable, type Geo, type PathPoint, type Pt, type Rect } from "../src/relay/pointer.ts";
-import { planMove, seededRandom } from "../src/record.ts";
+  sampleTrajectory, toDisplay, toPage, usable, type Geo, type PathPoint, type Pt, type Rect } from "../src/relay/pointer.ts";
+import { buildTrajectory, drawShape } from "../src/human/path.ts";
+import { middlePerson } from "../src/human/person.ts";
+import { seededRandom } from "../src/record.ts";
 
 const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-8a3b66f/${name}.json`, import.meta.url), "utf8"));
 const bridgeV = vectors("bridge");
@@ -132,7 +134,7 @@ function assertPath(path: PathPoint[], S: Pt, T: Pt, clamp: Rect | null, what: s
   assert.deepEqual({ x: last.x, y: last.y }, T, `${what}: the path ends at T`);
 }
 
-test("the path: the generator's legs from S to T sampled every 16 ms, clamped 2 px inside the viewport, in whole pixels, each dt 16 to 250 ms, no step over 50 px, a first step of 2 px or more", async () => {
+test("the path: the generator's trajectory from S to T sampled every 16 ms, clamped 2 px inside the viewport, in whole pixels, each dt 16 to 250 ms, no step over 50 px, a first step of 2 px or more", async () => {
   const random = seededRandom(71);
   const clamp = { x0: 2, y0: 93, x1: 1277, y1: 897 };
   let planned = 0;
@@ -155,16 +157,27 @@ test("the path is sampled every 16 ms: on a short move each dt is 16 to 31 ms, e
   assert.ok(total >= 280 && total <= 1500, `${total} ms: about fittsMs, 300 ms or more`);
 });
 
-test("the stretch: a long fast move gets one longer time for all legs, so that no step is over 50 px", async () => {
-  const S = { x: 30, y: 450 }, T = { x: 1880, y: 520 }, random = seededRandom(5);
-  const legs = await planMove(S, T, 24, seededRandom(5));
-  const fast = sampleLegs(S, T, legs, 1, null);
+test("the stretch: a long fast move gets one longer time for its whole trajectory, so that no step is over 50 px", async () => {
+  // A person with no overshoot: the same main sub-movement before and after the stretch.
+  const S = { x: 30, y: 450 }, T = { x: 1880, y: 520 }, person = { ...middlePerson(), overshootShare: 0 }, random = seededRandom(5);
+  const fast = sampleTrajectory(S, T, buildTrajectory(S, T, drawShape(S, T, 24, person, seededRandom(5)), person), null);
   const max = (path: PathPoint[]) => Math.max(...path.map((p, i) => Math.sqrt(dist2(p, i ? path[i - 1] : S))));
   assert.ok(max(fast) > 50, `unstretched max step ${max(fast)}`);
-  const path = (await planPath(S, T, { random }))!;
+  const path = (await planPath(S, T, { random, person }))!;
   assert.ok(path, "it fits after the stretch");
   assertPath(path, S, T, null, "the stretched path");
   assert.ok(path.reduce((a, p) => a + p.dt, 0) > fast.reduce((a, p) => a + p.dt, 0), "it takes longer");
+});
+
+test("a long move whose overshoot does not fit C10's 1500 ms after the stretch: the path without its overshoot", async () => {
+  // With this seed the middle person's move overshoots, and its stretched time is about 1550 ms.
+  const S = { x: 30, y: 450 }, T = { x: 1880, y: 520 }, person = middlePerson();
+  assert.equal(drawShape(S, T, 24, person, seededRandom(5)).overshoot, true);
+  const path = (await planPath(S, T, { random: seededRandom(5), person }))!;
+  assert.ok(path, "a path");
+  assertPath(path, S, T, null, "without the overshoot");
+  const past = Math.max(...path.map((p) => p.x));
+  assert.ok(past <= T.x, `no point past the target: ${past}`);
 });
 
 test("no path when it does not fit the limits (more than 1500 ms: a far target on a large display)", async () => {

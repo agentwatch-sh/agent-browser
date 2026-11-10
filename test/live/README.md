@@ -127,9 +127,11 @@ harness guard. The page is the input research's recorder on `rec.localhost`, wit
 The scenarios:
 
 - `source`: the reference, real X input (XTEST) at 125 Hz, then the design's M1 paths as CDP moves in
-  four forms of the `timestamp`, the design's form on XTEST's own paths (`cdp-4ms-same`), and a drag with
-  XTEST.
-- `agent-browser`: today's input of `src/input.ts`, through agent-browser's commands.
+  four forms of the `timestamp`, the design's form on XTEST's own paths (`cdp-4ms-same`), the
+  generator's CDP player (`src/human/cdp-player.ts`, board ab-t30.3) on XTEST's own paths
+  (`human-same`), and a drag with XTEST.
+- `agent-browser`: the input of `src/input.ts` (the generator of `src/human/` since board ab-t30.3),
+  through agent-browser's commands.
 - `playwright`: plain Playwright. It needs `playwright-core` in a scratch folder, never in `package.json`.
   Without it, the run skips this scenario and says so.
 
@@ -167,9 +169,21 @@ How the rows read:
   n = 1 is 0.975, below 1, so without this count one value could pass.)
 - P1's predicted points: the bar of design 9.1 is XTEST's per-path range on the same paths, with no
   margin: the row "predicted points on XTEST's same paths" (the `cdp-4ms-same` source now, the pointer
-  build's own replay later). The range row over all paths is information with an XTEST reference, and
-  the bar (with no margin) with a person's reference. P1's samples: XTEST's per-path range widened by
-  0.15 (the lead's choice; design section 16, point 6).
+  build's own replay: `human-same`). The range row over all paths is information with an XTEST
+  reference, and the bar (with no margin) with a person's reference. P1's samples: XTEST's per-path
+  range widened by 0.15 (the lead's choice; design section 16, point 6). Two information rows give the
+  numbers of that point's options b (the range with no margin) and c (a two-sample KS of the counts on
+  XTEST's same paths).
+- P1's distributions (board ab-t30.3): each pointermove's samples (`nc`) and each sample gap, by a
+  two-sample KS against the reference's values (`samplesEach`, `sampleGapsMs`: every pointermove and
+  gap of XTEST's paths); the predicted points (`np`) likewise, as information with an XTEST reference
+  and the bar with a person's. They need 30 pointermoves, as the other P1 rows. R10 counts them.
+- P4's straightness inside the box (board ab-t30.3): the box frame's samples from the entry to the
+  press. With an XTEST reference it is information: XTEST's box paths are planned by the old
+  generator, whose almost straight end is the research's gap P4 itself. With a person's reference it is
+  the bar (the reference's range).
+- P6's load to the first move (board ab-t30.3): the time from the top page's load to its first trusted
+  pointer move, on the step that holds that move; measured, not scored (Q4; part B's task 6).
 - K2: the design's measure is per letter pair. The per-pair row runs a KS test for each pair with 5
   values or more in both the source and the reference. Until part B gives values for each pair, it has
   no data, and the pooled row counts: the literature's value (a mean of 239 ms and an SD of 112 ms)
