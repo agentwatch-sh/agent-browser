@@ -1,8 +1,8 @@
 # Vanilla Playwright input becomes a person's input in agent mode — design
 
-**Status: proposed. Two read-only reviews ran (review-96 and its re-check review-96b), and their findings
-are fixed or in section 16 (open points). It waits for the operator's answers to Q1 to Q4 (section 15).
-Nothing is built before that.**
+**Status: Decided: the operator's answers of 2026-11-10 to Q1 to Q4 (section 15, "The answers"). Two
+read-only reviews ran (review-96 and its re-check review-96b), and their findings are fixed or in section 16
+(open points). The build runs in the tasks of section 14.**
 
 Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-t30.6, epic
 ab-t30). Branch `ab-t30.6-input-translation-design` in agent-browser, from main `d0e8acf`. No product code
@@ -81,7 +81,7 @@ work opened a public site.
    that turns a test red.
 10. **Build tasks (section 14)** in order: the harness, the pointer model, the keyboard model, the contract
     text, the stage in four parts, then the part B parameters. **Four questions** for the operator (section
-    15) and **four open points** (section 16).
+    15) and **six open points** (section 16).
 
 ## 2. The operator's words
 
@@ -93,6 +93,7 @@ work opened a public site.
   transliates the clicks and types into a human version. i.e. the caller doesn't worry about it"
 - 2026-11-09, on the service: "so let's build a single self-contained process/wrapper that includes the
   relay/browser/extension/etc and everything communicates over that."
+- 2026-11-10, on board item ab-0z5: option a for each of Q1 to Q4 (section 15, "The answers").
 
 What this design takes from them:
 
@@ -665,8 +666,8 @@ press, or on `shiftKey` in a key handler, sees a person's Shift.
   pastes it.
 - **An input method (IME)**: not in this design. CDP has `Input.imeSetComposition`; a page sees composition
   events only from an input method. The first build sends no composition events.
-- **A very long text**: above the limit of rule 3. Q2 asks the operator. The first build (no answer) types
-  up to the limit at the fast end and sends the whole text as one `Input.insertText` above it.
+- **A very long text**: above the limit of rule 3. By the operator's answer to Q2 (a), the build types up
+  to the limit at the fast end and sends the whole text as one `Input.insertText` above it.
 
 ### 7.4 `clear`
 
@@ -1157,6 +1158,22 @@ half baked").
 
 Each question gives its options, their effects, a recommendation, and what the build does with no answer.
 
+**The answers (board item ab-0z5, 2026-11-10).** The operator answered all four questions on 2026-11-10
+(confirmed, with a web login), with no note. Each answer is option a, the recommendation. The build follows
+these answers:
+
+- **Q1: a.** The stage shapes the input of every client on every site in agent mode. No list, no switch and
+  no new C12 op; no change in agentwatch for the stage (section 12.3).
+- **Q2: a.** A text that fits in 10 s is typed; a longer text goes as one text with no keys (section 7.3).
+  `pressSequentially` goes to the fast end after 12 s and to Playwright's own speed after 25 s.
+- **Q3: a.** A script call is translated where a person's input gives the same result, and the rest pass and
+  are counted (section 5.1 and build task 8). The parts that need a probe (a select's popup and CDP keys)
+  pass until the probe is done.
+- **Q4: a.** No idle moves. The harness measures P6 against part B and reports it; a change needs a new
+  decision of the operator (build task 9).
+
+The questions below stay as the operator read them.
+
 **Q1. Does the stage shape the input of every client and every site in agent mode?**
 
 - **a. Yes, always, for every client and every site (recommended).** A click takes about 1 to 1.6 s (2.6 s
@@ -1219,8 +1236,9 @@ The page sees an event with `isTrusted` false or a focus or a change with no inp
 
 ## 16. Open points
 
-The review of this design (review-96) found these points that the fix round did not settle. Each names what
-the build must show. The operator sees them with the questions.
+The review of this design (review-96) found points 1 to 5, which the fix round did not settle; the review of the
+harness (review-97, ab-t30.2) found point 6. Each names what the build must show. The operator sees them with the
+questions.
 
 1. **A widget that a click opens** (review-96, B1 c). The stage's focus click is a click, where Playwright
    uses a script focus. A text field whose click opens a picker or a list (a date-picker library, a
@@ -1259,6 +1277,32 @@ the build must show. The operator sees them with the questions.
    - c. End the plan, send only the releases, and answer the client's open calls with an error that names
      the dialog. No old event can reach the page, but a click that a dialog interrupts fails where
      Playwright's own click goes on after the close.
+
+6. **The bar of P1's samples per `pointermove`** (review-97 of the harness, ab-t30.2). Section 13.3 says "within
+   XTEST's range on the same run". The harness scores the source's mean count against XTEST's per-path range widened
+   by 0.15 (about three standard errors of one path's mean over about 60 moves). This is the lead's choice between rules
+   that do not agree. The numbers of the harness's runs on taylor (2026-11-10):
+   - One XTEST path's mean count varies by up to 0.06 between runs on the same planned path: M1's path to `#b` gave
+     1.95, 1.89, 1.95 and 1.92 (M1's runs 1 and 2, the harness's runs 3 and 4). M1 run 2's range of three paths (1.89
+     to 1.93) is narrower than that.
+   - With no margin, XTEST fails against itself across runs: the harness's run 4 gives a mean of 1.931 over its six
+     paths, above M1 run 2's range of 1.89 to 1.93.
+   - On the same paths, the design's CDP form gives fewer samples per `pointermove` than XTEST: 1.81 to 1.83 against
+     1.90 to 1.93 (run 4), and 1.83 to 1.84 against 1.87 to 1.97 (run 3). The share of moves with one sample is 0.16 to
+     0.18 for CDP against 0.07 to 0.09 for XTEST. The margin of 0.15 passes this difference. The range with no margin
+     does not.
+
+   The options:
+   - **a. XTEST's per-path range widened by 0.15 (the lead's choice; the harness uses it).** XTEST passes against
+     itself across runs. CDP's lower count on the same paths also passes.
+   - b. XTEST's per-path range with no margin. XTEST fails against itself across runs (above), and the design's CDP form
+     fails in every run (M1: 1.73 to 1.86 against 1.87 to 1.97).
+   - c. A two-sample KS test of the per-move counts (the distribution of `nc`) on the same paths. Runs 3 and 4: D 0.092
+     and 0.089 against a bound of 0.141 on the same paths (pass); on M1's other CDP paths, D 0.136 and 0.159 against
+     0.140 and 0.139 (one pass, one fail). The counts take only the values 1, 2 and 3, so the test is conservative with
+     its ties.
+
+   Build task 2 (ab-t30.3) reports this row with the bar in force, and the numbers of options b and c.
 
 ## 17. What this design does not cover
 

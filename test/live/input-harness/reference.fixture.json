@@ -1,0 +1,31 @@
+{
+ "format": 1,
+ "source": 1,
+ "pointer": {
+  "samplesPerMove": [1.887,1.931,1.934,1.968,1.932,1.965],
+  "predictedPerMove": [1.839,1.828,1.787,1.984,1.932,2.614],
+  "handlerLagMs": [6.1,2.2,8.1,3.2,2.8,5.5],
+  "wholeMsShare": 1,
+  "straightness": [0.89,0.807,0.759,0.953,0.739,0.948],
+  "maxDeviationPx": [89.09,27.531,79.746,80.476,122.323,78.154],
+  "peakPxPerMs": [2.298,1.677,1.858,1.976,1.777,1.521],
+  "meanPxPerMs": [1.012,0.758,0.84,0.907,0.813,0.714],
+  "fittsRatio": [1.356,1.437,1.187,1.414,1.463,1.117],
+  "speedPeaks": [1,2,2,2,2,2],
+  "pauseMs": {"lognormal":[140,0.4]},
+  "pressMs": {"lognormal":[100,0.275]},
+  "boxEntryEdgePx": [2,1],
+  "boxMovesInside": [22,10],
+  "boxEntryToPressMs": [532,285]
+ },
+ "keys": {
+  "holdMs": {"normal":[116,24]},
+  "downToDownMs": {"lognormal":[216.4,0.446]},
+  "wordEndExtraMs": {"range":[20,600]},
+  "overlapShare": {"range":[0.15,0.5]}
+ },
+ "wheel": {
+  "notchPx": 120,
+  "gapMs": {"range":[35,90]}
+ }
+}
