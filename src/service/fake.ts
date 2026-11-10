@@ -51,7 +51,8 @@ export const FAKE_STATE = {
 };
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
-const launchRefusal = (scope: string) => `A session named ${scope} ended a moment ago, and the agent browser still closes its tabs. Try the launch again in a few seconds.`;
+// The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
+const launchRefusal = (scope: string) => `A session named ${scope} ended a moment ago, and the agent browser could not record it (the file of ended scopes cannot be written: ENOSPC). Choose another name, or wait until the agent browser confirms its lists.`;
 
 const copy = <T>(x: T): T => JSON.parse(JSON.stringify(x));
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);

@@ -301,6 +301,12 @@ export class Stage1c implements ServicePart {
   private syncCopies(): void {
     const t = this.book.ticket();
     if (t === null) return;
+    // A copy that the service wrote goes when its scope leaves the object or its list has no file any more: the CLI
+    // then refuses the session, as for a list with no site, and never reads an old list's hosts (review-102 note 5).
+    for (const scope of [...this.written.keys()]) {
+      const name = own(t.body.scopes, scope);
+      if (name === undefined || name === null || name === UNREAD_LIST || !this.files.exists(name)) { this.copies.remove(scope); this.written.delete(scope); }
+    }
     for (const [scope, name] of Object.entries(t.body.scopes)) {
       // A list with no file has no copy: agent-browser's CLI refuses a session whose list has no site yet.
       if (name === null || name === UNREAD_LIST || !this.files.exists(name)) continue;

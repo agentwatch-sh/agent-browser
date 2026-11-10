@@ -393,6 +393,8 @@ test("launch_check: null for a free name; while an ended name is held in memory 
     const refusal = (await r.req("launch_check", { scope: "v" })).data.refusal;
     assert.equal(refusal, LAUNCH_HELD_TEXT.replace("{name}", "v").replace("{error}", "the file of ended scopes cannot be written: ENOSPC"));
     assert.equal(refusal, "A session named v ended a moment ago, and the agent browser could not record it (the file of ended scopes cannot be written: ENOSPC). Choose another name, or wait until the agent browser confirms its lists.");
+    const r6 = control.requests.find((v: any) => v.req.id === "r6").res.data.refusal;
+    assert.equal(r6, LAUNCH_HELD_TEXT.replace("{name}", "web-1").replace("{error}", "the file of ended scopes cannot be written: ENOSPC"), "the vectors' r6 is the service's text (review-102 B2)");
     assert.doesNotMatch(refusal, I2, "I2: the caller is often an agent");
     disk.failing = false;
     await setSessions(r, []);
@@ -499,6 +501,20 @@ test("the list copy of each named scope whose list has a file: written at set_se
   await r.req("session_ended", { scope: "w" });
   assert.equal(existsSync(join(r.state, "session-lists", "w")), false);
   assert.deepEqual(copyOf(r, "m"), { allow: ["n.example"] }, "no other copy goes");
+}));
+
+test("a copy goes when its scope's list has no file any more or its scope leaves the object, so the CLI never reads an old list's hosts (review-102 note 5)", withRig(async (r) => {
+  writeList(r, "a.b", { allow: ["a.example"], repo: "a/b" });
+  await setSessions(r, [W, sess("v")]);
+  assert.deepEqual(copyOf(r, "w"), { allow: ["a.example"] });
+  assert.deepEqual(copyOf(r, "v"), { allow: ["a.example"] });
+  await setSessions(r, [sess("w", "c/d"), sess("v")]); // w's list is now c.d, which has no file
+  assert.equal(copyOf(r, "w"), null, "a list with no file: no copy");
+  assert.deepEqual(copyOf(r, "v"), { allow: ["a.example"] }, "no other copy goes");
+  await setSessions(r, [sess("w", "c/d")]); // v leaves the object with no session_ended
+  assert.equal(copyOf(r, "v"), null, "a scope out of the object: no copy");
+  await setSessions(r, [W]);
+  assert.deepEqual(copyOf(r, "w"), { allow: ["a.example"] }, "back on a list with a file: the copy again");
 }));
 
 test("the end of a name that another live session holds keeps its copy; an end before the first complete read removes no copy", async () => {
@@ -819,6 +835,24 @@ test("a peer that half-closes after its import still gets the answer, then the d
     assert.deepEqual(await d.c.answer("i"), { t: "res", id: "i", ok: true, data: rx.importCounts });
     await d.c.closed;
     assert.ok(d.logs.includes("control: import by operator ann via send: ok"));
+  } finally { await d.close(); }
+});
+
+test("an import whose answer holds errors: the error event goes out before the import's answer line (C12, the error event; review-102 note 1)", async () => {
+  const rx = new FakeReceiver();
+  rx.importCounts = { ...rx.importCounts, errors: ["e1", "e2"] };
+  const d = await doorRig({ receiver: rx });
+  try {
+    d.c.send({ t: "req", id: "s", op: "set_sessions", by: { kind: "daemon", user: "ann", via: "daemon" }, sessions: [W], remote: [], box: BOX });
+    await d.c.answer("s");
+    rx.connect();
+    d.c.send({ t: "req", id: "i", op: "import", by: { kind: "operator", user: "ann", via: "send" }, payload: payload() });
+    assert.equal((await d.c.answer("i")).ok, true);
+    const at = (want: (l: any) => boolean) => d.c.lines.findIndex(want);
+    const ev = at((l) => l.t === "ev" && l.ev === "error" && l.op === "import");
+    assert.ok(ev >= 0, "the error event");
+    assert.ok(ev < at((l) => l.t === "res" && l.id === "i"), "before the import's answer");
+    d.c.end();
   } finally { await d.close(); }
 });
 

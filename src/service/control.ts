@@ -225,6 +225,15 @@ export class ControlDoor {
     this.o.log(`control: connection ${c.n} closed: ${why}`);
   }
 
+  /** The peer's end of the stream, with no answer owed: end the socket, so that the answers already written still go
+   * out whole (a destroy drops the bytes that the socket has not sent yet; review-102 B1). */
+  private finish(c: Conn): void {
+    if (!this.conns.has(c)) return;
+    this.conns.delete(c);
+    c.socket.end();
+    this.o.log(`control: connection ${c.n} closed: the end of the stream`);
+  }
+
   private accept(socket: Socket): void {
     const c: Conn = { n: ++this.count, socket, ready: false, pending: 0, ended: false };
     this.conns.add(c);
@@ -283,7 +292,7 @@ export class ControlDoor {
     // Bytes after the last newline are not a line: at the end of the stream the door drops them and closes, after the
     // answers that it still owes (a peer that half-closes after its request still gets its answer).
     c.socket.on("end", () => {
-      if (c.pending === 0) { this.close(c, "the end of the stream"); return; }
+      if (c.pending === 0) { this.finish(c); return; }
       c.ended = true;
     });
     c.socket.resume();
@@ -306,11 +315,7 @@ export class ControlDoor {
     void a.catch((e) => { this.o.log(`control: ${req.op} failed: ${(e as Error).name}`); return { error: ERR.bad } as Answer; }).then((x) => {
       c.pending--;
       this.answer(c, req, res(x), null, events);
-      if (c.ended && c.pending === 0 && this.conns.has(c)) {
-        this.conns.delete(c);
-        c.socket.end();
-        this.o.log(`control: connection ${c.n} closed: the end of the stream`);
-      }
+      if (c.ended && c.pending === 0) this.finish(c);
     });
   }
 
