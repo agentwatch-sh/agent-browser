@@ -520,7 +520,7 @@ test("the read vectors (q1 to q5) have exactly the keys of C12's data, and statu
 test("C12 states the ops of stage 1a: the five ops that it has, unsupported for each other op until its stage, and no Chrome, no list and no MCP", () => {
   sayAll(part(C12, "The ops of stage 1a."), [
     "Stage 1a's service (board ab-v16.94.2) has the ops `config`, `set_sessions`, `session_ended`, `status` and `endpoint`.",
-    "It answers each other op of the requests' table `unsupported`, as the hello says for an op that a service does not have, until a later stage adds that op: `start`, `stop` and `sender` come with the Chrome unit (stage 1b, board ab-v16.94.3); `launch_check`, `list_set`, `prompt_allow`, `prompt_dismiss`, `import`, `lists_get` and `prompts_get` come with the lists, the scopes, the prompts and the sign-ins (stage 1c, board ab-v16.94.4).",
+    "It answers each other op of the requests' table `unsupported`, as the hello says for an op that a service does not have, until a later stage adds that op: `start` and `stop` come with the Chrome unit (stage 1b part 1, board ab-v16.94.3), and `sender` with the agent package (stage 1b part 2, board ab-v16.94.9); `launch_check`, `list_set`, `prompt_allow`, `prompt_dismiss`, `import`, `lists_get` and `prompts_get` come with the lists, the scopes, the prompts and the sign-ins (stage 1c, board ab-v16.94.4).",
     "These stages add no feature name: the daemon's client (stage 2) needs every op of stage 1, and stage 2 comes after stage 1.",
     "Stage 1a has no Chrome, no list and no MCP. `config` and `set_sessions` keep their data in memory. `session_ended` drops the scope's session and records the ended scope in memory.",
     "Its `status` gives the state `off`, `null` for each fact of Chrome and the extension, the `mcp` state `none`, no list and no prompt. Its event stream sends no event, because each event comes from Chrome or a later stage.",
@@ -532,6 +532,34 @@ test("C12 states the ops of stage 1a: the five ops that it has, unsupported for 
   const later = p.slice(p.indexOf("It answers"), p.indexOf("These stages"));
   const named = [...spans(first), ...spans(later)].filter((s) => Object.hasOwn(OPS, s));
   assert.deepEqual([...named].sort(), Object.keys(OPS).sort(), "every op once");
+});
+
+test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop, their answers after the work, the owner rule's error, the events of the Chrome unit, the values of Chrome's facts, and the command's new flags", () => {
+  sayAll(part(C12, "The ops of stage 1b part 1 (board ab-v16.94.3)."), [
+    "Stage 1b part 1 adds the Chrome unit to the service (the design, sections 5.1, 5.6 and 13.2) and the ops `start` and `stop`: the service no longer answers them `unsupported`. Each other op that stage 1a answers `unsupported` stays so until its stage.",
+    "`start` starts Chrome and Xvfb and answers when they run, with `data` `{}`, or with the start's error text (for example a refused switch of `chrome_args`, or that Google Chrome is being installed into the tools folder). `stop` stops them and answers when they are gone, with `data` `{}`.",
+    "A `start` or a `stop` while the service does not own the Chrome unit (the design, section 13.2) gets the error `the agent-browser service does not own the agent browser now`, and the service changes nothing.",
+    "A `start` and a `stop` answer when their work ends, so their answer can come after the answer of a later request and after their events: the daemon matches each answer by its `id`. A daemon that half-closes the connection after a request still gets that answer; the service closes the connection after its last answer.",
+    "`ready` comes when Chrome and Xvfb run after a `start`, a restart by the service's supervisor, an adoption at the service's start, or a Chrome move. Stage 1b part 1 has no native link and no agent package (stage 1b part 2), so `extension_version` is `null`, and with no receiver the fail-closed watch stops Chrome 60 s after the last confirm on it, with the `stopped` reason `receiver_missing`.",
+    "`chrome` comes when the version or the update state of the running Chrome changes.",
+    "`stopped` comes at a `stop` that stopped a running Chrome (with the stop's `by`), at a stop of the fail-closed watch (`receiver_missing` or `sessions_unread`), and once after three failed starts of the supervisor in a row (`start_failed`). A `config` with `enabled: false` stops Chrome with no event.",
+    "`state` is `ready` while Chrome and Xvfb run; `starting` during a start, while the supervisor starts a wanted Chrome again, and while a wanted Chrome waits for the first `config`; `failed closed` after a stop of the fail-closed watch; else `off`.",
+    "`chrome_kind` is `google-chrome` (Google Chrome stable from the tools folder, when `chrome_bin` is empty or `null`) or `chromium` (the Chromium of `chrome_bin`): the kinds of the unit record.",
+    "`chrome_version` is the version of the tools folder's copy, in the form of Google's index (`a.b.c.d-r`, for example `157.0.7000.1-1`), or `null` when the service does not know it (a Chromium of `chrome_bin`). The `ready` and `chrome` events carry the same value.",
+    "`update` is `null` while no Google Chrome of the tools folder runs; else `current`, `waiting` (a newer copy waits for the idle hour and for the clients to leave), `moving` (a move or the probation of its new copy runs), or `failed` (the last move failed, and the last good copy runs).",
+  ]);
+  sayAll(part(C12, "The command (stage 1b part 1)."), [
+    "`agent-browser service` takes three more flags: `--browser-state <folder>`, the state folder of the agent browser (its profile, `unit.json` and the X auth file), by default today's folder `~/.local/share/agentwatch-browser/`; `--tools-dir <folder>`, the tools folder of Google Chrome, by default today's `~/.local/share/agentwatch-tools/`; and `--service-unit <unit>`, the service's own unit, whose state decides the owner (the design, section 13.2), by default `agent-browser.service`.",
+    "The service owns the Chrome unit only while its own unit is `active`, `activating` or `deactivating` and the unit's MainPID is the service. When it does not own at its start, it closes its control door and exits with status 1. When it finds later that it no longer owns, it stops its owner parts and exits with status 1. Chrome and Xvfb stay, for the next owner.",
+    "`agent-browser service stop --all [--browser-state <folder>]` stops the Chrome unit with no service running (the uninstall, and the Mac's open point 3 of the design's section 17): each Chrome on the profile and the unit's Xvfb, of this user only. It writes no file.",
+    "`--test` serves the real service for the live harness only: the service owns with no systemd unit, the MainPID of rule 1 is the service's parent (the harness), and it needs `--test-display`. It is refused when a folder is missing or is a default folder. Its test-only `--test-chrome-source` names a local folder and a test key in place of Google's index. agentwatch never passes these flags.",
+  ]);
+  // The vectors use the values that this part fixes.
+  assert.equal(control.state.chrome.kind, "google-chrome");
+  assert.match(control.state.chrome.version, /^\d+(\.\d+){3}-\d+$/);
+  for (const v of control.events.filter((e: any) => e.ev.ev === "ready")) assert.equal(v.ev.chrome_version, control.state.chrome.version);
+  for (const v of control.events.filter((e: any) => e.ev.ev === "chrome")) assert.ok(["current", "waiting", "moving", "failed", null].includes(v.ev.update) && v.ev.version === control.state.chrome.version);
+  assert.ok(["current", "waiting", "moving", "failed", null].includes(control.state.update));
 });
 
 test("C12 states the command of stage 1a and the fake service (the daemon lead's C10): the flags, the fake's admission, its own rules and its events from standard input", () => {

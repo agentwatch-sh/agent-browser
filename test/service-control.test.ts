@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
-import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
+import { commitOf, defaultControlDoor, LATER_OPS, PART_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
 import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 
@@ -191,9 +191,10 @@ test("the fake answers every request vector and every bad request vector as the 
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
   assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), {
-    import: "1c", launch_check: "1c", list_set: "1c", lists_get: "1c", prompt_allow: "1c", prompt_dismiss: "1c", prompts_get: "1c", sender: "1b", start: "1b", stop: "1b",
+    import: "1c", launch_check: "1c", list_set: "1c", lists_get: "1c", prompt_allow: "1c", prompt_dismiss: "1c", prompts_get: "1c", sender: "1b2",
   });
-  assert.deepEqual([...STAGE_1A_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
+  assert.deepEqual(PART_OPS, { "1b1": ["start", "stop"] }, "stage 1b part 1 adds start and stop (its tests: test/service-unit-part.test.ts)");
+  assert.deepEqual([...STAGE_1A_OPS, ...Object.values(PART_OPS).flat(), ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
   const d = await openDoor(stage1a());
   try {
     const { c, answers } = await runVectors(d.path);

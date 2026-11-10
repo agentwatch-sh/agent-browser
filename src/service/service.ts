@@ -5,6 +5,8 @@
 // admission.ts). Off by default: nothing starts it before stage 2, and no install step of this repository writes a unit
 // for it. Stage 1a has no Chrome, no list and no MCP: it has the ops config, set_sessions, session_ended, status and
 // endpoint, and it answers each other op of C12 `unsupported` until the stage that adds it (C12, "The ops of stage 1a").
+// Each later part adds its ops to the op table through ServicePart: stage 1b part 1 (board ab-v16.94.3) adds the Chrome
+// unit and its owner rule (src/service/unit/part.ts) with the ops start and stop (C12, "The ops of stage 1b part 1").
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";

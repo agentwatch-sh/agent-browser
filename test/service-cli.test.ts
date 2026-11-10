@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,8 +64,10 @@ test("the usage of service: --agent-door is required; its flags are its own and 
 test("the service as a process with node:ffi off: its peer check cannot run, so the control door refuses each connection with the reason and the agent door answers the 503 of step 3; SIGTERM stops it and removes both sockets", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-svc-"));
   const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
-  const child = spawn(process.execPath, ["--no-experimental-ffi", BIN, "service", "--agent-door", cdp, "--control-door", sock,
-    "--daemon-unit", "agent-browser-test-none.service", "--daemon-command", join(dir, "daemon-command.json")], { stdio: ["ignore", "pipe", "pipe"] });
+  // --test (board ab-v16.94.3): the service owns the Chrome unit with no systemd unit, in temp folders only; no Chrome starts.
+  const child = spawn(process.execPath, ["--no-experimental-ffi", BIN, "service", "--test", "--test-display", "173", "--agent-door", cdp, "--control-door", sock,
+    "--daemon-unit", "agent-browser-test-none.service", "--daemon-command", join(dir, "daemon-command.json"),
+    "--browser-state", join(dir, "state"), "--tools-dir", join(dir, "tools")], { stdio: ["ignore", "pipe", "pipe"] });
   let err = "";
   child.stderr!.on("data", (d) => (err += d));
   try {
@@ -117,4 +119,57 @@ test("off by default: no install step, unit file or script of this repository st
   const files = (d: string): string[] => readdirSync(join(ROOT, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(d, e.name)) : [join(d, e.name)]));
   assert.deepEqual([...files("bin"), ...files("src"), ...files("python")].filter((f) => /\.(service|socket|plist)$/.test(f)), [], "no unit file");
   assert.ok(!readFileSync(join(ROOT, "index.js"), "utf8").includes("service"), "the library does not start it");
+});
+
+// ------------------------------------------------------------------ stage 1b part 1 (board ab-v16.94.3): --test and stop --all
+
+test("--test (the live harness only) is refused when a folder is missing or is a default folder (the operator's state and tools folders, the service's and agentwatch's run folders), and needs --test-display; its test-only flags go with --test only", async () => {
+  const { testRefusal } = await import("../src/service/main.ts");
+  const { defaultStateDir, defaultToolsDir } = await import("../src/service/unit/paths.ts");
+  const dir = mkdtempSync(join(tmpdir(), "ab-test-mode-"));
+  try {
+    const ok = { browserState: join(dir, "state"), toolsDir: join(dir, "tools"), controlDoor: join(dir, "run", "control.sock"), agentDoor: join(dir, "run", "cdp.sock"), daemonCommand: join(dir, "daemon-command.json"), display: "173" };
+    const env = { XDG_RUNTIME_DIR: "/run/user/1000", XDG_CONFIG_HOME: "/home/ann/.config" };
+    assert.equal(testRefusal(ok, env, 1000), null);
+    for (const k of Object.keys(ok) as (keyof typeof ok)[]) assert.match(testRefusal({ ...ok, [k]: undefined }, env, 1000)!, /--test needs --/, k);
+    const cases: [Partial<typeof ok>, RegExp][] = [
+      [{ browserState: defaultStateDir() }, /--browser-state in or around a default folder/],
+      [{ browserState: join(defaultStateDir(), "profile") }, /--browser-state in or around a default folder/],
+      [{ toolsDir: defaultToolsDir() }, /--tools-dir in or around a default folder/],
+      [{ browserState: join(defaultStateDir(), "..") }, /--browser-state in or around a default folder/],
+      [{ controlDoor: "/run/user/1000/agent-browser/control.sock" }, /--control-door in or around a default folder/],
+      [{ agentDoor: "/run/user/1000/agentwatch/browser-cdp.sock" }, /--agent-door in or around a default folder/],
+      [{ daemonCommand: "/home/ann/.config/agent-browser/daemon-command.json" }, /--daemon-command in or around a default folder/],
+      [{ display: "x" }, /--test-display must be a display number/],
+    ];
+    for (const [change, re] of cases) assert.match(testRefusal({ ...ok, ...change }, env, 1000) ?? "", re, JSON.stringify(change));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  for (const [args, what] of [
+    [["service", "--test", "--agent-door", "/x/cdp.sock"], /--test needs --browser-state/],
+    [["service", "--agent-door", "/x/cdp.sock", "--test-display", "173"], /--test-display goes with --test/],
+    [["service", "--agent-door", "/x/cdp.sock", "--test-chrome-source", "/x.json"], /--test-chrome-source goes with --test/],
+    [["service", "--test", "--fake", "--control-door", "/x/c.sock"], /--test does not go with --fake/],
+    [["service", "stop"], /usage: agent-browser service/],
+    [["service", "--all", "--agent-door", "/x/cdp.sock"], /--all goes with service stop/],
+    [["service", "stop", "--all", "--agent-door", "/x/cdp.sock"], /--agent-door does not go with service stop --all/],
+  ] as const) {
+    const r = await runNode([BIN, ...args]);
+    assert.equal(r.code, 2, `${args.join(" ")}: ${r.stderr}`);
+    assert.match(r.stderr, what, args.join(" "));
+  }
+});
+
+test("service stop --all with a temp state folder where nothing runs prints nothing and exits 0; the test-only Chrome source is a local folder, never a URL", async () => {
+  const { testChromeSource } = await import("../src/service/main.ts");
+  const dir = mkdtempSync(join(tmpdir(), "ab-stop-all-"));
+  try {
+    const r = await runNode([BIN, "service", "stop", "--all", "--browser-state", join(dir, "state")]);
+    assert.deepEqual([r.code, r.stdout], [0, ""], r.stderr);
+    const f = join(dir, "source.json");
+    writeFileSync(f, JSON.stringify({ repo: "https://dl.google.com/linux/chrome/deb", key: "/k.asc", fingerprints: ["A".repeat(40)] }));
+    assert.throws(() => testChromeSource(f), /a local folder, never a URL/);
+    writeFileSync(f, JSON.stringify({ repo: join(dir, "repo") + "/", key: join(dir, "k.asc"), fingerprints: ["A".repeat(40)] }));
+    const s = testChromeSource(f);
+    assert.deepEqual([s.repo, s.keyFile, s.fingerprints, s.origin, s.suite, s.package], [join(dir, "repo"), join(dir, "k.asc"), ["A".repeat(40)], "Google LLC", "stable", "google-chrome-stable"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
