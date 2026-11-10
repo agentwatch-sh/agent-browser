@@ -12,7 +12,7 @@ import { AGENT_ARGS } from "../src/agent.ts";
 import { abstractDisplays, DISPLAY_FIRST, DISPLAY_LAST, displayInUse, freeDisplays, realDisplayFs } from "../src/service/unit/display.ts";
 import { Procs } from "../src/service/unit/procs.ts";
 import { readRecord, writeJsonDurable } from "../src/service/unit/record.ts";
-import { CHROME_INSTALLING, CHROME_NOT_INSTALLED, ChromeUnit, configFrom, ConfigError, DEFAULT_CONFIG, KIND_CHROMIUM, KIND_GOOGLE, NotOwnerError, signalGroup, spawnDetached, StartError, STOPPED_DURING_INSTALL, XVFB_TRIES, type UnitEvent } from "../src/service/unit/unit.ts";
+import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, HEALTHY_MS, SUPERVISE_MS, CHROME_INSTALLING, CHROME_NOT_INSTALLED, ChromeUnit, configFrom, ConfigError, DEFAULT_CONFIG, KIND_CHROMIUM, KIND_GOOGLE, NotOwnerError, signalGroup, spawnDetached, StartError, STOPPED_DURING_INSTALL, XVFB_TRIES, type UnitEvent } from "../src/service/unit/unit.ts";
 import { AUTH_NAME, COOKIE_LEN, writeXauthority, xauthEntry } from "../src/service/unit/xauth.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 
@@ -366,6 +366,10 @@ test("the boot sweep (stopOrphans) spares the adopted Chrome and every process b
 
 // ------------------------------------------------------------------ the supervisor
 
+test("the supervisor's check comes every 5 s; its backoff runs from 1 s to 60 s", () => {
+  assert.deepEqual([SUPERVISE_MS, BACKOFF_MIN_MS, BACKOFF_MAX_MS, HEALTHY_MS], [5000, 1000, 60_000, 300_000]);
+});
+
 test("the supervisor: a wanted Chrome that is gone starts again after the backoff (1 s, doubling), with its Xvfb when that is gone too; nothing happens when not wanted; a start sends ready", async () => {
   const w = new World();
   try {
@@ -383,11 +387,24 @@ test("the supervisor: a wanted Chrome that is gone starts again after the backof
     assert.deepEqual(events, [{ kind: "ready" }]);
     w.end(chromeOf(w)[1].pid); w.end(x.pid);
     await u.superviseOnce((e) => events.push(e));
+    assert.deepEqual(w.logs.filter((l) => /is gone; starting it again in/.test(l)).map((l) => l.replace(/.* in /, "")), ["1 s", "2 s"], "the backoff doubles");
     assert.equal(xvfbOf(w).length, 2, "Xvfb again too");
     await u.stop();
     const n = w.spawned.length;
     await u.superviseOnce((e) => events.push(e));
     assert.equal(w.spawned.length, n, "not wanted: nothing");
+  } finally { w.close(); }
+});
+
+test("the supervisor starts nothing before the first config (build note 8: the part starts a wanted Chrome at that config), and counts no failure", async () => {
+  const w = new World();
+  try {
+    const { u } = unitIn(w, { cfg: null });
+    (u as any).wantedFlag = true;
+    const t0 = w.now;
+    for (let i = 0; i < 4; i++) await u.superviseOnce(() => assert.fail("no event"));
+    assert.equal(w.now, t0, "no backoff, no try");
+    assert.equal((u as any).failures, 0);
   } finally { w.close(); }
 });
 

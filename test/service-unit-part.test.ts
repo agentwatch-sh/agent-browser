@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as require_fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,17 +27,18 @@ const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: 
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 
 type Rig = { w: World; part: UnitPart; door: ControlDoor; logs: string[]; owns: { yes: boolean }; c: DaemonClient; close: () => Promise<void> };
-async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World) => void } = {}): Promise<Rig> {
+async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void } = {}): Promise<Rig> {
   const w = new World();
-  o.before?.(w);
+  const tools = new FakeTools();
+  o.before?.(w, tools);
   const logs: string[] = [];
   const owns = { yes: true };
   let handler!: Stage1a;
   const part = new UnitPart({
-    paths: w.paths, procs: w.procs, tools: new FakeTools(), log: (l) => logs.push(l),
+    paths: w.paths, procs: w.procs, tools, log: (l) => logs.push(l),
     owner: new Owner(async () => (owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }), (l) => logs.push(l)),
     endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => handler.sessionsComplete,
-    unit: { ...w.deps(new FakeTools(), { displays: { first: 173, last: 175 } }) },
+    unit: { ...w.deps(tools, { displays: { first: 173, last: 175 } }) },
     clock: () => w.now, wall: () => Date.UTC(2026, 10, 10, 12, 0, 0) + w.now - 1_000_000,
     superviseMs: 10, watchMs: 5, watchLimitMs: o.watchLimitMs ?? 3_600_000, firstCheckMs: 3_600_000,
   });
@@ -103,6 +105,10 @@ test("a start that fails answers its reason; a start or a stop while the service
     await c.answer("cfg3");
     r.owns.yes = false;
     assert.deepEqual(await req(c, "c", "start", TOKEN), { t: "res", id: "c", ok: false, error: NOT_OWNER });
+    // Google Chrome with no copy: a start of a service that does not own never begins an install.
+    c.send({ ...CONFIG, id: "cfg4", chrome_bin: null }); await c.answer("cfg4");
+    assert.deepEqual(await req(c, "c2", "start", TOKEN), { t: "res", id: "c2", ok: false, error: NOT_OWNER });
+    assert.deepEqual((r.part as any).o.tools.calls, [], "no install");
     assert.deepEqual(await req(c, "d", "stop", TOKEN), { t: "res", id: "d", ok: false, error: NOT_OWNER });
     assert.equal(r.w.spawned.length, 0);
   } finally { await r.close(); }
@@ -142,11 +148,24 @@ test("build note 8: at the service's start a record that wants the browser and w
   try {
     const { c } = r;
     assert.equal((await status(c, "s0")).state, "starting");
+    await sleep(100); // ten checks of the supervisor
     assert.equal(r.w.spawned.length, 0, "nothing before the config");
+    assert.deepEqual(events(c), [], "no start_failed before the config");
     c.send(CONFIG); await c.answer("cfg");
     await c.next((l) => l.t === "ev" && l.ev === "ready", 10_000);
     assert.equal(r.w.named("chromium").length, 1);
   } finally { await r.close(); }
+  // Google Chrome with no copy yet: the start at the first config installs it (a restart by the supervisor never installs).
+  const r3 = await rig({ before: (w, tools) => {
+    tools.autoInstall = true;
+    w.programs[tools.copy(tools.entry.version).binary] = tools.copy(tools.entry.version).binary;
+    writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, xvfb_pid: 99999, chrome_pid: 99998, chrome: { kind: "google-chrome", version: "157.0.7000.1-1" } });
+  } });
+  try {
+    r3.c.send({ ...CONFIG, chrome_bin: null }); await r3.c.answer("cfg");
+    const ready = await r3.c.next((l) => l.t === "ev" && l.ev === "ready", 10_000);
+    assert.equal(ready.chrome_version, "158.0.7100.1-1", "the installed copy");
+  } finally { await r3.close(); }
   const r2 = await rig({ before: (w) => { writeJsonDurable(w.paths.unitFile, { wanted: false, display: 173, xvfb_pid: 99999, chrome_pid: 99998 }); } });
   try {
     r2.c.send(CONFIG); await r2.c.answer("cfg");
@@ -174,6 +193,39 @@ test("the watch through the part: with no receiver (stage 1b part 1) Chrome stop
     assert.deepEqual([s.state, s.agent_text, s.last_stop.reason, s.last_stop.by], ["failed closed", STATE_TEXTS["failed closed"].agent_text, "receiver_missing", null]);
     assert.equal(r.w.named("chromium").length, 0);
     assert.ok(r.logs.some((l) => /with no receiver that confirmed the lists; stopping it/.test(l)));
+  } finally { await r.close(); }
+});
+
+test("the boot sweep at the service's start: a Chrome on the profile that no record names is stopped; with a unit record that cannot be read, no Chrome is stopped", async () => {
+  let orphan = 0;
+  const r = await rig({ before: (w) => { orphan = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`] }).pid; } });
+  try {
+    assert.equal(r.w.alive(orphan), false);
+    assert.deepEqual(r.w.signals, [[orphan, "SIGTERM"]]);
+  } finally { await r.close(); }
+  const pids: number[] = [];
+  const r2 = await rig({ before: (w) => {
+    require_fs.writeFileSync(w.paths.unitFile, "{not json");
+    for (let i = 0; i < 2; i++) pids.push(w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`] }).pid);
+  } });
+  try {
+    assert.deepEqual(r2.w.signals, [], "no sweep on a record that cannot be read");
+    for (const p of pids) assert.ok(r2.w.alive(p));
+  } finally { await r2.close(); }
+});
+
+test("the watch asks the owner rule right before its stop: a service that no longer owns never stops Chrome", async () => {
+  const r = await rig({ watchLimitMs: 60_000 });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await req(c, "a", "start", TOKEN);
+    while (r.part.watch.missingFor() === null) await sleep(2);
+    r.owns.yes = false;
+    r.w.now += 61_000;
+    await sleep(100);
+    assert.equal(events(c).some((l) => l.ev === "stopped"), false);
+    assert.equal(r.w.named("chromium").length, 1, "Chrome stays");
   } finally { await r.close(); }
 });
 

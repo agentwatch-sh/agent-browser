@@ -715,7 +715,8 @@ export class ChromeUnit {
 
   /** One check of the supervisor: a wanted Chrome that is gone starts again after the backoff. */
   async superviseOnce(on: (e: UnitEvent) => void): Promise<void> {
-    if (!this.wantedFlag) return;
+    // Before the first config the unit starts nothing (build note 8): the part starts a wanted Chrome at that config.
+    if (!this.wantedFlag || !this.config) return;
     const now = this.clock();
     const chrome = this.chrome;
     if (this.running()) {

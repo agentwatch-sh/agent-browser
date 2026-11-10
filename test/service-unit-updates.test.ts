@@ -48,6 +48,7 @@ test("the update's state file: the last good copy, the failed versions (never st
     assert.deepEqual([...broken.refused()], []);
     broken.noteFailed("160.0.1.1-1", "x");
     broken.noteGood("160.0.1.1-1");
+    broken.noteWait(99);
     assert.equal(readFileSync(w.paths.updateFile, "utf8"), "{damaged", "never written over");
     assert.match(broken.stateProblem(), /cannot be read/);
   } finally { w.close(); }
@@ -104,12 +105,13 @@ async function moving(o: Partial<Activity> = {}) {
 const settle = async () => { for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r)); };
 
 test("a move waits for the idle hour from the service's start and for the clients to leave, then restarts Chrome on the new copy (the owner rule first); its confirm makes it the last good copy and prunes", async () => {
-  let clients = true;
+  let clients = false;
   const { w, unit, mover, updater, tools, asked } = await moving({ clients: () => clients });
   try {
     mover.tick(true);
-    assert.equal(mover.moving, false, "the idle hour counts from the service's start");
+    assert.equal(mover.moving, false, "the idle hour counts from the service's start, also with no client");
     w.now += H;
+    clients = true;
     mover.tick(true);
     assert.equal(mover.moving, false, "a client holds the move back");
     assert.equal(mover.updateState(), "waiting");

@@ -119,7 +119,7 @@ export class ChromeUpdater {
   /** The receiver of `version` confirmed the lists: it is the last good copy; one newer than every failed one ends them. */
   noteGood(version: string): void {
     const s = this.load();
-    if (versionKey(version) === null || this.broken) return;
+    if (versionKey(version) === null) return;
     let changed = s.last_good !== version;
     s.last_good = version;
     const f = this.newestFailure();
@@ -131,13 +131,12 @@ export class ChromeUpdater {
   noteFailed(version: string, reason: string): void {
     const s = this.load();
     if (this.ready === version) this.ready = null;
-    if (this.broken) return;
     s.failed = [...s.failed.filter((x) => x.version !== version), { version, reason: reason.slice(0, 300) }].slice(-FAILED_KEPT);
     this.save();
   }
 
   waitSince(): number | null { return this.load().update_since; }
-  noteWait(since: number | null): void { const s = this.load(); if (!this.broken && s.update_since !== since) { s.update_since = since; this.save(); } }
+  noteWait(since: number | null): void { const s = this.load(); if (s.update_since !== since) { s.update_since = since; this.save(); } }
 
   /** One check; the version that it newly installed, else null. Nothing runs while the browser is off or chrome_bin is set. */
   async checkOnce(): Promise<string | null> {
