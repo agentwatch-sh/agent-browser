@@ -84,16 +84,21 @@ export function site(base: string): Site {
 
 export type Consumer = { dir: string; stateDir: string; allowlist: string; options: (extra?: Partial<BrowserOptions>) => BrowserOptions; remove: () => void };
 
+/** The consumers' temp folders that no test removed yet: the process's exit removes them (so no test leaks one). */
+const consumerDirs = new Set<string>();
+process.on("exit", () => { for (const d of consumerDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } });
+
 /** A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist file. */
 export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
   const dir = mkdtempSync(join(tmpdir(), "ab-"));
+  consumerDirs.add(dir);
   const stateDir = join(dir, "state"), allowlist = join(dir, "allow.json");
   writeFileSync(allowlist, JSON.stringify({ allow }));
   return {
     dir, stateDir, allowlist,
     options: (extra = {}) => ({ stateDir, allowlistFile: allowlist, noLaunch: true, log: () => {}, ...extra }),
     // A just-stopped proxy may still be writing its socket/pid file as this runs; retry past the race.
-    remove: () => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }),
+    remove: () => { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); consumerDirs.delete(dir); },
   };
 }
 
