@@ -1248,6 +1248,18 @@ the build must show. The operator sees them with the questions.
    in each, no event goes after a later client call. If Chrome drops input events during a dialog, the
    client's calls of the ended plan get an error that names the dialog.
 
+   This rule is the lead's choice between the two rules that the fix round left in disagreement. The options:
+   - **a. End the plan, and send the client's own events at once (kept in section 4.3a).** The page gets
+     what the client asked for, in the client's order, as with Playwright's own input. The rest of the path
+     and the person's timing of the press and the release are lost for that one action.
+   - b. Pause the plan while the dialog is open, and go on after the close (the fix round's first text). The
+     person's timing stays, but a client that keeps working during the dialog (the Playwright MCP waits for
+     the model's dialog tool, often longer than 2 s) can then see the plan's old events after its later
+     calls.
+   - c. End the plan, send only the releases, and answer the client's open calls with an error that names
+     the dialog. No old event can reach the page, but a click that a dialog interrupts fails where
+     Playwright's own click goes on after the close.
+
 ## 17. What this design does not cover
 
 - The Mac's own numbers: event times, the trackpad, the wheel, fractional points on a Retina screen (part B;
