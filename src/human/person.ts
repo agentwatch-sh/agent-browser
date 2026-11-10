@@ -23,7 +23,14 @@ export type Params = {
   };
   press: { pauseMs: Dist; holdMs: Dist; force: number; doubleGapMs: Dist; spread: { sdShare: number; maxShare: number } };
   wheel: { notchPx: number; gapMs: Dist };
-  population: { speed: Dist; pause: Dist; hold: Dist; overshootShare: Dist; side: Dist };
+  /** The keys (board ab-t30.4; design 10.2): src/human/keys.ts. */
+  keys: {
+    holdMs: Dist; baseMs: Dist; pairMs: { twoHands: number; sameHand: number; sameFinger: number; sameKey: number };
+    pauseMs: { space: Dist; mark: Dist; line: Dist }; drift: { min: number; max: number; keep: number; sd: number };
+    shift: { beforeMs: Dist; afterMs: Dist; otherHandShare: number }; chord: { beforeMs: Dist; releaseGapMs: Dist };
+    afterReleaseMs: Dist; fastMs: Dist; runSlowMs: number; typeMaxMs: number;
+  };
+  population: { speed: Dist; pause: Dist; hold: Dist; overshootShare: Dist; side: Dist; keySpeed: Dist };
 };
 
 /** One person: the platform's parameters and the values drawn once for the scope. */
@@ -41,6 +48,8 @@ export type Person = {
   /** The hand's tremor across the path: its amplitude (px) and frequency (Hz). */
   tremorPx: number;
   tremorHz: number;
+  /** A factor on the time from one key press to the next (board ab-t30.4: a slower or a faster typist). */
+  keySpeed: number;
 };
 
 const files = new Map<string, Params>();
@@ -69,6 +78,8 @@ export function drawPerson(params: Params, random: Random): Person {
     side: draw(random, pop.side),
     tremorPx: draw(random, params.path.jitter.px),
     tremorHz: draw(random, params.path.jitter.hz),
+    // Drawn after the pointer's values, so that a scope's pointer stays the person that it was before the keys (board ab-t30.4).
+    keySpeed: draw(random, pop.keySpeed),
   };
 }
 
@@ -82,5 +93,5 @@ export function middlePerson(params: Params = paramsFor()): Person {
   const mid = (d: Dist) => ("uniform" in d ? (d.uniform[0] + d.uniform[1]) / 2 : "normal" in d ? d.normal[0] : d.lognormal[0]);
   const pop = params.population;
   return { params, speed: mid(pop.speed), pause: mid(pop.pause), hold: mid(pop.hold), overshootShare: params.path.overshoot.share, side: mid(pop.side),
-    tremorPx: mid(params.path.jitter.px), tremorHz: mid(params.path.jitter.hz) };
+    tremorPx: mid(params.path.jitter.px), tremorHz: mid(params.path.jitter.hz), keySpeed: mid(pop.keySpeed) };
 }

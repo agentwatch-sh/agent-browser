@@ -1493,8 +1493,8 @@ export class Tab {
    * another one: only the text before the first of them is checked, and the rest goes as key events
    * (Tab, Enter and characters), so "a\tb\tc\n" fills a row of cells. Under whileDrawn. In a window of its own
    * (Tab.drive "window"), a person's typing (input.ts): the field gets the focus by a click, with the caret where
-   * el.focus() would put it, and the text goes as one key-event pair per character, 90 to 150 ms apart, never as
-   * inserted text (a character with no US key excepted).
+   * el.focus() would put it, and the text goes as keys by the keyboard model (src/human/keys.ts: a person's holds and
+   * times, rollover, a real Shift key), never as inserted text (a character with no US key excepted).
    */
   async type(text: string, selector?: string): Promise<void> {
     if (this.drive === "window") return this.byHand((h) => this.typeNow(text, selector, h));
@@ -1530,10 +1530,12 @@ export class Tab {
       if (!before.editable && !h) await this.send("Input.insertText", { text: head });
       if (h || before.editable || await unchanged()) {
         for (const ch of head) await key(ch);
+        await h?.endKeys(); // the field's read comes after the last key's release (design 4.5)
         if (await unchanged()) throw new Error(`type: the text did not arrive: the focused field is unchanged after ${before.editable || h ? "" : "inserted text and after "}key events`);
       }
     }
     for (const ch of rest) await key(ch);
+    await h?.endKeys();
   }
 
   /** Under whileDrawn; in a window of its own, after the window came forward, with the key held down a short time (input.ts). */

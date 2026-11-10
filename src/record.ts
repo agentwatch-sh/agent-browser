@@ -31,6 +31,7 @@ import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, s
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
 import { seededRandom } from "./human/random.ts";
+import { charKey } from "./human/keys.ts";
 import type { Hands } from "./input.ts";
 
 // ---------- the step script ----------
@@ -210,27 +211,9 @@ export type KeyEvent = { key: string; code: string; keyCode: number; text?: stri
 
 const MODIFIERS: Record<string, number> = { alt: 1, option: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
 const SHIFT = 8;
-// US layout: the code, the key code and whether Shift is down for each printable character.
-const PUNCTUATION: Record<string, [string, number, boolean]> = {
-  " ": ["Space", 32, false], "-": ["Minus", 189, false], _: ["Minus", 189, true], "=": ["Equal", 187, false], "+": ["Equal", 187, true],
-  "[": ["BracketLeft", 219, false], "{": ["BracketLeft", 219, true], "]": ["BracketRight", 221, false], "}": ["BracketRight", 221, true],
-  "\\": ["Backslash", 220, false], "|": ["Backslash", 220, true], ";": ["Semicolon", 186, false], ":": ["Semicolon", 186, true],
-  "'": ["Quote", 222, false], '"': ["Quote", 222, true], ",": ["Comma", 188, false], "<": ["Comma", 188, true],
-  ".": ["Period", 190, false], ">": ["Period", 190, true], "/": ["Slash", 191, false], "?": ["Slash", 191, true],
-  "`": ["Backquote", 192, false], "~": ["Backquote", 192, true],
-};
-const SHIFTED_DIGITS = ")!@#$%^&*(";
-
-/** The US-layout key that types `ch`, or undefined (the character is then inserted as text). */
-export function charKey(ch: string): KeyEvent | undefined {
-  if (/^[a-z]$/.test(ch)) return { key: ch, code: `Key${ch.toUpperCase()}`, keyCode: ch.toUpperCase().charCodeAt(0), text: ch, modifiers: 0 };
-  if (/^[A-Z]$/.test(ch)) return { key: ch, code: `Key${ch}`, keyCode: ch.charCodeAt(0), text: ch, modifiers: SHIFT };
-  if (/^[0-9]$/.test(ch)) return { key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0), text: ch, modifiers: 0 };
-  const d = SHIFTED_DIGITS.indexOf(ch);
-  if (d >= 0) return { key: ch, code: `Digit${d}`, keyCode: 48 + d, text: ch, modifiers: SHIFT };
-  const p = PUNCTUATION[ch];
-  return p ? { key: ch, code: p[0], keyCode: p[1], text: ch, modifiers: p[2] ? SHIFT : 0 } : undefined;
-}
+// The US layout's keys (charKey) are the keyboard model's (src/human/keys.ts, board ab-t30.4): one table for `record`,
+// agent-browser's own typing and the input stage.
+export { charKey };
 
 /**
  * "Enter", "ArrowDown", "Shift+ArrowDown", "Meta+A", "Control+Home". A letter in a chord is the key
