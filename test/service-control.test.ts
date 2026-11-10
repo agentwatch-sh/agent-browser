@@ -7,14 +7,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
 import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
-import { FAKE_STATE, FakeService, startFake } from "../src/service/fake.ts";
+import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -33,7 +33,10 @@ async function openDoor(handler: Handler, o: { admit?: Admit; maxLine?: number }
   const dir = mkdtempSync(join(tmpdir(), "ab-ctl-"));
   const path = join(dir, "control.sock");
   const logs: string[] = [];
-  const door = await ControlDoor.open({ path, admit: o.admit ?? admitAll, handler, log: (l) => logs.push(l), maxLine: o.maxLine });
+  let door: ControlDoor;
+  // The folder goes also when the open throws (N10).
+  try { door = await ControlDoor.open({ path, admit: o.admit ?? admitAll, handler, log: (l) => logs.push(l), maxLine: o.maxLine }); }
+  catch (e) { rmSync(dir, { recursive: true, force: true }); throw e; }
   return { door, path, logs, close: async () => { await door.stop(); rmSync(dir, { recursive: true, force: true }); } };
 }
 const stage1a = () => new Stage1a({ agentDoor: { url: (scope) => `ws+unix://${AGENT_DOOR}:/devtools/browser/${scope}`, state: () => ({ form: "pidfd" }) } });
@@ -229,7 +232,7 @@ test("the stage 1a status: state off, the agent's text and the operator's text a
       state: "off", agent_text: STAGE_1A_TEXTS.agent_text, operator_text: STAGE_1A_TEXTS.operator_text,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: { form: "pidfd" }, mcp: { state: "none", address: null },
-      sessions: [{ scope: "shell-2", repo: null, list: null }], lists: [], last_stop: null, prompts: [],
+      sessions: [{ scope: "shell-2", repo: null, list: null }, { scope: "web-2", repo: "owner/repo", list: null }], lists: [], last_stop: null, prompts: [],
     });
     assert.deepEqual((await c.answer("u")).data, { url: `ws+unix://${AGENT_DOOR}:/devtools/browser/shell-2` });
     c.end();
@@ -279,9 +282,15 @@ test("the log rule: the service logs each act with its provenance, and no log li
       const { c } = await runVectors(d.path);
       c.send({ t: "req", id: "bad-shape", op: "list_set", by: { kind: "operator", user: "ann", via: "web" }, list: "secret-list-name", add: "not-a-list", remove: [] });
       await c.answer("bad-shape");
+      // N8: a user with a newline or a control character is a bad request, so no log line gets it.
+      for (const [id, user] of [["u1", "ann\ncontrol: forged-line"], ["u2", "ann\u0007forged-bell"]]) {
+        c.send({ t: "req", id, op: "config", by: { kind: "daemon", user, via: "config" }, enabled: true, control: true, chrome_bin: null, chrome_args: [] });
+        assert.deepEqual(await c.answer(id), { t: "res", id, ok: false, error: "bad request" });
+      }
       c.end();
       for (const l of d.logs) for (const s of secrets) assert.ok(!l.includes(s), `a log line holds ${JSON.stringify(s)}: ${l}`);
       assert.ok(d.logs.every((l) => !l.includes("secret-list-name") && !l.includes("not-a-list")), "a refused line is never logged");
+      assert.ok(d.logs.every((l) => !l.includes("forged")), "no forged log line");
       // An act is logged with its provenance; a read is not an act.
       assert.ok(d.logs.some((l) => l === "control: config by daemon ann via config: ok"), d.logs.join("\n"));
       assert.ok(d.logs.some((l) => l === "control: session_ended by daemon ann via daemon: ok"), d.logs.join("\n"));
@@ -390,5 +399,94 @@ test("the fake with --refuse sends the refused line of rule 2 of the vectors and
   const def = defaultControlDoor({ XDG_RUNTIME_DIR: "/run/user/1000" }, "linux", "/nonexistent-home");
   assert.equal(def, "/run/user/1000/agent-browser/control.sock");
   assert.equal(defaultControlDoor({}, "darwin", "/Users/u"), "/Users/u/.cache/agent-browser/run/control.sock");
-  await assert.rejects(startFake({ controlDoor: def, log: () => {}, defaultPath: def }), /never takes the place of the service/);
+});
+
+test("the fake never listens in the service's run folder (B2): the run folders with and with no XDG_RUNTIME_DIR, the real folder through a link in a parent folder, and no folder made there", async () => {
+  // With no XDG_RUNTIME_DIR, Linux's default run folder is /run/user/<uid>/agent-browser.
+  assert.deepEqual(serviceRunFolders({}, "linux", "/h", 1234), ["/run/user/1234/agent-browser"]);
+  assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "linux", "/h", 1234), ["/run/user/1234/agent-browser", "/x/run/agent-browser"]);
+  assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "darwin", "/Users/u", 501), ["/Users/u/.cache/agent-browser/run"]);
+  // A temp folder stands in for the run root (never the real /run/user/<uid>/agent-browser).
+  const dir = mkdtempSync(join(tmpdir(), "ab-run-"));
+  try {
+    const root = join(dir, "run"), link = join(dir, "L");
+    mkdirSync(root, { mode: 0o700 });
+    symlinkSync(root, link);
+    const runFolder = join(root, "agent-browser");
+    for (const path of [join(runFolder, "control.sock"), join(link, "agent-browser", "control.sock"), join(link, "agent-browser", "other.sock"), join(dir, "L", ".", "agent-browser", "x.sock")]) {
+      await assert.rejects(startFake({ controlDoor: path, log: () => {}, refusedFolders: [runFolder] }), /never takes the place of the service/, path);
+    }
+    assert.throws(() => statSync(runFolder), /ENOENT/, "no folder made in the run folder's place");
+    // The run folder exists: the same check after links.
+    mkdirSync(runFolder, { mode: 0o700 });
+    await assert.rejects(startFake({ controlDoor: join(link, "agent-browser", "control.sock"), log: () => {}, refusedFolders: [runFolder] }), /never takes the place of the service/);
+    // Another folder is fine.
+    const fake = await startFake({ controlDoor: join(dir, "ok", "control.sock"), log: () => {}, refusedFolders: [runFolder] });
+    await fake.stop();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------ the line rules (B1), the folder, the admission limit
+
+test("the line rules (B1): each badLines vector closes the connection (a BOM, a CR LF, a lone surrogate's bytes); a last line with no newline before the end gets no answer and the connection closes; many lines in one read get their answers in order", async () => {
+  for (const make of [stage1a, () => new FakeService({})]) {
+    const d = await openDoor(make());
+    try {
+      for (const v of control.badLines) {
+        const { c } = await hello(d.path);
+        c.send(Buffer.from(v.hex, "hex"));
+        assert.equal(await closesWithin(c), true, v.note);
+        assert.equal(c.lines.length, 1, `${v.note}: no answer`);
+      }
+      // Many lines in one read: each one answered, in order.
+      const many = await hello(d.path);
+      const by = { kind: "daemon", user: "ann", via: "daemon" };
+      many.c.send(["m1", "m2", "m3"].map((id) => JSON.stringify({ t: "req", id, op: "status", by }) + "\n").join(""));
+      await many.c.answer("m3");
+      assert.deepEqual(many.c.lines.filter((l) => l.t === "res").map((l) => l.id), ["m1", "m2", "m3"]);
+      many.c.end();
+      // A last line with no newline, then the end of the stream: no answer; the connection closes.
+      const last = await hello(d.path);
+      last.c.send(JSON.stringify({ t: "req", id: "tail", op: "status", by }));
+      last.c.socket.end();
+      assert.equal(await closesWithin(last.c), true, "the end of the stream closes the connection");
+      assert.deepEqual(last.c.lines.filter((l) => l.t === "res"), [], "no answer to bytes after the last newline");
+    } finally { await d.close(); }
+  }
+});
+
+test("the control door's folder: a new folder gets mode 0700; a folder that the group or others can enter stops the open", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-fold-"));
+  try {
+    const made = join(dir, "made");
+    const door = await ControlDoor.open({ path: join(made, "control.sock"), admit: admitAll, handler: stage1a(), log: () => {} });
+    assert.equal(statSync(made).mode & 0o777, 0o700);
+    await door.stop();
+    const open = join(dir, "open");
+    mkdirSync(open);
+    chmodSync(open, 0o755);
+    await assert.rejects(ControlDoor.open({ path: join(open, "control.sock"), admit: admitAll, handler: stage1a(), log: () => {} }), /must be a folder of this user with mode 0700/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the admission limit (N9): at most 4 connections are checked at a time; one more gets the refused line with its reason and closes; the 4 go on", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  let calls = 0;
+  const d = await openDoor(stage1a(), { admit: async () => { calls++; await held; return { ok: true }; } });
+  try {
+    const waiting = await Promise.all([1, 2, 3, 4].map(() => daemonClient(d.path)));
+    await sleep(100);
+    assert.equal(calls, 4);
+    const over = await daemonClient(d.path);
+    assert.equal(await closesWithin(over), true);
+    assert.deepEqual(over.lines, [{ t: "refused", reason: "The control door checks 4 other connections now, so it refuses this one: connect again." }]);
+    assert.equal(calls, 4, "the admission did not run for the fifth");
+    release();
+    for (const c of waiting) assert.equal((await c.next()).t, "hello");
+    // The limit counts only the checks that run: a new connection is checked again.
+    const after = await daemonClient(d.path);
+    assert.equal((await after.next()).t, "hello");
+    for (const c of [...waiting, after]) c.end();
+  } finally { await d.close(); }
 });

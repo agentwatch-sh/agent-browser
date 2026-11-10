@@ -1316,13 +1316,14 @@ ops of stage 1a and the fake).
 - `agent-browser service --agent-door <address> [--control-door <path>] [--daemon-unit <unit>] [--daemon-command <file>]`:
   one process with two doors. The agent door is today's CDP endpoint with today's peer check (the relay's code,
   `src/service/agent-door.ts`). The control door, `control.sock`, admits only the agentwatch daemon process: the
-  MainPID of agentwatch's unit or its direct child, with the command of the file that agentwatch's install writes
-  (`src/service/admission.ts`). Stage 1a has no Chrome: it answers `config`, `set_sessions`, `session_ended`,
+  MainPID of agentwatch's unit or its direct child, with the command of the file that agentwatch's daemon writes at
+  its start (`src/service/admission.ts`). Stage 1a has no Chrome: it answers `config`, `set_sessions`, `session_ended`,
   `status` and `endpoint`, and each other op `unsupported`.
 - `agent-browser service --hello [--fake]` prints the hello and exits.
 - `agent-browser service --fake --control-door <path> [--refuse]`: the fake for agentwatch's hermetic tests, with the
-  scripted state of `test/vectors/control.json` and no Chrome (`src/service/fake.ts`). Each event line on its standard
-  input goes to the connected daemon.
+  scripted state of `test/vectors/control.json` and no Chrome (`src/service/fake.ts`). It prints `{"t":"listening"}`
+  when its socket listens, and each event line on its standard input goes to the connected daemon. It never listens
+  in the service's run folder.
 
 ## Tab scopes
 

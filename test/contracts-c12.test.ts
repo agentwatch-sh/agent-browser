@@ -51,7 +51,9 @@ const spans = (cell: string) => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1]
 
 const KINDS = ["operator", "token", "daemon"];
 const VIAS = ["web", "send", "cli", "config", "daemon"];
-const ERRORS = ["unsupported", "bad request", "not the operator", "this prompt is gone"];
+const ERRORS = ["unsupported", "bad request", "not the operator", "this prompt is gone", "no such session"];
+/** agentwatch's user pattern (C12, provenance): a `user` that does not match is a bad request. */
+const USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const LINE_KEYS = ["t", "v", "id", "op", "by"];
 const strings = (x: unknown) => Array.isArray(x) && x.every((s) => typeof s === "string");
 const text1 = (x: unknown) => typeof x === "string" && x.length > 0;
@@ -101,10 +103,11 @@ const OPS: Record<string, { fields: string[]; kinds: string[] | null }> = {
   endpoint: { kinds: null, fields: ["scope"] },
   sender: { kinds: null, fields: [] },
 };
-const byFits = (by: any) => isObj(by) && keysOf(by).join() === "kind,user,via" && KINDS.includes(by.kind) && typeof by.user === "string" && by.user.length > 0 && VIAS.includes(by.via);
+const byFits = (by: any) => isObj(by) && keysOf(by).join() === "kind,user,via" && KINDS.includes(by.kind) && typeof by.user === "string" && USER.test(by.user) && VIAS.includes(by.via);
 type Prompt = { id: string; host: string; list: string };
-// The service's error for a request, in C12's order (null: the service applies it).
-function serviceError(req: any, state: { prompts: Prompt[] }): string | null {
+// The service's error for a request, in C12's order (null: the service applies it). `scopes`: the scopes of the last
+// set_sessions less the ones that ended since (for endpoint's `no such session`).
+function serviceError(req: any, state: { prompts: Prompt[]; scopes?: Set<string> }): string | null {
   const o = OPS[req.op];
   if (!o) return "unsupported";
   if (!byFits(req.by) || !requestFits(req, o.fields) || !o.fields.every((f) => fieldFits(f, req[f]))) return "bad request";
@@ -112,7 +115,19 @@ function serviceError(req: any, state: { prompts: Prompt[] }): string | null {
   const p = state.prompts.find((x) => x.id === req.prompt);
   if (req.op === "prompt_dismiss" && !p) return "this prompt is gone";
   if (req.op === "prompt_allow" && (!p || p.host !== req.host || p.list !== req.list)) return "this prompt is gone";
+  if (req.op === "endpoint" && state.scopes && !state.scopes.has(req.scope)) return "no such session";
   return null;
+}
+/** C12's line rules for the bytes of one line (with its newline): true when the line closes the connection. */
+function lineCloses(bytes: Buffer): boolean {
+  const line = bytes.subarray(0, bytes.length - 1);
+  if (bytes[bytes.length - 1] !== 10 || line.includes(10) || line.includes(13)) return true;
+  if (line[0] === 0xef && line[1] === 0xbb && line[2] === 0xbf) return true;
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(line); } catch { return true; }
+  let msg: unknown;
+  try { msg = JSON.parse(text); } catch { return true; }
+  return !isObj(msg) || (msg.t === "req" && typeof msg.id !== "string");
 }
 // Each event of C12 and its fields (stopped with the reason stop also has by).
 const EVENTS: Record<string, string[]> = {
@@ -162,10 +177,11 @@ test("C12 states who connects (R1, m1): the MainPID and its pidfd, the parent, a
     "1. The service gets the MainPID of agentwatch's unit from the user's systemd at this accept, and it holds a pidfd of the MainPID itself. A daemon restart changes the MainPID.",
     "2. The peer is the MainPID itself, or a direct child of it: the peer's parent pid is the MainPID, and the parent's start time (field 22 of `/proc/<ppid>/stat`) equals the MainPID's start time, read in the same check.",
     "(If agentwatch's unit makes the daemon itself its MainPID, the child case goes, and this file changes first.)",
-    "3. The peer is the daemon's command. The service reads the expected command from a file that agentwatch's install writes, so an agentwatch update needs no restart of the service.",
+    "3. The peer is the daemon's command. The service reads the expected command from a file that agentwatch's daemon writes at its start, before it connects, so an agentwatch update needs no restart of the service.",
     "It compares the peer's command line (`/proc/<pid>/cmdline`) from argv[1] on: argv[0] is the interpreter's path in uv's cache, which changes with the script's dependencies (agentwatch runs a uv script).",
     "It also checks the peer's executable (`/proc/<pid>/exe`) against the interpreter that the file names.",
-    "4. The peer is the same process during the whole check: the service holds its pidfd, and the peer's start time is the same before and after the reads, and later than its parent's. After the checks the service reads the MainPID again, and it must be the same.",
+    "4. The peer is the same process during the whole check: the service holds its pidfd, and the peer's start time is the same before and after the reads, and not earlier than its parent's (start times count in clock ticks, so a child can start in its parent's tick). Its parent pid is the same before and after the reads. After the checks the service reads the MainPID again, and it must be the same.",
+    "The service checks at most 4 connections at a time. A connection over that limit gets the refused line with its reason (`The control door checks 4 other connections now, so it refuses this one: connect again.`), and the service closes it.",
     "A process of agentwatch's cgroup is not enough. A child that the daemon forks and that connects itself has the daemon, not the MainPID, as its parent, and it is refused. The daemon never passes its connection to another process.",
     "The service's own pid never passes. No agent-browser CLI command is a control client.",
     "A peer that fails a rule of 1 to 4 gets one line `{\"t\":\"refused\",\"reason\":\"<text>\"}` that names the rule, and the service closes the connection and logs the reason.",
@@ -238,6 +254,8 @@ test("C12 states the lines, the line keys, an unknown ev, the field rules (exact
     "A line that is not a JSON object, or a request with no string `id`, closes the connection.",
     "A request with an op that the service does not have gets `unsupported` (the hello, above).",
     "A request whose `by` breaks the shape of provenance (below), or whose fields break the field rules (below), gets `{\"t\":\"res\",\"id\":\"<id>\",\"ok\":false,\"error\":\"bad request\"}`.",
+    "A line is strict UTF-8, with no byte order mark and no CR: a line that is not valid UTF-8 (for example the bytes `ED A0 80` of a lone surrogate), a line that starts with a byte order mark (`EF BB BF`), and a line that holds a CR (byte `0D`, for example a line that ends in CR LF) break the compact-line rule, and each closes the connection.",
+    "Bytes after the last newline are not a line: a side does not answer them. At the end of the stream it drops them and closes the connection. Many lines can come in one read: a side takes each of them, in order.",
     "A side ignores a line whose `t` it does not know: a newer side can add a kind of line. The daemon ignores an event whose `ev` it does not know, as it ignores a field that it does not know: a newer service can add an event.",
   ]);
   // The field rules: the part holds exactly the reference's bullets, so the reference takes its rules only from C12.
@@ -254,7 +272,7 @@ test("C12 states the lines, the line keys, an unknown ev, the field rules (exact
     "`kind: token` for a start, a stop or a read with the API token (for a start and a stop, today's rule).",
     "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, and the daemon's own reads.",
     "`browser.control` is a key of agentwatch's config file, so it comes in `config` with `kind: daemon` and `via: config`. The daemon's other own requests have `via: daemon`.",
-    "`user` is the agentwatch user: the login's user for `operator`, the token's user for `token`, and the daemon's own user for `daemon`.",
+    "`user` is the agentwatch user: the login's user for `operator`, the token's user for `token`, and the daemon's own user for `daemon`. It matches agentwatch's user pattern, `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`; a `user` that does not match breaks the shape of provenance (so no log line gets a newline or a control character from it).",
     "`via` is where the act came from: `web` (the web viewer), `send` (the operator extension's send, C9), `cli` (the agentwatch CLI), `config` (the config file), `daemon` (the daemon itself).",
     "The service checks a request in this order: its op (`unsupported`); the shape of its `by` and its fields (`bad request`); then its kind.",
     "The service applies an operator act (`list_set`, `prompt_allow`, `prompt_dismiss`, `import`) only with `kind: operator`; any other kind gets `{\"t\":\"res\",\"id\":\"<id>\",\"ok\":false,\"error\":\"not the operator\"}`.",
@@ -289,15 +307,15 @@ test("C12's table of requests names exactly the ops of the reference, with their
     "Checks the payload (C2), drops the box's own sign-in cookies (the hosts and names of `set_sessions`), sends `import` to the receiver (C4), and answers the counts of C4's `import`. Nothing is written to disk.",
     "Starts or stops Chrome and Xvfb. Today's rule stays (the API token may start and stop) until the operator answers Q5 (board item ab-6ng).",
     "the state (`off`, `starting`, `ready` or `failed closed`), with an agent's text and an operator's text for each state (I2: no agent's text names a stop or a start)",
-    "Chrome's kind, version, pid and update state, and the extension's version; the endpoint's state (the peer check's form, or why it cannot run); the MCP port's state; the sessions and lists that the service has; the last stop with its reason and time; the open prompts; the update state.",
+    "Chrome's kind, version, pid and update state, and the extension's version; the endpoint's state (the peer check's form, or why it cannot run); the MCP's state; the sessions and lists that the service has; the last stop with its reason and time; the open prompts; the update state.",
     "| `lists_get`, `prompts_get` | none | The lists and the old single list (read only); the open prompts, each with its recipients. |",
-    "The endpoint's URL for the scope (for `agentwatch browser endpoint` and `env`).",
+    "The endpoint's URL for the scope (for `agentwatch browser endpoint` and `env`). A scope that the service does not have (no session of the last `set_sessions` has it, or it ended) gets the error `no such session`, not a URL.",
     "The sender's ID, its version and its package (C1, C9).",
     "Stage 1a (board ab-v16.94.2) fixes the keys of the `data` of `status`, `lists_get`, `prompts_get`, `endpoint` and `sender` in the part \"The data of the reads\", below, with the daemon lead's review. They include:",
     "It keeps each session's `lifetime_id` (agentwatch's id of that run of the session) for the recipients of a prompt.",
     "the agent's text and the operator's text of a state as two separate keys, because the gateway gives the operator's text only to a password login;",
     "each prompt's recipients, the session name and the lifetime id of each session that the block stopped, because the daemon sends them the allow notice (today's gateway does, at an allow);",
-    "the MCP port's state, for `agentwatch health`.",
+    "the MCP's state, for `agentwatch health`.",
     "The design's table names the prompt's field `id`; here it is `prompt`, because `id` is the request's id.",
     "The design's table names a field `providers` for `list_set` too. No list has providers: the operator chose the allow prompt, not a list of sign-in providers (board item ab-pbk). So `list_set` has no such field, and a later rule can add it as an additive field.",
     "The design's `list_set` names the whole list (`allow`); here it adds and removes (the daemon lead's change of 2026-11-10).",
@@ -305,9 +323,12 @@ test("C12's table of requests names exactly the ops of the reference, with their
   for (const e of ERRORS) assert.ok(C12.includes("`" + e + "`") || C12.includes(`"error":"${e}"`), `C12 names the error ${e}`);
 });
 
+const has0 = (f: (v: any) => boolean) => [...control.requests, ...control.badRequests].some(f);
 test("each request vector fits C12, gets its answer, and each bad request vector gets the error of C12's order", () => {
   const ids = new Set<string>();
   const ops = new Set<string>();
+  // The scopes of the last set_sessions that applied, less the ones that ended since (for endpoint, A1).
+  let scopes = new Set<string>();
   for (const { note, req, res } of [...control.requests, ...control.badRequests]) {
     assert.equal(req.t, "req", note);
     assert.ok(typeof req.id === "string" && !ids.has(req.id), `${note}: a unique id`);
@@ -321,8 +342,15 @@ test("each request vector fits C12, gets its answer, and each bad request vector
       assert.deepEqual(keysOf(res), ["error", "id", "ok", "t"], note);
       assert.ok(ERRORS.includes(res.error), `${note}: an error of C12`);
     }
-    assert.equal(serviceError(req, control.state), res.ok ? null : res.error, note);
+    assert.equal(serviceError(req, { ...control.state, scopes }), res.ok ? null : res.error, note);
+    if (res.ok && req.op === "set_sessions") scopes = new Set(req.sessions.map((x: any) => x.scope));
+    if (res.ok && req.op === "session_ended") scopes.delete(req.scope);
   }
+  // A1: endpoint for a scope that the service does not have, and for a scope that ended: no such session.
+  assert.ok(has0((v) => v.req.op === "endpoint" && v.req.scope === "web-3" && v.res.error === "no such session"), "endpoint: a scope never named");
+  assert.ok(has0((v) => v.req.op === "endpoint" && control.requests.some((r: any) => r.req.op === "session_ended" && r.req.scope === v.req.scope) && v.res.error === "no such session"), "endpoint: a scope that ended");
+  // N8: a user that breaks the pattern is a bad request.
+  assert.ok(has0((v) => typeof v.req.by?.user === "string" && !USER.test(v.req.by.user) && /\n/.test(v.req.by.user) && v.res.error === "bad request"), "a user with a newline");
   for (const { req, res } of control.requests) {
     ops.add(req.op);
     if (req.op === "list_set" || req.op === "prompt_allow") assert.ok(strings(res.data.allow) && Array.isArray(res.data.refused), `${req.id}: allow and refused`);
@@ -393,11 +421,13 @@ test("C12 states what happens when the daemon drops, and the vectors' part", () 
 test("C12 names the path and the format of the daemon's expected command (rule 3's file): agentwatch writes it, the service reads it at each accept", () => {
   assert.ok(says(part(C12, "Who connects"), "The part \"The daemon's expected command\", below, names the file's path and its format."), "rule 3 points to the part");
   sayAll(part(C12, "The daemon's expected command (rule 3's file; board ab-v16.94.2)."), [
-    "agentwatch's install writes this file, and agentwatch writes it again at each update and at each change of the daemon's command line. The service reads it at each accept, so a new file takes effect at the next connection, with no restart of the service.",
-    "The path: `$XDG_CONFIG_HOME/agent-browser/daemon-command.json`, or `~/.config/agent-browser/daemon-command.json` when `XDG_CONFIG_HOME` is not set, on Linux and on the Mac. The service's unit can name another file with `--daemon-command <file>` (the command, below).",
+    "agentwatch's daemon writes this file at its start, before it connects. The service reads it at each accept, so a new file takes effect at the next connection, with no restart of the service.",
+    "The path: `$XDG_CONFIG_HOME/agent-browser/daemon-command.json`, or `~/.config/agent-browser/daemon-command.json` when `XDG_CONFIG_HOME` is not set, on Linux and on the Mac. agentwatch's unit passes `--daemon-command <file>` and `--daemon-unit <unit>` explicitly (the command, below): a systemd user unit's environment can lack the user's `XDG_CONFIG_HOME`.",
     "The format: one JSON object in UTF-8, `{\"v\":1,\"interpreter\":\"<path>\",\"args\":[\"<argument>\",...]}`. `v` is 1.",
     "`interpreter` is the absolute, resolved path (`realpath`) of the daemon's interpreter, because `/proc/<pid>/exe` resolves links: a path through a link never matches.",
-    "`args` is the daemon's command line from argv[1] on, one string for each argument, in order. The service ignores a key that it does not know.",
+    "`args` is the daemon's command line from argv[1] on, one string for each argument, in order. The daemon takes `args` from `/proc/self/cmdline`, not from Python's `sys.argv` (which drops the interpreter's flags; `-m` changes argv[0]). The service ignores a key that it does not know.",
+    "When the interpreter is replaced on disk, `/proc/<pid>/exe` ends with ` (deleted)`: the door then refuses the daemon (rule 3) until the daemon restarts and writes the file again.",
+    "The service opens it once, with no link followed (`O_NOFOLLOW`), and checks the open file (`fstat`), so the file that it checks is the file that it reads.",
     "The check: the target of the peer's `/proc/<pid>/exe` equals `interpreter`, and the peer's `/proc/<pid>/cmdline` from argv[1] on equals `args`, with the same count and each argument the same.",
     "The file is a regular file, not a link, owned by the service's user, and not writable by its group or by others (agentwatch writes it with mode 0600).",
     "A file that is missing, that breaks one of these rules, or whose content breaks the format fails rule 3 at each connection: the refused line names rule 3 and the reason.",
@@ -517,15 +547,47 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
   sayAll(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), [
     "`agent-browser service --fake --control-door <path>` serves the control door for agentwatch's hermetic tests, with the scripted state of the vectors (the `state` of `test/vectors/control.json`) and no Chrome. Its code is `src/service/fake.ts`.",
     "Its hello has `\"commit\":null` and the feature `fake`. It has every op of the requests' table, and it gives each request vector its answer when the vectors run in their order on one connection.",
-    "It admits each connection that reaches its socket: the socket has mode 0600 in a folder of mode 0700, and the fake holds no list, no sign-in, no Chrome and no data of the user. It refuses the default path of `control.sock`, so it never takes the place of the service. With `--refuse`, each connection gets the refused line of rule 2 of the vectors, and the fake closes it.",
+    "It admits each connection that reaches its socket: the socket has mode 0600 in a folder of mode 0700, and the fake holds no list, no sign-in, no Chrome and no data of the user. It never listens in the service's run folder: the folder of the default `control.sock`, and on Linux also `/run/user/<uid>/agent-browser/` (the default when `XDG_RUNTIME_DIR` is not set). It compares the real folder of its socket (after links, before and after it makes the folder) with each of them, so it never takes the place of the service. With `--refuse`, each connection gets the refused line of rule 2 of the vectors, and the fake closes it.",
     "Its own rules where the vectors stop: it starts in the state `ready`. A `start` in the state `off` sends the vectors' first `ready` event, and a `stop` in the state `ready` sends `stopped` with the reason `stop` and the stop's `by`. An allow or a dismissal closes the prompt, with a `prompt` event in the state `closed`. `session_ended` holds the ended scope until the next `set_sessions`. `endpoint` gives the URL of the address of `--agent-door` (no agent door listens), else of the vectors' address.",
     "Each line on its standard input that is an event of the event table, with exactly its fields, goes to each connection that has sent its hello. The fake drops each other line. So a test sends the events that it needs.",
+    "After its socket listens, the fake prints one line on its standard output, `{\"t\":\"listening\"}`, so that a test waits for that line.",
   ]);
-  assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads."));
+  assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads. Its `badLines` are lines as bytes (in hex) that close the connection: a byte order mark, a CR, and bytes that are not UTF-8."));
   // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
   for (const p of control.state.prompts) assert.deepEqual(keysOf(p), PROMPT_KEYS, p.id);
   assert.equal(control.state.state, "ready", "the fake starts ready");
   assert.deepEqual(control.state.mcp, { state: "none", address: null });
+});
+
+test("C12 states the recipients' lifetime ids (B4): the run that the block stopped, a new run with a new set_sessions, null passes through, and no feature name for lifetime_id", () => {
+  sayAll(part(C12, "The data of the reads (stage 1a)."), [
+    "A recipient's `lifetime_id` is the one of the run that the block stopped: the session's `lifetime_id` in the `set_sessions` in force when the block happened, not a later one. A new run of a session comes with a new `set_sessions` that carries its new `lifetime_id`. A session whose `lifetime_id` is `null` is still a recipient, with `\"lifetime_id\":null`.",
+  ]);
+  sayAll(part(C12, "The ops of stage 1a."), [
+    "The field `lifetime_id` of `set_sessions` (stage 1a) comes with no feature name either, although the hello says that a stage that adds a field adds its feature name first: the daemon's client (stage 2) comes after stage 1, so no daemon talks to a service without it.",
+  ]);
+  // A vector of a recipient whose lifetime id is null: its session has null in set_sessions.
+  const snap = control.requests.find((v: any) => v.req.op === "set_sessions").req.sessions;
+  const nulls = control.state.prompts.flatMap((p: any) => p.recipients).filter((r: any) => r.lifetime_id === null);
+  assert.ok(nulls.length > 0, "a recipient with a null lifetime id");
+  for (const r of nulls) assert.ok(snap.some((s: any) => s.scope === r.session && s.lifetime_id === null), r.session);
+  assert.ok(!/MCP port/.test(C12), "no MCP port in C12 (B3)");
+});
+
+test("the line rules' vectors (badLines, B1): a byte order mark, a CR and bytes that are not UTF-8 each close the connection, by the reference of C12's line rules", () => {
+  assert.ok(Array.isArray(control.badLines) && control.badLines.length >= 3);
+  for (const v of control.badLines) {
+    const bytes = Buffer.from(v.hex, "hex");
+    assert.equal(lineCloses(bytes), v.closes, v.note);
+    assert.equal(v.closes, true, v.note);
+  }
+  const lines = control.badLines.map((v: any) => Buffer.from(v.hex, "hex"));
+  assert.ok(lines.some((b: Buffer) => b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf), "a BOM line");
+  assert.ok(lines.some((b: Buffer) => b.includes(13)), "a CR LF line");
+  assert.ok(lines.some((b: Buffer) => b.includes(Buffer.from([0xed, 0xa0, 0x80]))), "a lone surrogate's bytes");
+  // Without its BOM, its CR or its bad bytes each line is a good request: only the rule closes it.
+  const req = Buffer.from(JSON.stringify(control.requests.find((v: any) => v.req.op === "status").req) + "\n");
+  assert.equal(lineCloses(req), false);
 });
 
 // ---- The MCP's allow list: the reference of the format ----

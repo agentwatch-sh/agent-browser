@@ -28,7 +28,8 @@
     "list": "owner-repo",
     "repo": "owner/repo",
     "scopes": [
-     "web-1"
+     "web-1",
+     "web-2"
     ],
     "from": null,
     "warnings": [],
@@ -36,6 +37,10 @@
      {
       "session": "web-1",
       "lifetime_id": "lt-1a2b"
+     },
+     {
+      "session": "web-2",
+      "lifetime_id": null
      }
     ]
    }
@@ -242,7 +247,7 @@
    }
   },
   {
-   "note": "set_sessions: a complete snapshot of two local sessions (each with its lifetime id, or null), no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
+   "note": "set_sessions: a complete snapshot of three local sessions (each with its lifetime id, or null: web-2 has none), no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
    "req": {
     "t": "req",
     "id": "r3",
@@ -272,6 +277,18 @@
        {
         "pid": 3200,
         "start": 6100
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null
+     },
+     {
+      "scope": "web-2",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3300,
+        "start": 6200
        }
       ],
       "cgroup": null,
@@ -337,6 +354,11 @@
        "scope": "shell-2",
        "repo": null,
        "list": null
+      },
+      {
+       "scope": "web-2",
+       "repo": "owner/repo",
+       "list": "owner-repo"
       }
      ],
      "lists": [
@@ -367,7 +389,8 @@
        "list": "owner-repo",
        "repo": "owner/repo",
        "scopes": [
-        "web-1"
+        "web-1",
+        "web-2"
        ],
        "from": null,
        "warnings": [],
@@ -375,6 +398,10 @@
         {
          "session": "web-1",
          "lifetime_id": "lt-1a2b"
+        },
+        {
+         "session": "web-2",
+         "lifetime_id": null
         }
        ]
       }
@@ -408,7 +435,8 @@
         "old.example"
        ],
        "sessions": [
-        "web-1"
+        "web-1",
+        "web-2"
        ],
        "error": ""
       }
@@ -418,7 +446,7 @@
    }
   },
   {
-   "note": "prompts_get: the open prompts, each with its recipients (the session name and the lifetime id of each session that a block stopped)",
+   "note": "prompts_get: the open prompts, each with its recipients (the session name and the lifetime id of each session that a block stopped; web-2's lifetime id is null, and web-2 is still a recipient)",
    "req": {
     "t": "req",
     "id": "q3",
@@ -458,7 +486,8 @@
        "list": "owner-repo",
        "repo": "owner/repo",
        "scopes": [
-        "web-1"
+        "web-1",
+        "web-2"
        ],
        "from": null,
        "warnings": [],
@@ -466,6 +495,10 @@
         {
          "session": "web-1",
          "lifetime_id": "lt-1a2b"
+        },
+        {
+         "session": "web-2",
+         "lifetime_id": null
         }
        ]
       }
@@ -1179,6 +1212,65 @@
     "ok": false,
     "error": "bad request"
    }
+  },
+  {
+   "note": "endpoint for a scope that the service does not have: no such session, not a URL",
+   "req": {
+    "t": "req",
+    "id": "b19",
+    "op": "endpoint",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "web-3"
+   },
+   "res": {
+    "t": "res",
+    "id": "b19",
+    "ok": false,
+    "error": "no such session"
+   }
+  },
+  {
+   "note": "endpoint for a scope that ended (r4 ended web-1): no such session",
+   "req": {
+    "t": "req",
+    "id": "b20",
+    "op": "endpoint",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "web-1"
+   },
+   "res": {
+    "t": "res",
+    "id": "b20",
+    "ok": false,
+    "error": "no such session"
+   }
+  },
+  {
+   "note": "a user that does not match agentwatch's user pattern (a newline, which could forge a log line): bad request",
+   "req": {
+    "t": "req",
+    "id": "b21",
+    "op": "status",
+    "by": {
+     "kind": "daemon",
+     "user": "ann\nforged",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b21",
+    "ok": false,
+    "error": "bad request"
+   }
   }
  ],
  "events": [
@@ -1306,6 +1398,23 @@
     "count": 1
    },
    "ignored": true
+  }
+ ],
+ "badLines": [
+  {
+   "note": "a line that starts with a byte order mark (EF BB BF): not a compact line; it closes the connection",
+   "hex": "efbbbf7b2274223a22726571222c226964223a226c31222c226f70223a22737461747573222c226279223a7b226b696e64223a226461656d6f6e222c2275736572223a22616e6e222c22766961223a226461656d6f6e227d7d0a",
+   "closes": true
+  },
+  {
+   "note": "a line that ends in CR LF: a CR breaks the compact-line rule; it closes the connection",
+   "hex": "7b2274223a22726571222c226964223a226c31222c226f70223a22737461747573222c226279223a7b226b696e64223a226461656d6f6e222c2275736572223a22616e6e222c22766961223a226461656d6f6e227d7d0d0a",
+   "closes": true
+  },
+  {
+   "note": "a line with the bytes of a lone surrogate (ED A0 80) in a string: not UTF-8; it closes the connection",
+   "hex": "7b2274223a22726571222c226964223a226c31222c226f70223a22737461747573222c226279223a7b226b696e64223a226461656d6f6e222c2275736572223a22616e6e222c22766961223a226461656d6f6e227d2c2278223a22eda080227d0a",
+   "closes": true
   }
  ]
 }

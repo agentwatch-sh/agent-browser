@@ -85,14 +85,18 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the fake as a process (agentwatch's hermetic tests): the hello, the vectors' answers, an event from its standard input; SIGTERM stops it and removes its socket", { timeout: 60_000 }, async () => {
+test("the fake as a process (agentwatch's hermetic tests): {\"t\":\"listening\"} on its standard output, the hello, the vectors' answers, an event from its standard input; SIGTERM stops it and removes its socket", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-fake-"));
   const sock = join(dir, "control.sock");
   const child = spawn(process.execPath, [BIN, "service", "--fake", "--control-door", sock], { stdio: ["pipe", "pipe", "pipe"] });
-  let err = "";
+  let err = "", out = "";
   child.stderr!.on("data", (d) => (err += d));
+  child.stdout!.on("data", (d) => (out += d));
   try {
-    await until(() => err.includes("control: ready on"), "the ready line");
+    // A2: one line on standard output after the socket listens, for a test to wait on.
+    await until(() => out.includes("\n"), "the listening line");
+    assert.equal(out, '{"t":"listening"}\n');
+    assert.ok(existsSync(sock), "the socket listens before the line");
     const c = await daemonClient(sock);
     assert.deepEqual((await c.next()).features, ["fake"]);
     c.send(DAEMON_HELLO);

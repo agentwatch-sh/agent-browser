@@ -7,13 +7,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { parseExpectedCommand, readExpectedCommand, REFUSED_NO_MAINPID, refusedRule, systemdMainPid, defaultDaemonCommandFile } from "../src/service/admission.ts";
-import { startService, type Service } from "../src/service/service.ts";
+import { daemonAdmission, loadPidfdOpen, parseExpectedCommand, readExpectedCommand, REFUSED_NO_MAINPID, refusedCannotRead, refusedRule, systemdMainPid, defaultDaemonCommandFile } from "../src/service/admission.ts";
+import { ControlDoor } from "../src/service/control.ts";
+import { Stage1a, startService, type Service } from "../src/service/service.ts";
+import { selfTest, type PeerReader } from "../src/relay/peer.ts";
 import { raw } from "./fake-bridge.ts";
 import { NOT_READY } from "../src/relay/model.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
@@ -68,18 +70,66 @@ function descendants(pid: number): number[] {
   return kids.flatMap((k) => [...descendants(k), k]);
 }
 
+/**
+ * The race cases of rules 2 and 4 (B5): a wrapper of the real reader that changes one answer, as a process that
+ * changes during the check would. `mainFdinfo`: the MainPID's pidfd names another pid at once; `parentStart`: the
+ * parent's start time is not the MainPID's; `peerStart`: the peer's start time changes; `parentLater`: the parent
+ * (the MainPID) starts after the peer; `endPoll` and `endFdinfo`: the MainPID's pidfd polls readable, or names another
+ * pid, at the end; `peerPpid`: the peer's parent pid changes; `stat`: the reader is of the stat form.
+ */
+type Mode = null | "stat" | "mainFdinfo" | "parentStart" | "peerStart" | "parentLater" | "endPoll" | "endFdinfo" | "peerPpid";
+function wrapped(r: PeerReader, main: () => number | null, w: { mode: Mode; counts: Map<string, number> }): PeerReader {
+  const count = (k: string) => { const n = (w.counts.get(k) ?? 0) + 1; w.counts.set(k, n); return n; };
+  return {
+    get form() { return w.mode === "stat" ? "stat" : r.form; },
+    peer: (fd) => r.peer(fd),
+    proc: (pid) => {
+      const p = r.proc(pid);
+      if (!p || w.mode === null) return p;
+      if (pid === main()) {
+        if (w.mode === "parentLater") return { ...p, start: p.start + 10_000_000 };
+        if (w.mode === "parentStart" && count("main") === 2) return { ...p, start: p.start + 1 };
+        return p;
+      }
+      if (w.mode === "peerStart" && count("peer") === 2) return { ...p, start: p.start + 1 };
+      if (w.mode === "peerPpid" && count("peer") === 2) return { ...p, ppid: p.ppid + 1 };
+      return p;
+    },
+    cgroup: (pid) => r.cgroup(pid),
+    poll: (fd) => (w.mode === "endPoll" && r.fdinfoPid(fd) === main() ? 1 : r.poll(fd)),
+    fdinfoPid: (fd) => {
+      const p = r.fdinfoPid(fd);
+      if (p === null || p !== main()) return p;
+      if (w.mode === "mainFdinfo") return p + 1;
+      if (w.mode === "endFdinfo" && count("mainfd") === 2) return p + 1;
+      return p;
+    },
+    close: (fd) => r.close(fd),
+  };
+}
+
 /** A world: a temp folder with the two doors' paths and the expected command's file, the service, and the processes that it started. */
-type World = { dir: string; sock: string; file: string; logs: string[]; service: Service; procs: Proc[]; pids: number[]; main: { pid: number | null; queue: (number | null)[]; hold?: Promise<void> }; uv: () => Promise<{ p: Proc; pid: number }>; daemon: (uv: Proc, marker: string) => Promise<any[]>; close: () => Promise<void> };
-async function world(): Promise<World> {
+type World = { dir: string; sock: string; file: string; logs: string[]; service: Service; procs: Proc[]; pids: number[]; main: { pid: number | null; queue: (number | null)[]; hold?: Promise<void> }; race: { mode: Mode; counts: Map<string, number> }; uv: () => Promise<{ p: Proc; pid: number }>; daemon: (uv: Proc, marker: string) => Promise<any[]>; close: () => Promise<void> };
+/** `wrap`: the control door alone, with its admission over a wrapped real reader (the race cases), in place of the whole service. */
+async function world(o: { wrap?: boolean } = {}): Promise<World> {
   const dir = mkdtempSync(join(tmpdir(), "ab-adm-"));
   const sock = join(dir, "control.sock"), file = join(dir, "daemon-command.json");
   const logs: string[] = [];
   // The MainPID of the test's systemd: the queue's next value, else `pid`; `hold` holds the next read once.
   const main: World["main"] = { pid: null, queue: [] };
-  const service = await startService({
-    agentDoor: join(dir, "cdp.sock"), controlDoor: sock, daemonCommand: file, log: (l) => logs.push(l),
-    mainPid: async () => { if (main.hold) { const h = main.hold; main.hold = undefined; await h; } return main.queue.length ? main.queue.shift()! : main.pid; },
-  });
+  const race: World["race"] = { mode: null, counts: new Map() };
+  const mainPid = async () => { if (main.hold) { const h = main.hold; main.hold = undefined; await h; } return main.queue.length ? main.queue.shift()! : main.pid; };
+  let service: Service;
+  try {
+    if (o.wrap) {
+      const t = await selfTest(join(dir, "cdp.sock"));
+      if ("failed" in t) throw new Error(`the self-test failed: ${t.failed}`);
+      const state = new Stage1a({ agentDoor: { url: (scope) => scope, state: () => ({ form: "pidfd" }) } });
+      const control = await ControlDoor.open({ path: sock, handler: state, log: (l) => logs.push(l),
+        admit: daemonAdmission({ reader: wrapped(t.reader, () => main.pid, race), pidfd: await loadPidfdOpen(), mainPid, commandFile: file }) });
+      service = { control, agent: null as never, state, stop: () => control.stop() };
+    } else service = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: sock, daemonCommand: file, log: (l) => logs.push(l), mainPid });
+  } catch (e) { rmSync(dir, { recursive: true, force: true }); throw e; }
   const procs: Proc[] = [], pids: number[] = [];
   const uv = async () => { const p = run(["-e", UV, sock, DAEMON]); procs.push(p); const pid = (await p.next((l) => l.uv)).uv; return { p, pid }; };
   /** Start a fake daemon under `uv`: the lines that it got, up to its close or the answer of its status. */
@@ -92,7 +142,7 @@ async function world(): Promise<World> {
     return u.lines.filter((l) => l.pid === first.pid && l.line).map((l) => l.line);
   };
   return {
-    dir, sock, file, logs, service, procs, pids, main, uv, daemon,
+    dir, sock, file, logs, service, procs, pids, main, race, uv, daemon,
     close: async () => {
       // Each process that this test started, and each process under it.
       for (const pid of [...procs.flatMap((p) => descendants(p.child.pid!)), ...pids]) try { process.kill(pid, "SIGKILL"); } catch {}
@@ -139,6 +189,10 @@ test("the expected command's file: its format (v 1, an absolute interpreter, arg
     symlinkSync(f, link);
     assert.match(String(readExpectedCommand(link, uid)), /not a regular file/);
     assert.match(String(readExpectedCommand(dir, uid)), /not a regular file/);
+    // A FIFO: the one open does not wait for a writer (O_NONBLOCK), and fstat refuses it (N4).
+    const fifo = join(dir, "fifo.json");
+    assert.equal(spawnSync("mkfifo", [fifo]).status, 0);
+    assert.match(String(readExpectedCommand(fifo, uid)), /not a regular file/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -291,6 +345,29 @@ async function waitFor(f: () => boolean, what: string, ms = 10_000): Promise<voi
   const t0 = Date.now();
   while (!f()) { if (Date.now() - t0 > ms) throw new Error(`no ${what} in ${ms} ms`); await new Promise((r) => setTimeout(r, 20)); }
 }
+
+test("the race checks of rules 2 and 4 (B5, N3) through a wrapped real reader: the stat form, the MainPID's pidfd at the open and at the end, the parent's start time, the peer's start time and parent pid before and after, and a parent that starts after the peer", { skip: !linux, timeout: 120_000 }, async () => {
+  const w = await world({ wrap: true });
+  try {
+    const { p, pid } = await w.uv();
+    w.main.pid = pid;
+    expect(w, { args: daemonArgs(w, "a") });
+    const run = async (mode: Mode) => { w.race.mode = mode; w.race.counts = new Map(); return w.daemon(p, "a"); };
+    assert.ok(admitted(await run(null)), "the real reader, unchanged: admitted");
+    const cases: [Mode, string][] = [
+      ["stat", refusedCannotRead("this kernel gives no pidfd of a peer (SO_PEERPIDFD)")],
+      ["mainFdinfo", refusedRule(1, "the service cannot hold a pidfd of the MainPID")],
+      ["parentStart", refusedRule(2, "its parent's start time is not the MainPID's")],
+      ["peerStart", refusedRule(4, "the peer changed during the check")],
+      ["parentLater", refusedRule(4, "the peer changed during the check")],
+      ["endPoll", refusedRule(4, "the MainPID changed during the check")],
+      ["endFdinfo", refusedRule(4, "the MainPID changed during the check")],
+      ["peerPpid", refusedRule(4, "the peer changed during the check")],
+    ];
+    for (const [mode, reason] of cases) assert.equal(refusedWith(await run(mode)), reason, String(mode));
+    assert.ok(admitted(await run(null)), "admitted again");
+  } finally { await w.close(); }
+});
 
 test("the service's two doors: control.sock and the agent door with mode 0600; the agent door is today's endpoint with today's peer check (no Chrome: the link's 503); the stop removes both sockets", { skip: !linux, timeout: 60_000 }, async () => {
   const w = await world();

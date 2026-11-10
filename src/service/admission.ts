@@ -19,7 +19,7 @@
 // self-test (the peer reader), each by a dynamic import at the service's start.
 
 import { execFile } from "node:child_process";
-import { lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { Socket } from "node:net";
@@ -67,16 +67,27 @@ export function parseExpectedCommand(text: string): ExpectedCommand | string {
   return { interpreter: f.interpreter, args: [...f.args] };
 }
 
-/** Read the file at an accept: a regular file (not a link) of the service's user that its group and others cannot write. */
+/**
+ * Read the file at an accept: a regular file (not a link) of the service's user that its group and others cannot
+ * write. One open, with no link followed (O_NOFOLLOW) and no wait for a writer of a FIFO (O_NONBLOCK), and fstat on
+ * the same fd: the file that the service checks is the file that it reads.
+ */
 export function readExpectedCommand(path: string, uid: number): ExpectedCommand | string {
-  let st;
-  try { st = lstatSync(path); } catch (e) { return `cannot be read (${(e as { code?: string }).code ?? "error"})`; }
-  if (!st.isFile()) return "is not a regular file";
-  if (st.uid !== uid) return "is not owned by the service's user";
-  if ((st.mode & 0o022) !== 0) return "is writable by its group or by others";
-  let text: string;
-  try { text = readFileSync(path, "utf8"); } catch (e) { return `cannot be read (${(e as { code?: string }).code ?? "error"})`; }
-  return parseExpectedCommand(text);
+  let fd: number;
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (e) {
+    const code = (e as { code?: string }).code;
+    return code === "ELOOP" ? "is not a regular file (it is a link)" : `cannot be read (${code ?? "error"})`;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return "is not a regular file";
+    if (st.uid !== uid) return "is not owned by the service's user";
+    if ((st.mode & 0o022) !== 0) return "is writable by its group or by others";
+    let text: string;
+    try { text = readFileSync(fd, "utf8"); } catch (e) { return `cannot be read (${(e as { code?: string }).code ?? "error"})`; }
+    return parseExpectedCommand(text);
+  } finally { closeSync(fd); }
 }
 
 // ------------------------------------------------------------------ the MainPID (rule 1)
@@ -188,7 +199,7 @@ export function daemonAdmission(d: AdmissionDeps): Admit {
       if (again !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
       const after = reader.proc(peer.pid);
       const parentStart = peer.pid === main ? reader.proc(before.ppid)?.start ?? null : mainProc.start;
-      if (!after || after.start !== before.start || after.state === "Z" || !peerAlive() || parentStart === null || before.start < parentStart) return { ok: false, reason: refusedRule(4, WHY.peer) };
+      if (!after || after.start !== before.start || after.ppid !== before.ppid || after.state === "Z" || !peerAlive() || parentStart === null || before.start < parentStart) return { ok: false, reason: refusedRule(4, WHY.peer) };
       if (reader.poll(mainFd) !== 0 || reader.fdinfoPid(mainFd) !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
       return { ok: true, pid: peer.pid };
     } finally {

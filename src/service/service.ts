@@ -10,8 +10,8 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PeerGate, selfTest } from "../relay/peer.ts";
-import { agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
+import { PeerGate } from "../relay/peer.ts";
+import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 
@@ -129,7 +129,10 @@ export class Stage1a implements Handler {
         return { data: {} };
       }
       case "status": return { data: this.status() };
-      case "endpoint": return { data: { url: this.agentDoor.url(req.scope as string) } };
+      case "endpoint":
+        // A scope that the service does not have (no session of the last set_sessions, or it ended): no URL (C12).
+        if (!this.sessions.some((s) => s.scope === req.scope)) return { error: ERR.noSession };
+        return { data: { url: this.agentDoor.url(req.scope as string) } };
       default: return { error: ERR.unsupported };
     }
   }
@@ -155,7 +158,7 @@ export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; 
  * admission, then the agent door with the same peer reader. A self-test that fails makes both doors fail closed.
  */
 export async function startService(o: ServiceOptions): Promise<Service> {
-  const t = await selfTest(o.agentDoor);
+  const t = await agentDoorPeerCheck(o.agentDoor);
   o.log("failed" in t ? `service: the peer check cannot run: ${t.failed}` : `service: the peer check runs (${t.reader.form})`);
   const gate = "failed" in t ? new PeerGate({ failed: t.failed }) : new PeerGate({ reader: t.reader });
   const pidfd = await loadPidfdOpen();

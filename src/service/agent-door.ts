@@ -3,14 +3,17 @@
 // this file reuses with no change. The service takes the door's address from its arguments (--agent-door).
 //
 // The transport seam: this file is the only one that knows how the agent door listens (in stage 1a a Unix socket
-// path, as today's endpoint) and how a client names it (C11's URL). The door's request logic (the relay's admit and
-// the model) and the rest of the service do not know the transport. In stage 1a no Chrome runs, so the bridge has no
+// path, as today's endpoint): how the service takes the address from its arguments (agentDoorAddress), where the peer
+// check's self-test runs (agentDoorPeerCheck), how the door listens (openAgentDoor) and how a client names it (C11's
+// URL, agentDoorUrl). The door's request logic (the relay's admit and the model) and the rest of the service do not
+// know the transport. In stage 1a no Chrome runs, so the bridge has no
 // link: the model's link stays down, and each upgrade that passes the peer check gets the 503 of the link (C11).
 // Stage 1b gives the bridge the native link.
 
+import { resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { startRelay, type Relay } from "../relay/endpoint.ts";
-import type { PeerGate } from "../relay/peer.ts";
+import { selfTest, type PeerGate } from "../relay/peer.ts";
 
 export type EndpointState = { form: string } | { form: null; reason: string };
 
@@ -22,6 +25,12 @@ export type AgentDoor = {
   state(): EndpointState;
   stop(): Promise<void>;
 };
+
+/** The agent door's address from --agent-door: in stage 1a a Unix socket path, from the current folder. */
+export const agentDoorAddress = (raw: string) => resolve(raw);
+
+/** The peer check's self-test of the relay, which runs next to the agent door's socket (C11). */
+export const agentDoorPeerCheck = (address: string) => selfTest(address);
 
 /** C11's endpoint URL of a scope for a Unix socket path. */
 export const agentDoorUrl = (address: string, scope: string) => `ws+unix://${address}:/devtools/browser/${scope}`;

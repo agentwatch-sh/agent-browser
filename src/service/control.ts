@@ -25,7 +25,12 @@ export const KINDS = ["operator", "token", "daemon"] as const;
 export const VIAS = ["web", "send", "cli", "config", "daemon"] as const;
 export type By = { kind: (typeof KINDS)[number]; user: string; via: (typeof VIAS)[number] };
 export type Req = { t: "req"; id: string; op: string; by: By; [field: string]: unknown };
-export const ERR = { unsupported: "unsupported", bad: "bad request", notOperator: "not the operator", gone: "this prompt is gone" } as const;
+export const ERR = { unsupported: "unsupported", bad: "bad request", notOperator: "not the operator", gone: "this prompt is gone", noSession: "no such session" } as const;
+/** agentwatch's user pattern (C12, provenance): no newline and no control character reaches a log line from `user`. */
+export const USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+/** At most this many admissions run at a time (C12, who connects); one more connection is refused. */
+export const MAX_ADMISSIONS = 4;
+export const admissionLimitText = (n: number) => `The control door checks ${n} other connections now, so it refuses this one: connect again.`;
 
 const OWN = ["daemon"] as const, ACT = ["operator"] as const, START = ["operator", "token"] as const;
 /** Each op of C12's table: its fields (the shape step) and the kinds that it takes (null: any kind, the reads). */
@@ -83,7 +88,7 @@ export function fieldFits(f: string, v: unknown): boolean {
 
 /** The shape of provenance (R7): exactly `kind`, `user` and `via`, each of its set. */
 export function byFits(by: unknown): by is By {
-  return isObj(by) && Object.keys(by).length === 3 && (KINDS as readonly unknown[]).includes(by.kind) && text1(by.user) && (VIAS as readonly unknown[]).includes(by.via);
+  return isObj(by) && Object.keys(by).length === 3 && (KINDS as readonly unknown[]).includes(by.kind) && typeof by.user === "string" && USER.test(by.user) && (VIAS as readonly unknown[]).includes(by.via);
 }
 
 /** C12's order of the checks: the op (`has`: the ops that this service has), the shape, then the kind; null passes. */
@@ -127,7 +132,7 @@ export interface Handler {
 /** The admission of one accepted socket: it reads the peer at once (before any await), then decides. */
 export type Admit = (socket: Socket) => Promise<{ ok: true; pid?: number } | { ok: false; reason: string }>;
 
-export type ControlDoorOptions = { path: string; admit: Admit; handler: Handler; log: (line: string) => void; maxLine?: number };
+export type ControlDoorOptions = { path: string; admit: Admit; handler: Handler; log: (line: string) => void; maxLine?: number; maxAdmissions?: number };
 
 /** One line reader with C12's limit: `onLine` gets each line's bytes (no newline); `onTooLong` ends the reading. */
 export class LineReader {
@@ -155,7 +160,8 @@ export class LineReader {
   }
 }
 
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+/** Strict UTF-8 (C12, the lines): bytes that are not UTF-8 throw, and a byte order mark stays in the text (so JSON.parse refuses it). */
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 type Conn = { n: number; socket: Socket; ready: boolean };
 
@@ -168,6 +174,8 @@ export class ControlDoor {
   private readonly sockets = new Set<Socket>();
   private readonly inode: number;
   private count = 0;
+  /** The admissions that run now (MAX_ADMISSIONS). */
+  private checking = 0;
   private stopping: Promise<void> | undefined;
   /** Events emitted while an op runs go out after its answer. */
   private handling: Record<string, unknown>[] | null = null;
@@ -221,9 +229,16 @@ export class ControlDoor {
     this.sockets.add(socket);
     socket.on("error", () => {});
     socket.once("close", () => { this.conns.delete(c); this.sockets.delete(socket); });
-    // The admission reads the peer now, at the accept, before the door reads any byte.
+    // At most maxAdmissions checks at a time: one more connection gets the refused line with its reason.
+    const limit = this.o.maxAdmissions ?? MAX_ADMISSIONS;
     let admission: ReturnType<Admit>;
-    try { admission = this.o.admit(socket); } catch (e) { admission = Promise.resolve({ ok: false, reason: `The control door cannot check the program that connects (${(e as Error).message}), so it admits no connection.` }); }
+    if (this.checking >= limit) admission = Promise.resolve({ ok: false, reason: admissionLimitText(limit) });
+    else {
+      this.checking++;
+      // The admission reads the peer now, at the accept, before the door reads any byte.
+      try { admission = this.o.admit(socket); } catch (e) { admission = Promise.resolve({ ok: false, reason: `The control door cannot check the program that connects (${(e as Error).message}), so it admits no connection.` }); }
+      admission = admission.finally(() => { this.checking--; });
+    }
     void admission.then((r) => {
       if (!this.conns.has(c)) return;
       if (!r.ok) {
@@ -242,6 +257,8 @@ export class ControlDoor {
   private read(c: Conn): void {
     let helloRead = false;
     const reader = new LineReader(this.o.maxLine ?? CONTROL_MAX_LINE, (bytes) => {
+      // A CR (a line that ends in CR LF, say) breaks the compact-line rule.
+      if (bytes.includes(13)) { this.close(c, "a line that is not compact (it holds a CR)"); return false; }
       let msg: unknown;
       try { msg = JSON.parse(utf8.decode(bytes)); } catch { this.close(c, "a line that is not a JSON object"); return false; }
       if (!isObj(msg)) { this.close(c, "a line that is not a JSON object"); return false; }
@@ -261,6 +278,8 @@ export class ControlDoor {
       return true;
     }, () => { this.close(c, `a line longer than ${this.o.maxLine ?? CONTROL_MAX_LINE} bytes`); });
     c.socket.on("data", (d: Buffer) => reader.push(d));
+    // Bytes after the last newline are not a line: at the end of the stream the door drops them and closes.
+    c.socket.on("end", () => this.close(c, "the end of the stream"));
     c.socket.resume();
   }
 

@@ -8,17 +8,19 @@
 // of the service. Each line on its standard input that is an event of C12's table, with exactly its fields, goes to
 // each connection past the hellos.
 
+import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { covers, normalizeEntry } from "../relay/scopes.ts";
 import { refusedRule } from "./admission.ts";
 import { agentDoorUrl } from "./agent-door.ts";
 import { ControlDoor, ERR, eventFits, serviceHello, type Answer, type By, type Handler, type Req } from "./control.ts";
-import { defaultControlDoor, packageInfo } from "./service.ts";
+import { packageInfo } from "./service.ts";
 
-type Recipient = { session: string; lifetime_id: string };
+/** A prompt's recipient: a session that a block stopped, with the lifetime id of that run (null: the session had none). */
+type Recipient = { session: string; lifetime_id: string | null };
 type Prompt = { id: string; host: string; list: string; repo: string | null; scopes: string[]; from: string | null; warnings: string[]; recipients: Recipient[] };
 type List = { name: string; repo: string | null; allow: string[]; error: string };
 
@@ -26,7 +28,7 @@ type List = { name: string; repo: string | null; allow: string[]; error: string 
 export const FAKE_STATE = {
   prompts: [
     { id: "p1", host: "login.example", list: "owner-repo", repo: "owner/repo", scopes: ["web-1"], from: "app.example", warnings: [], recipients: [{ session: "web-1", lifetime_id: "lt-1a2b" }] },
-    { id: "p2", host: "cdn.example", list: "owner-repo", repo: "owner/repo", scopes: ["web-1"], from: null, warnings: [], recipients: [{ session: "web-1", lifetime_id: "lt-1a2b" }] },
+    { id: "p2", host: "cdn.example", list: "owner-repo", repo: "owner/repo", scopes: ["web-1", "web-2"], from: null, warnings: [], recipients: [{ session: "web-1", lifetime_id: "lt-1a2b" }, { session: "web-2", lifetime_id: null }] },
   ] as Prompt[],
   lists: [{ name: "owner-repo", repo: "owner/repo", allow: ["a.example", "old.example"], error: "" }] as List[],
   old_allow: [] as string[],
@@ -171,7 +173,9 @@ export class FakeService implements Handler {
       case "lists_get":
         return { data: { lists: [...this.lists.values()].map((l) => ({ name: l.name, repo: l.repo, allow: [...l.allow], sessions: this.sessions.filter((s) => s.repo !== null && s.repo === l.repo).map((s) => s.scope), error: l.error })), old_allow: [...FAKE_STATE.old_allow] } };
       case "prompts_get": return { data: { prompts: copy(this.prompts) } };
-      case "endpoint": return { data: { url: agentDoorUrl(this.agentDoor, req.scope as string) } };
+      case "endpoint":
+        if (!this.sessions.some((s) => s.scope === req.scope)) return { error: ERR.noSession };
+        return { data: { url: agentDoorUrl(this.agentDoor, req.scope as string) } };
       case "sender": return { data: copy(FAKE_STATE.sender) };
       default: return { error: ERR.unsupported };
     }
@@ -179,12 +183,46 @@ export class FakeService implements Handler {
 }
 
 /**
- * Start the fake on `controlDoor` (never the default path of control.sock). `input`: its standard input, whose event
- * lines go to each connection past the hellos. `refuse`: each connection gets FAKE_REFUSED.
+ * The service's run folders, where the fake never listens (C12, the fake): the folder of the default control.sock,
+ * and on Linux also /run/user/<uid>/agent-browser, the default when XDG_RUNTIME_DIR is not set.
  */
-export async function startFake(o: { controlDoor: string; agentDoor?: string; refuse?: boolean; input?: Readable; log: (line: string) => void; defaultPath?: string | null }): Promise<{ door: ControlDoor; stop: () => Promise<void> }> {
-  const def = o.defaultPath !== undefined ? o.defaultPath : defaultControlDoor(process.env, process.platform, homedir());
-  if (def !== null && resolve(o.controlDoor) === resolve(def)) throw new Error(`the fake never takes the place of the service: give --control-door a path other than ${def}`);
+export function serviceRunFolders(env: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform, home = homedir(), uid = process.getuid?.() ?? -1): string[] {
+  if (platform === "darwin") return [join(home, ".cache", "agent-browser", "run")];
+  const out = [`/run/user/${uid}/agent-browser`];
+  const run = env.XDG_RUNTIME_DIR;
+  if (run && isAbsolute(run) && !out.includes(join(run, "agent-browser"))) out.push(join(run, "agent-browser"));
+  return out;
+}
+
+/** The real path of `p` after links: of `p` itself, or of its nearest folder that exists, with the rest of `p`. */
+function realOf(p: string): string {
+  const rest: string[] = [];
+  for (let at = resolve(p); ;) {
+    try { return join(realpathSync(at), ...[...rest].reverse()); } catch {}
+    const up = dirname(at);
+    if (up === at) return resolve(p);
+    rest.push(basename(at));
+    at = up;
+  }
+}
+
+/**
+ * Start the fake on `controlDoor`, never in a run folder of the service (`refusedFolders`; the default is
+ * serviceRunFolders()): its socket's real folder is compared with each one before the fake makes its folder, and
+ * again after (by device and inode). `input`: its standard input, whose event lines go to each connection past the
+ * hellos. `refuse`: each connection gets FAKE_REFUSED.
+ */
+export async function startFake(o: { controlDoor: string; agentDoor?: string; refuse?: boolean; input?: Readable; log: (line: string) => void; refusedFolders?: string[] }): Promise<{ door: ControlDoor; stop: () => Promise<void> }> {
+  const folders = o.refusedFolders ?? serviceRunFolders();
+  const dir = dirname(resolve(o.controlDoor));
+  const refuse = () => { throw new Error(`the fake never takes the place of the service: ${dir} is a run folder of the service; give --control-door a path in another folder`); };
+  if (folders.some((f) => realOf(f) === realOf(dir))) refuse();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const st = statSync(dir);
+  for (const f of folders) {
+    const ft = statSync(f, { throwIfNoEntry: false });
+    if ((ft && ft.dev === st.dev && ft.ino === st.ino) || realOf(f) === realpathSync(dir)) refuse();
+  }
   const door = await ControlDoor.open({
     path: o.controlDoor, handler: new FakeService({ agentDoor: o.agentDoor }), log: o.log,
     admit: o.refuse ? async () => ({ ok: false, reason: FAKE_REFUSED }) : async () => ({ ok: true }),
