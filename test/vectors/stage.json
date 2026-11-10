@@ -1,0 +1,5170 @@
+{
+ "contract": "C11, the input stage: docs/contracts/C11.md, the part \"The input stage (board ab-t30.6)\", from the input design (docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, sections 4 to 8, 12.1 point 6 and 13.1) and the operator's answers to Q1 to Q4 (option a each, board item ab-0z5). The stage is not built yet (board tasks ab-t30.9 to ab-t30.12, behind a build switch): these vectors are the contract that the build follows. For each row of the design's table of every input path (section 5.1) the vectors give the client calls in, the events out (the method, the type and the key fields; each time as a range) and the order of the answers, with a seed and a fake clock. The stage's tests (a fake bridge, a fake clock) and test/contracts-c11.test.ts read them.",
+ "format": {
+  "vector": "id; row (the first cell of a row of the input design's table, section 5.1, exactly) or rule (the lead of a bullet of C11's part on the input stage); note; platform (linux or mac); seed (the generator's seed); clock (the fake clock's ms at the start); page (the fake page's facts: viewport, last (the page's last point or null), nodes (by the objectId of the node's handle: tag, type, role, box in its frame's own CSS px, the length of its text, focused, frame), focused, frames, scrollers); chrome (optional: how the fake Chrome answers, below); in; out; answers.",
+  "in": "The client calls, in the order in which the client sends them: id; at (ms on the fake clock), or after (the id of the call whose answer makes the client send this one, as Playwright's await does), or afterEvent (an event of Chrome that the client gets); waitMs (the client's own wait after that); session (child: the session of a cross-origin frame; else the tab's own session); method; params (as the client sends them). A utility call carries Playwright 1.65.0's function text.",
+  "out": "What the stage sends to Chrome, in the order in which it sends it: method; type; for (the id of the client call whose plan holds the event); from (start, in:<id> (the arrival of a call) or out:<k> (the last event of an earlier item)) and at ([lo, hi] ms after it); rule (the first value that bounds at, when one does); fields (the key fields: a number is exact, [lo, hi] is a range; a point is in the top page's CSS px). pass: the client's call as it sent it, with the stage's timestamp for an input call. path: the moves of a path from a point to a point (part outside or inside of a box, for a hover; until dragIntercepted and rest, for a drag), one each gapMs, count [lo, hi] moves, durMs [lo, hi] from its first move to its last. line: the samples of a short move. notches: that many wheel events, gapMs [lo, hi] apart. typing: the text as typed keys (a keyDown and a keyUp for each character, a Shift rawKeyDown and keyUp around each character of shift), each hold in holdMs.",
+  "answers": "The answers of the client calls, in the order in which the stage gives them: id; after (out:<k>: the item whose events the answer follows, and Chrome's answer to them; none: an answer of the stage with no event, with its result); mayBeEarly and before (a keyUp's early answer, which comes before out:<k> when the plan says that the next key can overlap); waits (the id of a call whose answer comes first: a dialog's answer); error (chrome: Chrome's error; the same: the error of the plan's refused event); from and at (a later time, with its rule).",
+  "chrome": "results (by in id: Chrome's result for a passed call); events (Chrome's events, at the time of an out item; toClient false: an event of the stage's own interception, which no client gets); dialog (opensAt and closesAt: while the dialog is open, Chrome answers no input event, and after it closes it answers them in order); errors (by out item: Chrome's error for that event). Every other call gets {} at once.",
+  "times": "Each range holds for every seed: its bounds come from C11's constants and first values (constants, firstValues). A range with no rule is an order with a wide bound (a person's time from one key press to the next has no bound in C11)."
+ },
+ "constants": {
+  "STAGE_MOVE_MS": 8,
+  "STAGE_LATENCY_MS": [3, 5],
+  "STAGE_EVENT_WAIT_MS": 2000,
+  "STAGE_MOVES_IN_FLIGHT": 8,
+  "STAGE_NOTCH_PX": 120,
+  "STAGE_TYPE_MAX_MS": 10000,
+  "STAGE_RUN_SLOW_MS": 12000,
+  "STAGE_ACTION_MAX_MS": 25000,
+  "STAGE_SCROLL_ROUNDS": 4
+ },
+ "firstValues": {
+  "pathMs": [300, 1000],
+  "longPathMs": [300, 1500],
+  "longPathPx": 500,
+  "maxSpeedPxPerMs": 3.5,
+  "shortMovePx": 50,
+  "shortSpeedPxPerMs": [0.5, 1.5],
+  "pauseMs": [80, 400],
+  "holdMs": [60, 180],
+  "dblGapMs": [90, 150],
+  "keyHoldMs": [50, 250],
+  "shiftBeforeMs": [45, 95],
+  "shiftAfterMs": [15, 60],
+  "chordBeforeMs": [40, 120],
+  "chordReleaseGapMs": [20, 80],
+  "modifierAfterMs": [60, 200],
+  "notchGapMs": [35, 90],
+  "scrollWaitMs": 350,
+  "dragWaitMs": [100, 300],
+  "fastKeyMs": [100, 120],
+  "spreadSd": 0.125,
+  "spreadMax": 0.25
+ },
+ "utility": {"functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)"},
+ "recognizers": [
+  {
+   "name": "hit-target check",
+   "pattern": "^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.setupHitTargetInterceptor\\([^)]*\\)\\s*$",
+   "texts": {
+    "1.64.1": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)",
+    "1.65.0": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)",
+    "1.66.0-alpha-2026-11-09": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+   },
+   "notTexts": [
+    "([injected, node]) => { log(\"injected.setupHitTargetInterceptor(\"); }",
+    "(x) => x.setupHitTargetInterceptor(1)",
+    "async (page) => { await page.evaluate(([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)); }"
+   ]
+  },
+  {
+   "name": "the check's stop",
+   "pattern": "^\\(([A-Za-z_$][\\w$]*)\\)\\s*=>\\s*\\1\\.stop\\(\\)\\s*$",
+   "texts": {"1.64.1": "(h) => h.stop()", "1.65.0": "(h) => h.stop()", "1.66.0-alpha-2026-11-09": "(h) => h.stop()"},
+   "notTexts": ["(h) => g.stop()", "(h) => h.stop(); h.start()", "async (page) => { await page.evaluate((h) => h.stop()); }"]
+  },
+  {
+   "name": "focus",
+   "pattern": "^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.focusNode\\([^)]*\\)\\s*$",
+   "texts": {
+    "1.64.1": "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)",
+    "1.65.0": "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)",
+    "1.66.0-alpha-2026-11-09": "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)"
+   },
+   "notTexts": [
+    "(el) => el.focusNode(el)",
+    "([injected, node]) => { injected.focusNode(node); return 1; }",
+    "async (page) => { await page.evaluate(([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)); }"
+   ]
+  },
+  {
+   "name": "fill",
+   "pattern": "^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.fill\\(node,\\s*[\\w$]+\\);?\\s*\\}\\s*$",
+   "texts": {
+    "1.64.1": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }",
+    "1.65.0": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }",
+    "1.66.0-alpha-2026-11-09": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+   },
+   "notTexts": [
+    "async (el) => { el.value = \"injected.fill(node, v)\"; }",
+    "async ([injected, node]) => { return injected.fill(node, v).then(log); }",
+    "async (page) => { await page.evaluate(async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }); }"
+   ]
+  },
+  {
+   "name": "select text",
+   "pattern": "^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.selectText\\(node\\);?\\s*\\}\\s*$",
+   "texts": {
+    "1.64.1": "async ([injected, node, { force, frameVisible }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\"], frameVisible);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectText(node);\n          }",
+    "1.65.0": "async ([injected, node, { force, frameVisible }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\"], frameVisible);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectText(node);\n          }",
+    "1.66.0-alpha-2026-11-09": "async ([injected, node, { force, frameVisible }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\"], frameVisible);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectText(node);\n          }"
+   },
+   "notTexts": [
+    "(el) => el.select() // injected.selectText(node)",
+    "async (page) => { await page.evaluate(async ([injected, node, { force, frameVisible }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\"], frameVisible);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectText(node);\n          }); }"
+   ]
+  },
+  {
+   "name": "retry scroll",
+   "pattern": "^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\bnode\\.scrollIntoView\\(\\{\\s*\\.\\.\\.[\\w$]+,\\s*behavior:\\s*\"instant\"\\s*\\}\\);[\\s\\S]*\\}\\s*$",
+   "texts": {
+    "1.64.1": "([injected, node, options2]) => {\n              if (node.nodeType === 1)\n                node.scrollIntoView({ ...options2, behavior: \"instant\" });\n              return \"done\";\n            }",
+    "1.65.0": "([injected, node, options2]) => {\n              if (node.nodeType === 1)\n                node.scrollIntoView({ ...options2, behavior: \"instant\" });\n              return \"done\";\n            }",
+    "1.66.0-alpha-2026-11-09": "([injected, node, options2]) => {\n              if (node.nodeType === 1)\n                node.scrollIntoView({ ...options2, behavior: \"instant\" });\n              return \"done\";\n            }"
+   },
+   "notTexts": [
+    "(node) => { node.scrollIntoView({ block: \"end\", behavior: \"instant\" }); }",
+    "([injected, node]) => {\n          node.scrollIntoView({\n            block: \"center\",\n            inline: \"center\",\n            behavior: \"instant\"\n          });\n        }",
+    "async (page) => { await page.evaluate(([injected, node, options2]) => {\n              if (node.nodeType === 1)\n                node.scrollIntoView({ ...options2, behavior: \"instant\" });\n              return \"done\";\n            }); }"
+   ]
+  },
+  {
+   "name": "blur",
+   "pattern": "^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.blurNode\\([^)]*\\)\\s*$",
+   "texts": {
+    "1.64.1": "([injected, node]) => injected.blurNode(node)",
+    "1.65.0": "([injected, node]) => injected.blurNode(node)",
+    "1.66.0-alpha-2026-11-09": "([injected, node]) => injected.blurNode(node)"
+   },
+   "notTexts": [
+    "(el) => el.blur()",
+    "([injected, node]) => { injected.blurNode(node); }",
+    "async (page) => { await page.evaluate(([injected, node]) => injected.blurNode(node)); }"
+   ]
+  },
+  {
+   "name": "select option",
+   "pattern": "^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.selectOptions\\(node,\\s*[\\w$]+\\);?\\s*\\}\\s*$",
+   "texts": {
+    "1.64.1": "async ([injected, node, { optionsToSelect: optionsToSelect2, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectOptions(node, optionsToSelect2);\n          }",
+    "1.65.0": "async ([injected, node, { optionsToSelect: optionsToSelect2, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectOptions(node, optionsToSelect2);\n          }",
+    "1.66.0-alpha-2026-11-09": "async ([injected, node, { optionsToSelect: optionsToSelect2, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectOptions(node, optionsToSelect2);\n          }"
+   },
+   "notTexts": [
+    "(el, v) => { el.value = v; }",
+    "async (page) => { await page.evaluate(async ([injected, node, { optionsToSelect: optionsToSelect2, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectOptions(node, optionsToSelect2);\n          }); }"
+   ]
+  },
+  {
+   "name": "set files",
+   "pattern": "^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.setInputFiles\\([^)]*\\)\\s*$",
+   "texts": {
+    "1.64.1": "([injected, node, files]) => injected.setInputFiles(node, files)",
+    "1.65.0": "([injected, node, files]) => injected.setInputFiles(node, files)",
+    "1.66.0-alpha-2026-11-09": "([injected, node, files]) => injected.setInputFiles(node, files)"
+   },
+   "notTexts": [
+    "(el, files) => injected.setInputFiles(el, files).then(() => 1)",
+    "async (page) => { await page.evaluate(([injected, node, files]) => injected.setInputFiles(node, files)); }"
+   ]
+  }
+ ],
+ "vectors": [
+  {
+   "id": "click",
+   "row": "`locator.click()`, `page.click()`",
+   "note": "A locator click on a button that is in view, from the page's last point 900,700. The actionability check (one of Playwright's utility calls with no recognizer) passes unchanged; DOM.scrollIntoViewIfNeeded gets {} with no event (the button is in view); Playwright's own DOM.getContentQuads passes. The four conditions of the spread point hold, so the path ends at the spread point and the press is there (at most 10 px from the middle). Playwright sends the move, the press and the release together, and the stage holds each answer until its events have gone.",
+   "platform": "linux",
+   "seed": 11,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {
+     "3": {"quads": [[60, 220, 140, 220, 140, 260, 60, 260]]},
+     "4": {"result": {"type": "object", "objectId": "7.3.20"}},
+     "8": {"result": {"type": "string", "value": "done"}}
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { elementStates: elementStates2, frameVisible: frameVisible2 }]) => {\n            return await injected.checkElementStates(node, elementStates2, frameVisible2);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [{"k": "elementStates", "v": {"a": ["visible", "enabled", "stable"]}}, {"k": "frameVisible", "v": true}]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {"id": 2, "after": 1, "method": "DOM.scrollIntoViewIfNeeded", "params": {"objectId": "7.3.10"}},
+    {"id": 3, "after": 2, "method": "DOM.getContentQuads", "params": {"objectId": "7.3.10"}},
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 100}, {"k": "y", "v": 240}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 5,
+     "after": 4,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 100, "y": 240, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 6,
+     "after": 4,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 100,
+      "y": 240,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 7,
+     "after": 4,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 100, "y": 240, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 8,
+     "after": 7,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {"pass": true, "for": 3, "from": "in:3", "at": [0, 0]},
+    {"pass": true, "for": 4, "from": "in:4", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 5,
+     "from": "in:5",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [90, 110], "y": [230, 250]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [33, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 6,
+     "from": "out:3",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [90, 110], "y": [230, 250]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 7,
+     "from": "out:4",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [90, 110], "y": [230, 250]}
+    },
+    {"pass": true, "for": 8, "from": "in:8", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "none", "result": {}},
+    {"id": 3, "after": "out:1"},
+    {"id": 4, "after": "out:2"},
+    {"id": 5, "after": "out:3"},
+    {"id": 6, "after": "out:4"},
+    {"id": 7, "after": "out:5"},
+    {"id": 8, "after": "out:6"}
+   ]
+  },
+  {
+   "id": "dblclick",
+   "row": "`dblclick()`, `mouse.dblclick()`",
+   "note": "A double click on a word: Playwright's point 300.5,400.5 has a fraction, and the stage rounds it (half up) to 301,401. No spread: a double click is no condition 1 of the spread point. The second press comes one double-click gap (90 to 150 ms) after the first release.",
+   "platform": "linux",
+   "seed": 12,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.11": {"tag": "span", "box": {"x": 250, "y": 390, "width": 101, "height": 21}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "7": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 300.5}, {"k": "y", "v": 400.5}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.11"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 300.5, "y": 400.5, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 1
+     }
+    },
+    {
+     "id": 5,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 2,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 6,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 2
+     }
+    },
+    {
+     "id": 7,
+     "after": 6,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 301, "y": 401}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [24, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 4,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 5,
+     "from": "out:3",
+     "at": [90, 150],
+     "rule": "dblGapMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 2, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 6,
+     "from": "out:4",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 2, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {"pass": true, "for": 7, "from": "in:7", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"},
+    {"id": 6, "after": "out:5"},
+    {"id": 7, "after": "out:6"}
+   ]
+  },
+  {
+   "id": "dblclick-button",
+   "row": "`dblclick()`, `mouse.dblclick()`",
+   "note": "A double click on a button at its middle: conditions 2 and 3 of the spread point hold, but condition 1 does not (the action has a press with clickCount 2), so neither press spreads: both go at the client's point, rounded half up (review-107 B1).",
+   "platform": "linux",
+   "seed": 12,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.11": {"tag": "button", "box": {"x": 250, "y": 390, "width": 101, "height": 21}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "7": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 300.5}, {"k": "y", "v": 400.5}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.11"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 300.5, "y": 400.5, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 1
+     }
+    },
+    {
+     "id": 5,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 2,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 6,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 2
+     }
+    },
+    {
+     "id": 7,
+     "after": 6,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 301, "y": 401}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [24, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 4,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 5,
+     "from": "out:3",
+     "at": [90, 150],
+     "rule": "dblGapMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 2, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 6,
+     "from": "out:4",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 2, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {"pass": true, "for": 7, "from": "in:7", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"},
+    {"id": 6, "after": "out:5"},
+    {"id": 7, "after": "out:6"}
+   ]
+  },
+  {
+   "id": "triple-click",
+   "row": "`click({ clickCount: 3 })`",
+   "note": "Three presses with a person's gaps, from the page's last point 500,300 (a path of less than 500 px: 300 to 1000 ms).",
+   "platform": "linux",
+   "seed": 13,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 500, "y": 300},
+    "nodes": {"7.3.11": {"tag": "span", "box": {"x": 250, "y": 390, "width": 101, "height": 21}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "9": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 300.5}, {"k": "y", "v": 400.5}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.11"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 300.5, "y": 400.5, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 1
+     }
+    },
+    {
+     "id": 5,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 2,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 6,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 2
+     }
+    },
+    {
+     "id": 7,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 3,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 8,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseReleased",
+      "button": "left",
+      "buttons": 0,
+      "x": 300.5,
+      "y": 400.5,
+      "modifiers": 0,
+      "clickCount": 3
+     }
+    },
+    {
+     "id": 9,
+     "after": 8,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 500, "y": 300}, "to": {"x": 301, "y": 401}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [8, 126],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 4,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 5,
+     "from": "out:3",
+     "at": [90, 150],
+     "rule": "dblGapMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 2, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 6,
+     "from": "out:4",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 2, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 7,
+     "from": "out:5",
+     "at": [90, 150],
+     "rule": "dblGapMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 3, "modifiers": 0, "force": 0.5, "x": 301, "y": 401}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 8,
+     "from": "out:6",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 3, "modifiers": 0, "x": 301, "y": 401}
+    },
+    {"pass": true, "for": 9, "from": "in:9", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"},
+    {"id": 6, "after": "out:5"},
+    {"id": 7, "after": "out:6"},
+    {"id": 8, "after": "out:7"},
+    {"id": 9, "after": "out:8"}
+   ]
+  },
+  {
+   "id": "right-click",
+   "row": "`click({ button: 'right' })`, `'middle'`",
+   "note": "A right click on a div (no spread: a div is no element of condition 3): the client's button and buttons 2.",
+   "platform": "linux",
+   "seed": 14,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.12": {"tag": "div", "box": {"x": 400, "y": 100, "width": 200, "height": 100}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "5": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 500}, {"k": "y", "v": 150}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.12"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 500, "y": 150, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "right",
+      "buttons": 2,
+      "x": 500,
+      "y": 150,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "right", "buttons": 0, "x": 500, "y": 150, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 5,
+     "after": 4,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 500, "y": 150}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [25, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "right", "buttons": 2, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 500, "y": 150}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 4,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "right", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 500, "y": 150}
+    },
+    {"pass": true, "for": 5, "from": "in:5", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"}
+   ]
+  },
+  {
+   "id": "click-delay",
+   "row": "`click({ delay })`, `mouse.click(x, y, { delay })`",
+   "note": "mouse.click(640, 360, { delay: 500 }): Playwright waits for each answer, and waits 500 ms between the press and the release. The release goes at the later of its arrival and the press plus a person's hold: here at its arrival, because the delay is longer than any hold.",
+   "platform": "linux",
+   "seed": 15,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 640,
+      "y": 360,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "waitMs": 500,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "clickCount": 1}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 640, "y": 360}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [16, 126],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 640, "y": 360}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 3,
+     "from": "in:3",
+     "at": [0, 0],
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 640, "y": 360}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2"}]
+  },
+  {
+   "id": "click-modifiers",
+   "row": "`click({ modifiers })`",
+   "note": "click({ modifiers: ['Shift'] }): Playwright presses Shift after the hit-target setup and waits for its answer before the move, so the Shift press goes as it comes. The path and the press have modifiers 8. Playwright sends the Shift release after the mouse release; the stage holds it until 60 to 200 ms after the mouse release, and answers it after it has gone. Then Playwright sends the check's stop.",
+   "platform": "linux",
+   "seed": 16,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.12": {"tag": "div", "box": {"x": 400, "y": 100, "width": 200, "height": 100}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "7": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 500}, {"k": "y", "v": 150}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.12"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "rawKeyDown",
+      "modifiers": 8,
+      "windowsVirtualKeyCode": 16,
+      "code": "ShiftLeft",
+      "commands": [],
+      "key": "Shift",
+      "text": "",
+      "unmodifiedText": "",
+      "autoRepeat": false,
+      "location": 1,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 500, "y": 150, "modifiers": 8, "force": 0}
+    },
+    {
+     "id": 4,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 500,
+      "y": 150,
+      "modifiers": 8,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 5,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 500, "y": 150, "modifiers": 8, "clickCount": 1}
+    },
+    {
+     "id": 6,
+     "after": 5,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "Shift",
+      "windowsVirtualKeyCode": 16,
+      "code": "ShiftLeft",
+      "location": 1,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 7,
+     "after": 6,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "fields": {"key": "Shift", "modifiers": 8}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 3,
+     "from": "in:3",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 500, "y": 150}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [25, 188],
+     "fields": {"button": "none", "buttons": 0, "modifiers": 8}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 4,
+     "from": "out:2",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 8, "force": 0.5, "x": 500, "y": 150}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 5,
+     "from": "out:3",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 8, "x": 500, "y": 150}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 6,
+     "from": "out:4",
+     "at": [60, 200],
+     "rule": "modifierAfterMs",
+     "fields": {"key": "Shift", "modifiers": 0}
+    },
+    {"pass": true, "for": 7, "from": "in:7", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"},
+    {"id": 6, "after": "out:5"},
+    {"id": 7, "after": "out:6"}
+   ]
+  },
+  {
+   "id": "hover-modifiers",
+   "row": "`hover({ modifiers })`",
+   "note": "hover({ modifiers: ['Shift'] }) on #b: at the hit-target setup the stage plans the whole path and sends its samples outside the button's box first; then the setup; the Shift press as it comes; the last leg, inside the box, with modifiers 8 at Playwright's move. With no mouse release in a hover, the Shift release goes as it comes.",
+   "platform": "linux",
+   "seed": 17,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "5": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "hover"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 100}, {"k": "y", "v": 240}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "rawKeyDown",
+      "modifiers": 8,
+      "windowsVirtualKeyCode": 16,
+      "code": "ShiftLeft",
+      "commands": [],
+      "key": "Shift",
+      "text": "",
+      "unmodifiedText": "",
+      "autoRepeat": false,
+      "location": 1,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 100, "y": 240, "modifiers": 8, "force": 0}
+    },
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "Shift",
+      "windowsVirtualKeyCode": 16,
+      "code": "ShiftLeft",
+      "location": 1,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 5,
+     "after": 4,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 3,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {
+      "from": {"x": 900, "y": 700},
+      "to": {"x": 100, "y": 240},
+      "part": "outside",
+      "box": "7.3.10",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {"pass": true, "for": 1, "from": "out:0", "at": [0, 8]},
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "fields": {"key": "Shift", "modifiers": 8}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 3,
+     "from": "in:3",
+     "at": [0, 8],
+     "path": {
+      "from": {"x": 900, "y": 700},
+      "to": {"x": 100, "y": 240},
+      "part": "inside",
+      "box": "7.3.10",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "none", "buttons": 0, "modifiers": 8}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 4,
+     "from": "in:4",
+     "at": [0, 0],
+     "fields": {"key": "Shift", "modifiers": 0}
+    },
+    {"pass": true, "for": 5, "from": "in:5", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:1"},
+    {"id": 2, "after": "out:2"},
+    {"id": 3, "after": "out:3"},
+    {"id": 4, "after": "out:4"},
+    {"id": 5, "after": "out:5"}
+   ]
+  },
+  {
+   "id": "click-position",
+   "row": "`click({ position })`, `click({ force })`",
+   "note": "click({ position: { x: 5, y: 5 } }) on #b: the point is not the middle of the content quad (condition 2), so no spread: the press is at the client's point.",
+   "platform": "linux",
+   "seed": 18,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "5": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 65}, {"k": "y", "v": 225}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 65, "y": 225, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 65,
+      "y": 225,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 65, "y": 225, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 5,
+     "after": 4,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 65, "y": 225}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [35, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 65, "y": 225}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 4,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 65, "y": 225}
+    },
+    {"pass": true, "for": 5, "from": "in:5", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"}
+   ]
+  },
+  {
+   "id": "click-trial",
+   "row": "`click({ trial })`",
+   "note": "click({ trial: true }): Playwright runs its checks and sends no input. The stage sends no event of its own.",
+   "platform": "linux",
+   "seed": 19,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "2": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 100}, {"k": "y", "v": 240}]}},
+            {"k": "trial", "v": true}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}, {"pass": true, "for": 2, "from": "in:2", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}]
+  },
+  {
+   "id": "move-steps",
+   "row": "`click({ steps })` (new in 1.65), `mouse.move(x, y, { steps })`",
+   "note": "mouse.move(140, 240, { steps: 2 }) from 100,240: two moves of 20 px, each awaited. Each is a short move (at most 50 px), so it goes as samples of the client's line at 0.5 to 1.5 px/ms (14 to 40 ms for 20 px).",
+   "platform": "linux",
+   "seed": 20,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 100, "y": 240}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 120, "y": 240, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 140, "y": 240, "modifiers": 0, "force": 0}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "line": {"from": {"x": 100, "y": 240}, "to": {"x": 120, "y": 240}},
+     "gapMs": 8,
+     "durMs": [14, 40],
+     "count": [1, 6],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "line": {"from": {"x": 120, "y": 240}, "to": {"x": 140, "y": 240}},
+     "gapMs": 8,
+     "durMs": [14, 40],
+     "count": [1, 6],
+     "fields": {"button": "none", "buttons": 0}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}]
+  },
+  {
+   "id": "hover",
+   "row": "`locator.hover()`, `hover({ position })`",
+   "note": "hover() on #b from 900,700: the samples of the path outside the button's box go before the stage sends the setup, so the first mousemove after Playwright's setup is inside the button (M4, M8). The rest of the path goes at Playwright's move.",
+   "platform": "linux",
+   "seed": 21,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "3": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "hover"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 100}, {"k": "y", "v": 240}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 100, "y": 240, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {
+      "from": {"x": 900, "y": 700},
+      "to": {"x": 100, "y": 240},
+      "part": "outside",
+      "box": "7.3.10",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {"pass": true, "for": 1, "from": "out:0", "at": [0, 8]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {
+      "from": {"x": 900, "y": 700},
+      "to": {"x": 100, "y": 240},
+      "part": "inside",
+      "box": "7.3.10",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {"pass": true, "for": 3, "from": "in:3", "at": [0, 0]}
+   ],
+   "answers": [{"id": 1, "after": "out:1"}, {"id": 2, "after": "out:2"}, {"id": 3, "after": "out:3"}]
+  },
+  {
+   "id": "move",
+   "row": "`mouse.move(x, y)`",
+   "note": "mouse.move(640, 360) from 900,700: a path of 428 px (300 to 1000 ms).",
+   "platform": "linux",
+   "seed": 22,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "force": 0}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 640, "y": 360}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [16, 126],
+     "fields": {"button": "none", "buttons": 0}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "move-same-point",
+   "row": "`mouse.move(x, y)`",
+   "note": "mouse.move(900, 700) to the page's last point: no event (M2: a mouse that does not move sends none), and the answer at once.",
+   "platform": "linux",
+   "seed": 23,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 900, "y": 700, "modifiers": 0, "force": 0}
+    }
+   ],
+   "out": [],
+   "answers": [{"id": 1, "after": "none", "result": {}}]
+  },
+  {
+   "id": "mouse-drag",
+   "row": "`mouse.move(x, y)` with a held button over an HTML5 draggable (`mouse.down()` first)",
+   "note": "mouse.move(100, 440), mouse.down(), mouse.move(700, 450), mouse.up() over a draggable card. Playwright's drag manager turns Input.setInterceptDrags on before the move with the button down. The stage waits 100 to 300 ms after the press, sends a short path with the button down until Chrome reports Input.dragIntercepted (here at out:3), then its own dragEnter and dragOver events along the rest of the path. Playwright's own dragEnter at the target goes as a dragOver; its drop goes after a pause. (Playwright's utility calls that set up and read its drag listeners pass unchanged, and the vector leaves them out.)",
+   "platform": "linux",
+   "seed": 24,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.13": {"tag": "div", "draggable": true, "box": {"x": 60, "y": 420, "width": 80, "height": 40}, "focused": false},
+     "7.3.14": {"tag": "div", "box": {"x": 600, "y": 400, "width": 200, "height": 100}, "focused": false}
+    },
+    "focused": null
+   },
+   "chrome": {
+    "events": [
+     {
+      "method": "Input.dragIntercepted",
+      "params": {"data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}},
+      "at": "out:3"
+     }
+    ]
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 100, "y": 440, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 100,
+      "y": 440,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {"id": 3, "after": 2, "method": "Input.setInterceptDrags", "params": {"enabled": true}},
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "left", "buttons": 1, "x": 700, "y": 450, "modifiers": 0, "force": 0.5}
+    },
+    {"id": 5, "after": 4, "method": "Input.setInterceptDrags", "params": {"enabled": false}},
+    {
+     "id": 6,
+     "after": 5,
+     "method": "Input.dispatchDragEvent",
+     "params": {
+      "type": "dragEnter",
+      "x": 700,
+      "y": 450,
+      "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1},
+      "modifiers": 0
+     }
+    },
+    {
+     "id": 7,
+     "after": 6,
+     "method": "Input.dispatchDragEvent",
+     "params": {
+      "type": "drop",
+      "x": 700,
+      "y": 450,
+      "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1},
+      "modifiers": 0
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 100, "y": 440}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [31, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 100, "y": 440}
+    },
+    {"pass": true, "for": 3, "from": "in:3", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 4,
+     "from": "out:1",
+     "at": [100, 300],
+     "path": {
+      "from": {"x": 100, "y": 440},
+      "to": {"x": 700, "y": 450},
+      "part": "until dragIntercepted",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "left", "buttons": 1, "force": 0.5},
+     "rule": "dragWaitMs"
+    },
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "dragEnter",
+     "for": 4,
+     "from": "out:3",
+     "at": [0, 8],
+     "fields": {"data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "dragOver",
+     "for": 4,
+     "from": "out:4",
+     "at": [0, 8],
+     "path": {"from": {"x": 100, "y": 440}, "to": {"x": 700, "y": 450}, "part": "rest", "totalMs": [300, 1500]},
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {"pass": true, "for": 5, "from": "in:5", "at": [0, 0]},
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "dragOver",
+     "for": 6,
+     "from": "in:6",
+     "at": [0, 0],
+     "fields": {"x": 700, "y": 450, "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "drop",
+     "for": 7,
+     "from": "out:7",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"x": 700, "y": 450, "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:5"},
+    {"id": 5, "after": "out:6"},
+    {"id": 6, "after": "out:7"},
+    {"id": 7, "after": "out:8"}
+   ]
+  },
+  {
+   "id": "down-up",
+   "row": "`mouse.down()`, `mouse.up()`",
+   "note": "mouse.down() and mouse.up() at the page's last point: no path, so no pause; the release at the later of its arrival and a person's hold.",
+   "platform": "linux",
+   "seed": 25,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 500, "y": 300}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 500,
+      "y": 300,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 500, "y": 300, "modifiers": 0, "clickCount": 1}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 500, "y": 300}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 2,
+     "from": "out:0",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 500, "y": 300}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}]
+  },
+  {
+   "id": "mouse-click",
+   "row": "`mouse.click(x, y)`",
+   "note": "mouse.click(640, 360) from 900,700: no checks, no spread (a mouse click is no condition 1).",
+   "platform": "linux",
+   "seed": 26,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 640,
+      "y": 360,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 3,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "clickCount": 1}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 640, "y": 360}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [16, 126],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 640, "y": 360}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 3,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 640, "y": 360}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2"}]
+  },
+  {
+   "id": "wheel",
+   "row": "`mouse.wheel(dx, dy)`",
+   "note": "mouse.wheel(0, 600): five notches of 120 px (deltaY 120, wheelDeltaY -120 on the page, as a Linux mouse wheel), with a person's gaps, at the page's last point (M6).",
+   "platform": "linux",
+   "seed": 27,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 640, "y": 360}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 600}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "notches": 5,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "wheel-residual",
+   "row": "`mouse.wheel(dx, dy)`",
+   "note": "Four calls of mouse.wheel(0, 100), each awaited: n = max(0, round((|delta| + r) / 120)), half up, with r the residual in the call's direction. The calls get 1, 1, 1 and 0 notches (r: 0, -20, -40, -60, then +40): 360 px for 400 asked, within one notch. The fourth call gets no event, because earlier notches have already given it.",
+   "platform": "linux",
+   "seed": 28,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 640, "y": 360}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 100}
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 100}
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 100}
+    },
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 100}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "notches": 1,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "notches": 1,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 3,
+     "from": "in:3",
+     "at": [0, 0],
+     "notches": 1,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "none", "result": {}}
+   ]
+  },
+  {
+   "id": "wheel-mac",
+   "row": "`mouse.wheel(dx, dy)`",
+   "note": "The Mac: until the Mac's wheel model exists, mouse.wheel(0, 600) goes as the client sent it, with the stage's timestamp (with its fraction).",
+   "platform": "mac",
+   "seed": 29,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 640, "y": 360}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 600}
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "scroll-into-view",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "An element 1,680 px below the viewport (its middle at y 2420 in a viewport of 720 px): 17 notches (round(2060 / 120)) at the page's last point, which is a wheel point (no input, no listener; it scrolls the document). After the smooth scroll's 350 ms the stage reads again: the element is in view, and the stage answers {} (M6: 17 notches). In view at once: the click vector.",
+   "platform": "linux",
+   "seed": 30,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 640, "y": 360},
+    "nodes": {"7.3.15": {"tag": "button", "box": {"x": 600, "y": 2400, "width": 100, "height": 40}, "focused": false}},
+    "focused": null,
+    "scrollers": {"document": {"scrollY": 0, "height": 4000}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { elementStates: elementStates2, frameVisible: frameVisible2 }]) => {\n            return await injected.checkElementStates(node, elementStates2, frameVisible2);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {"o": [{"k": "elementStates", "v": {"a": ["visible", "stable"]}}, {"k": "frameVisible", "v": true}]}
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.15"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {"id": 2, "after": 1, "method": "DOM.scrollIntoViewIfNeeded", "params": {"objectId": "7.3.15"}}
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "notches": 17,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1", "from": "out:1", "at": [350, 400], "rule": "scrollWaitMs", "result": {}}
+   ]
+  },
+  {
+   "id": "check",
+   "row": "`check()`, `setChecked()`, `uncheck()`",
+   "note": "check() on a check box: Playwright reads the state (a utility call with no recognizer: it passes), clicks, and reads the state again. A check box is an element of condition 3, so the press spreads (at most 4 px: 1/4 of 16 px).",
+   "platform": "linux",
+   "seed": 31,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.16": {"tag": "input", "type": "checkbox", "box": {"x": 60, "y": 300, "width": 16, "height": 16}, "focused": false}
+    },
+    "focused": null
+   },
+   "chrome": {
+    "results": {
+     "1": {"result": {"type": "object", "value": {"matches": false, "isRadio": false}}},
+     "2": {"result": {"type": "object", "objectId": "7.3.20"}},
+     "6": {"result": {"type": "string", "value": "done"}},
+     "7": {"result": {"type": "object", "value": {"matches": true, "isRadio": false}}}
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "([injected, node]) => injected.elementState(node, \"checked\")"},
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.16"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 68}, {"k": "y", "v": 308}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.16"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 68, "y": 308, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 4,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 68,
+      "y": 308,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 5,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 68, "y": 308, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 6,
+     "after": 5,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 7,
+     "after": 6,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "([injected, node]) => injected.elementState(node, \"checked\")"},
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.16"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {"pass": true, "for": 2, "from": "in:2", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 3,
+     "from": "in:3",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [64, 72], "y": [304, 312]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [33, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 4,
+     "from": "out:2",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [64, 72], "y": [304, 312]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 5,
+     "from": "out:3",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [64, 72], "y": [304, 312]}
+    },
+    {"pass": true, "for": 6, "from": "in:6", "at": [0, 0]},
+    {"pass": true, "for": 7, "from": "in:7", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"},
+    {"id": 6, "after": "out:5"},
+    {"id": 7, "after": "out:6"}
+   ]
+  },
+  {
+   "id": "frame-click",
+   "row": "frame clicks: `frameLocator(...).locator(...).click()`",
+   "note": "A click on a span in a cross-origin frame (box 300,100, border 2): its checks and its hit-target setup come on the frame's own session (in the frame's points, 22,32); the move, the press and the release come on the top page's session in the top page's points (324,134), and the stage plays them there. A span is no element of condition 3: no spread.",
+   "platform": "linux",
+   "seed": 32,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "8.5.10": {"tag": "span", "frame": "box", "box": {"x": 10, "y": 20, "width": 24, "height": 24}, "focused": false}
+    },
+    "focused": null,
+    "frames": {"box": {"origin": "cross", "box": {"x": 300, "y": 100, "width": 300, "height": 65}, "border": 2, "padding": 0}}
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "8.5.20"}}, "5": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "session": "child",
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "8.5.1",
+      "arguments": [
+       {"objectId": "8.5.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 22}, {"k": "y", "v": 32}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "8.5.2"},
+       {"objectId": "8.5.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 324, "y": 134, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 324,
+      "y": 134,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 324, "y": 134, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 5,
+     "after": 4,
+     "session": "child",
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "8.5.1",
+      "arguments": [
+       {"objectId": "8.5.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "8.5.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0], "session": "child"},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 324, "y": 134}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [29, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 324, "y": 134}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 4,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 324, "y": 134}
+    },
+    {"pass": true, "for": 5, "from": "in:5", "at": [0, 0], "session": "child"}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"}
+   ]
+  },
+  {
+   "id": "frame-hover",
+   "row": "frame hovers",
+   "note": "hover() on an element of a same-origin frame (no session of its own: its utility calls come on the top page's session). The setup's hit point 80,55 is in the frame's own points; the stage maps it to the top page (the frame's box 300,300 plus its border 2: 382,357) and the element's box to 352,342 60x30, and plays the hover there (M10).",
+   "platform": "linux",
+   "seed": 33,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.4.10": {
+      "tag": "div",
+      "frame": "inner",
+      "box": {"x": 50, "y": 40, "width": 60, "height": 30},
+      "mapped": {"x": 352, "y": 342, "width": 60, "height": 30},
+      "focused": false
+     }
+    },
+    "focused": null,
+    "frames": {"inner": {"origin": "same", "box": {"x": 300, "y": 300, "width": 400, "height": 200}, "border": 2, "padding": 0}}
+   },
+   "chrome": {
+    "results": {"1": {"result": {"type": "object", "objectId": "7.3.20"}}, "3": {"result": {"type": "string", "value": "done"}}}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.4.1",
+      "arguments": [
+       {"objectId": "7.4.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "hover"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 80}, {"k": "y", "v": 55}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.4.2"},
+       {"objectId": "7.4.10"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 382, "y": 357, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {
+      "from": {"x": 900, "y": 700},
+      "to": {"x": 382, "y": 357},
+      "part": "outside",
+      "box": "7.4.10",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {"pass": true, "for": 1, "from": "out:0", "at": [0, 8]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {
+      "from": {"x": 900, "y": 700},
+      "to": {"x": 382, "y": 357},
+      "part": "inside",
+      "box": "7.4.10",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {"pass": true, "for": 3, "from": "in:3", "at": [0, 0]}
+   ],
+   "answers": [{"id": 1, "after": "out:1"}, {"id": 2, "after": "out:2"}, {"id": 3, "after": "out:3"}]
+  },
+  {
+   "id": "tap",
+   "row": "`tap()`, `touchscreen.tap()`",
+   "note": "Playwright refuses tap() without hasTouch, and a context from connectOverCDP has none: no call reaches the stage (R12).",
+   "platform": "linux",
+   "seed": 34,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "in": [],
+   "out": [],
+   "answers": []
+  },
+  {
+   "id": "type",
+   "row": "`keyboard.type(text)`, `pressSequentially(text)`, the old `type()`",
+   "note": "keyboard.type('Hi') into the focused field: Playwright sends each key's keyDown and keyUp and waits for each answer; its capital H has modifiers 0. The stage sends a Shift press 45 to 95 ms before H (with modifiers 8), the Shift release 15 to 60 ms after H's release, and i only after both. The answer of H's keyUp can come early (before the release goes) when the plan says that the next key can overlap; the seed decides, so both orders fit the vector.",
+   "platform": "linux",
+   "seed": 35,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyDown",
+      "modifiers": 0,
+      "windowsVirtualKeyCode": 72,
+      "code": "KeyH",
+      "commands": [],
+      "key": "H",
+      "text": "H",
+      "unmodifiedText": "H",
+      "autoRepeat": false,
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "H",
+      "windowsVirtualKeyCode": 72,
+      "code": "KeyH",
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyDown",
+      "modifiers": 0,
+      "windowsVirtualKeyCode": 73,
+      "code": "KeyI",
+      "commands": [],
+      "key": "i",
+      "text": "i",
+      "unmodifiedText": "i",
+      "autoRepeat": false,
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "i",
+      "windowsVirtualKeyCode": 73,
+      "code": "KeyI",
+      "location": 0,
+      "isKeypad": false
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "fields": {"key": "Shift", "modifiers": 8, "windowsVirtualKeyCode": 16}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyDown",
+     "for": 1,
+     "from": "out:0",
+     "at": [45, 95],
+     "rule": "shiftBeforeMs",
+     "fields": {"key": "H", "modifiers": 8, "code": "KeyH", "text": "H"}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 2,
+     "from": "out:1",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "H", "modifiers": 8}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": null,
+     "from": "out:2",
+     "at": [15, 60],
+     "rule": "shiftAfterMs",
+     "fields": {"key": "Shift", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyDown",
+     "for": 3,
+     "from": "out:3",
+     "at": [0, 2000],
+     "fields": {"key": "i", "modifiers": 0, "code": "KeyI", "text": "i"}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 4,
+     "from": "out:4",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "i", "modifiers": 0}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:1"},
+    {"id": 2, "after": "out:2", "mayBeEarly": true},
+    {"id": 3, "after": "out:4"},
+    {"id": 4, "after": "out:5"}
+   ]
+  },
+  {
+   "id": "press-sequentially",
+   "row": "`keyboard.type(text)`, `pressSequentially(text)`, the old `type()`",
+   "note": "pressSequentially('Meet me at 10:45.') into an empty textarea with no focus: Playwright's focusNode with the caret reset comes first. The stage clicks the field first (an empty textarea: 25% to 75% across, 6 to 12 px from the top), then the utility call passes. The keys of the run follow as in the vector 'type' (left out here).",
+   "platform": "linux",
+   "seed": 36,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.21": {"tag": "textarea", "box": {"x": 200, "y": 400, "width": 400, "height": 120}, "text": 0, "focused": false}
+    },
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)"
+       },
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}, true]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.21"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [300, 500], "y": [406, 412]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [21, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [300, 500], "y": [406, 412]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [300, 500], "y": [406, 412]}
+    },
+    {"pass": true, "for": 1, "from": "out:2", "at": [0, 8]}
+   ],
+   "answers": [{"id": 1, "after": "out:3"}]
+  },
+  {
+   "id": "type-delay",
+   "row": "`keyboard.type(text, { delay })`, `pressSequentially(text, { delay })`",
+   "note": "keyboard.type('ab', { delay: 300 }): Playwright waits 300 ms between each key's press and release. Each release goes at its arrival (the delay is longer than any hold); b's press goes at the later of its arrival and its planned time.",
+   "platform": "linux",
+   "seed": 37,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyDown",
+      "modifiers": 0,
+      "windowsVirtualKeyCode": 65,
+      "code": "KeyA",
+      "commands": [],
+      "key": "a",
+      "text": "a",
+      "unmodifiedText": "a",
+      "autoRepeat": false,
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "waitMs": 300,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "a",
+      "windowsVirtualKeyCode": 65,
+      "code": "KeyA",
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyDown",
+      "modifiers": 0,
+      "windowsVirtualKeyCode": 66,
+      "code": "KeyB",
+      "commands": [],
+      "key": "b",
+      "text": "b",
+      "unmodifiedText": "b",
+      "autoRepeat": false,
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 4,
+     "after": 3,
+     "waitMs": 300,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "b",
+      "windowsVirtualKeyCode": 66,
+      "code": "KeyB",
+      "location": 0,
+      "isKeypad": false
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyDown",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "fields": {"key": "a", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "fields": {"key": "a", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyDown",
+     "for": 3,
+     "from": "in:3",
+     "at": [0, 2000],
+     "fields": {"key": "b", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 4,
+     "from": "in:4",
+     "at": [0, 0],
+     "fields": {"key": "b", "modifiers": 0}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"}
+   ]
+  },
+  {
+   "id": "press-chord",
+   "row": "`press(key)` (locator), `keyboard.press(key)`, `keyboard.down()`, `keyboard.up()`",
+   "note": "keyboard.press('Control+A'): Playwright presses Control, then A (a rawKeyDown with no text while Control is down), then releases A and Control, each awaited. The stage sends A 40 to 120 ms after Control, holds A, and releases Control 20 to 80 ms after A.",
+   "platform": "linux",
+   "seed": 38,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "rawKeyDown",
+      "modifiers": 2,
+      "windowsVirtualKeyCode": 17,
+      "code": "ControlLeft",
+      "commands": [],
+      "key": "Control",
+      "text": "",
+      "unmodifiedText": "",
+      "autoRepeat": false,
+      "location": 1,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "rawKeyDown",
+      "modifiers": 2,
+      "windowsVirtualKeyCode": 65,
+      "code": "KeyA",
+      "commands": [],
+      "key": "A",
+      "text": "",
+      "unmodifiedText": "",
+      "autoRepeat": false,
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 2,
+      "key": "A",
+      "windowsVirtualKeyCode": 65,
+      "code": "KeyA",
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "Control",
+      "windowsVirtualKeyCode": 17,
+      "code": "ControlLeft",
+      "location": 1,
+      "isKeypad": false
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "fields": {"key": "Control", "modifiers": 2}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 2,
+     "from": "out:0",
+     "at": [40, 120],
+     "rule": "chordBeforeMs",
+     "fields": {"key": "A", "modifiers": 2}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 3,
+     "from": "out:1",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "A", "modifiers": 2}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 4,
+     "from": "out:2",
+     "at": [20, 80],
+     "rule": "chordReleaseGapMs",
+     "fields": {"key": "Control", "modifiers": 0}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"}
+   ]
+  },
+  {
+   "id": "fill",
+   "row": "`fill(text)`, `clear()`",
+   "note": "fill('jane.doe@example.com') into a text input with no focus and text in it (M5): the fill recognizer gives a focus click at the field's left end (2 to 5 px from its left edge, 35% to 65% down), then Playwright's script selects the text, and typed keys take the place of Input.insertText (20 characters with a US key each, no line feed, inside STAGE_TYPE_MAX_MS). The first key replaces the selection; the @ gets a Shift.",
+   "platform": "linux",
+   "seed": 39,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": false
+     }
+    },
+    "focused": null
+   },
+   "chrome": {"results": {"1": {"result": {"type": "string", "value": "needsinput"}}}},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [{"k": "value", "v": "jane.doe@example.com"}, {"k": "force", "v": false}, {"k": "frameVisible", "v": true}]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.18"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {"id": 2, "after": 1, "method": "Input.insertText", "params": {"text": "jane.doe@example.com"}}
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [202, 205], "y": [311, 319]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [29, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [202, 205], "y": [311, 319]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [202, 205], "y": [311, 319]}
+    },
+    {"pass": true, "for": 1, "from": "out:2", "at": [0, 8]},
+    {
+     "method": "Input.dispatchKeyEvent",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 2000],
+     "typing": "jane.doe@example.com",
+     "holdMs": [50, 250],
+     "shift": ["@"]
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:3"}, {"id": 2, "after": "out:4"}]
+  },
+  {
+   "id": "fill-line-feed",
+   "row": "`fill(text)`, `clear()`",
+   "note": "fill('two\\nlines') into a focused textarea: no click (it has the focus), and the text has a line feed, so the Input.insertText goes as it is (typing rule 2), after a person's time from one press to the next.",
+   "platform": "linux",
+   "seed": 40,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.21": {"tag": "textarea", "box": {"x": 200, "y": 400, "width": 400, "height": 120}, "text": 0, "focused": true}
+    },
+    "focused": "7.3.21"
+   },
+   "chrome": {"results": {"1": {"result": {"type": "string", "value": "needsinput"}}}},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {"o": [{"k": "value", "v": "two\nlines"}, {"k": "force", "v": false}, {"k": "frameVisible", "v": true}]}
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.21"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {"id": 2, "after": 1, "method": "Input.insertText", "params": {"text": "two\nlines"}}
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}, {"pass": true, "for": 2, "from": "in:2", "at": [0, 2000]}],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}]
+  },
+  {
+   "id": "fill-long",
+   "row": "`fill(text)`, `clear()`",
+   "note": "A fill of 114 characters into a focused input: even at the fast end of the spread (100 ms a key) the plan does not fit in STAGE_TYPE_MAX_MS, so the text goes as one Input.insertText (Q2 a).",
+   "platform": "linux",
+   "seed": 41,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "chrome": {"results": {"1": {"result": {"type": "string", "value": "needsinput"}}}},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {
+             "k": "value",
+             "v": "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text."
+            },
+            {"k": "force", "v": false},
+            {"k": "frameVisible", "v": true}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.18"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.insertText",
+     "params": {
+      "text": "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text."
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}, {"pass": true, "for": 2, "from": "in:2", "at": [0, 2000]}],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}]
+  },
+  {
+   "id": "clear",
+   "row": "`fill(text)`, `clear()`",
+   "note": "clear() on a focused input: Playwright's script selects the text, then the Delete key; the stage gives it a person's hold.",
+   "platform": "linux",
+   "seed": 42,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "chrome": {"results": {"1": {"result": {"type": "string", "value": "needsinput"}}}},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {"o": [{"k": "value", "v": ""}, {"k": "force", "v": false}, {"k": "frameVisible", "v": true}]}
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.18"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "rawKeyDown",
+      "modifiers": 0,
+      "windowsVirtualKeyCode": 46,
+      "code": "Delete",
+      "commands": [],
+      "key": "Delete",
+      "text": "",
+      "unmodifiedText": "",
+      "autoRepeat": false,
+      "location": 0,
+      "isKeypad": false
+     }
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchKeyEvent",
+     "params": {
+      "type": "keyUp",
+      "modifiers": 0,
+      "key": "Delete",
+      "windowsVirtualKeyCode": 46,
+      "code": "Delete",
+      "location": 0,
+      "isKeypad": false
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "fields": {"key": "Delete", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 3,
+     "from": "out:1",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "Delete", "modifiers": 0}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2"}]
+  },
+  {
+   "id": "fill-date",
+   "row": "`fill()` of a date, time, month, week, color or range input",
+   "note": "fill('2026-11-10') of a date input: Playwright's script sets the value (no Input call). A date input is no text field, so no focus click; the utility call passes (Q3 a, the first build).",
+   "platform": "linux",
+   "seed": 43,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.22": {"tag": "input", "type": "date", "box": {"x": 200, "y": 600, "width": 160, "height": 30}, "focused": false}
+    },
+    "focused": null
+   },
+   "chrome": {"results": {"1": {"result": {"type": "string", "value": "done"}}}},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {"o": [{"k": "value", "v": "2026-11-10"}, {"k": "force", "v": false}, {"k": "frameVisible", "v": true}]}
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.22"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "insert-text",
+   "row": "`keyboard.insertText(text)`",
+   "note": "keyboard.insertText('Hello') into a focused input: typed keys (the H with a Shift).",
+   "platform": "linux",
+   "seed": 44,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "in": [{"id": 1, "at": 0, "method": "Input.insertText", "params": {"text": "Hello"}}],
+   "out": [
+    {
+     "method": "Input.dispatchKeyEvent",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 2000],
+     "typing": "Hello",
+     "holdMs": [50, 250],
+     "shift": ["H"]
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "select-option",
+   "row": "`selectOption()`",
+   "note": "selectOption('b'): the select option recognizer matches; the call passes, and the stage counts it (Q3 a: until a probe shows that the popup of a select takes CDP keys).",
+   "platform": "linux",
+   "seed": 45,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.23": {"tag": "select", "box": {"x": 200, "y": 650, "width": 120, "height": 24}, "focused": false}},
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { optionsToSelect: optionsToSelect2, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectOptions(node, optionsToSelect2);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "optionsToSelect", "v": {"a": [{"o": [{"k": "valueOrLabel", "v": "b"}]}]}},
+            {"k": "force", "v": false},
+            {"k": "frameVisible", "v": true}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.23"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "set-files-paths",
+   "row": "`setInputFiles(paths)` with a local browser",
+   "note": "setInputFiles('/data/report.pdf'): Playwright's check of the input passes, then DOM.setFileInputFiles. The stage turns the file chooser's interception on (the client has it off), clicks the input (a point of its middle 40%), gets Page.fileChooserOpened for the same input (backendNodeId 42; it does not go to the client), sends the client's files to that input, and turns the interception off.",
+   "platform": "linux",
+   "seed": 46,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.19": {
+      "tag": "input",
+      "type": "file",
+      "backendNodeId": 42,
+      "box": {"x": 60, "y": 500, "width": 200, "height": 30},
+      "focused": false
+     }
+    },
+    "focused": null
+   },
+   "chrome": {
+    "events": [
+     {
+      "method": "Page.fileChooserOpened",
+      "params": {"frameId": "main", "mode": "selectSingle", "backendNodeId": 42},
+      "at": "out:3",
+      "toClient": false
+     }
+    ]
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "([injected, node, { multiple: multiple2, directoryUpload }]) => {\n          const element3 = injected.retarget(node, \"follow-label\");\n          if (!element3)\n            return;\n          if (element3.tagName !== \"INPUT\")\n            throw injected.createStacklessError(\"Node is not an HTMLInputElement\");\n          const inputElement = element3;\n          if (multiple2 && !inputElement.multiple && !inputElement.webkitdirectory)\n            throw injected.createStacklessError(\"Non-multiple file input can only accept single file\");\n          if (directoryUpload && !inputElement.webkitdirectory)\n            throw injected.createStacklessError(\"File input does not support directories, pass individual files instead\");\n          if (!directoryUpload && inputElement.webkitdirectory)\n            throw injected.createStacklessError(\"[webkitdirectory] input requires passing a path to a directory\");\n          return inputElement;\n        }"
+       },
+       {"value": 1},
+       {
+        "value": {"a": [{"h": 0}, {"h": 1}, {"o": [{"k": "multiple", "v": false}, {"k": "directoryUpload", "v": false}]}]}
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.19"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "DOM.setFileInputFiles",
+     "params": {"objectId": "7.3.19", "files": ["/data/report.pdf"]}
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Page.setInterceptFileChooserDialog",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "fields": {"enabled": true}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "out:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [120, 200], "y": [509, 521]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [28, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:2",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [120, 200], "y": [509, 521]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 2,
+     "from": "out:3",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [120, 200], "y": [509, 521]}
+    },
+    {
+     "method": "DOM.setFileInputFiles",
+     "for": 2,
+     "from": "out:4",
+     "at": [0, 2000],
+     "fields": {"files": ["/data/report.pdf"], "backendNodeId": 42}
+    },
+    {
+     "method": "Page.setInterceptFileChooserDialog",
+     "for": 2,
+     "from": "out:5",
+     "at": [0, 8],
+     "fields": {"enabled": false}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:6"}]
+  },
+  {
+   "id": "set-files-payloads",
+   "row": "`setInputFiles(payloads)` (a remote client, or buffers)",
+   "note": "setInputFiles({ name, mimeType, buffer }): Playwright's script makes the files (the set files recognizer); the call passes, and the stage counts it (Q3 a, the first build).",
+   "platform": "linux",
+   "seed": 47,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.19": {
+      "tag": "input",
+      "type": "file",
+      "backendNodeId": 42,
+      "box": {"x": 60, "y": 500, "width": 200, "height": 30},
+      "focused": false
+     }
+    },
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "([injected, node, files]) => injected.setInputFiles(node, files)"},
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "a": [
+            {
+             "o": [
+              {"k": "name", "v": "a.txt"},
+              {"k": "mimeType", "v": "text/plain"},
+              {"k": "buffer", "v": "aGk="},
+              {"k": "lastModifiedMs", "v": 0}
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.19"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "drag-to",
+   "row": "`dragTo(target)`, `dragTo(target, { steps, sourcePosition, targetPosition })`",
+   "note": "locator('#card').dragTo(locator('#zone')): the source's checks and press; the target's hit-target setup (action drag); then as the vector 'mouse-drag': the wait after the press, the short path with the button down until Input.dragIntercepted, the stage's own dragEnter (M12: Chromium needs it) and dragOver events, Playwright's dragEnter as a dragOver, and the drop after a pause.",
+   "platform": "linux",
+   "seed": 48,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.13": {"tag": "div", "draggable": true, "box": {"x": 60, "y": 420, "width": 80, "height": 40}, "focused": false},
+     "7.3.14": {"tag": "div", "box": {"x": 600, "y": 400, "width": 200, "height": 100}, "focused": false}
+    },
+    "focused": null
+   },
+   "chrome": {
+    "results": {
+     "1": {"result": {"type": "object", "objectId": "7.3.20"}},
+     "4": {"result": {"type": "string", "value": "done"}},
+     "5": {"result": {"type": "object", "objectId": "7.3.24"}},
+     "11": {"result": {"type": "string", "value": "done"}}
+    },
+    "events": [
+     {
+      "method": "Input.dragIntercepted",
+      "params": {"data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}},
+      "at": "out:6"
+     }
+    ]
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "mouse"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 100}, {"k": "y", "v": 440}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.13"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 100, "y": 440, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 3,
+     "after": 2,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 100,
+      "y": 440,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 4,
+     "after": 3,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.20"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 5,
+     "after": 4,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": false},
+       {
+        "value": "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {
+           "o": [
+            {"k": "actionType", "v": "drag"},
+            {"k": "hitPoint", "v": {"o": [{"k": "x", "v": 700}, {"k": "y", "v": 450}]}},
+            {"k": "trial", "v": false}
+           ]
+          }
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.14"}
+      ],
+      "returnByValue": false,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {"id": 6, "after": 5, "method": "Input.setInterceptDrags", "params": {"enabled": true}},
+    {
+     "id": 7,
+     "after": 6,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "left", "buttons": 1, "x": 700, "y": 450, "modifiers": 0, "force": 0.5}
+    },
+    {"id": 8, "after": 7, "method": "Input.setInterceptDrags", "params": {"enabled": false}},
+    {
+     "id": 9,
+     "after": 8,
+     "method": "Input.dispatchDragEvent",
+     "params": {
+      "type": "dragEnter",
+      "x": 700,
+      "y": 450,
+      "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1},
+      "modifiers": 0
+     }
+    },
+    {
+     "id": 10,
+     "after": 9,
+     "method": "Input.dispatchDragEvent",
+     "params": {
+      "type": "drop",
+      "x": 700,
+      "y": 450,
+      "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1},
+      "modifiers": 0
+     }
+    },
+    {
+     "id": 11,
+     "after": 10,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "(h) => h.stop()"},
+       {"value": 2},
+       {"value": {"h": 0}},
+       {"value": {"v": "undefined"}},
+       {"objectId": "7.3.24"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 100, "y": 440}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [31, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 3,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 100, "y": 440}
+    },
+    {"pass": true, "for": 4, "from": "in:4", "at": [0, 0]},
+    {"pass": true, "for": 5, "from": "in:5", "at": [0, 0]},
+    {"pass": true, "for": 6, "from": "in:6", "at": [0, 0]},
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 7,
+     "from": "out:2",
+     "at": [100, 300],
+     "path": {
+      "from": {"x": 100, "y": 440},
+      "to": {"x": 700, "y": 450},
+      "part": "until dragIntercepted",
+      "totalMs": [300, 1500]
+     },
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"button": "left", "buttons": 1, "force": 0.5},
+     "rule": "dragWaitMs"
+    },
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "dragEnter",
+     "for": 7,
+     "from": "out:6",
+     "at": [0, 8],
+     "fields": {"data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "dragOver",
+     "for": 7,
+     "from": "out:7",
+     "at": [0, 8],
+     "path": {"from": {"x": 100, "y": 440}, "to": {"x": 700, "y": 450}, "part": "rest", "totalMs": [300, 1500]},
+     "gapMs": 8,
+     "durMs": [0, 1500],
+     "count": [1, 188],
+     "fields": {"data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {"pass": true, "for": 8, "from": "in:8", "at": [0, 0]},
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "dragOver",
+     "for": 9,
+     "from": "in:9",
+     "at": [0, 0],
+     "fields": {"x": 700, "y": 450, "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {
+     "method": "Input.dispatchDragEvent",
+     "type": "drop",
+     "for": 10,
+     "from": "out:10",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"x": 700, "y": 450, "data": {"items": [{"mimeType": "text/plain", "data": "card-7"}], "dragOperationsMask": 1}}
+    },
+    {"pass": true, "for": 11, "from": "in:11", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"},
+    {"id": 5, "after": "out:4"},
+    {"id": 6, "after": "out:5"},
+    {"id": 7, "after": "out:8"},
+    {"id": 8, "after": "out:9"},
+    {"id": 9, "after": "out:10"},
+    {"id": 10, "after": "out:11"},
+    {"id": 11, "after": "out:12"}
+   ]
+  },
+  {
+   "id": "drop",
+   "row": "`locator.drop(payload)` (new in 1.65)",
+   "note": "locator.drop(payload): a script of Playwright's in the page's main world makes the drag events (isTrusted false). It is no utility call of a recognizer: it passes as any call (Q3 a).",
+   "platform": "linux",
+   "seed": 49,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.14": {"tag": "div", "box": {"x": 600, "y": 400, "width": 200, "height": 100}, "focused": false}},
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.2.1",
+      "arguments": [
+       {"objectId": "7.2.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "(node, { payloads: payloads2, data: data2, point: point2 }) => {\n              if (!node.isConnected || node.nodeType !== 1)\n                return \"error:notconnected\";\n              const element3 = node;\n              const dt = new DataTransfer();\n              for (const p of payloads2) {\n                const bytes = Uint8Array.from(atob(p.buffer), (c) => c.charCodeAt(0));\n                const file = new File([bytes], p.name, { type: p.mimeType, lastModified: p.lastModifiedMs });\n                dt.items.add(file);\n              }\n              for (const entry of data2)\n                dt.setData(entry.mimeType, entry.value);\n              const makeEvent = (type3) => new DragEvent(type3, {\n                bubbles: true,\n                cancelable: true,\n                composed: true,\n                clientX: point2.x,\n                clientY: point2.y,\n                dataTransfer: dt\n              });\n              element3.dispatchEvent(makeEvent(\"dragenter\"));\n              const over = makeEvent(\"dragover\");\n              element3.dispatchEvent(over);\n              if (!over.defaultPrevented) {\n                element3.dispatchEvent(makeEvent(\"dragleave\"));\n                return \"not-accepted\";\n              }\n              element3.dispatchEvent(makeEvent(\"drop\"));\n              return \"accepted\";\n            }"
+       },
+       {"value": 2},
+       {"value": {"h": 0}},
+       {
+        "value": {
+         "o": [
+          {"k": "payloads", "v": {"a": []}},
+          {"k": "data", "v": {"a": [{"o": [{"k": "mimeType", "v": "text/plain"}, {"k": "value", "v": "card-7"}]}]}},
+          {"k": "point", "v": {"o": [{"k": "x", "v": 100}, {"k": "y", "v": 50}]}}
+         ]
+        }
+       },
+       {"objectId": "7.2.14"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "focus-field",
+   "row": "`focus()`",
+   "note": "focus() on a text input with text and no focus: the focus recognizer gives a focus click at the field's left end, then the utility call passes.",
+   "platform": "linux",
+   "seed": 50,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": false
+     }
+    },
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)"
+       },
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}, {"v": "undefined"}]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.18"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [202, 205], "y": [311, 319]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [29, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [202, 205], "y": [311, 319]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [202, 205], "y": [311, 319]}
+    },
+    {"pass": true, "for": 1, "from": "out:2", "at": [0, 8]}
+   ],
+   "answers": [{"id": 1, "after": "out:3"}]
+  },
+  {
+   "id": "focus-button",
+   "row": "`focus()`",
+   "note": "focus() on a button: no text field, so no click; the utility call passes (Q3 a).",
+   "platform": "linux",
+   "seed": 51,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)"
+       },
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}, {"v": "undefined"}]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.10"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "blur",
+   "row": "`blur()`",
+   "note": "blur(): the blur recognizer matches; the call passes, and the stage counts it (Q3 a).",
+   "platform": "linux",
+   "seed": 52,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": true
+     }
+    },
+    "focused": "7.3.18"
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {"value": "([injected, node]) => injected.blurNode(node)"},
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}, {"o": []}]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.18"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "select-text",
+   "row": "`selectText()`",
+   "note": "selectText() on a text input with no focus: a click on it (the focus click's point) and the select-all chord (Control+A on Linux), then the utility call passes.",
+   "platform": "linux",
+   "seed": 53,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {"x": 200, "y": 300, "width": 300, "height": 30},
+      "text": 3,
+      "focused": false
+     }
+    },
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { force, frameVisible }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\"], frameVisible);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.selectText(node);\n          }"
+       },
+       {"value": 1},
+       {"value": {"a": [{"h": 0}, {"h": 1}, {"o": [{"k": "force", "v": false}, {"k": "frameVisible", "v": true}]}]}},
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.18"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [202, 205], "y": [311, 319]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [29, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [202, 205], "y": [311, 319]}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [202, 205], "y": [311, 319]}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 1,
+     "from": "out:2",
+     "at": [0, 2000],
+     "fields": {"key": "Control", "modifiers": 2}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 1,
+     "from": "out:3",
+     "at": [40, 120],
+     "rule": "chordBeforeMs",
+     "fields": {"key": "a", "modifiers": 2}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 1,
+     "from": "out:4",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "a", "modifiers": 2}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 1,
+     "from": "out:5",
+     "at": [20, 80],
+     "rule": "chordReleaseGapMs",
+     "fields": {"key": "Control", "modifiers": 0}
+    },
+    {"pass": true, "for": 1, "from": "out:6", "at": [0, 8]}
+   ],
+   "answers": [{"id": 1, "after": "out:7"}]
+  },
+  {
+   "id": "dispatch-event",
+   "row": "`dispatchEvent(type)`",
+   "note": "dispatchEvent('click'): a script of Playwright's in the page's main world sends an event with isTrusted false. It passes as any call (R15, Q3 a).",
+   "platform": "linux",
+   "seed": 54,
+   "clock": 0,
+   "page": {
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 900, "y": 700},
+    "nodes": {"7.3.10": {"tag": "button", "box": {"x": 60, "y": 220, "width": 80, "height": 40}, "focused": false}},
+    "focused": null
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.2.1",
+      "arguments": [
+       {"objectId": "7.2.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "(injectedScript, element3, data) => {\n          injectedScript.dispatchEvent(element3, data.type, data.eventInit);\n          return { result: void 0 };\n        }"
+       },
+       {"value": 3},
+       {"value": {"h": 0}},
+       {"value": {"h": 1}},
+       {"value": {"o": [{"k": "type", "v": "click"}, {"k": "eventInit", "v": {"o": []}}]}},
+       {"objectId": "7.2.2"},
+       {"objectId": "7.2.10"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    }
+   ],
+   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "rule-gate",
+   "rule": "The gate.",
+   "note": "The gate: a Runtime.evaluate that Playwright sends with the click (not awaited) goes to Chrome only after the release, so it sees the page after the click.",
+   "platform": "linux",
+   "seed": 61,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 640,
+      "y": 360,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 3,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 4,
+     "at": 0,
+     "method": "Runtime.evaluate",
+     "params": {"expression": "document.activeElement.id", "returnByValue": true}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 640, "y": 360}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [16, 126],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 640, "y": 360}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 3,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 640, "y": 360}
+    },
+    {"pass": true, "for": 4, "from": "out:2", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1"},
+    {"id": 3, "after": "out:2"},
+    {"id": 4, "after": "out:3"}
+   ]
+  },
+  {
+   "id": "rule-dialog-at-press",
+   "rule": "Dialogs (the input design, section 4.3a).",
+   "note": "A confirm() in the page's mousedown handler: the dialog opens at the press, and Chrome answers no input event while it is open. The plan ends: the release goes at once (a hold counts from the press's send). The client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate, and gets its answer first; then Chrome answers the press and the release (its own answers, after the dialog closes).",
+   "platform": "linux",
+   "seed": 62,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "chrome": {
+    "events": [
+     {
+      "method": "Page.javascriptDialogOpening",
+      "params": {
+       "type": "confirm",
+       "message": "Sure?",
+       "url": "https://a.example/",
+       "hasBrowserHandler": false,
+       "defaultPrompt": ""
+      },
+      "at": "out:1"
+     }
+    ],
+    "dialog": {"opensAt": "out:1", "closesAt": "out:3"}
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 640,
+      "y": 360,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 3,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "clickCount": 1}
+    },
+    {
+     "id": 4,
+     "afterEvent": "Page.javascriptDialogOpening",
+     "waitMs": 50,
+     "method": "Page.handleJavaScriptDialog",
+     "params": {"accept": true}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 640, "y": 360}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [16, 126],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 640, "y": 360}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 3,
+     "from": "out:1",
+     "at": [0, 1],
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 640, "y": 360}
+    },
+    {"pass": true, "for": 4, "from": "in:4", "at": [0, 0]}
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 4, "after": "out:3"},
+    {"id": 2, "after": "out:1", "waits": 4},
+    {"id": 3, "after": "out:2", "waits": 4}
+   ]
+  },
+  {
+   "id": "rule-event-error",
+   "rule": "The answers.",
+   "note": "Chrome refuses the press: the stage stops the plan. The press gets Chrome's error; the release, whose event did not go, gets the same error (no button is down, so no release goes).",
+   "platform": "linux",
+   "seed": 63,
+   "clock": 0,
+   "page": {"viewport": {"width": 1280, "height": 720}, "last": {"x": 900, "y": 700}, "nodes": {}, "focused": null},
+   "chrome": {"errors": {"out:1": {"code": -32000, "message": "Internal error"}}},
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseMoved", "button": "none", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "force": 0}
+    },
+    {
+     "id": 2,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mousePressed",
+      "button": "left",
+      "buttons": 1,
+      "x": 640,
+      "y": 360,
+      "modifiers": 0,
+      "clickCount": 1,
+      "force": 0.5
+     }
+    },
+    {
+     "id": 3,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {"type": "mouseReleased", "button": "left", "buttons": 0, "x": 640, "y": 360, "modifiers": 0, "clickCount": 1}
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": 640, "y": 360}},
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [300, 1000],
+     "count": [16, 126],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 2,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 640, "y": 360}
+    }
+   ],
+   "answers": [
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1", "error": "chrome"},
+    {"id": 3, "after": "none", "error": "the same"}
+   ]
+  }
+ ]
+}

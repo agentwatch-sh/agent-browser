@@ -2104,7 +2104,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   is `fixture.localhost` (a list entry is never an IP address; the fake Chrome reaches it on 127.0.0.1).
 - `test/contracts-c11.test.ts`, `test/contracts-c12.test.ts`: the contracts in `docs/contracts/` (board task
   ab-v16.94.1): C11 (the endpoint; its text and its tests moved here from chrome-extension, with its vectors
-  `test/vectors/endpoint.json`), C12 (the control door of the self-contained agent browser, with
+  `test/vectors/endpoint.json`; its part "The input stage" of board ab-t30.6, with `test/vectors/stage.json`, the
+  contract that the stage's build follows), C12 (the control door of the self-contained agent browser, with
   `test/vectors/control.json`) and the format of the MCP's allow list (`test/vectors/mcp-allow-list.json`).
   Each test asserts the exact sentences of the text, and small reference rules check each vector.
 - `test/relay-peer.test.ts`: the peer check (`--peer-check`). The contract's peer vectors (`upgradeChecks`,

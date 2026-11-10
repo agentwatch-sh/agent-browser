@@ -692,6 +692,9 @@ read their deltas and gaps, and see a scroll with no wheel or key before it.
 - The count: `n = max(1, round((|delta| + residual) / 120))`, where `residual` is what the page's earlier
   wheel calls asked for and did not get. So a series of wheel calls scrolls the asked total to within one
   notch, and a call with a delta that is not 0 always gives at least one wheel event.
+  The contract changes this (C11, the input stage, from PR #107; review-107 reading 8): the two goals conflict (ten
+  calls of 100 px would give 1200 px), so C11 keeps "the asked total within one notch" and counts with `max(0, ...)`,
+  with one notch when the count is 0 and the residual is 0 or more. C11's rule is the one that the build follows.
 - Playwright's `mouse.wheel` does not wait for the scroll and does not check it (its documentation). So a
   scroll that differs from the asked delta by less than one notch keeps the client's result.
 
