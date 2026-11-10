@@ -79,8 +79,9 @@ display whose next one (its stable part's) is reserved: `--display 89`, `146` or
 
 The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), `background-tabs/`
 (`check.ts`, `visibility.ts`, `override.ts`), `anti-detect/` (`run.ts`, `extra.ts`, `mac.ts
---dry-run`, whose `mac-standin.ts` is a child of it), `function-keys/check.ts`, `input-harness/run.ts` and
-`parity/probe.ts` on Linux.
+--dry-run`, whose `mac-standin.ts` is a child of it), `function-keys/check.ts`, `input-harness/run.ts`,
+`parity/probe.ts` on Linux, and `service-unit/check.ts` (board ab-v16.94.3: the service that it starts with `--test`
+starts Xvfb and Chrome, and the check gives each of their pids to `track()` and signals only those pids).
 
 No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
