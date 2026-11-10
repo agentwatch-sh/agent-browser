@@ -1134,7 +1134,7 @@ Each question gives its options, their effects, a recommendation, and what the b
 - **a. Yes, always, for every client and every site (recommended).** A click takes about 1 to 1.6 s (2.6 s
   with a long scroll; M3) and typed text about 5 characters a second (M5), so a long agent task takes longer
   than with plain Playwright. A test of `@playwright/test` with 15 to 20 clicks and a 60-character fill
-  passes its default 30 s test timeout through agent mode; its owner must raise that timeout (for example to
+  goes over its default 30 s test timeout through agent mode; its owner must raise that timeout (for example to
   120 s; section 6.3). No site and no client needs a setting, as "the caller doesn't worry about it" says. A
   check like a click box can appear on any site, so the agent never knows in advance where it matters. No
   change in agentwatch.
