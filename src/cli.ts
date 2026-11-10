@@ -15,6 +15,7 @@ import { runProxy } from "./proxy.ts";
 import { runWatchBack } from "./watchback.ts";
 import { startRelay } from "./relay/endpoint.ts";
 import { SERVICE_USAGE, serviceMain } from "./service/main.ts";
+import { runHost } from "./service/link/host.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
 
@@ -286,6 +287,12 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       // The self-contained agent browser's service (stage 1a): off by default; agentwatch's unit starts it from stage 2.
       for (const k of Object.keys(values)) if (!(k in SERVICE_FLAGS) && !SERVICE_SHARED.has(k)) throw new UsageError(`--${k} is not an option of service; ${SERVICE_USAGE}`);
       return await serviceMain(values, io, log, rest);
+    }
+    if (name === "host") {
+      // The host shim of the self-contained agent browser (stage 1b part 2): Chrome starts it for the receiver, with the
+      // receiver's origin as its one argument. Its standard output is Chrome's native port, so it prints nothing else there.
+      for (const k of Object.keys(values)) throw new UsageError(`--${k} is not an option of host (Chrome starts it, not a person)`);
+      return await runHost({ env: process.env, stdin: io.stdin, stdout: io.stdout, ppid: process.ppid, log });
     }
     if (name === "proxy") {
       if (!rest[0]) throw new UsageError("usage: agent-browser proxy <ws-url> --state-dir DIR (started by the library, not by hand)");

@@ -7,9 +7,10 @@
 // endpoint, and it answers each other op of C12 `unsupported` until the stage that adds it (C12, "The ops of stage 1a").
 // Each later stage adds a part with its ops (part.ts): stage 1c (board ab-v16.94.4) the lists, the scopes, the prompts
 // and the sign-ins (stage1c.ts); stage 1b part 1 (board ab-v16.94.3) the Chrome unit and its owner rule with the ops
-// start and stop (unit/part.ts).
+// start and stop (unit/part.ts); stage 1b part 2 (board ab-v16.94.9) the native link (link/), the agent package
+// (package/) and the model in this process, the X pointer, and the op sender.
 
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,15 @@ import { PeerGate } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
+import { Carrier } from "./link/carrier.ts";
+import { LinkReceiverPort, NativeLink, type LinkPeerCheck } from "./link/link.ts";
+import { shimArgv, writeHostFiles } from "./link/manifest.ts";
+import { endOldHosts, loadPidfds, type Pidfds } from "./link/old-host.ts";
+import { linkPeerCheck } from "./link/peer.ts";
+import { PointerOps, xWorld } from "./link/pointer-ops.ts";
+import { extensionFile, prepareAgentPackage } from "./package/crx.ts";
+import { RECEIVER_ID } from "./package/pins.ts";
+import { senderData, type SenderData } from "./package/sender.ts";
 import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
 import { Stage1c } from "./stage1c.ts";
@@ -33,9 +43,22 @@ export { serviceHello };
 /** The ops of stage 1a (C12, "The ops of stage 1a"). */
 export const STAGE_1A_OPS = ["config", "set_sessions", "session_ended", "status", "endpoint"] as const;
 /** Each op of C12 that no part of this service has yet, and the stage that adds it; until then it gets `unsupported`. */
-export const LATER_OPS: Readonly<Record<string, "1b2">> = {
-  sender: "1b2",
-};
+export const LATER_OPS: Readonly<Record<string, string>> = {};
+/** The op of stage 1b part 2 (C12, "The ops of stage 1b part 2"): the sender package. */
+export const STAGE_1B2_OPS = ["sender"] as const;
+
+/** The part of `sender` (C1, C9): the sender's ID, its version and the zip of the pinned commit's operator/ folder, made once. */
+export function senderPart(make: () => SenderData = senderData): ServicePart {
+  let made: SenderData | null = null;
+  return {
+    ops: {
+      sender: () => {
+        try { made ??= make(); } catch (e) { return { error: `the sender package cannot be read: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}` }; }
+        return { data: { id: made.id, version: made.version, package: { ...made.package } } };
+      },
+    },
+  };
+}
 /** The texts of stage 1a's one state, `off` (I2: the agent's text names no stop and no start). */
 export const STAGE_1A_TEXTS = {
   agent_text: "The agent browser is not running.",
@@ -200,6 +223,11 @@ export type ServiceOptions = {
   lists?: { listsFolder: string; stateFolder: string; receiver?: ReceiverPort };
   /** The Chrome unit (stage 1b part 1): its folders, the owner rule's reader and the test seams. Without it, no Chrome. */
   unit?: UnitOptions;
+  /**
+   * The native link (stage 1b part 2), with the unit and the lists: the link socket's path (link.sock in the run folder),
+   * and the test seams (the pidfd calls; the shim's Node and bin; no X pointer).
+   */
+  link?: { socket: string; pidfds?: Pidfds | { failed: string }; shim?: { node?: string; bin?: string }; xdotool?: string | null; agentPackage?: string; peer?: LinkPeerCheck };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -212,7 +240,7 @@ export type UnitOptions = {
   part?: Partial<Omit<UnitPartOptions, "unit">> & { unit?: Partial<UnitDeps> };
 };
 /** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
-export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; lost: Promise<string>; stop: () => Promise<void> };
+export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; lost: Promise<string>; stop: () => Promise<void> };
 
 /** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
 export class NotOwnerAtStart extends Error {}
@@ -230,15 +258,50 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The Chrome unit (stage 1b part 1) and its owner rule: built now, begun only after the owner rule said yes.
   const owner = o.unit ? new Owner(o.unit.owner, o.log) : null;
   let state!: Stage1a;
-  const part = o.unit && owner ? new UnitPart({
-    paths: o.unit.paths, procs: o.unit.procs ?? new Procs(), owner, log: o.log,
+  const procs = o.unit?.procs ?? new Procs();
+  // The native link, the carrier and the X pointer (stage 1b part 2): with the unit and the lists only.
+  const L = o.unit && o.lists && o.link ? o.link : null;
+  let part: UnitPart | null = null;
+  let stage1c: Stage1c | null = null;
+  // The X pointer of C10's daemon ops: the unit's own Xvfb only, while the unit runs.
+  const world = L ? xWorld({
+    display: () => { const d = part?.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
+    xdotool: L.xdotool !== undefined ? L.xdotool : which("xdotool"),
+  }) : null;
+  const ops = world ? new PointerOps(world) : null;
+  const carrier = L ? new Carrier({
+    send: (p) => link!.sendBridge(p), log: o.log, blocked: (b) => port!.blocked(b),
+    pointer: ops && world ? { answer: (r) => ops.answer(r), pending: (id) => ops.pending(id), busy: () => ops.working(), kill: (k) => world.kill(k) } : undefined,
+  }) : null;
+  const link: NativeLink | null = L && o.unit ? new NativeLink({
+    path: L.socket, log: o.log, carrier: carrier!,
+    peer: L.peer ?? linkPeerCheck({ reader: "failed" in t ? { failed: t.failed } : t.reader, chrome: () => part?.unit.chromeId() ?? null, profile: o.unit.paths.profile, cmdline: (pid) => procs.cmdline(pid) }),
+  }) : null;
+  const port: LinkReceiverPort | null = link ? new LinkReceiverPort(link, carrier) : null;
+  const pidfds = L ? (L.pidfds ?? await loadPidfds()) : null;
+  part = o.unit && owner ? new UnitPart({
+    paths: o.unit.paths, procs, owner, log: o.log,
     tools: o.unit.tools ?? new GoogleChromeTools({ tools: o.unit.paths.tools, log: o.log }),
     endpoint: () => endpointState(gate), sessionsComplete: () => state.sessionsComplete,
-    activity: { clients: () => (agent?.clients() ?? 0) > 0 },
+    activity: link && carrier ? {
+      inFlight: () => carrier.inFlight(), idleFor: () => carrier.idleFor(), importing: () => link.importing(), sinceSend: () => link.sinceSend(),
+      clients: () => (agent?.clients() ?? 0) > 0 || carrier.clients(),
+    } : { clients: () => (agent?.clients() ?? 0) > 0 },
+    ...(link ? {
+      link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady() },
+      extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
+      onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
+      beforeStop: () => world?.kill("unitStop"),
+    } : {}),
     ...o.unit.part,
-    unit: { displayFs: realDisplayFs(() => (o.unit!.procs ?? new Procs()).netUnix()), which: (n) => which(n), ...o.unit.part?.unit },
+    unit: {
+      displayFs: realDisplayFs(() => procs.netUnix()), which: (n) => which(n),
+      ...(L ? { prepare: { run: (copy) => prepareAgentPackage(copy, o.unit!.paths.tools, o.unit!.paths.chromes, L.agentPackage), hasFile: (copy) => { try { return existsSync(extensionFile(copy)); } catch { return false; } } } } : {}),
+      ...o.unit.part?.unit,
+    },
   }) : null;
-  const parts: ServicePart[] = [...(o.lists ? [new Stage1c({ ...o.lists, log: o.log })] : []), ...(part ? [part] : [])];
+  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log });
+  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), senderPart()];
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
   const unit = o.daemonUnit ?? "agentwatch.service";
   // The control door opens first, before the agent door and before any Chrome start (the design's build note 8).
@@ -252,14 +315,35 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     await control.stop();
     throw new NotOwnerAtStart(`the service does not own the Chrome unit, so it exits: ${await owner.lost}`);
   }
-  try { agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log }); }
-  catch (e) { state.stopParts(); await control.stop(); throw e; }
+  try {
+    // The owner parts of the native link (the design, section 13.2): the host manifest with the service's shim, then the link socket.
+    if (link && o.unit) {
+      if (Buffer.byteLength(L!.socket) > 103) throw new Error(`the link socket's path is longer than 103 bytes: ${L!.socket}`);
+      writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
+      await link.start();
+    }
+    agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined });
+  } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;
+  // C10: the carrier's deadlines, each second.
+  const expire = carrier ? setInterval(() => carrier.expire(), 1000) : null;
+  expire?.unref();
   if (part) await part.begin();
-  o.log(`service: ready (pid ${process.pid}; ${part ? "the Chrome unit runs" : "stage 1a: no Chrome"})`);
+  o.log(`service: ready (pid ${process.pid}; ${part ? `the Chrome unit runs${link ? ", with the native link" : ""}` : "stage 1a: no Chrome"})`);
   let stopping: Promise<void> | undefined;
   return {
-    control, agent: door, state, part, lost: owner ? owner.lost : new Promise<string>(() => {}),
-    stop: () => stopping ??= (async () => { state.stopParts(); await part?.stop(); await control.stop(); await door.stop(); o.log("service: stopped"); })(),
+    control, agent: door, state, part, link, carrier, lost: owner ? owner.lost : new Promise<string>(() => {}),
+    stop: () => stopping ??= (async () => {
+      state.stopParts();
+      if (expire) clearInterval(expire);
+      await part?.stop();
+      await control.stop();
+      // The model's last bridge.attachNew [false] goes to the receiver before the link closes (C10).
+      await door.stop();
+      await link?.flush(500);
+      carrier?.stop();
+      await link?.stop();
+      o.log("service: stopped");
+    })(),
   };
 }

@@ -6,13 +6,13 @@
 // path, as today's endpoint): how the service takes the address from its arguments (agentDoorAddress), where the peer
 // check's self-test runs (agentDoorPeerCheck), how the door listens (openAgentDoor) and how a client names it (C11's
 // URL, agentDoorUrl). The door's request logic (the relay's admit and the model) and the rest of the service do not
-// know the transport. In stage 1a no Chrome runs, so the bridge has no
-// link: the model's link stays down, and each upgrade that passes the peer check gets the 503 of the link (C11).
-// Stage 1b gives the bridge the native link.
+// know the transport. With no bridge (stage 1a) the model's link stays down, and each upgrade that passes the peer
+// check gets the 503 of the link (C11). Stage 1b part 2 (board ab-v16.94.9) gives the model the native link: its
+// bridge is the service's carrier (link/carrier.ts), as calls inside the process.
 
 import { resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { startRelay, type Relay } from "../relay/endpoint.ts";
+import { startRelay, type Relay, type RelayTransport } from "../relay/endpoint.ts";
 import { selfTest, type PeerGate } from "../relay/peer.ts";
 
 export type EndpointState = { form: string } | { form: null; reason: string };
@@ -41,15 +41,17 @@ export const agentDoorUrl = (address: string, scope: string) => `ws+unix://${add
 export const endpointState = (gate: PeerGate): EndpointState => (gate.form !== null ? { form: gate.form } : { form: null, reason: gate.failed ?? "unknown" });
 
 /**
- * Open the agent door at `address` with the gate of the service's peer check: the relay's endpoint, whose bridge goes
- * nowhere until stage 1b (no link line ever comes, so no bridge request is made).
+ * Open the agent door at `address` with the gate of the service's peer check: the relay's endpoint and its model. With
+ * `bridge` (the carrier) the model's bridge is the native link; with none it goes nowhere (no link line ever comes, so
+ * no bridge request is made).
  */
-export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void }): Promise<AgentDoor> {
+export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport }): Promise<AgentDoor & { relay: Relay }> {
   const input = new PassThrough();
   const output = new Writable({ write(_chunk, _enc, done) { done(); } });
-  const relay: Relay = await startRelay({ socket: o.address, input, output, log: o.log, peerCheck: o.gate });
+  const relay: Relay = await startRelay({ socket: o.address, input, output, log: o.log, peerCheck: o.gate, transport: o.bridge });
   let stopping: Promise<void> | undefined;
   return {
+    relay,
     address: o.address,
     url: (scope) => agentDoorUrl(o.address, scope),
     state: () => endpointState(o.gate),

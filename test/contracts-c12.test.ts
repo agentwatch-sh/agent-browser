@@ -567,6 +567,36 @@ test("C12 states the part of stage 1c: the files, a session's repo, the object, 
   assert.ok(!/\/home\//.test(P), "no box path");
 });
 
+test("C12 states the ops of stage 1b part 2 (board ab-v16.94.9): sender and its data, extension_version, the agent package, the native link, the receiver port, the model and the watch; the values are the code's", async () => {
+  const P = part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9).");
+  sayAll(P, [
+    "Stage 1b part 2 adds the native link, the agent package and the model to the service (the design, sections 5.1, 5.3 and 5.4), and the op `sender`: the service no longer answers it `unsupported`. Now no op of the requests' table gets `unsupported` from the service. The stage adds no feature name, as the part of stage 1a says.",
+    "`id` is the sender's ID, `bpfkgknpndlpkcffmaaelkfcbpackiip`. `version` is the version in the manifest of that commit's `operator/` folder (`0.2.0`), not the receiver's version. `package` is a zip of that folder: its `name` is `agentwatch-sender-<version>.zip`, its `sha256` is the SHA-256 of the zip's bytes, and `base64` holds the bytes.",
+    "When the service cannot read the folder, `sender` answers the error `the sender package cannot be read: <kind>`. The fake gives the vectors' empty zip.",
+    "`extension_version` (in `status` and in the `ready` event) is the receiver's version from its last hello on the link.",
+    "Before each start of Google Chrome from the tools folder, the service checks the CRX against the pinned SHA-256 and ID, copies it into `agent-crx/` in the tools folder, and writes Chrome's external extensions file next to the copy's binary (`extensions/<receiver ID>.json`).",
+    "The link socket is `link.sock` in the folder of `control.sock`, with mode 0600.",
+    "The link admits only a shim whose parent is the service's Chrome, by pid and start time, on the agent profile. After it writes the manifest, the service ends the old owner's host by the rule of the design's build note 7, through a pidfd.",
+    "Stage 1c's `set_scopes`, `import`, allowlist line, `end_scope` and blocked reports use this link now, with the rules of stage 1c's part (below): the push, its 10 s wait, the import's waits and the `prompt` events.",
+    "one request of channel `main` at a time, a bridge channel that never waits behind an import, parts of at most 700,000 bytes, the joins of result parts, `MAX_BYTES_IN_FLIGHT`, the waits and the deadline answers.",
+    "`daemon.pointerAt`, `daemon.movePointer` and `daemon.blocked` are calls inside the service, with C10's checks. The X pointer is the Chrome unit's own Xvfb.",
+  ]);
+  // The values that the part names are the code's.
+  const { SENDER_ID, RECEIVER_ID, CHROME_EXTENSION_COMMIT, NATIVE_HOST_NAME } = await import("../src/service/package/pins.ts");
+  const { senderData } = await import("../src/service/package/sender.ts");
+  const { PART_BYTES } = await import("../src/service/link/parts.ts");
+  const { linkSocketFor } = await import("../src/service/main.ts");
+  const real = senderData();
+  assert.ok(says(P, `\`${SENDER_ID}\``) && says(P, `\`${RECEIVER_ID}\``) && says(P, `\`${CHROME_EXTENSION_COMMIT.slice(0, 7)}\``) && says(P, `\`${NATIVE_HOST_NAME}\``));
+  assert.ok(says(P, `(\`${real.version}\`)`), "the sender's version");
+  assert.equal(PART_BYTES, 700_000);
+  assert.equal(linkSocketFor("/run/x/agent-browser/control.sock"), "/run/x/agent-browser/link.sock");
+  // The vectors' sender has the real ID, version and name; only its zip is the fake's empty one.
+  const q5 = control.requests.find((v: any) => v.req.op === "sender");
+  assert.deepEqual([q5.res.data.id, q5.res.data.version, q5.res.data.package.name], [real.id, real.version, real.package.name]);
+  assert.deepEqual(control.state.sender, q5.res.data);
+});
+
 test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop, their answers after the work, the owner rule's error, the events of the Chrome unit, the values of Chrome's facts, and the command's new flags", () => {
   sayAll(part(C12, "The ops of stage 1b part 1 (board ab-v16.94.3)."), [
     "Stage 1b part 1 adds the Chrome unit to the service (the design, sections 5.1, 5.6 and 13.2) and the ops `start` and `stop`: the service no longer answers them `unsupported`. Each other op that stage 1a answers `unsupported` stays so until its stage.",

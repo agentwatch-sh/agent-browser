@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
-import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
+import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS, STAGE_1B2_OPS } from "../src/service/service.ts";
 import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
 import { STAGE_1B1_OPS } from "../src/service/unit/part.ts";
 import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
@@ -194,10 +194,11 @@ test("the fake answers every request vector and every bad request vector as the 
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
   // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts), stage 1b part 1's part start and stop
-  // (test/service-unit-part.test.ts); sender comes with stage 1b part 2.
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sender: "1b2" });
+  // (test/service-unit-part.test.ts), stage 1b part 2's part sender (test/service-native.test.ts): no op is later now.
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), {});
   assert.deepEqual([...STAGE_1B1_OPS], ["start", "stop"]);
-  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
+  assert.deepEqual([...STAGE_1B2_OPS], ["sender"]);
+  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...STAGE_1B2_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
   const d = await openDoor(stage1a());
   try {
     const { c, answers } = await runVectors(d.path);
