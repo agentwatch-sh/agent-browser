@@ -465,7 +465,10 @@ test("the control door's folder: a new folder gets mode 0700; a folder that the 
     const open = join(dir, "open");
     mkdirSync(open);
     chmodSync(open, 0o755);
-    await assert.rejects(ControlDoor.open({ path: join(open, "control.sock"), admit: admitAll, handler: stage1a(), log: () => {} }), /must be a folder of this user with mode 0700/);
+    // A door that opens by mistake is stopped at once, so the test fails and does not hang.
+    const r = await ControlDoor.open({ path: join(open, "control.sock"), admit: admitAll, handler: stage1a(), log: () => {} })
+      .then(async (d) => { await d.stop(); return "the door opened"; }, (e: Error) => e.message);
+    assert.match(r, /must be a folder of this user with mode 0700/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
