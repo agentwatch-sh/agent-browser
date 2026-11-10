@@ -1,9 +1,9 @@
 # Agents sign in from credentials that the operator stores — design
 
-**Status: Proposed. It waits for the operator's answers to section 14 (four questions, one board item). The
-operator answered all the questions of the token design (A, B1, B2, C, D and the address list; section 5.7). This
-design builds on those answers. No build starts before this design's answers and its merge. Revised after one
-fresh review (review-104, one fix round).**
+**Status: Decided: the operator's answers of 2026-11-10 to section 14 (board item ab-8w8; section 14, "The
+answers"): Q1 a, Q2 b, Q3 b, Q4 a. The operator answered all the questions of the token design too (A, B1, B2, C, D
+and the address list; section 5.7), and this design builds on those answers. Revised after one fresh review
+(review-104, one fix round) and a narrow re-check (review-104b).**
 
 Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-v16.95, goal ab-v16).
 Branch `ab-v16.95-stored-credentials-design` in agent-browser, from main `3fe1427`. No product code and no
@@ -84,10 +84,10 @@ every decided rule of those documents.
    pane, with the password login, as for the lists. Q3 b is a change of that rule, and the question says so: an
    agent that holds a password in a file today may put it into the store once, and only its use waits for the
    operator's approval. The approval is in the seal, so no edit of a file can make an offer usable.
-10. **Which scopes may use one (section 8, question Q2).** The recommendation: the repos that the operator names on
-    each credential, and only when the scope's list covers the credential's host. Only a local session uses a
+10. **Which scopes may use one (section 8, question Q2).** The operator's answer (Q2 b): every repo whose list covers
+    the credential's host (and each host of `send_to`) may use it; no repos are named on a credential. Only a local session uses a
     credential: a request that a remote token admits (the token design's answer D c) never reaches the act.
-11. **A second factor (section 9, question Q4).** The recommendation: not in the first build. The act stops at a
+11. **A second factor (section 9, question Q4).** The operator's answer (Q4 a): not in the first build. The act stops at a
     second-factor page and says so.
 12. **Chrome's own password manager is not the store (section 5.4).** Its "basic" store on Linux has no
     encryption, and it fills saved passwords into pages that an agent drives.
@@ -894,7 +894,9 @@ No text names a stop or a start (I2).
 
 ## 8. Which scopes may use a credential; the log and the audit
 
-**The rule (Q2 a, recommended).** A scope may start a sign-in with a credential when both hold:
+**The rule.** The operator chose Q2 b (board item ab-8w8): every repo whose list covers the credential's host and
+each host of `send_to` may start a sign-in with it, and a credential names no repos. The text below keeps Q2 a's rule
+as the record of the other option. With Q2 a, a scope may start a sign-in with a credential when both hold:
 
 - the scope's repo (the walk's session, its `repo_key`) is in the credential's `repos`;
 - the scope's list covers the credential's host and each host of `send_to`.
@@ -1254,6 +1256,19 @@ again at the switch. So the first credential waits for stage 3.
 Four questions, for one board item. You answered the token design's questions (board items ab-0wv, ab-sxg,
 ab-ufy and ab-5t3), and these four build on those answers: the stored sign-ins live in agentwatch's token store,
 and only sessions of this box use them.
+
+**The answers (board item ab-8w8, 2026-11-10, confirmed, with a web login, with no note).** The build follows them:
+
+- **Q1: a.** A locked store that the operator unlocks in the Browser pane (section 5.2).
+- **Q2: b.** Every repo whose list covers the credential's host may use it; a credential names no repos, and the
+  pane offers no repo choice (section 8). This is not the recommendation; the design holds with it as written
+  (sections 5.3, 6.3 and 7.2 state both options).
+- **Q3: b.** An agent that holds a credential today may also put it into the store once, for the operator's
+  approval (section 6.3). This changes the manager's rule "the operator alone adds", as the question said. With
+  Q2 b, the approval has no repo choice: the operator approves or removes the offer.
+- **Q4: a.** No second factor in the first build (section 9).
+
+The questions below stay as the operator read them.
 
 Until you answer, nothing of this design is built. If you answer some questions and leave one open, its no-answer
 choice holds.
