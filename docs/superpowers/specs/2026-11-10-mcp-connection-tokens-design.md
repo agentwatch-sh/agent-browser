@@ -195,16 +195,17 @@ The daemon lead's input (board task ab-v16.94.10, its comments; data for the des
   `set_sessions` that carries its new `lifetime_id`"). No file name, no profile name and no command line holds
   it (the daemon lead's addition).
 - **The random name**: a new random name for each run of a session, 32 lowercase hex digits
-  (`secrets.token_hex(16)`). It names the run's entry file and its Codex profile (`aw-<random name>`). The entry
-  file holds the run's lifetime id. The daemon keeps the map from each random name to its lifetime id in memory,
-  and it rebuilds the map from the files at its start (section 9.2).
+  (`secrets.token_hex(16)`). It names the run's entry file and its Codex profile (`aw-<random name>`). The map
+  from each random name to its run's lifetime id is in the daemon's own index file, `tokens/agent-browser/sessions/index.json` (0600,
+  written atomically), and in the daemon's memory; no client file holds a lifetime id (the daemon lead's
+  recommendation, section 9.2).
 - **A token**: a session's connection token: `abt1_` and 43 base64url characters (32 random bytes). A session
   has a local token, and one remote token for each serving box whose entry it gets.
 - **A fingerprint**: the lowercase hex SHA-256 of the token's ASCII bytes, with the `abt1_` prefix (the daemon
   lead's change 3).
 - **The entry**: a session's MCP server entry, which agentwatch writes before the launch, with the token in its
   `Authorization` header.
-- **The entry file**: the 0600 file that holds a session's entries and its run's lifetime id:
+- **The entry file**: the 0600 file that holds a session's entries (no lifetime id; the index holds the map):
   `~/.config/agentwatch/tokens/agent-browser/sessions/<random name>.json` for Claude Code and
   `.../<random name>.toml` for Codex.
 - **The profile link** (Codex): `$CODEX_HOME/aw-<random name>.config.toml`, a symbolic link to the session's
@@ -311,7 +312,7 @@ check proves both kinds (section 14.4).
 **The Codex homes.** A Codex session runs with `CODEX_HOME` at `~/.codex` or at an account home,
 `~/.config/agentwatch/tokens/codex/<name>/`, which links a fixed list of entries (`config.toml` among them) to
 `~/.codex` (`accounts/codex_home.py`). A profile link goes into the session's own home. An account home does not
-share the `aw-*` links, because they are not in its list of shared entries.
+share the `aw-<32 hex digits>.config.toml` links, because they are not in its list of shared entries.
 
 **taylor.** `/proc` is mounted with no `hidepid`, so every OS user can read every process's command line. A
 token in an argv is a token for every user of the box. The entry file's path and the profile name show the run's
@@ -372,12 +373,12 @@ lists' limit too.
 | --- | --- | --- |
 | Allow (the operator's act) | the repo's list in the Browser pane with a password login: the gateway builds `"operator":{"user":...,"login":"password"}` from the credential and drops any `operator` key from the request body, on each route that adds a site (the list edit, the prompt's allow and its confirm path, the sign-in targets path); the daemon reads the list's state from the service (`lists_get`), not from the files | owns the lists (C12, unchanged) |
 | Mint | the daemon, at each launch of an allowed session (section 9.1), never at another time: 32 bytes from `secrets.token_bytes`, `abt1_` and base64url. One local token; one remote token for each serving box whose entry the session gets (section 10) | never |
-| Hold | the entry file only: `tokens/agent-browser/sessions/<random name>.json` or `.toml`, mode 0600, with the run's lifetime id in it (section 9.2); the folders `tokens/`, `tokens/agent-browser/` and `sessions/` mode 0700; an atomic write (a temp file in the same folder, `fchmod` 0600, then a rename), opened with no link followed. The daemon keeps each fingerprint and the map from each random name to its lifetime id in memory, and it reads the files again at its own restart. No other file holds a token or a fingerprint | only the fingerprints of the last `set_sessions`, in memory; nothing on disk |
+| Hold | the entry file only: `tokens/agent-browser/sessions/<random name>.json` or `.toml`, mode 0600, and the daemon's index `tokens/agent-browser/sessions/index.json` (0600) that maps each random name to its run's lifetime id (section 9.2); the folders `tokens/`, `tokens/agent-browser/` and `sessions/` mode 0700; an atomic write (a temp file in the same folder, `fchmod` 0600, then a rename), opened with no link followed. The daemon keeps each fingerprint and the map from each random name to its lifetime id in memory, and it reads the files again at its own restart. No other file holds a token or a fingerprint | only the fingerprints of the last `set_sessions`, in memory; nothing on disk |
 | Harden | the permissions sweep (`service/permissions.py`) covers `tokens/agent-browser/`, `sessions/` and each entry file, at each write and at each daemon start (today it covers only the tokens folder itself) | nothing |
 | Send | `set_sessions` carries each session's fingerprint in its item (`mcp_token`); the daemon waits for the answer before it launches a session with the entry, and it sends a failed drop again (section 6.3) | answers it, and never echoes a refused snapshot |
 | Check | the serving box's gateway on the remote route: the route, the address check (section 10) | each request on the local MCP port and on the remote route (section 11) |
 | End | at the session's end: the link, then the entry file, then `set_sessions` without the session (section 6.5) | drops the fingerprint; closes the scope's MCP connections |
-| Sweep | at each daemon start (after it has adopted the live sessions) and every hour: each entry file whose lifetime id (the sweep reads it from the file) is not live, or that holds no lifetime id; each profile link named `aw-<32 hex digits>.config.toml` in each Codex home that agentwatch uses, whose random name is not the name of a live run (by the map); each temp file in `sessions/` older than 10 minutes (a younger one can be a Codex write in progress). In a Codex home it touches only a link whose name is `aw-`, 32 hex digits and `.config.toml`: never another file (for example a person's own `aw-notes.config.toml`), and never a link's target | nothing |
+| Sweep | at each daemon start (after it has adopted the live sessions) and every hour: each entry file (a name of 32 hex digits and `.json` or `.toml` in `sessions/`) whose random name maps in the index (in memory while the daemon runs, read from the index at its start) to a lifetime id that is not live, or that the index does not name; every other file in `sessions/` only by the temp-file age rule below; each profile link named `aw-<32 hex digits>.config.toml` in each Codex home that agentwatch uses, whose random name is not the name of a live run (by the map); each temp file in `sessions/` older than 10 minutes (a younger one can be a Codex write in progress). In a Codex home it touches only a link whose name is `aw-`, 32 hex digits and `.config.toml`: never another file (for example a person's own `aw-notes.config.toml`), and never a link's target | nothing |
 | Remove at the uninstall | a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-<32 hex digits>.config.toml` link, on Linux and the Mac; an update (`install.sh --update`) keeps them; no vault or config sync copies the tokens folder | nothing |
 
 Why this split (the operator's answer A, and the reasons of the first revision that still hold):
@@ -465,11 +466,11 @@ The rules of the recommended form:
   - Codex: its header is static too. The service no longer knows the old MCP session id. Whether Codex then
     opens a new MCP session by itself is a stage 2 check.
 - **The daemon's restart.** The service keeps its last `set_sessions` (C12, "when the daemon drops"). Admitted
-  sessions go on. At its start the daemon adopts the live sessions, rebuilds the map from each random name to its
-  lifetime id from the entry files (each file holds its run's lifetime id), reads each live session's
+  sessions go on. At its start the daemon adopts the live sessions, reads the map from each random name to its
+  lifetime id from its index (section 9.2), reads each live session's
   fingerprint from its file (it parses its own file and logs nothing of it), runs the sweep, and sends the full
-  snapshot. An entry file that the daemon cannot parse, or that fails its checks (also a file with no lifetime
-  id, or with a lifetime id that is not a UUID): the daemon removes it (and the link), sends `"mcp_token":null`
+  snapshot. An entry file that the daemon cannot parse, that fails its checks, or that the index does not name (or
+  an index entry with a lifetime id that is not a UUID): the daemon removes it (and the link), sends `"mcp_token":null`
   for its session when it knows the session, and `agentwatch health` says why. That session's MCP then gets the
   401 until the session restarts.
 
@@ -646,20 +647,15 @@ rewrite a running session's entry.
   (Codex). The daemon makes a new random name for each run (`secrets.token_hex(16)`, 32 lowercase hex digits),
   and it checks that form before it uses the name in a path. No path and no profile name holds a lifetime id (the
   daemon lead's addition).
-- The lifetime id in the file. The file holds its run's lifetime id, so the sweep and the daemon's restart can
-  read it from the file:
-  - the JSON file (Claude Code): the top-level key `"agentwatch":{"lifetime_id":"<lifetime id>"}` beside
-    `mcpServers`. Not known yet: whether Claude Code takes a top-level key that it does not use. Stage 2 checks it.
-    If Claude Code refuses it, the daemon lead chooses another place for the lifetime id that holds no secret and
-    that no command line shows (for example a 0600 file beside the entry file);
-  - the TOML file (Codex): its last line, the comment `# agentwatch lifetime id: <lifetime id>`. A comment, because
-    Codex warns at a key that it does not know and its strict mode refuses one (section 4.1). The last line,
-    because a comment at the document's end stays when Codex's writer changes a table (source, not proven; stage 2
-    checks it);
-  - the daemon checks the lifetime id that it reads back against the UUID pattern. A file with no lifetime id, or
-    with one that is not a UUID, fails its checks (section 6.4).
-- The map: the daemon keeps the map from each random name to its run's lifetime id in memory. At its start it
-  rebuilds the map from the files.
+- The index (the daemon lead's recommendation): the map from each random name to its run's lifetime id is in the
+  daemon's own file `tokens/agent-browser/sessions/index.json`, mode 0600, written atomically (a temp file, `fchmod` 0600, then a rename), and in
+  the daemon's memory. No client file holds a lifetime id, so no client write can lose it, and no client sees a
+  field that it does not know. The index maps each random name to one lifetime id and each lifetime id to at most
+  one random name; at its start the daemon reads the index, checks each lifetime id against the UUID pattern, and
+  a second name for one lifetime id fails the check for both names (review-103d), so the daemon removes both entry
+  files and sends `"mcp_token":null` for that session. The sweep, the restart and the uninstall take as an entry
+  file only a name of 32 hex digits and `.json` or `.toml` in `sessions/`; the index itself and every other file
+  there go only by their own rules (the index stays; a temp file goes by its age).
 - The modes: the file 0600; the folders `tokens/`, `tokens/agent-browser/` and `sessions/` 0700, made with those
   modes and set again at each write and by the permissions sweep.
 - The write: a temp file in `sessions/`, `fchmod` 0600, the content, then a rename to the final name; the open
@@ -677,8 +673,7 @@ agentwatch passes the session's entry file with `--mcp-config`, beside agentwatc
 ```json
 {"mcpServers":{"agent-browser":{"type":"http",
   "url":"http://127.0.0.1:<port>/mcp/<scope>",
-  "headers":{"Authorization":"Bearer abt1_<43 base64url characters>"}}},
- "agentwatch":{"lifetime_id":"<lifetime id>"}}
+  "headers":{"Authorization":"Bearer abt1_<43 base64url characters>"}}}}
 ```
 
 - A session that runs with `--strict-mcp-config` (an open-model profile) gets the entry in the same way, because
@@ -699,7 +694,6 @@ launch passes `-p aw-<random name>`:
 url = "http://127.0.0.1:<port>/mcp/<scope>"
 http_headers = { Authorization = "Bearer abt1_<43 base64url characters>" }
 tool_timeout_sec = 120
-# agentwatch lifetime id: <lifetime id>
 ```
 
 - The profile link: `$CODEX_HOME/aw-<random name>.config.toml`, in the session's own Codex home (`~/.codex` or
@@ -714,8 +708,7 @@ tool_timeout_sec = 120
 - The other `-c` values of agentwatch's launch stay. They are a higher layer than the profile, and none of them
   names `mcp_servers.agent-browser`.
 - Stage 2 proves that Codex reads the linked profile file, starts the MCP from it and sends the header, and that
-  a Codex write keeps the link, writes the target with mode 0600, keeps the token under the tokens folder and
-  keeps the lifetime id line. If Codex refuses a linked profile file, that goes back to the operator (the daemon
+  a Codex write keeps the link, writes the target with mode 0600 and keeps the token under the tokens folder. If Codex refuses a linked profile file, that goes back to the operator (the daemon
   lead: "we re-decide").
 
 **The app-server launch (the operator's answer E a).** The profile does not reach the app server (section 4.1).
@@ -1194,12 +1187,14 @@ socket and the Python walk go from stage 5.
   `bad request`, or no answer in 5 s: the daemon sends its current snapshot again after 1 s, then after 2 s, 4 s
   and on up to 60 s, and at each reconnect; at a `bad request` the health line is red; the first answer
   `data: {}` to a snapshot without the session ends the resend.
-- The entry files: Claude Code's JSON (the token only in `headers.Authorization`; the lifetime id in
-  `agentwatch.lifetime_id`); Codex's TOML (`http_headers`, never `bearer_token`; the lifetime id in the last line's
-  comment); the file's name is the run's random name, never its lifetime id; the modes 0600 and 0700, also after a
+- The entry files: Claude Code's JSON (the token only in `headers.Authorization`; no lifetime id); Codex's TOML
+  (`http_headers`, never `bearer_token`; no lifetime id); the index maps each random name to its lifetime id; the
+  file's name is the run's random name, never its lifetime id; the modes 0600 and 0700, also after a
   test changes them; the atomic write; no link followed; a lifetime id that is not a UUID gets no file; the
   escaping of each value (a test with a URL and a scope that hold each character that the rules allow).
 - No lifetime id in a command line: the recorded launch argv holds the random name, and it holds no lifetime id.
+  Today's launch arguments (for example the question MCP's arguments) may already hold a lifetime id: the build
+  removes it there, or narrows the scan to the agent browser's arguments and records why (review-103d).
 - The Codex profile link: in the session's own Codex home (`~/.codex` or an account home), named
   `aw-<random name>.config.toml`, an absolute link to the entry file; no other file under the Codex home changes;
   the link moves at a swap to another home; the launch line has `-p aw-<random name>`; no entry for an app-server
@@ -1207,16 +1202,18 @@ socket and the Python walk go from stage 5.
   legacy `[profiles.aw-<random name>]` table.
 - The end: the link removed, then the file, then `set_sessions` without the session; a crash test after each step
   (the sweep at the next start removes what is left).
-- The sweep: at the start (after the adoption) and every hour, it removes each entry file whose lifetime id (read
-  from the file) is not live or that holds none, each `aw-<32 hex digits>.config.toml` link whose random name is
+- The sweep: at the start (after the adoption) and every hour, it removes each entry file (32 hex digits and
+  `.json` or `.toml`) whose random name the index maps to a lifetime id that is not live, or that the index does not
+  name; it keeps the index and a live session's file also when a client rewrote that file; each `aw-<32 hex digits>.config.toml` link whose random name is
   not a live run's, and each temp file in `sessions/` older than 10 minutes; it keeps a younger temp file (a Codex
   write in progress); it covers each Codex home that agentwatch uses; it never touches a planted
   `aw-notes.config.toml`, a profile file whose name does not start with `aw-`, a file outside `sessions/`, or a
   live session's file; it removes a planted `aw-<32 hex digits>.config.toml` link whose target is outside
   `sessions/`, and not that target.
-- The daemon's restart: it rebuilds the map from the files (each file's lifetime id) and gets each live
-  session's fingerprint from its entry file again; a file that it cannot parse, or that holds no lifetime id, is
-  removed, and the snapshot carries `null`.
+- The daemon's restart: it reads the map from the index and gets each live session's fingerprint from its entry
+  file again; a file that it cannot parse, or that the index does not name, is removed, and the snapshot carries
+  `null`; two names for one lifetime id in the index fail both; the index itself is written atomically with mode
+  0600 and is never removed by the sweep.
 - The permissions sweep covers `tokens/agent-browser/`, `sessions/` and each entry file.
 - The uninstall: a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each
   `aw-<32 hex digits>.config.toml` link in each Codex home, on Linux and on the Mac, and never a planted
@@ -1271,6 +1268,8 @@ socket and the Python walk go from stage 5.
 | The sweep never touches another profile | the sweep removes every `*.config.toml` | the planted profile that is not `aw-*` is gone |
 | The sweep matches only `aw-<32 hex digits>.config.toml` | the sweep matches `aw-*` | the planted `aw-notes.config.toml` is gone |
 | The sweep keeps a young temp file | the sweep removes each temp file, whatever its age | the young temp file is gone |
+| The sweep keeps a live session's file | the sweep takes the lifetime id from the file, not from the index | a live session's file that a client rewrote is gone |
+| The uninstall matches only `aw-<32 hex digits>.config.toml` | the uninstall removes `aw-*` | the planted `aw-notes.config.toml` is gone |
 | The sweep removes a link, never its target | it removes the resolved target | the planted target is gone |
 | The uninstall removes the tokens | the normal uninstall keeps `tokens/agent-browser/` or the links | the uninstall test |
 | The redactor knows `abt1_` | the prefix removed from the list | the redactor test |
@@ -1298,7 +1297,8 @@ not touch the operator's agent browser. Stage 3 runs it again on the real path w
    of section 4.1). By the answer E a, each new Codex version gets this check; the entry for such sessions comes
    only when a Codex release passes it.
 4. A Codex config write in the session (for example a model change) keeps the link, writes the target with mode
-   0600, keeps the token under the tokens folder and keeps the lifetime id line at the file's end.
+   0600 and keeps the token under the tokens folder (the lifetime id is in the daemon's index, so no Codex write
+   can lose it).
 5. No client starts an OAuth login at a 401.
 6. No client shows the header's value in its `/mcp` view, its logs or its transcript (with point 3 of the steps).
 7. Each client's behaviour after a service restart.
@@ -1453,6 +1453,10 @@ through Playwright. The no-answer behaviour was a. The operator chose a.
 
 ## 18. Limits and open points
 
+- **A resend that cannot succeed** (review-103d): C12 keeps the old snapshot at a refusal. A snapshot can fail for
+  a reason that the resend cannot clear (for example a daemon fault that puts one bad local item into each
+  snapshot). Then the service keeps the last fingerprints that it took, also remote ones, and only the red health
+  line shows the fault.
 - **The same-uid limit** stays (section 5). This design does not claim isolation between sessions of one OS user
   from the token. The walk gives it, for every program that is not hostile.
 - **An agent can copy a token** (T9, section 12): it can read its own entry file, or another session's. The token
