@@ -85,7 +85,7 @@ test("the timed check: none while the browser is off, chrome_bin is set, the box
 });
 
 /** A unit that runs Google Chrome 157 with 158 ready, a link that the test confirms, and the mover. */
-async function moving(o: Partial<Activity> = {}) {
+async function moving(o: Partial<Activity> = {}, owns = { yes: true }) {
   const w = new World();
   const tools = new FakeTools();
   tools.versions = ["157.0.7000.1-1"];
@@ -98,7 +98,7 @@ async function moving(o: Partial<Activity> = {}) {
   const act: Activity = { inFlight: () => 0, idleFor: () => Infinity, importing: () => false, clients: () => false, sinceSend: () => Infinity, ...o };
   const asked: string[] = [];
   const starts: (number | null)[] = [];
-  const mover = new ChromeMover({ unit, updater, activity: act, clock: () => w.now, wall: () => 1_762_750_000_000 + w.now, mayAct: async (x) => { asked.push(x); return true; }, log: (l) => w.logs.push(l), onStarted: () => starts.push(unit.chromePid()) });
+  const mover = new ChromeMover({ unit, updater, activity: act, clock: () => w.now, wall: () => 1_762_750_000_000 + w.now, mayAct: async (x) => { asked.push(x); return owns.yes; }, log: (l) => w.logs.push(l), onStarted: () => starts.push(unit.chromePid()) });
   tools.versions.push("158.0.7100.1-1");
   (updater as any).ready = "158.0.7100.1-1";
   return { w, tools, updater, unit, mover, asked, starts };
@@ -175,6 +175,36 @@ test("a move whose new Chrome gets no confirm in 60 s takes the way back: the ve
     await unit.stop();
     await unit.start();
     assert.equal(unit.chromeFacts()!.version, "157.0.7000.1-1", "never started again");
+  } finally { w.close(); }
+});
+
+test("review-106 B2: the way back of a failed move asks the owner rule first: a service that no longer owns stops nothing, starts nothing and writes nothing (no failed version, no update state)", async () => {
+  const owns = { yes: true };
+  const { w, unit, mover, updater, starts, asked } = await moving({}, owns);
+  try {
+    w.now += H;
+    mover.tick(true);
+    while (mover.moving) await settle();
+    assert.equal(unit.chromeFacts()!.version, "158.0.7100.1-1", "the move ran (the owner rule said yes)");
+    // A tick before the deadline (the wait for the update ends: that write is not the way back's).
+    w.now += 30_000;
+    mover.tick(false);
+    await settle();
+    const pid = unit.chromePid(), stops = unit.stopCount, spawned = w.spawned.length, nStarts = starts.length;
+    const file = readFileSync(w.paths.updateFile, "utf8");
+    owns.yes = false;
+    w.now += 30_000;
+    mover.tick(false);
+    await settle();
+    while ((mover as any).reverting) await settle();
+    assert.deepEqual(asked, ["a Chrome move", "the way back of a Chrome move"], "the owner rule was asked before the way back");
+    assert.equal(unit.chromePid(), pid, "Chrome stays");
+    assert.equal(unit.stopCount, stops, "no stop");
+    assert.equal(w.spawned.length, spawned, "no start");
+    assert.equal(starts.length, nStarts, "no ready");
+    assert.deepEqual([...updater.refused()], [], "no failed version");
+    assert.equal(readFileSync(w.paths.updateFile, "utf8"), file, "the update state file is not written");
+    assert.notEqual(mover.updateState(), "failed");
   } finally { w.close(); }
 });
 

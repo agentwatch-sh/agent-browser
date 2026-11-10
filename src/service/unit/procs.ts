@@ -52,11 +52,17 @@ export class Procs {
   /** True when `pid` runs as this user. */
   mine(pid: number): boolean { return this.realUid(pid) === this.uid; }
 
+  /** The target of /proc/<pid>/exe, or null when it cannot be read. */
+  exe(pid: number): string | null {
+    try { return readlinkSync(join(this.root, String(pid), "exe")); } catch { return null; }
+  }
+
   /** True when the base name of argv[0] or of the exe link of `pid` is `name`. */
   programIs(pid: number, name: string): boolean {
     const argv = this.cmdline(pid);
     if (argv.length && basename(argv[0]) === name) return true;
-    try { return basename(readlinkSync(join(this.root, String(pid), "exe"))) === name; } catch { return false; }
+    const exe = this.exe(pid);
+    return exe !== null && basename(exe) === name;
   }
 
   /** True when `pid` is alive, this user's, and each marker is a whole argument of its command line. */

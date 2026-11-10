@@ -8,9 +8,8 @@
 // default folder, and it needs --test-display. `service stop --all` stops the Chrome unit with no service running. The
 // folders have no default (stage 1c's rule): agentwatch's unit gives --lists-folder, --state-folder and --tools-dir.
 
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { UsageError } from "../errors.ts";
@@ -21,7 +20,7 @@ import { serviceRunFolders, startFake } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
-import { defaultStateDir, defaultToolsDir, unitPaths } from "./unit/paths.ts";
+import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
 
@@ -35,23 +34,19 @@ type Values = Record<string, string | boolean | undefined>;
 /** Resolves at the first SIGTERM or SIGINT. */
 const signalled = () => new Promise<void>((r) => { process.once("SIGTERM", () => r()); process.once("SIGINT", () => r()); });
 
-/** The real path of `p` after links: of `p`, or of its nearest folder that exists, with the rest of `p`. */
-function realOf(p: string): string {
-  const rest: string[] = [];
-  for (let at = resolve(p); ;) {
-    try { return join(realpathSync(at), ...[...rest].reverse()); } catch {}
-    const up = dirname(at);
-    if (up === at) return resolve(p);
-    rest.push(basename(at));
-    at = up;
-  }
-}
+/**
+ * The displays that `--test` refuses (review-106 note 7): the harnesses' reserved displays, the same list as
+ * RESERVED_DISPLAYS of test/live/guard.ts (a test keeps the two equal). :90 is agentwatch's agent browser.
+ */
+export const TEST_RESERVED_DISPLAYS: readonly number[] = Object.freeze([0, 90, 147, 190, 191, 192]);
+
 /** True when `a` is `b`, or one holds the other. */
 const overlaps = (a: string, b: string) => { const x = realOf(a), y = realOf(b); return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`); };
 
 /**
  * The refusals of `--test`: each folder is given, and none is a default folder (the operator's state folder, tools
- * folder, the service's run folders, agentwatch's run folder) or holds one or lies in one.
+ * folder, the service's run folders, agentwatch's run folder) or holds one or lies in one; the display is a number
+ * and no reserved display.
  */
 export function testRefusal(v: { listsFolder?: string; stateFolder?: string; toolsDir?: string; controlDoor?: string; agentDoor?: string; daemonCommand?: string; display?: string }, env: Record<string, string | undefined> = process.env, uid = process.getuid?.() ?? -1): string | null {
   for (const [flag, x] of [["--lists-folder", v.listsFolder], ["--state-folder", v.stateFolder], ["--tools-dir", v.toolsDir], ["--control-door", v.controlDoor], ["--agent-door", v.agentDoor], ["--daemon-command", v.daemonCommand], ["--test-display", v.display]] as const) {
@@ -64,6 +59,8 @@ export function testRefusal(v: { listsFolder?: string; stateFolder?: string; too
   const folders: [string, string][] = [["--lists-folder", v.listsFolder!], ["--state-folder", v.stateFolder!], ["--tools-dir", v.toolsDir!], ["--control-door", dirname(v.controlDoor!)], ["--agent-door", dirname(v.agentDoor!)], ["--daemon-command", dirname(v.daemonCommand!)]];
   for (const [flag, f] of folders) for (const d of defaults) if (overlaps(f, d)) return `--test refuses ${flag} in or around a default folder (${d}): give it a temp folder`;
   if (!/^[0-9]{1,5}$/.test(v.display!)) return "--test-display must be a display number";
+  const display = Number(v.display);
+  if (TEST_RESERVED_DISPLAYS.includes(display)) return `--test-display names :${display}, a reserved display (${TEST_RESERVED_DISPLAYS.join(", ")}): --test never takes it; give another one`;
   return null;
 }
 

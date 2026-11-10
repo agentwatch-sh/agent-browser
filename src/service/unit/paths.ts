@@ -5,8 +5,9 @@
 // its tools folder (google-chrome/<version>/), both under ~/.local/share/. This file names them only for `--test`,
 // which refuses them. Every path is computed from the folders that the service got.
 
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /** Today's state folder of the agent browser (agentwatch's daemon/browser/stop_unit.py, STATE_PARTS): `--test` refuses it. */
 export const defaultStateDir = (home = homedir()) => join(home, ".local", "share", "agentwatch-browser");
@@ -45,4 +46,16 @@ export function unitPaths(state: string, tools: string): UnitPaths {
     watchFile: join(state, "watch.json"),
     chromes: join(tools, "google-chrome"),
   };
+}
+
+/** The real path of `p` after links: of `p`, or of its nearest folder that exists, with the rest of `p`. */
+export function realOf(p: string): string {
+  const rest: string[] = [];
+  for (let at = resolve(p); ;) {
+    try { return join(realpathSync(at), ...[...rest].reverse()); } catch {}
+    const up = dirname(at);
+    if (up === at) return resolve(p);
+    rest.push(basename(at));
+    at = up;
+  }
 }

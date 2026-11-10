@@ -4,7 +4,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
+import { unitPaths } from "../src/service/unit/paths.ts";
 import { writeJsonDurable } from "../src/service/unit/record.ts";
 import { stopAll } from "../src/service/unit/stop-all.ts";
 import { World } from "./fake-unit-world.ts";
@@ -26,6 +28,25 @@ test("stop --all: SIGTERM to each Chrome root on the profile, then the record's 
     assert.equal(w.live.size, 0);
     assert.deepEqual(JSON.parse(JSON.stringify(await stopAll(deps(w)))), [], "nothing left: nothing to stop");
   } finally { w.close(); }
+});
+
+test("stop --all through a link (review-106 note 9): a state folder given through a link finds the unit's Chrome and Xvfb, and so does the real folder when they run on the link's path", async () => {
+  for (const runOn of ["real", "link"] as const) {
+    const w = new World();
+    try {
+      const link = join(w.dir, "state-link");
+      symlinkSync(w.paths.state, link);
+      const viaLink = unitPaths(link, w.paths.tools);
+      const on = runOn === "real" ? w.paths : viaLink;
+      const chrome = w.add({ argv: ["/opt/google/chrome/chrome", `--user-data-dir=${on.profile}`] });
+      const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-auth", on.xauth] });
+      writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, xvfb_pid: x.pid, chrome_pid: chrome.pid });
+      const given = runOn === "real" ? viaLink : w.paths;
+      const stopped = await stopAll({ ...deps(w), paths: given });
+      assert.deepEqual(stopped, [["Chrome", chrome.pid], ["Xvfb", x.pid]], `they run on the ${runOn} path`);
+      assert.equal(w.live.size, 0);
+    } finally { w.close(); }
+  }
 });
 
 test("stop --all never signals another user's process, another profile, a similar profile path, an xauth that names the file, or a record pid that runs another program; it writes no file", async () => {

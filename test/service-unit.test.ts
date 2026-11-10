@@ -349,6 +349,34 @@ test("an unreadable record is not no record: the owner finds Chrome on the profi
   } finally { w.close(); }
 });
 
+test("an unreadable record (review-106 note 6): the adopted Chrome's kind, version and binary come from its program: a copy of the tools folder is Google Chrome of that copy's version, any other program Chromium", async () => {
+  const w = new World();
+  try {
+    const tools = new FakeTools();
+    tools.root = w.paths.chromes;
+    tools.versions = ["158.0.7100.1-1"];
+    const binary = tools.copy("158.0.7100.1-1").binary;
+    const { u } = unitIn(w, { tools, cfg: DEFAULT_CONFIG });
+    await u.start();
+    assert.equal(chromeOf(w)[0].argv[0], binary);
+    writeFileSync(w.paths.unitFile, "{not json");
+    const u2 = unitIn(w, { tools, cfg: DEFAULT_CONFIG }).u;
+    assert.equal(u2.adopt().adopted, true);
+    assert.deepEqual(u2.chromeFacts(), { kind: KIND_GOOGLE, version: "158.0.7100.1-1" });
+    assert.deepEqual([record(w).chrome, record(w).chrome_bin], [{ kind: KIND_GOOGLE, version: "158.0.7100.1-1" }, binary]);
+  } finally { w.close(); }
+  const w2 = new World();
+  try {
+    const { u } = unitIn(w2);
+    await u.start();
+    writeFileSync(w2.paths.unitFile, "{not json");
+    const u2 = unitIn(w2).u;
+    assert.equal(u2.adopt().adopted, true);
+    assert.deepEqual(u2.chromeFacts(), { kind: KIND_CHROMIUM, version: "" });
+    assert.deepEqual([record(w2).chrome, record(w2).chrome_bin], [{ kind: KIND_CHROMIUM, version: "" }, "/usr/bin/chromium"]);
+  } finally { w2.close(); }
+});
+
 test("the boot sweep (stopOrphans) spares the adopted Chrome and every process below it, and stops a Chrome on the profile that no record names", async () => {
   const w = new World();
   try {

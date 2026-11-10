@@ -89,6 +89,8 @@ test("verify: only exit 0, a GOODSIG, no bad status and a VALIDSIG whose last fi
     }
     const wrongOrigin: Run = async () => { writeFileSync(out, "Origin: Evil\nSuite: stable\n"); return { code: 0, stdout: `[GNUPG:] GOODSIG 1 x\n${valid(pinned)}\n`, stderr: "" }; };
     await assert.rejects(verifyInrelease(signed, join(dir, "k"), out, { run: wrongOrigin, gpgv: "gpgv", source }), /the wrong Origin/);
+    const wrongSuite: Run = async () => { writeFileSync(out, "Origin: Google LLC\nSuite: beta\n"); return { code: 0, stdout: `[GNUPG:] GOODSIG 1 x\n${valid(pinned)}\n`, stderr: "" }; };
+    await assert.rejects(verifyInrelease(signed, join(dir, "k"), out, { run: wrongSuite, gpgv: "gpgv", source }), /the wrong Suite \(not 'stable'\)/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

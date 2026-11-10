@@ -23,14 +23,16 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { AGENT_ARGS, assertSafeChromeArgs } from "../../agent.ts";
+import { BINARY_REL } from "./deb.ts";
 import { displayInUse, abstractDisplays, DISPLAY_FIRST, DISPLAY_LAST, type DisplayFs } from "./display.ts";
 import type { ChromeTools, ChromeCopy } from "./google-chrome.ts";
 import { Mutex } from "./mutex.ts";
 import type { UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
 import { intOf, readRecord, writeJsonDurable, type RecordRead } from "./record.ts";
+import { VERSION_RE } from "./versions.ts";
 import { writeXauthority, COOKIE_LEN } from "./xauth.ts";
 
 export const KIND_GOOGLE = "google-chrome";
@@ -682,6 +684,20 @@ export class ChromeUnit {
     return { adopted: false, wanted, unreadable: null };
   }
 
+  /**
+   * The kind, version and binary of a Chrome that no readable record names, from its program (argv[0], else the exe
+   * link): a copy of the tools folder (<tools>/google-chrome/<version>/opt/google/chrome/chrome) is Google Chrome of that
+   * version, any other program Chromium.
+   */
+  private programOf(pid: number): { kind: string; version: string; binary: string } {
+    const argv0 = this.d.procs.cmdline(pid)[0] ?? "", exe = this.d.procs.exe(pid) ?? "";
+    for (const binary of [argv0, exe]) {
+      const parts = binary ? relative(this.d.paths.chromes, binary).split(sep) : [];
+      if (parts.length > 1 && VERSION_RE.test(parts[0]) && parts.slice(1).join(sep) === BINARY_REL) return { kind: KIND_GOOGLE, version: parts[0], binary };
+    }
+    return { kind: KIND_CHROMIUM, version: "", binary: argv0 || exe };
+  }
+
   /** The adoption of an unreadable record: the one Chrome root on the profile and the one Xvfb with the X auth file. */
   private adoptByProfile(why: string): boolean {
     const chromes = this.orphanChromes(new Set());
@@ -695,9 +711,11 @@ export class ChromeUnit {
     this.xvfb = { pid: xvfbs[0], start: this.d.procs.stat(xvfbs[0])?.start ?? null, proc: null, startedAt: null };
     this.chrome = { pid: chromes[0], start: this.d.procs.stat(chromes[0])?.start ?? null, proc: null, startedAt: null };
     this.display = Number(display);
-    this.chromeInfo = { kind: KIND_CHROMIUM, version: "" };
+    const program = this.programOf(chromes[0]);
+    this.chromeInfo = { kind: program.kind, version: program.version };
+    this.chromeBin = program.binary;
     this.wantedFlag = true;
-    this.writeRecord({ wanted: true, display: this.display, display_size: null, xvfb_pid: this.xvfb.pid, xvfb_start: this.xvfb.start, chrome_pid: this.chrome.pid, chrome_start: this.chrome.start, receiver: null, chrome: { kind: KIND_CHROMIUM, version: "" }, chrome_bin: "", started_at: (this.d.wall ?? Date.now)() / 1000 });
+    this.writeRecord({ wanted: true, display: this.display, display_size: null, xvfb_pid: this.xvfb.pid, xvfb_start: this.xvfb.start, chrome_pid: this.chrome.pid, chrome_start: this.chrome.start, receiver: null, chrome: { ...this.chromeInfo }, chrome_bin: program.binary, started_at: (this.d.wall ?? Date.now)() / 1000 });
     this.d.log(`unit: the unit record cannot be read (${why}); adopted the Chrome on the profile (pid ${this.chrome.pid}) and Xvfb :${this.display} (pid ${this.xvfb.pid})`);
     return true;
   }

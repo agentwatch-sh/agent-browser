@@ -9,8 +9,9 @@
 // - Chrome's facts in `status`: the state (off, starting, ready, failed closed) with an agent's text and an
 //   operator's text, `chrome_kind`, `chrome_version`, `chrome_pid`, `update` and `last_stop`;
 // - the owner parts of section 13.2, which run only while the owner rule says that the service owns: at its start the
-//   adoption from the unit record (or a start of a wanted Chrome at the first `config`: build note 8), the boot sweep of
-//   orphans (never on a record that cannot be read), then the 5 s supervisor (it reads the owner state at each tick),
+//   adoption from the unit record (or a start of a wanted Chrome at the first `config`: build note 8; a `config` that
+//   came before applies at once), the boot sweep of orphans (never on a record that cannot be read), then the 5 s
+//   supervisor (it reads the owner state at each tick),
 //   the 1 s fail-closed watch (watch.ts) and the Chrome updater (updates.ts).
 //
 // When the owner rule says no, the part stops its loops at once and `lost` resolves: the service closes its doors and
@@ -83,6 +84,8 @@ export class UnitPart implements ServicePart {
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
   /** The record said `wanted` and no Chrome could be adopted: it starts at the first `config` (build note 8). */
   private pendingStart = false;
+  /** The Chrome (pid and start time) of the last `ready`: each Chrome gets one `ready` (C12). */
+  private lastReady = "";
   private lastChrome = "";
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private wakers = new Set<() => void>();
@@ -136,8 +139,15 @@ export class UnitPart implements ServicePart {
   }
 
   private ready(): void {
+    // A start that succeeded (or an adoption): no start waits for a config any more (review-106 B1).
+    this.pendingStart = false;
     const f = this.unit.chromeFacts();
-    if (!f) return;
+    const id = this.unit.chromeId();
+    if (!f || !id) return;
+    // One `ready` for each Chrome: a start op that meets the supervisor's restart sends none of its own.
+    const key = `${id.pid}:${id.start}`;
+    if (key === this.lastReady) return;
+    this.lastReady = key;
     this.emit({ t: "ev", ev: "ready", chrome_pid: this.unit.chromePid(), chrome_version: f.version || null, extension_version: null, endpoint: this.o.endpoint() });
     this.chromeChanged();
   }
@@ -200,6 +210,8 @@ export class UnitPart implements ServicePart {
   /** The watch's stop: the owner rule first; a Chrome on probation takes the way back instead. */
   private async failClosed(reason: WatchStop): Promise<boolean> {
     if (!(await this.o.owner.check("the watch's stop"))) return false;
+    // After a fail-closed stop only a `start` starts Chrome again: no later `config` does (review-106 B1).
+    this.pendingStart = false;
     const p = reason === "receiver_missing" ? this.mover.probationFor() : null;
     if (p) { this.mover.revert(p, "no receiver confirmed the lists in 60 s"); return true; }
     await this.unit.stop();
@@ -215,16 +227,26 @@ export class UnitPart implements ServicePart {
     if (!cfg.enabled) {
       // browser.enabled false stops the browser (no event: turning it off is not a fault).
       this.pendingStart = false;
-      if (this.unit.chromePid() !== null || this.unit.wanted) void this.ownerPart("the stop of a browser that is turned off", async () => { await this.unit.stop(); });
+      if (this.unit.chromePid() !== null || this.unit.wanted) void this.turnOff();
       return;
     }
     if (this.pendingStart) {
       this.pendingStart = false;
-      void this.ownerPart("the start of a wanted Chrome", async () => {
-        try { await this.unit.start(); if (this.unit.running()) this.ready(); }
-        catch (e) { if (e instanceof NotOwnerError) throw e; this.o.log(`unit: the start of the wanted Chrome failed: ${(e as Error).message.slice(0, 300)}`); }
-      });
+      void this.startWanted();
     }
+  }
+
+  /** browser.enabled false: stop Chrome and Xvfb; the record says `wanted: false` (an owner part; no event). */
+  private turnOff(): Promise<void> {
+    return this.ownerPart("the stop of a browser that is turned off", async () => { await this.unit.stop(); });
+  }
+
+  /** The start of a wanted Chrome with no `start` op (build note 8): at the first `config`, or in begin when that came first. */
+  private startWanted(): Promise<void> {
+    return this.ownerPart("the start of a wanted Chrome", async () => {
+      try { await this.unit.start(); if (this.unit.running()) this.ready(); }
+      catch (e) { if (e instanceof NotOwnerError) throw e; this.o.log(`unit: the start of the wanted Chrome failed: ${(e as Error).message.slice(0, 300)}`); }
+    });
   }
 
   // ------------------------------------------------------------------ the owner parts and their loops
@@ -261,7 +283,13 @@ export class UnitPart implements ServicePart {
   async begin(): Promise<void> {
     const a = this.unit.adopt();
     if (a.unreadable === null) await this.unit.stopOrphans();
-    if (a.adopted) this.ready();
+    // A `config` can come before this point (the control door opens first: build note 8). It applies now, before the
+    // loops start (review-106 B1): `enabled: false` stops what the record wanted, and a wanted Chrome that is gone
+    // starts at once. With no `config` yet, a wanted Chrome starts at the first one.
+    const cfg = this.unit.config;
+    if (cfg && !cfg.enabled) { if (a.adopted || a.wanted) await this.turnOff(); }
+    else if (a.adopted) this.ready();
+    else if (a.wanted && cfg) await this.startWanted();
     else if (a.wanted) { this.pendingStart = true; this.o.log("unit: the unit record wants the agent browser; it starts at the daemon's config"); }
     const superviseMs = this.o.superviseMs ?? SUPERVISE_MS;
     this.loop(superviseMs, superviseMs, async () => {

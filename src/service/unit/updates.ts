@@ -379,14 +379,15 @@ export class ChromeMover {
     void this.takeWayBack(p, reason).catch((e) => this.log(`update: the way back to Google Chrome ${p.old} failed: ${(e as Error).name}`)).finally(() => { this.reverting = false; this.onChange(); });
   }
 
-  /** Note the failed version, stop the unit and start the last good copy exactly. A stop since the start is no failure. */
+  /** The owner rule, then: note the failed version, stop the unit and start the last good copy exactly. A stop since the start is no failure. */
   private async takeWayBack(p: Probation, reason: string): Promise<void> {
     if (this.unit.stopCount !== p.stops || !this.unit.config?.enabled) { this.log(`update: the agent browser was stopped or turned off; no failed start of Google Chrome ${p.new} is noted, and nothing starts`); return; }
+    // The owner rule first: a service that no longer owns writes nothing, stops nothing and starts nothing (review-106 B2).
+    if (!(await this.mayAct("the way back of a Chrome move"))) return;
     const lg = this.updater.lastGood();
     this.updater.noteFailed(p.new, reason);
     this.lastMoveFailed = true;
     this.log(`update: Google Chrome ${p.new} did not start: ${reason.slice(0, 300)}; starting the last good copy (${lg ?? "none known"}) again`);
-    if (!(await this.mayAct("the way back of a Chrome move"))) return;
     if (this.unit.chromePid() !== null) await this.unit.stop();
     try { await this.unit.start({ upto: lg }); }
     catch (e) {

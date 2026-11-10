@@ -148,6 +148,13 @@ test("--test (the live harness only) is refused when a folder is missing or is a
       [{ display: "x" }, /--test-display must be a display number/],
     ];
     for (const [change, re] of cases) assert.match(testRefusal({ ...ok, ...change }, env, 1000) ?? "", re, JSON.stringify(change));
+    // A reserved display (review-106 note 7): the harnesses' list (test/live/guard.ts), which the service keeps a copy of.
+    const { RESERVED_DISPLAYS } = await import("./live/guard.ts");
+    const { TEST_RESERVED_DISPLAYS } = await import("../src/service/main.ts");
+    assert.deepEqual([...TEST_RESERVED_DISPLAYS], [...RESERVED_DISPLAYS], "the same list as the harnesses' guard");
+    for (const d of RESERVED_DISPLAYS) assert.match(testRefusal({ ...ok, display: String(d) }, env, 1000) ?? "", new RegExp(`--test-display names :${d}, a reserved display`), String(d));
+    assert.equal(testRefusal({ ...ok, display: "0173" }, env, 1000), null, "a number, not a string, is checked");
+    assert.match(testRefusal({ ...ok, display: "090" }, env, 1000) ?? "", /a reserved display/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
   for (const [args, what] of [
     [["service", "--test", "--agent-door", "/x/cdp.sock"], /--test needs --lists-folder/],

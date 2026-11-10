@@ -11,10 +11,15 @@
 //
 // A pid's command line is read again right before each signal, so a reused pid is never signalled. It writes no file:
 // only the owner writes the unit record.
+//
+// The folder can come in another form than the one that the unit's processes got (through a link, review-106 note 9):
+// a process's profile argument and the Xvfb's X auth argument name the unit's file when they name it as given or when
+// their real path (after links) is the real path of the unit's file. Only absolute paths count.
 
+import { isAbsolute } from "node:path";
 import type { Procs } from "./procs.ts";
 import { intOf, readRecord } from "./record.ts";
-import type { UnitPaths } from "./paths.ts";
+import { realOf, type UnitPaths } from "./paths.ts";
 import { KILL_WAIT_MS, TERM_GRACE_MS } from "./unit.ts";
 
 export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void> };
@@ -39,23 +44,38 @@ export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
     }
   };
 
+  // The argument of `pid` that names `file` (as given, or by its real path), after `prefix`; null when none does.
+  const forms = (file: string) => new Set([file, realOf(file)]);
+  const argFor = (pid: number, prefix: string, file: ReadonlySet<string>): string | null => {
+    if (!procs.mine(pid)) return null;
+    for (const a of procs.cmdline(pid)) {
+      if (!a.startsWith(prefix)) continue;
+      const v = a.slice(prefix.length);
+      if (isAbsolute(v) && (file.has(v) || file.has(realOf(v)))) return a;
+    }
+    return null;
+  };
+
   // Chrome: every process on the profile; SIGTERM to each whose parent is not on the profile itself.
-  const profileArg = `--user-data-dir=${paths.profile}`;
-  const onProfile = procs.pids().filter((p) => procs.holds(p, [profileArg]));
-  const tops = onProfile.filter((p) => !onProfile.includes(procs.stat(p)?.ppid ?? -1));
-  if (onProfile.length) {
-    await stop(new Map(onProfile.map((p) => [p, [profileArg]])), tops);
+  const profile = forms(paths.profile);
+  const onProfile = new Map<number, string[]>();
+  for (const p of procs.pids()) { const a = argFor(p, "--user-data-dir=", profile); if (a !== null) onProfile.set(p, [a]); }
+  const tops = [...onProfile.keys()].filter((p) => !onProfile.has(procs.stat(p)?.ppid ?? -1));
+  if (onProfile.size) {
+    await stop(onProfile, tops);
     stopped.push(...tops.map((p): [string, number] => ["Chrome", p]));
   }
 
   // Xvfb: the record's (its display and the X auth file), then any other with the X auth file; a program named Xvfb only.
-  const isXvfb = (pid: number, markers: string[]) => procs.holds(pid, markers) && procs.programIs(pid, "Xvfb");
+  const xauth = forms(paths.xauth);
+  const authOf = (pid: number) => (procs.programIs(pid, "Xvfb") ? argFor(pid, "", xauth) : null);
   const xvfbs = new Map<number, string[]>();
   const r = readRecord(paths.unitFile);
   const rec = r.kind === "ok" ? r.record : {};
   const pid = intOf(rec.xvfb_pid), display = intOf(rec.display);
-  if (pid !== null && display !== null && isXvfb(pid, [`:${display}`, paths.xauth])) xvfbs.set(pid, [`:${display}`, paths.xauth]);
-  for (const p of procs.pids()) if (!xvfbs.has(p) && isXvfb(p, [paths.xauth])) xvfbs.set(p, [paths.xauth]);
+  const recAuth = pid !== null && display !== null ? authOf(pid) : null;
+  if (recAuth !== null && procs.holds(pid!, [`:${display}`, recAuth])) xvfbs.set(pid!, [`:${display}`, recAuth]);
+  for (const p of procs.pids()) { if (xvfbs.has(p)) continue; const a = authOf(p); if (a !== null) xvfbs.set(p, [a]); }
   if (xvfbs.size) {
     await stop(xvfbs, [...xvfbs.keys()], "Xvfb");
     stopped.push(...[...xvfbs.keys()].map((p): [string, number] => ["Xvfb", p]));

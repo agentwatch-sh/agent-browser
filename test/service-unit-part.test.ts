@@ -16,6 +16,7 @@ import { NotOwnerAtStart, Stage1a, startService } from "../src/service/service.t
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import { NOT_OWNER, STATE_TEXTS, UnitPart } from "../src/service/unit/part.ts";
 import { writeJsonDurable } from "../src/service/unit/record.ts";
+import { CHECK_EVERY_MS, FIRST_CHECK_MS } from "../src/service/unit/updates.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 
@@ -26,17 +27,17 @@ const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
 const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: "ann", via: "config" }, enabled: true, control: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] };
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 
-type Rig = { w: World; part: UnitPart; door: ControlDoor; logs: string[]; owns: { yes: boolean }; c: DaemonClient; close: () => Promise<void> };
+type Rig = { w: World; part: UnitPart; door: ControlDoor; logs: string[]; owns: { yes: boolean; hook?: () => Promise<void> }; c: DaemonClient; close: () => Promise<void> };
 async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void } = {}): Promise<Rig> {
   const w = new World();
   const tools = new FakeTools();
   o.before?.(w, tools);
   const logs: string[] = [];
-  const owns = { yes: true };
+  const owns: Rig["owns"] = { yes: true };
   let handler!: Stage1a;
   const part = new UnitPart({
     paths: w.paths, procs: w.procs, tools, log: (l) => logs.push(l),
-    owner: new Owner(async () => (owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }), (l) => logs.push(l)),
+    owner: new Owner(async () => { await owns.hook?.(); return owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }; }, (l) => logs.push(l)),
     endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => handler.sessionsComplete,
     unit: { ...w.deps(tools, { displays: { first: 173, last: 175 } }) },
     clock: () => w.now, wall: () => Date.UTC(2026, 10, 10, 12, 0, 0) + w.now - 1_000_000,
@@ -202,6 +203,152 @@ test("build note 8: at the service's start a record that wants the browser and w
     assert.equal(r2.w.spawned.length, 0);
     assert.equal((await status(r2.c, "s")).state, "off");
   } finally { await r2.close(); }
+});
+
+// ------------------------------------------------------------------ review-106 B1: a config before the service's start ends
+
+const WANTED_GONE = (w: World) => { writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, xvfb_pid: 99999, chrome_pid: 99998, chrome: { kind: "chromium", version: "" }, chrome_bin: "/usr/bin/chromium" }); };
+/** A live Xvfb and Chrome of the unit, and the record that names them (an adoption takes them). */
+function adoptable(w: World): { x: number; ch: number } {
+  const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1280x900x24"] });
+  const ch = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"] });
+  writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, display_size: [1280, 900], xvfb_pid: x.pid, xvfb_start: x.start, chrome_pid: ch.pid, chrome_start: ch.start, chrome: { kind: "chromium", version: "" }, chrome_bin: "/usr/bin/chromium" });
+  return { x: x.pid, ch: ch.pid };
+}
+
+test("review-106 B1: a config that comes before the service's start ends: a wanted record whose Chrome is gone starts Chrome at once in begin, with one ready for its pid; after the watch's fail-closed stop no later config starts Chrome (only a start op does), and the state stays failed closed", async () => {
+  const r = await rig({ begin: false, watchLimitMs: 60_000, before: WANTED_GONE });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    assert.equal(r.w.spawned.length, 0, "nothing before the start of the part");
+    await r.part.begin();
+    const chrome = r.w.named("chromium");
+    assert.equal(chrome.length, 1, "Chrome runs when begin ends: it waits for no later config and no supervisor's restart");
+    const ready = await c.next((l) => l.t === "ev" && l.ev === "ready", 10_000);
+    assert.equal(ready.chrome_pid, chrome[0].pid);
+    assert.equal((await status(c, "s1")).state, "ready");
+    // The fail-closed watch stops it (stage 1b part 1 has no receiver).
+    while (r.part.watch.missingFor() === null) await sleep(2);
+    r.w.now += 60_000;
+    assert.deepEqual(await c.next((l) => l.t === "ev" && l.ev === "stopped", 10_000), { t: "ev", ev: "stopped", reason: "receiver_missing" });
+    assert.equal((await status(c, "s2")).state, "failed closed");
+    // The daemon sends config at each connect and at each change: none starts Chrome again.
+    for (const id of ["cfg2", "cfg3"]) { c.send({ ...CONFIG, id }); await c.answer(id); }
+    await sleep(100); // ten checks of the supervisor
+    assert.equal(r.w.named("chromium").length, 0, "no start without a start op");
+    assert.equal((await status(c, "s3")).state, "failed closed");
+    assert.deepEqual(events(c).filter((l) => l.ev === "ready").map((l) => l.chrome_pid), [chrome[0].pid], "one ready for the pid");
+    assert.deepEqual(await req(c, "a", "start", TOKEN), { t: "res", id: "a", ok: true, data: {} });
+    assert.equal(r.w.named("chromium").length, 1, "a start op starts it again");
+  } finally { await r.close(); }
+});
+
+test("review-106 B1: a config with enabled false that comes before the service's start ends applies at the start: the adopted Chrome and its Xvfb stop, and a wanted record whose Chrome is gone starts nothing; no event, the record says wanted false, the state is off", async () => {
+  let pids = { x: 0, ch: 0 };
+  const r = await rig({ begin: false, before: (w) => { pids = adoptable(w); } });
+  try {
+    const { c } = r;
+    c.send({ ...CONFIG, enabled: false }); await c.answer("cfg");
+    await r.part.begin();
+    assert.equal(r.w.alive(pids.ch), false, "the adopted Chrome stops");
+    assert.equal(r.w.alive(pids.x), false, "and its Xvfb");
+    assert.equal(JSON.parse(readFileSync(r.w.paths.unitFile, "utf8")).wanted, false);
+    await sleep(100); // ten checks of the supervisor
+    assert.equal(r.w.spawned.length, 0);
+    assert.deepEqual(events(c), [], "no ready and no stopped: turning it off is not a fault");
+    assert.equal((await status(c, "s")).state, "off");
+  } finally { await r.close(); }
+  const r2 = await rig({ begin: false, before: WANTED_GONE });
+  try {
+    const { c } = r2;
+    c.send({ ...CONFIG, enabled: false }); await c.answer("cfg");
+    await r2.part.begin();
+    await sleep(100); // ten checks of the supervisor
+    assert.equal(r2.w.spawned.length, 0, "nothing starts");
+    assert.deepEqual(events(c), [], "no start_failed");
+    assert.equal((await status(c, "s")).state, "off");
+    assert.equal(JSON.parse(readFileSync(r2.w.paths.unitFile, "utf8")).wanted, false);
+  } finally { await r2.close(); }
+});
+
+test("one ready for each Chrome pid: a start op that comes while the supervisor's restart runs sends no second ready for the restarted Chrome", async () => {
+  const r = await rig();
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await req(c, "a", "start", TOKEN);
+    const first = r.w.named("chromium")[0];
+    // The supervisor's restart holds the unit's lock; its owner check right before the spawn takes 200 ms here, and
+    // the start op comes then (before the restarted Chrome runs).
+    let held = false;
+    r.owns.hook = async () => { if (!held && r.part.unit.locked) { held = true; await sleep(200); } };
+    r.w.end(first.pid);
+    while (!held) await new Promise((res) => setImmediate(res));
+    assert.equal(r.w.named("chromium").length, 0, "the restart has not spawned yet");
+    assert.deepEqual(await r.part.startBrowser(TOKEN as any), { data: {} });
+    const second = r.w.named("chromium");
+    assert.equal(second.length, 1);
+    await sleep(50);
+    assert.deepEqual(events(c).filter((l) => l.ev === "ready").map((l) => l.chrome_pid), [first.pid, second[0].pid], "one ready for each pid");
+  } finally { await r.close(); }
+});
+
+test("a pendingStart flag never outlives a start or a fail-closed stop (the second guard of review-106 B1; the test sets the flag by hand, since no path sets it while Chrome runs)", async () => {
+  const r = await rig({ watchLimitMs: 60_000 });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await req(c, "a", "start", TOKEN);
+    const first = r.w.named("chromium")[0];
+    (r.part as any).pendingStart = true;
+    r.w.end(first.pid);
+    await c.next((l) => l.t === "ev" && l.ev === "ready" && l.chrome_pid !== first.pid, 10_000);
+    assert.equal((r.part as any).pendingStart, false, "a start that succeeds clears it");
+    (r.part as any).pendingStart = true;
+    while (r.part.watch.missingFor() === null) await sleep(2);
+    r.w.now += 60_000;
+    await c.next((l) => l.t === "ev" && l.ev === "stopped", 10_000);
+    assert.equal((await status(c, "s")).state, "failed closed", "the fail-closed stop clears it");
+    c.send({ ...CONFIG, id: "cfg2" }); await c.answer("cfg2");
+    await sleep(50);
+    assert.equal(r.w.named("chromium").length, 0, "and no config starts Chrome then");
+  } finally { await r.close(); }
+});
+
+test("the Chrome update check of the part: the first 10 min after the start, then every 12 h (FIRST_CHECK_MS and CHECK_EVERY_MS are its defaults); review-106 B2: once the owner rule says no, the timed check calls neither latestEntry nor ensure", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const w = new World();
+  const owns = { yes: true };
+  const tools = new FakeTools();
+  tools.versions = ["157.0.7000.1-1"];
+  tools.autoInstall = true;
+  const part = new UnitPart({
+    paths: w.paths, procs: w.procs, tools, log: () => {},
+    owner: new Owner(async () => (owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }), () => {}),
+    endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => true, unit: w.deps(tools),
+    superviseMs: 100 * 3_600_000, watchMs: 100 * 3_600_000,
+  });
+  const flush = async () => { for (let i = 0; i < 30; i++) await new Promise((res) => setImmediate(res)); };
+  const after = async (ms: number) => { t.mock.timers.tick(ms); await flush(); };
+  const checks = () => tools.calls.filter((x) => x === "latest").length;
+  try {
+    part.onConfig({ enabled: true, chrome_bin: null, chrome_args: [] });
+    await part.begin();
+    await after(FIRST_CHECK_MS - 1);
+    assert.equal(checks(), 0, "none before 10 min");
+    await after(1);
+    assert.equal(checks(), 1, "the first at 10 min");
+    await after(CHECK_EVERY_MS - 1);
+    assert.equal(checks(), 1, "none before 12 h more");
+    await after(1);
+    assert.equal(checks(), 2, "then every 12 h");
+    owns.yes = false;
+    const calls = tools.calls.length;
+    await after(CHECK_EVERY_MS);
+    await after(CHECK_EVERY_MS);
+    assert.deepEqual(tools.calls.slice(calls), [], "a service that does not own reads no index and installs nothing");
+  } finally { await part.stop(); w.close(); }
 });
 
 test("the watch through the part: with no receiver (stage 1b part 1) Chrome stops after the limit, with one stopped event receiver_missing, the state failed closed and last_stop with no by", async () => {
