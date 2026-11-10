@@ -651,7 +651,7 @@
      "refused": [
       {
        "entry": "https://bad/x",
-       "reason": "not a host name"
+       "reason": "paste the host only"
       }
      ]
     }

@@ -5,6 +5,8 @@
 // admission.ts). Off by default: nothing starts it before stage 2, and no install step of this repository writes a unit
 // for it. Stage 1a has no Chrome, no list and no MCP: it has the ops config, set_sessions, session_ended, status and
 // endpoint, and it answers each other op of C12 `unsupported` until the stage that adds it (C12, "The ops of stage 1a").
+// Each later stage adds a part with its ops (part.ts): stage 1c (board ab-v16.94.4) the lists, the scopes, the prompts
+// and the sign-ins (stage1c.ts).
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,15 +16,17 @@ import { PeerGate } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
+import type { ServicePart } from "./part.ts";
+import type { ReceiverPort } from "./receiver.ts";
+import { Stage1c } from "./stage1c.ts";
 
 export { serviceHello };
 
 /** The ops of stage 1a (C12, "The ops of stage 1a"). */
 export const STAGE_1A_OPS = ["config", "set_sessions", "session_ended", "status", "endpoint"] as const;
-/** Each other op of C12 and the stage that adds it; until then it gets `unsupported`. */
-export const LATER_OPS: Readonly<Record<string, "1b" | "1c">> = {
+/** Each op of C12 that no part of this service has yet, and the stage that adds it; until then it gets `unsupported`. */
+export const LATER_OPS: Readonly<Record<string, "1b">> = {
   start: "1b", stop: "1b", sender: "1b",
-  launch_check: "1c", list_set: "1c", prompt_allow: "1c", prompt_dismiss: "1c", import: "1c", lists_get: "1c", prompts_get: "1c",
 };
 /** The texts of stage 1a's one state, `off` (I2: the agent's text names no stop and no start). */
 export const STAGE_1A_TEXTS = {
@@ -88,29 +92,47 @@ export class Stage1a implements Handler {
   /** agentwatch's browser.* keys of the last `config` (stage 1a keeps them: no Chrome uses them yet). */
   config: Record<string, unknown> | null = null;
   private sessions: Session[] = [];
-  /** The ended scopes, in memory only (stage 1c adds the ended file and launch_check). */
+  /** The ended scopes, in memory only (stage 1c's part keeps the file of ended scopes and launch_check). */
   readonly ended = new Set<string>();
 
-  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown> }) {
+  /** The parts of the later stages, each with its ops (stage 1c's lists, scopes, prompts and sign-ins). */
+  private readonly parts: readonly ServicePart[];
+
+  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[] }) {
     this.agentDoor = o.agentDoor;
     const { version, commit } = packageInfo();
     this.hello = o.hello ?? serviceHello(version, commit, []);
+    this.parts = o.parts ?? [];
   }
 
-  has(op: string): boolean { return (STAGE_1A_OPS as readonly string[]).includes(op); }
+  private partOf(op: string): ServicePart | undefined { return this.parts.find((p) => Object.hasOwn(p.ops, op)); }
+
+  has(op: string): boolean { return (STAGE_1A_OPS as readonly string[]).includes(op) || this.partOf(op) !== undefined; }
+
+  attach(emit: (ev: Record<string, unknown>) => void): void { for (const p of this.parts) p.attach?.(emit); }
+
+  stopParts(): void { for (const p of this.parts) p.stop?.(); }
 
   endpointState(): EndpointState { return this.agentDoor.state(); }
 
   status(): Record<string, unknown> {
-    return {
+    const data: Record<string, unknown> = {
       state: "off", ...STAGE_1A_TEXTS,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: this.agentDoor.state(), mcp: { state: "none", address: null },
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null })), lists: [], last_stop: null, prompts: [],
     };
+    // Each part gives its keys, and its sentences for the two texts (I2: no agent's text names a stop or a start).
+    const agent = [data.agent_text as string], operator = [data.operator_text as string];
+    for (const p of this.parts) {
+      Object.assign(data, p.status?.());
+      const n = p.notes?.();
+      if (n) { agent.push(...n.agent); operator.push(...n.operator); }
+    }
+    return { ...data, agent_text: agent.join(" "), operator_text: operator.join(" ") };
   }
 
-  handle(req: Req): Answer {
+  handle(req: Req): Answer | Promise<Answer> {
     switch (req.op) {
       case "config": {
         const { t, id, op, by, ...keys } = req;
@@ -119,6 +141,7 @@ export class Stage1a implements Handler {
       }
       case "set_sessions":
         this.sessions = (req.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id }));
+        for (const p of this.parts) p.setSessions?.(req);
         return { data: {} };
       case "session_ended": {
         const scope = req.scope as string;
@@ -126,6 +149,7 @@ export class Stage1a implements Handler {
         this.ended.delete(scope);
         this.ended.add(scope);
         if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
+        for (const p of this.parts) p.sessionEnded?.(scope);
         return { data: {} };
       }
       case "status": return { data: this.status() };
@@ -133,7 +157,10 @@ export class Stage1a implements Handler {
         // A scope that the service does not have (no session of the last set_sessions, or it ended): no URL (C12).
         if (!this.sessions.some((s) => s.scope === req.scope)) return { error: ERR.noSession };
         return { data: { url: this.agentDoor.url(req.scope as string) } };
-      default: return { error: ERR.unsupported };
+      default: {
+        const part = this.partOf(req.op);
+        return part ? part.ops[req.op](req) : { error: ERR.unsupported };
+      }
     }
   }
 }
@@ -150,6 +177,12 @@ export type ServiceOptions = {
   log: (line: string) => void;
   /** Tests only: the MainPID in place of the user's systemd. */
   mainPid?: () => Promise<number | null>;
+  /**
+   * Stage 1c's folders (--lists-folder and --state-folder; agentwatch's unit gives them, with no default): with them the
+   * service has the lists, the scopes, the prompts and the sign-ins. `receiver`: the receiver port (stage 1b part 2
+   * gives the native link's; with none, NO_RECEIVER).
+   */
+  lists?: { listsFolder: string; stateFolder: string; receiver?: ReceiverPort };
 };
 export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; stop: () => Promise<void> };
 
@@ -162,7 +195,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   o.log("failed" in t ? `service: the peer check cannot run: ${t.failed}` : `service: the peer check runs (${t.reader.form})`);
   const gate = "failed" in t ? new PeerGate({ failed: t.failed }) : new PeerGate({ reader: t.reader });
   const pidfd = await loadPidfdOpen();
-  const state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) } });
+  const parts: ServicePart[] = o.lists ? [new Stage1c({ ...o.lists, log: o.log })] : [];
+  const state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
   const unit = o.daemonUnit ?? "agentwatch.service";
   // The control door opens first, before the agent door (and from stage 1b before any Chrome start: the design's build note 8).
   const control = await ControlDoor.open({
@@ -171,11 +205,11 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   });
   let agent: AgentDoor;
   try { agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log }); }
-  catch (e) { await control.stop(); throw e; }
+  catch (e) { state.stopParts(); await control.stop(); throw e; }
   o.log(`service: ready (pid ${process.pid}; stage 1a: no Chrome)`);
   let stopping: Promise<void> | undefined;
   return {
     control, agent, state,
-    stop: () => stopping ??= (async () => { await control.stop(); await agent.stop(); o.log("service: stopped"); })(),
+    stop: () => stopping ??= (async () => { state.stopParts(); await control.stop(); await agent.stop(); o.log("service: stopped"); })(),
   };
 }

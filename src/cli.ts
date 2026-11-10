@@ -52,6 +52,7 @@ const WATCH_FLAGS: Record<string, Flag> = { "chrome-pid": { type: "string" }, "w
 /** The flags of `service` (contract C12, "The command"; board ab-v16.94.2): only `service` takes them, and it takes no other flag. */
 const SERVICE_FLAGS: Record<string, Flag> = {
   "agent-door": { type: "string" }, "control-door": { type: "string" }, "daemon-unit": { type: "string" }, "daemon-command": { type: "string" },
+  "lists-folder": { type: "string" }, "state-folder": { type: "string" },
   hello: { type: "boolean" }, fake: { type: "boolean" }, refuse: { type: "boolean" },
 };
 

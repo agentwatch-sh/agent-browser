@@ -11,7 +11,7 @@ import { encodeLine, serviceHello } from "./control.ts";
 import { startFake } from "./fake.ts";
 import { defaultControlDoor, packageInfo, startService } from "./service.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse]"
   + " (agentwatch's unit starts it, not a person)";
 
@@ -47,11 +47,16 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   }
   const agentDoor = str("agent-door");
   if (!agentDoor) throw new UsageError(`--agent-door is required: the agent door's address, which the daemon gives; ${SERVICE_USAGE}`);
+  // Stage 1c's folders have no default: the unit gives them (a test gives temp folders), so no run reads the operator's lists by chance.
+  const listsFolder = str("lists-folder"), stateFolder = str("state-folder");
+  if (!listsFolder) throw new UsageError(`--lists-folder is required: the folder of the lists (CONFIG_DIR/browser/lists), which agentwatch's unit gives; ${SERVICE_USAGE}`);
+  if (!stateFolder) throw new UsageError(`--state-folder is required: the agent browser's state folder, which agentwatch's unit gives; ${SERVICE_USAGE}`);
   const controlDoor = str("control-door") ?? defaultControlDoor();
   if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
   const s = await startService({
     agentDoor: agentDoorAddress(agentDoor), controlDoor: resolve(controlDoor), daemonUnit: str("daemon-unit") ?? "agentwatch.service",
     daemonCommand: resolve(str("daemon-command") ?? defaultDaemonCommandFile()), log,
+    lists: { listsFolder: resolve(listsFolder), stateFolder: resolve(stateFolder) },
   });
   await signalled();
   await s.stop();

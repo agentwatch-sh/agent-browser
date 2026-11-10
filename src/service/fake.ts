@@ -13,7 +13,8 @@ import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
-import { covers, normalizeEntry } from "../relay/scopes.ts";
+import { covers } from "../relay/scopes.ts";
+import { EntryError, hostOrNull, normalizeHost } from "./lists/hosts.ts";
 import { refusedRule } from "./admission.ts";
 import { agentDoorUrl } from "./agent-door.ts";
 import { ControlDoor, ERR, eventFits, serviceHello, type Answer, type By, type Handler, type Req } from "./control.ts";
@@ -102,12 +103,11 @@ export class FakeService implements Handler {
     if (!l) this.lists.set(name, (l = { name, repo: null, allow: [], error: "" }));
     const allow = new Set(l.allow);
     const refused: { entry: string; reason: string }[] = [];
+    // The service's host rules and their reason texts (stage 1c, lists/hosts.ts).
     for (const e of add) {
-      const n = normalizeEntry(e);
-      if (n === null) refused.push({ entry: e, reason: "not a host name" });
-      else allow.add(n);
+      try { allow.add(normalizeHost(e)); } catch (x) { refused.push({ entry: e, reason: (x as EntryError).reason }); }
     }
-    for (const e of remove) { allow.delete(e); const n = normalizeEntry(e); if (n !== null) allow.delete(n); }
+    for (const e of remove) { allow.delete(e); const n = hostOrNull(e); if (n !== null) allow.delete(n); }
     l.allow = [...allow].sort();
     return { data: { allow: [...l.allow], refused } };
   }
