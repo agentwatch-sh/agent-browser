@@ -17,20 +17,33 @@
 //   windows; with the X pointer never moved, 0 jumps but each later activation entered at the X pointer's one point,
 //   a position change that the movement does not explain (2 in each window per 3 activations). The whole design
 //   (run.ts design, 4 runs): 0 and 0.
-// - The shape: a ghost-cursor path (as `record`'s cursor) of 12 to 60 moves, a pause on the target, a press of 70 to
-//   90 ms with force 0.5; one key-event pair per character, 90 to 150 ms apart; the wheel brings an element into view
-//   (100 px a notch); a field gets the focus by a click, and the caret goes where el.focus() would have put it; a file
+// - The shape: the generator of src/human/ (board ab-t30.3; the input design,
+//   docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, sections 10.1 and 11.2), the one that
+//   agent mode's input stage uses too: a path of Fitts's time along an arc, with end corrections, an overshoot past
+//   500 px, a tremor and a slow approach to a small target, one sample each 8 ms in whole px, sent by the CDP player at
+//   its time with no wait for each answer, with a person's timestamp; a pause on the target, a press with force 0.5 at a
+//   spread point of the element; the wheel brings an element into view (120 px a notch); one person for each endpoint
+//   scope (pointer.json keeps its seed). One key-event pair per character, 90 to 150 ms apart (the keyboard model is
+//   board ab-t30.4); a field gets the focus by a click, and the caret goes where el.focus() would have put it; a file
 //   input gets a click that opens Chrome's file chooser (intercepted), and the files go to the input that it names.
-//   The times are the inputTiming option (options.ts, INPUT_TIMING).
+//   The times are the inputTiming option (options.ts, INPUT_TIMING): its ranges bound the generator's draws.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomInt } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Tab } from "./browser.ts";
 import { displayOf, onlyWindowsOf, pidOf, type DisplayInfo, type XAccess } from "./display.ts";
 import { AgentBrowserError } from "./errors.ts";
 import { withFileLock } from "./lock.ts";
 import { statePath, type InputTiming, type Settings } from "./options.ts";
-import { charKey, parseKey, planMove, pointAt, sendKey, type KeyEvent, type Point } from "./record.ts";
+import { charKey, parseKey, sendKey, type KeyEvent, type Point } from "./record.ts";
+import { CdpPlayer, systemClock } from "./human/cdp-player.ts";
+import { planPath, startPoint } from "./human/path.ts";
+import { paramsFor, personFor, type Person } from "./human/person.ts";
+import { force, holdMs, pauseMs, spreadPoint } from "./human/press.ts";
+import type { Random } from "./human/random.ts";
+import { notches, notchGapMs } from "./human/wheel.ts";
+import { playX } from "./human/x-player.ts";
 
 export const INPUT_LOCK = "input.lock", POINTER_FILE = "pointer.json";
 
@@ -58,6 +71,11 @@ export async function withInputLock<T>(s: Settings, fn: () => Promise<T>, opts: 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 const between = ([a, b]: [number, number]) => a + (b - a) * Math.random();
+/**
+ * The least time between two moves, whatever inputTiming.moveScale is (ms): a page's event (a navigation off the
+ * allowlist) is read between two moves, so the guard stops the path at the next one.
+ */
+export const MIN_MOVE_GAP_MS = 2;
 
 // ---------- the pointer's state ----------
 
@@ -66,7 +84,7 @@ const between = ([a, b]: [number, number]) => a + (b - a) * Math.random();
  * by an activation), and when a log line last named why a display is not used (at most one each 5 minutes). Written
  * inside the input lock.
  */
-type PointerState = { pages: Record<string, Point>; display?: { name: string; ok: boolean; at: number }; notices?: Record<string, number> };
+type PointerState = { pages: Record<string, Point>; display?: { name: string; ok: boolean; at: number }; notices?: Record<string, number>; seed?: number };
 
 function readPointer(s: Settings): PointerState {
   try {
@@ -266,6 +284,10 @@ export class Hands {
   private readonly geo: Geo;
   private readonly state: PointerState;
   private readonly guard: () => void;
+  /** The scope's person (one for each endpoint scope: design 10.4), the draws' source, and the CDP player. */
+  readonly person: Person;
+  private readonly random: Random = Math.random;
+  private readonly player: CdpPlayer;
   private recordMoved = false;
   private lastKey = 0;
   private keys = 0;
@@ -279,6 +301,12 @@ export class Hands {
     this.geo = geo;
     this.state = state;
     this.guard = guard;
+    this.person = personOf(tab, state);
+    const dev = this.person.params.device;
+    this.player = new CdpPlayer((method, params) => this.tab.send(method, params), {
+      clock: systemClock, latencyMs: dev.latencyMs, wholeMs: dev.wholeMsTimestamps, random: this.random, maxInFlight: dev.movesInFlight,
+      scale: this.timing.moveScale, minGapMs: MIN_MOVE_GAP_MS, before: () => this.guard(),
+    });
   }
 
   private get log() { return this.tab.browser.settings.log; }
@@ -355,7 +383,8 @@ export class Hands {
       try { const p = await xLocation(x), o = origin(geo); at = { x: p.x - o.x, y: p.y - o.y }; } catch { /* below */ }
     }
     const known = !!at;
-    at ??= { x: geo.iw * between([0.35, 0.65]), y: geo.ih * between([0.35, 0.65]) };
+    // No last point and no X pointer: a random point of the viewport's middle 30% to 70% (design 10.1).
+    at ??= startPoint(geo.iw, geo.ih, Math.random, paramsFor(mac ? "darwin" : "linux").path.start.middle);
     at = { x: Math.min(Math.max(at.x, 0), Math.max(0, geo.iw - 1)), y: Math.min(Math.max(at.y, 0), Math.max(0, geo.ih - 1)) };
     return new Hands(tab, at, known, x, geo, state, guard);
   }
@@ -379,7 +408,8 @@ export class Hands {
     const o = origin(this.geo), at = { x: Math.round(p.x), y: Math.round(p.y) };
     this.guard();
     try {
-      await this.x!.run(["mousemove", String(Math.round(o.x + at.x)), String(Math.round(o.y + at.y))]);
+      // The X player (src/human/x-player.ts): one point is one xdotool move.
+      await playX((args) => this.x!.run(args), [{ ...at, t: 0 }], (q) => ({ x: o.x + q.x, y: o.y + q.y }));
       return true;
     } catch (e) {
       this.log(`agent-browser: could not move the X pointer (${(e as Error).message.split("\n")[0]}); the input goes on with CDP alone`);
@@ -394,33 +424,26 @@ export class Hands {
   }
 
   /**
-   * A pointer path to `to` along ghost-cursor's curve (W: the target's smaller side): 12 to 60 points at about 60 a
-   * second, in whole pixels as a mouse gives them, and no move that does not move (a real mouse sends none). Where
-   * agent-browser may move the X pointer, the path's last step that moves is the X pointer's move there (xMove): the
-   * pointer is then where the page saw it last, with no extra move after the press (review-47: in 99.4% of 2000 paths
-   * the last sample rounds to the pixel before it).
+   * A pointer path to `to` (W: the target's smaller side), planned by the generator (src/human/path.ts): one sample each
+   * 8 ms in whole px with no sample that does not move, sent by the CDP player at its time with no wait for the answer
+   * of the move before it (times inputTiming.moveScale). Where agent-browser may move the X pointer, the path's last step
+   * is the X pointer's move there (xMove): the pointer is then where the page saw it last, with no extra move after the
+   * press. When the page answers none of 8 moves (a dialog), the path stops and one move goes to `to`.
    */
   async moveTo(to: Point, width = 24): Promise<void> {
     to = { x: Math.round(to.x), y: Math.round(to.y) };
     const from = { x: Math.round(this.at.x), y: Math.round(this.at.y) };
-    const legs = await planMove(from, to, width, Math.random);
-    if (!legs.length) { this.at = to; return; }
-    for (const leg of legs) leg.ms *= this.timing.moveScale;
-    const total = legs.reduce((a, l) => a + l.ms, 0), n = Math.min(60, Math.max(12, Math.round(total / 16)));
-    // The steps that move, each with its time; the last one ends at `to`.
-    const steps: { p: Point; ms: number }[] = [];
-    let last = from;
-    for (let i = 1; i <= n; i++) {
-      const q = i === n ? to : pointAt(legs, (total * i) / n), p = { x: Math.round(q.x), y: Math.round(q.y) };
-      if (p.x !== last.x || p.y !== last.y) { steps.push({ p, ms: (total * i) / n }); last = p; }
+    const { samples } = planPath(from, to, width, this.person, this.random);
+    if (!samples.length) { this.at = to; return; }
+    const last = samples[samples.length - 1], viaX = !!this.x, t0 = systemClock.now();
+    const r = await this.player.moves(viaX ? samples.slice(0, -1) : samples);
+    if (r.stopped) {
+      this.log(`agent-browser: tab ${this.name} answered none of ${this.person.params.device.movesInFlight} moves; the path stops, and one move goes to its end`);
+      await this.player.event("Input.dispatchMouseEvent", { type: "mouseMoved", x: to.x, y: to.y, button: "none", buttons: 0 });
+    } else if (viaX) {
+      await sleep(t0 + last.t * this.timing.moveScale - systemClock.now());
+      if (!(await this.xMove(last))) await this.player.event("Input.dispatchMouseEvent", { type: "mouseMoved", x: last.x, y: last.y, button: "none", buttons: 0 });
     }
-    const t0 = Date.now();
-    for (let i = 0; i < steps.length; i++) {
-      await sleep(t0 + steps[i].ms - Date.now());
-      const { p } = steps[i];
-      if (!(i === steps.length - 1 && this.x && await this.xMove(p))) await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none", buttons: 0 });
-    }
-    await sleep(t0 + total - Date.now());
     this.at = to;
   }
 
@@ -431,32 +454,48 @@ export class Hands {
   }
 
   /**
-   * A click where the pointer is: the pause on the target, the allowlist read again, then a press with force 0.5 and a
-   * release. `before` (setFiles' second hit test) can still stop it after the pause: false, no press.
+   * A click where the pointer is: the pause on the target (design 10.1: a lognormal, median 140 ms, from 80 to 400 ms,
+   * within inputTiming.settleMs), the allowlist read again, then a press with force 0.5, held a person's time (a
+   * lognormal, median 100 ms, from 60 to 180 ms, within inputTiming.pressMs) from the press's send, and a release; each
+   * event with a person's timestamp. `before` (setFiles' second hit test) can still stop it after the pause: false, no
+   * press.
    */
   async press(before?: () => Promise<boolean>): Promise<boolean> {
-    await sleep(between(this.timing.settleMs));
+    await sleep(pauseMs(this.person, this.random, this.timing.settleMs));
     this.guard();
     await this.tab.assertAllowed();
     if (before && !(await before())) return false;
     this.guard();
-    const { x, y } = this.at;
-    await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1, force: 0.5 });
-    await sleep(between(this.timing.pressMs));
-    await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+    const { x, y } = this.at, hold = holdMs(this.person, this.random, this.timing.pressMs), sent = systemClock.now();
+    await this.player.event("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1, force: force(this.person) });
+    await sleep(sent + hold - systemClock.now()); // the hold counts from the press's send, not from its answer (C11)
+    await this.player.event("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
     return true;
   }
 
   /** A point of the box to click, in its middle 40% (`fx`, `fy`: other parts), inside the viewport. */
   private aim(b: Box, fx: [number, number] = [0.3, 0.7], fy: [number, number] = [0.3, 0.7]): Point {
     const x = b.x + b.w * between(fx), y = b.y + b.h * between(fy);
-    return { x: Math.min(Math.max(x, 1), this.geo.iw - 2), y: Math.min(Math.max(y, 1), this.geo.ih - 2) };
+    return this.inside({ x, y });
+  }
+  private inside(p: Point): Point { return { x: Math.min(Math.max(p.x, 1), this.geo.iw - 2), y: Math.min(Math.max(p.y, 1), this.geo.ih - 2) }; }
+
+  /**
+   * The press point of the kept element's box: a person's spread around its middle (src/human/press.ts: a normal offset
+   * with a standard deviation of 1/8 of the smaller side, at most 1/4 of it), inside the viewport, when the element is
+   * at that point (a hit test); else its middle.
+   */
+  private async spread(b: Box): Promise<Point> {
+    const p = this.inside(spreadPoint(b, this.person, this.random));
+    if (await this.tab.evaluate(hits, p.x, p.y)) return p;
+    return this.inside({ x: Math.round(b.x + b.w / 2), y: Math.round(b.y + b.h / 2) });
   }
 
   /**
    * Bring the kept element into view with the wheel, as a person scrolls: the pointer goes over the element's scroller
-   * if it is not there, then 100 px notches. At most 3 rounds; when the element does not come into view, the old way
-   * (a script's scrollIntoView) and a log line. Its box in view.
+   * if it is not there, then notches of 120 px (X11's notch; src/human/wheel.ts: the count rounds half up, at least one),
+   * with a person's gaps. At most 3 rounds; when the element does not come into view, the old way (a script's
+   * scrollIntoView) and a log line. Its box in view.
    */
   async intoView(what: string): Promise<Box> {
     let last: string | undefined;
@@ -468,11 +507,12 @@ export class Hands {
       if (key === last || !v.wheelAt) break; // the wheel moved nothing, or no point scrolls it
       last = key;
       if (Math.hypot(v.wheelAt.x - this.at.x, v.wheelAt.y - this.at.y) > 2) await this.moveTo(v.wheelAt, 80);
+      const px = this.person.params.wheel.notchPx;
       for (const [delta, axis] of [[v.dy, "y"], [v.dx, "x"]] as const) {
-        for (let i = 0, notches = Math.min(80, Math.ceil(Math.abs(delta) / 100)); i < notches; i++) {
-          const d = Math.sign(delta) * 100;
-          await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: this.at.x, y: this.at.y, deltaX: axis === "x" ? d : 0, deltaY: axis === "y" ? d : 0 });
-          await sleep(between(this.timing.wheelMs));
+        for (let i = 0, n = Math.min(80, Math.abs(notches(delta, 0, px).count)); i < n; i++) {
+          const d = Math.sign(delta) * px;
+          await this.player.event("Input.dispatchMouseEvent", { type: "mouseWheel", x: Math.round(this.at.x), y: Math.round(this.at.y), deltaX: axis === "x" ? d : 0, deltaY: axis === "y" ? d : 0 });
+          await sleep(notchGapMs(this.person, this.random, this.timing.wheelMs));
         }
       }
       await sleep(150); // a smooth scroll ends after its last notch
@@ -496,7 +536,7 @@ export class Hands {
     if (!box) throw new Error(text ? `no visible element with text "${text.text}"` : `no element matches ${selector}`);
     if (!text && (box.w === 0 || box.h === 0)) throw new Error(`element ${selector} is not visible`);
     const b = await this.intoView(what);
-    await this.moveTo(this.aim(b), Math.min(b.w, b.h));
+    await this.moveTo(await this.spread(b), Math.min(b.w, b.h));
     await this.press();
   }
 
@@ -506,7 +546,7 @@ export class Hands {
     if (!box) throw new Error(`no element matches ${selector}`);
     if (box.w === 0 || box.h === 0) throw new Error(`element ${selector} is not visible`);
     const b = await this.intoView(`element ${selector}`);
-    await this.moveTo(this.aim(b), Math.min(b.w, b.h));
+    await this.moveTo(await this.spread(b), Math.min(b.w, b.h));
   }
 
   /** A click at a point of the viewport (CSS px): a path there, a press. */
@@ -620,7 +660,7 @@ export class Hands {
     await this.tab.send("Page.setInterceptFileChooserDialog", { enabled: true });
     try {
       const b = await this.intoView(what);
-      const at = this.aim(b);
+      const at = this.inside(spreadPoint(b, this.person, this.random));
       await this.moveTo(at, Math.min(b.w, b.h));
       // A hit test of the click point: when another element (a frame, say) covers the input, the click would reach it,
       // and its chooser is not this input's (review-47b). Then no click, and the files go the old way.
@@ -666,6 +706,17 @@ export class Hands {
       await this.tab.send("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
     }
   }
+}
+
+/**
+ * The person of the command's endpoint scope (design 10.4): drawn from the scope's name and a seed that pointer.json
+ * keeps for the state folder's life (made at random on its first use), so the commands of one scope move as one person
+ * and two scopes as two. Direct mode is the scope "".
+ */
+function personOf(tab: Tab, state: PointerState): Person {
+  const s = tab.browser.settings;
+  if (typeof state.seed !== "number" || !Number.isInteger(state.seed)) state.seed = randomInt(2 ** 31);
+  return personFor(s.tabScope ?? "", state.seed, paramsFor(tab.browser.mac ? "darwin" : "linux"));
 }
 
 /** The page's content origin on the screen: Chrome draws its own frame on a display with no window manager. */

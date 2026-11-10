@@ -102,8 +102,8 @@ const keys = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatch
 const methods = (calls: Call[]) => calls.map((x) => x.method);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
 
-test("the input timing: the defaults of the research, a partial option, and the CLI's --input-timing", () => {
-  assert.deepEqual(INPUT_TIMING, { pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
+test("the input timing: the defaults of the input design (the pointer's bounds of design 10.1 and 8.2), a partial option, and the CLI's --input-timing", () => {
+  assert.deepEqual(INPUT_TIMING, { pressMs: [60, 180], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
   assert.deepEqual(resolveOptions(c.options()).inputTiming, INPUT_TIMING);
   assert.deepEqual(resolveOptions(c.options({ inputTiming: { pressMs: [10, 20] } })).inputTiming, { ...INPUT_TIMING, pressMs: [10, 20] });
   for (const bad of [{ pressMs: [20, 10] }, { keyMs: [-1, 5] }, { moveScale: 0 }, { activateMs: Number.NaN }, { nope: 1 }, { holdMs: [1] }])
@@ -134,13 +134,13 @@ test("click on a window page: the window comes forward first (Page.bringToFront)
   await commands.close(linux(), { tab: name });
 });
 
-test("the default timing: a press of 70 to 90 ms, a path of a person's length, and the click takes about half a second or more", async () => {
+test("the default timing: a press of 60 to 180 ms, a path of a person's length, and the click takes about half a second or more", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const t0 = Date.now();
   const calls = await callsOf(page, () => commands.click(linux({ inputTiming: undefined }), { tab: name, target: "#b" }));
   const ms = Date.now() - t0, ev = mouse(calls), press = ev.find((x) => x.params.type === "mousePressed")!, release = ev.find((x) => x.params.type === "mouseReleased")!;
-  assert.ok(release.t - press.t >= 65 && release.t - press.t <= 110, `press ${release.t - press.t} ms`);
+  assert.ok(release.t - press.t >= 55 && release.t - press.t <= 200, `press ${release.t - press.t} ms`);
   const moves = ev.filter((x) => x.params.type === "mouseMoved");
   assert.ok(moves.length >= 15, `${moves.length} moves`);
   assert.ok(press.t - moves[0].t >= 300, `the path and the settle took ${press.t - moves[0].t} ms`);
@@ -311,19 +311,19 @@ test("hover: a path to the element, no press; clickAt: a path to the point and a
   await commands.close(linux(), { tab: name });
 });
 
-test("click below the fold: wheel events until the element is in view, then the click; no scrollIntoView", async () => {
+test("click below the fold: wheel events of 120 px (X11's notch) until the element is in view, then the click; no scrollIntoView", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const calls = await callsOf(page, () => commands.click(linux(), { tab: name, target: "#far" }));
   assert.equal(page.title, "far");
   const wheels = mouse(calls).filter((x) => x.params.type === "mouseWheel");
   assert.ok(wheels.length >= 10, `${wheels.length} wheel events`);
-  assert.ok(wheels.every((x) => x.params.deltaY === 100 && x.params.deltaX === 0));
+  assert.ok(wheels.every((x) => x.params.deltaY === 120 && x.params.deltaX === 0));
   assert.equal(page.scriptScrolls, 0);
   const r = page.select("#far")[0].getBoundingClientRect();
   assert.ok(r.top > 0 && r.bottom < page.height, `in view: ${r.top}`);
   const clickText = await callsOf(page, () => commands.click(linux(), { tab: name, text: "Go" }));
-  assert.ok(mouse(clickText).filter((x) => x.params.type === "mouseWheel").every((x) => x.params.deltaY === -100), "back up with the wheel");
+  assert.ok(mouse(clickText).filter((x) => x.params.type === "mouseWheel").every((x) => x.params.deltaY === -120), "back up with the wheel");
   assert.equal(page.title, "clicked");
   assert.equal(page.scriptScrolls, 0);
   await commands.close(linux(), { tab: name });

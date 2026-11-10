@@ -18,11 +18,14 @@
 //   format   1
 //   source   1: XTEST at 125 Hz on the harness's own Xvfb, with LITERATURE; 2: a person's recording (part B)
 //   pointer  samplesPerMove, predictedPerMove   the mean count of samples and of predicted points per pointermove (P1)
+//            samplesEach, predictedEach, sampleGapsMs (optional)   their distributions: each pointermove's nc and np, and
+//                                               each sample gap in ms (P1's distributions; board ab-t30.3)
 //            handlerLagMs                       the median handler time minus event time: the frame phase (P8)
 //            wholeMsShare                       a number: the share of sample gaps on a whole ms (P2; 1 on Linux)
 //            straightness, maxDeviationPx, peakPxPerMs, meanPxPerMs, fittsRatio, speedPeaks   the path's shape (P3)
 //            pauseMs, pressMs                   the pause before a press and the press (P5)
 //            boxEntryEdgePx, boxMovesInside, boxEntryToPressMs   the click box's own view (P4)
+//            boxStraightness (optional)        the straightness of the box's samples from the entry to the press (P4)
 //   keys     holdMs, downToDownMs, wordEndExtraMs, overlapShare   (K1 to K3)
 //            downToDownByPairMs (optional): { "th": Dist, "he": Dist, ... }: press to press for each letter pair (K2 per
 //            letter pair); each name is two characters of the US layout's printable set (space to tilde), in lower case
@@ -40,6 +43,7 @@ export type Reference = {
     samplesPerMove: Dist; predictedPerMove: Dist; handlerLagMs: Dist; wholeMsShare: number;
     straightness: Dist; maxDeviationPx: Dist; peakPxPerMs: Dist; meanPxPerMs: Dist; fittsRatio: Dist; speedPeaks: Dist;
     pauseMs: Dist; pressMs: Dist; boxEntryEdgePx: Dist; boxMovesInside: Dist; boxEntryToPressMs: Dist;
+    samplesEach?: Dist; predictedEach?: Dist; sampleGapsMs?: Dist; boxStraightness?: Dist;
   };
   keys: { holdMs: Dist; downToDownMs: Dist; wordEndExtraMs: Dist; overlapShare: Dist; downToDownByPairMs?: Record<string, Dist> };
   wheel: { notchPx: number; gapMs: Dist };
@@ -65,11 +69,12 @@ export const LITERATURE: { pointer: Pick<Reference["pointer"], "pauseMs" | "pres
 
 const D = "dist", N = "number", PAIRS = "pairs";
 /** Fields that a file may leave out. */
-const OPTIONAL = new Set(["keys.downToDownByPairMs"]);
+const OPTIONAL = new Set(["keys.downToDownByPairMs", "pointer.samplesEach", "pointer.predictedEach", "pointer.sampleGapsMs", "pointer.boxStraightness"]);
 const PAIR = /^[\x20-\x7e]{2}$/;
 const SCHEMA: Record<string, Record<string, string>> = {
   pointer: { samplesPerMove: D, predictedPerMove: D, handlerLagMs: D, wholeMsShare: N, straightness: D, maxDeviationPx: D, peakPxPerMs: D, meanPxPerMs: D,
-    fittsRatio: D, speedPeaks: D, pauseMs: D, pressMs: D, boxEntryEdgePx: D, boxMovesInside: D, boxEntryToPressMs: D },
+    fittsRatio: D, speedPeaks: D, pauseMs: D, pressMs: D, boxEntryEdgePx: D, boxMovesInside: D, boxEntryToPressMs: D,
+    samplesEach: D, predictedEach: D, sampleGapsMs: D, boxStraightness: D },
   keys: { holdMs: D, downToDownMs: D, wordEndExtraMs: D, overlapShare: D, downToDownByPairMs: PAIRS },
   wheel: { notchPx: N, gapMs: D },
 };
@@ -128,10 +133,12 @@ export function checkReference(raw: unknown): Reference {
 }
 
 const PATH_KINDS = new Set(["click", "hover", "move"]);
+/** The optional fields that have values (a list of none is left out: checkDist refuses an empty list). */
+const optional = (o: Record<string, number[]>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v.length));
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const vals = (list: (number | null | undefined)[]) => list.filter((v): v is number => isNum(v)).map(r3);
 
-/** The reference of a run's XTEST steps (the steps that passed): per-path values for P1, P3 and P8, per-trial values for P4, and LITERATURE for the rest. */
+/** The reference of a run's XTEST steps (the steps that passed): per-path values for P1, P3 and P8, every pointermove's and sample gap's values for P1's distributions, per-trial values for P4, and LITERATURE for the rest. */
 export function buildReference(all: readonly StepMeasures[]): Reference {
   const xtest = all.filter((s) => s.ok); // a failed step is left out
   const paths = xtest.filter((s) => PATH_KINDS.has(s.kind) && s.pointer && s.pointer.moves >= 5);
@@ -149,6 +156,8 @@ export function buildReference(all: readonly StepMeasures[]): Reference {
       meanPxPerMs: vals(shapes.map((p) => p.meanPxPerMs)), fittsRatio: vals(shapes.map((p) => p.fittsRatio)), speedPeaks: vals(shapes.map((p) => p.speedPeaks)),
       pauseMs: LITERATURE.pointer.pauseMs, pressMs: LITERATURE.pointer.pressMs,
       boxEntryEdgePx: vals(boxes.map((b) => b.entryEdgePx)), boxMovesInside: vals(boxes.map((b) => b.movesInside)), boxEntryToPressMs: vals(boxes.map((b) => b.entryToPressMs)),
+      ...optional({ samplesEach: vals(paths.flatMap((s) => s.pointer!.samplesEach ?? [])), predictedEach: vals(paths.flatMap((s) => s.pointer!.predictedEach ?? [])),
+        sampleGapsMs: vals(paths.flatMap((s) => s.pointer!.gapsMs ?? [])), boxStraightness: vals(boxes.map((b) => b.straightness)) }),
     },
     keys: LITERATURE.keys,
     wheel: LITERATURE.wheel,

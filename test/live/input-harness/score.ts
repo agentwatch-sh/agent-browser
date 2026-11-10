@@ -103,6 +103,8 @@ function distRow(gap: string, measure: string, values: number[], dist: Dist): Ro
 export type ScoreOptions = {
   /** XTEST's predicted points on each planned path that it played (by path id): P1's same-path row (design 9.1). */
   samePaths?: Record<string, number>;
+  /** XTEST's samples (nc) of each pointermove on each planned path (by path id): open point 6's option c, KS on the same paths. */
+  samePathCounts?: Record<string, number[]>;
   /** The beacon batches of the source's scenario that never came: every row is then "no data". */
   lostBatches?: number;
 };
@@ -125,7 +127,30 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     const b = band(rp.samplesPerMove, BARS.countMargin), v = nums(P.map((p) => p.samplesPerMove)), m = mean(v), measure = "samples per pointermove (mean)";
     rows.push(m === null || !b ? noData("P1", measure, bandText(b)) : moves < BARS.minMoves ? noData("P1", measure, bandText(b), fewMoves)
       : row("P1", measure, bandText(b), `${f2(m)}`, yes(inBand(m, b)), v.length));
+    // Open point 6's other options (design section 16), as information: option b, the per-path range with no margin; option c,
+    // a two-sample KS of the pointermoves' counts on XTEST's same paths.
+    const b0 = band(rp.samplesPerMove), mb = "samples per pointermove, the range with no margin (point 6, option b)", bar0 = `${bandText(b0)} (information)`;
+    rows.push(m === null || !b0 ? noData("P1", mb, bar0) : moves < BARS.minMoves ? noData("P1", mb, bar0, fewMoves)
+      : row("P1", mb, bar0, `${f2(m)} (${inBand(m, b0) ? "inside" : "outside"})`, "not scored", v.length));
+    const counts = opts.samePathCounts ?? {}, onPaths = ptr.filter((s) => s.path !== undefined && Object.hasOwn(counts, s.path));
+    const sv = onPaths.flatMap((s) => s.pointer!.samplesEach ?? []), xv = onPaths.flatMap((s) => counts[s.path!]), mc = "samples per pointermove, KS of the counts on XTEST's paths (point 6, option c)";
+    const c = compareDist(sv, xv), barC = "KS against XTEST's counts on the same paths (information)";
+    rows.push(!onPaths.length ? noData("P1", mc, barC, "no step on XTEST's paths") : sv.length < BARS.minMoves ? noData("P1", mc, barC, `${sv.length} moves: fewer than ${BARS.minMoves}`)
+      : row("P1", mc, barC, `D ${f2(c.stat ?? 0)} / ${f2(c.bound ?? 0)} (${c.pass ? "inside" : "outside"} the bound)`, "not scored", sv.length));
   }
+  // P1's distributions (board ab-t30.3; the research's measure of P1): each pointermove's samples (nc) and each sample gap,
+  // by a two-sample KS against the reference's values; the predicted points (np) likewise, as information with an XTEST
+  // reference (the same-path row below is the bar), and the bar with a person's reference.
+  const each = (key: "samplesEach" | "predictedEach" | "gapsMs") => P.flatMap((p) => p[key] ?? []);
+  const distOf = (measure: string, values: number[], dist: Dist | undefined, information: boolean): Row => {
+    const bar = dist ? `KS vs ${distText(dist)}${information ? " (information)" : ""}` : "KS vs the reference's values";
+    if (!dist) return noData("P1", measure, bar, "no values in the reference");
+    if (moves < BARS.minMoves) return noData("P1", measure, bar, fewMoves);
+    const r = distRow("P1", measure, values, dist);
+    return information && (r.verdict === "pass" || r.verdict === "fail") ? { ...r, bar, verdict: "not scored" } : { ...r, bar };
+  };
+  rows.push(distOf("samples per pointermove (distribution)", each("samplesEach"), rp.samplesEach, false));
+  rows.push(distOf("sample gaps (distribution, ms)", each("gapsMs"), rp.sampleGapsMs, false));
   {
     const xtest = ref.source === SOURCE.xtest, b = band(rp.predictedPerMove), v = nums(P.map((p) => p.predictedPerMove)), m = mean(v);
     const measure = "predicted points per pointermove (mean)", bar = xtest ? `${bandText(b)} (information: the same-path row is the bar)` : bandText(b);
@@ -137,6 +162,7 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     rows.push(sm === null || !sb ? noData("P1", sMeasure, "XTEST's per-path range on the same paths", "no step on XTEST's paths")
       : sameMoves < BARS.minMoves ? noData("P1", sMeasure, bandText(sb), `${sameMoves} moves: fewer than ${BARS.minMoves}`)
       : row("P1", sMeasure, bandText(sb), `${f2(sm)} (${sv.map(f2).join(", ")} against ${xv.map(f2).join(", ")})`, yes(inBand(sm, sb)), sv.length));
+    rows.push(distOf("predicted points per pointermove (distribution)", each("predictedEach"), rp.predictedEach, xtest));
   }
   // ---- P2 times: the share of whole-ms sample gaps over all steps (30 gaps or more); events later than their handler.
   {
@@ -180,6 +206,14 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
       const shown = v.map((x) => (x === null ? "none" : f2(x))).join(", ");
       rows.push(row("P4", measure, bar, shown, yes(v.every((x) => x !== null && ok(x))), v.length));
     }
+    // The straightness inside the box (board ab-t30.3): with an XTEST reference, information only: XTEST's box paths are
+    // planned by the old generator (ghost-cursor), whose almost straight end is the research's gap P4 itself; with a person's
+    // reference, in its range.
+    const sr = rp.boxStraightness, sbd = sr ? band(sr) : null, xt = ref.source === SOURCE.xtest, ms = "box straightness inside (entry to press)";
+    const sBar = !sbd ? "the reference's range" : xt ? `${bandText(sbd)} (information: XTEST's box paths are planned)` : bandText(sbd);
+    const sv = B.map((b) => b?.straightness ?? null);
+    rows.push(!boxes.length ? noData("P4", ms, sBar) : !sbd ? noData("P4", ms, sBar, "no values in the reference")
+      : row("P4", ms, sBar, sv.map((x) => (x === null ? "none" : f2(x))).join(", "), xt ? "not scored" : yes(sv.every((x) => x !== null && inBand(x, sbd))), sv.length));
   }
   // ---- P5 the pause before the press and the press: KS against the reference.
   const presses = of(PRESSES).filter((s) => s.pointer).map((s) => s.pointer!);
@@ -189,6 +223,9 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
   {
     const v = nums(steps.filter((s) => s.kind === "idle").map((s) => s.idleMovesPerS));
     rows.push(v.length ? row("P6", "idle moves per s", "by Q4", f2(mean(v)!), "not scored", v.length) : noData("P6", "idle moves per s", "by Q4"));
+    // The time from the page's load to its first move (board ab-t30.3): measured, not scored (Q4; part B's task 6 measures a person's).
+    const l = nums(steps.map((s) => s.loadToFirstMoveMs)), lm = "load to the first move (ms)", lb = "by Q4 (part B)";
+    rows.push(l.length ? row("P6", lm, lb, l.map(f2).join(", "), "not scored", l.length) : noData("P6", lm, lb, "no move after a load"));
   }
   // ---- P7 wheel: notches of the reference's size with deltaMode 0 (a missing deltaMode fails), wheelDeltaY / deltaY -1, gaps in range; events per scroll (not scored).
   {
@@ -279,7 +316,7 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     rows.push(P.length ? row("R9", "fractional points", "0", `${fr}`, yes(fr === 0), P.length) : noData("R9", "fractional points", "0"));
     // R10: no row of P1, P2 and P8 fails, and the three core rows (P1's samples, P2's share, P8) have data and pass.
     const parts = rows.filter((r) => r.gap === "P1" || r.gap === "P2" || r.gap === "P8"), fails = parts.filter((r) => r.verdict === "fail").length;
-    const core = parts.filter((r) => /^(samples per pointermove|sample gaps on a whole ms|frame phase)/.test(r.measure)).map((r) => r.verdict);
+    const core = parts.filter((r) => /^(samples per pointermove \(mean\)|sample gaps on a whole ms|frame phase)/.test(r.measure)).map((r) => r.verdict);
     rows.push(row("R10", "P1, P2 and P8 together", "none fails; P1's samples, P2's share and P8 pass", `${parts.filter((r) => r.verdict === "pass").length} of ${parts.length} pass`,
       fails ? "fail" : core.length === 3 && core.every((v) => v === "pass") ? "pass" : "no data", parts.length));
     const jumps = steps.flatMap((s) => s.activationJumps);

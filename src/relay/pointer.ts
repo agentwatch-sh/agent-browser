@@ -1,13 +1,15 @@
 // The relay's part of the agent display's pointer (board ab-v16.71; the agent pointer design,
 // docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 2 and 3; contract C10 "The daemon's own ops"
 // and C11 "The pointer at an activation" in chrome-extension's docs/protocol.md, the master). The relay plans a
-// person-shaped path in display pixels with src/input.ts's generator (record.ts: planMove's curve and times, pointAt),
-// and the daemon, which owns the unit's Xvfb, plays it with xdotool (daemon.movePointer). This file holds the
+// person-shaped path in display pixels with the generator that src/input.ts uses (src/human/path.ts, board ab-t30.3:
+// its trajectory, sampled for the X player within C10's limits), and the daemon, which owns the unit's Xvfb, plays it
+// with xdotool (daemon.movePointer). This file holds the
 // constants, the relay's own check of a move (C10's rules that need no daemon state), the path and the mapping of a
 // page's CSS px to the display. The model (model.ts) runs the activation step and the catch-up with them. No log line
 // carries a point (C10's log rule).
 
-import { planMove, pointAt, type Leg, type Point } from "../record.ts";
+import { buildTrajectory, drawShape, withoutOvershoot, type Point, type Shape, type Trajectory } from "../human/path.ts";
+import { drawPerson, paramsFor, type Person } from "../human/person.ts";
 
 export type Pt = Point;
 /** A point of a path: whole display px, and `dt`, the wait in ms before its move. */
@@ -41,7 +43,7 @@ export const ACTIVATE_MAX_MS = 2000;
 export const GEOMETRY_WAIT_MS = 200;
 /** C11: a tab has at most this many catch-up moves without an answer (per tab, not per catch-up: review-63e note E). */
 export const CATCH_UP_MAX_UNANSWERED = 4;
-/** The sample time of a path (16 ms: about one frame). */
+/** The sample time of a path (16 ms: C10's POINTER_DT_MIN_MS; the X path keeps its 16 ms samples, the input design's section 11.2). */
 const SAMPLE_MS = 16;
 /** The default target width of the generator (input.ts's moveTo). */
 const TARGET_WIDTH = 24;
@@ -93,13 +95,13 @@ export function moveProblem(args: unknown, now: number): "bad args" | "out of bo
 }
 
 /**
- * Sample the legs every 16 ms with the time of all legs stretched by `factor` (whole ms; each dt 16 to 31 ms, the last
- * sample at the end), in whole pixels, each point clamped into `clamp`; drop a point that does not move (its time goes
- * to the next one) and a first point less than 2 px from the rounded start, and cap each dt at POINTER_DT_MAX_MS.
+ * Sample a trajectory every 16 ms (whole ms; each dt 16 to 31 ms, the last sample at the end), in whole pixels, each
+ * point clamped into `clamp`; drop a point that does not move (its time goes to the next one) and a first point less
+ * than 2 px from the rounded start, and cap each dt at POINTER_DT_MAX_MS. `keepEnd`: the last point is `to` itself, also
+ * outside the clamp.
  */
-export function sampleLegs(from: Pt, to: Pt, legs: Leg[], factor: number, clamp: Rect | null, keepEnd = false): PathPoint[] {
-  const legsMs = legs.reduce((a, l) => a + l.ms, 0);
-  const total = Math.max(SAMPLE_MS, Math.round(legsMs * factor));
+export function sampleTrajectory(from: Pt, to: Pt, traj: Trajectory, clamp: Rect | null, keepEnd = false): PathPoint[] {
+  const total = Math.max(SAMPLE_MS, Math.round(traj.ms));
   const n = Math.max(1, Math.floor(total / SAMPLE_MS)), base = Math.floor(total / n), extra = total - base * n;
   const fit = (q: Pt): Pt => {
     const p = { x: Math.round(q.x), y: Math.round(q.y) };
@@ -111,7 +113,7 @@ export function sampleLegs(from: Pt, to: Pt, legs: Leg[], factor: number, clamp:
   for (let i = 1; i <= n; i++) {
     const dt = base + (i <= extra ? 1 : 0);
     t += dt; wait += dt;
-    const p = i === n ? (keepEnd ? { x: Math.round(to.x), y: Math.round(to.y) } : fit(to)) : fit(pointAt(legs, (t / total) * legsMs));
+    const p = i === n ? (keepEnd ? { x: Math.round(to.x), y: Math.round(to.y) } : fit(to)) : fit(traj.at((t / total) * traj.ms));
     if ((p.x === last.x && p.y === last.y) || (!out.length && near(p, start, 1.99))) continue;
     out.push({ x: p.x, y: p.y, dt: Math.min(wait, POINTER.POINTER_DT_MAX_MS) });
     last = p; wait = 0;
@@ -149,32 +151,38 @@ function outAndBack(S: Pt, T: Pt, clamp: Rect | null, random: () => number): Pat
 }
 
 /**
- * The relay's path from S to T (section 3, step 4), in whole px, or null when it does not fit C10's limits. The legs
- * of src/input.ts's generator (planMove: its curve and times, an overshoot leg past 500 px, the target width 24),
- * sampled every 16 ms and clamped into `clamp`; while a step is over 50 px, the time of all legs is stretched by one
- * factor and the legs are sampled again. With S equal to T (or within 2 px), a short out-and-back of 2 to 4 px. The
- * catch-up uses it too, in the page's CSS px, clamped to the page's content box with `keepEnd`: its last point is the
- * client's own event point, also where that is outside the box.
+ * The relay's path from S to T (section 3, step 4), in whole px, or null when it does not fit C10's limits. The
+ * generator's trajectory (src/human/path.ts: Fitts's time with the person's spread, the arc, the end corrections, an
+ * overshoot past 500 px, the tremor; the target width 24) of `person` (the model's one person for the display's one
+ * pointer; else one drawn from `random`), sampled every 16 ms and clamped into `clamp`; while a step is over 50 px,
+ * the trajectory's time is stretched by one factor and it is sampled again. When that does not fit C10's 1500 ms, the
+ * path without its overshoot and corrections. With S equal to T (or within 2 px), a short
+ * out-and-back of 2 to 4 px. The catch-up uses it too, in the page's CSS px, clamped to the page's content box with
+ * `keepEnd`: its last point is the client's own event point, also where that is outside the box.
  */
-export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: () => number; keepEnd?: boolean } = {}): Promise<PathPoint[] | null> {
+export async function planPath(S: Pt, T: Pt, o: { clamp?: Rect | null; random?: () => number; keepEnd?: boolean; person?: Person } = {}): Promise<PathPoint[] | null> {
   const random = o.random ?? Math.random, clamp = o.clamp ?? null;
   const from = { x: Math.round(S.x), y: Math.round(S.y) }, to = { x: Math.round(T.x), y: Math.round(T.y) };
   if (near(from, to, 1.99)) {
     const path = outAndBack(from, to, clamp, random);
     return path && fits(from, path) ? path : null;
   }
-  const legs = await planMove(from, to, TARGET_WIDTH, random);
-  if (!legs.length) return null;
-  let factor = 1;
-  for (let i = 0; i < 24; i++) {
-    const path = sampleLegs(from, to, legs, factor, clamp, o.keepEnd ?? false);
-    if (!path.length) return null;
-    const step = Math.sqrt(maxStep2(from, path));
-    if (step <= POINTER.POINTER_STEP_MAX_PX) return fits(from, path) ? path : null;
-    if (totalMs(path) > POINTER.POINTER_PATH_MAX_MS) return null;
-    factor *= Math.max(1.02, step / (POINTER.POINTER_STEP_MAX_PX - 3));
-  }
-  return null;
+  const person = o.person ?? drawPerson(paramsFor("linux"), random);
+  const shape = drawShape(from, to, TARGET_WIDTH, person, random);
+  const stretched = (sh: Shape): PathPoint[] | null => {
+    let factor = 1;
+    for (let i = 0; i < 24; i++) {
+      const path = sampleTrajectory(from, to, buildTrajectory(from, to, sh, person, factor), clamp, o.keepEnd ?? false);
+      if (!path.length) return null;
+      const step = Math.sqrt(maxStep2(from, path));
+      if (step <= POINTER.POINTER_STEP_MAX_PX) return fits(from, path) ? path : null;
+      if (totalMs(path) > POINTER.POINTER_PATH_MAX_MS) return null;
+      factor *= Math.max(1.02, step / (POINTER.POINTER_STEP_MAX_PX - 3));
+    }
+    return null;
+  };
+  // An overshoot or a correction that does not fit C10's limits after the stretch: the main sub-movement alone.
+  return stretched(shape) ?? (shape.overshoot || shape.ends.length ? stretched(withoutOvershoot(shape)) : null);
 }
 
 // ------------------------------------------------------------------ the geometry

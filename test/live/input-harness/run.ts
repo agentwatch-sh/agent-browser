@@ -80,10 +80,10 @@ function scoreRun(out: Results, referenceFile?: string): { reference: Reference;
     for (const m of sc.marks) { (steps[m.source] ??= []).push(measureStep(sc.recs, m)); lost[m.source] = n; }
   }
   const reference = referenceFile ? checkReference(JSON.parse(readFileSync(referenceFile, "utf8"))) : buildReference(steps.xtest ?? []);
-  const samePaths: Record<string, number> = {};
-  for (const s of steps.xtest ?? []) if (s.ok && s.path && s.pointer?.predictedPerMove != null) samePaths[s.path] = s.pointer.predictedPerMove;
+  const samePaths: Record<string, number> = {}, samePathCounts: Record<string, number[]> = {};
+  for (const s of steps.xtest ?? []) if (s.ok && s.path && s.pointer?.predictedPerMove != null) { samePaths[s.path] = s.pointer.predictedPerMove; samePathCounts[s.path] = s.pointer.samplesEach ?? []; }
   const names = Object.keys(steps).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
-  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { samePaths, lostBatches: lost[n] })])), steps, lost };
+  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { samePaths, samePathCounts, lostBatches: lost[n] })])), steps, lost };
 }
 
 function writeReport(dir: string, out: Results, referenceFile?: string): string {

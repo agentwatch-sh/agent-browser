@@ -29,20 +29,26 @@ export function validateApprove(spec: ApproveSpec): void {
 
 /**
  * The shape of a person's input in a window of its own (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md,
- * section 5). Ranges are [min, max] in ms; each value is drawn at random between them.
+ * section 5). Ranges are [min, max] in ms. The pointer's draws come from the person of src/human/ (board ab-t30.3; the
+ * input design, section 10.1), bounded by these ranges: the defaults are the design's bounds, and a shorter range (a
+ * test's) keeps every draw inside it. The keys' values are drawn at random between them (the keyboard model is board
+ * ab-t30.4).
  */
 export type InputTiming = {
-  /** From a click's press to its release. A person's press through xdotool was 75 to 81 ms on taylor. */
+  /** From a click's press to its release: a lognormal, median 100 ms, within this range (design 10.1: 60 to 180 ms). */
   pressMs: [number, number];
   /** From one typed character's key press to the next one's. */
   keyMs: [number, number];
   /** How long each key stays down. */
   holdMs: [number, number];
-  /** The pause on the target after the pointer arrives, before the press, as a person settles on it. */
+  /** The pause on the target after the pointer arrives, before the press: a lognormal, median 140 ms, within this range (design 10.1: 80 to 400 ms). */
   settleMs: [number, number];
-  /** From one wheel notch (100 px) to the next, when a command scrolls an element into view. */
+  /** From one wheel notch (120 px) to the next, when a command scrolls an element into view (design 8.2: 35 to 90 ms). */
   wheelMs: [number, number];
-  /** A factor on the time of each pointer path (Fitts's law: 300 to 1000 ms, as `record`'s cursor). */
+  /**
+   * A factor on the time of each pointer path (Fitts's law: 300 to 1000 ms; one sample each 8 ms): 1 for a person's rate;
+   * a smaller factor (a test's) keeps the samples and makes them faster, at most one each 2 ms.
+   */
   moveScale: number;
   /** How long an input command waits for its page's focus after it brings the page's window forward. */
   activateMs: number;
@@ -56,9 +62,9 @@ export type InputTiming = {
   lockWaitMs: number;
 };
 
-/** The defaults: the research's person-shaped input. A click costs 0.5 to 0.9 s, a typed character about 0.13 s. */
+/** The defaults: a person's input (the input design's first values). A click costs about 0.5 to 1.5 s, a typed character about 0.13 s. */
 export const INPUT_TIMING: Readonly<InputTiming> = Object.freeze({
-  pressMs: [70, 90], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 150], wheelMs: [30, 70], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000,
+  pressMs: [60, 180], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000,
 }) as Readonly<InputTiming>;
 
 /** The input timing of a caller's partial option, checked: each range two numbers, 0 <= min <= max; the factor and the waits positive. */

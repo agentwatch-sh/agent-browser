@@ -30,6 +30,7 @@ import { assertNavigationUrl, isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
+import { seededRandom } from "./human/random.ts";
 import type { Hands } from "./input.ts";
 
 // ---------- the step script ----------
@@ -322,17 +323,8 @@ export function findFfmpeg(explicit?: string, path = process.env.PATH ?? ""): st
 /** One leg of a move: points along ghost-cursor's curve, travelled in `ms` with a minimum-jerk speed profile. */
 export type Leg = { points: Point[]; ms: number };
 
-/** mulberry32: a small seeded generator, so a retake with the same --seed moves and types the same way. */
-export function seededRandom(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+/** mulberry32: a small seeded generator, so a retake with the same --seed moves and types the same way (src/human/random.ts). */
+export { seededRandom };
 
 /** Minimum jerk: slow start, fast middle, slow arrival. */
 const minJerk = (u: number) => u * u * u * (10 - 15 * u + 6 * u * u);
