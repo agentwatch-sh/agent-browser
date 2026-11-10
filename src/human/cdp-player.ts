@@ -5,7 +5,9 @@
 //
 // - The timestamp: a person's input latency before the send, `(now - latency) / 1000`, in whole ms on Linux (X11's event
 //   times are whole ms) and with its fraction on the Mac. It comes from the send, never from the plan, so no event has a
-//   time in the future. The latency is drawn for each event (first value 3 to 5 ms).
+//   time in the future. The latency is drawn once for each plan (a device's latency over one path; first value 3 to
+//   5 ms), and for each single event: measured on taylor (the harness, ab-t30.3), one latency for each event gave a
+//   wider spread of sample gaps and fewer samples per pointermove (1.66 against 1.83 on XTEST's paths).
 // - The rate: each move at its planned time (one each 8 ms at 125 Hz), times `scale` (agent-browser's moveScale).
 // - The bound: at most `maxInFlight` (STAGE_MOVES_IN_FLIGHT, 8) moves without an answer. When a move is due while that
 //   many wait (a page with an open dialog, a busy renderer), the player stops the path and says so; the caller sends
@@ -41,8 +43,8 @@ export type PlayerOptions = {
   minGapMs?: number;
   /** Runs before each send (agent-browser's guard); a throw stops the plan. */
   before?: () => void;
-  /** One latency for all the moves of a plan (a device's latency over one path), not one for each move. */
-  latencyPerPlan?: boolean;
+  /** One latency for each move, not one for all the moves of a plan (only for a measurement). */
+  latencyPerEvent?: boolean;
 };
 
 export type MovesResult = { sent: number; stopped: boolean };
@@ -80,7 +82,7 @@ export class CdpPlayer {
   async moves(samples: readonly Sample[], extra: Record<string, unknown> = {}): Promise<MovesResult> {
     const t0 = this.clock.now(), scale = this.o.scale ?? 1, gap = this.o.minGapMs ?? 0, pending: Promise<void>[] = [];
     let inFlight = 0, sent = 0, stopped = false, last = -Infinity, failed: { e: unknown } | undefined;
-    const lat = this.o.latencyPerPlan ? this.latency() : undefined;
+    const lat = this.o.latencyPerEvent ? undefined : this.latency();
     const settle = () => Promise.all(pending);
     for (const s of samples) {
       const due = Math.max(t0 + s.t * scale, last + gap), wait = due - this.clock.now();

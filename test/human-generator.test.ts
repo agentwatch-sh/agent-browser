@@ -486,6 +486,12 @@ test("cdp player rule the timestamps: a latency of 3 to 5 ms before the send, in
     assert.ok(Number.isInteger(Math.round(ms * 1000) / 1000) && Math.abs(ms - Math.round(ms)) < 1e-6, `whole ms: ${ms}`);
     assert.ok(sentAt - ms >= 2.5 && sentAt - ms <= 5.5, `the latency: ${sentAt - ms} ms`);
   }
+  // One latency for the moves of one plan (a device's latency over one path); a measurement can ask for one for each move.
+  const lags = (calls: { t: number; params: Record<string, any> }[]) => new Set(calls.map((c) => Math.round(1_000_000 + c.t - c.params.timestamp * 1000)));
+  assert.equal(lags(f.calls).size, 1, "one latency for the plan");
+  const per = new FakeClock(), q = fakeSend(per, 1);
+  await player(q.send, per, { latencyPerEvent: true, random: seededRandom(9) }).moves(grid(20));
+  assert.ok(lags(q.calls).size >= 2, "one latency for each move");
   // A send that comes late (a busy event loop) gets the time of its send.
   const late = new FakeClock(), g = fakeSend(late, 1);
   const p = new CdpPlayer(g.send, { clock: late, stamp: () => 1_000_000 + late.now() + 50, latencyMs: [3, 5], wholeMs: true, random: seededRandom(1), maxInFlight: 8 });
