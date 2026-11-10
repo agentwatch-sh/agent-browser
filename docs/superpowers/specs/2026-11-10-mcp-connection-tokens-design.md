@@ -250,7 +250,7 @@ section 11. The token rule is for the local MCP port only; the agent door and th
 | T4. A process that is not an agent session (the operator's own shell, a cron job outside agentwatch, `systemd-run`, a web page, Chrome) | connect with a token that it found | the walk (step 2): no root; a web page: the `Origin` 403 (step 3) and the `Host` 403 (step 4); the walk refuses a browser process | stopped, also with the token |
 | T5. Another box over the link | reach the service; use a taylor token on the Mac | the port listens on `127.0.0.1` only; over the link the Mac's daemon checks the signature with the pinned key, the nonce, the seal, the browser grant that the operator approved, the quiet times, the size and the rate; the remote path takes no token, and the Mac's remote MCP path refuses an `Authorization` header (question D a) | stopped; the grant is the other box's right |
 | T6. The Mac before its peer reader exists | connect to the Mac's MCP port with a token | the Mac's MCP port refuses every connection until the `libproc` reader is built and measured (the operator's Q1 rule 3, kept); a token does not open it | stopped (fail closed) |
-| T7. A token that stays valid after the operator's act | a running session keeps using a revoked or replaced token; a daemon crash during a revoke brings the token back | the check runs for each request (not once for each connection); a revoke closes the repo's MCP connections at once; the overlap of a rotation ends after 60 s; a revoke removes the file and records itself before it sends the snapshot, and it stays pending until the service acknowledges it (section 7.3) | stopped at the next request; a crash does not undo a revoke |
+| T7. A token that stays valid after the operator's act | a running session keeps using a revoked or replaced token; a daemon crash during a revoke brings the token back | the check runs for each request (not once for each connection); a revoke closes the repo's MCP connections at once; the overlap of a rotation ends after 60 s; a revoke removes the file and records itself before it sends the snapshot, and it stays pending until the service acknowledges it (section 7.3) | stopped at the next request; a crash does not undo a revoke (the service takes the token until the daemon reconnects) |
 | T8. A copy of the token in a program's state | a log, a status, a crash report or a heap of the service gives the token | the service never gets a token, only its SHA-256 (question A a); its log and its `status` name a repo and a generation only; the daemon checks the service's pid before its hello, so only the real service gets the hashes | no token to give |
 | T9. An agent that runs the helper or reads the token file itself | put the token into its tool output, its transcript and the model's context (which the client sends to its model provider) | not stopped: the same uid allows it. The helper refuses when its stdout or stderr is a terminal, so a print into a person's terminal or a pane is refused; an agent's shell tool gives the helper a pipe, so this refusal does not stop an agent. The skill text tells agents never to run the helper or read the file. The copy works only from a session of its own repo on its own box (steps 2 and 7) | no new right for that agent; the copy is in its transcript. Open point: the helper over the daemon's socket (section 18) |
 
@@ -344,9 +344,11 @@ A new request of C12, from the daemon to the service:
 - **The answer and its failure** (the daemon lead's change 2). The daemon checks each answer. A failure is
   `bad request`, an answer whose count is not the number of repos in the snapshot, or no answer in 5 s. At a
   failure:
-  - the daemon writes no new token file, and it keeps the old token;
+  - at an issue or a rotation, the daemon writes no new token file, and it keeps the old token;
+  - at a revoke, the file is already gone (section 7.3): the revoke stays pending;
   - the Browser pane shows the failure on the repo's row, and `agentwatch health` shows it;
-  - the daemon sends its current snapshot (the old tokens) again at once, and at each reconnect.
+  - the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to 60 s, and at
+    each reconnect; a snapshot that the service refuses again is no loop with no end.
 - **What the snapshot does at once**:
   - a repo that the snapshot drops: the service closes that repo's MCP connections and ends their MCP
     sessions, as at `session_ended` (section 7.3);
@@ -447,9 +449,8 @@ body.
 - At the switch-on (stage 3) and at the upgrade to this release, some lists already have sites. The daemon
   mints no token for them. Each such repo shows "Issue token" in the pane and gets no MCP entry until the
   operator acts.
-- `agentwatch health` then says, in the daemon lead's words: "repo X has sites but no usable token: New token
-  in the Browser pane". (The pane's button for a repo with no token is "Issue token"; the build gives the two
-  texts one button name.)
+- `agentwatch health` then says: "repo X has sites but no usable token: Issue token in the Browser pane" (the
+  daemon lead's words, with the pane's button name).
 - A list file changed by hand is no operator act. A hand edit issues no token and revokes none. The pane shows
   the repo's state: "Issue token" for sites with no token; a token with no sites gets no MCP entry (Q2) and the
   service's no-list 503 (step 8).
@@ -481,7 +482,8 @@ The daemon's steps, in this order, so that a crash cannot undo a revoke:
 5. The next launch of a session of that repo gets no MCP entry.
 
 - A crash after step 1: at its restart the daemon finds no file, so its snapshot has no hash for the repo. The
-  revoke holds.
+  revoke holds. Between the crash and the reconnect, the service keeps its last map, so it still takes the
+  revoked token for that time; the window ends at the reconnect's first snapshot.
 - A pending revoke: until the service acknowledges it, the pane shows "removal pending" on the repo's row,
   `agentwatch health` shows a line for it, and the daemon sends the snapshot again at each reconnect.
 - The same order holds for the automatic revokes and the uninstall (the uninstall removes the files, then stops
@@ -537,7 +539,7 @@ At each launch, agentwatch adds the agent browser's local entry only when all of
 5. the client has a header helper: Claude Code at or after the first version that stage 2's live check
    passes, Codex 0.159.3 or later. An older client gets no entry, and `agentwatch health` says why.
 
-When rule 3 fails for a repo with sites, `agentwatch health` says "repo X has sites but no usable token: New
+When rule 3 fails for a repo with sites, `agentwatch health` says "repo X has sites but no usable token: Issue
 token in the Browser pane" (section 7.2).
 
 The entry never goes into the user's global files and never into the environment (age-4ks).
@@ -552,10 +554,11 @@ The entry never goes into the user's global files and never into the environment
 - `--tokens` names the absolute path of `tokens/agent-browser/`, because Codex runs the helper with a cleared
   environment (no `XDG_CONFIG_HOME`). A path is no secret. Stage 2 proves that the helper finds the folder in
   Codex's environment.
-- It refuses when its stdout or its stderr is a terminal (`isatty`): it then writes one refusal line with no
+- It refuses when its stdout is a terminal (`isatty`): it then writes one refusal line with no
   token ("this command gives a connection token only to an MCP client, not to a terminal") and exits 1. So a
   person or a pane never gets the token from it. An agent's shell tool gives it a pipe, so this rule does not
-  stop an agent (section 12).
+  stop an agent (section 12). Its stderr can be a terminal: the token never goes to stderr, and a client may give
+  the helper its own terminal's stderr (review-103b).
 - It refuses with no `--repo`, and with a `--repo` that is not a repo key (exit 1).
 - It opens `<tokens folder>/repos/<repo key>` with no link followed (`O_NOFOLLOW`), and it checks the open
   file: a regular file of the user, mode 0600, in folders of the user with mode 0700.
@@ -953,13 +956,15 @@ taylor session while the grant is active and its Mac list has a site; no link re
   B1 b), the uninstall.
 - A renamed repo: the pane shows the old key's token as not used.
 - The helper: each refusal (no file, a link, mode 0644, a folder of mode 0755, another uid's file, no
-  listener, another uid's listener in a fake `/proc/net/tcp`, no `--repo`, a stdout or a stderr that is a
-  terminal (a pseudo-terminal in the test), a `CLAUDE_CODE_MCP_SERVER_URL` with another origin); its output's
+  listener, another uid's listener in a fake `/proc/net/tcp`, no `--repo`, a stdout that is a
+  terminal (a pseudo-terminal in the test; a stderr that is a terminal is no refusal), a `CLAUDE_CODE_MCP_SERVER_URL` with another origin); its output's
   form; no token on its stderr; its start time below 1 s; its command shell-quoted (a tokens path with a space
   and a quote).
 - The entry writer: an entry only when all five conditions of section 9.1 hold; Codex's entry is only `-c`
   values, and no file under `~/.codex/` changes; the recorded launch argv and environment hold no canary; the
-  per-session file holds no canary and no `Bearer`; the file is removed at the session's end.
+  per-session file holds no canary and no `Bearer`; the file is removed at the session's end; the helper command
+  sits inside the `-c` value's TOML string with TOML's escaping of a `"` and a `\` that `shlex.quote` can give
+  (a test with a path that holds a space, a quote and a backslash).
 - The C12 lines: the daemon's `mcp_tokens` line holds the canary's SHA-256 and never the canary; `set_sessions`
   holds each session's `repo_key`.
 - The Browser pane's API: its answers (the rows, the generations, the failures) hold no canary and no hash.
@@ -978,7 +983,7 @@ taylor session while the grant is active and its Mac list has a site; no link re
 | Only the daemon sends tokens | `mcp_tokens` accepted with `kind: token` | the bad-request vector gets `ok: true` |
 | One hash once | a hash in two repos accepted | its bad-request vector gets `ok: true` |
 | The uid check and the walk first | the token read before steps 1 and 2 | the no-read test reads a byte |
-| One repo key rule | the service computes the key itself | the repo-to-key vector fails for the long name |
+| One repo key rule | the service ignores `repo_key` and computes the key itself | a test that sends a `repo_key` that differs from the computed key gets the wrong repo |
 | No token in a log | the header logged at a refusal | the log scan finds the canary |
 | No token in an answer | the 401 echoes the header | the answer scan finds the canary |
 | The file modes | the store writes 0644, or the sweep leaves out `state.json` | the mode test |
@@ -1179,8 +1184,8 @@ Context: each repo has its own connection token for the agent browser's MCP. age
 allowed session when the session starts. Your words that this question rests on: "can we use http instead of
 stdio?" (2026-11-09, recorded in the service design's section 2), your answer "HTTP" to ab-bi3 Q1 (2026-11-10,
 recorded in its section 19), and "i prefer the agentbrowser is more self-contained. seems like a lot of moving
-parts." Board item ab-6ng offered "HTTP on the private socket, with a small helper"; you chose neither offered
-option there and asked for tokens. Your words do not clearly choose between the options below, so this is your
+parts." Board item ab-6ng offered two options, "Keep: a URL on a local port" (no helper, no token) and "HTTP on
+the private socket, with a small helper"; you chose neither and asked for tokens. Your words do not clearly choose between the options below, so this is your
 choice.
 
 - **a. Direct HTTP with a header helper, for Claude Code and for Codex (recommended).** The session's MCP entry
@@ -1189,7 +1194,8 @@ choice.
   that carries a credential). The token is in no command line, no environment, no entry and no address. No
   extra program runs for the session. The fewest moving parts: one short command run at each connection, and
   no process for each session. Both clients have this feature now (Claude Code `headersHelper`; Codex 0.159.3
-  `http_headers_helper`). Stage 2 checks it live; a client without it gets no MCP entry.
+  `http_headers_helper`). Stage 2 checks it live; a client without it gets no MCP entry. If stage 2 shows that
+  Codex cannot take the command from a launch option, that comes back to you as a new question.
 - **b. A small local program between the client and the agent browser, for both clients (a stdio bridge; the
   daemon lead's first proposal).** The entry names an agentwatch program. The program reads the token and
   speaks HTTP to the agent browser. One form that works with any MCP client. More moving parts: each session
@@ -1215,7 +1221,9 @@ list (your Q3 answer).
   says: taylor's daemon checks which session's program connects; the link carries the request over HTTPS,
   signed with taylor's link key and sealed for the Mac's daemon; the Mac checks your browser grant. Every
   taylor session gets the Mac's MCP while the grant is active and its Mac list has a site; taylor's own lists
-  and tokens play no part. No token leaves taylor, so a copy works nowhere else. That path keeps agentwatch's
+  and tokens play no part. So "Remove token" for a repo on taylor does not stop that repo's use of your Mac's
+  browser while the grant is active, and sessions with no repo, or whose repo agentwatch cannot read yet, get
+  it too. To stop it, you end the grant. No token leaves taylor, so a copy works nowhere else. That path keeps agentwatch's
   small stdio program on taylor, because the Mac opens no port. The Mac's own MCP stays closed until the Mac's
   code that tells which program connects (its peer reader) is built and measured.
 - **b. The remote path needs the taylor repo's token too.** Then only a taylor repo with a site in taylor's own
@@ -1243,7 +1251,11 @@ Recommendation: a. No answer: a.
   remove it, at the cost of a TCP port and a TCP walk in agentwatch. That is a later design.
 - **Small leaks** (section 5): the step 7 403 tells a caller that its token is valid for another repo; the
   helper's command line names the repo key to every OS user on taylor.
-- **Two texts to agree** (section 7.2): the health line keeps the daemon lead's "New token"; the pane's button
-  for a repo with no token is "Issue token". The build gives them one name.
+- **One button name**: the health line and the pane's button for a repo with no token both say "Issue token"
+  (the daemon lead's health line said "New token"; the lead gave both one name).
+- **Codex after a revoke and a new issue** (review-103b): Codex's headers recover at its next POST, but a revoke
+  ends the repo's MCP sessions, so that POST carries an MCP session id that the service no longer knows. Whether
+  Codex then opens a new MCP session is the same stage 2 check as at a service restart, so "no restart" is not
+  proven yet. Codex runs the helper at its first request, not when it makes the server's client.
 - **First values**: the overlap (60 s), the answer's limit (5 s), question B2 b's interval (30 days), the
   helper's time limit (the clients' 10 s). The build measures and records them.
