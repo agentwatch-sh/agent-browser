@@ -162,6 +162,17 @@ test("keys rule the speed in a session: a slow drift from word to word, a factor
     i += w.length + 1;
   }
   assert.ok(new Set(per).size > 5, `the factor changes from word to word: ${per.join(", ")}`);
+  // The factor scales the times of its word: two letters' interval is longer in a word with a high factor than in one with a low one.
+  const st = new KeyStream(MID, seededRandom(15), { runSlowMs: Infinity }), hi: number[] = [], lo: number[] = [];
+  let t0 = 0, prev: { t: number; ch: string } | undefined;
+  for (const ch of TEXT.repeat(4)) {
+    const key = k(ch), press = st.next(key, t0).at(-1)!;
+    if (prev && /[a-z]/.test(prev.ch) && /[a-z]/.test(ch)) (st.drift > 1.04 ? hi : st.drift < 0.96 ? lo : []).push(press.t - prev.t);
+    prev = { t: press.t, ch };
+    const r = st.release(key, press.t);
+    t0 = r.early ? press.t : r.events.at(-1)!.t;
+  }
+  assert.ok(hi.length > 100 && lo.length > 100 && mean(hi) / mean(lo) > 1.08, `${hi.length} and ${lo.length} intervals: ${mean(hi)} against ${mean(lo)} ms`);
 });
 
 test("keys rule rollover: the next press before this key's release in about 25% of keys for an average typist (the letter-pair part's fit), and 15% to 50% for every person of the population (K3)", () => {
