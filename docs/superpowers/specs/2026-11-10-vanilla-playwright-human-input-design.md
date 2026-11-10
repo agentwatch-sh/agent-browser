@@ -1,7 +1,8 @@
 # Vanilla Playwright input becomes a person's input in agent mode — design
 
-**Status: proposed. It waits for a fresh read-only review and for the operator's answers to Q1 to Q4
-(section 15). Nothing is built before that.**
+**Status: proposed. Two read-only reviews ran (review-96 and its re-check review-96b), and their findings
+are fixed or in section 16 (open points). It waits for the operator's answers to Q1 to Q4 (section 15).
+Nothing is built before that.**
 
 Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-t30.6, epic
 ab-t30). Branch `ab-t30.6-input-translation-design` in agent-browser, from main `d0e8acf`. No product code
