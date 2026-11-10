@@ -1,0 +1,973 @@
+{
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines: the open prompts p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo).",
+ "constants": {
+  "CONTROL_MAX_LINE": 33619968
+ },
+ "state": {
+  "prompts": [
+   {
+    "id": "p1",
+    "host": "login.example",
+    "list": "owner-repo"
+   },
+   {
+    "id": "p2",
+    "host": "cdn.example",
+    "list": "owner-repo"
+   }
+  ]
+ },
+ "hellos": [
+  {
+   "note": "the service's hello",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "service",
+    "version": "0.3.0",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "features": []
+   }
+  },
+  {
+   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests)",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "service",
+    "version": "0.3.0",
+    "commit": null,
+    "features": [
+     "fake"
+    ]
+   }
+  },
+  {
+   "note": "the daemon's hello",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "daemon",
+    "version": "0.9.0",
+    "features": []
+   }
+  },
+  {
+   "note": "a newer daemon's hello: a field and a feature that the service does not know, which it ignores",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "daemon",
+    "version": "0.10.0",
+    "features": [
+     "later-feature"
+    ],
+    "later": true
+   },
+   "newer": true
+  }
+ ],
+ "badHellos": [
+  {
+   "note": "the daemon reads a hello whose side is not service (a process that is not the service, or a mixed-up peer): it closes the connection",
+   "reader": "daemon",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "daemon",
+    "version": "0.9.0",
+    "features": []
+   },
+   "closes": true
+  },
+  {
+   "note": "the service reads a hello whose side is not daemon: it closes the connection",
+   "reader": "service",
+   "line": {
+    "t": "hello",
+    "v": 1,
+    "side": "service",
+    "version": "0.3.0",
+    "commit": null,
+    "features": []
+   },
+   "closes": true
+  },
+  {
+   "note": "a hello whose v is not 1 is a new door: the reader closes the connection and sends no request and no answer",
+   "reader": "daemon",
+   "line": {
+    "t": "hello",
+    "v": 2,
+    "side": "service",
+    "version": "0.9.0",
+    "commit": null,
+    "features": []
+   },
+   "closes": true
+  }
+ ],
+ "refused": [
+  {
+   "note": "the systemd query failed (m1): one line with the reason, then the service closes the connection",
+   "line": {
+    "t": "refused",
+    "reason": "The control door cannot read the MainPID of agentwatch's unit, so it admits no connection."
+   }
+  },
+  {
+   "note": "a peer that fails a rule of 1 to 4 (here rule 2: its parent is not the MainPID): one line that names the rule, then the service closes the connection",
+   "line": {
+    "t": "refused",
+    "reason": "The control door admits only the agentwatch daemon process: rule 2 failed (its parent is not the MainPID of agentwatch's unit)."
+   }
+  }
+ ],
+ "requests": [
+  {
+   "note": "config: agentwatch's browser.* keys as data, at each connect and each change",
+   "req": {
+    "t": "req",
+    "id": "r1",
+    "op": "config",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "config"
+    },
+    "enabled": true,
+    "control": true,
+    "chrome_bin": null,
+    "chrome_args": []
+   },
+   "res": {
+    "t": "res",
+    "id": "r1",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "config with browser.control false: the endpoint and the MCP path answer the 503 of C11",
+   "req": {
+    "t": "req",
+    "id": "r2",
+    "op": "config",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "config"
+    },
+    "enabled": true,
+    "control": false,
+    "chrome_bin": null,
+    "chrome_args": []
+   },
+   "res": {
+    "t": "res",
+    "id": "r2",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "set_sessions: a complete snapshot of two local sessions, no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
+   "req": {
+    "t": "req",
+    "id": "r3",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope"
+     },
+     {
+      "scope": "shell-2",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3200,
+        "start": 6100
+       }
+      ],
+      "cgroup": null
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [
+      "box.example"
+     ],
+     "cookie_names": [
+      "box_login"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r3",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "session_ended",
+   "req": {
+    "t": "req",
+    "id": "r4",
+    "op": "session_ended",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "web-1"
+   },
+   "res": {
+    "t": "res",
+    "id": "r4",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "launch_check of a name that is free",
+   "req": {
+    "t": "req",
+    "id": "r5",
+    "op": "launch_check",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "web-3"
+   },
+   "res": {
+    "t": "res",
+    "id": "r5",
+    "ok": true,
+    "data": {
+     "refusal": null
+    }
+   }
+  },
+  {
+   "note": "launch_check of a name whose ended scope is held in memory only",
+   "req": {
+    "t": "req",
+    "id": "r6",
+    "op": "launch_check",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "web-1"
+   },
+   "res": {
+    "t": "res",
+    "id": "r6",
+    "ok": true,
+    "data": {
+     "refusal": "A session named web-1 ended a moment ago, and the agent browser still closes its tabs. Try the launch again in a few seconds."
+    }
+   }
+  },
+  {
+   "note": "an operator act from the web viewer with a password login: list_set adds and removes entries of one list (it never replaces the list)",
+   "req": {
+    "t": "req",
+    "id": "r7",
+    "op": "list_set",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "list": "owner-repo",
+    "add": [
+     "example.com",
+     "https://bad/x"
+    ],
+    "remove": [
+     "old.example"
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "r7",
+    "ok": true,
+    "data": {
+     "allow": [
+      "a.example",
+      "example.com"
+     ],
+     "refused": [
+      {
+       "entry": "https://bad/x",
+       "reason": "not a host name"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "note": "an operator act: the allow of a prompt, with the host and the list that the operator saw",
+   "req": {
+    "t": "req",
+    "id": "r8",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p1",
+    "host": "login.example",
+    "list": "owner-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "r8",
+    "ok": true,
+    "data": {
+     "allow": [
+      "a.example",
+      "example.com",
+      "login.example"
+     ],
+     "refused": []
+    }
+   }
+  },
+  {
+   "note": "an operator act: the dismissal of a prompt",
+   "req": {
+    "t": "req",
+    "id": "r9",
+    "op": "prompt_dismiss",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p2"
+   },
+   "res": {
+    "t": "res",
+    "id": "r9",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "an operator act from the operator extension's send (C9): import, with a C2 payload (here a small one), answered with C4's import counts",
+   "req": {
+    "t": "req",
+    "id": "r10",
+    "op": "import",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "send"
+    },
+    "payload": {
+     "v": 1,
+     "domain": "example.com",
+     "url": "https://www.example.com/",
+     "origin": "https://www.example.com",
+     "cookies": [],
+     "storage": {
+      "local": {},
+      "session": {},
+      "idb": [],
+      "caches": []
+     }
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r10",
+    "ok": true,
+    "data": {
+     "cookies_removed": 0,
+     "cookies_set": 0,
+     "tabs_closed": 0,
+     "local": 0,
+     "session": 0,
+     "idb_databases": 0,
+     "idb_records": 0,
+     "cache_entries": 0,
+     "errors": []
+    }
+   }
+  },
+  {
+   "note": "a start with the API token (an agent's endpoint wait, or agentwatch browser start in a terminal): today's rule",
+   "req": {
+    "t": "req",
+    "id": "r11",
+    "op": "start",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r11",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "a stop from the web viewer",
+   "req": {
+    "t": "req",
+    "id": "r12",
+    "op": "stop",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r12",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "a stop with the API token: today's rule, until the answer Q5 (ab-6ng)",
+   "req": {
+    "t": "req",
+    "id": "r13",
+    "op": "stop",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r13",
+    "ok": true,
+    "data": {}
+   }
+  }
+ ],
+ "badRequests": [
+  {
+   "note": "a list change with the API token: never an operator act",
+   "req": {
+    "t": "req",
+    "id": "b1",
+    "op": "list_set",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "list": "owner-repo",
+    "add": [
+     "example.com"
+    ],
+    "remove": []
+   },
+   "res": {
+    "t": "res",
+    "id": "b1",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "an allow from the daemon itself: never an operator act",
+   "req": {
+    "t": "req",
+    "id": "b2",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "prompt": "p1",
+    "host": "login.example",
+    "list": "owner-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "b2",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "an import with the API token",
+   "req": {
+    "t": "req",
+    "id": "b3",
+    "op": "import",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "payload": {
+     "v": 1
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b3",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "a start with kind daemon: start and stop take operator or token only",
+   "req": {
+    "t": "req",
+    "id": "b4",
+    "op": "start",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b4",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "an op that the service does not have",
+   "req": {
+    "t": "req",
+    "id": "b5",
+    "op": "later_op",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b5",
+    "ok": false,
+    "error": "unsupported"
+   }
+  },
+  {
+   "note": "a request with no provenance",
+   "req": {
+    "t": "req",
+    "id": "b6",
+    "op": "status"
+   },
+   "res": {
+    "t": "res",
+    "id": "b6",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a kind that does not exist",
+   "req": {
+    "t": "req",
+    "id": "b7",
+    "op": "status",
+    "by": {
+     "kind": "agent",
+     "user": "ann",
+     "via": "cli"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b7",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a via that does not exist",
+   "req": {
+    "t": "req",
+    "id": "b8",
+    "op": "status",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "mcp"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b8",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "provenance with a missing user",
+   "req": {
+    "t": "req",
+    "id": "b9",
+    "op": "status",
+    "by": {
+     "kind": "daemon",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b9",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "the allow of a prompt that the service does not know",
+   "req": {
+    "t": "req",
+    "id": "b10",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p-gone",
+    "host": "login.example",
+    "list": "owner-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "b10",
+    "ok": false,
+    "error": "this prompt is gone"
+   }
+  },
+  {
+   "note": "a session_ended whose scope does not match the scope pattern",
+   "req": {
+    "t": "req",
+    "id": "b11",
+    "op": "session_ended",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "scope": "-bad"
+   },
+   "res": {
+    "t": "res",
+    "id": "b11",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "the allow of a prompt whose host is not the one that the operator saw (the prompt changed): this prompt is gone",
+   "req": {
+    "t": "req",
+    "id": "b12",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p1",
+    "host": "other.example",
+    "list": "owner-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "b12",
+    "ok": false,
+    "error": "this prompt is gone"
+   }
+  },
+  {
+   "note": "the allow of a prompt whose list is not the one that the operator saw",
+   "req": {
+    "t": "req",
+    "id": "b13",
+    "op": "prompt_allow",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "prompt": "p2",
+    "host": "cdn.example",
+    "list": "other-repo"
+   },
+   "res": {
+    "t": "res",
+    "id": "b13",
+    "ok": false,
+    "error": "this prompt is gone"
+   }
+  },
+  {
+   "note": "a list_set of the design's old form (the whole list in allow, no add and no remove)",
+   "req": {
+    "t": "req",
+    "id": "b14",
+    "op": "list_set",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "list": "owner-repo",
+    "allow": [
+     "example.com"
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "b14",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with one root that breaks C11's root rule (pid 1): the whole snapshot is a bad request",
+   "req": {
+    "t": "req",
+    "id": "b15",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       },
+       {
+        "pid": 1,
+        "start": 0
+       }
+      ],
+      "cgroup": null
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b15",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a config whose chrome_args is not a list of strings",
+   "req": {
+    "t": "req",
+    "id": "b16",
+    "op": "config",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "config"
+    },
+    "enabled": true,
+    "control": true,
+    "chrome_bin": null,
+    "chrome_args": "--flag"
+   },
+   "res": {
+    "t": "res",
+    "id": "b16",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a stop with the token: allowed today; a stop by the daemon itself is a bad request",
+   "req": {
+    "t": "req",
+    "id": "b17",
+    "op": "stop",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b17",
+    "ok": false,
+    "error": "bad request"
+   }
+  }
+ ],
+ "events": [
+  {
+   "note": "ready",
+   "ev": {
+    "t": "ev",
+    "ev": "ready",
+    "chrome_pid": 4242,
+    "chrome_version": "157.0.7000.1",
+    "extension_version": "0.3.6",
+    "endpoint": {
+     "form": "pidfd"
+    }
+   }
+  },
+  {
+   "note": "ready with an endpoint whose peer check cannot run",
+   "ev": {
+    "t": "ev",
+    "ev": "ready",
+    "chrome_pid": 4242,
+    "chrome_version": "157.0.7000.1",
+    "extension_version": "0.3.6",
+    "endpoint": {
+     "form": null,
+     "reason": "node:ffi is not available"
+    }
+   }
+  },
+  {
+   "note": "a new prompt: no URL path",
+   "ev": {
+    "t": "ev",
+    "ev": "prompt",
+    "id": "p1",
+    "state": "open",
+    "host": "login.example",
+    "scope": "web-1",
+    "list": "owner-repo",
+    "from": "app.example",
+    "warnings": []
+   }
+  },
+  {
+   "note": "a closed prompt",
+   "ev": {
+    "t": "ev",
+    "ev": "prompt",
+    "id": "p1",
+    "state": "closed",
+    "host": "login.example",
+    "scope": "web-1",
+    "list": "owner-repo",
+    "from": null,
+    "warnings": []
+   }
+  },
+  {
+   "note": "a fail-closed stop: no confirmed receiver",
+   "ev": {
+    "t": "ev",
+    "ev": "stopped",
+    "reason": "receiver_missing"
+   }
+  },
+  {
+   "note": "a fail-closed stop: no complete set_sessions",
+   "ev": {
+    "t": "ev",
+    "ev": "stopped",
+    "reason": "sessions_unread"
+   }
+  },
+  {
+   "note": "a failed start",
+   "ev": {
+    "t": "ev",
+    "ev": "stopped",
+    "reason": "start_failed"
+   }
+  },
+  {
+   "note": "a stop, with its caller's provenance",
+   "ev": {
+    "t": "ev",
+    "ev": "stopped",
+    "reason": "stop",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    }
+   }
+  },
+  {
+   "note": "chrome",
+   "ev": {
+    "t": "ev",
+    "ev": "chrome",
+    "version": "157.0.7000.1",
+    "update": "current"
+   }
+  },
+  {
+   "note": "an error: a user, a domain and counts only",
+   "ev": {
+    "t": "ev",
+    "ev": "error",
+    "op": "import",
+    "user": "ann",
+    "domain": "example.com",
+    "counts": {
+     "errors": 1
+    }
+   }
+  }
+ ],
+ "newerEvents": [
+  {
+   "note": "an event of a newer service that the daemon does not know: it ignores it, as a field that it does not know",
+   "ev": {
+    "t": "ev",
+    "ev": "later_event",
+    "count": 1
+   },
+   "ignored": true
+  }
+ ]
+}

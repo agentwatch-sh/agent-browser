@@ -935,7 +935,8 @@ fail-safe button-name targeting, and the Linux mechanism was verified on a live 
 ## Agent mode's endpoint (`agent-browser relay`)
 
 The agentwatch daemon starts `agent-browser relay --socket <path> [--peer-check]` with the agent Chrome's unit. The relay
-serves agent mode's CDP endpoint (contract C11 of chrome-extension's `docs/protocol.md`) to Playwright, the
+serves agent mode's CDP endpoint (contract C11, `docs/contracts/C11.md`; its master moved here from
+chrome-extension's `docs/protocol.md` in board task ab-v16.94.1) to Playwright, the
 Playwright MCP and agent-browser's commands with `--cdp-url`. It drives the agent Chrome through the agent
 extension's bridge (contract C10).
 
@@ -2081,6 +2082,11 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver. Over the endpoint the fixture site
   is `fixture.localhost` (a list entry is never an IP address; the fake Chrome reaches it on 127.0.0.1).
+- `test/contracts-c11.test.ts`, `test/contracts-c12.test.ts`: the contracts in `docs/contracts/` (board task
+  ab-v16.94.1): C11 (the endpoint; its text and its tests moved here from chrome-extension, with its vectors
+  `test/vectors/endpoint.json`), C12 (the control door of the self-contained agent browser, with
+  `test/vectors/control.json`) and the format of the MCP's allow list (`test/vectors/mcp-allow-list.json`).
+  Each test asserts the exact sentences of the text, and small reference rules check each vector.
 - `test/relay-peer.test.ts`: the peer check (`--peer-check`). The contract's peer vectors (`upgradeChecks`,
   `lineCloses` and `lines` with the peer check: each gives the peer and a fake process table) run through
   the relay with a fake reader behind the reader interface. On Linux the real reader runs too: the
