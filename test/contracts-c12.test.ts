@@ -517,26 +517,60 @@ test("the read vectors (q1 to q5) have exactly the keys of C12's data, and statu
   assert.ok(control.badRequests.some((v: any) => v.req.op === "set_sessions" && v.req.sessions.some((s: any) => !Object.hasOwn(s, "lifetime_id")) && v.res.error === "bad request"), "a session with no lifetime_id");
 });
 
-test("C12 states the ops of stage 1a: the five ops that it has, unsupported for each other op until its stage, and no Chrome, no list and no MCP", () => {
+test("C12 states the ops of stage 1a and the ops that stage 1c adds: unsupported only for the ops of a later stage, and no Chrome, no list and no MCP in stage 1a", () => {
   sayAll(part(C12, "The ops of stage 1a."), [
     "Stage 1a's service (board ab-v16.94.2) has the ops `config`, `set_sessions`, `session_ended`, `status` and `endpoint`.",
-    "It answers each other op of the requests' table `unsupported`, as the hello says for an op that a service does not have, until a later stage adds that op: `start`, `stop` and `sender` come with the Chrome unit (stage 1b, board ab-v16.94.3); `launch_check`, `list_set`, `prompt_allow`, `prompt_dismiss`, `import`, `lists_get` and `prompts_get` come with the lists, the scopes, the prompts and the sign-ins (stage 1c, board ab-v16.94.4).",
+    "Stage 1c (board ab-v16.94.4) adds the ops `launch_check`, `list_set`, `prompt_allow`, `prompt_dismiss`, `import`, `lists_get` and `prompts_get`, with the lists, the scopes, the prompts and the sign-ins (the part \"The lists, the scopes, the prompts and the sign-ins (stage 1c)\", below). Each stage adds its ops to the service's table.",
+    "The service answers each other op of the requests' table `unsupported`, as the hello says for an op that a service does not have, until a later stage adds that op: `start`, `stop` and `sender` come with the Chrome unit (stage 1b, board ab-v16.94.3).",
     "These stages add no feature name: the daemon's client (stage 2) needs every op of stage 1, and stage 2 comes after stage 1.",
     "Stage 1a has no Chrome, no list and no MCP. `config` and `set_sessions` keep their data in memory. `session_ended` drops the scope's session and records the ended scope in memory.",
     "Its `status` gives the state `off`, `null` for each fact of Chrome and the extension, the `mcp` state `none`, no list and no prompt. Its event stream sends no event, because each event comes from Chrome or a later stage.",
+    "From stage 1c, `status` gives each session with its list, the lists and the open prompts, and stage 1c's sentences in the two texts (below). The state stays `off` until stage 1b. The event stream sends stage 1c's `prompt` and `error` events.",
     "`agent-browser service --fake` (below) has every op of the requests' table.",
   ]);
-  // Each op of the requests' table is in stage 1a's list or in a later stage's list, once.
-  const p = part(C12, "The ops of stage 1a.");
-  const first = p.slice(0, p.indexOf("It answers"));
-  const later = p.slice(p.indexOf("It answers"), p.indexOf("These stages"));
-  const named = [...spans(first), ...spans(later)].filter((s) => Object.hasOwn(OPS, s));
-  assert.deepEqual([...named].sort(), Object.keys(OPS).sort(), "every op once");
+  // Each op of the requests' table is in one sentence once: stage 1a's, stage 1c's, or a later stage's.
+  const p = flat(part(C12, "The ops of stage 1a."));
+  const cut = (a: string, b: string) => p.slice(p.indexOf(a), p.indexOf(b));
+  const opsIn = (t: string) => spans(t).filter((x) => Object.hasOwn(OPS, x));
+  const a = opsIn(cut("Stage 1a's service", "Stage 1c (board")), c = opsIn(cut("Stage 1c (board", "The service answers")), later = opsIn(cut("The service answers", "These stages"));
+  assert.deepEqual(a, ["config", "set_sessions", "session_ended", "status", "endpoint"]);
+  assert.deepEqual(c, ["launch_check", "list_set", "prompt_allow", "prompt_dismiss", "import", "lists_get", "prompts_get"]);
+  assert.deepEqual(later, ["start", "stop", "sender"]);
+  assert.deepEqual([...a, ...c, ...later].sort(), Object.keys(OPS).sort(), "every op once");
+});
+
+test("C12 states the part of stage 1c: the files, a session's repo, the object, the end of a session, the list copy, the texts, the prompts and their events, the dismissals, the import, the error event, later answers and the log", () => {
+  const P = part(C12, "The lists, the scopes, the prompts and the sign-ins (stage 1c).");
+  sayAll(P, [
+    "The service talks to the receiver (C4) and to the model (C10) through one receiver port. In stage 1c the service has no native link: it sends no `set_scopes` and no `import`, and the model gets no allowlist line, until stage 1b part 2 (board ab-v16.94.9) puts the port on the native link.",
+    "The lists are today's files in the folder of `--lists-folder`, in today's format: `<list>.json`, `{\"allow\":[<host>...],\"repo\":\"<owner>/<repo>\"|null}`. Only the owner of the Chrome unit writes them (the design, section 13.2), so the service takes no file lock.",
+    "A `repo` string that is not an `owner/repo` says that the daemon cannot read the session's repo yet: the scope gets the list `unread-repo`, which is always empty, and the service reads no file of that name.",
+    "The service sends `set_scopes` with `default` `null` and `operator` `\"*\"` (C4). It keeps C4's rules 1 and 2 of the tabs of a session that ended: no object before the first complete `set_sessions`, the file of ended scopes and the restart gate. An ok in time is an ok within 10 s on the same link. Only then does the model get the allowlist line, with each session's roots. With no ok in time, the service sends its current object again every 10 s.",
+    "At `session_ended` the service writes the file of ended scopes first, then sends `end_scope` to the model (not for a scope that another live session holds), then sends the object without the scope.",
+    "The list copy of a scope is `<state>/session-lists/<scope>/allowlist.json`, `{\"allow\":[<host>...]}`: the hosts of the scope's list, for agent-browser's CLI.",
+    "`launch_check`'s refusal is today's text: \"A session named <scope> ended a moment ago, and the agent browser could not record it (<error>). Choose another name, or wait until the agent browser confirms its lists.\" The fake keeps the vectors' text.",
+    "Each entry of `refused` has the host rules' reason, for example `paste the host only` (the vectors' `r7`).",
+    "`list_set` changes nothing and answers an error for the list `unread-repo` (`the list unread-repo is always empty, so it takes no entry`), for a list file that it cannot read (`the list file of <list> cannot be read, so the service does not change it`), and for a write that fails (`the list file of <list> cannot be written: <kind>`).",
+    "The agent's text gets only \"The agent browser's extension has not confirmed the lists yet.\" while a receiver is there and has not confirmed the current object.",
+    "A blocked report (the receiver's `blocked`, or the model's `daemon.blocked`) goes on at most once in 10 s for each host, across scopes and sources, and the service keeps at most 256 hosts for this.",
+    "A `closed` event names the prompt's host, its first scope and its list, with `from` `null` and `warnings` empty.",
+    "A dismissal holds 24 hours and outlives a restart of the service: `prompt-dismissals.json` keeps at most 500. When the service cannot write a dismissal, `prompt_dismiss` answers the error `the dismissal cannot be written: <kind>`, and the prompt stays open.",
+    "Before the first `set_sessions`, or with no box host, it answers `the sign-in send is not valid (field box_hosts)`. It drops each cookie whose name is one of `box.cookie_names` or starts with `agentwatch` (today's rule), and each cookie that a box host would get.",
+    "After an `import` whose answer holds errors, the service sends the `error` event: `op` is `import`, `user` is the act's user, `domain` is the payload's domain, and `counts` is `{\"errors\":<their number>}` (never their texts, which can name a cookie).",
+    "An answer can come after the answers of later requests: an `import` answers when the receiver answers, and the service answers the other requests of the connection in that time. The daemon matches each answer by its `id`. When the daemon ends its side of the connection, it still gets the answers that the service owes it; then the service ends its side.",
+    "No log line holds an entry of a `list_set`, a refused entry, a lifetime id, a cookie, a storage value or a payload.",
+  ]);
+  // The texts that the part names are the code's (one text on both sides).
+  const r7 = control.requests.find((v: any) => v.req.id === "r7");
+  assert.deepEqual(r7.res.data.refused, [{ entry: "https://bad/x", reason: "paste the host only" }], "r7: the host rules' reason");
+  assert.ok(!/\/home\//.test(P), "no box path");
 });
 
 test("C12 states the command of stage 1a and the fake service (the daemon lead's C10): the flags, the fake's admission, its own rules and its events from standard input", () => {
   sayAll(part(C12, "The command (stage 1a)."), [
-    "agentwatch's unit runs `agent-browser service --agent-door <address> [--control-door <path>] [--daemon-unit <unit>] [--daemon-command <file>]`. Nothing starts it before stage 2, and no install step of this repository writes a unit for it.",
+    "agentwatch's unit runs `agent-browser service --agent-door <address> --lists-folder <folder> --state-folder <folder> [--control-door <path>] [--daemon-unit <unit>] [--daemon-command <file>]`. Nothing starts it before stage 2, and no install step of this repository writes a unit for it.",
+    "`--lists-folder` (required, from stage 1c): the folder of the lists, `CONFIG_DIR/browser/lists/` (the design, section 7.5). The old single list is `allowlist.json` in its parent folder. It has no default, so the service never reads the lists of a folder that the unit did not give.",
+    "`--state-folder` (required, from stage 1c): the agent browser's state folder (the design, section 5.2). The service keeps `ended-scopes.json`, `session-lists/<scope>/allowlist.json` and `prompt-dismissals.json` in it. It has no default.",
     "`--agent-door` (required): the agent door's address, which the daemon gives (today's endpoint path during the move: the design, section 13). In stage 1a it is the path of a Unix socket, and the agent door is today's endpoint with today's peer check (C11).",
     "`--control-door`: the path of `control.sock`. The default is `control.sock` in the run folder (the door, above).",
     "`--daemon-unit`: agentwatch's unit, whose MainPID rule 1 reads. The default is `agentwatch.service`.",

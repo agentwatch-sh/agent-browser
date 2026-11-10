@@ -44,9 +44,13 @@ test("service --hello prints the service's hello as one line and exits, with no 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the usage of service: --agent-door is required; its flags are its own and no other command takes them; --refuse goes with --fake, and --fake with --control-door", async () => {
+test("the usage of service: --agent-door, --lists-folder and --state-folder are required (no default folder of the lists or the state); its flags are its own and no other command takes them; --refuse goes with --fake, and --fake with --control-door", async () => {
   for (const [args, what] of [
     [["service"], /--agent-door is required/],
+    [["service", "--agent-door", "/x/cdp.sock"], /--lists-folder is required: the folder of the lists/],
+    [["service", "--agent-door", "/x/cdp.sock", "--lists-folder", "/x/lists"], /--state-folder is required: the agent browser's state folder/],
+    [["service", "--agent-door", "/x/cdp.sock", "--lists-folder", ""], /--lists-folder is empty/],
+    [["commands", "--lists-folder", "/x/lists"], /--lists-folder is only for service/],
     [["service", "--agent-door", "/x/cdp.sock", "--bogus"], /Unknown option|bogus/],
     [["service", "--agent-door", "/x/cdp.sock", "--state-dir", "/x"], /--state-dir is not an option of service/],
     [["service", "extra", "--agent-door", "/x/cdp.sock"], /usage: agent-browser service/],
@@ -65,7 +69,8 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
   const dir = mkdtempSync(join(tmpdir(), "ab-svc-"));
   const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
   const child = spawn(process.execPath, ["--no-experimental-ffi", BIN, "service", "--agent-door", cdp, "--control-door", sock,
-    "--daemon-unit", "agent-browser-test-none.service", "--daemon-command", join(dir, "daemon-command.json")], { stdio: ["ignore", "pipe", "pipe"] });
+    "--daemon-unit", "agent-browser-test-none.service", "--daemon-command", join(dir, "daemon-command.json"),
+    "--lists-folder", join(dir, "config", "browser", "lists"), "--state-folder", join(dir, "state")], { stdio: ["ignore", "pipe", "pipe"] });
   let err = "";
   child.stderr!.on("data", (d) => (err += d));
   try {

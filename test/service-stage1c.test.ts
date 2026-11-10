@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { OPS, ControlDoor, type Admit, type Req } from "../src/service/control.ts";
 import { LATER_OPS, Stage1a, STAGE_1A_OPS } from "../src/service/service.ts";
 import { NO_RECEIVER, ReceiverError, type ReceiverEvents, type ReceiverPort } from "../src/service/receiver.ts";
@@ -118,6 +118,12 @@ const writeList = (r: Rig, name: string, body: unknown) => { mkdirSync(r.lists, 
 const ended = (r: Rig) => JSON.parse(readFileSync(join(r.state, "ended-scopes.json"), "utf8"));
 const copyOf = (r: Rig, scope: string) => { const p = join(r.state, "session-lists", scope, "allowlist.json"); return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; };
 const status = async (r: Rig) => (await r.req("status")).data;
+const filesIn = (dir: string) => (existsSync(dir) ? readdirSync(dir).sort() : []);
+const failingDisk = (disk: { failing: boolean }) => (p: string, v: unknown) => {
+  if (disk.failing) throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(v));
+};
 
 // ------------------------------------------------------------------ the ops and the port
 
@@ -337,7 +343,7 @@ test("a prune whose write failed goes to the receiver again after 10 s and logs 
   const disk = { failing: true };
   const r = rig({
     before: (dir) => { mkdirSync(join(dir, "state"), { recursive: true }); writeFileSync(join(dir, "state", "ended-scopes.json"), JSON.stringify({ ended: ["x"] })); },
-    writeEnded: (p, v) => { if (disk.failing) throw Object.assign(new Error("no space"), { code: "ENOSPC" }); writeFileSync(p, JSON.stringify(v)); },
+    writeEnded: failingDisk(disk),
   });
   try {
     await setSessions(r, [sess("x", null), W]);
@@ -359,7 +365,7 @@ test("a prune whose write failed goes to the receiver again after 10 s and logs 
 
 test("launch_check: null for a free name; while an ended name is held in memory only (its write failed), today's refusal with the write's error", async () => {
   const disk = { failing: false };
-  const r = rig({ writeEnded: (p, v) => { if (disk.failing) throw Object.assign(new Error("no space"), { code: "ENOSPC" }); writeFileSync(p, JSON.stringify(v)); } });
+  const r = rig({ writeEnded: failingDisk(disk) });
   try {
     await setSessions(r, [W]);
     assert.deepEqual((await r.req("launch_check", { scope: "web-3" })).data, { refusal: null });
@@ -458,7 +464,7 @@ test("a damaged list fails closed for its own repo and the push goes on; a lists
   assert.ok(!s.agent_text.includes(DAMAGED_TEXT));
   rmSync(r.lists, { recursive: true });
   writeFileSync(r.lists, "x");
-  await r.req("list_set", { list: "no-repo", add: [], remove: [] }).catch(() => {});
+  await setSessions(r, [W, sess("v", "c/d")]); // the object changed (its lists read empty now): it goes
   await settle();
   s = await status(r);
   assert.ok(s.operator_text.includes(LISTS_FOLDER_TEXT.replace("{kind}", "ENOTDIR").replace(/^./, (c) => c.toUpperCase())), s.operator_text);
@@ -617,7 +623,7 @@ test("import checks the payload, drops the box's own cookies (set_sessions' box)
   await setSessions(r, [W]);
   r.rx.connect();
   await settle();
-  const before = readdirSync(r.state).sort();
+  const before = filesIn(r.state);
   const a = await r.req("import", { payload: payload() });
   assert.deepEqual(a, { data: r.rx.importCounts });
   const [imp] = r.rx.imports();
@@ -626,7 +632,7 @@ test("import checks the payload, drops the box's own cookies (set_sessions' box)
   assert.deepEqual(imp.body.state.cookies.map((c: any) => c.name), ["sid"], "the box's cookie names and agentwatch's prefix drop");
   assert.equal(imp.body.state.cookies[0].value, SENTINEL, "the payload reaches the receiver");
   assert.deepEqual(Object.keys(imp.body.state).sort(), ["cookies", "domain", "origin", "storage", "url", "v"]);
-  assert.deepEqual(readdirSync(r.state).sort(), before, "no file");
+  assert.deepEqual(filesIn(r.state), before, "no file");
   const text = r.logs.join("\n");
   for (const s of [SENTINEL, STORAGE_SENTINEL, "private-path", "__Host-session", "agentwatch_board"]) assert.ok(!text.includes(s), s);
   assert.ok(r.logs.some((l) => l.startsWith("signin: imported a sign-in for site.localhost: 4 cookies set, 2 box cookies dropped")), text);
@@ -658,19 +664,20 @@ test("a failed import answers the Browser pane's text of the send: a step after 
     r.rx.importMode = e;
     assert.deepEqual(await r.req("import", { payload: payload() }), { error: text }, `${e.kind} ${e.message}`);
   }
-  const lists = readdirSync(r.state);
-  assert.ok(!lists.includes("site.localhost.json"));
+  assert.ok(!filesIn(r.lists).includes("site.localhost.json"));
 }));
 
 test("an import waits at most 45 s for the receiver's hello: a hello at 30 s imports; none says the extension did not connect", withRig(async (r) => {
   await setSessions(r, [W]);
   assert.equal(RECEIVER_WAIT_MS, 45_000);
   const late = r.req("import", { payload: payload() });
+  await settle();
   await r.clock.advance(30_000);
   r.rx.connect();
   assert.deepEqual(await late, { data: r.rx.importCounts });
   r.rx.drop();
   const none = r.req("import", { payload: payload() });
+  await settle();
   await r.clock.advance(44_999);
   assert.equal(r.rx.imports().length, 1);
   await r.clock.advance(1);

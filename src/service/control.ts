@@ -198,7 +198,8 @@ export class ControlDoor {
     if (await socketAlive(o.path)) throw new Error(`a service already serves ${o.path}`);
     rmSync(o.path, { force: true });
     let door!: ControlDoor;
-    const server = createServer({ pauseOnConnect: true }, (socket) => door.accept(socket));
+    // allowHalfOpen: a peer that ends its side still gets the answers that the door owes it (the door ends its side after them).
+    const server = createServer({ pauseOnConnect: true, allowHalfOpen: true }, (socket) => door.accept(socket));
     const umask = process.umask(0o077);
     try { await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(o.path, resolve); }); }
     finally { process.umask(umask); }

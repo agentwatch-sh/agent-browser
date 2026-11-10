@@ -73,6 +73,8 @@ export type Stage1cOptions = {
   clock?: Clock;
   /** The wall clock in seconds (the dismissals). */
   wall?: () => number;
+  /** Tests only: the writer of the file of ended scopes (a disk that fails). */
+  writeEnded?: (path: string, value: unknown) => void;
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null };
@@ -114,7 +116,7 @@ export class Stage1c implements ServicePart {
     this.clock = o.clock ?? REAL_CLOCK;
     this.receiver = o.receiver ?? NO_RECEIVER;
     this.files = new ListFiles(o.listsFolder);
-    this.book = new ScopeBook(new EndedFile(join(o.stateFolder, "ended-scopes.json")), (name) => this.files.read(name), o.log);
+    this.book = new ScopeBook(new EndedFile(join(o.stateFolder, "ended-scopes.json"), { write: o.writeEnded }), (name) => this.files.read(name), o.log);
     this.copies = new ListCopies(o.stateFolder, o.log);
     this.prompts = new PromptBook({ file: join(o.stateFolder, "prompt-dismissals.json"), now: () => this.clock.now(), wall: o.wall ?? (() => Date.now() / 1000), log: o.log });
     this.ops = {
@@ -211,11 +213,15 @@ export class Stage1c implements ServicePart {
     this.wanted = true;
     if (this.running) return;
     this.running = (async () => {
-      while (this.wanted && !this.stopped) {
-        this.wanted = false;
-        try { await this.pushOnce(); } catch (e) { this.log(`lists: the lists could not be sent (${(e as Error).name})`); }
-      }
-    })().finally(() => { this.running = null; this.schedule(); });
+      // `running` goes in the same step as the last check of `wanted`, so no wake comes between them and is lost.
+      try {
+        while (this.wanted && !this.stopped) {
+          this.wanted = false;
+          try { await this.pushOnce(); } catch (e) { this.log(`lists: the lists could not be sent (${(e as Error).name})`); }
+        }
+      } finally { this.running = null; }
+      this.schedule();
+    })();
   }
 
   /** The retry: while the link is up and the current object is not confirmed (or a prune waits), a push PUSH_RETRY_MS after the last. */

@@ -14,6 +14,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
 import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
+import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
 import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 
@@ -190,10 +191,9 @@ test("the fake answers every request vector and every bad request vector as the 
 
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), {
-    import: "1c", launch_check: "1c", list_set: "1c", lists_get: "1c", prompt_allow: "1c", prompt_dismiss: "1c", prompts_get: "1c", sender: "1b", start: "1b", stop: "1b",
-  });
-  assert.deepEqual([...STAGE_1A_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
+  // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts); start, stop and sender come with stage 1b.
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sender: "1b", start: "1b", stop: "1b" });
+  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
   const d = await openDoor(stage1a());
   try {
     const { c, answers } = await runVectors(d.path);
