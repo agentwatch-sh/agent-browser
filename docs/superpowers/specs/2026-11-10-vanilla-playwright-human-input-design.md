@@ -25,7 +25,7 @@ Sources:
 
 Evidence: the probe in
 [2026-11-10-vanilla-playwright-human-input-probe/](2026-11-10-vanilla-playwright-human-input-probe/README.md)
-(section 17). It ran on taylor with a private Xvfb, its own Chromium and local pages only. No browser in this
+(section 18). It ran on taylor with a private Xvfb, its own Chromium and local pages only. No browser in this
 work opened a public site.
 
 ## 1. The answer in short
@@ -40,20 +40,23 @@ work opened a public site.
    focus call, a protocol scroll), the stage uses the person's way when that gives the same result.
 2. **Every input path is in one table (section 5).** For each Playwright call: the CDP calls that the model
    sees, what the stage sends, and what the page sees. The page's result is the same as with Playwright's
-   own input.
+   own input, with one named exception: a page's own key handler can act on typed keys where Playwright's
+   own `fill` inserts the text in one step (section 7.2 says how the stage limits it).
 3. **Playwright's checks keep working (section 6).** A click's hit-target check reads the press, so a path
-   that crosses other elements does not matter. A hover's check reads the first move, so the stage plays a
-   hover's path before Playwright sets the check up. Measured (section 17): 8 of 8 translated clicks
-   passed the check at the first try, in each of two runs; a hover with the path after the setup needed a
-   retry, and a page listener then got 73 `pointermove` and 0 `mousemove` events. Each answer comes after
-   its events. A translated click from a far point took 1.0 to 1.6 s, and 2.6 s with a scroll of 17
-   notches, inside Playwright's 30 s default. The service sets its own MCP's action timeout to 30 s (its
+   that crosses other elements does not matter, unless the path opens an overlay over the target: then the
+   stage leaves it and goes around (section 6.6; M7). A hover's check reads the first move, so the stage sends
+   the hover path's samples outside the target before Playwright sets the check up, and the rest after it (M4,
+   M8). A client's dialog answer never waits behind the stage (section 4.3a; M9). Measured (section 18): 8 of
+   8 translated clicks passed the check at the first try, in each of two runs; a hover with the path after the
+   setup needed a retry, and a page listener then got 73 `pointermove` and 0 `mousemove` events. Each answer
+   comes after its events. A translated click from a far point took 1.0 to 1.6 s, and 2.6 s with a scroll of
+   17 notches, inside Playwright's 30 s default. The service sets its own MCP's action timeout to 30 s (its
    default is 5 s).
 4. **Text (section 7).** For `fill` and `insertText` into a text field, typed keys take the place of the
-   inserted text when every character has a key on the US layout and the typing plan fits in 10 s (about 40
-   to 80 characters). Else the text goes as Playwright sends it (Q2). A date, color or range input gets no
-   input at all from Playwright (a script sets it). A contenteditable keeps the inserted text, because a
-   page's editor can change typed text.
+   inserted text when every character has a key on the US layout, the text has no line feed or tab, and the
+   typing plan fits in 10 s (about 40 to 80 characters). Else the text goes as Playwright sends it (Q2). A
+   date, color or range input gets no input at all from Playwright (a script sets it). A contenteditable keeps
+   the inserted text, because a page's editor can change typed text.
 5. **Scrolling (section 8).** Wheel notches of 120 px (X11) for `mouse.wheel` and in place of
    `DOM.scrollIntoViewIfNeeded`. On the Mac the wheel waits for part B (ab-t30.7).
 6. **The source (section 9): CDP input on every platform**, with a `timestamp` in whole milliseconds a few
@@ -67,14 +70,15 @@ work opened a public site.
    and notches. A CDP player and an X player send the plans. The stage and agent-browser's own commands
    (`src/input.ts`) use the same generator. Until part B records the operator, the parameters come from the
    literature; a script then fits them from part B's numbers.
-8. **Contracts (section 12).** C11 gets a new section, "The input stage", and three changed rules. C10 and
-   C4 do not change. The text is named against chrome-extension `docs/protocol.md` at `66078cd`.
+8. **Contracts (section 12).** C11 gets a new section, "The input stage", and changed rules (the window,
+   the pointer at an activation, dialogs, the MCP's timeout). C10 and C4 do not change. From stage 0 (PR #95)
+   C11's master is agent-browser `docs/contracts/C11.md`.
 9. **Tests (section 13).** Every row of the table runs with real Playwright (two pinned versions) against
    local pages and the research's recorder. The harness (ab-t30.2) scores each gap. Each rule has a mutation
    that turns a test red.
-10. **Build tasks (section 14)** in order: the harness, the pointer model, the keyboard model, the stage in
-    three parts, the contract text, then the part B parameters. **Four questions** for the operator
-    (section 15).
+10. **Build tasks (section 14)** in order: the harness, the pointer model, the keyboard model, the contract
+    text, the stage in four parts, then the part B parameters. **Four questions** for the operator (section
+    15) and **four open points** (section 16).
 
 ## 2. The operator's words
 
@@ -113,6 +117,8 @@ What this design takes from them:
 - **A held answer**: an answer of a client call that the stage sends only after the events of that call.
 - **An early answer**: an answer of a key release that the stage sends before it sends the release (section
   4.5).
+- **A miss**: Playwright's hit-target check found another element at the point: in its setup (the setup's
+  answer is a string) or at the first event (the stop's answer is not `"done"`). Section 6.6.
 - **A utility call**: a `Runtime.callFunctionOn` of Playwright's utility script. Its fourth argument holds
   the text of Playwright's function (section 5.2).
 - **A recognizer**: a rule of the stage that finds one kind of utility call by its function text.
@@ -149,10 +155,11 @@ On a page session of a tab (not on a child session of a frame or a worker), the 
 - the utility calls of its recognizers (section 5.2).
 
 It passes every other call to the bridge as today. It also passes each of these calls unchanged when one of
-its own rules says so (section 4.7). On a child session of a frame, the stage takes only the recognized
-utility calls (the hover check of a frame, section 5.3) and `DOM.scrollIntoViewIfNeeded` (section 8.3).
-Playwright sends the input of a frame on the top page's session (the research, section 5), so the stage
-plays it there.
+its own rules says so (section 4.7). On a child session of a cross-origin frame, the stage takes only the
+recognized utility calls (the hover check, the focus and the fill of a frame's element: sections 5.3 and
+5.4) and `DOM.scrollIntoViewIfNeeded` (section 8.3). Playwright sends the input of a frame on the top page's
+session (the research, section 5), so the stage plays it there. A same-origin frame has no session of its
+own: its utility calls come on the top page's session, with the frame's own points (section 5.3).
 
 ### 4.3 The gate and the order
 
@@ -165,7 +172,32 @@ is a step of that gate:
 - The stage's own reads (an element's box, the focused element) go to Chrome inside the step. A client
   never sees them.
 - An ordinary call that the stage passes leaves the gate when the model sends it, not when Chrome answers
-  (today's rule). A dialog can still get its `Page.handleJavaScriptDialog`.
+  (today's rule).
+
+### 4.3a Dialogs
+
+Today's gate never waits for an answer of Chrome ("never wait for an ordinary CDP answer: a dialog or held
+target must still accept its release command", `src/relay/model.ts` `send`). A stage step does wait for the
+answers of its own events, and a page with an open dialog answers no input event. Example (review-96): field
+A has `onblur="alert(...)"`; a client fills field B; the stage's focus click on B blurs A; the alert opens;
+the press's answer does not come; Playwright's `Page.handleJavaScriptDialog` (its auto-dismiss) comes after
+the fill's utility call, which waits behind the stage's step. Measured (M9): with the dialog's answer in the
+gate, the fill failed at its 6 s timeout, and every later call of the page waited until the probe itself
+dismissed the dialog 25 s later. So these rules hold:
+
+- **A client's `Page.handleJavaScriptDialog` never waits.** The model sends it to Chrome at once, before the
+  tab's gate and before any stage step (M9: the fill then passed).
+- **A dialog stops the plan.** The stage watches `Page.javascriptDialogOpening` and `Page.javascriptDialogClosed`
+  of the tab (it sees the events that go to the client; when no client has `Page` enabled, its own wait limit
+  below applies). While a dialog is open, it sends no new event of a plan; after the close it goes on.
+- **Each read of the stage has a limit.** An element's box, the focused element, a hit test, a frame's offset:
+  each waits at most `GEOMETRY_WAIT_MS` (200 ms, C11's geometry wait) and then fails open (the stage sends
+  the client's call as it is, and the harness counts it).
+- **Each wait for an answer of the stage's own event has a limit**, `STAGE_EVENT_WAIT_MS` (first value
+  2 s). At the limit the stage sends the releases of what the plan holds (a button, a key), answers the
+  client's call, and opens the gate. A late answer changes nothing.
+- **A hold counts from the press's send**, not from its answer, so a `confirm()` in a `mousedown` handler
+  does not make the hold longer: the release goes at its time, and Chrome keeps it until the dialog closes.
 
 ### 4.4 The one input lock
 
@@ -204,6 +236,10 @@ agent-browser's own commands. The stage holds the same rule in memory:
 - **The error of an event.** When Chrome refuses an event of a plan, the stage stops the plan, answers the
   client call with that error, and sends no more events of the plan. When the plan held a button or a key,
   the stage sends its release first.
+- **Shift and rollover.** A key with no Shift that follows a shifted key waits for that key's planned
+  release and for the Shift release; the stage never sends a release before its planned hold has passed.
+  (The probe's run 1 broke this rule: it sent a pending release at once to put Shift up first, and the `@` of
+  the fill got a hold of 2 ms: N6 of review-96.)
 
 ### 4.6 The clock, the timestamps and the rate
 
@@ -247,8 +283,11 @@ cases, and the harness counts them:
 "U" is a utility call. The CDP column comes from the research's traces (Playwright 1.65.0, section 5 and
 `results/run-1-cdp.json`, `results/run-3-cdp.json`), checked against the code of `playwright-core` 1.65.0.
 "The path" is a path of the pointer model (section 10.1) from the page's last point to the named point, at
-the device rate, with whole-ms timestamps. "A press" is the pause before a press, a `mousePressed` with
-`force` 0.5, a hold, and a `mouseReleased` (section 10.1). "Measured" names a probe step of section 17.
+the device rate, with whole-ms timestamps, around a kept obstacle after a hit-target miss (section 6.6). "A
+press" is the pause before a press, a `mousePressed` with `force` 0.5, a hold, and a `mouseReleased`
+(section 10.1), at Playwright's point rounded to a whole px, except for the spread of section 6.2. "Measured"
+names a probe step of section 18. The last column holds for every row except the named exception of
+section 7.2 (a page's key handler and typed keys).
 
 | Playwright call | CDP that the model sees | What the model sends (its stage) | What the page sees (the result is the same as Playwright's own) |
 | --- | --- | --- | --- |
@@ -257,12 +296,14 @@ the device rate, with whole-ms timestamps. "A press" is the pause before a press
 | `click({ clickCount: 3 })` | three pairs (`clickCount` 1, 2, 3) | as `dblclick`, three presses | three clicks with a person's gaps |
 | `click({ button: 'right' })`, `'middle'` | the click's calls with `button: right, buttons: 2` or `middle, 4` | as a click, with the client's button | `contextmenu` (right) and `auxclick`, after a press of a person's length |
 | `click({ delay })`, `mouse.click(x, y, { delay })` | the move, the press, Playwright's own wait, the release (each awaited) | the path; a press; the release at the later of Playwright's release and the press time plus a person's hold | a hold of at least the client's delay |
-| `click({ modifiers })`, `hover({ modifiers })` | the modifier's `rawKeyDown` (`modifiers` 1, 2, 4 or 8) before the move, the move and the press with the flag, the modifier's `keyUp` after (the research, R13) | the modifier key 40 to 120 ms before the path's end; the path and the press with the flag; the modifier's release 60 to 200 ms after the release | a modifier held from before the press to after the release (measured: M3, Shift) |
+| `click({ modifiers })` | after the hit-target setup, the modifier's `rawKeyDown` (`modifiers` 1, 2, 4 or 8); Playwright waits for its answer, then sends the move and the press with the flag; the modifier's `keyUp` after the release (the research, R13; `ensureModifiers` in `playwright-core` 1.65.0) | the modifier's press as it comes (Playwright waits for its answer before the move, so the stage cannot put it later); the path and the press with the flag; the modifier's release 60 to 200 ms after the mouse release (the stage holds the `keyUp` until then, and answers it after it) | the modifier down for the whole path and the press, up after the release (M3: the Shift `keydown` came before the path) |
+| `hover({ modifiers })` | the hit-target setup, then the modifier's `rawKeyDown`, then the move | the path's samples outside the target at the setup (section 6.2); the modifier's press as it comes; the last leg with the flag | the modifier goes down after the approach and before the last leg (designed; not measured) |
 | `click({ position })`, `click({ force })` | the same input at another point; with `force`, no checks before it | as a click | as a click |
 | `click({ trial })` | the checks only, no `Input` call | nothing | nothing (Playwright's own trial) |
 | `click({ steps })` (new in 1.65), `mouse.move(x, y, { steps })` | n `mouseMoved` on a straight line, each one awaited, then for a click the press | each short move (at most 50 px from the last point) as samples at the device rate at a person's speed (0.5 to 1.5 px/ms) with 0 to 1 px of jitter across the line; a longer move as a path | the client's line at a person's speed and rate, not 20 jumps one frame apart |
-| `locator.hover()` | as a click up to the move, with U (`setupHitTargetInterceptor`, action `hover`, with the hit point); then one `mouseMoved`; no press | the path to the hit point **before** the stage sends the check's setup; then Playwright's move, which is at the pointer's point, gets its answer with no event | a path that ends on the element, no move after it; Playwright's check passes (measured: M4) |
+| `locator.hover()`, `hover({ position })` | as a click up to the move, with U (`setupHitTargetInterceptor`, action `hover`, with the hit point; with `position`, the hit point is that point); then one `mouseMoved`; no press | the whole path is planned at the setup; its samples outside the target's box go **before** the stage sends the setup; the rest (from the first sample inside the box) goes at Playwright's move, after the setup | a path that ends on the element; the first move after Playwright's check setup is inside the element, as with Playwright's own move; the check passes (M4, M8) |
 | `mouse.move(x, y)` | one `mouseMoved` | the path (a short move as in the `steps` row) | a path |
+| `mouse.move(x, y)` with a held button over an HTML5 draggable (`mouse.down()` first) | Playwright's drag manager: `Input.setInterceptDrags`, the move with `buttons: 1`, then `Input.dispatchDragEvent` events | as `dragTo` | as `dragTo` |
 | `mouse.down()`, `mouse.up()` | `mousePressed`, `mouseReleased` at the last point | a pause when the press follows a path; the press; the release at the later of its arrival and a person's hold | a press of a person's length |
 | `mouse.click(x, y)` | `mouseMoved`, `mousePressed`, `mouseReleased`, no checks | the path; a press | as a click |
 | `mouse.wheel(dx, dy)` | one `mouseWheel` at the last point | notches of 120 px with a person's gaps (section 8.2) | wheel events of `deltaY` 120 and `wheelDeltaY` -120, as a Linux mouse wheel (measured: M6) |
@@ -272,14 +313,15 @@ the device rate, with whole-ms timestamps. "A press" is the pause before a press
 | frame hovers | the hover's setup on the frame's session, with the hit point in the frame's own points | the stage maps the hit point to the top page (section 5.3), then as `hover` | as `hover` (designed; not measured) |
 | `tap()`, `touchscreen.tap()` | nothing: Playwright refuses without `hasTouch`, and a context from `connectOverCDP` has none | nothing | nothing (R12) |
 | `keyboard.type(text)`, `pressSequentially(text)`, the old `type()` | `pressSequentially` and `type`: U x5, then U (`focusNode` with the caret reset) when the field has no focus; then for each character a `keyDown` with its text (a capital: `modifiers` 0) and a `keyUp`, each awaited; a character with no US key: `Input.insertText` | for the focus call: a click on the field when it does not have the focus (section 5.2); for each key: a person's timing (section 10.2), a Shift `rawKeyDown` before a shifted character and its release after, the release answered early for rollover; an `insertText` with a person's gap before it | the field gets the focus from a press; keys with a person's holds and gaps, about 25% overlap, a Shift key for each capital and symbol; the same text (measured: M5) |
+| `keyboard.type(text, { delay })`, `pressSequentially(text, { delay })` | for each character: `keyDown`, Playwright's own wait of `delay`, `keyUp` (each awaited); before an `insertText`, a wait of `delay` | as above; each release at the later of its arrival and the key's planned hold; each press at the later of its arrival and its planned time | a hold of at least the client's delay; the gaps of a person or longer |
 | `press(key)` (locator), `keyboard.press(key)`, `keyboard.down()`, `keyboard.up()` | U x5 and U (`focusNode`) for the locator; then the chord's `rawKeyDown` events, the key, and the releases in reverse order | the focus click as above; the chord with a person's timing: each modifier 40 to 120 ms before the key, the key's hold, the releases 20 to 80 ms apart | a person's chord; the same effect |
-| `fill(text)`, `clear()` | U x5 (`fill`: the state checks, then the focus and the select-all by script), then `Input.insertText` with the whole text; `clear`: `rawKeyDown Delete` and `keyUp` | a click on the field when it has no focus, before the U call; typed keys in place of the `insertText` when section 7's rule allows it, else the text as it is; `clear`: the Delete key with a person's hold | typed keys (measured: M5), or one `input` with the whole text above the limit (Q2) |
+| `fill(text)`, `clear()` | U x5 (`fill`: the state checks, then the focus and the select-all by script), then `Input.insertText` with the whole text (a line feed in it too: `"two\nlines"` in the research's run 1 trace); `clear`: `rawKeyDown Delete` and `keyUp` | a click on the field when it has no focus, before the U call (with notches first when the field is out of view: section 5.4); typed keys in place of the `insertText` when section 7.2's rule allows it, else the text as it is; `clear`: the Delete key with a person's hold | typed keys (M5), or one `input` with the whole text (a line feed, a tab, the limit: Q2) |
 | `fill()` of a date, time, month, week, color or range input | U only: a script sets the value and sends `input` and `change` with `isTrusted` false | nothing reaches the stage as input; the U call passes | the script's events (Q3) |
 | `keyboard.insertText(text)` | `Input.insertText` | as `fill`'s text (section 7) | typed keys or the inserted text |
 | `selectOption()` | U only: a script selects and sends `input` and `change` (`isTrusted` false) | the U call passes, or by Q3 | the script's events (Q3) |
 | `setInputFiles(paths)` with a local browser | U, then `DOM.setFileInputFiles` | a click on the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles`), then the client's files to the input that the chooser names | a click on the input, then `input` and `change` from the browser |
 | `setInputFiles(payloads)` (a remote client, or buffers) | U only: a script makes the files and sends untrusted `input` and `change` | the U call passes, or by Q3 | the script's events (Q3) |
-| `dragTo(target)` | the click's checks on both elements; `mouseMoved` and `mousePressed` at the source; `Input.setInterceptDrags {enabled: true}`; one `mouseMoved {buttons: 1}` to the target; `setInterceptDrags {enabled: false}`; `Input.dispatchDragEvent` `dragEnter`; `drop` | the path to the source; a press; a person's wait before the drag (100 to 300 ms); for the move with the button down: a short path with the button down until Chrome reports `Input.dragIntercepted`, then the rest of the path to the target as `dispatchDragEvent` `dragOver` events at the device rate; the client's `dragEnter` at the pointer's point gets its answer with no event; a pause before the `drop` | `dragstart`, drag events along a path, the drop at the target (designed; not measured: the research measured no page that accepts the drop) |
+| `dragTo(target)`, `dragTo(target, { steps, sourcePosition, targetPosition })` | the click's checks on both elements (with the positions as their points); `mouseMoved` and `mousePressed` at the source; `Input.setInterceptDrags {enabled: true}`; one `mouseMoved {buttons: 1}` to the target; `setInterceptDrags {enabled: false}`; `Input.dispatchDragEvent` `dragEnter`; `drop` | the path to the source; a press; a person's wait before the drag (100 to 300 ms); for the move with the button down: a short path with the button down until Chrome reports `Input.dragIntercepted`, then the rest of the path to the target as `Input.dispatchDragEvent`: first a `dragEnter` of the stage's own at the first point (with the data of `Input.dragIntercepted`), then `dragOver` events at the device rate; the client's own `dragEnter` at the target goes as a `dragOver` at its point; with `steps`, the client's moves as in the `steps` row; a pause before the `drop` | `dragstart`, `dragenter`, `dragover` events along a path, the drop at the target. M12: Chromium needs the `dragEnter` (with it: `dragstart dragenter dragover x4 drop dragend`; with no `dragEnter`: `dragstart dragend`, no `dragover` and no drop). The whole `dragTo` through the stage: not measured |
 | `locator.drop(payload)` (new in 1.65) | a script in the page's main world makes `dragenter`, `dragover`, `drop` with `isTrusted` false | the call passes, or by Q3 | the script's events (Q3) |
 | `focus()` | U (`focusNode`, no caret reset) | on a text field (an input of a text type, a textarea, a contenteditable): a click, then the U call; on another element: the U call passes, or by Q3 | a focus from a press, or from a script (Q3) |
 | `blur()` | U (`blurNode`) | the U call passes, or by Q3 | a blur from a script (Q3) |
@@ -304,7 +346,8 @@ the activation (C11, "Playwright's focus call"). The stage adds these:
 
 | Recognizer | The function text (Playwright 1.65.0) | What the stage reads | What the stage does first |
 | --- | --- | --- | --- |
-| hover check | `([injected, node, { actionType, hitPoint, trial }]) => injected.setupHitTargetInterceptor(...)` | `actionType`, `hitPoint` | for `hover`: the path to the hit point (section 6.2) |
+| hit-target check | `([injected, node, { actionType, hitPoint, trial }]) => injected.setupHitTargetInterceptor(...)` | `actionType`, `hitPoint`, the node; the setup's answer (a string: a miss of Playwright's first check) | for `hover`: the path's samples outside the target (section 6.2); after a miss: the recovery (section 6.6) |
+| the check's stop | `(h) => h.stop()` | its answer (`"done"`, or a miss) | after a miss: the recovery at the next setup (section 6.6) |
 | focus | `([injected, node, resetSelectionIfNotFocused]) => injected.focusNode(...)` | the node | a click on a text field that does not have the focus (section 5.4) |
 | fill | `async ([injected, node, { value, force, frameVisible }]) => { ... injected.fill(node, value) }` | the node | a click on the field when it does not have the focus |
 | select text | `... injected.selectText(node)` | the node | for an input or a textarea: a click and the select-all chord |
@@ -323,20 +366,27 @@ The rules of a recognizer:
 - The stage never answers a utility call itself and never changes its arguments. It only puts its own
   input before the call.
 
-### 5.3 A hover in a frame
+### 5.3 A point in a frame
 
-Playwright sends a frame element's hover check on the frame's own session, with the hit point in the
-frame's points, and the move on the top page's session (the research, section 5). The stage maps the hit
-point to the top page before it plays the path:
+Playwright gives a frame element's hit point in the frame's own points, and it sends the move and the press
+on the top page's session, in top-page points (the research, section 5; `_checkFrameIsHitTarget` in
+`playwright-core` 1.65.0). A cross-origin frame's utility calls come on the frame's own session; a same-origin
+frame has no session of its own, and its utility calls come on the top page's session (review-96, B6;
+measured: M10). So the stage maps a point by the frame of the call's node, on every session:
 
-1. It finds the frame's owner element on the parent's session (`DOM.getFrameOwner` with the frame's id).
-2. It reads the owner's content box (`DOM.getContentQuads`).
-3. The top page's point is the content box's corner plus the frame's point, for each frame level up to the
-   top page.
+1. **A same-origin frame.** One call in Playwright's utility world on the node's own handle adds up, for each
+   frame level up to the top page, the frame element's box plus its border and padding (the same sum as
+   Playwright's `_checkFrameIsHitTarget`: `box.x + style.left`), and gives the node's box in top-page points.
+2. **A cross-origin frame** (a child session). The stage finds the frame's owner on the parent's session
+   (`DOM.getFrameOwner` with the frame's id) and reads its content box (`DOM.getContentQuads`), level by
+   level; within a level that is same-origin, rule 1 applies.
+3. The top page's point is the hit point plus the sum; the target's box is the node's box plus the sum.
 
-When a read fails or the frame has a transform (the quad is not a rectangle), the stage plays no path
-before the check, and the hover goes as the naive way of M4 (a retry of Playwright's, and the check blocks
-the path's `mousemove` events). The harness counts it. This is designed, not measured.
+When a read fails or reaches its limit (section 4.3a), or a frame has a transform (a quad that is not a
+rectangle; Playwright gives no hit point then: `framePoint: undefined`), the stage plays no path before the
+setup, and the hover goes the naive way (a retry of Playwright's; the check blocks the path's `mousemove`
+events). The harness counts it. Measured for a same-origin frame (M10); a cross-origin frame's hover is
+designed, not measured.
 
 ### 5.4 The focus click
 
@@ -354,6 +404,20 @@ field. The stage does the same, by the rules of `src/input.ts` `focusField`:
   gets no click: the utility call alone gives the focus, and the harness counts it.
 - Only text fields get the click. A click on a button, a link or a check box has its own effect, so the
   focus of another element is by Q3.
+- **A field out of view.** Playwright's script focus scrolls the field into view by itself (`focus()`
+  scrolls). The stage first brings the field into view with notches (section 8.3), then clicks (review-96,
+  N11).
+- **A field in a cross-origin frame** (a payment field). The focus and fill recognizers also work on the
+  frame's own session: the stage maps the click's point by section 5.3 and sends the click on the top page's
+  session. Playwright's keys and `insertText` come on the top page's session (its keyboard is the page's),
+  and the typing rule's read of the focused element (section 7.2) follows the focus into the frame on the
+  frame's own session. Designed, not measured; build task 6 measures a field in a cross-origin frame
+  (review-96, N2).
+- **A click that opens a widget.** A field whose click (not its focus) opens a picker or a list can cover
+  the next target, where Playwright's script focus opens nothing. The recovery of section 6.6 moves the
+  pointer off a covering element, but a picker that stays open until Escape or an outside click is an open
+  point (section 16, open point 1).
+
 
 ## 6. Playwright's own checks
 
@@ -376,34 +440,58 @@ Read in `playwright-core` 1.65.0 (`setupHitTargetInterceptor`):
   the drop of a drag: none.
 - **The first event of the set decides.** Playwright checks its point against the target. After a miss,
   Playwright stops every later event of the set (`preventDefault`, `stopPropagation`,
-  `stopImmediatePropagation`), and the action retries after 0, 20, 100, 100 and 500 ms, with a script
-  scroll (`scrollIntoView` with `block` end, center, start) in each retry.
+  `stopImmediatePropagation`), and the action retries after 0, 20, 100, 100 and then 500 ms
+  (`_retryAction`). Each attempt's scroll comes from the list `[none, end, center, start]` by the attempt's
+  number modulo 4 (`_retryPointerAction`): attempts 0, 4, 8 send `DOM.scrollIntoViewIfNeeded`; attempts
+  1 to 3, 5 to 7 send a script `scrollIntoView` with that `block` (section 6.5).
 - When no event of the set came, the check passes.
+- **Each attempt checks the hit point first, before any input.** So when the stage's own input left an
+  overlay open over the target, every later attempt fails in the setup and sends no input, until the
+  action's timeout (review-96, B1; measured: M7).
 
 What it means for the stage:
 
 - **A click.** The path's moves are not in the click's set. Only the press decides, and it is at
-  Playwright's point. So the path can cross any element. Measured (M3): in each of two runs, 8 of 8
-  clicks, checks, double clicks, frame clicks and clicks with a modifier passed at the first try (one
-  hit-target setup each). A path that opens a hover menu over the target makes the press miss, as a
-  person's would. Playwright then retries, and the second path is short.
+  Playwright's point. Measured (M3): in each of two runs, 8 of 8 clicks, checks, double clicks, frame clicks
+  and clicks with a modifier passed at the first try (one hit-target setup each). But a path that crosses a
+  hover menu's trigger can open its panel over the target, and the panel stays open while the pointer is
+  in it. Then the press hits the panel, Playwright retries, and each retry fails in its setup (the pointer
+  is still in the panel), until the timeout. Playwright's own input jumps to the target and opens no panel.
+  Section 6.6 gives the stage's recovery (measured: M7).
 - **A hover.** The first `mousemove` after the setup decides. If the stage played the path after the setup,
   its first move would be far from the target, so the check would miss and stop every later `mousemove` of
   the path: the page would get `pointermove` events with no `mousemove`, which no mouse gives. Measured
   (M4): a listener of the page on the document got 73 `pointermove` and 0 `mousemove` events, and
   Playwright retried the hover once.
-  So the stage plays a hover's path when it sees the setup (the hover check recognizer), before it sends
-  the setup to Chrome. Playwright's move then comes at the point where the pointer is, and the stage
-  answers it with no event (a mouse that does not move sends no move; M2: Chromium gives the page a
-  `pointermove` and a `mousemove` with movement 0 for each CDP move to the same point). No `mousemove`
-  comes after the setup, so the check passes (M4: at the first try, and the page's listener got 33
-  `mousemove` and 33 `pointermove` events).
+  A path that ends on the target **before** the setup has its own fault: a hover layer that the target's
+  `:hover` shows over its middle (a "Quick view" layer) is then open at the setup, so the setup's first check
+  misses at every attempt (review-96, B1 b; measured: M8, where Playwright's own hover failed on that card
+  too, at its first event). So the stage plans the hover's whole path when it sees the setup (the hit-target
+  check recognizer), sends the path's samples that are outside the target's box, then sends the setup, and
+  sends the rest of the path (from its first sample inside the box) at Playwright's move. The first
+  `mousemove` after the setup is then inside the target, as with Playwright's own move, and the check passes
+  (M4; M8: it passed at the first try, where Playwright's own hover and the whole path before the setup both
+  failed at the 6 s timeout). The pause between the two parts is the setup's round trip (a few ms) plus one
+  sample time. When the pointer is inside the target's box already, the whole path goes after the setup. A
+  move that does not move gets no event (a mouse that does not move sends none; M2: Chromium gives the page a
+  `pointermove` and a `mousemove` with movement 0 for each CDP move to the same point).
 - **The press point.** The stage presses at Playwright's point, rounded to a whole px (at most 0.5 px from
-  it, inside the element). A person's press spreads around a target's middle. The pointer model (section
-  10.1) can aim at another point of the same element. The stage then checks the point with its own hit test
-  in its own isolated world (in the frame's own session for a frame), and keeps the point only when the hit
-  element is the same as at Playwright's point. Else it uses Playwright's point. This keeps the check and
-  gives the spread. (Designed; the build measures it.)
+  it, inside the element). A person's press spreads around a target's middle, but for some targets the
+  point is the client's result: `click({ position })`, `mouse.click(x, y)` on a canvas, a range input, the
+  caret in a text field, a double click on a word (review-96, B3). So the spread (section 10.1) applies only
+  when all of these hold; else the stage presses at Playwright's point, rounded:
+  1. a locator click with a hit-target setup of action `mouse` and `clickCount` 1 (no `dblclick`, no
+     `clickCount` 2 or 3, no `mouse.click`);
+  2. no `position`: Playwright's point is within 1 px of the middle of the element's content quad (the
+     answer of Playwright's own `DOM.getContentQuads`, which the stage sees);
+  3. an element whose effect does not depend on the point: `button`, `a[href]`, `input` of type `button`,
+     `submit`, `reset`, `checkbox` or `radio`, `label`, `summary`, or an element with the role `button`,
+     `link`, `checkbox`, `radio`, `tab`, `menuitem` or `switch` (read in the stage's own world); never a
+     `canvas`, an `img` with a map, an `svg`, a `video`, an `input` of another type, a `textarea` or a
+     contenteditable;
+  4. the stage's own hit test at the new point (in its own isolated world; in the frame's own session for a
+     frame) gives the same element as at Playwright's point.
+  Designed; build task 5 measures it.
 
 ### 6.3 The timeouts and the budget
 
@@ -412,7 +500,7 @@ Read in `playwright-core` 1.65.0 and `@playwright/mcp` 0.0.85:
 | Client call | Its timeout by default |
 | --- | --- |
 | `page.mouse.*`, `page.keyboard.*` | none (the client sends no timeout: `kNoTimeout`) |
-| locator and page actions: `click`, `hover`, `fill`, `type`, `pressSequentially`, `press`, `check`, `dragTo` | the action timeout: 30 000 ms in the library (`DEFAULT_PLAYWRIGHT_TIMEOUT`); `@playwright/test`: no action timeout by default, inside a 30 s test timeout |
+| locator and page actions: `click`, `hover`, `fill`, `type`, `pressSequentially`, `press`, `check`, `dragTo` | the action timeout: 30 000 ms in the library (`DEFAULT_PLAYWRIGHT_TIMEOUT`); `@playwright/test`: no action timeout by default, inside a 30 s test timeout for the whole test |
 | the Playwright MCP's tools | 5 000 ms for an action (`--timeout-action`), 60 000 ms for a navigation |
 
 The budget of a translated action, in the normal case (first values of section 10):
@@ -427,8 +515,9 @@ The budget of a translated action, in the normal case (first values of section 1
 
 The stage's limits, so that a translated action ends inside the defaults:
 
-- A pointer action ends in about 2.5 s at most, plus the activation step. Inside 30 s, and inside the MCP's
-  5 s in the normal case.
+- A pointer action ends in about 2.5 s at most, plus the activation step and a scroll of up to 4 rounds.
+  That is inside a 30 s action timeout. It is not always inside the MCP's default of 5 s (a 4-round scroll
+  and a path can take more), so the next rule sets the service's own MCP to 30 s.
 - The Playwright MCP inside the service gets `timeouts.action: 30000` in its `createConnection`
   configuration (the service design, section 8.2), not the MCP's 5 s default. Then a long fill or an
   activation's worst case does not end an MCP action that a person's input would finish.
@@ -441,6 +530,12 @@ The stage's limits, so that a translated action ends inside the defaults:
   an average typist's speed, about 50 characters go at the person's speed and about 170 in all inside the
   25 s. So no client action reaches the 30 s timeout because of the stage (Q2).
 - `STAGE_ACTION_MAX_MS` ends any lock hold in the same way (section 4.4).
+- **A whole test of `@playwright/test`.** Its default test timeout is 30 s for the whole test, and the
+  stage's time adds up over the test's actions (review-96, B8). With M3 and M5's times, 15 to 20 translated
+  clicks take about 15 to 32 s, and a 60-character `fill` about 10 to 12 s. So a vanilla test of that size
+  that passes today in a few seconds fails at its 30 s test timeout through agent mode. A client that runs
+  `@playwright/test` against agent mode must raise its test timeout (`test.setTimeout`, or `timeout` in its
+  configuration), for example to 120 s. The stage cannot see a test's timeout. Q1 names this effect.
 
 ### 6.4 The order of the answers
 
@@ -453,10 +548,38 @@ came, the press 1,305 ms and the release 1,429 ms after; Playwright's click ende
 ### 6.5 Retries
 
 A retry of Playwright's comes after a miss of the hit-target check or after "not in the viewport". Its
-scroll is a script (`scrollIntoView` with a `block` option, in a utility call), not
-`DOM.scrollIntoViewIfNeeded`. The first build passes that call unchanged, and the harness counts the scroll
-with no wheel. A later build can put notches before it (the retry scroll recognizer) when the harness shows
-retries in normal use.
+scroll comes from the cycle of section 6.2 (review-96, N12):
+
+- attempts 1 to 3 (and 5 to 7): a script `scrollIntoView` with `block` end, center or start, in a utility
+  call. The first build passes that call unchanged, and the harness counts the scroll with no wheel. A later
+  build can put notches before it (the retry scroll recognizer) when the harness shows retries in normal use;
+- attempts 4 and 8: `DOM.scrollIntoViewIfNeeded` again, which the stage translates as in section 8.3.
+
+### 6.6 Overlays that the stage's own input opens
+
+The stage's input crosses elements that Playwright's one jump never touches, and its focus click is a click
+where Playwright uses a script. So the stage can open an overlay that Playwright's own input does not open
+(review-96, B1). The rules:
+
+1. **A hover's last leg after the setup** (section 6.2): a hover layer of the target opens only after the
+   setup's first check, as with Playwright's own move (M8).
+2. **The miss watch.** The stage reads the answer of each hit-target setup (a string is a miss of
+   Playwright's first check) and of each stop (`"done"`, or a miss at the first event). A miss marks the
+   tab.
+3. **The recovery at the next setup.** Before it sends the next setup of a marked tab, the stage reads, in
+   Playwright's utility world on the setup's node, the element at the hit point. When it is not the target
+   or inside it, the stage takes that element's highest ancestor that does not hold the target (for example
+   a menu's root, which holds the trigger and the panel), moves the pointer out of both boxes on the side
+   away from the target (a path to a point 15 px outside), waits two frames, and reads the ancestor's box
+   again (now the panel is closed: the trigger's box). Then it sends the setup.
+4. **The way around.** The next path to the target goes around that box: when the straight way crosses
+   the box (10 px wider on each side), the path goes through the corner of the wider box that gives the
+   shortest way, as two paths. Measured (M7): Playwright's own click passed; the stage with no recovery
+   failed at the 6 s timeout; the stage with the recovery passed in 2.4 s (rule 4 was not needed there).
+5. **A limit.** At most two recoveries in one action. After them, the stage sends the rest of the action's
+   input as Playwright sends it, with only the timestamps and the rate of section 4.6, and the harness
+   counts it.
+6. **A widget that a click opens** and that stays open (a date picker, a list): open point 1 (section 16).
 
 ## 7. `fill` and `insertText`
 
@@ -477,8 +600,10 @@ The stage types the text as keys when all of these are true. Else it sends the `
 
 1. The focused element (the stage's own read at the call) is an input of a text type (the first row above)
    or a textarea.
-2. Each character has a key on the US layout (`src/record.ts` `charKey`), or it is a line feed into a
-   textarea (the Enter key). Playwright's `keyboard.type` uses the same US layout.
+2. Each character has a key on the US layout (`src/record.ts` `charKey`); Playwright's `keyboard.type` uses
+   the same US layout. The text has no line feed and no tab: a text with one goes as `Input.insertText`
+   (review-96, B4: as Enter, a line feed sends a message in a chat field with Enter-to-send, and a tab moves
+   the focus).
 3. The plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (10 s). When it does not, the stage plans at
    the fast end of the person's spread (about 100 to 120 ms a key); when that fits, it types at that speed.
    With the first values, about 40 to 60 characters fit at a person's mean speed, and about 80 at the fast
@@ -487,10 +612,26 @@ The stage types the text as keys when all of these are true. Else it sends the `
    `macCommands`).
 
 The first typed key replaces the selection that Playwright's script made, as a person's typing replaces a
-selection. The text in the field is the same as with `Input.insertText`, with one known difference: a page
-that changes each typed key (an input mask, a key handler) sees keys, as from a person, where Playwright's
-own `fill` gives it one `input`. The stage reads the field's value after the last key. When the value is
-not the text, it logs the difference; it does not repair the field.
+selection.
+
+**The named exception to "the same result".** A page's own key handler can act on typed keys, where
+Playwright's own `fill` inserts the text in one step: a tag input that makes a chip at a comma, an
+autocomplete that takes a suggestion at a key, an input mask that changes each key. A person's typing gets
+the same handling, but the field's value can then differ from Playwright's result. The stage limits it:
+
+- no Enter and no tab are ever typed for a `fill` (rule 2);
+- typed keys only into an input of a text type or a textarea, never into a contenteditable (rule 1);
+- after the last key, the stage reads the field's value. When it is not the text (as `maxlength` would cut
+  it), the stage logs the difference and the harness counts it. The stage does not repair the field: a
+  second insert would be a second, visible input, and a chip or a sent message cannot be undone;
+- the live tests (section 13.2) hold a tag input and a field with an input mask, and the build reports how
+  their values differ.
+
+`keyboard.type` and `pressSequentially` are not under this exception: Playwright itself sends keys there.
+
+**Shift is a known difference too** (review-96, N10). The stage types a capital with a real Shift
+`keydown` before it, where Playwright's own `keyboard.type` sends none. A page that acts on a lone Shift
+press, or on `shiftKey` in a key handler, sees a person's Shift.
 
 ### 7.3 When typed keys cannot take its place
 
@@ -550,6 +691,23 @@ Playwright sends it before each pointer action and for `scrollIntoViewIfNeeded()
 5. when the element is still not in view (a scroller that the wheel does not move, or a page that stops the
    wheel), sends the client's `DOM.scrollIntoViewIfNeeded` as it is (a script scroll) and logs it.
 
+**The wheel point** (review-96, B2). A notch has side effects that `DOM.scrollIntoViewIfNeeded` does not
+have: it changes the value of a focused number input under the pointer (measured: M11), it zooms a map or a
+canvas whose page handles the wheel, and it scrolls a frame under the pointer first. So a point is a wheel
+point only when all of these hold (the stage's own read, in its own isolated world):
+
+- the element under the point, and each ancestor of it up to the scroller, is not an `input`, `select`,
+  `textarea`, contenteditable, `canvas`, `embed`, `object`, `video`, `audio` or `iframe`;
+- no element on that chain has a wheel listener that is not passive (`wheel`, `mousewheel`; the stage
+  reads them with `DOMDebugger.getEventListeners` on the chain's elements; listeners of the window and the
+  document do not count, as they do not stop the scroll of a scroller under them by default);
+- the element under the point scrolls the target scroller (today's rule).
+
+When no point of the scroller's visible part (a 5 x 5 grid, as `view()` tries) passes, the stage sends the
+client's call as it is. **A round that does not move the scroller ends the notches**: after each round the
+stage reads the scroller's scroll position, and when it did not change, it sends the client's call as it is,
+so no notch goes to a page that does not scroll with it.
+
 Measured: M6. For an element in a cross-origin frame, the frame's session sends the call. The stage reads
 the box there and sends the notches on the top page's session at a point over the frame: a wheel over a
 frame scrolls the frame's scroller first, then its parents.
@@ -584,13 +742,18 @@ differences in timing and rate, and this probe measured whether CDP can match th
 | events with a time later than their handler's time | 0 | 0 | 0 | 0 | 0 |
 | fractional points, jumps over 100 px, movement that does not match the point | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 |
 
-M1 (section 17) ran the same three planned paths in each column, with a press at the end, in two runs (the
+M1 (section 18) ran the same three planned paths in each column, with a press at the end, in two runs (the
 column of 4 ms in the second run only). So the CDP form of the design (the second column) matches XTEST on
 every measured signal except the count of predicted points: 2.3 to 2.7 against 1.8 to 2.1 here. The
 research measured 1.86 to 2.71 for XTEST at 125 Hz, so the two ranges overlap, but in this probe CDP's
 mean is higher in each step. Chromium predicts points from the samples and their times; the cause of the
-difference is not known. A page can read it. The harness scores it (P1), and the pointer build (ab-t30.3)
-tries the rate, the latency and the sample times against XTEST and then against part B.
+difference is not known. A page can read it. The bar (review-96, N1): before part B, the pointer build
+(ab-t30.3) must bring CDP's mean count of predicted points into the range that XTEST gives on the same
+harness run and the same paths (this probe: 1.80 to 2.11), by the rate, the latency and the sample times.
+After part B, the bar is the person's range. If ab-t30.3 cannot reach the bar, the lead brings the numbers
+to the operator with two options: keep CDP and accept the difference (it is inside the research's XTEST
+range of 1.86 to 2.71), or plan the X player for whole paths on Linux (section 9.3, point 4). Open point 3
+(section 16) holds it until then.
 
 Two more differences need no probe:
 
@@ -628,7 +791,7 @@ The reasons:
 
 1. With whole-ms timestamps a few ms before the send and moves at 125 Hz with no wait for each answer, CDP
    matches real X input on the measured signals (M1), except the count of predicted points, which the
-   pointer build must close or show to be within a person's range. No field of one event differs (the
+   pointer build must bring into XTEST's range (section 9.1's bar). No field of one event differs (the
    research).
 2. One source for Linux and the Mac, so one stage and one set of tests. The Mac cannot use X.
 3. No raise for every action, no shared X pointer for hovers and wheels, and no X keyboard map.
@@ -656,7 +819,7 @@ literature or from the research; part B replaces them (section 10.3).
 | The pause before a press | a lognormal, median 140 ms, from 80 to 400 ms | first value; [13] counts a click within 0.4 s of a point as one action; part B |
 | The press | a lognormal hold, median 100 ms, from 60 to 180 ms; `force` 0.5 | first value (a person's press is not measured; the research, P5); `force` 0.5 [1]; part B |
 | A double click's gap | 90 to 150 ms from the first release to the second press | not measured; part B |
-| The press point | an offset from the target's middle, a normal with a standard deviation of 1/8 of the target's smaller side, at most 1/4 of it; kept only by the hit test of section 6.2 | first value; part B's tasks 1 and 2 record the press points |
+| The press point | an offset from the target's middle, a normal with a standard deviation of 1/8 of the target's smaller side, at most 1/4 of it; only for the targets of section 6.2's four conditions, else Playwright's point rounded | first value; part B's tasks 1 and 2 record the press points |
 | The idle hand | none in the first build (Q4) | part B, task 6 |
 
 ### 10.2 Keyboard patterns (ab-t30.4)
@@ -667,7 +830,7 @@ literature or from the research; part B replaces them (section 10.3).
 | The time from one press to the next | a lognormal with the person's mean (an average typist: 239 ms, standard deviation 112 ms; a fast one: about 120 ms), with a part for each letter pair | [19], [20]; the letter-pair part from part B |
 | Pauses | after a space: 20 to 120 ms more; after a mark (`.,;:!?`): 80 to 250 ms more; at a line's end: 200 to 600 ms more | first values; the research's K2 target (longer at word and line ends [19], [20]); part B |
 | The speed in a session | the person's base speed times a slow drift from word to word (a factor from 0.85 to 1.15) | first value; ab-t30.4's "a speed that varies within a session"; part B |
-| Rollover | when the next press comes before this key's release; with the holds and gaps above, about 25% of keys for an average typist and about 50% for a fast one | [19] |
+| Rollover | when the next press comes before this key's release. With the hold and the base interval above alone, the share is only about 10% (review-96, N5; the probe's run 2: 1 overlap in 54 keys). The person's share (about 25% of keys for an average typist and about 50% for a fast one [19]) comes from the letter-pair part: common pairs typed with the two hands have short intervals. ab-t30.4 fits the letter-pair part until the share reaches the target (K3) | [19]; part B |
 | Shift | a Shift `rawKeyDown` 45 to 95 ms before a shifted character (`modifiers` 8 on it), and the Shift release 15 to 60 ms after the last held key's release; a run of capitals keeps Shift down; the left Shift (`location` 1) for a key of the right hand, the right Shift (`location` 2) for a key of the left hand, in about 70% of cases | first values; the research (K4: CDP can send it); part B |
 | Corrections | none in the first build (K5); a later task can add a wrong key, a pause, Backspace and the right key, with the same final text | part B |
 | NumLock, CapsLock | off | the agent display |
@@ -733,9 +896,12 @@ and a seed.
 
 ## 12. The contracts
 
-C11's master text is in chrome-extension `docs/protocol.md` today. The service design's stage 0 (board
-ab-v16.94) moves it to agent-browser. The changes below are named against chrome-extension main `66078cd`;
-the build writes them wherever C11's master text is at that time.
+The service design's stage 0 (board ab-v16.94.1, agent-browser PR #95) merges before this design. From
+stage 0, C11's master is agent-browser `docs/contracts/C11.md`. Its sections "One window per page" with the
+bullets "The window comes forward for input" and "The pointer at an activation" have the same text as
+chrome-extension `docs/protocol.md` at `66078cd`, which this design read. So the changes below go into
+`docs/contracts/C11.md`, the new vectors go beside `test/vectors/control.json`, and the contract task (build
+task 4, section 14) is a pull request in agent-browser only.
 
 ### 12.1 C11 (the endpoint)
 
@@ -745,7 +911,8 @@ the build writes them wherever C11's master text is at that time.
      answer of a key release (4.5), the timestamps and the rate (4.6), the cases of no change (4.7);
    - each translation of the table of section 5, by CDP method and type;
    - the recognizers with their patterns, as `PLAYWRIGHT_FOCUS` is written today (section 5.2);
-   - the constants: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_MOVES_IN_FLIGHT = 8`,
+   - the constants: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`,
+     `STAGE_MOVES_IN_FLIGHT = 8`,
      `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`,
      `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`;
    - the rule that the stage is on for every client on Linux and on the Mac, with no client setting.
@@ -760,9 +927,14 @@ the build writes them wherever C11's master text is at that time.
    events that the stage sent, not by the client's points.
 4. **Refusals**: no new refusal, unless Q3's answer is c.
 5. **The Mac**: the wheel and the scroll pass (section 8.5) until the Mac's wheel model exists.
-6. **Vectors**: new `stageVectors` in `test/vectors/`: for each row of section 5, the client calls in, the
-   events out (method, type, key fields; times as ranges), and the order of the answers, with a seed and a
-   fake clock. The model's tests and the contract's tests read the same vectors.
+6. **Vectors**: a new `test/vectors/stage.json` beside `test/vectors/control.json`: for each row of section 5,
+   the client calls in, the events out (method, type, key fields; times as ranges), and the order of the
+   answers, with a seed and a fake clock. The model's tests and the contract's tests
+   (`test/contracts-c11.test.ts` of stage 0) read the same vectors.
+7. **Dialogs** (section 4.3a): a client's `Page.handleJavaScriptDialog` goes to Chrome before the tab's gate
+   and before every stage step; the stage's waits and reads have their limits.
+8. **The MCP inside the service** (C11's section of that name, from stage 0): its configuration gets
+   `timeouts.action: 30000` (section 6.3).
 
 ### 12.2 C10 (the bridge) and C4
 
@@ -791,27 +963,38 @@ the build writes them wherever C11's master text is at that time.
   their spreads; the overlap share; a Shift press before each shifted character and its release after the
   last held key; a run of capitals keeps Shift; the same text. Notches: the count with the residual.
 - **The stage**, with a fake bridge and a fake clock, for each row of section 5: the client calls in, the
-  events out, the order of the answers, from `stageVectors`. Also: the gate (a `Runtime.evaluate` after a
-  click waits for the release), the lock (two tabs' actions never interleave), the in-flight bound, the
-  early answer (a later non-key call waits for the release), an error of an event (the plan stops, a held
-  button is released).
-- **The recognizers**: fixtures of Playwright's utility calls for each pinned version (taken from the
-  research's traces and from this probe's run), and a changed fixture that must pass unchanged.
+  events out, the order of the answers, from `test/vectors/stage.json`. Also: the gate (a `Runtime.evaluate`
+  after a click waits for the release), the lock (two tabs' actions never interleave), the in-flight bound,
+  the early answer (a later non-key call waits for the release), an error of an event (the plan stops, a
+  held button is released), a dialog at a press (a `confirm()` in `mousedown`) and at a focus click (an
+  `alert()` at the blur of the field before), with the client's dialog answer passing the gate, the miss
+  watch and the recovery of section 6.6, the press point's four conditions, the wheel point's rule.
+- **The recognizers and the decoder**: fixtures of Playwright's utility calls, captured for each pinned
+  version (from the research's traces and from this probe's runs), the decoder of Playwright's serialized
+  argument against them (the probe's run 1 had a wrong decoder: section 5.2), and a changed fixture that
+  must pass unchanged.
 
 ### 13.2 Live tests with real Playwright (`test/live/`, local pages only)
 
 - They run on the harness's own Xvfb and Chromium with the real receiver package, under the harness guard,
   as the agent-mode live tests do today, with `*.localhost` pages only. Playwright is installed in the run's
-  scratch folder, not in `package.json`, for two pinned versions: the oldest that the C11 text names
-  (1.64.1) and the newest (1.65.0 today).
+  scratch folder, not in `package.json`, for three pinned versions: the oldest that the C11 text names
+  (1.64.1), the newest release (1.65.0 today), and the `playwright-core` of the service's pinned
+  `@playwright/mcp` (with 0.0.85: `1.66.0-alpha-2026-11-09`, read in the probe's scratch install; the
+  service design's M3 ran it). The recognizer fixtures come from the same three. A pin bump of the MCP runs
+  them again, as its allow-list test does (review-96, B9).
 - For each row of section 5: the action passes in Playwright with its default timeout, and the page's state
   is the same as with Playwright's own input on a second Chromium with no stage (the value of a field, the
   checked state, the count of clicks, the element in view, the files of an input). The recorder page
   (`recorder.html`) records the page's view for the harness.
-- The cross-cases: a click whose path crosses a hover menu; a hover in a cross-origin frame; a click below
-  the fold inside an inner scroller; a fill of exactly the limit and one character more; a `dblclick` on a
-  word in a text; a press of Enter that submits a form; a dialog that opens at a click (the in-flight bound
-  and the dialog's answer).
+- The cross-cases: a click whose path crosses a hover menu whose panel covers the target (M7); a hover on
+  a target with a hover layer (M8); a hover in a same-origin frame (M10) and in a cross-origin frame; a
+  click below the fold inside an inner scroller, with a number input, a canvas with a wheel handler and a
+  frame inside it (the wheel point's rule; M11); a fill of exactly the limit and one character more; a fill
+  with a line feed; a tag input and a field with an input mask (the named exception of section 7.2); a field
+  in a cross-origin frame; a `dblclick` on a word in a text (at Playwright's point); a press of Enter that
+  submits a form; a dialog at a press and at a focus click (M9); a date-picker input that opens at a click
+  (open point 1); `dragTo` onto a drop zone that accepts the drop (M12).
 
 ### 13.3 The harness (ab-t30.2) and its measure for each gap
 
@@ -821,7 +1004,7 @@ part B, the person's numbers.
 
 | Gap | The measure | The bar (first values; the harness task sets them) |
 | --- | --- | --- |
-| P1 rate | samples per `pointermove` and predicted points | within the reference's range (M1) |
+| P1 rate | samples per `pointermove` and predicted points | samples: within XTEST's range on the same run (M1: met); predicted points: the bar of section 9.1 (M1: not met yet, 2.3 to 2.7 against 1.80 to 2.11) |
 | P2 times | the share of whole-ms sample gaps; events later than their handler | 100% on Linux; 0 |
 | P3 shape | straightness, maximum deviation, peak and mean speed, time against Fitts's index, speed peaks | a Kolmogorov-Smirnov statistic against the reference below a bound |
 | P4 the box | the frame's entry point, its moves inside, the time from entry to press | the entry at an edge; moves inside in the reference's range |
@@ -869,6 +1052,28 @@ runs each mutation once and records the red test in its pull request.
 | no input lock | the two-tab lock test |
 | no in-flight bound | the dialog case |
 | a recognizer that matches a part of the text | the client-function fixture |
+| the hover's whole path before the setup (not only its samples outside the target) | the hover-layer case (M8: every attempt misses) |
+| no miss watch, or no recovery at the next setup | the hover-menu case (M7: the click times out) |
+| the way around that crosses the kept box | the hover-menu case |
+| no limit of two recoveries | a unit test with a target that is always covered (the action must end in Playwright's own timeout, with at most two recoveries) |
+| the press point's spread on any target (no four conditions of section 6.2) | the `click({ position })`, range input and `dblclick`-on-a-word cases |
+| no hit test of a spread press point | a unit test with a target whose edge is near the spread point |
+| typed keys into a contenteditable | a unit test of the typing rule (rule 1) |
+| typed keys for a character with no US key | a unit test of the typing rule (rule 2) |
+| a line feed typed as Enter | the chat-field case (two messages) |
+| no residual of the notches | a unit test: ten calls of 100 px scroll the total within one notch |
+| no end of the notches after a round that does not move the scroller | the canvas-with-a-wheel-handler case (it must not zoom) |
+| a wheel point over a number input or a frame | the number-input case (M11: the value changes) |
+| no fallback after 4 rounds | a unit test with a scroller that the wheel does not move |
+| no frame mapping (the hit point in the frame's own points) | the same-origin frame case (M10) |
+| no release of a held button or key at an event's error | a unit test: an error at the press, then no button is down |
+| no `STAGE_ACTION_MAX_MS` | the long `pressSequentially` case (it must not reach 30 s) |
+| the modifier's release with no delay after the mouse release | R13 (the modifier's hold after the release) |
+| no person's gap between the presses of a double click | R13 (the gap of a double click) |
+| a later non-key call that does not wait for an early-answered release | a unit test: a `Runtime.evaluate` after `keyboard.type` sees every `keyup` |
+| a client's `Page.handleJavaScriptDialog` in the gate | the dialog-at-a-focus-click case (M9: the fill times out) |
+| a hold that counts from the press's answer | the dialog-at-a-press case (the hold grows by the dialog's time) |
+| a pending release sent before its hold (the probe's run 1 fault) | K1 (a hold below 50 ms) |
 
 ## 14. The build tasks, in order
 
@@ -887,32 +1092,36 @@ Each one builds on the one before.
 3. **ab-t30.4, the keyboard model** (on the board). `src/human/keys.ts` with the stream API and the early
    answer decision; `src/input.ts` `key` and `typeChar` move onto it. Tests: unit tests; the harness on
    `type --into` (K1 to K4, K6); mutations.
-4. **A new task, the stage's pointer part.** `src/relay/stage.ts`: the gate step, the lock, the held
-   answers, the timestamps and the rate, the in-flight bound, the paths for `mouseMoved`, the presses, the
-   double clicks, the buttons, the modifiers, `delay` and `steps`, the hover recognizer and the frame
-   mapping, the press point's hit test, the catch-up's merge, the activation before a path (C11 change 2).
-   Tests: the stage's unit tests and vectors for the pointer rows; the live rows with Playwright 1.64.1 and
-   1.65.0; the harness for R1, R2, R9 to R13; the mutations.
-5. **A new task, the stage's keys and text.** The key runs, the Shift key, the early answer of a release,
-   the typing rule of section 7 with its limits, the focus and fill recognizers and the focus click, `clear`,
-   chords. Tests: as task 4, for the key and text rows; R3, R4, K1 to K4.
-6. **A new task, the stage's scroll and wheel.** The notches with the residual, the translation of
-   `DOM.scrollIntoViewIfNeeded` with the scroller check, the frame case, the Mac's pass. Tests: as task 4;
-   R5, R6, P7.
-7. **A new task, the script calls.** By Q3's answer: the select-text and focus translations, the file
-   chooser click for `DOM.setFileInputFiles`, the drag path for `dragTo` (with a probe step on a page that
-   accepts the drop), and the pass or refusal of the other script calls. Tests: as task 4; R7, R8, R14, R15.
-8. **A new task, the contract text.** C11's changes of section 12.1 and `stageVectors`, in the repository
-   that holds C11's master text at that time. It merges before task 4's merge, so the build follows a
-   reviewed text.
+4. **A new task, the contract text.** C11's changes of section 12.1 in agent-browser
+   `docs/contracts/C11.md`, and `test/vectors/stage.json` beside `test/vectors/control.json`: a pull request
+   in agent-browser only (from stage 0, PR #95). It merges before task 5, so the build follows a reviewed
+   text (review-96, B12).
+5. **A new task, the stage's pointer part.** `src/relay/stage.ts`: the gate step, the lock, the held
+   answers, the dialog rules (section 4.3a), the timestamps and the rate, the in-flight bound, the paths for
+   `mouseMoved`, the presses, the double clicks, the buttons, the modifiers, `delay` and `steps`, the hover
+   rule and the frame mapping, the miss watch and the recovery (section 6.6), the press point's conditions
+   and hit test, the catch-up's merge, the activation before a path (C11 change 2). Tests: the stage's unit
+   tests and vectors for the pointer rows; the live rows with the three Playwright versions of section 13.2;
+   the harness for R1, R2, R9 to R13; the mutations.
+6. **A new task, the stage's keys and text.** The key runs, the Shift key and its order (section 4.5), the
+   early answer of a release, the typing rule of section 7 with its limits and the named exception, the focus
+   and fill recognizers (also on a cross-origin frame's session) and the focus click with its scroll,
+   `clear`, chords, `delay`. Tests: as task 5, for the key and text rows; R3, R4, K1 to K4.
+7. **A new task, the stage's scroll and wheel.** The notches with the residual, the translation of
+   `DOM.scrollIntoViewIfNeeded` with the wheel point's rule and the end after a round that does not move,
+   the frame case, the Mac's pass. Tests: as task 5; R5, R6, P7.
+8. **A new task, the script calls.** By Q3's answer: the select-text and focus translations, the file
+   chooser click for `DOM.setFileInputFiles`, the drag path for `dragTo` (with a live case on a drop zone
+   that accepts the drop), and the pass or refusal of the other script calls. Tests: as task 5; R7, R8, R14,
+   R15.
 9. **A new task, part B's parameters** (after ab-t30.7). `src/human/fit.ts`, the new parameter files, the
-   harness's bars against the person, and the Mac's wheel model (section 8.5). Tests: the fit's unit tests;
-   the harness against the person's numbers.
+   harness's bars against the person, the Mac's wheel model (section 8.5), and Q4's choice. Tests: the
+   fit's unit tests; the harness against the person's numbers.
 10. **ab-t30.5, the live test** on forum.bearchive.com from the operator's Mac Chrome, last, under its own
     rules. The design recommends to the lead that ab-t30.5 also waits for task 9, so that the input is
     measured against the operator's own recording before the live test.
 
-The stage's tasks 4 to 7 merge together or not at all into the default path: until all four are merged,
+The stage's tasks 5 to 8 merge together or not at all into the default path: until all four are merged,
 the stage stays off behind a build switch, so that no partial translation reaches a client ("don't do this
 half baked").
 
@@ -924,13 +1133,16 @@ Each question gives its options, their effects, a recommendation, and what the b
 
 - **a. Yes, always, for every client and every site (recommended).** A click takes about 1 to 1.6 s (2.6 s
   with a long scroll; M3) and typed text about 5 characters a second (M5), so a long agent task takes longer
-  than with plain Playwright.
-  No site and no client needs a setting, as "the caller doesn't worry about it" says. A check like a click
-  box can appear on any site, so the agent never knows in advance where it matters.
+  than with plain Playwright. A test of `@playwright/test` with 15 to 20 clicks and a 60-character fill
+  passes its default 30 s test timeout through agent mode; its owner must raise that timeout (for example to
+  120 s; section 6.3). No site and no client needs a setting, as "the caller doesn't worry about it" says. A
+  check like a click box can appear on any site, so the agent never knows in advance where it matters. No
+  change in agentwatch.
 - b. Only for the sites of a list that the operator keeps on the Browser pane; plain Playwright speed on
   other sites. Faster on most sites; a check on a site that is not on the list sees plain Playwright input.
+  It needs a new op on the control door (C12) for the list and a change of agentwatch's Browser pane.
 - c. Always, with a switch for each scope on the Browser pane that the operator can turn off (for example,
-  for a test run). The default stays a.
+  for a test run). The default stays a. It needs a new C12 op and a change of agentwatch's Browser pane.
 - No answer: a.
 
 **Q2. What does the stage do with a long text for `fill`, `insertText` or `pressSequentially`?** (section
@@ -965,43 +1177,73 @@ The page sees an event with `isTrusted` false or a focus or a change with no inp
 
 **Q4. Does the pointer move by itself between a client's actions (a resting hand)?** (P6)
 
-- a. No, until part B shows how the operator's hand moves at rest (task 6 of part B). Then the operator
-  decides again with the numbers.
-- **b. No, not in this design (recommended).** A move that no client asked for can open a hover menu or start
-  a page's own handlers, so the client's next action can meet a changed page; a person's resting hand on a
-  desk mouse makes few or no moves. The harness measures P6 against part B; if part B shows a gap, a later
-  task can add small moves that stay over a part of the page with no handlers.
-- c. Yes: small moves at rest from the first build. A page sees a living hand; a client's next action can
-  meet a changed page.
-- No answer: b.
+- **a. No idle moves (recommended).** A move that no client asked for can open a hover menu or start a
+  page's own handlers, so the client's next action can meet a changed page; a person's resting hand on a
+  desk mouse makes few or no moves. The harness still measures P6 against part B and reports it; a change
+  needs a new decision of the operator.
+- b. Idle moves from the first build: small moves at rest, only over parts of the page with no hover
+  handlers that the stage can see. A page sees a living hand; a client's next action can meet a changed
+  page, and the stage needs a rule for that.
+- c. No idle moves now; build task 9 adds them with no new question when part B shows that the operator's
+  hand moves at rest (P6 above a bar that task 9 sets from part B's task 6). The build is a now, and b later
+  if the numbers say so.
+- No answer: a.
 
-## 16. What this design does not cover
+## 16. Open points
+
+The review of this design (review-96) found these points that the fix round did not settle. Each names what
+the build must show. The operator sees them with the questions.
+
+1. **A widget that a click opens** (review-96, B1 c). The stage's focus click is a click, where Playwright
+   uses a script focus. A text field whose click opens a picker or a list (a date-picker library, a
+   combobox) can leave that widget over the next target, and Playwright's script focus would not open it.
+   Section 6.6's recovery moves the pointer off a covering element, but a widget that stays open until
+   Escape or an outside click stays. Build task 6 must show, on a date-picker input and a combobox of the
+   live tests, whether the next action passes; if not, the options are: send Escape after a focus click that
+   opened a new element over the page (an input of its own), click an empty part of the page (a click with
+   its own effects), or use Playwright's script focus for such fields (the signal stays).
+2. **The named exception of section 7.2** (review-96, B4). A page's key handler can make the value differ
+   from Playwright's `fill`. Build task 6 must report the tag input and the input mask of the live tests;
+   if the operator wants "the same result" always, `fill` goes as one `insertText` (Q2 c's effect for every
+   length).
+3. **Predicted points** (section 9.1; review-96, N1). CDP gives more predicted points than XTEST
+   (2.3 to 2.7 against 1.80 to 2.11 here). Build task 2 (ab-t30.3) must reach the bar of section 9.1, or the
+   lead brings the numbers and the two options to the operator.
+4. **A hover or a click in a cross-origin frame, `dragTo` onto a drop zone that accepts the drop, and the
+   press point's spread** are designed but not measured. Build tasks 5 and 8 measure them in the live tests
+   before their merge.
+
+## 17. What this design does not cover
 
 - The Mac's own numbers: event times, the trackpad, the wheel, fractional points on a Retina screen (part B;
   the research, section 9).
 - An input method, dead keys, and typed keys in a contenteditable (section 7.3).
 - Typing errors and their corrections (K5).
 - Touch and pen input.
-- A hover in a cross-origin frame (section 5.3) and `dragTo` against a page that accepts the drop (section
-  5.1): designed, not measured. Tasks 4 and 7 measure them.
-- Internal names of Playwright versions other than 1.64.1 and 1.65.0 (section 5.2).
+- The points of section 16 (open points).
+- Internal names of Playwright versions other than the three of section 13.2 (section 5.2).
 - What a click box's scripts read: this design matches what a script can read (the research, section 1).
 
-## 17. The measurements
+## 18. The measurements
 
 The probe ran on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
 playwright-core 1.65.0 in a scratch folder) in a private Xvfb on display 169 (1920 x 1080 x 24, no window
 manager, its own X authority file), under the box's shared heavy lock and the repository's harness guard.
 Each scenario started its own Chromium on a new profile, which the probe removed at the scenario's end.
-Only `rec.localhost` and `box.localhost` were reachable. The probe's README gives the files and the
+Only `rec.localhost`, `box.localhost` and `cases.localhost` were reachable. The probe's README gives the files and the
 command; `results/` holds the runs.
 
-Two runs: run 1 (02:15 to 02:16 UTC on 2026-11-10) and run 2 (02:33 to 02:35 UTC). Run 1's stage had two
-faults of the probe, which run 2 fixed: its decoder read Playwright's argument in a wrong form, so its hover
-recognizer missed and both of its hovers went the naive way; and its events carried the send time with no
-latency. The folder holds run 2's code. Where both runs measured the same thing, a value is a range over both
-runs. Each step's numbers come from the input research's `analyze.ts` (`results/run-2-summary.json`) and from
-the probe's own counts (`results/run-2-extra.json`).
+Four runs: run 1 (02:15 to 02:16 UTC on 2026-11-10), run 2 (02:33 to 02:35 UTC), and runs 3 and 4 (03:18 and
+about 03:35 UTC) of the review's cases (scenarios `cases-raw` and `cases`, M7 to M12). Run 3's menu was
+narrow, so the stage's random path missed its trigger in the step with the recovery; run 4 (the code in the
+folder) has a wider menu, and its numbers are the ones below; run 3's other results were the same. Run 1's
+stage had two faults of the probe, which run 2 fixed: its decoder read Playwright's argument in a wrong form,
+so its hover recognizer missed and both of its hovers went the naive way; and its events carried the send time
+with no latency. The folder holds run 4's code; its `stage` scenario sets run 2's options (the hover's whole
+path before the setup, no recovery, no frame mapping), so it gives run 2's steps again. Where runs 1 and 2
+measured the same thing, a value is a range over both runs. Each step's numbers come from the input
+research's `analyze.ts` (`results/run-2-summary.json`) and from the probe's own counts
+(`results/run-2-extra.json`, `results/run-4-extra.json`).
 
 **M1. The event source** (scenario `source`). Three planned paths (`planMove`, 105 to 120 samples, 0.9 to 1.04
 s, straightness 0.75 to 0.99) to three targets, each with a press of 90 ms after a pause of 150 ms, in five
@@ -1030,8 +1272,9 @@ an 8 s timeout).
 | `mouse.move(900, 700)`, then `click({ timeout: 3000 })` | passed | 2.35 to 2.41 s with the move's path | 1 | as the first row |
 
 In every step of the stage: 100% of the sample gaps on a whole millisecond, no fractional point, no jump over
-100 px, no movement that does not match the point, no event later than its handler, no untrusted event; 1.65
-to 1.88 samples per `pointermove`.
+100 px, no movement that does not match the point, no event later than its handler, no untrusted event.
+Samples per `pointermove`: 1.44 to 1.88 over both runs (run 1's double click 1.44; run 2 alone: 1.65 to
+1.88).
 
 **M4. Hovers** (`locator('#hov').hover()` from 900,700).
 
@@ -1065,6 +1308,49 @@ model's parameters; ab-t30.4 sets them. In every case the text was right.
 `mouse.wheel(0, -2400)` gave 20. Playwright's own `mouse.wheel(0, 600)` gives one event of 600 px (the
 research). The click below the fold is in M3.
 
+**M7 to M12: the review's cases** (run 4; a page of the probe's own, `cases.localhost`; Playwright with a 6 s
+timeout; the stage prototype with the rules of sections 4.3a, 5.3, 6.2 and 6.6, each one off in one step).
+
+| Case | Playwright's own input | The stage with the rule off | The stage with the rule |
+| --- | --- | --- | --- |
+| M7: a click on a button under a hover menu's panel, from above the menu | passed, 0.11 s | failed at 6 s: the path opened the panel, the press hit it (a miss at the stop), and 13 more setups missed (the pointer stayed in the panel; no input) | passed, 2.4 s: one miss at the stop, then the recovery at the second setup moved the pointer out of the menu's root, and the second attempt's press hit the button |
+| M8: `hover()` on a card whose `:hover` shows a layer over its middle | failed at 6 s (the layer covered the hit point at the first `mousemove`) | the whole path before the setup: failed at 6 s, 11 setups missed | the samples outside the card before the setup: passed, 0.58 s, one setup |
+| M10: `hover()` on an element of a same-origin frame (no session of its own) | passed, 0.13 s | the hit point in the frame's own points: failed at 6 s (4 setups, 3 misses at the stop) | the hit point mapped to the top page: passed, 0.72 s, one setup |
+| M9: `fill()` of a field while the field with the focus has `onblur="alert(...)"` | passed, 0.03 s (Playwright dismissed the alert) | the client's dialog answer in the gate: the fill failed at 6 s, and the page's later calls waited until the probe dismissed the alert at 25 s | the dialog answer passes the gate: passed, 1.1 s, with the focus click and 3 typed keys |
+
+In M7 the second attempt's path went straight from the exit point to the button, so the way around (rule 4
+of section 6.6) did not come into play; its unit test is in build task 5.
+
+M11, a wheel notch over a number input (`cases-raw`, CDP only): with no focus, the value stayed 5 and the page
+scrolled 43 px; with the input focused (by a press), a notch down set the value to 4 and a notch up to 5,
+each with a trusted `input` event, and the page did not scroll.
+
+M12, the drag events (`cases-raw`, CDP only, `Input.setInterceptDrags`): with a `dragEnter` before the
+`dragOver` events and the `drop`, the page got `dragstart`, `dragenter`, 4 `dragover`, `drop`, `dragend`; with
+no `dragEnter`, it got only `dragstart` and `dragend`: no `dragover` and no `drop`.
+
+**The facts of this design and how they were checked.** Facts from the code were read in `playwright-core`
+1.65.0 (and 1.66.0-alpha-2026-11-09, the playwright-core of `@playwright/mcp` 0.0.85), in a scratch install:
+
+| Fact | How it was checked |
+| --- | --- |
+| The hit-target event sets (click: `mousedown`, `mouseup`, `pointerdown`, `pointerup`, `click`, `auxclick`, `dblclick`, `contextmenu`; hover: `mousemove`); the first event decides; a miss stops later events | read: `setupHitTargetInterceptor`; probe: M4, M7, M8 |
+| Each attempt checks the hit point in the setup before input; retries after 0, 20, 100, 100, 500 ms; the scroll cycle `[none, end, center, start]` by the attempt number modulo 4 | read: `_retryAction`, `_retryPointerAction`, `_performPointerAction`; probe: M7 (13 missed setups with no input) |
+| A frame's hit point is in the frame's own points; a transformed frame gives none | read: `_checkFrameIsHitTarget`; probe: M10 |
+| A same-origin frame's utility calls come on the top page's session | probe: M10 (the stage saw them on the page's session) |
+| A click's move, press and release come together; `delay` and `steps` make them sequential | read: `Mouse.click`; probe: M3 |
+| `ensureModifiers` presses a modifier after the setup and waits for its answer before the move | read: `_performPointerAction`, `Keyboard.ensureModifiers`; the research's run 3 trace; probe: M3 |
+| `keyboard.type` presses each key and waits; `delay` is a wait between down and up | read: `Keyboard.type`, `Keyboard.press` |
+| `fill` selects by script, then one `Input.insertText` with the whole text (a line feed too); date and similar inputs get a script value | read: `_fill`, `injected.fill`, the input type sets; the research's trace |
+| The serialized argument's form (plain strings, numbers and booleans) | read: `serializeAsCallArgument`; probe: run 1's fault and run 2's fix |
+| `page.mouse.*` and `page.keyboard.*` have no timeout; actions 30 s by default | read: the client's `kNoTimeout`, `TimeoutSettings`, `DEFAULT_PLAYWRIGHT_TIMEOUT` |
+| The MCP's action timeout is 5 s by default | read: the `@playwright/mcp` 0.0.85 README (`--timeout-action`) |
+| `dragTo` has `steps`, `sourcePosition`, `targetPosition`; the drop replaces the release | read: `dragAndDrop`, the drag manager's `drop` |
+| Chromium needs a `dragEnter` before `dragOver` and `drop` | probe: M12 |
+| A wheel notch changes a focused number input's value | probe: M11 |
+| A dialog stops the answers of input events until it closes | probe: M9 |
+| `@playwright/test`: no action timeout and a 30 s test timeout by default | not read in its code here (the `@playwright/test` package is not in the scratch install); its documented defaults |
+
 **The limits of the measurements.** The design rests on these numbers only within these limits:
 
 - One Chromium (Debian Chromium 156) on Linux, in an Xvfb with no window manager; XTEST, not a hardware mouse
@@ -1073,10 +1359,14 @@ research). The click below the fold is in M3.
   Its bridge was Chromium's pipe, not `chrome.debugger` through the agent extension. The stage's build
   measures these in the live tests (section 13.2).
 - The prototype's model parameters are its own (M5), not all of the first values of section 10.
-- Not run: `dragTo`, a hover in a frame, the press point's spread and its hit test, `setInputFiles`,
-  `selectText`, `focus` on a text field, Playwright 1.64.1, and the MCP inside the service.
+- Not run: the whole `dragTo` through the stage (M12 sent the drag events by hand), a hover or a click in a
+  cross-origin frame, the press point's spread and its hit test, the wheel point's rule, `setInputFiles`,
+  `selectText`, `focus` on a text field, the two other Playwright versions of section 13.2, and the MCP
+  inside the service.
+- The review's cases (M7 to M12) ran in two runs (3 and 4) on pages of the probe's own; the numbers are run
+  4's. The way around of section 6.6 rule 4 was not exercised.
 
-## 18. Sources
+## 19. Sources
 
 The numbered sources [7], [13], [14], [17], [18], [19], [20] are those of the research
 ([2026-11-09-click-box-input-signals.md](../../research/2026-11-09-click-box-input-signals.md), section 11).

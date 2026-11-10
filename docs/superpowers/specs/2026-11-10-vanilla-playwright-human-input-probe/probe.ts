@@ -1,8 +1,8 @@
 // The probe of board task ab-t30.6 (docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, section
-// 17). Not part of `npm test`. Linux only, in a private Xvfb that it starts (display 169 by default), with Chromium
+// 18). Not part of `npm test`. Linux only, in a private Xvfb that it starts (display 169 by default), with Chromium
 // processes of its own and local pages only.
 //
-//   node probe.ts --out-dir DIR --playwright DIR [--display 169] [--chrome /usr/bin/chromium] [--only source,stage]
+//   node probe.ts --out-dir DIR --playwright DIR [--display 169] [--chrome /usr/bin/chromium] [--only source,stage,cases-raw,cases]
 //
 // It uses the recorder page of the input research (docs/research/2026-11-09-click-box-input-signals/recorder.html) on a
 // local server (rec.localhost, with the click-box stand-in in a frame of box.localhost), and that research's analyze.ts
@@ -16,9 +16,14 @@
 //           person's timing, a Shift key for capitals, rollover, typed keys for a short fill, wheel notches of 120 px, a
 //           wheel scroll in place of DOM.scrollIntoViewIfNeeded, a click in place of Playwright's script focus, and the
 //           hover path before the hit-target check)
+//   cases-raw  the review's cases (review-96) with CDP calls of the probe's own on cases.localhost: a wheel notch over a
+//           number input, and an intercepted HTML5 drag with and without a dragEnter
+//   cases   the review's cases with Playwright, each with no stage, with the stage and one rule off, and with the rule
+//           on: a hover menu's panel over a button, a hover layer over a card, a hover in a same-origin frame, and a
+//           dialog at the stage's focus click
 // Chromium runs with --remote-debugging-pipe; the bridge serves the pipe as a WebSocket on a Unix socket in a short
 // temporary folder of its own (removed at the end) and records each CDP message with its time. Chromium opens no
-// debugging port. No page of the network is reachable: the host resolver maps every host but the two local ones to
+// debugging port. No page of the network is reachable: the host resolver maps every host but the three local ones to
 // nothing, and the proxy is a closed local port. One harness at a time and nothing left after its end
 // (test/live/README.md): the harness guard; the probe ends only the processes that it started, by their pids, and removes
 // each scenario's profile.
@@ -47,7 +52,7 @@ const CHROME = values.chrome ?? "/usr/bin/chromium", DISPLAY = Number(values.dis
 if (!Number.isInteger(DISPLAY) || DISPLAY < 1) refuse("--display is a positive whole number");
 const reserved = reservedDisplay(DISPLAY, "--display");
 if (reserved) refuse(reserved);
-const ALL = ["source", "stage"];
+const ALL = ["source", "stage", "cases-raw", "cases"];
 const ONLY = values.only ? values.only.split(",") : ALL;
 for (const n of ONLY) if (!ALL.includes(n)) refuse(`no scenario ${n}; known: ${ALL.join(", ")}`);
 const OUT = resolve(values["out-dir"]!);
@@ -90,6 +95,50 @@ const HTML = readFileSync(RECORDER, "utf8");
 const piece = (re: RegExp) => { const m = re.exec(HTML); if (!m) throw new Error(`recorder.html has no ${re}`); return m[1]; };
 const BOX_HTML = `<!doctype html><html><head><meta charset=utf-8><title>box</title></head><body>${piece(/<template id="box-html">([\s\S]*?)<\/template>/)}`
   + `<script>${piece(/<script id="core">([\s\S]*?)<\/script>/)}</script><script>${piece(/<script type="text\/plain" id="box-ui">([\s\S]*?)<\/script>/)}</script></body></html>`;
+/**
+ * The page of the review's cases (fix round 1): a hover menu whose panel covers a button (B1 a), a card with a hover
+ * layer over its middle (B1 b), a same-origin frame with a hover target (B6), a number input (B2), an HTML5 drag source
+ * and drop zone (N3), and a field whose blur opens an alert (B7). Fixed places; the page logs its own events.
+ */
+const CASES_HTML = `<!doctype html><html><head><meta charset=utf-8><title>Cases</title><style>
+body { margin: 0; font: 14px sans-serif; min-height: 900px; }
+.abs { position: absolute; box-sizing: border-box; }
+#mt { left: 40px; top: 100px; width: 420px; height: 30px; background: #ddd; }
+#mp { display: none; position: absolute; left: 0; top: 30px; width: 420px; height: 220px; background: #eef; border: 1px solid #99a; z-index: 5; }
+#mt:hover #mp { display: block; }
+#ub { left: 140px; top: 200px; width: 100px; height: 30px; }
+#wrap { left: 500px; top: 100px; width: 240px; height: 160px; }
+#card { position: absolute; left: 0; top: 0; width: 240px; height: 160px; background: #cfc; }
+#qv { display: none; position: absolute; left: 70px; top: 60px; width: 100px; height: 40px; background: #333; color: #fff; }
+#wrap:hover #qv { display: block; }
+#sf { left: 100px; top: 450px; width: 300px; height: 150px; border: 2px solid #888; }
+#num { left: 500px; top: 450px; width: 120px; height: 28px; }
+#ds { left: 700px; top: 450px; width: 80px; height: 40px; background: #fcc; }
+#dz { left: 900px; top: 450px; width: 160px; height: 80px; border: 2px dashed #888; }
+#a1 { left: 100px; top: 650px; width: 150px; height: 28px; }
+#b2 { left: 300px; top: 650px; width: 150px; height: 28px; }
+</style></head><body>
+<div id=mt class=abs>Menu<div id=mp>Panel</div></div>
+<button id=ub class=abs>Under</button>
+<div id=wrap class=abs><div id=card>Card</div><div id=qv>Quick view</div></div>
+<iframe id=sf class=abs srcdoc="<style>body{margin:0}#sft{position:absolute;left:50px;top:50px;width:120px;height:40px;background:#ccf}</style><div id=sft>Frame target</div><script>window.__hov=0;document.getElementById('sft').addEventListener('mouseenter',()=>window.__hov++)</script>"></iframe>
+<input id=num class=abs type=number value=5>
+<div id=ds class=abs draggable=true>Drag</div>
+<div id=dz class=abs>Drop</div>
+<input id=a1 class=abs onblur="alert('blur of a1')">
+<input id=b2 class=abs>
+<script>
+window.__log = [];
+const L = (e) => window.__log.push({ e: e.type, tg: (e.target && e.target.id) || (e.target && e.target.nodeName), tr: e.isTrusted });
+for (const t of ["click", "mouseenter"]) document.getElementById("ub").addEventListener(t, L);
+document.getElementById("mp").addEventListener("click", L);
+document.getElementById("ds").addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", "x"); L(e); });
+document.getElementById("ds").addEventListener("dragend", L);
+const dz = document.getElementById("dz");
+for (const t of ["dragenter", "dragleave", "drop"]) dz.addEventListener(t, (e) => { e.preventDefault(); L(e); });
+window.__overs = 0; dz.addEventListener("dragover", (e) => { e.preventDefault(); window.__overs++; });
+document.getElementById("num").addEventListener("input", L);
+</script></body></html>`;
 const server = createServer((req, res) => {
   const host = String(req.headers.host ?? "");
   if (req.method === "POST" && req.url === "/log") {
@@ -105,10 +154,12 @@ const server = createServer((req, res) => {
   const path = (req.url ?? "/").split("?")[0];
   if (path === "/recorder.html" && host.startsWith("rec.localhost")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(HTML); return; }
   if (path === "/box.html" && host.startsWith("box.localhost")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(BOX_HTML); return; }
+  if (path === "/cases.html" && host.startsWith("cases.localhost")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(CASES_HTML); return; }
   res.writeHead(404).end();
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 const PORT = (server.address() as { port: number }).port;
+const CASES_URL = () => `http://cases.localhost:${PORT}/cases.html`;
 const REC_URL = (label: string) => `http://rec.localhost:${PORT}/recorder.html?sink=1&run=${label}&box=${encodeURIComponent(`http://box.localhost:${PORT}/box.html`)}`;
 
 // ------------------------------------------------------------------ the layout (the page's own records) and X input
@@ -145,7 +196,7 @@ async function step(name: string, fn: () => Promise<unknown>, limitMs = 20_000, 
   let ok = true, error: string | undefined, note: unknown;
   let timer: NodeJS.Timeout | undefined;
   try { note = await Promise.race([fn(), new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no end in ${limitMs / 1000} s`)), limitMs); })]); }
-  catch (e) { ok = false; error = String((e as Error).message ?? e).split("\n")[0].slice(0, 240); }
+  catch (e) { ok = false; error = String((e as Error).message ?? e).split("\n")[0].slice(0, 240); note = (e as { out?: unknown }).out; }
   finally { clearTimeout(timer); }
   const t1 = now();
   (marks[scenarioName] ??= []).push({ name, t0, t1, ok, ...(error ? { error } : {}), ...(note !== undefined ? { note } : {}) });
@@ -176,8 +227,8 @@ const between = (random: () => number, a: number, b: number) => a + (b - a) * ra
 // ------------------------------------------------------------------ Chromium over a pipe, the bridge, and the stage
 const BASE_ARGS = ["--remote-debugging-pipe", "--no-first-run", "--no-default-browser-check", "--ozone-platform=x11", "--password-store=basic",
   "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps", "--disable-backgrounding-occluded-windows",
-  "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE rec.localhost , EXCLUDE box.localhost", "--proxy-server=http://127.0.0.1:9",
-  "--proxy-bypass-list=rec.localhost;box.localhost", "--window-position=0,0", "--window-size=1280,1000"];
+  "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE rec.localhost , EXCLUDE box.localhost , EXCLUDE cases.localhost", "--proxy-server=http://127.0.0.1:9",
+  "--proxy-bypass-list=rec.localhost;box.localhost;cases.localhost", "--window-position=0,0", "--window-size=1280,1000"];
 type Trace = { t: number; d: ">" | "<" | "e" | "s"; id?: number; m?: string; s?: string; p?: unknown; err?: string; held?: number };
 type Client = { ws: WebSocket; sessions: Set<string> };
 type Msg = { id: number; method: string; sessionId?: string; params?: any };
@@ -199,7 +250,9 @@ class Chromium {
   readonly types = new Map<string, string>();
   private buf = "";
   private next = 1;
-  private pending = new Map<number, { c?: Client; id?: number; method: string; sessionId?: string; done?: (m: any) => void; recv?: number }>();
+  private pending = new Map<number, { c?: Client; id?: number; method: string; sessionId?: string; done?: (m: any) => void; recv?: number; onAnswer?: (m: any) => void }>();
+  /** The last point of a pointer event that the bridge sent as it came (with the stage off). */
+  readonly lastPoint = new Map<string, Pt>();
   private owner = new Map<string, Client>();
   private clients = new Set<Client>();
   private autoAttacher?: Client;
@@ -233,9 +286,10 @@ class Chromium {
   }
   private toChrome(m: object) { (this.proc.stdio[3] as Writable).write(JSON.stringify(m) + "\0"); }
   /** A client's call goes to Chrome now; its answer goes back to the client. */
-  forward(c: Client, m: Msg, recv = now()) {
+  forward(c: Client, m: Msg, recv = now(), onAnswer?: (m: any) => void) {
     const gid = this.next++;
-    this.pending.set(gid, { c, id: m.id, method: m.method, sessionId: m.sessionId, recv });
+    if (m.method === "Input.dispatchMouseEvent" && m.sessionId && typeof m.params?.x === "number") this.lastPoint.set(m.sessionId, { x: Math.round(m.params.x), y: Math.round(m.params.y) });
+    this.pending.set(gid, { c, id: m.id, method: m.method, sessionId: m.sessionId, recv, onAnswer });
     this.toChrome({ ...m, id: gid });
   }
   /** The stage's own call: never seen by a client. */
@@ -256,6 +310,8 @@ class Chromium {
     const m = JSON.parse(raw) as Msg, recv = now();
     if (m.method === "Target.setAutoAttach" && !m.sessionId) this.autoAttacher = m.params?.autoAttach ? c : undefined;
     this.trace.push({ t: recv, d: ">", id: m.id, m: m.method, ...(m.sessionId ? { s: m.sessionId.slice(0, 6) } : {}), ...(m.params ? { p: trim(m.params) } : {}) });
+    // The design's rule (B7): a client's dialog answer never waits behind a stage step.
+    if (this.stage && m.method === "Page.handleJavaScriptDialog" && this.stage.dialogBypass) { this.forward(c, m, recv); return; }
     if (this.stage && m.sessionId && this.types.get(m.sessionId) === "page") { this.stage.enqueue(c, m, recv); return; }
     this.forward(c, m, recv);
   }
@@ -266,6 +322,7 @@ class Chromium {
       this.pending.delete(m.id);
       if (p?.done) { p.done(m); return; }
       if (!p?.c) return;
+      p.onAnswer?.(m);
       this.trace.push({ t: now(), d: "<", id: p.id, m: p.method, ...(m.error ? { err: String(m.error.message).slice(0, 120) } : {}), ...(p.recv ? { held: Math.round((now() - p.recv) * 10) / 10 } : {}) });
       if (p.method === "Target.attachToTarget" && m.result?.sessionId) { this.owner.set(m.result.sessionId, p.c); p.c.sessions.add(m.result.sessionId); }
       if (p.c.ws.readyState === WebSocket.OPEN) p.c.ws.send(JSON.stringify({ ...m, id: p.id }));
@@ -345,8 +402,37 @@ type Keys = { lastDown: number; lastChar: string; downAt: Map<string, number>; h
  * one gate: its calls run in order, and a call runs after the input before it has been played. The stage's own calls
  * (paths, presses, keys, notches, reads) go to Chrome with ids of their own.
  */
+type Rect = { x0: number; y0: number; x1: number; y1: number };
+/** Whether the segment a-b crosses the rectangle (Liang-Barsky). */
+function crosses(a: Pt, b: Pt, r: Rect): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (const [p, q] of [[-dx, a.x - r.x0], [dx, r.x1 - a.x], [-dy, a.y - r.y0], [dy, r.y1 - a.y]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return t0 <= t1;
+}
+const inside = (p: Pt, r: Rect) => p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
+/** In Playwright's utility world, on a node: the offset of its frame in the top page (same-origin frames), and its box there. */
+const NODE_GEO = "function () { let x = 0, y = 0, w = this.ownerDocument.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = this.getBoundingClientRect(); return { ox: x, oy: y, top: w === w.top, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }";
+/** On the target node: the element that covers the hit point, widened to its highest ancestor that does not hold the target (a menu's root); kept for the second read. */
+const OBSTACLE = "function (x, y) { const t = this, el = document.elementFromPoint(x, y); if (!el || el === t || t.contains(el)) return null; let o = el; while (o.parentElement && !o.parentElement.contains(t)) o = o.parentElement; globalThis.__stageObstacle = o; const a = o.getBoundingClientRect(), b = el.getBoundingClientRect(); return { x0: Math.min(a.left, b.left), y0: Math.min(a.top, b.top), x1: Math.max(a.right, b.right), y1: Math.max(a.bottom, b.bottom), id: o.id || o.tagName }; }";
+const OBSTACLE_AGAIN = "function () { const o = globalThis.__stageObstacle; if (!o) return null; const a = o.getBoundingClientRect(); return { x0: a.left, y0: a.top, x1: a.right, y1: a.bottom }; }";
+
 class Stage {
-  hover: "hold" | "naive" = "hold";
+  /** A hover's path: "edge" (the design: the samples outside the target before Playwright's check setup, the rest after it), "hold" (all of it before the setup), "naive" (all of it after the setup). */
+  hover: "edge" | "hold" | "naive" = "edge";
+  /** Map a hover's hit point from a same-origin frame to the top page (B6). */
+  frameMap = true;
+  /** After a hit-target miss: leave the element that covered the target, and go around it on the next path (B1). */
+  recover = true;
+  /** The client's Page.handleJavaScriptDialog never waits behind a stage step (B7). */
+  dialogBypass = true;
+  private miss = new Map<string, boolean>();
+  private avoid = new Map<string, Rect | null>();
+  private rest = new Map<string, { to: Pt; pts: { p: Pt; at: number }[] }>();
   readonly random: () => number;
   readonly stats: Record<string, number> = {};
   private readonly br: Chromium;
@@ -363,6 +449,8 @@ class Stage {
   /** The event's time: whole ms, a person's input latency (3 to 5 ms) before the send, so never in the future. */
   private ts() { return (Date.now() - 3 - Math.floor(this.random() * 3)) / 1000; }
   start(sessionId: string, p: Pt) { this.last.set(sessionId, p); }
+  /** A new case: no miss, no obstacle and no kept hover leg from the case before. */
+  reset() { this.miss.clear(); this.avoid.clear(); this.rest.clear(); }
   enqueue(c: Client, m: Msg, recv: number) {
     const s = m.sessionId!;
     const run = (this.gates.get(s) ?? Promise.resolve()).then(() => this.handle(c, m, recv)).catch((e) => {
@@ -394,10 +482,78 @@ class Stage {
     if (u && /\binjected\.setupHitTargetInterceptor\(/.test(u.fn)) {
       this.count("setupCalls");
       const o = u.arg?.[2] as Record<string, any> | undefined;
-      if (o?.actionType === "hover" && o.hitPoint && this.hover === "hold") { this.count("hoverPathsBeforeSetup"); await this.path(s, { x: o.hitPoint.x, y: o.hitPoint.y }, 0); }
+      if (this.recover && this.miss.get(s) && u.node && o?.hitPoint) await this.leave(s, u.node, o.hitPoint);
+      if (o?.actionType === "hover" && o.hitPoint && this.hover !== "naive") {
+        const g = this.frameMap && u.node ? await this.nodeGeo(s, u.node) : null;
+        const H = { x: o.hitPoint.x + (g?.ox ?? 0), y: o.hitPoint.y + (g?.oy ?? 0) };
+        this.count("hoverPathsBeforeSetup");
+        if (this.hover === "hold" || !g) await this.path(s, H, 0);
+        else await this.pathOutside(s, H, g.box);
+      }
+      // The setup's answer: a string is Playwright's own miss of its first check.
+      this.br.forward(c, m, recv, (a) => { const r = a?.result?.result; if (r?.type === "string" && r.value !== "error:notconnected") { this.miss.set(s, true); this.count("setupMisses"); } else if (r?.objectId) this.miss.set(s, false); });
+      return;
+    }
+    if (u && /^\(h\) => h\.stop\(\)$/.test(u.fn.trim())) {
+      this.br.forward(c, m, recv, (a) => { const v = a?.result?.result?.value; if (v !== undefined && v !== "done") { this.miss.set(s, true); this.count("stopMisses"); } });
+      return;
     }
     if (u && /\binjected\.(focusNode|fill)\(/.test(u.fn) && u.node) await this.clickToFocus(s, u.node);
     this.br.forward(c, m, recv);
+  }
+  private async nodeGeo(s: string, objectId: string): Promise<{ ox: number; oy: number; box: Rect } | null> {
+    try { return (await this.br.call("Runtime.callFunctionOn", { objectId, functionDeclaration: NODE_GEO, returnByValue: true }, s)).result.value; } catch { return null; }
+  }
+  /** The design's hover rule: plan the whole path, send its samples that are outside the target's box now, and keep the rest for Playwright's move. */
+  private async pathOutside(s: string, to: Pt, box: Rect) {
+    const from = this.last.get(s)!, pts = await plan(from, to, this.random);
+    let i = 0;
+    while (i < pts.length && !inside(pts[i].p, box)) i++;
+    if (i === pts.length) { await this.play(s, pts, 0); this.last.set(s, { x: Math.round(to.x), y: Math.round(to.y) }); return; }
+    await this.play(s, pts.slice(0, i), 0);
+    if (i > 0) this.last.set(s, pts[i - 1].p);
+    this.rest.set(s, { to: { x: Math.round(to.x), y: Math.round(to.y) }, pts: pts.slice(i).map((q) => ({ p: q.p, at: q.at - pts[i].at })) });
+    this.count("hoverRestKept");
+  }
+  private async play(s: string, pts: { p: Pt; at: number }[], modifiers: number) {
+    const t0 = this.perf(), sent: Promise<unknown>[] = [];
+    for (const { p, at } of pts) {
+      await this.until(t0 + at);
+      sent.push(this.br.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none", buttons: 0, modifiers, timestamp: this.ts() }, s));
+    }
+    await Promise.all(sent);
+    this.count("pathMoves", pts.length);
+    this.lastMoveEnd.set(s, this.perf());
+  }
+  /** After a miss (B1): leave the element that covers the hit point, wait two frames, and keep its root's box to go around. */
+  private async leave(s: string, node: string, hit: Pt) {
+    this.miss.set(s, false);
+    let r: (Rect & { id: string }) | null = null;
+    try { r = (await this.br.call("Runtime.callFunctionOn", { objectId: node, functionDeclaration: OBSTACLE, arguments: [{ value: hit.x }, { value: hit.y }], returnByValue: true }, s)).result.value; } catch { /* none */ }
+    if (!r) return;
+    this.count("leaves");
+    const at = this.last.get(s)!;
+    const exits = [{ x: r.x0 - 15, y: at.y }, { x: r.x1 + 15, y: at.y }, { x: at.x, y: r.y0 - 15 }, { x: at.x, y: r.y1 + 15 }].filter((e) => e.x > 2 && e.y > 2 && e.x < 1260 && e.y < 840);
+    exits.sort((a, b) => Math.hypot(b.x - hit.x, b.y - hit.y) - Math.hypot(a.x - hit.x, a.y - hit.y));
+    if (exits[0]) await this.path(s, exits[0], 0);
+    await sleep(60);
+    try { this.avoid.set(s, (await this.br.call("Runtime.callFunctionOn", { objectId: node, functionDeclaration: OBSTACLE_AGAIN, returnByValue: true }, s)).result.value); } catch { /* none */ }
+  }
+  /** A path that goes around the kept obstacle (B1): through the corner of its box (10 px out) with the shortest way, when the straight way crosses it. */
+  private async pathAround(s: string, to: Pt, modifiers: number) {
+    const r = this.avoid.get(s);
+    this.avoid.set(s, null);
+    const at = this.last.get(s)!;
+    if (r) {
+      const R = { x0: r.x0 - 10, y0: r.y0 - 10, x1: r.x1 + 10, y1: r.y1 + 10 }, inner = { x0: R.x0 + 1, y0: R.y0 + 1, x1: R.x1 - 1, y1: R.y1 - 1 };
+      if (crosses(at, to, inner)) {
+        const corners = [{ x: R.x0, y: R.y0 }, { x: R.x1, y: R.y0 }, { x: R.x0, y: R.y1 }, { x: R.x1, y: R.y1 }]
+          .filter((w) => !crosses(at, w, inner) && !crosses(w, to, inner))
+          .sort((a, b) => (Math.hypot(a.x - at.x, a.y - at.y) + Math.hypot(to.x - a.x, to.y - a.y)) - (Math.hypot(b.x - at.x, b.y - at.y) + Math.hypot(to.x - b.x, to.y - b.y)));
+        if (corners[0]) { this.count("pathsAround"); await this.path(s, corners[0], modifiers); }
+      }
+    }
+    await this.path(s, to, modifiers);
   }
   /** A path from the page's last point to `to`, at 125 Hz, each move with its send time in whole ms, not awaited one by one. */
   private async path(s: string, to: Pt, modifiers: number) {
@@ -417,18 +573,29 @@ class Stage {
     const same = to.x === at.x && to.y === at.y;
     if (p.type === "mouseMoved") {
       if (p.buttons) { this.last.set(s, to); this.br.forward(c, m, recv); return; } // a drag: not in this prototype
+      const rest = this.rest.get(s);
+      this.rest.delete(s);
+      if (rest && rest.to.x === to.x && rest.to.y === to.y) {
+        // The hover's last leg: its first sample is inside the target, after Playwright's check setup.
+        await this.until((this.lastMoveEnd.get(s) ?? 0) + SAMPLE_MS);
+        await this.play(s, rest.pts, p.modifiers ?? 0);
+        this.last.set(s, to);
+        this.br.answer(c, m, {}, recv);
+        return;
+      }
       if (same) { this.count("sameMovesAnswered"); this.br.answer(c, m, {}, recv); return; }
-      await this.path(s, to, p.modifiers ?? 0);
+      await this.pathAround(s, to, p.modifiers ?? 0);
       this.br.answer(c, m, {}, recv);
       return;
     }
     if (p.type === "mousePressed") {
-      if (!same) await this.path(s, to, p.modifiers ?? 0);
+      if (!same) await this.pathAround(s, to, p.modifiers ?? 0);
       const rel = this.releaseAt.get(s) ?? 0, end = this.lastMoveEnd.get(s) ?? 0;
       // The second press of a double click comes a person's gap after the first release; a first press, a pause after the path.
       await this.until(rel > end ? rel + between(this.random, 90, 150) : end + between(this.random, 90, 220));
-      const r = await this.br.call("Input.dispatchMouseEvent", { ...p, x: to.x, y: to.y, force: 0.5, timestamp: this.ts() }, s);
+      // The hold counts from the press's send (B7: a dialog in a mousedown handler holds the press's answer).
       this.pressAt.set(s, { at: this.perf(), hold: between(this.random, 75, 125) });
+      const r = await this.br.call("Input.dispatchMouseEvent", { ...p, x: to.x, y: to.y, force: 0.5, timestamp: this.ts() }, s);
       this.count("presses");
       this.br.answer(c, m, r ?? {}, recv);
       return;
@@ -497,9 +664,11 @@ class Stage {
     await this.path(s, to, 0);
     await this.until((this.lastMoveEnd.get(s) ?? 0) + between(this.random, 90, 220));
     const at = this.last.get(s)!;
-    await this.br.call("Input.dispatchMouseEvent", { type: "mousePressed", x: at.x, y: at.y, button: "left", buttons: 1, clickCount: 1, force: 0.5, timestamp: this.ts() }, s);
-    await sleep(between(this.random, 75, 125));
-    await this.br.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: "left", buttons: 0, clickCount: 1, timestamp: this.ts() }, s);
+    const t0 = this.perf();
+    const pressed = this.br.call("Input.dispatchMouseEvent", { type: "mousePressed", x: at.x, y: at.y, button: "left", buttons: 1, clickCount: 1, force: 0.5, timestamp: this.ts() }, s);
+    await this.until(t0 + between(this.random, 75, 125));
+    const released = this.br.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: "left", buttons: 0, clickCount: 1, timestamp: this.ts() }, s);
+    await Promise.all([pressed, released]);
     this.releaseAt.set(s, this.perf());
     this.count("focusClicks");
   }
@@ -615,13 +784,14 @@ async function rawCdp(url: string) {
   await new Promise((r, j) => { ws.once("open", r); ws.once("error", j); });
   let id = 1;
   const waits = new Map<number, (m: any) => void>();
-  ws.on("message", (d) => { const m = JSON.parse(String(d)); if (m.id && waits.has(m.id)) { waits.get(m.id)!(m); waits.delete(m.id); } });
+  const events: { method: string; params: any }[] = [];
+  ws.on("message", (d) => { const m = JSON.parse(String(d)); if (m.id && waits.has(m.id)) { waits.get(m.id)!(m); waits.delete(m.id); } else if (m.method) events.push(m); });
   const send = (method: string, params: object = {}, sessionId?: string) => new Promise<any>((r, j) => {
     const i = id++;
     waits.set(i, (m) => (m.error ? j(new Error(m.error.message)) : r(m.result)));
     ws.send(JSON.stringify({ id: i, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
-  return { send, close: () => ws.close() };
+  return { send, events, close: () => ws.close() };
 }
 
 const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
@@ -694,6 +864,8 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
       xdo(["windowraise", win]); xdo(["windowfocus", win]); await sleep(500);
       xdo(["mousemove", "1900", "1060"]); await sleep(300); // the X pointer outside the window
       const stage = new Stage(c, 3061);
+      // Run 2's options (this scenario's results are run 2's): the hover's whole path before the setup, no recovery.
+      stage.hover = "hold"; stage.recover = false; stage.frameMap = false;
       c.stage = stage;
       browser = await pw.chromium.connectOverCDP(c.cdpUrl, { timeout: 15_000 });
       const page = browser.contexts()[0].pages().find((p: any) => p.url().includes("recorder.html"));
@@ -720,6 +892,7 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
       stage.hover = "naive";
       await run("locator('#hov').hover(): the path after the hit-target check (naive)", async () => { await page.evaluate("Object.keys(window.__late).forEach((k) => window.__late[k] = 0)"); await page.locator("#hov").hover(t); return { late: await lateCounts() }; });
       stage.hover = "hold";
+      stage.recover = false;
       await run("mouse.move(900, 700) again", () => page.mouse.move(900, 700));
       await run("locator('#chk').check()", async () => { await page.locator("#chk").check(t); return { checked: await page.locator("#chk").isChecked() }; });
       await run("locator('#b').dblclick()", () => page.locator("#b").dblclick(t));
@@ -741,6 +914,137 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
       await run("mouse.move(900, 700); locator('#b').click({ timeout: 3000 })", async () => { await page.mouse.move(900, 700); await page.locator("#b").click({ timeout: 3000 }); });
       stats.stage = stage.stats;
       return { playwright: PW_VERSION };
+    } finally {
+      await browser?.close().catch(() => {});
+      await c.stop();
+    }
+  },
+
+  // ---------------------------------------------------------------- the review's cases with CDP calls of the probe's own
+  async "cases-raw"() {
+    const c = await startChrome("cases-raw", [CASES_URL()]);
+    try {
+      await sleep(1500);
+      const win = chromeWindow(c.proc.pid!, "Cases");
+      xdo(["windowraise", win]); xdo(["windowfocus", win]); await sleep(400);
+      xdo(["mousemove", "1900", "1060"]); await sleep(200);
+      const cdp = await rawCdp(c.cdpUrl);
+      const page = ((await cdp.send("Target.getTargets")).targetInfos as { targetId: string; type: string; url: string }[]).find((t) => t.type === "page" && t.url.includes("cases.html"))!;
+      const { sessionId } = await cdp.send("Target.attachToTarget", { targetId: page.targetId, flatten: true });
+      const send = (mth: string, p: object = {}) => cdp.send(mth, p, sessionId);
+      const val = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true })).result.value;
+      const mouse = (type: string, x: number, y: number, extra: object = {}) => send("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: 0, clickCount: 1, ...extra });
+      const out: Record<string, unknown> = {};
+      // B2: a wheel notch over a number input, with and without its focus.
+      await step("wheel notch over #num with no focus", async () => {
+        await mouse("mouseMoved", 560, 464); await sleep(100);
+        await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 560, y: 464, deltaX: 0, deltaY: 120 }); await sleep(400);
+        const r = { value: await val("document.getElementById('num').value"), scrollY: await val("scrollY") };
+        await val("scrollTo(0, 0)"); await sleep(200);
+        return (out.noFocus = r);
+      });
+      await step("click #num, then wheel notches down and up over it", async () => {
+        await mouse("mousePressed", 560, 464, { buttons: 1 }); await sleep(90); await mouse("mouseReleased", 560, 464); await sleep(200);
+        const focused = await val("document.activeElement.id");
+        await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 560, y: 464, deltaX: 0, deltaY: 120 }); await sleep(400);
+        const down = { value: await val("document.getElementById('num').value"), scrollY: await val("scrollY") };
+        await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 560, y: 464, deltaX: 0, deltaY: -120 }); await sleep(400);
+        const up = { value: await val("document.getElementById('num').value"), scrollY: await val("scrollY") };
+        return (out.focused = { focused, down, up, inputs: await val("JSON.stringify(window.__log.filter((r) => r.e === 'input'))") });
+      });
+      // N3: an intercepted HTML5 drag, with and without a dragEnter before the dragOver events and the drop.
+      for (const withEnter of [true, false]) {
+        await send("Page.reload", {}); await sleep(1200);
+        await step(`drag #ds to #dz by Input.dispatchDragEvent, ${withEnter ? "with" : "with no"} dragEnter`, async () => {
+          await send("Input.setInterceptDrags", { enabled: true });
+          const n0 = cdp.events.length;
+          await mouse("mouseMoved", 740, 470); await sleep(50);
+          await mouse("mousePressed", 740, 470, { buttons: 1 }); await sleep(120);
+          for (const dx of [4, 9, 15, 22, 30]) { await mouse("mouseMoved", 740 + dx, 470 + Math.round(dx / 5), { button: "left", buttons: 1 }); await sleep(16); }
+          let ev: any;
+          for (let i = 0; i < 50 && !ev; i++) { ev = cdp.events.slice(n0).find((e) => e.method === "Input.dragIntercepted"); if (!ev) await sleep(20); }
+          if (!ev) return { intercepted: false };
+          const data = ev.params.data;
+          const pts = [[920, 485], [945, 488], [965, 490], [980, 490]];
+          if (withEnter) await send("Input.dispatchDragEvent", { type: "dragEnter", x: pts[0][0], y: pts[0][1], data });
+          for (const [x, y] of pts.slice(withEnter ? 1 : 0)) { await send("Input.dispatchDragEvent", { type: "dragOver", x, y, data }); await sleep(16); }
+          await send("Input.dispatchDragEvent", { type: "drop", x: 980, y: 490, data });
+          await send("Input.setInterceptDrags", { enabled: false });
+          await mouse("mouseReleased", 980, 490); await sleep(300);
+          const r = { intercepted: true, log: await val("JSON.stringify(window.__log.filter((r) => /drag|drop/.test(r.e)).map((r) => r.e + ':' + r.tg))"), overs: await val("window.__overs") };
+          out[withEnter ? "dragWithEnter" : "dragNoEnter"] = r;
+          return r;
+        });
+      }
+      cdp.close();
+      return out;
+    } finally { await c.stop(); }
+  },
+
+  // ---------------------------------------------------------------- the review's cases: Playwright with and without the stage
+  async cases() {
+    const c = await startChrome("cases", [CASES_URL()]);
+    let browser: any;
+    try {
+      await sleep(1500);
+      const win = chromeWindow(c.proc.pid!, "Cases");
+      xdo(["windowraise", win]); xdo(["windowfocus", win]); await sleep(400);
+      xdo(["mousemove", "1900", "1060"]); await sleep(200);
+      browser = await pw.chromium.connectOverCDP(c.cdpUrl, { timeout: 15_000 });
+      const page = browser.contexts()[0].pages().find((p: any) => p.url().includes("cases.html"));
+      if (!page) throw new Error("Playwright sees no cases page");
+      const s = [...c.types.entries()].find(([, t]) => t === "page")![0];
+      const stage = new Stage(c, 3062);
+      const T = { timeout: 6000 };
+      const mode = (on: boolean, o: Partial<Pick<Stage, "hover" | "recover" | "frameMap" | "dialogBypass">> = {}) => {
+        if (on) {
+          Object.assign(stage, { hover: "edge", recover: true, frameMap: true, dialogBypass: true }, o);
+          stage.reset();
+          if (!c.stage) stage.start(s, c.lastPoint.get(s) ?? { x: 900, y: 700 }); // from plain input: where Playwright left the pointer
+          c.stage = stage;
+        } else c.stage = null;
+      };
+      const log = () => page.evaluate("JSON.stringify(window.__log.splice(0))").then((x: string) => JSON.parse(x));
+      const run = async (name: string, fn: () => Promise<unknown>) => {
+        const before = { ...stage.stats };
+        await step(name, async () => { const t0 = performance.now(); let err: string | undefined; try { await fn(); } catch (e) { err = String((e as Error).message).split("\n")[0].slice(0, 120); }
+          const d = Object.fromEntries(Object.entries(stage.stats).map(([k, v]) => [k, v - (before[k] ?? 0)]).filter(([, v]) => v));
+          const out = { ms: Math.round(performance.now() - t0), error: err, stage: d, page: await log().catch(() => null) };
+          if (err) throw Object.assign(new Error(err), { out });
+          return out; }, 25_000, 400);
+      };
+      // B1 a: a hover menu whose open panel covers the button.
+      mode(false); await page.mouse.move(180, 40);
+      await run("plain: locator('#ub').click() from above the menu", () => page.locator("#ub").click(T));
+      mode(true, { recover: false }); await page.mouse.move(180, 40);
+      await run("stage, no recovery: locator('#ub').click() from above the menu", () => page.locator("#ub").click(T));
+      mode(true); await page.mouse.move(180, 40);
+      await run("stage, recovery: locator('#ub').click() from above the menu", () => page.locator("#ub").click(T));
+      // B1 b: a card whose hover layer covers its middle.
+      mode(false); await page.mouse.move(620, 40);
+      await run("plain: locator('#card').hover()", () => page.locator("#card").hover(T));
+      mode(true, { hover: "hold", recover: false }); await page.mouse.move(620, 40);
+      await run("stage, the whole path before the setup: locator('#card').hover()", () => page.locator("#card").hover(T));
+      mode(true); await page.mouse.move(620, 40);
+      await run("stage, the samples outside the target before the setup: locator('#card').hover()", () => page.locator("#card").hover(T));
+      // B6: a hover in a same-origin frame (no session of its own).
+      const fr = () => page.frames().find((f: any) => f !== page.mainFrame());
+      mode(false); await page.mouse.move(250, 820);
+      await run("plain: frameLocator('#sf').locator('#sft').hover()", async () => { await page.frameLocator("#sf").locator("#sft").hover(T); return fr()?.evaluate("window.__hov"); });
+      mode(true, { frameMap: false, recover: false }); await page.mouse.move(250, 820);
+      await run("stage, no frame mapping: frameLocator('#sf').locator('#sft').hover()", () => page.frameLocator("#sf").locator("#sft").hover(T));
+      mode(true); await page.mouse.move(250, 820);
+      await run("stage, frame mapping: frameLocator('#sf').locator('#sft').hover()", () => page.frameLocator("#sf").locator("#sft").hover(T));
+      // B7: a dialog that opens at the stage's focus click (the blur of #a1).
+      for (const [label, on, bypass] of [["plain", false, true], ["stage, the dialog answer passes the gate", true, true], ["stage, the dialog answer waits in the gate", true, false]] as const) {
+        mode(false); await page.locator("#a1").click(T); mode(on, { dialogBypass: bypass });
+        await run(`${label}: locator('#b2').fill('abc') while #a1 (blur: alert) has the focus`, async () => { await page.locator("#b2").fill("abc", T); return page.locator("#b2").inputValue(); });
+        if (on && !bypass) { await c.call("Page.handleJavaScriptDialog", { accept: false }, s).catch(() => {}); await sleep(1000); }
+        await page.locator("#b2").fill("", T).catch(() => {});
+      }
+      mode(false);
+      stats.cases = stage.stats;
+      return {};
     } finally {
       await browser?.close().catch(() => {});
       await c.stop();

@@ -35,7 +35,19 @@ scenario's profile.
   keys for a short `Input.insertText`, wheel notches of 120 px, notches in place of
   `DOM.scrollIntoViewIfNeeded`, a click before Playwright's focus and fill utility calls, and the hover's
   path before Playwright's hit-target setup (or, in one step, after it: the naive way). It passes every
-  other call. Frame sessions pass unchanged.
+  other call. Frame sessions pass unchanged. (This scenario sets run 2's options: the hover's whole path
+  before the setup, no recovery and no frame mapping.)
+- **`cases-raw`** (added in the fix round of review-96): CDP calls of the probe's own on a page of its own
+  (`cases.localhost`): a wheel notch over a number input with and without its focus (M11), and an
+  intercepted HTML5 drag sent with `Input.dispatchDragEvent`, with and without a `dragEnter` before the
+  `dragOver` events and the `drop` (M12).
+- **`cases`** (the same round): Playwright on that page, each case three times: with no stage, with the stage
+  and one rule off, and with the stage and the rule on. The cases: a click on a button under a hover menu's
+  open panel (the rule: the miss watch, the recovery and the way around; M7), a hover on a card whose hover
+  layer covers its middle (the rule: the samples outside the target before Playwright's setup, the rest
+  after it; M8), a hover in a same-origin frame (the rule: the frame mapping; M10), and a fill while the
+  field with the focus opens an alert at its blur (the rule: the client's dialog answer passes the gate;
+  M9).
 
 `analyze.ts` of the input research reads `results.json` (the same form as that research's runs). The probe
 also writes `extra.json`: for each step Playwright's result and time, the stage's counts, the `pointermove`
@@ -50,14 +62,17 @@ On a Linux box with Xvfb, xdotool and Chromium, under the box's heavy-job lock:
 npm ci
 S=<a scratch folder>; (cd $S && npm init -y && npm install --ignore-scripts playwright-core@1.65.0)
 flock <heavy.lock> timeout 1500 node docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-probe/probe.ts \
-  --out-dir $S/out --playwright $S [--display 169] [--only source,stage]
+  --out-dir $S/out --playwright $S [--display 169] [--only source,stage,cases-raw,cases]
 node docs/research/2026-11-09-click-box-input-signals/analyze.ts $S/out/run-*/results.json --summary summary.json
 ```
 
 ## The results
 
-Two runs, about 1.5 minutes each: run 1 at 02:15 UTC and run 2 at 02:33 UTC. Run 1's prototype had two
-faults, which run 2's code (the code in this folder) fixed:
+Four runs of about 1.5 minutes each: run 1 at 02:15 UTC and run 2 at 02:33 UTC (scenarios `source` and
+`stage`), runs 3 and 4 at about 03:18 and 03:35 UTC (scenarios `cases-raw` and `cases`, the fix round of
+review-96). Run 3's menu was narrow, so the stage's random path missed its trigger in the recovery step;
+run 4 widened it, and only run 4's results are kept. Run 1's prototype had two faults, which run 2's code
+fixed:
 
 - its decoder of Playwright's serialized argument read numbers and strings as `{"n": ...}` and `{"s": ...}`;
   Playwright's `serializeAsCallArgument` sends them as plain JSON values. So run 1's hover recognizer never
@@ -72,6 +87,7 @@ faults, which run 2's code (the code in this folder) fixed:
 | `results/run-2-cdp.json` | `analyze.ts --traces` of run 2: the client's CDP calls of each step, with their times (long strings cut) |
 | `results/run-2-extra.json` | the probe's own counts of run 2 (see above) |
 | `results/run-1-summary.json`, `results/run-1-extra.json` | the same for run 1 (its raw records are not kept) |
+| `results/run-4.json`, `results/run-4-extra.json` | run 4 (`cases-raw` and `cases`): the marks with each case's result, the page's own log, the stage's counts, and the CDP messages |
 
 The design's section 17 (M1 to M6) and its section 9.1 give the numbers. In short:
 
@@ -96,6 +112,20 @@ The design's section 17 (M1 to M6) and its section 9.1 give the numbers. In shor
   focus, and rollover through an early answer of a release (overlaps in 3 of 20 and 1 of 20 keys of the fill).
 - **M6.** `mouse.wheel(0, 600)` gave 5 notches of `deltaY` 120 and `wheelDeltaY` -120; the click below the
   fold scrolled by 17 notches, with no scroll that had no wheel.
+- **M7.** A click on a button under a hover menu's open panel: Playwright's own click passed (0.11 s); the
+  stage with no recovery failed at 6 s (13 setups missed, with no input); with the recovery it passed (2.4 s).
+- **M8.** A hover on a card whose hover layer covers its middle: Playwright's own hover failed at 6 s, the
+  stage's whole path before the setup failed at 6 s, and the samples outside the card before the setup passed
+  (0.58 s).
+- **M9.** A fill while the field with the focus opens an alert at its blur: Playwright's own passed; the
+  stage with the client's dialog answer in the gate failed at 6 s and held the page's later calls until the
+  probe dismissed the alert at 25 s; with the answer passing the gate it passed (1.1 s).
+- **M10.** A hover in a same-origin frame: Playwright's own passed; the stage with no frame mapping failed at
+  6 s; with the mapping it passed (0.72 s).
+- **M11.** A wheel notch over a focused number input changed its value (5 to 4, then back to 5) and did not
+  scroll the page; with no focus, the value stayed and the page scrolled 43 px.
+- **M12.** An intercepted drag with a `dragEnter` gave `dragstart dragenter dragover x4 drop dragend`; with no
+  `dragEnter`, only `dragstart dragend`.
 
 The probe ended its own Xvfb and Chromium processes by their pids, and it removed each profile and its socket
 folder.
