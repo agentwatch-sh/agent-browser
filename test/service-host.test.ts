@@ -166,7 +166,7 @@ test("stdin's end while no socket listens exits 0", async (t) => {
   assert.equal(await code, 0);
 });
 
-test("a missing socket or profile variable is exit 2; a parent that does not run the agent profile is exit 3, with no connect", async (t) => {
+test("a missing socket or profile variable is exit 2; a parent that does not run the agent profile is exit 3, with no connect", { timeout: 10_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "ab-host-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const io = { stdin: new PassThrough(), stdout: new PassThrough(), log: () => {} };

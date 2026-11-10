@@ -8,7 +8,8 @@
 //   3. the peer is the same process during the whole check: its pidfd still names it (the pidfd form), or its start
 //      time is the same before and after the reads (the stat form), and its parent pid too.
 //
-// When the check cannot run (no peer reader), the link admits no connection: it never admits by a weaker rule.
+// When the check cannot run (no peer reader), the link admits no connection: it never admits by a weaker rule. The Mac
+// (stage 4) is not built: there the link refuses each connection.
 
 import type { Socket } from "node:net";
 import { readPeer, type PeerReader } from "../../relay/peer.ts";
@@ -17,6 +18,7 @@ import type { LinkPeerCheck } from "./link.ts";
 
 export const WHY = {
   noRun: (why: string) => `the peer check cannot run (${why})`,
+  platform: (p: string) => `the link's check is not built for ${p} yet (stage 4)`,
   unread: "the service cannot read the peer, or it runs as another user",
   noChrome: "no Chrome of the service runs",
   parent: "its parent is not the service's Chrome",
@@ -32,9 +34,12 @@ export function linkPeerCheck(d: {
   profile: string;
   cmdline: (pid: number) => string[];
   uid?: number;
+  platform?: NodeJS.Platform;
 }): LinkPeerCheck {
   const uid = d.uid ?? process.getuid?.() ?? -1;
+  const platform = d.platform ?? process.platform;
   return async (socket: Socket) => {
+    if (platform !== "linux") return { ok: false, reason: WHY.platform(platform) };
     if ("failed" in d.reader) return { ok: false, reason: WHY.noRun(d.reader.failed) };
     const reader = d.reader;
     const fd = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd;

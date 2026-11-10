@@ -178,9 +178,10 @@ export class NativeLink {
       conn.mainOut.push(msg);
       conn.wake?.();
       timer = setTimeout(() => {
-        // The receiver would otherwise hold a half-sent request: a timeout before the last part drops the connection.
-        if (!msg.done) this.drop(conn);
+        const sent = msg.done;
         p.reject(new ReceiverError("timeout", "timeout"));
+        // The receiver would otherwise hold a half-sent request: a timeout before the last part drops the connection.
+        if (!sent) this.drop(conn);
       }, waitMs);
     });
   }

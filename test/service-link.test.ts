@@ -257,7 +257,10 @@ test("a receiver line of MAX_TO_DAEMON bytes is read; a longer one drops the lin
   const r = rig(t);
   await r.start();
   const s = await r.shim();
-  const pad = MAX_TO_DAEMON - JSON.stringify({ t: "x", p: "" }).length;
+  // C4's MAX_TO_DAEMON, from the shared vectors (not the code's constant).
+  const limit = V("bridge.json").constants.MAX_TO_DAEMON;
+  assert.equal(MAX_TO_DAEMON, limit);
+  const pad = limit - JSON.stringify({ t: "x", p: "" }).length;
   s.send(`${JSON.stringify({ t: "x", p: "a".repeat(pad) })}\n`);
   s.send({ t: "blocked", tab: 1, host: "c.example", scope: null, from: null });
   await until(() => r.blocked.length === 1, 10_000);
@@ -386,6 +389,56 @@ test("the receiver port on the link: up and down from the hellos, set_scopes and
   await assert.rejects(port.request("import", { state: {} }, 1000), (e: ReceiverError) => e.kind === "down");
 });
 
+test("a stalled reader: a timeout before the last part of a request drops the connection, and a new shim gets the link", async (t) => {
+  const r = rig(t);
+  await r.start();
+  const s = await r.shim();
+  s.s.pause();
+  const p = r.link.request("import", { state: { pad: "x".repeat(24 * 1024 * 1024) } }, 300);
+  await assert.rejects(p, (e: ReceiverError) => e.kind === "timeout");
+  await until(() => !r.link.connected());
+  s.s.destroy();
+  await r.shim();
+  assert.equal(r.link.connected(), true);
+});
+
+test("a raising handler leaves the link up, and its log line holds no page data", async (t) => {
+  const r = rig(t, { carrier: true });
+  await r.start();
+  r.link.attach({ up: () => { throw new Error("secret-page-text"); }, down: () => {}, blocked: () => { throw new Error("secret-page-text"); } });
+  r.carrier!.bind({ answer: () => { throw new Error("secret-page-text"); }, daemon: () => { throw new Error("secret-page-text"); } });
+  const s = await r.shim();
+  s.send({ t: "blocked", tab: 1, host: "a.example", scope: null, from: null });
+  s.send({ t: "ev", ch: "bridge", ev: "x", params: ["secret-page-text"] });
+  const p = r.link.request("set_scopes", {}, 10_000);
+  await until(() => s.requests().length === 1);
+  s.send({ t: "res", id: s.requests()[0].id, ok: true, data: {} });
+  await p;
+  assert.equal(r.link.connected(), true);
+  assert.ok(r.logs.some((l) => l.startsWith("link: a handler failed (Error)")));
+  assert.ok(r.logs.some((l) => l.startsWith("bridge: the model failed on a ev message (Error)")));
+  for (const l of r.logs) assert.doesNotMatch(l, /secret-page-text/);
+});
+
+test("a main request never waits behind a large bridge message, and the parts of one bridge message never interleave with the next", async (t) => {
+  const r = rig(t, { carrier: true });
+  await r.start();
+  const s = await r.shim();
+  const big = { t: "req" as const, id: "5f3a9c01-1", op: "debugger.sendCommand", args: [{ tabId: 1 }, "DOM.setFileInputFiles", { pad: "y".repeat(4 * 700_000) }], wait: 600_000 };
+  const small = { t: "req" as const, id: "5f3a9c01-2", op: "tabs.get", args: [1], wait: 30_000 };
+  r.carrier!.fromModel(JSON.stringify(big), big);
+  r.carrier!.fromModel(JSON.stringify(small), small);
+  const main = r.link.request("set_scopes", {}, 10_000);
+  await until(() => s.requests().length === 1 && s.requests("bridge").length === 2);
+  const order = s.lines.map((l) => `${l.ch ?? "main"} ${l.id}`);
+  const mainAt = order.findIndex((x) => x.startsWith("main"));
+  const lastBig = order.lastIndexOf(`bridge ${big.id}`);
+  assert.ok(mainAt < lastBig, `the main part goes before the large bridge message ends: ${order.join(", ")}`);
+  assert.ok(order.indexOf(`bridge ${small.id}`) > lastBig, "the next bridge message goes after the last part of the one before");
+  s.send({ t: "res", id: s.requests()[0].id, ok: true, data: {} });
+  await main;
+});
+
 // ------------------------------------------------------------------ the peer check
 
 /** A peer reader over a table of processes. */
@@ -420,6 +473,7 @@ test("the link's peer check: the shim's parent is the service's Chrome by pid an
   assert.deepEqual(await check({ form: "stat", peer: { pid: 200, uid: 1000, pidfd: null, start: 5999 } }).run, { ok: false, reason: WHY.unread }, "the stat form: the start at the accept is not the process's");
   assert.deepEqual(await check({ form: "stat", peer: { pid: 200, uid: 1000, pidfd: null, start: 6000 } }).run, { ok: true, pid: 200 });
   assert.deepEqual(await linkPeerCheck({ reader: { failed: "no ffi" }, chrome: () => CHROME, profile: "/p", cmdline: () => [] })(SOCK), { ok: false, reason: WHY.noRun("no ffi") });
+  assert.deepEqual(await linkPeerCheck({ reader: fakeReader(procs, { pid: 200, uid: 1000, pidfd: 33, start: null }), chrome: () => CHROME, profile: "/s/profile", cmdline: () => PROFILE_ARGV, uid: 1000, platform: "darwin" })(SOCK), { ok: false, reason: WHY.platform("darwin") }, "the Mac is not built: it refuses");
 });
 
 // ------------------------------------------------------------------ the end of the old host (note 7)
