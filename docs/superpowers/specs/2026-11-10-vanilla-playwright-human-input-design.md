@@ -1,8 +1,8 @@
 # Vanilla Playwright input becomes a person's input in agent mode — design
 
-**Status: proposed. Two read-only reviews ran (review-96 and its re-check review-96b), and their findings
-are fixed or in section 16 (open points). It waits for the operator's answers to Q1 to Q4 (section 15).
-Nothing is built before that.**
+**Status: Decided: the operator's answers of 2026-11-10 to Q1 to Q4 (section 15, "The answers"). Two
+read-only reviews ran (review-96 and its re-check review-96b), and their findings are fixed or in section 16
+(open points). The build runs in the tasks of section 14.**
 
 Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-t30.6, epic
 ab-t30). Branch `ab-t30.6-input-translation-design` in agent-browser, from main `d0e8acf`. No product code
@@ -93,6 +93,7 @@ work opened a public site.
   transliates the clicks and types into a human version. i.e. the caller doesn't worry about it"
 - 2026-11-09, on the service: "so let's build a single self-contained process/wrapper that includes the
   relay/browser/extension/etc and everything communicates over that."
+- 2026-11-10, on board item ab-0z5: option a for each of Q1 to Q4 (section 15, "The answers").
 
 What this design takes from them:
 
@@ -665,8 +666,8 @@ press, or on `shiftKey` in a key handler, sees a person's Shift.
   pastes it.
 - **An input method (IME)**: not in this design. CDP has `Input.imeSetComposition`; a page sees composition
   events only from an input method. The first build sends no composition events.
-- **A very long text**: above the limit of rule 3. Q2 asks the operator. The first build (no answer) types
-  up to the limit at the fast end and sends the whole text as one `Input.insertText` above it.
+- **A very long text**: above the limit of rule 3. By the operator's answer to Q2 (a), the build types up
+  to the limit at the fast end and sends the whole text as one `Input.insertText` above it.
 
 ### 7.4 `clear`
 
@@ -1156,6 +1157,22 @@ half baked").
 ## 15. Questions for the operator
 
 Each question gives its options, their effects, a recommendation, and what the build does with no answer.
+
+**The answers (board item ab-0z5, 2026-11-10).** The operator answered all four questions on 2026-11-10
+(confirmed, with a web login), with no note. Each answer is option a, the recommendation. The build follows
+these answers:
+
+- **Q1: a.** The stage shapes the input of every client on every site in agent mode. No list, no switch and
+  no new C12 op; no change in agentwatch for the stage (section 12.3).
+- **Q2: a.** A text that fits in 10 s is typed; a longer text goes as one text with no keys (section 7.3).
+  `pressSequentially` goes to the fast end after 12 s and to Playwright's own speed after 25 s.
+- **Q3: a.** A script call is translated where a person's input gives the same result, and the rest pass and
+  are counted (section 5.1 and build task 8). The parts that need a probe (a select's popup and CDP keys)
+  pass until the probe is done.
+- **Q4: a.** No idle moves. The harness measures P6 against part B and reports it; a change needs a new
+  decision of the operator (build task 9).
+
+The questions below stay as the operator read them.
 
 **Q1. Does the stage shape the input of every client and every site in agent mode?**
 
