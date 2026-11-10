@@ -160,6 +160,7 @@ try {
   check("the service stops at SIGTERM (exit 0) and Chrome and Xvfb stay", exit1 === 0 && !!proc(p2) && !!proc(rec1.xvfb_pid), `exit ${exit1}`);
   await sleep(1000);
   d = await startService();
+  const tService2 = Date.now();
   const s3 = (await req(d, "status", DAEMON)).data;
   check("the new service adopts the Chrome and the Xvfb of the unit record", s3.state === "ready" && s3.chrome_pid === p2 && /unit: adopted Xvfb :\d+ \(pid \d+\) and Google Chrome \(pid \d+\)/.test(serviceErr), serviceErr.match(/unit: adopted.*/)?.[0] ?? serviceErr.slice(-300));
 
@@ -167,7 +168,7 @@ try {
   const ev = await d.next((l) => l.t === "ev" && l.ev === "stopped", 75_000);
   const tStop = Date.now();
   const since = (tStop - tRestarted) / 1000;
-  check("the watch stops Chrome with receiver_missing about 60 s after its first check of this Chrome, across the restart (build note 5)", ev.reason === "receiver_missing" && since >= 55 && since <= 68, `${since.toFixed(1)} s after the supervisor's restart; the service restarted ${((tStop - tRestarted) / 1000 - 60).toFixed(1)} s into the count`);
+  check("the watch stops Chrome with receiver_missing about 60 s after its first check of this Chrome, across the restart (build note 5)", ev.reason === "receiver_missing" && since >= 55 && since <= 68, `${since.toFixed(1)} s after the supervisor's restart of Chrome; the new service started ${((tService2 - tRestarted) / 1000).toFixed(1)} s into the count`);
   const s4 = (await req(d, "status", DAEMON)).data;
   check("status: failed closed, last_stop receiver_missing with no by", s4.state === "failed closed" && s4.last_stop?.reason === "receiver_missing" && s4.last_stop.by === null && !proc(p2), JSON.stringify(s4.last_stop));
 
