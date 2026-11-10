@@ -1,0 +1,1172 @@
+{
+ "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path.",
+ "folder": "/state/mcp/web-1/",
+ "pin": "0.0.85",
+ "list": {
+  "package": "@playwright/mcp",
+  "version": "0.0.85",
+  "capabilities": [
+   "core"
+  ],
+  "tools": {
+   "browser_navigate": {
+    "keys": [
+     "url"
+    ],
+    "paths": [],
+    "schema": {
+     "type": "object",
+     "properties": {
+      "url": {
+       "type": "string",
+       "description": "The URL to navigate to"
+      }
+     }
+    }
+   },
+   "browser_snapshot": {
+    "keys": [],
+    "paths": [],
+    "schema": {
+     "type": "object",
+     "properties": {}
+    }
+   },
+   "browser_click": {
+    "keys": [
+     "element",
+     "target"
+    ],
+    "paths": [],
+    "schema": {
+     "type": "object",
+     "properties": {
+      "element": {
+       "type": "string",
+       "description": "A description of the element"
+      },
+      "target": {
+       "type": "string",
+       "description": "The element's ref from the snapshot"
+      }
+     }
+    }
+   },
+   "browser_file_upload": {
+    "keys": [
+     "paths"
+    ],
+    "paths": [
+     "paths"
+    ],
+    "schema": {
+     "type": "object",
+     "properties": {
+      "paths": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "The absolute paths of the files to upload"
+      }
+     }
+    }
+   },
+   "browser_take_screenshot": {
+    "keys": [
+     "filename"
+    ],
+    "paths": [
+     "filename"
+    ],
+    "schema": {
+     "type": "object",
+     "properties": {
+      "filename": {
+       "type": "string",
+       "description": "The file name to save the screenshot to"
+      }
+     }
+    }
+   }
+  },
+  "refused": {
+   "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+  }
+ },
+ "pinnedTools": [
+  {
+   "name": "browser_navigate",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "url": {
+      "type": "string",
+      "description": "The URL to navigate to"
+     }
+    }
+   }
+  },
+  {
+   "name": "browser_snapshot",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "browser_click",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "element": {
+      "type": "string",
+      "description": "A description of the element"
+     },
+     "target": {
+      "type": "string",
+      "description": "The element's ref from the snapshot"
+     }
+    }
+   }
+  },
+  {
+   "name": "browser_file_upload",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "paths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "The absolute paths of the files to upload"
+     }
+    }
+   }
+  },
+  {
+   "name": "browser_take_screenshot",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "filename": {
+      "type": "string",
+      "description": "The file name to save the screenshot to"
+     }
+    }
+   }
+  },
+  {
+   "name": "browser_run_code_unsafe",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "code": {
+      "type": "string",
+      "description": "The JavaScript to run"
+     }
+    }
+   }
+  }
+ ],
+ "badLists": [
+  {
+   "note": "a tool of the pinned tools/list in neither tools nor refused",
+   "breaks": "each tool in tools or refused, once",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  },
+  {
+   "note": "a tool in both tools and refused",
+   "breaks": "each tool in tools or refused, once",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state.",
+     "browser_navigate": "twice"
+    }
+   }
+  },
+  {
+   "note": "browser_run_code_unsafe allowed",
+   "breaks": "browser_run_code_unsafe in refused",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     },
+     "browser_run_code_unsafe": {
+      "keys": [
+       "code"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "description": "The JavaScript to run"
+        }
+       }
+      }
+     }
+    },
+    "refused": {}
+   }
+  },
+  {
+   "note": "a schema that is not the pinned one",
+   "breaks": "each schema equals the pinned schema",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "changed"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  },
+  {
+   "note": "a key that is no property of its schema",
+   "breaks": "keys are properties of the schema",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url",
+       "headers"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  },
+  {
+   "note": "a path key that is not in keys",
+   "breaks": "paths are keys",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [
+       "headers"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  },
+  {
+   "note": "a key that speaks of a file, in keys but not in paths",
+   "breaks": "a file or path key is in paths",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  },
+  {
+   "note": "a capability that the service never turns on",
+   "breaks": "no core-install, storage, devtools, testing or config",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core",
+     "storage"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  },
+  {
+   "note": "a version that is not the pin",
+   "breaks": "version is the pin",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.86",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   }
+  }
+ ],
+ "calls": [
+  {
+   "note": "an allowed tool with an allowed key",
+   "call": {
+    "name": "browser_navigate",
+    "arguments": {
+     "url": "https://a.example/"
+    }
+   },
+   "answer": "pass"
+  },
+  {
+   "note": "an allowed tool with no arguments",
+   "call": {
+    "name": "browser_snapshot",
+    "arguments": {}
+   },
+   "answer": "pass"
+  },
+  {
+   "note": "a refused tool",
+   "call": {
+    "name": "browser_run_code_unsafe",
+    "arguments": {
+     "code": "async (page) => 1"
+    }
+   },
+   "answer": {
+    "code": -32601,
+    "message": "Not available in the agent browser: browser_run_code_unsafe"
+   }
+  },
+  {
+   "note": "a tool that no list names (a newer version's)",
+   "call": {
+    "name": "browser_install",
+    "arguments": {}
+   },
+   "answer": {
+    "code": -32601,
+    "message": "Not available in the agent browser: browser_install"
+   }
+  },
+  {
+   "note": "an argument key that the tool's keys do not name",
+   "call": {
+    "name": "browser_navigate",
+    "arguments": {
+     "url": "https://a.example/",
+     "headers": {
+      "cookie": "x"
+     }
+    }
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: the argument headers of browser_navigate"
+   }
+  },
+  {
+   "note": "a path key inside the scope's folder (after realpath)",
+   "call": {
+    "name": "browser_file_upload",
+    "arguments": {
+     "paths": [
+      "/state/mcp/web-1/a.pdf"
+     ]
+    }
+   },
+   "realpath": {
+    "/state/mcp/web-1/a.pdf": "/state/mcp/web-1/a.pdf"
+   },
+   "answer": "pass"
+  },
+  {
+   "note": "a path key outside the scope's folder",
+   "call": {
+    "name": "browser_file_upload",
+    "arguments": {
+     "paths": [
+      "/etc/hostname"
+     ]
+    }
+   },
+   "realpath": {
+    "/etc/hostname": "/etc/hostname"
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: paths must name a file in the session's folder /state/mcp/web-1/"
+   }
+  },
+  {
+   "note": "a link in the folder whose realpath leaves it",
+   "call": {
+    "name": "browser_take_screenshot",
+    "arguments": {
+     "filename": "/state/mcp/web-1/shot.png"
+    }
+   },
+   "realpath": {
+    "/state/mcp/web-1/shot.png": "/srv/other/shot.png"
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: filename must name a file in the session's folder /state/mcp/web-1/"
+   }
+  },
+  {
+   "note": "a folder of another scope with the same start",
+   "call": {
+    "name": "browser_take_screenshot",
+    "arguments": {
+     "filename": "/state/mcp/web-10/shot.png"
+    }
+   },
+   "realpath": {
+    "/state/mcp/web-10/shot.png": "/state/mcp/web-10/shot.png"
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: filename must name a file in the session's folder /state/mcp/web-1/"
+   }
+  }
+ ]
+}

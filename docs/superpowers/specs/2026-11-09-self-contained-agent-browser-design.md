@@ -1,7 +1,6 @@
 # A self-contained agent browser with the fewest moving parts — design
 
-**Status: proposed. It waits for the operator's answers to Q1-Q5 and to the open points in section 17.
-Nothing is built before that.**
+**Status: Decided: the operator's answers of 2026-11-10 (section 19). The build runs in stages (board ab-v16.94).**
 
 Date: 2026-11-09. Revised after four fresh reviews and the daemon lead's review and re-read; the
 manager's bound ended the review rounds after the fourth review. Author: a taylor contributor, a
@@ -10,6 +9,11 @@ design subagent of the lead (board task ab-v16.93, under goal ab-v16). Branch
 [2026-11-09-self-contained-agent-browser-probe/](2026-11-09-self-contained-agent-browser-probe/README.md)
 (M1 to M3), run on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
 `@playwright/mcp` 0.0.85). Nothing ran on the Mac. No product code changes in this task.
+
+The operator answered the questions on 2026-11-10 (board item ab-bi3). Board task ab-v16.94.1 (stage 0, the
+contracts) recorded the answers in section 19, changed the sections that they change, and wrote the contracts:
+chrome-extension `docs/protocol.md` (C1, C4 and C10, and a short C11) and agent-browser `docs/contracts/`
+(C11, C12 and the format of the MCP's allow list).
 
 The design builds on the two-modes design
 ([2026-11-03-two-modes-playwright-design.md](2026-11-03-two-modes-playwright-design.md)). It also builds on
@@ -35,8 +39,9 @@ constraint.
    while its unit is active, the daemon while it is inactive or failed. The service runs only while it
    owns. So a hand-off ends with exactly one owner also when a step is slow or a side stops (section 13.2).
 2. **Two doors and one link (sections 5 and 7).**
-   - The **agent door** is a 0600 Unix socket for CDP and MCP clients. It keeps the peer check of today's
-     relay.
+   - The **agent door** is a 0600 Unix socket for CDP clients. It keeps the peer check of today's relay.
+   - The **MCP port** is a loopback TCP port for the MCP of a local session, with the TCP peer check (the
+     operator's answer Q1, section 19).
    - The **control door** is a 0600 Unix socket. It admits only the agentwatch daemon process itself, by
      its pid and start time, read at each accept. Operator acts (a list change, an allow, a sign-in import)
      arrive only there, with the provenance that the gateway gives after a password login. No
@@ -59,33 +64,35 @@ constraint.
    list and refusal code of `commands/browser.py` go away or move to agent-browser. `panes.py` moves to
    `agentwatch/daemon/` (section 7.4).
 4. **The parts (section 4).** Honestly counted:
-   - processes in the browser path: 5 to 4, but one more lifetime unit (the service's);
-   - sockets and pipes in the browser path: 5 to 5 (and from stage 5 agentwatch's remote MCP socket); TCP
-     ports: 0 to 0;
+   - processes in the browser path: 5 to 4, but two more lifetime units (the service's, and the socket unit
+     that holds the MCP port);
+   - sockets and pipes in the browser path: 5 to 6 (and from stage 5 agentwatch's remote MCP socket); TCP
+     ports: 0 to 1, the MCP port (section 19);
    - contracts that bind agentwatch's code: 6 to 3 (C9, C11's remote path, C12); contracts that bind
      three repositories: 2 to 0 (from stage 5 one shared rule, the remote scope's pattern, binds three);
    - repositories that one bridge op or list rule change touches: 3 to 2;
-   - process boundaries of an agent's CDP call: 4 to 3; of an MCP tool call: 5 to 4; of an operator act: 3
+   - process boundaries of an agent's CDP call: 4 to 3; of an MCP tool call: 5 to 3; of an operator act: 3
      to 4 (a rare path).
 
    The receiver's code does not change for the move.
 5. **The MCP (section 8).** The standard Playwright MCP runs from code inside the service. It serves its
-   usual tools over Streamable HTTP on the agent door, at `/mcp/<scope>`. M3 started it from code and
+   usual tools over Streamable HTTP on the MCP port, at `/mcp/<scope>` (section 19). M3 started it from code and
    called `initialize`, `tools/list` (25 tools), `browser_navigate` and `browser_snapshot` with plain HTTP
    requests on a Unix socket. The service passes only the tools and argument keys of an allow list, which
    is fixed for each pinned MCP version; a test fails when the pinned `tools/list` changes. The list leaves
    out `browser_run_code_unsafe`, which runs client JavaScript in the server's process. A local session
-   reaches the MCP through a stdio shim, `agent-browser mcp`, which is a child of the session. So the kernel
-   check of the Unix socket holds on Linux and on the Mac, with no TCP port and no key.
+   reaches the MCP with its client's HTTP configuration, `http://127.0.0.1:<port>/mcp/<scope>`: no stdio
+   shim runs, and no key (the operator's answer Q1, section 19).
 6. **Loopback TCP (section 8.3).** The peer check over loopback TCP works on Linux. M2 gave the right
    decision in each case, at 10.4 ms p50 per new connection (a scan of the session's processes) or 23.1 ms
-   p50 (a scan of every process). `SO_PEERCRED` on a Unix socket takes 0.02 ms. The design does not use
-   TCP by default, for three reasons:
-   - another OS user can take the port while the service is down (taylor has three human users);
-   - the check finds the holders of the socket, not the process that connected;
-   - the Mac has no `/proc`.
-
-   Question Q1 asks the operator.
+   p50 (a scan of every process). `SO_PEERCRED` on a Unix socket takes 0.02 ms. The operator chose TCP for
+   the MCP (Q1, section 19). Its three risks get rules from the daemon lead's conditions (section 19):
+   - another OS user could take the port while the service is down (taylor has three human users): a user
+     socket unit holds the port;
+   - the check finds the holders of the socket, not the process that connected: each holder must be in the
+     session, and the uid check and the walk come before any request byte;
+   - the Mac has no `/proc`: the Mac's MCP port refuses every connection until its `libproc` reader is built
+     and measured.
 7. **Another box (section 9).** A session on taylor uses the agent browser on the Mac through the
    agentwatch link. A new socket of taylor's daemon names the session with a kernel peer check. The link
    carries the MCP's HTTP requests, sealed, under a new browser grant that the operator approves on the
@@ -98,10 +105,9 @@ constraint.
    default and unchanged until stage 6. The switch on a box moves every part at once; the tested rollback
    (switch-off, with the same Chrome and the same list files) is its safeguard. The move keeps today's
    rule for start and stop; Q5 asks the operator about a change.
-9. **Open for the operator (sections 16 and 17).** Five questions (Q1 to Q5) and three open points at the
-   edges of section 13.2's rule: a switch-on that the daemon gave up, a start of the service's unit from
-   outside the switch-on, and the Mac after the daemon unloads the service's job. Nothing is built before
-   the operator answers.
+9. **The operator's answers (section 19).** The operator answered Q1 to Q4 on 2026-11-10, and the
+   recommendations of the three open points of section 17 hold. Board item ab-6ng asks two follow-ups: a
+   check of the reading of Q1, and Q5. Today's rule for start and stop stays until the operator answers it.
 
 ## 2. The operator's words
 
@@ -131,8 +137,11 @@ call, with every security rule of today kept.
 ## 3. Words
 
 - **The service**: the agent-browser service process, `agent-browser service`.
-- **The agent door**: the service's Unix socket for clients: CDP at `/devtools/browser/<scope>`, MCP at
-  `/mcp/<scope>`. A local client may send `/mcp` alone: the service then takes the scope from the walk.
+- **The agent door**: the service's Unix socket for CDP clients, at `/devtools/browser/<scope>`. From stage 5
+  it also carries the remote MCP path of the daemon (section 9).
+- **The MCP port**: the service's loopback TCP port for the MCP of a local session, at
+  `http://127.0.0.1:<port>/mcp/<scope>` (section 19). A client may send `/mcp` alone: the service then
+  takes the scope from the walk.
 - **The control door**: the service's Unix socket for agentwatch's daemon.
 - **The host shim**: the process that Chrome starts when the agent extension opens its native port.
 - **The native link**: extension, Chrome, host shim, service. Contract C4.
@@ -168,10 +177,11 @@ call, with every security rule of today kept.
 ```
  an agent session (tmux pane)        the agent-browser service (one Node process per OS user and box)
  +--------------------------+ agent  +------------------------------------------------+ link  +-----------+ native  +--------+
- | Playwright, agent-browser|-door-->| agent door: CDP endpoint, MCP (Playwright MCP) |------>| host shim |-------->| Chrome |--> receiver
- | agent-browser mcp (stdio |  unix  | browser model (today's relay), peer check      |  (C4) +-----------+  stdio  |        |    (agent/)
- |  shim, no Playwright)    | socket | Chrome + Xvfb unit, updates, extension install |                          +--------+
- +--------------------------+        | X pointer, lists, scopes, sign-in import,      |                             ^ Xvfb
+ | Playwright, agent-browser|-door-->| agent door (unix): CDP endpoint                |------>| host shim |-------->| Chrome |--> receiver
+ | the agent's own MCP      |  unix  | MCP port (TCP, 127.0.0.1): Playwright MCP      |  (C4) +-----------+  stdio  |        |    (agent/)
+ |  client (HTTP, no shim)  |-MCP--->| browser model (today's relay), peer checks     |                          +--------+
+ +--------------------------+  TCP   | Chrome + Xvfb unit, updates, extension install |                             ^ Xvfb
+                                     | X pointer, lists, scopes, sign-in import,      |
                                      | blocked events                                 |
                                      +------------------------------------------------+
                                         ^ control door (C12), unix socket
@@ -184,13 +194,13 @@ call, with every security rule of today kept.
 
 | Part | Today | After |
 | --- | --- | --- |
-| Lifetime units for the browser (systemd user units, launchd agents) | 1: agentwatch's own unit; Chrome and Xvfb run detached under it | 2: agentwatch's unit, and the new `agent-browser.service` with its own cgroup; Chrome and Xvfb run detached under the service's unit |
+| Lifetime units for the browser (systemd user units, launchd agents) | 1: agentwatch's own unit; Chrome and Xvfb run detached under it | 3: agentwatch's unit, the new `agent-browser.service` with its own cgroup, and the socket unit that holds the MCP port (section 19); Chrome and Xvfb run detached under the service's unit |
 | Who owns the Chrome unit | the daemon, always (no arbiter) | the state of the service's unit, which systemd (launchd on the Mac) keeps: the service while it is active, the daemon while it is inactive or failed; no file or message of its own (section 13.2) |
 | Long-lived processes in the browser path (one OS user, one box) | 5: agentwatch daemon (carrier), relay, native host, Chrome, Xvfb | 4: service, host shim, Chrome, Xvfb (the daemon leaves the path) |
-| Processes for the MCP of each session | 1 Playwright MCP per session (Node and Playwright; its memory is not measured here) | 1 stdio shim per session (62.7 MiB, no Playwright, M3); the session's MCP work runs in a worker thread of the service, with a heap limit for each scope (section 8.2; its memory is not measured) |
-| Connections of one session's MCP | its stdio pipe; its CDP connection to the relay | the shim's stdio pipe; the shim's HTTP connection to the agent door; inside the service, the MCP's CDP connection back to the agent door with a one-time ticket that never leaves the process (section 8.2) |
-| Sockets and pipes in the browser path | 5: `browser-cdp.sock`, the relay's stdin and stdout, `browser.sock`, the native stdio, the X display | 5 on each box: the agent door, the control door, the link socket, the native stdio, the X display; from stage 5 one more, agentwatch's remote MCP socket, on a box whose sessions use another box's browser |
-| TCP ports | 0 | 0 (1 only with Q1 b) |
+| Processes for the MCP of each session | 1 Playwright MCP per session (Node and Playwright; its memory is not measured here) | none: the agent's own MCP client connects over HTTP (section 19); the session's MCP work runs in a worker thread of the service, with a heap limit for each scope (section 8.2; its memory is not measured) |
+| Connections of one session's MCP | its stdio pipe; its CDP connection to the relay | the client's HTTP connection to the MCP port; inside the service, the MCP's CDP connection back to the agent door with a one-time ticket that never leaves the process (section 8.2) |
+| Sockets and pipes in the browser path | 5: `browser-cdp.sock`, the relay's stdin and stdout, `browser.sock`, the native stdio, the X display | 6 on each box: the agent door, the MCP port, the control door, the link socket, the native stdio, the X display; from stage 5 one more, agentwatch's remote MCP socket, on a box whose sessions use another box's browser |
+| TCP ports | 0 | 1: the MCP port on 127.0.0.1, held by a user socket unit while the service is down (section 19) |
 | Contracts that bind agentwatch's code | 6: C1 (agentwatch pins the IDs), C2 (the daemon checks the payload), C4, C9, C10, C11 | 3: C9 (with the send's size limit), C11 (only the remote MCP path; until stage 6 also the endpoint path that the daemon gives), C12 (new). C1: agentwatch keeps no ID and no pin; it reads the sender's ID and package from the service. C2: agentwatch carries the bytes and checks none of them |
 | Contracts that bind three repositories | 2: C10 and C11 (chrome-extension, agent-browser, agentwatch) | none until stage 5: C4 and C10 bind chrome-extension and agent-browser; C11 and C12 bind agent-browser and agentwatch, and their master text moves to agent-browser (stage 0); C9 binds chrome-extension and agentwatch, and it uses a sender ID that the service gives through C12. From stage 5, one shared rule binds three: the scope pattern with `<box>/` (C4 and C11), which agentwatch fills in `set_sessions`, the service passes on and the receiver checks |
 | Repositories that one bridge op change touches | 3 (receiver, relay, daemon carrier) | 2 (receiver, service) |
@@ -198,7 +208,7 @@ call, with every security rule of today kept.
 | Repositories that a Chrome start flag or update rule touches | 2 (agentwatch `unit.py` and its twin check `chrome_args.py`, agent-browser `assertSafeChromeArgs`) | 1 (agent-browser) |
 | Rules written twice, in Python and TypeScript | the Chrome flag check, the scope pattern, C4's list rules (`ScopeBook` and `scopes.ts`), the version order, the host rules (`browser_hosts.py` and `allowlist.ts`) | none (TypeScript, and the receiver's JavaScript) |
 | Process boundaries of an agent's CDP call to Chrome | 4: client, relay, daemon, host, Chrome | 3: client, service, host shim, Chrome |
-| Process boundaries of an MCP tool call to Chrome | 5: agent, MCP, relay, daemon, host, Chrome | 4: agent, MCP shim, service, host shim, Chrome |
+| Process boundaries of an MCP tool call to Chrome | 5: agent, MCP, relay, daemon, host, Chrome | 3: agent, service, host shim, Chrome |
 | Process boundaries of an MCP tool call from another box | no path | 6: agent, MCP shim on taylor, taylor's daemon, the Mac's daemon (over the agentwatch link), the Mac service, the host shim, Chrome |
 | Process boundaries of a pointer path (X) | 2: relay, daemon, xdotool | 1: service, xdotool |
 | Process boundaries of an operator act (a list change, a sign-in send) to Chrome | 3: gateway, daemon, host, Chrome | 4: gateway, daemon, service, host shim, Chrome (one more, on a rare path) |
@@ -207,7 +217,7 @@ call, with every security rule of today kept.
 The hot path (an agent's calls, thousands a minute) loses one process boundary. The operator's acts (a few
 a day) gain one. The relay's stdio pipes, the daemon's carrier and its limits (`MAX_BYTES_IN_FLIGHT`,
 parts, waits) and the `daemon.*` ops leave the wire: they become calls inside one process. The new parts are
-the service's unit, the control door, one shim for each session that uses the MCP, and the remote path's
+the service's unit, the control door, the MCP port with its socket unit (section 19), and the remote path's
 parts (section 9).
 
 ## 5. The service (task item 1)
@@ -225,7 +235,7 @@ parts (section 9).
 | The bridge (C10) | the relay and the daemon's carrier (`bridge.py`) | inside the service: the model's bridge writes to the native link, with no stdio pipe and no carrier |
 | The browser model | `agent-browser relay`, a child of the daemon (`relay.py`) | the same model code (`src/relay/model.ts`), in the service |
 | The CDP endpoint | the relay's socket `browser-cdp.sock` | the agent door, path `/devtools/browser/<scope>` |
-| The MCP | a Playwright MCP per session, outside | the agent door, path `/mcp/<scope>` (section 8) |
+| The MCP | a Playwright MCP per session, outside | the MCP port, path `/mcp/<scope>` (sections 8 and 19) |
 | The X pointer | `pointer.py` (`daemon.pointerAt`, `daemon.movePointer`) | in the service: the model plans the path (`src/relay/pointer.ts`) and plays it with `xdotool` on its own Xvfb |
 | The lists and the scopes | `lists.py`, `allowlist.py`, `scopes.py` (`ScopeBook`, the ended file), `browser_lists.py`, `browser_hosts.py` (`normalize_entry`, `covers`) | the service reads and writes today's list files in today's folder, `CONFIG_DIR/browser/lists/`, in the same format (section 7.5); it builds `set_scopes` and the model's lines from the sessions that agentwatch sends; it owns the host rules and the ended scopes |
 | The list copy of each scope for agent-browser's CLI | `commands/browser.py` writes `<state>/session-lists/<scope>/allowlist.json` before each command | the service writes it at each list change (it owns the state folder), and removes it at the scope's end |
@@ -374,7 +384,8 @@ needs no extension release. (M1 used a test extension that copies the receiver's
 real receiver; stage 1's live test runs the real one.)
 
 **The contract text changes** (chrome-extension `docs/protocol.md` is the master of C1, C4, C5, C10 and
-C11). Stage 0 writes them; the texts that name the service as a party apply **from stage 3** on a box
+C11). Stage 0 writes them (board task ab-v16.94.1 wrote them, and moved C11's master to agent-browser
+`docs/contracts/C11.md`); the texts that name the service as a party apply **from stage 3** on a box
 whose switch is on, and until then the daemon stays the party:
 
 - **C1**: the native host name stays. agent-browser, not agentwatch, pins the chrome-extension commit, the
@@ -683,7 +694,7 @@ How the service runs it:
   `realpath`, so no link leaves the folder). A local agent copies a file into that folder before an
   upload, and finds a saved file there; `agent-browser mcp --folder` prints the folder for the calling
   session. For a remote scope the service refuses every path argument (section 9). A later build can carry
-  the client's roots through the shim and measure them; this design does not rely on them.
+  the client's roots through the transport and measure them; this design does not rely on them.
 - **A memory bound for each scope** (C9): the MCP code of each scope runs in one worker thread of the
   service, with a heap limit (`resourceLimits`; first value 512 MiB). A worker that passes it ends, with
   its MCP sessions: their clients get an error and can start a new session. The model, Chrome and the
@@ -693,8 +704,8 @@ How the service runs it:
 - **The transport** is a small Streamable HTTP transport of the service's own on the agent door, at
   `/mcp/<scope>`. The MCP server object needs only `start`, `send` and `close` from a transport, and M3's
   part C ran `initialize`, `tools/list` and `browser_navigate` through such a transport with no MCP SDK
-  package. With Q1 a the service serves only its own shims and the agentwatch link, so it controls both
-  ends, and JSON answers are enough. The MCP SDK's own transport also worked (part A), but its package
+  package. With the operator's answer Q1 (section 19) the agents' own HTTP MCP clients talk to this
+  transport, so stage 1d checks its JSON answers with Claude Code's and Codex's clients before stage 3. The MCP SDK's own transport also worked (part A), but its package
   brings 17 direct dependencies (among them `express`, `hono`, `ajv`, `zod`, `jose` and `cross-spawn`;
   96 packages in the probe's install). The service answers a request with an `Origin` header with the 403
   (M3), as C11 does for CDP.
@@ -705,6 +716,9 @@ How the service runs it:
   too, with a tool set of agent-browser's own over the model and no new package.
 
 ### 8.3 The MCP transport: a Unix socket with a stdio shim, or loopback TCP
+
+**Decided: b, HTTP on a loopback TCP port (the operator's answer Q1, section 19).** The text below is the
+comparison that the operator saw.
 
 The operator asked for HTTP. Claude Code (`claude mcp add --transport http <name> <url>`) and Codex
 (`codex mcp add <name> --url <url>`) take an HTTP MCP by URL. Neither help text names a Unix-socket URL.
@@ -750,30 +764,34 @@ pays it once.
 | A process per session | The shim (62.7 MiB, no Playwright) | None |
 | The Mac | The same | A new reader, pending |
 
-**Recommendation: a.** The agent door stays a Unix socket for CDP and MCP. A local session's MCP is the
-stdio shim `agent-browser mcp`. It holds no MCP logic: it posts each JSON-RPC line to `/mcp` on the agent
-door and writes each answer line (M3: the same calls through the shim). The service takes the scope from the
-walk of the shim's process: the first root that the walk reaches names the scope, and a walk that reaches no
-root gets the session's 403 (the peer admission design's "path with no scope", section 7). So one MCP
-configuration serves every session. The kernel check holds on both systems. A session on another box uses
-HTTP over the agentwatch link (section 9). This keeps the daemon lead's C3 and the operator's HTTP. HTTP is
-the MCP's transport inside the service and across boxes. Only the last step, inside the session, is stdio.
-Option b stays a later option for Linux, behind a setting, if a client must have a URL (Q1).
+**The decision: b.** A local session's MCP configuration holds the URL `http://127.0.0.1:<port>/mcp/<scope>`,
+and the service checks the peer over loopback TCP as M2 did, with the daemon lead's five conditions as rules
+(section 19): the uid check first, then the walk, before any request byte; an `Origin` header refused and the
+`Host` checked; the port held by a socket unit while the service is down, and the Mac closed until its reader
+exists; a per-session MCP configuration; and no secret. No stdio shim runs. Option a was this design's
+recommendation before the answer: it kept the kernel's check of the Unix socket, at the cost of one shim
+process for each session. Board item ab-6ng asks the operator to check this reading of "HTTP"; if the answer
+is HTTP on the private socket with a helper, option a comes back before stage 1d builds the MCP. A session on
+another box still uses HTTP over the agentwatch link (section 9).
 
 ### 8.4 The fallbacks
 
 - **stdio**: today's Playwright MCP keeps working as a stdio child of the session, with `--cdp-endpoint`
   (the URL of `agent-browser endpoint`). It is a CDP client of the agent door, and the walk admits it.
-- **A key per session**: not needed. The peer check holds on the Unix socket, and the operator rejected
-  keys (ab-dm6).
+- **A key per session**: not needed. The peer check holds on the Unix socket and, for the MCP port, over
+  loopback TCP (section 19), and the operator rejected keys (ab-dm6).
 
 ### 8.5 How a session gets the MCP
 
-The operator's answer age-4ks ("env: no") keeps the endpoint out of a session's environment by default.
-With the shim, the MCP configuration holds no URL, no scope and no secret, so the same line works for
-every session: `{"command":"agent-browser","args":["mcp"]}` (or `agentwatch browser mcp`, a wrapper). What
-the operator must decide (Q2) is whether agentwatch adds that line to the sessions it launches. Each
-session that has it loads the MCP's tool list into its context, also when it never uses the browser.
+The operator's answer Q2 (section 19): agentwatch adds the MCP's HTTP entry to the MCP configuration of a
+session that it launches when the session's scope has a list with at least one site. The entry holds the URL
+with the session's scope (a label: the walk decides the scope) and no secret. agentwatch writes it into a
+configuration of the session's own at the launch (Claude Code: a generated file with `--mcp-config`; Codex: a
+`-c` override or the account's own `CODEX_HOME`), never into the user's global files. Nothing goes into the
+session's environment: the operator's answer age-4ks ("env: no") stays. agentwatch does not rewrite a running
+session's configuration, so a list that gets its first site after the launch takes effect at the session's
+next launch; the skill says how to add the entry by hand. Each session that has the entry loads the MCP's
+tool list into its context.
 
 ## 9. Another box (task item 5)
 
@@ -882,14 +900,15 @@ needs:
   design says). The service writes the host manifest into the agent profile's `NativeMessagingHosts/`
   folder.
 - **No Xvfb and no X pointer**: the model sends no pointer path on the Mac.
-- **The peer check**: `LOCAL_PEERPID` and `proc_pidinfo` (built, not run yet: ab-v16.52). The stdio shim
-  keeps the kernel check on the Mac with no port.
+- **The peer check**: `LOCAL_PEERPID` and `proc_pidinfo` (built, not run yet: ab-v16.52), for the agent
+  door. The MCP port needs a TCP peer reader (`libproc`), built and measured before stage 4; until then the
+  Mac's MCP port refuses every connection (section 19).
 - **Open checks on the Mac** (through the manager, with the operator):
   - the host shim's start from the agent profile's folder in branded Chrome;
   - the sleep and wake of `chrome.debugger` and the native port (the agentwatch design's Mac check 4);
   - the peer reader;
   - the shim's `connectNative` after a relaunch;
-  - a TCP peer reader, only if the operator picks Q1 b or c.
+  - the TCP peer reader of the MCP port (the operator's answer Q1, section 19).
 
 ## 11. Security (task item 7)
 
@@ -899,7 +918,7 @@ Every rule of today holds. The table names where each rule lives after the chang
 | --- | --- | --- |
 | Per-scope allowlists that only the operator edits | lists in agentwatch's config folder, edited in the web viewer (password login), pushed by the daemon | the same files in the same folder (section 7.5), changed only by `list_set` and `prompt_allow` on the control door with `by.kind: operator`, which the daemon sets only from the gateway's password-login field (R7); no op on the agent door or in the MCP changes a list |
 | The lists' enforcement | the receiver's DNR rules, guard and sweep; the relay's navigation refusal (layer 1) | the same: the receiver, and the model in the service |
-| The peer check (the scope is the session's) | the relay (`src/relay/peer.ts`), roots from the daemon's `allowlist` line | the same code in the service, roots from `set_sessions`; the MCP shim and the MCP's own connection under the same check (section 8.2) |
+| The peer check (the scope is the session's) | the relay (`src/relay/peer.ts`), roots from the daemon's `allowlist` line | the same code in the service, roots from `set_sessions`; the MCP port under the TCP peer check (the uid first, then the walk, before any request byte; section 19), and the MCP's own connection under the same check (section 8.2) |
 | Who may use the control door | the daemon's ops come from the gateway; the daemon's sockets take no agent | only the agentwatch daemon process itself, by pid, parent, command line and start time, read at each accept (section 7.1, R1); never a process of agentwatch's cgroup only, never the service's own pid, never an agent-browser CLI command |
 | No cookie calls; cookie headers masked | the relay's model | the model in the service; the MCP's page tools reach the browser only through the model |
 | The refused page marks (main-world init scripts and bindings) | the model | the model |
@@ -908,7 +927,8 @@ Every rule of today holds. The table names where each rule lives after the chang
 | The operator's own Chrome is never reachable | the operator package has no `debugger`; the host manifest only in the agent profile; the host checks its parent's profile; the daemon checks the host's parent is the unit's Chrome | the same package rule; the owner of the Chrome unit writes the manifest only in its agent profile; the shim checks its parent's profile; the service checks that the shim's parent is its own Chrome, by pid and start time (M1); on the Mac the service never writes the default folders |
 | Fail closed: no confirmed receiver, Chrome stops after 60 s; no scope object before the first complete read of the sessions | the daemon (`check_receiver`, `_fail_closed`) | the owner of the Chrome unit only (section 13.2: the service's unit state); the daemon's watch reads the unit state again right before it stops Chrome; the `stopped` event to the daemon and the last stop in `status` |
 | Start and stop | the API token or a web login (#643 open) | unchanged during the move; each op names its caller's kind; Q5 asks about a change |
-| A web page cannot connect | the `Origin` 403 of the endpoint | the same on CDP and MCP paths (M3); a Unix socket is out of a web page's reach |
+| A web page cannot connect | the `Origin` 403 of the endpoint | the same on CDP and MCP paths (M3); a Unix socket is out of a web page's reach; the MCP port refuses an `Origin` header, admits only the `Host` `127.0.0.1:<port>` or `localhost:<port>`, and its walk refuses a browser process (section 19) |
+| Another OS user | the 0600 sockets in a 0700 folder | the same for the doors; on the MCP port the uid column refuses another OS user before any scan, and a socket unit holds the port while the service is down (section 19) |
 | Secrets | no secret in argv or a log; payloads in memory | the same; the service gets a payload on the control door and keeps it in memory only; logs carry a user, a domain and counts; the MCP's one-time ticket never leaves the service's process |
 | The extension signing key | agentwatch keeps the private key (0600) and pins the CRX | the service never holds the key: it checks the CRX against the pinned hash; the key stays where the release flow keeps it |
 | The box's own sign-in never moves | `payload.py` (box hosts, `BOX_COOKIE_NAMES`) | the service, with the hosts and cookie names that agentwatch gives in `set_sessions` |
@@ -926,7 +946,7 @@ section 11).
 | --- | --- |
 | C1. Per user, never root; the gateway reads no user file | One service per OS user; the gateway passes requests to the user's daemon, which passes them to the user's service. The sender ID comes from the service through the daemon, not from a file. |
 | C2. Operator-only acts only through a control door, provenance from the credential | Section 7.1: only the daemon process itself on the control door (R1); `by.kind: operator` only from the gateway's password-login field (R7); no such op on the agent door or in the MCP. Start and stop keep today's rule until the operator answers Q5. |
-| C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check; the MCP's local path is the stdio shim (Q1 a); the MCP's own ticket is bound to the service's pid and never leaves the process; cross-box through the link and a new kernel-checked daemon socket. Loopback TCP only if the operator picks Q1 b, with the M2 check and its limits. |
+| C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check. The operator chose loopback TCP for the MCP (Q1 b, section 19), and the daemon lead turned C3 into five conditions for it, which section 19 records as rules: the uid check first, then the walk, before any request byte; any `Origin` refused and the `Host` checked; the port held while the service is down, and the Mac closed until its reader exists; a per-session MCP configuration; no secret. The MCP's own ticket is bound to the service's pid and never leaves the process; cross-box through the link and a new kernel-checked daemon socket. |
 | C4. Fail closed; the daemon sees the stop | Section 11; the `stopped` event, and the last stop in `status` for a daemon that was down. |
 | C5. Chrome survives restarts; the service has its own lifetime and adopts a running Chrome | Sections 5.2, 7.3 and 13.2: one owner of the Chrome unit, named by the state of the service's unit (`KillMode=process`, so a stop or crash of the service keeps Chrome); a daemon restart and a service restart keep Chrome in both modes (tested in stage 2). |
 | C6. Secrets | Section 11. |
@@ -1150,6 +1170,9 @@ The daemon lead's answers to the list of what the daemon lead must agree to (rev
 | 6. The MCP | yes, Q1 a; the cross-box path with R5 | sections 8.3 and 9 |
 | 7. The live checks | yes | sections 13.1 and 13.3 |
 
+Row 6 was the daemon lead's answer before the operator's answer to Q1. For the TCP choice the daemon lead set
+five conditions on 2026-11-10, which section 19 records as rules.
+
 In the agree list the daemon lead's conditions were R1, R4, R5 and R7. R2 (start and stop), R3 (the pin
 change, health) and R6 (lists through the same files) were points that the design should say: R2 is Q5 and
 section 5.6, R3 is section 7.3, R6 is section 7.5. Q2 to Q5 are the operator's.
@@ -1226,6 +1249,8 @@ These notes come from the last fresh review. They are not decisions; the build t
 
 ## 16. Questions for the operator
 
+**Answered on 2026-11-10 (section 19).** The questions stay here as the operator saw them.
+
 Each question gives its options, their effects and a recommendation. "No answer" names what the build
 does when the operator gives none.
 
@@ -1300,6 +1325,9 @@ stage 3.
 - No answer: c. The behavior does not change without the operator's answer.
 
 ## 17. Open points for the operator
+
+**Answered on 2026-11-10: the recommendations hold (section 19).** The points stay here as the operator saw
+them.
 
 The last fresh review found three points at the edges of section 13.2's rule. The manager's bound ended
 the review rounds, so they go to the operator here. Section 13.2's rule stays as it is until the operator
@@ -1390,3 +1418,87 @@ port. The probe's README gives the files, the commands and every number; `result
   `initialize` and `tools/list`, and its `browser_navigate` waited: the MCP connects to the browser only at
   its first browser tool. Section 8.2's allow-list test relies on this.
 - No fix of this version needed a new measurement.
+
+## 19. The operator's answers (ab-bi3, 2026-11-10)
+
+The operator answered board item ab-bi3 on 2026-11-10 (confirmed, with a web login). This section records the
+answers as the build reads them. Where an answer is free text, the lead's reading follows it. The contracts of
+stage 0 state the answers: agent-browser `docs/contracts/C11.md` (the MCP port, its admission and the
+per-session configuration), `docs/contracts/C12.md` (the control door) and `docs/contracts/mcp-allow-list.md`,
+and chrome-extension `docs/protocol.md` (C1, C4 and C10).
+
+**Q1. How does a local session reach the MCP? The answer: "HTTP" (free text).** The lead reads it as option b
+of section 8.3: the service serves the MCP over Streamable HTTP on a loopback TCP port,
+`http://127.0.0.1:<port>/mcp/<scope>`, with the TCP peer check of section 8.3 (the uid column first, then the
+walk to the session's pane). Agents use their client's HTTP MCP configuration. No stdio shim runs. The daemon
+lead turned the constraint C3 (section 12) into five conditions for the TCP choice, and they are rules of the
+build:
+
+1. The uid check comes first, then the walk to the session's pane, and both come before the service reads any
+   byte of a request.
+2. The service refuses any request with an `Origin` header, and it admits only a `Host` header that is exactly
+   `127.0.0.1:<port>` or `localhost:<port>` (against DNS rebinding). The walk refuses a browser process. The
+   service keeps all three checks.
+3. A user socket unit holds the port while the service is down (Linux), and launchd's equivalent on the Mac, so
+   another OS user cannot take the port. The Mac refuses every connection (fail closed) until its TCP peer
+   reader (`libproc`) is built and measured, before stage 4.
+4. agentwatch writes the MCP's HTTP entry into each session's own MCP configuration at the launch, never into
+   the user's global files: for Claude Code a generated file for the session with `--mcp-config`, for Codex a
+   `-c` override for the session or the account's own `CODEX_HOME`. It writes it only when the session's scope
+   has a list with a site (Q2), and nothing into the environment. A list change during a session does not
+   rewrite the session's configuration: the change takes effect at the session's next launch, so the session
+   needs a restart.
+5. No secret is in the URL or in the configuration. The scope in the path is a label: the walk decides the
+   scope.
+
+Q1 is about a local session. Section 9's path for a session of another box does not change by it.
+
+**Q2. Which sessions get the MCP in their configuration? The answer: "An agent with at least one site in the
+allowlist" (free text).** agentwatch adds the MCP's HTTP entry to a session's MCP configuration at the
+session's launch when the session's scope has a list with at least one site. Nothing goes into the session's
+environment: the answer age-4ks stays. A list that gets its first site after the launch takes effect at the
+next launch (an internal choice), and the skill says how to add the entry by hand.
+
+**Q3. What does the browser grant for another box give? The answer: a, one grant per box (the
+recommendation).** One Mac list for all sessions of that box.
+
+**Q4. Which code serves the MCP's tools inside the service? The answer: a, the standard Playwright MCP (the
+recommendation).** It is pinned, and it runs under the allow list of section 8.2. The format of the list is
+agent-browser `docs/contracts/mcp-allow-list.md`.
+
+**Q5. Who may start and stop the agent browser? Open.** Board item ab-6ng asks it. Today's rule stays until
+the operator answers: the API token may start and stop the agent browser, and an agent's `endpoint` wait sends
+a start.
+
+**The open points of section 17: the recommendations hold.** The operator gave no note, so:
+
+1. A switch-on that the daemon gave up: option a. A "gave up" mark on disk, which `agentwatch health` shows;
+   the config key stays as the operator wrote it.
+2. A start of the service's unit that the switch-on did not make: the reviewer's fix. The build uses
+   `systemctl --user try-restart` everywhere and one read of the unit's state and job, and the runbook forbids
+   a start by hand.
+3. The Mac after the daemon unloads the service's job: option a. The daemon stops the agent Chrome
+   (`agent-browser service stop --all`), and `agentwatch health` says why.
+
+**Board item ab-6ng (open).** It asks two things: (1) a check of the lead's reading of "HTTP" above, against
+HTTP on the private socket with a small helper for each agent; (2) Q5. Its answers matter before stage 3, the
+switch on taylor, and the board holds stage 1d (the MCP over local HTTP) until it is answered. If the operator
+picks HTTP on the private socket with a helper, option a of section 8.3 comes back, and C11 changes before
+stage 1d builds the MCP.
+
+**What the answers change in this design.** Sections 1, 3, 4.2, 4.3, 5.1, 6, 8.2 to 8.5, 10, 11 and 12 now
+describe the MCP port of Q1 and the session's entry of Q2. The questions of section 16 and the points of
+section 17 stay as the operator saw them. Section 13.4 stays the record of the daemon lead's review: its row 6
+answered "Q1 a" before the operator's answer.
+
+**Build notes from the answers.** These are not decisions; the stages take them into account.
+
+1. A systemd socket unit starts its service at the first connection to its socket. Such a start would start the
+   service's unit from outside the switch-on (open point 2 of section 17), and it would give the Chrome unit to
+   the service on a box whose switch is off. So stage 1d holds the port with no start of the service's unit
+   by a connection, or it shows why such a start is safe. Its test connects to the held port while the daemon
+   owns.
+2. The port is one port for each OS user and box. Which port, and who picks it (agentwatch's install writes the
+   socket unit and the session's entry), is a build point of stages 1d and 2.
+3. The agents' own HTTP MCP clients talk to the service's transport directly. Stage 1d checks the transport's
+   JSON answers with Claude Code's and Codex's clients before stage 3.
