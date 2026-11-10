@@ -194,7 +194,7 @@ test("every harness under test/live that starts Xvfb takes the harness guard fir
   const files = (readdirSync(live, { recursive: true }) as string[]).filter((f) => /\.(ts|mjs|js)$/.test(f)).sort();
   const starters = files.filter((f) => /(spawn|start)\("Xvfb"/.test(readFileSync(join(live, f), "utf8")));
   assert.deepEqual(starters, ["agent-mode/run.ts", "anti-detect/extra.ts", "anti-detect/mac.ts", "anti-detect/run.ts", "background-tabs/check.ts",
-    "background-tabs/override.ts", "background-tabs/visibility.ts", "function-keys/check.ts", "parity/probe.ts"]);
+    "background-tabs/override.ts", "background-tabs/visibility.ts", "function-keys/check.ts", "input-harness/run.ts", "parity/probe.ts"]);
   for (const f of starters) {
     const src = readFileSync(join(live, f), "utf8");
     const guard = src.indexOf("await harnessGuard("), xvfb = src.search(/(spawn|start)\("Xvfb"/);
@@ -336,6 +336,8 @@ test("every harness refuses a reserved display that its option names (--display 
       ["background-tabs/override.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
       ["background-tabs/visibility.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
       ["function-keys/check.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
+      ["input-harness/run.ts", ["--display", "90"], {}, /^--display names :90, a reserved display/],
+      ["input-harness/run.ts", ["--display", "191"], {}, /^--display names :191, a reserved display/],
       ["anti-detect/run.ts", ["--display", "147"], {}, /^--display names :147, a reserved display/],
       ["anti-detect/extra.ts", ["--display", "0"], {}, /--display/],
       ["anti-detect/extra.ts", ["--display", "190"], {}, /^--display names :190, a reserved display/],
