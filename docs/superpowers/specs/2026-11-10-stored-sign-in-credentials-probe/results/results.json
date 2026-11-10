@@ -1,0 +1,132 @@
+{
+  "chrome": "Chrome/156.0.8078.79",
+  "cases": {
+    "profile1": {
+      "C1_fill_then_read": {
+        "runtime_evaluate_value": true,
+        "dom_outer_html_attribute": false,
+        "domsnapshot_strings": true,
+        "ax_tree": false,
+        "screenshot_bytes": true,
+        "network_post_body": true,
+        "post_body_in_event_itself": true,
+        "signed_in_after_enter": true
+      },
+      "C3_back_after_sign_in": {
+        "back_to_login": true,
+        "restored_from_bfcache": true,
+        "password_value_after_back": true
+      },
+      "C3b_reset_history_then_back": {
+        "signed_in": true,
+        "reset_ok": true,
+        "history_length_after_reset": 1,
+        "path_after_back": "/home",
+        "password_reachable": false
+      },
+      "C3c_no_store_back": {
+        "restored_from_bfcache": false,
+        "password_value_after_back": false
+      },
+      "C4_failed_sign_in_plain": {
+        "wrong_note_shown": true,
+        "password_value_left": false
+      },
+      "C4_failed_sign_in_echo": {
+        "wrong_note_shown": true,
+        "password_value_left": true
+      },
+      "C5_script_sign_in": {
+        "failure_value_left": true,
+        "success_note": true,
+        "success_same_document_value_left": true
+      },
+      "C6_attribute_copy": {
+        "outer_html": true,
+        "attribute_event": true
+      },
+      "C7_agent_scripts_first": {
+        "main_world_listener": true,
+        "isolated_world_init_script": true,
+        "window_reference_of_opener": true
+      },
+      "C2_agent_interception": {
+        "body_read": true,
+        "continue_to_other_host": true,
+        "tracker_got_the_secret": true
+      }
+    },
+    "profile1_disk": {
+      "login_data_rows_with_username": 0,
+      "web_data_autofill_rows_with_username": 2,
+      "web_data_autofill_rows_with_password": 0,
+      "files_with_plain_bytes": {
+        "password": [],
+        "username": [
+          "Default/Cache/Cache_Data/a263927c52e4fe5c_0",
+          "Default/Login Data",
+          "Default/Web Data"
+        ]
+      }
+    },
+    "profile2_act": {
+      "form_checks": {
+        "same_origin": true,
+        "method_post": true,
+        "action_same_origin": true,
+        "one_password_field": true
+      },
+      "signed_in": true,
+      "blocked_hosts": [
+        "tracker.localhost:33407",
+        "tracker.localhost:33407"
+      ],
+      "continued_requests": 4,
+      "reset_history": true,
+      "ms": 1733,
+      "tracker_got_the_secret": false,
+      "agent_tab_signed_in": true
+    },
+    "profile2_disk": {
+      "login_data_rows_with_username": 0,
+      "web_data_autofill_rows_with_username": 1,
+      "web_data_autofill_rows_with_password": 0,
+      "files_with_plain_bytes": {
+        "password": [],
+        "username": [
+          "Default/Login Data",
+          "Default/Web Data"
+        ]
+      }
+    },
+    "profile3_act": {
+      "form_checks": {
+        "same_origin": true,
+        "method_post": true,
+        "action_same_origin": true,
+        "one_password_field": true
+      },
+      "signed_in": true,
+      "blocked_hosts": [],
+      "continued_requests": 4,
+      "reset_history": true,
+      "ms": 1585
+    },
+    "profile3_disk": {
+      "login_data_rows_with_username": 0,
+      "web_data_autofill_rows_with_username": 0,
+      "web_data_autofill_rows_with_password": 0,
+      "files_with_plain_bytes": {
+        "password": [],
+        "username": []
+      }
+    },
+    "profile3_prefs_kept": {
+      "credentials_enable_service": false,
+      "autofill_profile_enabled": false
+    }
+  },
+  "tracker": {
+    "requests": 1
+  }
+}
