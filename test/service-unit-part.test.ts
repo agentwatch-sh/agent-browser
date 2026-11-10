@@ -244,6 +244,70 @@ test("review-106 B1: a config that comes before the service's start ends: a want
   } finally { await r.close(); }
 });
 
+test("review-106b F1: a stop that comes while the start of a wanted Chrome waits for its owner check wins: no Chrome starts, the record says wanted false, and a later config starts nothing", async () => {
+  const r = await rig({ begin: false, before: WANTED_GONE });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    // The next owner check waits until the test lets it go; every later one passes at once.
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    let armed = true;
+    r.owns.hook = async () => { if (armed) { armed = false; await gate; } };
+    const begun = r.part.begin();
+    for (let i = 0; i < 200 && armed; i++) await sleep(2);
+    assert.equal(armed, false, "the start of the wanted Chrome waits in its owner check");
+    assert.deepEqual(await req(c, "b", "stop", TOKEN), { t: "res", id: "b", ok: true, data: {} });
+    release();
+    await begun;
+    await sleep(50);
+    assert.equal(r.w.named("chromium").length, 0, "the stop wins: no Chrome starts");
+    assert.equal(JSON.parse(readFileSync(r.w.paths.unitFile, "utf8")).wanted, false, "the record says wanted false");
+    c.send({ ...CONFIG, id: "cfg2" }); await c.answer("cfg2");
+    await sleep(50);
+    assert.equal(r.w.named("chromium").length, 0, "and a later config starts nothing");
+  } finally { await r.close(); }
+});
+
+test("review-106b F1: a stop that comes during the start's sweep of a Chrome that no record names (one that holds out against SIGTERM) wins: begin starts no Chrome, and the record says wanted false", async () => {
+  let orphan = 0;
+  const r = await rig({ begin: false, before: (w) => { WANTED_GONE(w); orphan = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"], stubborn: true }).pid; } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    const begun = r.part.begin();
+    for (let i = 0; i < 500 && !r.w.signals.some(([p, s]) => p === orphan && s === "SIGTERM"); i++) await sleep(2);
+    assert.ok(r.w.signals.some(([p, s]) => p === orphan && s === "SIGTERM"), "the sweep asks the orphan to stop");
+    c.send({ t: "req", id: "b", op: "stop", by: TOKEN });
+    await sleep(30); // the stop passes its owner check and waits for the sweep's lock
+    r.w.now += 10_000; // the orphan's grace ends: the sweep kills it and lets the lock go
+    await begun;
+    assert.deepEqual(await c.answer("b", 10_000), { t: "res", id: "b", ok: true, data: {} });
+    await sleep(50);
+    assert.equal(r.w.named("chromium").length, 0, "the stop wins: begin starts no Chrome");
+    assert.equal(JSON.parse(readFileSync(r.w.paths.unitFile, "utf8")).wanted, false, "the record says wanted false");
+  } finally { await r.close(); }
+});
+
+test("review-106b F1: with no config yet, a stop during the start's sweep leaves no start waiting: the state is off, and the first config starts nothing", async () => {
+  let orphan = 0;
+  const r = await rig({ begin: false, before: (w) => { WANTED_GONE(w); orphan = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"], stubborn: true }).pid; } });
+  try {
+    const { c } = r;
+    const begun = r.part.begin();
+    for (let i = 0; i < 500 && !r.w.signals.some(([p, s]) => p === orphan && s === "SIGTERM"); i++) await sleep(2);
+    c.send({ t: "req", id: "b", op: "stop", by: TOKEN });
+    await sleep(30);
+    r.w.now += 10_000;
+    await begun;
+    assert.deepEqual(await c.answer("b", 10_000), { t: "res", id: "b", ok: true, data: {} });
+    assert.equal((await status(c, "s1")).state, "off", "no start waits for the config");
+    c.send(CONFIG); await c.answer("cfg");
+    await sleep(50);
+    assert.equal(r.w.named("chromium").length, 0, "the first config starts nothing");
+  } finally { await r.close(); }
+});
+
 test("review-106 B1: a config with enabled false that comes before the service's start ends applies at the start: the adopted Chrome and its Xvfb stop, and a wanted record whose Chrome is gone starts nothing; no event, the record says wanted false, the state is off", async () => {
   let pids = { x: 0, ch: 0 };
   const r = await rig({ begin: false, before: (w) => { pids = adoptable(w); } });

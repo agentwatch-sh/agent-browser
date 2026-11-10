@@ -243,7 +243,10 @@ export class UnitPart implements ServicePart {
 
   /** The start of a wanted Chrome with no `start` op (build note 8): at the first `config`, or in begin when that came first. */
   private startWanted(): Promise<void> {
+    // A stop that comes during the owner check wins: the start reads the stop count before the check (review-106b F1).
+    const stops = this.unit.stopCount;
     return this.ownerPart("the start of a wanted Chrome", async () => {
+      if (this.unit.stopCount !== stops || !this.unit.wanted) return;
       try { await this.unit.start(); if (this.unit.running()) this.ready(); }
       catch (e) { if (e instanceof NotOwnerError) throw e; this.o.log(`unit: the start of the wanted Chrome failed: ${(e as Error).message.slice(0, 300)}`); }
     });
@@ -282,15 +285,18 @@ export class UnitPart implements ServicePart {
    */
   async begin(): Promise<void> {
     const a = this.unit.adopt();
+    const stops = this.unit.stopCount;
     if (a.unreadable === null) await this.unit.stopOrphans();
     // A `config` can come before this point (the control door opens first: build note 8). It applies now, before the
     // loops start (review-106 B1): `enabled: false` stops what the record wanted, and a wanted Chrome that is gone
     // starts at once. With no `config` yet, a wanted Chrome starts at the first one.
+    // A stop during the sweep wins (review-106b F1): it counts at once and clears the wish when it gets the lock.
     const cfg = this.unit.config;
-    if (cfg && !cfg.enabled) { if (a.adopted || a.wanted) await this.turnOff(); }
+    const wanted = this.unit.wanted && this.unit.stopCount === stops;
+    if (cfg && !cfg.enabled) { if (a.adopted || wanted) await this.turnOff(); }
     else if (a.adopted) this.ready();
-    else if (a.wanted && cfg) await this.startWanted();
-    else if (a.wanted) { this.pendingStart = true; this.o.log("unit: the unit record wants the agent browser; it starts at the daemon's config"); }
+    else if (wanted && cfg) await this.startWanted();
+    else if (wanted) { this.pendingStart = true; this.o.log("unit: the unit record wants the agent browser; it starts at the daemon's config"); }
     const superviseMs = this.o.superviseMs ?? SUPERVISE_MS;
     this.loop(superviseMs, superviseMs, async () => {
       if (!(await this.o.owner.check("the supervisor's check"))) throw new NotOwnerError("not the owner");
