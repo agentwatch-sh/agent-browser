@@ -944,3 +944,22 @@ test("the generator's start: a page with no last point and no X pointer starts i
   const xs = firsts.map((p) => p.x), ys = firsts.map((p) => p.y);
   assert.ok(Math.max(...xs) - Math.min(...xs) > 60 || Math.max(...ys) - Math.min(...ys) > 60, `no fixed start: ${firsts.map((p) => `${p.x},${p.y}`).join(" ")}`);
 });
+
+test("the generator's press point and its hit test: a spread point over another element goes to the element's middle", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  // #hov covers the right part of #b (x 101 and more): only the points of x 100 or less are #b's own.
+  page.select("#hov")[0].rect = [101, 100, 59, 30];
+  const xs: number[] = [];
+  try {
+    for (let i = 0; i < 12; i++) {
+      page.title = "input";
+      const p = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" }))).find((x) => x.params.type === "mousePressed")!.params;
+      xs.push(p.x);
+      assert.equal(page.title, "clicked", `the press at ${p.x},${p.y} reached #b`);
+    }
+  } finally { page.select("#hov")[0].rect = [300, 100, 100, 30]; }
+  assert.ok(xs.every((x) => x <= 100), `no press on the cover: ${xs.join(" ")}`);
+  assert.ok(xs.some((x) => x < 100), `the spread stays where #b is its own: ${xs.join(" ")}`);
+  await commands.close(linux(), { tab: name });
+});
