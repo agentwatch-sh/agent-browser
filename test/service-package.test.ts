@@ -208,6 +208,9 @@ test("the file of the last start is used only while its staged CRX has the pinne
   const outside = writeCrx(tools, REAL, "elsewhere.crx");
   writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: outside, external_version: "0.3.6" }));
   assert.equal(pinnedLastFile(copy, tools), null, "a CRX outside agent-crx/");
+  // A relative path, also one that names the staged CRX from the service's own folder: no fallback (review-110b).
+  writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: "agent-crx/x.crx", external_version: "0.3.6" }));
+  assert.equal(pinnedLastFile(copy, tools), null, "a relative CRX path");
 });
 
 test("a copy outside the tools folder, or whose root links outside it, is refused, and nothing is written", (t) => {

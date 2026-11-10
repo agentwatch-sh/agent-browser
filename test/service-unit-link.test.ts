@@ -43,6 +43,11 @@ test("each start of a Google Chrome copy runs the agent package first, and the u
     await u.stop();
     assert.equal(u.stagedPackage(), null);
     assert.equal(u.xDisplay(), null);
+    // A later start of a Chromium of chrome_bin in the same unit has no staged package (review-110b).
+    u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
+    await u.start();
+    assert.equal(u.stagedPackage(), null, "a Chromium of chrome_bin after a Google Chrome start");
+    await u.stop();
   } finally { w.close(); }
 });
 

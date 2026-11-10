@@ -7,7 +7,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
 import type { ChromeCopy } from "../unit/google-chrome.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, RECEIVER_ID } from "./pins.ts";
@@ -215,7 +215,8 @@ export function extensionFile(copy: ChromeCopy, id: string = RECEIVER_ID): strin
 export function pinnedLastFile(copy: ChromeCopy, tools: string, sha: string = AGENT_CRX_SHA256): string | null {
   try {
     const j = JSON.parse(readFileSync(extensionFile(copy), "utf8"));
-    if (typeof j?.external_crx !== "string" || typeof j?.external_version !== "string") return null;
+    // An absolute path only: Chrome reads a relative one against the file's folder (review-110b).
+    if (typeof j?.external_crx !== "string" || !isAbsolute(j.external_crx) || typeof j?.external_version !== "string") return null;
     const folder = realpathSync(join(tools, "agent-crx")), crx = realpathSync(j.external_crx);
     if (dirname(crx) !== folder || sha256(readFileSync(crx)) !== sha) return null;
     checkVersion(j.external_version);

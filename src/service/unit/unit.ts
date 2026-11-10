@@ -419,6 +419,8 @@ export class ChromeUnit {
 
   /** What this start runs. */
   private plan(cfg: UnitConfig, fetch: boolean): Plan {
+    // Each start sets its own staged package: a Chromium of chrome_bin has none (review-110b).
+    this.staged = null;
     const chromium = (bin: string): Plan => {
       const found = this.d.which(bin);
       if (!found) throw new StartError(`Chromium not found: ${bin}`);
