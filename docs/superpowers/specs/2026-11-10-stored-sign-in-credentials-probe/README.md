@@ -77,8 +77,8 @@ flock <the heavy lock> timeout 1500 node probe.ts --out-dir <dir> [--display 175
 Not probed: the act through `chrome.debugger` (the receiver) instead of a CDP pipe; Chrome stable; a saved password
 in Chrome's own password manager (the probe never clicked a save prompt); a site's service worker; the Mac.
 
-A separate check, with no browser: Node v26.12.0 started with `--disable-sigusr1` kept running when it got
-`SIGUSR1`. Each process was the check's own and was stopped by its pid.
+A separate check, with no browser: board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal). Each
+process was the check's own and was stopped by its pid.
 
 A read, with no browser: `/proc/sys/kernel/yama/ptrace_scope` on taylor gave `1` (read again on 2026-11-10 in
 fix round 1 of review-104; the design's section 5.5 rests on it).

@@ -59,8 +59,8 @@ every decided rule of those documents.
    it. The agent's tabs then load signed-in pages (measured: by a cookie, and by a token that the site keeps in
    `localStorage`).
 4. **The block and the guard (section 7.6).** From the first key to the end of the act, the receiver blocks every
-   request of the act's tab, and of the site's workers, to a host outside the origins that may receive the password
-   (`send_to`): every resource type, the WebSocket included. In the probe a page script sent each typed value
+   request except a top-level GET, of the act's tab, of its popups and of the site's workers, to a host outside the
+   origins that may receive the password (`send_to`): every resource type, the WebSocket included. In the probe a page script sent each typed value
    through six channels; with the block, the other host got nothing, and the sign-in worked. Without it (the
    earlier design's guard alone), the other host got the whole password three ways and parts of it in each way.
 5. **The screen (section 7.3).** The live view sends no frame of the display to any viewer during an act. The
@@ -237,7 +237,7 @@ to that agent. This is why the act uses a tab, a window and a browser context of
 | T2 | The agent watches the network or intercepts the submit, reads the body, or sends it to another host | No client session exists on the act tab, so no client's `Network` or `Fetch` acts on it. Only the service has a session there | stopped |
 | T3 | The agent puts a script in first (a main-world listener, an isolated-world init script, a window reference: C7), or uses its own tab of the same origin: the origin's storage, Cache Storage, a service worker, `BroadcastChannel` (review-104 B1; round 1, case K1: in one context the agent's service worker served the agent's page at the sign-in path, and the agent's tab got the typed value by `BroadcastChannel` and by the `storage` event) | The act runs in a new incognito window: a browser context of its own, new for each act, that no client can make or reach (C11 refuses every other context). Round 1: in the act's context, the agent's page was not served, the agent's storage and caches were not visible, no worker controlled the page, and no broadcast or `storage` event reached the agent's tab. The act tab has no opener and no window name | stopped. If the incognito window cannot be had (section 7.3, the fallback): the service worker is bypassed, and the same-origin channels stay a stated limit |
 | T4 | The agent changes the form's action to another host | The agent cannot reach the act tab. The form rules (section 7.4) refuse a form that sends to another origin, and the block stops a request to another host | stopped |
-| T5 | The site's own page sends the password away (a third-party script, or a script of the site that a change of its storage steers) | The block: from the first key, the receiver blocks every request of the act tab, of its dedicated workers and of the site's service workers to a host outside `send_to`, every resource type (WebSocket, beacon, image, fetch included). Before the first key, an open WebSocket to another host stops the act. The guard fails a request whose URL holds the password in five forms. Round 1: a page script sent each typed value through six channels; with the block, no request of any channel reached the other host, and the sign-in worked. With the earlier guard alone, the other host got the whole password by an image URL in base64url, by the site's service worker and by a WebSocket, and parts of it (4 to 18 characters) by all six channels; the earlier guard stopped the whole value only in the fetch, the beacon and the dedicated worker's fetch | stopped for other hosts. Not stopped: a send to the site's own origin or to another `send_to` origin (any path, a hash, an encryption, a compression, a part of the value, a WebSocket), a subdomain or another port of a `send_to` host by a WebSocket, and WebRTC (section 7.6) |
+| T5 | The site's own page sends the password away (a third-party script, or a script of the site that a change of its storage steers) | The block: from the first key, the receiver blocks every request except a top-level GET, of the act tab, of its popups, of its dedicated workers and of the site's service workers, to a host outside `send_to`, every resource type (WebSocket, beacon, image, fetch included). Before the first key, an open WebSocket to another host stops the act. The guard fails a request whose URL holds the password in five forms. Round 1: a page script sent each typed value through six channels; with the block, no request of any channel reached the other host, and the sign-in worked. With the earlier guard alone, the other host got the whole password by an image URL in base64url, by the site's service worker and by a WebSocket, and parts of it (4 to 18 characters) by all six channels; the earlier guard stopped the whole value only in the fetch, the beacon and the dedicated worker's fetch | stopped for other hosts. Not stopped: a send to the site's own origin or to another `send_to` origin (any path, a hash, an encryption, a compression, a part of the value, a WebSocket), a subdomain or another port of a `send_to` host by a WebSocket, a top-level or popup GET to a host on the scope's list with a changed or partial value, DNS prefetch and preconnect, and WebRTC (section 7.6) |
 | T6 | A page of the exact origin that is not the sign-in page (another path, a page that the agent made) | The act loads the credential's own sign-in path in its own context, so no page or worker of the agent serves it (T3). The agent names only the credential | stopped |
 | T7 | A redirect during the sign-in (to another origin, to a host on no list) | The origin check before the first key: the page must be on the credential's exact origin. After the submit, the scope's list rules apply in the act tab (C4, C5). The block stops a request outside `send_to` that is not a top-level GET; the guard fails a URL with the password, on any origin | stopped |
 | T8 | A failed sign-in leaves the password in the field (C4, C5) | The act empties the fields, and the act window and its whole context close at the end of each act. Three failed results in a row stop the credential (section 7.7) | stopped |
@@ -326,7 +326,9 @@ start (Python's `ctypes`), and agentwatch's unit has `LimitCORE=0`; a test prove
 check reads the daemon's `/proc/<pid>/exe` (the daemon's command, rule 3), and a non-dumpable process closes that
 link to other processes of the user. So the daemon is dumpable only from its connect to the control door until
 the service admits it, and non-dumpable at all other times. With the pane's seal, no plain value of a sign-in is in
-the daemon's memory in that time.
+the daemon's memory in that time. On a box where any process of the user may attach another (`ptrace_scope` 0), an
+attach in that window stays after the daemon is non-dumpable again, so the daemon checks that `TracerPid` in
+`/proc/self/status` is 0 after it sets non-dumpable again, and it stops when the check fails (review-104b).
 
 **The unlock.**
 
@@ -642,7 +644,9 @@ starts it, as any request that needs the browser does, and Chrome does not stop 
   incognito window has an off-the-record browser context of its own: no cookie, storage, Cache Storage, service
   worker, `BroadcastChannel`, HTTP cache or history of the default context (round 1, section 12). Chrome drops the
   context when its last window closes (round 1: after each act's close, only the default cookie store was left,
-  and the next act's store was empty).
+  and the next act's store was empty). The act tab also bypasses service workers (`Network.setBypassServiceWorker`),
+  as round 1 ran: two of round 1's isolation results (the agent's page was not served, and no worker controlled
+  the page) come from that bypass (review-104b F2).
 - **Why not `Target.createBrowserContext`.** Agent mode has no remote-debugging port and no pipe, so the service
   reaches Chrome only through the receiver's `chrome.debugger`. There, `Target.createBrowserContext` answers "Not
   allowed" (round 1). An incognito window is the context that an extension can make.
@@ -742,7 +746,7 @@ sets the act's own navigations as typed ones.
 | --- | --- | --- |
 | A | the act tab (`tabIds`), every resource type except `main_frame`, a host outside the hosts of `send_to` (`excludedRequestDomains`) | every subresource, beacon, WebSocket, WebTransport and the requests of the tab's dedicated workers |
 | B | the act tab, `main_frame`, every method except GET, a host outside the hosts of `send_to` | a form or a script that posts to another site after the form check |
-| C | no tab (`tabIds: [-1]`), the credential's host as the initiator, a host outside the hosts of `send_to` | the requests of the site's service workers and shared workers, which no tab rule matches |
+| C | every tab (no `tabIds`), the credential's host as the initiator, a host outside the hosts of `send_to` | the requests of the act's popups (an `about:blank` popup has the opener's origin) and of the site's service workers and shared workers, which no tab rule matches (review-104b F1) |
 | D | the act tab, every resource type except `main_frame`, the hosts of `send_to` and their subdomains | DNR matches hosts, not origins: this blocks a subdomain, another scheme or another port of a `send_to` host |
 | E (`allow`, priority 5) | the act tab, every resource type except `main_frame`, a URL of exactly a `send_to` origin (and `wss:` to the same host and port) | the site's own requests to its exact origins |
 
@@ -778,8 +782,10 @@ the sign-in fails, and the pane's list of blocked hosts tells the operator which
 of `send_to`, at any path (the site's own endpoints); a hash, an encryption or a compression of the password; a
 part of the value (the person's input types a key at a time, about 5 characters a second, so a script can send
 each prefix to a `send_to` origin); a WebSocket to a `send_to` origin; a WebSocket to a subdomain or another port
-of a `send_to` host from a service worker (rule C is by host); and WebRTC (a STUN or TURN request, or a data
-channel), which no rule and no `Fetch` sees (not measured).
+of a `send_to` host from a service worker (rule C is by host); a top-level or popup navigation by GET to a host on
+the scope's list, with a changed or partial value (the guard finds only the whole value); DNS prefetch and
+preconnect (`<link rel=dns-prefetch>`), which make no request that a rule sees; and WebRTC (a STUN or TURN request,
+or a data channel), which no rule and no `Fetch` sees (not measured).
 
 ### 7.7 The outcome
 
@@ -1180,7 +1186,6 @@ under the heavy-job lock and the harness guard. It printed no value.
 | Does a script put in first see the keys? | yes: a main-world listener, an isolated-world init script, and a window reference |
 | Does the act work in a tab of its own, with the guard? | yes: signed in in 1.6 to 1.7 s (keys 8 ms apart; the person's input is slower); the guard failed both requests of the page's script to another host, which got nothing; the agent's own tab then loaded the signed-in page |
 | What does Chromium write to the profile? | with its defaults: the username in `Login Data` and in `Web Data`'s `autofill` table, and an echoed value in the HTTP cache; with password saving, the leak check and autofill off: no file held the username or the password. In no run did a profile file hold the password |
-| Does `--disable-sigusr1` keep a process running at `SIGUSR1`? | yes, on Node v26.12.0 |
 
 This first probe drove the act over a CDP pipe, not through the receiver. The round-1 probe below drove it
 through an extension's `chrome.debugger`. In both, the hiding of the act tab from clients is designed, not
@@ -1335,9 +1340,10 @@ Recommendation: a, with b or c as a later task when a site needs it. No answer: 
 ## 15. Limits and open points
 
 - **The same-uid limit** stays (section 4.3, T15). The design does not claim more.
-- **The block and the guard** stop every request to a host outside `send_to`, and the guard sees five forms of the
+- **The block and the guard** stop every request except a top-level GET to a host outside `send_to`, and the guard sees five forms of the
   password. Not stopped: the site's own origins of `send_to` (a hash, an encryption, a compression, a part of the
-  value, a WebSocket), a service worker's WebSocket to a subdomain or another port of a `send_to` host, and WebRTC
+  value, a WebSocket), a service worker's WebSocket to a subdomain or another port of a `send_to` host, a top-level
+  or popup GET to a host on the scope's list with a changed or partial value, DNS prefetch and preconnect, and WebRTC
   (section 7.6).
 - **The display**: a program of the user with the display's X authority can read the display and the act window's
   title, move the window back onto the screen and send it input (T16). A site's own reveal control that shows the
