@@ -13,7 +13,8 @@ import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
-import { covers, normalizeEntry } from "../relay/scopes.ts";
+import { covers } from "../relay/scopes.ts";
+import { EntryError, hostOrNull, normalizeHost } from "./lists/hosts.ts";
 import { refusedRule } from "./admission.ts";
 import { agentDoorUrl } from "./agent-door.ts";
 import { ControlDoor, ERR, eventFits, serviceHello, type Answer, type By, type Handler, type Req } from "./control.ts";
@@ -50,7 +51,8 @@ export const FAKE_STATE = {
 };
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
-const launchRefusal = (scope: string) => `A session named ${scope} ended a moment ago, and the agent browser still closes its tabs. Try the launch again in a few seconds.`;
+// The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
+const launchRefusal = (scope: string) => `A session named ${scope} ended a moment ago, and the agent browser could not record it (the file of ended scopes cannot be written: ENOSPC). Choose another name, or wait until the agent browser confirms its lists.`;
 
 const copy = <T>(x: T): T => JSON.parse(JSON.stringify(x));
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
@@ -102,12 +104,11 @@ export class FakeService implements Handler {
     if (!l) this.lists.set(name, (l = { name, repo: null, allow: [], error: "" }));
     const allow = new Set(l.allow);
     const refused: { entry: string; reason: string }[] = [];
+    // The service's host rules and their reason texts (stage 1c, lists/hosts.ts).
     for (const e of add) {
-      const n = normalizeEntry(e);
-      if (n === null) refused.push({ entry: e, reason: "not a host name" });
-      else allow.add(n);
+      try { allow.add(normalizeHost(e)); } catch (x) { refused.push({ entry: e, reason: (x as EntryError).reason }); }
     }
-    for (const e of remove) { allow.delete(e); const n = normalizeEntry(e); if (n !== null) allow.delete(n); }
+    for (const e of remove) { allow.delete(e); const n = hostOrNull(e); if (n !== null) allow.delete(n); }
     l.allow = [...allow].sort();
     return { data: { allow: [...l.allow], refused } };
   }

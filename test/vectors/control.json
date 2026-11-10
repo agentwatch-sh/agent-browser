@@ -615,7 +615,7 @@
     "id": "r6",
     "ok": true,
     "data": {
-     "refusal": "A session named web-1 ended a moment ago, and the agent browser still closes its tabs. Try the launch again in a few seconds."
+     "refusal": "A session named web-1 ended a moment ago, and the agent browser could not record it (the file of ended scopes cannot be written: ENOSPC). Choose another name, or wait until the agent browser confirms its lists."
     }
    }
   },
@@ -651,7 +651,7 @@
      "refused": [
       {
        "entry": "https://bad/x",
-       "reason": "not a host name"
+       "reason": "paste the host only"
       }
      ]
     }
