@@ -1,6 +1,9 @@
 # A self-contained agent browser with the fewest moving parts — design
 
-**Status: Decided: the operator's answers of 2026-11-10 (section 19). The build runs in stages (board ab-v16.94).**
+**Status: Decided: the operator's answers of 2026-11-10 (section 19). The build runs in stages (board ab-v16.94).
+The operator's answer to board item ab-6ng (section 19) reverses "no secret" for the MCP: each repo gets its own
+connection token. A new design (board ab-v16.94.10) replaces the MCP's admission of section 8.3 and C11, and
+stage 1d waits for it.**
 
 Date: 2026-11-09. Revised after four fresh reviews and the daemon lead's review and re-read; the
 manager's bound ended the review rounds after the fourth review. Author: a taylor contributor, a
@@ -106,8 +109,10 @@ constraint.
    (switch-off, with the same Chrome and the same list files) is its safeguard. The move keeps today's
    rule for start and stop; Q5 asks the operator about a change.
 9. **The operator's answers (section 19).** The operator answered Q1 to Q4 on 2026-11-10, and the
-   recommendations of the three open points of section 17 hold. Board item ab-6ng asks two follow-ups: a
-   check of the reading of Q1, and Q5. Today's rule for start and stop stays until the operator answers it.
+   recommendations of the three open points of section 17 hold. The operator answered board item ab-6ng
+   on 2026-11-10: each repo gets its own connection token for the MCP, and agentwatch connects the MCP when
+   an allowed session starts; board ab-v16.94.10 designs it. Q5 is asked again as board item ab-1n8. Today's
+   rule for start and stop stays until the operator answers it.
 
 ## 2. The operator's words
 
@@ -770,9 +775,11 @@ and the service checks the peer over loopback TCP as M2 did, with the daemon lea
 `Host` checked; the port held by a socket unit while the service is down, and the Mac closed until its reader
 exists; a per-session MCP configuration; and no secret. No stdio shim runs. Option a was this design's
 recommendation before the answer: it kept the kernel's check of the Unix socket, at the cost of one shim
-process for each session. Board item ab-6ng asks the operator to check this reading of "HTTP"; if the answer
-is HTTP on the private socket with a helper, option a comes back before stage 1d builds the MCP. A session on
-another box still uses HTTP over the agentwatch link (section 9).
+process for each session. The operator's answer to board item ab-6ng (section 19) changes this reading:
+each repo gets its own connection token over HTTP or HTTPS, so "no secret" no longer holds, and the
+split of the admission between agentwatch and the service is open. Board ab-v16.94.10 designs it before
+stage 1d builds the MCP; until then, this section is the record of the earlier reading. A session on
+another box still uses HTTP over the agentwatch link (section 9) until that design says otherwise.
 
 ### 8.4 The fallbacks
 
@@ -1468,8 +1475,9 @@ recommendation).** One Mac list for all sessions of that box.
 recommendation).** It is pinned, and it runs under the allow list of section 8.2. The format of the list is
 agent-browser `docs/contracts/mcp-allow-list.md`.
 
-**Q5. Who may start and stop the agent browser? Open.** Board item ab-6ng asks it. Today's rule stays until
-the operator answers: the API token may start and stop the agent browser, and an agent's `endpoint` wait sends
+**Q5. Who may start and stop the agent browser? Open.** Board item ab-6ng asked it; the operator answered
+with a question (below), and board item ab-1n8 asks it again with the answer. Today's rule stays until the
+operator answers: the API token may start and stop the agent browser, and an agent's `endpoint` wait sends
 a start.
 
 **The open points of section 17: the recommendations hold.** The operator gave no note, so:
@@ -1482,11 +1490,25 @@ a start.
 3. The Mac after the daemon unloads the service's job: option a. The daemon stops the agent Chrome
    (`agent-browser service stop --all`), and `agentwatch health` says why.
 
-**Board item ab-6ng (open).** It asks two things: (1) a check of the lead's reading of "HTTP" above, against
-HTTP on the private socket with a small helper for each agent; (2) Q5. Its answers matter before stage 3, the
-switch on taylor, and the board holds stage 1d (the MCP over local HTTP) until it is answered. If the operator
-picks HTTP on the private socket with a helper, option a of section 8.3 comes back, and C11 changes before
-stage 1d builds the MCP.
+**Board item ab-6ng (answered 2026-11-10, confirmed, with a web login).** It asked two things: (1) a check of
+the lead's reading of "HTTP" above, against HTTP on the private socket with a small helper for each agent;
+(2) Q5. The operator answered both in free text:
+
+- (1): "let's have agentwatch connect the mcp for sessions that are allowed to use the agentbrowser on
+  startup. i want to reverse the 'no token' guidance i gave earlier. each repo gets its own connection token
+  to authenticate over http/https. we need to figure out how to split the auth surface between agentwatch and
+  the agentbrowser."
+- (2): "why is my password needed?"
+
+What follows from (1): the "no secret" condition of C3 (section 12) and C11's "No secret is in the URL or in a
+session's MCP configuration" no longer hold for the MCP. A new design, board ab-v16.94.10, decides the split of
+the admission between agentwatch and the service (who mints, holds, rotates, revokes and checks each repo's
+token), which sessions are allowed, how agentwatch connects the MCP at a session's start, HTTPS to another box,
+and which of today's checks stay. Stage 1d (ab-v16.94.5) waits for it, and C11 changes with it. Q2's answer
+(the MCP entry at a session's launch) agrees with (1) and stays.
+
+What follows from (2): the lead answered the question on board item ab-1n8 ("password login" means the
+operator's usual web viewer login, not a password step at each stop) and asks Q5 again there.
 
 **What the answers change in this design.** Sections 1, 3, 4.2, 4.3, 5.1, 6, 8.2 to 8.5, 10, 11 and 12 now
 describe the MCP port of Q1 and the session's entry of Q2. The questions of section 16 and the points of
