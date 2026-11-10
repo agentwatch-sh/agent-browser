@@ -1,0 +1,344 @@
+{
+  "chrome": "Chrome/156.0.8078.79",
+  "cases": {
+    "E1_debugger_scope": {
+      "createBrowserContext": "Error: {\"code\":-32000,\"message\":\"Not allowed\"}",
+      "createTarget": "allowed",
+      "setWindowBounds": "Error: {\"code\":-32601,\"message\":\"'Browser.setWindowBounds' wasn't found\"}"
+    },
+    "E1_incognito_window": {
+      "allowed": true,
+      "result": {
+        "created": true,
+        "tab_visible": true,
+        "attach": "attached"
+      }
+    },
+    "incognito_allowed_by_preferences": true,
+    "extension_id_as_computed": true,
+    "incognito_windows_left": 0,
+    "agent_setup": {
+      "worker_active": true
+    },
+    "agent_before_act": {
+      "home": "not signed in",
+      "spa_home": "not signed in"
+    },
+    "K1_same_context": {
+      "agent_page_served_by_worker": true,
+      "agent_tab_got_the_typed_value_by_broadcastchannel": true,
+      "agent_tab_got_it_by_storage_event": true,
+      "with_bypass_agent_page_served": false
+    },
+    "act_old": {
+      "store_is_fresh": true,
+      "agent_page_served": false,
+      "type_watch": {
+        "stopped": false,
+        "typed": 19,
+        "of": 19
+      },
+      "signed_in": true,
+      "reset_history": true,
+      "guard": {
+        "blocked": [
+          "tracker.localhost:38869",
+          "tracker.localhost:38869",
+          "tracker.localhost:38869"
+        ],
+        "continued": 76,
+        "paused_websocket": false,
+        "paused_hosts": [
+          "login.localhost:38869",
+          "tracker.localhost:38869"
+        ]
+      },
+      "cookie_stores_after_close": [
+        "0"
+      ],
+      "ms": 5578,
+      "tracker": {
+        "ws-upgrade": {
+          "requests": 1,
+          "whole": 0,
+          "prefix": 0
+        },
+        "sw": {
+          "requests": 19,
+          "whole": 1,
+          "prefix": 15
+        },
+        "fetch": {
+          "requests": 18,
+          "whole": 0,
+          "prefix": 15
+        },
+        "ws": {
+          "requests": 19,
+          "whole": 1,
+          "prefix": 15
+        },
+        "worker": {
+          "requests": 18,
+          "whole": 0,
+          "prefix": 15
+        },
+        "img": {
+          "requests": 19,
+          "whole": 1,
+          "prefix": 15
+        },
+        "beacon": {
+          "requests": 18,
+          "whole": 0,
+          "prefix": 15
+        }
+      }
+    },
+    "act_main": {
+      "store_is_fresh": true,
+      "agent_page_served": false,
+      "isolation": {
+        "agent_caches_visible": false,
+        "agent_marker_visible": false,
+        "controlled_by_a_worker": false,
+        "default_tab_got_broadcast": false,
+        "default_tab_got_storage_event": false,
+        "default_sees_act_marker": false
+      },
+      "window": {
+        "fb_pixels_on_screen": 894928,
+        "x_windows_found": 1,
+        "extension_update_offscreen": {
+          "error": "Invalid value for bounds. Bounds must be at least 50% within visible screen space."
+        },
+        "extension_update_more_than_half_offscreen": {
+          "error": "Invalid value for bounds. Bounds must be at least 50% within visible screen space."
+        },
+        "act_target_in_another_browser_context": true,
+        "cdp_set_offscreen": {
+          "left": 1480,
+          "top": 0,
+          "width": 1200,
+          "height": 850,
+          "windowState": "normal"
+        },
+        "fb_pixels_after_move": 0,
+        "x_positions": [
+          "1480,0"
+        ],
+        "pointer_after_move_beyond_screen": "x:1279 y:100",
+        "fb_pixels_back_on_screen_by_x": 895200,
+        "extension_minimize": "normal",
+        "fb_pixels_minimized": 895200,
+        "fb_pixels_after_x_move_outside": 0,
+        "extension_sees_bounds_after_x_move": {
+          "left": 1480,
+          "top": 0,
+          "state": "normal"
+        },
+        "fb_pixels_offscreen_after_typing": 0,
+        "fb_pixels_after_an_x_client_moves_it_back": 903813
+      },
+      "dnr": "set",
+      "type_watch": {
+        "stopped": false,
+        "typed": 19,
+        "of": 19
+      },
+      "signed_in": true,
+      "move": {
+        "cookies": 1,
+        "local_keys": 2
+      },
+      "reset_history": true,
+      "guard": {
+        "blocked": [],
+        "continued": 3,
+        "paused_websocket": false,
+        "paused_hosts": [
+          "login.localhost:38869"
+        ]
+      },
+      "cookie_stores_after_close": [
+        "0"
+      ],
+      "ms": 10973,
+      "tracker": {
+        "ws-upgrade": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        },
+        "sw": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        },
+        "fetch": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        },
+        "ws": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        },
+        "worker": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        },
+        "img": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        },
+        "beacon": {
+          "requests": 0,
+          "whole": 0,
+          "prefix": 0
+        }
+      }
+    },
+    "act_flip": {
+      "store_is_fresh": true,
+      "agent_page_served": false,
+      "ws_seen_before_the_first_key": [
+        "tracker.localhost:38869"
+      ],
+      "type_watch": {
+        "stopped": true,
+        "typed": 3,
+        "of": 19,
+        "field_empty": true
+      },
+      "reset_history": true,
+      "guard": {
+        "blocked": [],
+        "continued": 14,
+        "paused_websocket": false,
+        "paused_hosts": [
+          "login.localhost:38869",
+          "tracker.localhost:38869"
+        ]
+      },
+      "cookie_stores_after_close": [
+        "0"
+      ],
+      "ms": 4527,
+      "tracker": {
+        "ws-upgrade": {
+          "requests": 1,
+          "whole": 0,
+          "prefix": 0
+        },
+        "sw": {
+          "requests": 3,
+          "whole": 0,
+          "prefix": 0
+        },
+        "fetch": {
+          "requests": 3,
+          "whole": 0,
+          "prefix": 0
+        },
+        "ws": {
+          "requests": 3,
+          "whole": 0,
+          "prefix": 0
+        },
+        "worker": {
+          "requests": 3,
+          "whole": 0,
+          "prefix": 0
+        },
+        "img": {
+          "requests": 3,
+          "whole": 0,
+          "prefix": 0
+        },
+        "beacon": {
+          "requests": 3,
+          "whole": 0,
+          "prefix": 0
+        },
+        "wsload-upgrade": {
+          "requests": 1,
+          "whole": 0,
+          "prefix": 0
+        }
+      }
+    },
+    "after_the_move": {
+      "cookies_set": 1,
+      "agent_home": "signed in",
+      "agent_spa_home_by_localstorage_token": "signed in"
+    },
+    "listener_after_acts": {
+      "got_any_value": false
+    },
+    "history": {
+      "rows_of_act_paths": 0,
+      "rows_with_username_title": 0,
+      "rows_of_agent_paths": 1
+    },
+    "profile_files": {
+      "password": [],
+      "username": [],
+      "contrast": [
+        "Default/Local Storage/leveldb/000003.log"
+      ]
+    },
+    "preferences_kept": {
+      "credentials_enable_service": false,
+      "profile.password_manager_enabled": false,
+      "profile.password_manager_leak_detection": false,
+      "autofill.profile_enabled": false,
+      "autofill.credit_card_enabled": false
+    }
+  },
+  "tracker_total": {
+    "ws-upgrade": {
+      "requests": 2,
+      "whole": 0,
+      "prefix": 0
+    },
+    "sw": {
+      "requests": 22,
+      "whole": 1,
+      "prefix": 15
+    },
+    "fetch": {
+      "requests": 21,
+      "whole": 0,
+      "prefix": 15
+    },
+    "ws": {
+      "requests": 22,
+      "whole": 1,
+      "prefix": 15
+    },
+    "worker": {
+      "requests": 21,
+      "whole": 0,
+      "prefix": 15
+    },
+    "img": {
+      "requests": 22,
+      "whole": 1,
+      "prefix": 15
+    },
+    "beacon": {
+      "requests": 21,
+      "whole": 0,
+      "prefix": 15
+    },
+    "wsload-upgrade": {
+      "requests": 1,
+      "whole": 0,
+      "prefix": 0
+    }
+  }
+}
