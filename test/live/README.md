@@ -162,6 +162,8 @@ How the rows read:
   "failed steps left out" counts it), a row with no event records has no data, and a scenario that lost
   a beacon batch (the recorder numbers its batches) has no data in every row.
 - P1, P2 and P8 need 30 pointermoves (P2: 30 sample gaps); below that, they have no data.
+- A KS row (P3, P5, K1, K2) needs at least 2 values; one value has no data. (The exact one-sample bound at
+  n = 1 is 0.975, below 1, so without this count one value could pass.)
 - P1's predicted points: the bar of design 9.1 is XTEST's per-path range on the same paths, with no
   margin: the row "predicted points on XTEST's same paths" (the `cdp-4ms-same` source now, the pointer
   build's own replay later). The range row over all paths is information with an XTEST reference, and

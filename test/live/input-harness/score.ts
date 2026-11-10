@@ -68,6 +68,9 @@ export function band(dist: Dist, margin = 0): [number, number] | null {
   return [dist.lognormal[0] * Math.exp(-2 * dist.lognormal[1]) - margin, dist.lognormal[0] * Math.exp(2 * dist.lognormal[1]) + margin];
 }
 
+/** The least count of a KS row: the values that it scores need at least this many. The exact one-sample bound is below 1 at n = 1 (0.975), so without this count one value could pass (review-97b N1). */
+export const KS_MIN_VALUES = 2;
+
 export type Compared = { how: "ks2" | "ks1" | "range"; stat: number | null; bound: number | null; pass: boolean | null };
 
 /** Values against a distribution: KS against its values (two samples) or its model (one sample), each with its bound at 5%; or all in its range. pass null: too few values. */
@@ -79,7 +82,9 @@ export function compareDist(values: readonly number[], dist: Dist): Compared {
   const two = Array.isArray(dist);
   const bound = values.length ? (two ? ksBound(values.length, dist.length) : ksBound(values.length)) : null;
   const stat = two ? ks2(values, dist) : ks1(values, "normal" in dist ? (x) => normalCdf(x, dist.normal[0], dist.normal[1]) : (x) => lognormalCdf(x, dist.lognormal[0], dist.lognormal[1]));
-  return { how: two ? "ks2" : "ks1", stat, bound, pass: stat === null || bound === null || bound >= 1 ? null : stat <= bound };
+  // A reference of one value needs no count of its own: the two-sample bound is then 1 or more.
+  const few = values.length < KS_MIN_VALUES;
+  return { how: two ? "ks2" : "ks1", stat, bound, pass: few || stat === null || bound === null || bound >= 1 ? null : stat <= bound };
 }
 
 function row(gap: string, measure: string, bar: string, value: string, verdict: Verdict, n: number): Row { return { gap, measure, bar, value, verdict, n }; }

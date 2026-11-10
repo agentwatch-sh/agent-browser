@@ -13,7 +13,7 @@ import {
   type KeyMeasures, type PathMeasures, type PointerMeasures, type Rec, type StepMeasures, type TextMeasures,
 } from "./live/input-harness/measures.ts";
 import { buildReference, checkReference, LITERATURE, type Reference } from "./live/input-harness/reference.ts";
-import { band, compareDist, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
+import { band, compareDist, KS_MIN_VALUES, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
 import { Cleanup } from "./live/input-harness/cleanup.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -333,6 +333,18 @@ test("a distribution against the reference: KS against its samples or its model 
   assert.equal(compareDist([0.2, 0.3], { range: [0.15, 0.5] }).pass, true);
   assert.equal(compareDist([0.1], { range: [0.15, 0.5] }).pass, false);
   assert.equal(compareDist([], { range: [0.15, 0.5] }).pass, null);
+});
+
+test("a KS row needs at least KS_MIN_VALUES values: one value never passes (review-97b N1)", () => {
+  assert.equal(KS_MIN_VALUES, 2);
+  assert.equal(compareDist([116], { normal: [116, 24] }).pass, null, "one value against a model: the exact bound 0.975 is below 1, but one value is too few");
+  assert.equal(compareDist([116], { lognormal: [110, 0.3] }).pass, null);
+  assert.equal(compareDist([0.7], Array.from({ length: 12 }, (_, i) => 0.7 + i * 0.02)).pass, null);
+  assert.equal(compareDist([0.7, 0.72, 0.74], [0.7]).pass, null, "a reference of one value: the two-sample bound is 1 or more");
+  assert.equal(compareDist([110, 120], { normal: [116, 24] }).pass, true, "two values are scored, as before the exact bound");
+  const one = scoreSource([stepM({ pointer: { pauseMs: 140, pressMs: 100 } })], checkReference(FIXTURE));
+  assert.equal(verdict(one, "P5", /pause before the press/), "no data");
+  assert.equal(verdict(one, "P5", /^press/), "no data");
 });
 
 test("P1, P2, P8 and R10 on M1's numbers: the CDP form with whole-ms times 4 ms early meets the samples, the whole-ms share and the phase; its predicted points do not", () => {
