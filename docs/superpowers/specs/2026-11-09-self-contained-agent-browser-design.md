@@ -3,7 +3,8 @@
 **Status: Decided: the operator's answers of 2026-11-10 (section 19). The build runs in stages (board ab-v16.94).
 The operator's answer to board item ab-6ng (section 19) reverses "no secret" for the MCP: each repo gets its own
 connection token. A new design (board ab-v16.94.10) replaces the MCP's admission of section 8.3 and C11, and
-stage 1d waits for it.**
+stage 1d waits for it. The operator's answer to board item ab-1n8 (Q5, section 19) makes start and stop
+automatic: Chrome starts at the first use and stops when no agent uses it (board ab-v16.94.11).**
 
 Date: 2026-11-09. Revised after four fresh reviews and the daemon lead's review and re-read; the
 manager's bound ended the review rounds after the fourth review. Author: a taylor contributor, a
@@ -111,8 +112,9 @@ constraint.
 9. **The operator's answers (section 19).** The operator answered Q1 to Q4 on 2026-11-10, and the
    recommendations of the three open points of section 17 hold. The operator answered board item ab-6ng
    on 2026-11-10: each repo gets its own connection token for the MCP, and agentwatch connects the MCP when
-   an allowed session starts; board ab-v16.94.10 designs it. Q5 is asked again as board item ab-1n8. Today's
-   rule for start and stop stays until the operator answers it.
+   an allowed session starts; board ab-v16.94.10 designs it. The operator answered Q5 on board item ab-1n8:
+   start and stop are automatic (section 19); board ab-v16.94.11 builds it. Today's rule stays on the old
+   path until then.
 
 ## 2. The operator's words
 
@@ -366,8 +368,8 @@ where the stage runs.
 - **Start and stop** of the agent browser (Chrome and Xvfb) keep today's rule during the move. The control
   door takes them from the daemon. The daemon takes them from a password login or from the API token, as
   today (an agent's `endpoint` wait sends a start). Each op names its caller's kind (section 7.1), so the
-  service logs who asked. Q5 asks the operator whether start and stop become operator acts only (a Tier-2
-  change). The service process itself starts with its unit at login.
+  service logs who asked. The operator answered Q5 (section 19): start and stop become automatic, by use
+  (board ab-v16.94.11). The service process itself starts with its unit at login.
 - **Update**: the service checks Google's index every 12 hours and moves Chrome when idle (today's rule).
   It reports each step on the event stream. agentwatch updates the service itself by its pin (the daemon
   lead's C7).
@@ -1475,10 +1477,29 @@ recommendation).** One Mac list for all sessions of that box.
 recommendation).** It is pinned, and it runs under the allow list of section 8.2. The format of the list is
 agent-browser `docs/contracts/mcp-allow-list.md`.
 
-**Q5. Who may start and stop the agent browser? Open.** Board item ab-6ng asked it; the operator answered
-with a question (below), and board item ab-1n8 asks it again with the answer. Today's rule stays until the
-operator answers: the API token may start and stop the agent browser, and an agent's `endpoint` wait sends
-a start.
+**Q5. Who may start and stop the agent browser? The answer: automatic (free text, board item ab-1n8,
+2026-11-10, confirmed, with a web login).** Board item ab-6ng asked it; the operator answered with a question
+(below), and board item ab-1n8 asked it again with the answer. The operator's words: "starts/stops should be
+automatic. when all agents stop using the browser it stops.  when at least 1 agent uses it, it starts. the
+control plane layer is always active to receive data from any agent at all times. but chrome can start/stop
+at will."
+
+The lead reads it so (board ab-v16.94.11 builds it and records the details that it picks):
+
+1. The service (its agent door, its control door and later the MCP port) runs at all times and takes any
+   agent's request, also while Chrome is down.
+2. Chrome and Xvfb start at the first use. A request that needs the browser waits while the service starts
+   Chrome, then goes on.
+3. Chrome and Xvfb stop when no agent uses the browser: no open client connection and no request or send for
+   a grace time that the task sets (for example 10 minutes). The profile stays on disk, so sign-ins and
+   cookies stay.
+4. No agent and no operator needs a start or a stop. The control door's `start` and `stop` stay for the
+   daemon's own needs (switch-off, uninstall, `stop --all`) and for tests. A stop by the use rule is no
+   crash: the supervisor does not restart it.
+5. Chrome's update moves at the next automatic stop; the idle rule of section 5.1's update row stays the floor.
+
+Until ab-v16.94.11 merges and a box switches, today's rule stays on the old path: the API token may start and
+stop the agent browser, and an agent's `endpoint` wait sends a start.
 
 **The open points of section 17: the recommendations hold.** The operator gave no note, so:
 
@@ -1508,7 +1529,8 @@ and which of today's checks stay. Stage 1d (ab-v16.94.5) waits for it, and C11 c
 (the MCP entry at a session's launch) agrees with (1) and stays.
 
 What follows from (2): the lead answered the question on board item ab-1n8 ("password login" means the
-operator's usual web viewer login, not a password step at each stop) and asks Q5 again there.
+operator's usual web viewer login, not a password step at each stop) and asked Q5 again there. The operator
+answered it: start and stop are automatic (Q5 above).
 
 **What the answers change in this design.** Sections 1, 3, 4.2, 4.3, 5.1, 6, 8.2 to 8.5, 10, 11 and 12 now
 describe the MCP port of Q1 and the session's entry of Q2. The questions of section 16 and the points of
