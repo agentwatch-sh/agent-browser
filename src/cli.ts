@@ -52,9 +52,10 @@ const WATCH_FLAGS: Record<string, Flag> = { "chrome-pid": { type: "string" }, "w
 /** The flags of `service` (contract C12, "The command"; board ab-v16.94.2): only `service` takes them, and it takes no other flag. */
 const SERVICE_FLAGS: Record<string, Flag> = {
   "agent-door": { type: "string" }, "control-door": { type: "string" }, "daemon-unit": { type: "string" }, "daemon-command": { type: "string" },
+  "lists-folder": { type: "string" }, "state-folder": { type: "string" },
   hello: { type: "boolean" }, fake: { type: "boolean" }, refuse: { type: "boolean" },
   // The Chrome unit (stage 1b part 1, board ab-v16.94.3).
-  "browser-state": { type: "string" }, "tools-dir": { type: "string" }, "service-unit": { type: "string" },
+  "tools-dir": { type: "string" }, "service-unit": { type: "string" },
   test: { type: "boolean" }, "test-display": { type: "string" }, "test-chrome-source": { type: "string" },
 };
 /** The flags that service takes and other commands take too: `service stop --all`. */

@@ -82,7 +82,7 @@ const TOKEN = { kind: "token", user: "live", via: "cli" }, WEB = { kind: "operat
 async function startService(): Promise<Door> {
   serviceErr = "";
   service = spawn(process.execPath, [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
-    "--daemon-command", join(dir, "daemon-command.json"), "--browser-state", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json")], { stdio: ["ignore", "ignore", "pipe"] });
+    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", join(dir, "lists"), "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json")], { stdio: ["ignore", "ignore", "pipe"] });
   guard.track(service.pid, "service");
   started.set(service.pid!, proc(service.pid!)?.start ?? -1);
   service.stderr!.on("data", (d) => { serviceErr += d; });
@@ -188,7 +188,7 @@ try {
   d.s.end();
   const exit2 = await stopService();
   check("a stop of the service leaves Chrome and Xvfb", exit2 === 0 && !!proc(p4) && !!proc(rec6.xvfb_pid));
-  const all = await new Promise<{ code: number | null; out: string }>((r) => { const c = spawn(process.execPath, [BIN, "service", "stop", "--all", "--browser-state", state], { stdio: ["ignore", "pipe", "inherit"] }); let out = ""; c.stdout!.on("data", (x) => (out += x)); c.once("exit", (code) => r({ code, out })); });
+  const all = await new Promise<{ code: number | null; out: string }>((r) => { const c = spawn(process.execPath, [BIN, "service", "stop", "--all", "--state-folder", state], { stdio: ["ignore", "pipe", "inherit"] }); let out = ""; c.stdout!.on("data", (x) => (out += x)); c.once("exit", (code) => r({ code, out })); });
   check("service stop --all stops this run's Chrome and Xvfb", all.code === 0 && !proc(p4) && !proc(rec6.xvfb_pid) && all.out.includes(`Chrome pid ${p4}`) && all.out.includes(`Xvfb pid ${rec6.xvfb_pid}`), all.out.trim());
   check("the display is free again", !existsSync(`/tmp/.X11-unix/X${display}`));
 } catch (e) {

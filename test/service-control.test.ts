@@ -9,11 +9,14 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { connect } from "node:net";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
-import { commitOf, defaultControlDoor, LATER_OPS, PART_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
+import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS } from "../src/service/service.ts";
+import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
+import { STAGE_1B1_OPS } from "../src/service/unit/part.ts";
 import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 
@@ -190,11 +193,11 @@ test("the fake answers every request vector and every bad request vector as the 
 
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), {
-    import: "1c", launch_check: "1c", list_set: "1c", lists_get: "1c", prompt_allow: "1c", prompt_dismiss: "1c", prompts_get: "1c", sender: "1b2",
-  });
-  assert.deepEqual(PART_OPS, { "1b1": ["start", "stop"] }, "stage 1b part 1 adds start and stop (its tests: test/service-unit-part.test.ts)");
-  assert.deepEqual([...STAGE_1A_OPS, ...Object.values(PART_OPS).flat(), ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
+  // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts), stage 1b part 1's part start and stop
+  // (test/service-unit-part.test.ts); sender comes with stage 1b part 2.
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sender: "1b2" });
+  assert.deepEqual([...STAGE_1B1_OPS], ["start", "stop"]);
+  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
   const d = await openDoor(stage1a());
   try {
     const { c, answers } = await runVectors(d.path);
@@ -454,6 +457,29 @@ test("the line rules (B1): each badLines vector closes the connection (a BOM, a 
       assert.deepEqual(last.c.lines.filter((l) => l.t === "res"), [], "no answer to bytes after the last newline");
     } finally { await d.close(); }
   }
+});
+
+test("a peer that half-closes in the same write as its request gets the whole answer, also one much larger than the socket's buffer (review-102 B1)", async () => {
+  const big = "x".repeat(4_000_000);
+  const handler: Handler = { hello: stage1a().hello, has: (op) => op === "status", handle: () => ({ data: { big } }) };
+  const d = await openDoor(handler);
+  try {
+    const bytes = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const sock = connect(d.path);
+      sock.on("error", reject);
+      sock.on("data", (b: Buffer) => chunks.push(b));
+      sock.on("close", () => resolve(Buffer.concat(chunks)));
+      // After the service's hello: the daemon's hello, one request and the end of the stream, in one write.
+      sock.once("data", () => { sock.end(encodeLine(DAEMON_HELLO) + encodeLine({ t: "req", id: "big", op: "status", by: { kind: "daemon", user: "ann", via: "daemon" } })); });
+    });
+    const lines = bytes.toString("utf8").split("\n");
+    assert.equal(lines.length, 3, "the hello, the answer, and nothing after the answer's newline");
+    const res = JSON.parse(lines[1]);
+    assert.equal(res.id, "big");
+    assert.equal(res.data.big.length, big.length, "the whole answer");
+    assert.ok(d.logs.includes("control: connection 1 closed: the end of the stream"));
+  } finally { await d.close(); }
 });
 
 test("the control door's folder: a new folder gets mode 0700; a folder that the group or others can enter stops the open", async () => {

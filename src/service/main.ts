@@ -5,9 +5,11 @@
 //
 // `--test` (the live harness only; the design, section 13.1, stage 1): the service owns with no systemd unit, and the
 // MainPID of the control door's admission is the service's parent (the harness). It is refused when any folder is a
-// default folder, and it needs --test-display. `service stop --all` stops the Chrome unit with no service running.
+// default folder, and it needs --test-display. `service stop --all` stops the Chrome unit with no service running. The
+// folders have no default (stage 1c's rule): agentwatch's unit gives --lists-folder, --state-folder and --tools-dir.
 
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { readFileSync } from "node:fs";
@@ -23,10 +25,9 @@ import { defaultStateDir, defaultToolsDir, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE]"
-  + " [--browser-state DIR] [--tools-dir DIR] [--service-unit UNIT]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse]"
-  + " | agent-browser service stop --all [--browser-state DIR]"
+  + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
 
 type Values = Record<string, string | boolean | undefined>;
@@ -52,13 +53,15 @@ const overlaps = (a: string, b: string) => { const x = realOf(a), y = realOf(b);
  * The refusals of `--test`: each folder is given, and none is a default folder (the operator's state folder, tools
  * folder, the service's run folders, agentwatch's run folder) or holds one or lies in one.
  */
-export function testRefusal(v: { browserState?: string; toolsDir?: string; controlDoor?: string; agentDoor?: string; daemonCommand?: string; display?: string }, env: Record<string, string | undefined> = process.env, uid = process.getuid?.() ?? -1): string | null {
-  for (const [flag, x] of [["--browser-state", v.browserState], ["--tools-dir", v.toolsDir], ["--control-door", v.controlDoor], ["--agent-door", v.agentDoor], ["--daemon-command", v.daemonCommand], ["--test-display", v.display]] as const) {
+export function testRefusal(v: { listsFolder?: string; stateFolder?: string; toolsDir?: string; controlDoor?: string; agentDoor?: string; daemonCommand?: string; display?: string }, env: Record<string, string | undefined> = process.env, uid = process.getuid?.() ?? -1): string | null {
+  for (const [flag, x] of [["--lists-folder", v.listsFolder], ["--state-folder", v.stateFolder], ["--tools-dir", v.toolsDir], ["--control-door", v.controlDoor], ["--agent-door", v.agentDoor], ["--daemon-command", v.daemonCommand], ["--test-display", v.display]] as const) {
     if (!x) return `--test needs ${flag}: it never runs with a default`;
   }
-  const defaults = [defaultStateDir(), defaultToolsDir(), ...serviceRunFolders(env), `/run/user/${uid}/agentwatch`, dirname(defaultDaemonCommandFile(env))];
+  // Today's folders: agentwatch's browser state and tools folders, its config folder (the lists), the run folders.
+  const config = env.XDG_CONFIG_HOME && isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : join(homedir(), ".config");
+  const defaults = [defaultStateDir(), defaultToolsDir(), join(config, "agentwatch"), ...serviceRunFolders(env), `/run/user/${uid}/agentwatch`, dirname(defaultDaemonCommandFile(env))];
   if (env.XDG_RUNTIME_DIR && isAbsolute(env.XDG_RUNTIME_DIR)) defaults.push(join(env.XDG_RUNTIME_DIR, "agentwatch"));
-  const folders: [string, string][] = [["--browser-state", v.browserState!], ["--tools-dir", v.toolsDir!], ["--control-door", dirname(v.controlDoor!)], ["--agent-door", dirname(v.agentDoor!)], ["--daemon-command", dirname(v.daemonCommand!)]];
+  const folders: [string, string][] = [["--lists-folder", v.listsFolder!], ["--state-folder", v.stateFolder!], ["--tools-dir", v.toolsDir!], ["--control-door", dirname(v.controlDoor!)], ["--agent-door", dirname(v.agentDoor!)], ["--daemon-command", dirname(v.daemonCommand!)]];
   for (const [flag, f] of folders) for (const d of defaults) if (overlaps(f, d)) return `--test refuses ${flag} in or around a default folder (${d}): give it a temp folder`;
   if (!/^[0-9]{1,5}$/.test(v.display!)) return "--test-display must be a display number";
   return null;
@@ -83,8 +86,10 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (rest.length) {
     // `service stop --all`: the Chrome unit stops, with no service running (the uninstall; the Mac's open point 3).
     if (rest.length !== 1 || rest[0] !== "stop" || v.all !== true) throw new UsageError(SERVICE_USAGE);
-    for (const k of Object.keys(v)) if (k !== "all" && k !== "browser-state") throw new UsageError(`--${k} does not go with service stop --all`);
-    const state = resolve(str("browser-state") ?? defaultStateDir());
+    for (const k of Object.keys(v)) if (k !== "all" && k !== "state-folder") throw new UsageError(`--${k} does not go with service stop --all`);
+    const stateFolder = str("state-folder");
+    if (!stateFolder) throw new UsageError("service stop --all needs --state-folder: the agent browser's state folder (no default)");
+    const state = resolve(stateFolder);
     const stopped = await stopAll({ paths: unitPaths(state, defaultToolsDir()), procs: new Procs() });
     await new Promise<void>((r) => io.stdout.write(stopped.length ? `Stopped the agent browser: ${stopped.map(([n, p]) => `${n} pid ${p}`).join(", ")}\n` : "", () => r()));
     return 0;
@@ -113,14 +118,19 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   }
   const agentDoor = str("agent-door");
   if (!agentDoor) throw new UsageError(`--agent-door is required: the agent door's address, which the daemon gives; ${SERVICE_USAGE}`);
-  const controlDoor = str("control-door") ?? defaultControlDoor();
-  if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
   if (test) {
-    const why = testRefusal({ browserState: str("browser-state"), toolsDir: str("tools-dir"), controlDoor: str("control-door"), agentDoor, daemonCommand: str("daemon-command"), display: str("test-display") });
+    const why = testRefusal({ listsFolder: str("lists-folder"), stateFolder: str("state-folder"), toolsDir: str("tools-dir"), controlDoor: str("control-door"), agentDoor, daemonCommand: str("daemon-command"), display: str("test-display") });
     if (why) throw new UsageError(why);
     if (str("service-unit")) throw new UsageError("--service-unit does not go with --test: --test owns with no unit");
   }
-  const paths = unitPaths(resolve(str("browser-state") ?? defaultStateDir()), resolve(str("tools-dir") ?? defaultToolsDir()));
+  // The folders have no default: the unit gives them (a test gives temp folders), so no run reads the operator's files by chance.
+  const listsFolder = str("lists-folder"), stateFolder = str("state-folder"), toolsDir = str("tools-dir");
+  if (!listsFolder) throw new UsageError(`--lists-folder is required: the folder of the lists (CONFIG_DIR/browser/lists), which agentwatch's unit gives; ${SERVICE_USAGE}`);
+  if (!stateFolder) throw new UsageError(`--state-folder is required: the agent browser's state folder, which agentwatch's unit gives; ${SERVICE_USAGE}`);
+  if (!toolsDir) throw new UsageError(`--tools-dir is required: the tools folder of Google Chrome, which agentwatch's unit gives; ${SERVICE_USAGE}`);
+  const controlDoor = str("control-door") ?? defaultControlDoor();
+  if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
+  const paths = unitPaths(resolve(stateFolder), resolve(toolsDir));
   const display = test ? Number(str("test-display")) : null;
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   let s;
@@ -130,6 +140,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       daemonCommand: resolve(str("daemon-command") ?? defaultDaemonCommandFile()), log,
       // --test: the harness is the "daemon" (the service's parent), with its own expected command file.
       mainPid: test ? async () => process.ppid : undefined,
+      lists: { listsFolder: resolve(listsFolder), stateFolder: paths.state },
       unit: {
         paths, owner: test ? testOwner() : systemdUnitState(str("service-unit") ?? SERVICE_UNIT),
         tools: new GoogleChromeTools({ tools: paths.tools, source, log }),

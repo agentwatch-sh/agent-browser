@@ -313,3 +313,20 @@ test("the vectors' start and stops get the vectors' answers from the real servic
     }
   } finally { await r.close(); }
 });
+
+test("with stage 1c's part beside it, status gives the Chrome unit's state and texts, then each part's sentences in the two texts", async () => {
+  const w = new World();
+  try {
+    const tools = new FakeTools();
+    const unit = new UnitPart({
+      paths: w.paths, procs: w.procs, tools, log: () => {}, owner: new Owner(async () => ACTIVE, () => {}),
+      endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => true, unit: w.deps(tools), firstCheckMs: 3_600_000,
+    });
+    const other = { ops: {}, status: () => ({ lists: ["a.b"] }), notes: () => ({ agent: ["The lists are on their way."], operator: ["One list cannot be read."] }) };
+    const s = new Stage1a({ agentDoor: { url: (x) => x, state: () => ({ form: "pidfd" }) }, parts: [other, unit] }).status();
+    assert.equal(s.state, "off");
+    assert.equal(s.agent_text, `${STATE_TEXTS.off.agent_text} The lists are on their way.`);
+    assert.equal(s.operator_text, `${STATE_TEXTS.off.operator_text} One list cannot be read.`);
+    assert.deepEqual(s.lists, ["a.b"]);
+  } finally { w.close(); }
+});

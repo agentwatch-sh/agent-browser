@@ -1,16 +1,16 @@
 // The folders and files of the Chrome unit (the self-contained design, sections 5.1, 5.2 and 13.2; board ab-v16.94.3).
-// The service takes its state folder and its tools folder from its unit (agentwatch writes it at the install). The
-// defaults are today's folders of agentwatch's daemon, so a switch-on moves no file and keeps every sent sign-in: its
-// browser state folder (the profile, unit.json, the X auth file) and its tools folder (google-chrome/<version>/), both
-// under ~/.local/share/ (C12, "The command (stage 1b part 1)"). Every path is computed from the folders that the
-// service got, so a test and `--test` run in temp folders only.
+// The service takes its state folder (--state-folder) and its tools folder (--tools-dir) from its unit, with no default
+// (agentwatch writes the unit at the install). The unit gives today's folders of agentwatch's daemon, so a switch-on
+// moves no file and keeps every sent sign-in: its browser state folder (the profile, unit.json, the X auth file) and
+// its tools folder (google-chrome/<version>/), both under ~/.local/share/. This file names them only for `--test`,
+// which refuses them. Every path is computed from the folders that the service got.
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** Today's state folder of the agent browser (agentwatch's daemon/browser/stop_unit.py, STATE_PARTS). */
+/** Today's state folder of the agent browser (agentwatch's daemon/browser/stop_unit.py, STATE_PARTS): `--test` refuses it. */
 export const defaultStateDir = (home = homedir()) => join(home, ".local", "share", "agentwatch-browser");
-/** Today's tools folder (agentwatch's tools/install.py, tools_root()). */
+/** Today's tools folder (agentwatch's tools/install.py, tools_root()): `--test` refuses it. */
 export const defaultToolsDir = (home = homedir()) => join(home, ".local", "share", "agentwatch-tools");
 
 export type UnitPaths = {

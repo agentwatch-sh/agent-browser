@@ -44,9 +44,13 @@ test("service --hello prints the service's hello as one line and exits, with no 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the usage of service: --agent-door is required; its flags are its own and no other command takes them; --refuse goes with --fake, and --fake with --control-door", async () => {
+test("the usage of service: --agent-door, --lists-folder and --state-folder are required (no default folder of the lists or the state); its flags are its own and no other command takes them; --refuse goes with --fake, and --fake with --control-door", async () => {
   for (const [args, what] of [
     [["service"], /--agent-door is required/],
+    [["service", "--agent-door", "/x/cdp.sock"], /--lists-folder is required: the folder of the lists/],
+    [["service", "--agent-door", "/x/cdp.sock", "--lists-folder", "/x/lists"], /--state-folder is required: the agent browser's state folder/],
+    [["service", "--agent-door", "/x/cdp.sock", "--lists-folder", ""], /--lists-folder is empty/],
+    [["commands", "--lists-folder", "/x/lists"], /--lists-folder is only for service/],
     [["service", "--agent-door", "/x/cdp.sock", "--bogus"], /Unknown option|bogus/],
     [["service", "--agent-door", "/x/cdp.sock", "--state-dir", "/x"], /--state-dir is not an option of service/],
     [["service", "extra", "--agent-door", "/x/cdp.sock"], /usage: agent-browser service/],
@@ -67,7 +71,7 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
   // --test (board ab-v16.94.3): the service owns the Chrome unit with no systemd unit, in temp folders only; no Chrome starts.
   const child = spawn(process.execPath, ["--no-experimental-ffi", BIN, "service", "--test", "--test-display", "173", "--agent-door", cdp, "--control-door", sock,
     "--daemon-unit", "agent-browser-test-none.service", "--daemon-command", join(dir, "daemon-command.json"),
-    "--browser-state", join(dir, "state"), "--tools-dir", join(dir, "tools")], { stdio: ["ignore", "pipe", "pipe"] });
+    "--lists-folder", join(dir, "config", "browser", "lists"), "--state-folder", join(dir, "state"), "--tools-dir", join(dir, "tools")], { stdio: ["ignore", "pipe", "pipe"] });
   let err = "";
   child.stderr!.on("data", (d) => (err += d));
   try {
@@ -128,15 +132,16 @@ test("--test (the live harness only) is refused when a folder is missing or is a
   const { defaultStateDir, defaultToolsDir } = await import("../src/service/unit/paths.ts");
   const dir = mkdtempSync(join(tmpdir(), "ab-test-mode-"));
   try {
-    const ok = { browserState: join(dir, "state"), toolsDir: join(dir, "tools"), controlDoor: join(dir, "run", "control.sock"), agentDoor: join(dir, "run", "cdp.sock"), daemonCommand: join(dir, "daemon-command.json"), display: "173" };
+    const ok = { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), toolsDir: join(dir, "tools"), controlDoor: join(dir, "run", "control.sock"), agentDoor: join(dir, "run", "cdp.sock"), daemonCommand: join(dir, "daemon-command.json"), display: "173" };
     const env = { XDG_RUNTIME_DIR: "/run/user/1000", XDG_CONFIG_HOME: "/home/ann/.config" };
     assert.equal(testRefusal(ok, env, 1000), null);
     for (const k of Object.keys(ok) as (keyof typeof ok)[]) assert.match(testRefusal({ ...ok, [k]: undefined }, env, 1000)!, /--test needs --/, k);
     const cases: [Partial<typeof ok>, RegExp][] = [
-      [{ browserState: defaultStateDir() }, /--browser-state in or around a default folder/],
-      [{ browserState: join(defaultStateDir(), "profile") }, /--browser-state in or around a default folder/],
+      [{ stateFolder: defaultStateDir() }, /--state-folder in or around a default folder/],
+      [{ stateFolder: join(defaultStateDir(), "profile") }, /--state-folder in or around a default folder/],
       [{ toolsDir: defaultToolsDir() }, /--tools-dir in or around a default folder/],
-      [{ browserState: join(defaultStateDir(), "..") }, /--browser-state in or around a default folder/],
+      [{ stateFolder: join(defaultStateDir(), "..") }, /--state-folder in or around a default folder/],
+      [{ listsFolder: "/home/ann/.config/agentwatch/browser/lists" }, /--lists-folder in or around a default folder/],
       [{ controlDoor: "/run/user/1000/agent-browser/control.sock" }, /--control-door in or around a default folder/],
       [{ agentDoor: "/run/user/1000/agentwatch/browser-cdp.sock" }, /--agent-door in or around a default folder/],
       [{ daemonCommand: "/home/ann/.config/agent-browser/daemon-command.json" }, /--daemon-command in or around a default folder/],
@@ -145,7 +150,9 @@ test("--test (the live harness only) is refused when a folder is missing or is a
     for (const [change, re] of cases) assert.match(testRefusal({ ...ok, ...change }, env, 1000) ?? "", re, JSON.stringify(change));
   } finally { rmSync(dir, { recursive: true, force: true }); }
   for (const [args, what] of [
-    [["service", "--test", "--agent-door", "/x/cdp.sock"], /--test needs --browser-state/],
+    [["service", "--test", "--agent-door", "/x/cdp.sock"], /--test needs --lists-folder/],
+    [["service", "--agent-door", "/x/cdp.sock", "--lists-folder", "/x/l", "--state-folder", "/x/s"], /--tools-dir is required: the tools folder of Google Chrome/],
+    [["service", "stop", "--all"], /service stop --all needs --state-folder/],
     [["service", "--agent-door", "/x/cdp.sock", "--test-display", "173"], /--test-display goes with --test/],
     [["service", "--agent-door", "/x/cdp.sock", "--test-chrome-source", "/x.json"], /--test-chrome-source goes with --test/],
     [["service", "--test", "--fake", "--control-door", "/x/c.sock"], /--test does not go with --fake/],
@@ -163,7 +170,7 @@ test("service stop --all with a temp state folder where nothing runs prints noth
   const { testChromeSource } = await import("../src/service/main.ts");
   const dir = mkdtempSync(join(tmpdir(), "ab-stop-all-"));
   try {
-    const r = await runNode([BIN, "service", "stop", "--all", "--browser-state", join(dir, "state")]);
+    const r = await runNode([BIN, "service", "stop", "--all", "--state-folder", join(dir, "state")]);
     assert.deepEqual([r.code, r.stdout], [0, ""], r.stderr);
     const f = join(dir, "source.json");
     writeFileSync(f, JSON.stringify({ repo: "https://dl.google.com/linux/chrome/deb", key: "/k.asc", fingerprints: ["A".repeat(40)] }));

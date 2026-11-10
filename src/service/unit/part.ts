@@ -1,5 +1,5 @@
 // The Chrome unit inside `agent-browser service`: stage 1b part 1 of the self-contained agent browser (the design,
-// sections 5.1, 5.6 and 13.2; contract C12; board ab-v16.94.3). One part of the service (service.ts, ServicePart):
+// sections 5.1, 5.6 and 13.2; contract C12; board ab-v16.94.3). One part of the service (part.ts, ServicePart):
 //
 // - the ops `start` and `stop` of the control door (kind operator or token; the door logs each with its provenance),
 //   which answer when Chrome runs or is gone; a stop's `stopped` event and `last_stop` carry its `by`;
@@ -18,7 +18,7 @@
 
 import { ERR, type Answer, type By, type Req } from "../control.ts";
 import type { EndpointState } from "../agent-door.ts";
-import type { ServicePart } from "../service.ts";
+import type { ServicePart } from "../part.ts";
 import type { ChromeTools } from "./google-chrome.ts";
 import type { Owner } from "./owner.ts";
 import type { UnitPaths } from "./paths.ts";
@@ -28,6 +28,8 @@ import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activi
 import { FailClosedWatch, monotonicMs, NO_LINK, type LinkPort, type WatchStop } from "./watch.ts";
 
 export const WATCH_MS = 1000;
+/** The ops of stage 1b part 1 (C12, "The ops of stage 1b part 1"). */
+export const STAGE_1B1_OPS = ["start", "stop"] as const;
 
 /** The texts of each state (I2: no agent's text names a stop or a start; the gateway gives the operator's text to a password login only). */
 export const STATE_TEXTS = {
