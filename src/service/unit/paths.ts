@@ -1,8 +1,8 @@
 // The folders and files of the Chrome unit (the self-contained design, sections 5.1, 5.2 and 13.2; board ab-v16.94.3).
 // The service takes its state folder and its tools folder from its unit (agentwatch writes it at the install). The
-// defaults are today's folders, so a switch-on moves no file and keeps every sent sign-in: the state folder
-// ~/.local/share/agentwatch-browser/ (its profile, unit.json, the X auth file) and the tools folder
-// ~/.local/share/agentwatch-tools/ (google-chrome/<version>/). Every path is computed from the folders that the
+// defaults are today's folders of agentwatch's daemon, so a switch-on moves no file and keeps every sent sign-in: its
+// browser state folder (the profile, unit.json, the X auth file) and its tools folder (google-chrome/<version>/), both
+// under ~/.local/share/ (C12, "The command (stage 1b part 1)"). Every path is computed from the folders that the
 // service got, so a test and `--test` run in temp folders only.
 
 import { homedir } from "node:os";

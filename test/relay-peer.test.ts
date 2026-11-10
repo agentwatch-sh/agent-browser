@@ -506,14 +506,16 @@ const runNode = (args: string[]) => new Promise<{ code: number | null; stdout: s
   execFile(process.execPath, args, { cwd: ROOT, timeout: 30_000 }, (e, stdout, stderr) => resolve({ code: e ? (e as any).code ?? 1 : 0, stdout, stderr }));
 });
 
-test("no other agent-browser command loads node:ffi: only the relay's self-test and the service's control door (board ab-v16.94.2: the pidfd of the MainPID) import it, dynamically", async () => {
-  // The source: no static import or require of node:ffi; one dynamic import is in src/relay/peer.ts, and one in
-  // src/service/admission.ts (pidfd_open, which only `agent-browser service` loads, at its start).
+test("no other agent-browser command loads node:ffi: only the relay's self-test, the service's control door (board ab-v16.94.2: the pidfd of the MainPID) and the service's tools lock (board ab-v16.94.3: flock of the Google Chrome install) import it, dynamically", async () => {
+  // The source: no static import or require of node:ffi; one dynamic import is in src/relay/peer.ts, one in
+  // src/service/admission.ts (pidfd_open, which only `agent-browser service` loads, at its start), and one in
+  // src/service/unit/google-chrome.ts (flock, which only the service's install and prune of Google Chrome load).
   const files = (d: string): string[] => readdirSync(join(ROOT, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(d, e.name)) : /\.(ts|js|mjs)$/.test(e.name) ? [join(d, e.name)] : []));
   const code = (f: string) => readFileSync(join(ROOT, f), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
   const all = [...files("src"), ...files("bin"), "index.js", "loader.js"];
   assert.deepEqual(all.filter((f) => /from\s*["']node:ffi["']|require\(\s*["'](node:)?ffi["']\s*\)|import\s*["']node:ffi["']/.test(code(f))), [], "no static import or require of node:ffi");
-  assert.deepEqual(all.filter((f) => /import\(\s*["']node:ffi["']\s*\)/.test(code(f))).sort(), ["src/relay/peer.ts", "src/service/admission.ts"], "a dynamic import in the peer reader and in the control door's admission");
+  assert.deepEqual(all.filter((f) => /import\(\s*["']node:ffi["']\s*\)/.test(code(f))).sort(), ["src/relay/peer.ts", "src/service/admission.ts", "src/service/unit/google-chrome.ts"], "a dynamic import in the peer reader, in the control door's admission and in the tools lock");
+  assert.equal(code("src/service/unit/google-chrome.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);
   assert.equal(code("src/service/admission.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);
   assert.equal(code("src/relay/peer.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);
   // On a Node without node:ffi a static import anywhere would fail every command at load (ERR_UNKNOWN_BUILTIN_MODULE).
