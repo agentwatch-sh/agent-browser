@@ -78,9 +78,11 @@ function originOf(value: unknown): [string, string] | null {
   if (!m) return null;
   const scheme = m[1].toLowerCase(), netloc = m[2];
   if (!Object.hasOwn(DEFAULT_PORTS, scheme) || netloc.includes("@")) return null;
-  const colon = netloc.indexOf(":");
-  const host = (colon < 0 ? netloc : netloc.slice(0, colon)).toLowerCase();
-  const portText = colon < 0 ? "" : netloc.slice(colon + 1);
+  // As urlsplit: the host is after the last "@" of the authority, and before its first ":".
+  const hostinfo = netloc.slice(netloc.lastIndexOf("@") + 1);
+  const colon = hostinfo.indexOf(":");
+  const host = (colon < 0 ? hostinfo : hostinfo.slice(0, colon)).toLowerCase();
+  const portText = colon < 0 ? "" : hostinfo.slice(colon + 1);
   let port: number | null = null;
   if (portText !== "") {
     if (!/^[0-9]+$/.test(portText)) return null;

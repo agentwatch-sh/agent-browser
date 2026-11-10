@@ -95,8 +95,8 @@ export class Stage1c implements ServicePart {
   private stopped = false;
   // The push (C4).
   private hello = 0;
+  /** The object that the receiver of this link confirmed in time; a push on its way and a new link's push clear it. */
   private confirmedBody: ScopesBody | null = null;
-  private okHello: number | null = null;
   private sentBody: ScopesBody | null = null;
   private lineRoots: string | null = null;
   private wanted = false;
@@ -181,7 +181,7 @@ export class Stage1c implements ServicePart {
 
   /** The receiver of the current link confirmed the current object in time (for the Chrome unit's fail-closed watch). */
   listsConfirmed(): boolean {
-    if (!this.receiver.isUp() || this.confirmedBody === null || this.okHello !== this.hello) return false;
+    if (!this.receiver.isUp() || this.confirmedBody === null) return false;
     const t = this.book.ticket();
     return t !== null && isDeepStrictEqual(t.body, this.confirmedBody);
   }
@@ -191,9 +191,8 @@ export class Stage1c implements ServicePart {
 
   private onUp(): void {
     if (this.stopped) return;
+    // A new link: its own push (which starts now, and clears the confirmed object) must get an ok before any line.
     this.hello++;
-    this.confirmedBody = null;
-    this.okHello = null;
     this.sentBody = null;
     this.lineRoots = null;
     for (const w of [...this.upWaiters]) w();
@@ -201,9 +200,6 @@ export class Stage1c implements ServicePart {
   }
 
   private onDown(): void {
-    this.confirmedBody = null;
-    this.okHello = null;
-    this.lineRoots = null;
     if (this.retry !== null) { this.clock.clearTimeout(this.retry); this.retry = null; }
   }
 
@@ -224,16 +220,20 @@ export class Stage1c implements ServicePart {
     })();
   }
 
-  /** The retry: while the link is up and the current object is not confirmed (or a prune waits), a push PUSH_RETRY_MS after the last. */
+  /**
+   * The check every PUSH_RETRY_MS while the link is up (the daemon's watch): it sends the current object again when the
+   * receiver has not confirmed it (a refusal, no answer in time, or a list file that changed outside the service), or
+   * when a prune waits; else it only looks again later.
+   */
   private schedule(): void {
     if (this.retry !== null) { this.clock.clearTimeout(this.retry); this.retry = null; }
     if (this.stopped || !this.receiver.isUp() || !this.book.readDone()) return;
-    const prune = this.listsConfirmed() && this.book.pruneWaits();
-    if (this.listsConfirmed() && !prune) return;
     const wait = Math.max(0, (this.lastPushAt ?? this.clock.now()) + PUSH_RETRY_MS - this.clock.now());
     this.retry = this.clock.setTimeout(() => {
       this.retry = null;
-      if (this.listsConfirmed() && this.book.pruneWaits() && !this.pruneRetrying) {
+      const confirmed = this.listsConfirmed();
+      if (confirmed && !this.book.pruneWaits()) { this.lastPushAt = this.clock.now(); this.schedule(); return; }
+      if (confirmed && !this.pruneRetrying) {
         this.pruneRetrying = true;
         this.log(`lists: the prune of the ended names could not be written; the lists go to the receiver again every ${PUSH_RETRY_MS / 1000} s until it can`);
       }
@@ -261,7 +261,6 @@ export class Stage1c implements ServicePart {
     }
     if (hello !== this.hello || !this.receiver.isUp()) return; // an answer of an earlier link: that link's up pushes again
     this.confirmedBody = ticket.body;
-    this.okHello = hello;
     this.scopesError = "";
     const freed = this.book.confirmed(ticket);
     if (this.pruneRetrying && !this.book.pruneWaits()) { this.pruneRetrying = false; this.log("lists: the prune of the ended names is written"); }
@@ -284,9 +283,9 @@ export class Stage1c implements ServicePart {
     this.lineRoots = JSON.stringify(line.roots);
   }
 
-  /** A root change: write the last confirmed object with the new roots at once, but only after an ok in time on this link. */
+  /** A root change: write the last confirmed object with the new roots at once, but only after an ok in time on this link, and while it is up. */
   private checkRoots(): void {
-    if (this.confirmedBody === null || this.okHello !== this.hello || !this.receiver.isUp()) return;
+    if (this.confirmedBody === null || !this.receiver.isUp()) return;
     if (JSON.stringify(this.book.line({ lists: {}, scopes: {}, default: null, operator: "*" }, true).roots) !== this.lineRoots) this.writeLine(this.confirmedBody);
   }
 

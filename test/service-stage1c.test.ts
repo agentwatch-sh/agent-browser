@@ -215,6 +215,20 @@ test("a list that the receiver refuses goes again every 10 s, and a confirmation
   assert.equal(r.rx.pushes().length, n, "no push after the ok");
 }));
 
+test("a list file that changed outside the service goes to the receiver at the next check (every 10 s while the link is up)", withRig(async (r) => {
+  await setSessions(r, [W]);
+  r.rx.connect();
+  await settle();
+  assert.equal(r.rx.pushes().length, 1);
+  await r.clock.advance(PUSH_RETRY_MS);
+  assert.equal(r.rx.pushes().length, 1, "nothing changed: no push");
+  writeList(r, "a.b", { allow: ["hand.localhost"], repo: "a/b" });
+  assert.equal(r.part.listsConfirmed(), false, "the current object is not the confirmed one");
+  await r.clock.advance(PUSH_RETRY_MS);
+  assert.deepEqual(r.rx.pushes().at(-1)!.lists, { "a.b": ["hand.localhost"] });
+  assert.equal(r.part.listsConfirmed(), true);
+}));
+
 test("a push on its way confirms nothing; a change meanwhile waits for it, and only the newest object counts", withRig(async (r) => {
   await setSessions(r, [W]);
   r.rx.mode = "hold";
@@ -262,6 +276,8 @@ test("a root change writes the last confirmed object with the new roots at once,
   await setSessions(r, [sess("w", "a/b", [[101, 5000], [102, 5001]])]);
   assert.equal(r.rx.lines.length, 2, "the same roots write no line");
   r.rx.drop();
+  await setSessions(r, [sess("w", "a/b", [[103, 5002]])]);
+  assert.equal(r.rx.lines.length, 2, "no line while the link is down");
   r.rx.mode = "hold";
   r.rx.connect();
   await settle();
