@@ -81,7 +81,7 @@ work opened a public site.
    that turns a test red.
 10. **Build tasks (section 14)** in order: the harness, the pointer model, the keyboard model, the contract
     text, the stage in four parts, then the part B parameters. **Four questions** for the operator (section
-    15) and **four open points** (section 16).
+    15) and **six open points** (section 16).
 
 ## 2. The operator's words
 
@@ -1219,8 +1219,9 @@ The page sees an event with `isTrusted` false or a focus or a change with no inp
 
 ## 16. Open points
 
-The review of this design (review-96) found these points that the fix round did not settle. Each names what
-the build must show. The operator sees them with the questions.
+The review of this design (review-96) found points 1 to 5, which the fix round did not settle; the review of the
+harness (review-97, ab-t30.2) found point 6. Each names what the build must show. The operator sees them with the
+questions.
 
 1. **A widget that a click opens** (review-96, B1 c). The stage's focus click is a click, where Playwright
    uses a script focus. A text field whose click opens a picker or a list (a date-picker library, a
@@ -1259,6 +1260,32 @@ the build must show. The operator sees them with the questions.
    - c. End the plan, send only the releases, and answer the client's open calls with an error that names
      the dialog. No old event can reach the page, but a click that a dialog interrupts fails where
      Playwright's own click goes on after the close.
+
+6. **The bar of P1's samples per `pointermove`** (review-97 of the harness, ab-t30.2). Section 13.3 says "within
+   XTEST's range on the same run". The harness scores the source's mean count against XTEST's per-path range widened
+   by 0.15 (about three standard errors of one path's mean over about 60 moves). This is the lead's choice between rules
+   that do not agree. The numbers of the harness's runs on taylor (2026-11-10):
+   - One XTEST path's mean count varies by up to 0.06 between runs on the same planned path: M1's path to `#b` gave
+     1.95, 1.89, 1.95 and 1.92 (M1's runs 1 and 2, the harness's runs 3 and 4). M1 run 2's range of three paths (1.89
+     to 1.93) is narrower than that.
+   - With no margin, XTEST fails against itself across runs: the harness's run 4 gives a mean of 1.931 over its six
+     paths, above M1 run 2's range of 1.89 to 1.93.
+   - On the same paths, the design's CDP form gives fewer samples per `pointermove` than XTEST: 1.81 to 1.83 against
+     1.90 to 1.93 (run 4), and 1.83 to 1.84 against 1.87 to 1.97 (run 3). The share of moves with one sample is 0.16 to
+     0.18 for CDP against 0.07 to 0.09 for XTEST. The margin of 0.15 passes this difference. The range with no margin
+     does not.
+
+   The options:
+   - **a. XTEST's per-path range widened by 0.15 (the lead's choice; the harness uses it).** XTEST passes against
+     itself across runs. CDP's lower count on the same paths also passes.
+   - b. XTEST's per-path range with no margin. XTEST fails against itself across runs (above), and the design's CDP form
+     fails in every run (M1: 1.73 to 1.86 against 1.87 to 1.97).
+   - c. A two-sample KS test of the per-move counts (the distribution of `nc`) on the same paths. Runs 3 and 4: D 0.092
+     and 0.089 against a bound of 0.141 on the same paths (pass); on M1's other CDP paths, D 0.136 and 0.159 against
+     0.140 and 0.139 (one pass, one fail). The counts take only the values 1, 2 and 3, so the test is conservative with
+     its ties.
+
+   Build task 2 (ab-t30.3) reports this row with the bar in force, and the numbers of options b and c.
 
 ## 17. What this design does not cover
 

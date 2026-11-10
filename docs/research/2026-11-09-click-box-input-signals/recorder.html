@@ -14,11 +14,13 @@
   - A person (part B of the doc): open the file in Chrome, pick the device, run the tasks 1 to 7, press "Save JSON".
     The page saves one JSON file through a download. Nothing leaves the machine.
   - The probe (probe.ts): ?sink=1 sends the records to the probe's local server (navigator.sendBeacon to /log) every
-    250 ms. The elements have fixed places, so the probe's X input (xdotool) can find them with no CDP.
+    250 ms. The elements have fixed places, so the probe's X input (xdotool) can find them with no CDP. Each batch starts
+    with a record {e: "seq", n, run}: n counts the batches from 0 and run is the page's ?run= label, so a gap in n shows a
+    lost batch (the input harness, ab-t30.2).
 
   Record fields (short names keep the files small): f frame (top, box), e event type, t the event's time
   (performance.timeOrigin + event.timeStamp, epoch ms), h the handler's time (timeOrigin + performance.now()), tr
-  isTrusted, tg target (#id or tag). Pointer and mouse: x y client, sx sy screen, mx my movement, b button, bs buttons,
+  isTrusted, tg target (#id or tag). Pointer, mouse and drag (drag, dragover): x y client, sx sy screen, mx my movement, b button, bs buttons,
   m modifiers (1 Alt, 2 Control, 4 Meta, 8 Shift), d detail, sc sourceCapabilities.firesTouchEvents, id pointerId, pt
   pointerType, ip isPrimary, pr pressure, tp tangentialPressure, w ht width height, tx ty tilt, tw twist, al az
   altitude and azimuth, nc np the counts of getCoalescedEvents() and getPredictedEvents(), co pd their points as
@@ -163,7 +165,7 @@ function recCore(FRAME, emit) {
   const opt = { capture: true, passive: true };
   for (const t of ["pointerover", "pointerenter", "pointerdown", "pointermove", "pointerrawupdate", "pointerup", "pointercancel", "pointerout", "pointerleave",
     "gotpointercapture", "lostpointercapture", "mouseover", "mouseenter", "mousemove", "mousedown", "mouseup", "click", "dblclick", "auxclick", "contextmenu",
-    "mouseout", "mouseleave"]) window.addEventListener(t, mouse, opt);
+    "mouseout", "mouseleave", "drag", "dragover"]) window.addEventListener(t, mouse, opt);
   for (const t of ["touchstart", "touchmove", "touchend", "touchcancel"]) window.addEventListener(t, other, opt);
   for (const t of ["keydown", "keypress", "keyup"]) window.addEventListener(t, key, opt);
   window.addEventListener("wheel", wheel, opt);
@@ -275,12 +277,16 @@ function recCore(FRAME, emit) {
   if (SINK) {
     // The probe only: no native context menu at a right click (it would take the X input of the probe's display).
     addEventListener("contextmenu", (e) => e.preventDefault());
+    let seq = 0;
+    const run = params.get("run");
     const flush = () => {
       if (FRAMES.length) { pending.push({ f: "top", e: "frames", list: FRAMES.splice(0) }); }
       while (pending.length) {
         let n = pending.length, body;
-        while ((body = JSON.stringify(pending.slice(0, n))).length > 60000 && n > 1) n = Math.ceil(n / 2);
+        const mark = { f: "top", e: "seq", n: seq, run, t: core.now() };
+        while ((body = JSON.stringify([mark, ...pending.slice(0, n)])).length > 60000 && n > 1) n = Math.ceil(n / 2);
         navigator.sendBeacon("/log", body);
+        seq++;
         pending = pending.slice(n);
       }
     };
