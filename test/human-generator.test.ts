@@ -257,6 +257,20 @@ test("path rule the speed: at most 3.5 px/ms between two samples, also on a long
   assert.ok(far.ms > 1000, `a 2200 px move takes ${far.ms} ms`);
 });
 
+test("path rule the long move: the speed rule wins and the time has no upper bound; an overshoot leg only while the path stays at most 1500 ms", () => {
+  let long = 0, back = 0;
+  for (let s = 1; s <= 120; s++) {
+    // Moves of 2000 to 4400 px (up to a 3840 x 2160 viewport's diagonal), each with its own person.
+    const r = seededRandom(9000 + s), person = drawPerson(LINUX, r), D = 2000 + 20 * s, a = { x: 2, y: 2 }, b = { x: 2 + Math.round(D * 0.87), y: 2 + Math.round(D * 0.49) };
+    const p = planPath(a, b, 24, person, r);
+    assert.ok(peakSpeed(a, p.samples) <= 3.5 + 1e-9, `${D} px: ${peakSpeed(a, p.samples)} px/ms`);
+    if (p.ms > 1500) long++;
+    if (p.trajectory.subs.some((x) => x.kind === "back")) { back++; assert.ok(p.ms <= 1500 + 1e-6, `${D} px: an overshoot path of ${p.ms} ms`); }
+  }
+  assert.ok(long > 60, `${long} of 120 long moves take more than 1500 ms`);
+  assert.ok(back > 0, "some long moves keep their overshoot");
+});
+
 test("path rule the rate: one sample each 8 ms, in whole px, no sample that does not move, the target last", () => {
   for (const [i, [a, b]] of pairs(300, 12, 3, 1500).entries()) {
     const p = plan(a, b, 24, i);

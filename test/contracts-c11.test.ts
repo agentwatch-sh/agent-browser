@@ -1238,8 +1238,8 @@ const STAGE_ITEMS: string[] = [
   "A path has one sample each `STAGE_MOVE_MS`, in whole px on Linux, with no sample that does not move, at a speed of at most 3.5 px/ms.",
   "It ends at the client's point, or at the spread point of its press (below).",
   "Its time is 300 to 1000 ms (Fitts's law).",
-  "When a long move cannot keep both rules, the speed rule wins and the path takes longer than 1000 ms.",
-  "A move of more than 500 px can add an overshoot leg, so its time is at most 1500 ms.",
+  "When a long move cannot keep both rules, the speed rule wins: the path takes longer than 1000 ms, and its time has no upper bound.",
+  "A move of more than 500 px can add an overshoot leg only while its time stays at most 1500 ms.",
   "The pause before a press is 80 to 400 ms.",
   "The press has `force` 0.5 and a hold of 60 to 180 ms.",
   "The gap of a double click, from the first release to the second press, is 90 to 150 ms.",
@@ -1573,7 +1573,7 @@ test("the vectors' constants are C11's constants and the input design's (section
   const r = (k: string) => `${F[k][0]} to ${F[k][1]}`;
   const phrases: Record<string, string> = {
     pathMs: `Its time is ${r("pathMs")} ms (Fitts's law).`,
-    longPathMs: `so its time is at most ${F.longPathMs[1]} ms.`,
+    longPathMs: `only while its time stays at most ${F.longPathMs[1]} ms.`,
     longPathPx: `A move of more than ${F.longPathPx} px can add an overshoot leg`,
     maxSpeedPxPerMs: `at a speed of at most ${F.maxSpeedPxPerMs} px/ms.`,
     shortMovePx: `at most ${F.shortMovePx} px from the page's last point: samples of the client's line`,
