@@ -463,7 +463,7 @@ export async function selfTest(endpointSocket: string, o: SelfTestOptions = {}):
     // The time limit can pass during the listen: then the cleanup has run already, so this path closes its own server.
     if (over) { srv.close(); check(); }
     const accepted = new Promise<Socket>((resolve) => srv.once("connection", resolve));
-    const c = (child = spawn(process.execPath, ["-e", o.childScript ?? CHILD, path], { stdio: "ignore" }));
+    const c = (child = spawn(process.execPath, ["--disable-sigusr1", "-e", o.childScript ?? CHILD, path], { stdio: "ignore" }));
     o.onChild?.(c);
     const ended = new Promise<never>((_, reject) => {
       c.once("error", (e) => reject(new Error(`the self-test's child did not start: ${e.message}`)));
