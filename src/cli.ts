@@ -53,7 +53,12 @@ const WATCH_FLAGS: Record<string, Flag> = { "chrome-pid": { type: "string" }, "w
 const SERVICE_FLAGS: Record<string, Flag> = {
   "agent-door": { type: "string" }, "control-door": { type: "string" }, "daemon-unit": { type: "string" }, "daemon-command": { type: "string" },
   hello: { type: "boolean" }, fake: { type: "boolean" }, refuse: { type: "boolean" },
+  // The Chrome unit (stage 1b part 1, board ab-v16.94.3).
+  "browser-state": { type: "string" }, "tools-dir": { type: "string" }, "service-unit": { type: "string" },
+  test: { type: "boolean" }, "test-display": { type: "string" }, "test-chrome-source": { type: "string" },
 };
+/** The flags that service takes and other commands take too: `service stop --all`. */
+const SERVICE_SHARED: ReadonlySet<string> = new Set(["all"]);
 
 /** The command flags in the spec (`--name`), plus --stdin for a command with a parameter that can come from stdin. */
 function commandFlags(spec: CommandSpec): Record<string, Flag> {
@@ -278,9 +283,8 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     if (name !== "service") for (const k of Object.keys(SERVICE_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for service (started by agentwatch's unit), not ${name}`);
     if (name === "service") {
       // The self-contained agent browser's service (stage 1a): off by default; agentwatch's unit starts it from stage 2.
-      for (const k of Object.keys(values)) if (!(k in SERVICE_FLAGS)) throw new UsageError(`--${k} is not an option of service; ${SERVICE_USAGE}`);
-      if (rest.length) throw new UsageError(SERVICE_USAGE);
-      return await serviceMain(values, io, log);
+      for (const k of Object.keys(values)) if (!(k in SERVICE_FLAGS) && !SERVICE_SHARED.has(k)) throw new UsageError(`--${k} is not an option of service; ${SERVICE_USAGE}`);
+      return await serviceMain(values, io, log, rest);
     }
     if (name === "proxy") {
       if (!rest[0]) throw new UsageError("usage: agent-browser proxy <ws-url> --state-dir DIR (started by the library, not by hand)");

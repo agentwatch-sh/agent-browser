@@ -123,8 +123,11 @@ export interface Handler {
   readonly hello: Record<string, unknown>;
   /** The ops that this service has; each other op gets `unsupported`. */
   has(op: string): boolean;
-  /** An op that passed the door's checks. */
-  handle(req: Req): Answer;
+  /**
+   * An op that passed the door's checks. An op that answers later (a start, a stop) gives a promise: its answer goes out
+   * when it settles, also after the daemon half-closed the connection; the door closes after the last such answer.
+   */
+  handle(req: Req): Answer | Promise<Answer>;
   /** The door gives the handler its event stream at the open. */
   attach?(emit: (ev: Record<string, unknown>) => void): void;
 }
@@ -163,7 +166,8 @@ export class LineReader {
 /** Strict UTF-8 (C12, the lines): bytes that are not UTF-8 throw, and a byte order mark stays in the text (so JSON.parse refuses it). */
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-type Conn = { n: number; socket: Socket; ready: boolean };
+/** `pending`: the answers that an op still owes; `ended`: the daemon half-closed, and the door closes after them. */
+type Conn = { n: number; socket: Socket; ready: boolean; pending: number; ended: boolean };
 
 export class ControlDoor {
   readonly path: string;
@@ -197,7 +201,8 @@ export class ControlDoor {
     if (await socketAlive(o.path)) throw new Error(`a service already serves ${o.path}`);
     rmSync(o.path, { force: true });
     let door!: ControlDoor;
-    const server = createServer({ pauseOnConnect: true }, (socket) => door.accept(socket));
+    // allowHalfOpen: a daemon that half-closes after its request still gets the answer of an op that answers later.
+    const server = createServer({ pauseOnConnect: true, allowHalfOpen: true }, (socket) => door.accept(socket));
     const umask = process.umask(0o077);
     try { await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(o.path, resolve); }); }
     finally { process.umask(umask); }
@@ -224,7 +229,7 @@ export class ControlDoor {
   }
 
   private accept(socket: Socket): void {
-    const c: Conn = { n: ++this.count, socket, ready: false };
+    const c: Conn = { n: ++this.count, socket, ready: false, pending: 0, ended: false };
     this.conns.add(c);
     this.sockets.add(socket);
     socket.on("error", () => {});
@@ -279,30 +284,37 @@ export class ControlDoor {
     }, () => { this.close(c, `a line longer than ${this.o.maxLine ?? CONTROL_MAX_LINE} bytes`); });
     c.socket.on("data", (d: Buffer) => reader.push(d));
     // Bytes after the last newline are not a line: at the end of the stream the door drops them and closes.
-    c.socket.on("end", () => this.close(c, "the end of the stream"));
+    // An op that answers later answers first: the door closes after its last answer (c.pending).
+    c.socket.on("end", () => { c.ended = true; if (c.pending === 0) this.close(c, "the end of the stream"); });
     c.socket.resume();
   }
 
   private request(c: Conn, req: Record<string, unknown>): void {
     const id = req.id as string;
     const error = checkRequest(req, (op) => this.o.handler.has(op));
-    let answer: Record<string, unknown>;
     const events: Record<string, unknown>[] = [];
-    if (error) answer = { t: "res", id, ok: false, error };
-    else {
-      this.handling = events;
-      let a: Answer;
-      try { a = this.o.handler.handle(req as Req); }
-      catch (e) { a = { error: ERR.bad }; this.o.log(`control: ${req.op} failed: ${(e as Error).name}`); }
-      finally { this.handling = null; }
-      answer = "error" in a ? { t: "res", id, ok: false, error: a.error } : { t: "res", id, ok: true, data: a.data };
-    }
-    // An act is logged with its provenance; a read and a request that the shape step refused are not.
-    if (error !== ERR.unsupported && error !== ERR.bad && !READS.has(req.op as string)) {
-      const by = req.by as By;
-      this.o.log(`control: ${req.op} by ${by.kind} ${by.user} via ${by.via}: ${answer.ok ? "ok" : answer.error}`);
-    }
-    if (!c.socket.destroyed) c.socket.write(encodeLine(answer));
+    const answerOf = (a: Answer) => ("error" in a ? { t: "res", id, ok: false, error: a.error } : { t: "res", id, ok: true, data: a.data });
+    const send = (answer: Record<string, unknown>) => {
+      // An act is logged with its provenance; a read and a request that the shape step refused are not.
+      if (error !== ERR.unsupported && error !== ERR.bad && !READS.has(req.op as string)) {
+        const by = req.by as By;
+        this.o.log(`control: ${req.op} by ${by.kind} ${by.user} via ${by.via}: ${answer.ok ? "ok" : answer.error}`);
+      }
+      if (!c.socket.destroyed) c.socket.write(encodeLine(answer));
+    };
+    if (error) { send({ t: "res", id, ok: false, error }); return; }
+    this.handling = events;
+    let a: Answer | Promise<Answer>;
+    try { a = this.o.handler.handle(req as Req); }
+    catch (e) { a = { error: ERR.bad }; this.o.log(`control: ${req.op} failed: ${(e as Error).name}`); }
+    finally { this.handling = null; }
+    if (a instanceof Promise) {
+      // An op that answers later: its events go out as they come; the answer when it settles, once.
+      c.pending++;
+      void a.catch((e) => { this.o.log(`control: ${req.op} failed: ${(e as Error).name}`); return { error: ERR.bad } as Answer; })
+        .then((x) => { send(answerOf(x)); })
+        .finally(() => { c.pending--; if (c.ended && c.pending === 0) this.close(c, "the end of the stream"); });
+    } else send(answerOf(a));
     for (const ev of events) this.emit(ev);
   }
 

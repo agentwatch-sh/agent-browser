@@ -14,16 +14,44 @@ import { PeerGate } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
+import { realDisplayFs } from "./unit/display.ts";
+import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
+import { Owner, type UnitStateReader } from "./unit/owner.ts";
+import { UnitPart, type UnitPartOptions } from "./unit/part.ts";
+import type { UnitDeps } from "./unit/unit.ts";
+import type { UnitPaths } from "./unit/paths.ts";
+import { Procs } from "./unit/procs.ts";
 
 export { serviceHello };
 
 /** The ops of stage 1a (C12, "The ops of stage 1a"). */
 export const STAGE_1A_OPS = ["config", "set_sessions", "session_ended", "status", "endpoint"] as const;
-/** Each other op of C12 and the stage that adds it; until then it gets `unsupported`. */
-export const LATER_OPS: Readonly<Record<string, "1b" | "1c">> = {
-  start: "1b", stop: "1b", sender: "1b",
+/** The ops of each later part of the service (C12, "The ops of stage 1a" and the parts after it): a part adds its ops through ServicePart. */
+export const PART_OPS: Readonly<Record<string, readonly string[]>> = {
+  "1b1": ["start", "stop"],
+};
+/** Each op of C12 that no part of this service has yet, and the stage that adds it; until then it gets `unsupported`. */
+export const LATER_OPS: Readonly<Record<string, "1b2" | "1c">> = {
+  sender: "1b2",
   launch_check: "1c", list_set: "1c", prompt_allow: "1c", prompt_dismiss: "1c", import: "1c", lists_get: "1c", prompts_get: "1c",
 };
+
+/** An op of a part: its answer now, or later (a start, a stop). */
+export type Op = (req: Req) => Answer | Promise<Answer>;
+/**
+ * A part of the service after stage 1a (the Chrome unit of stage 1b part 1: src/service/unit/part.ts). Each part adds
+ * its ops to the op table, its keys to `status`, and hears each `config` and `set_sessions`.
+ */
+export interface ServicePart {
+  readonly ops?: Readonly<Record<string, Op>>;
+  /** The keys of `status` that this part gives, over stage 1a's. */
+  status?(): Record<string, unknown>;
+  /** After each `config`, with agentwatch's browser.* keys. */
+  onConfig?(keys: Record<string, unknown>): void;
+  /** After each `set_sessions`. */
+  onSessions?(): void;
+  attach?(emit: (ev: Record<string, unknown>) => void): void;
+}
 /** The texts of stage 1a's one state, `off` (I2: the agent's text names no stop and no start). */
 export const STAGE_1A_TEXTS = {
   agent_text: "The agent browser is not running.",
@@ -91,34 +119,51 @@ export class Stage1a implements Handler {
   /** The ended scopes, in memory only (stage 1c adds the ended file and launch_check). */
   readonly ended = new Set<string>();
 
-  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown> }) {
+  /** The parts after stage 1a, in order, and their op table. */
+  private readonly parts: readonly ServicePart[];
+  private readonly ops = new Map<string, Op>();
+
+  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[] }) {
     this.agentDoor = o.agentDoor;
     const { version, commit } = packageInfo();
     this.hello = o.hello ?? serviceHello(version, commit, []);
+    this.parts = o.parts ?? [];
+    for (const p of this.parts) for (const [name, op] of Object.entries(p.ops ?? {})) this.ops.set(name, op);
   }
 
-  has(op: string): boolean { return (STAGE_1A_OPS as readonly string[]).includes(op); }
+  has(op: string): boolean { return (STAGE_1A_OPS as readonly string[]).includes(op) || this.ops.has(op); }
 
   endpointState(): EndpointState { return this.agentDoor.state(); }
 
+  attach(emit: (ev: Record<string, unknown>) => void): void { for (const p of this.parts) p.attach?.(emit); }
+
+  /** A complete set_sessions came (the fail-closed watch's sessions_unread). */
+  get sessionsComplete(): boolean { return this.sessionsRead; }
+  private sessionsRead = false;
+
   status(): Record<string, unknown> {
-    return {
+    return Object.assign({
       state: "off", ...STAGE_1A_TEXTS,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: this.agentDoor.state(), mcp: { state: "none", address: null },
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null })), lists: [], last_stop: null, prompts: [],
-    };
+    }, ...this.parts.map((p) => p.status?.() ?? {}));
   }
 
-  handle(req: Req): Answer {
+  handle(req: Req): Answer | Promise<Answer> {
+    const op = this.ops.get(req.op);
+    if (op) return op(req);
     switch (req.op) {
       case "config": {
         const { t, id, op, by, ...keys } = req;
         this.config = keys;
+        for (const p of this.parts) p.onConfig?.(keys);
         return { data: {} };
       }
       case "set_sessions":
         this.sessions = (req.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id }));
+        this.sessionsRead = true;
+        for (const p of this.parts) p.onSessions?.();
         return { data: {} };
       case "session_ended": {
         const scope = req.scope as string;
@@ -138,6 +183,17 @@ export class Stage1a implements Handler {
   }
 }
 
+/** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
+export type UnitOptions = {
+  paths: UnitPaths;
+  /** The owner rule's reader (systemd, or `--test`'s). */
+  owner: UnitStateReader;
+  tools?: ChromeTools;
+  procs?: Procs;
+  /** Tests and `--test`: the part's other options; `unit` adds to the unit's real displays, processes and programs. */
+  part?: Partial<Omit<UnitPartOptions, "unit">> & { unit?: Partial<UnitDeps> };
+};
+
 export type ServiceOptions = {
   /** The agent door's address (--agent-door): in stage 1a a Unix socket path. */
   agentDoor: string;
@@ -150,8 +206,14 @@ export type ServiceOptions = {
   log: (line: string) => void;
   /** Tests only: the MainPID in place of the user's systemd. */
   mainPid?: () => Promise<number | null>;
+  /** The Chrome unit (stage 1b part 1). Without it the service has stage 1a's ops only. */
+  unit?: UnitOptions;
 };
-export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; stop: () => Promise<void> };
+/** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
+export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; lost: Promise<string>; stop: () => Promise<void> };
+
+/** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
+export class NotOwnerAtStart extends Error {}
 
 /**
  * Start the service: the peer check's self-test (the relay's, next to the agent door), the control door with its
@@ -162,20 +224,38 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   o.log("failed" in t ? `service: the peer check cannot run: ${t.failed}` : `service: the peer check runs (${t.reader.form})`);
   const gate = "failed" in t ? new PeerGate({ failed: t.failed }) : new PeerGate({ reader: t.reader });
   const pidfd = await loadPidfdOpen();
-  const state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) } });
+  let agent: AgentDoor | null = null;
+  // The Chrome unit (stage 1b part 1) and its owner rule: built now, begun only after the owner rule said yes.
+  const owner = o.unit ? new Owner(o.unit.owner, o.log) : null;
+  let state!: Stage1a;
+  const part = o.unit && owner ? new UnitPart({
+    paths: o.unit.paths, procs: o.unit.procs ?? new Procs(), owner, log: o.log,
+    tools: o.unit.tools ?? new GoogleChromeTools({ tools: o.unit.paths.tools, log: o.log }),
+    endpoint: () => endpointState(gate), sessionsComplete: () => state.sessionsComplete,
+    activity: { clients: () => (agent?.clients() ?? 0) > 0 },
+    ...o.unit.part,
+    unit: { displayFs: realDisplayFs(() => (o.unit!.procs ?? new Procs()).netUnix()), which: (n) => which(n), ...o.unit.part?.unit },
+  }) : null;
+  state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts: part ? [part] : [] });
   const unit = o.daemonUnit ?? "agentwatch.service";
-  // The control door opens first, before the agent door (and from stage 1b before any Chrome start: the design's build note 8).
+  // The control door opens first, before the agent door and before any Chrome start (the design's build note 8).
   const control = await ControlDoor.open({
     path: o.controlDoor, handler: state, log: o.log,
     admit: daemonAdmission({ reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (() => systemdMainPid(unit)), commandFile: o.daemonCommand }),
   });
-  let agent: AgentDoor;
+  // The owner rule at the start: a service runs only to own (the design, section 13.2). The agent door is an owner part.
+  if (owner && !(await owner.check("the service's start"))) {
+    await control.stop();
+    throw new NotOwnerAtStart(`the service does not own the Chrome unit, so it exits: ${await owner.lost}`);
+  }
   try { agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log }); }
   catch (e) { await control.stop(); throw e; }
-  o.log(`service: ready (pid ${process.pid}; stage 1a: no Chrome)`);
+  const door = agent;
+  if (part) await part.begin();
+  o.log(`service: ready (pid ${process.pid}; ${part ? "the Chrome unit runs" : "stage 1a: no Chrome"})`);
   let stopping: Promise<void> | undefined;
   return {
-    control, agent, state,
-    stop: () => stopping ??= (async () => { await control.stop(); await agent.stop(); o.log("service: stopped"); })(),
+    control, agent: door, state, part, lost: owner ? owner.lost : new Promise<string>(() => {}),
+    stop: () => stopping ??= (async () => { await part?.stop(); await control.stop(); await door.stop(); o.log("service: stopped"); })(),
   };
 }

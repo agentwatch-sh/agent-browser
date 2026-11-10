@@ -23,6 +23,8 @@ export type AgentDoor = {
   url(scope: string): string;
   /** The peer check's form, or why it cannot run (C12's `endpoint` of `status` and of the `ready` event). */
   state(): EndpointState;
+  /** The client connections that are open now. */
+  clients(): number;
   stop(): Promise<void>;
 };
 
@@ -51,6 +53,7 @@ export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (
     address: o.address,
     url: (scope) => agentDoorUrl(o.address, scope),
     state: () => endpointState(o.gate),
+    clients: () => relay.model.connectionCount,
     stop: () => stopping ??= (async () => { await relay.stop(); input.end(); })(),
   };
 }

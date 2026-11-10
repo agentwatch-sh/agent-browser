@@ -265,6 +265,9 @@ export class Model {
     this.random = opts.random ?? Math.random;
   }
 
+  /** The client connections that are open now (the service's Chrome move waits while a client holds one). */
+  get connectionCount(): number { return this.conns.size; }
+
   /** What the relay keeps of the pointer (for the tests and the live check; no client sees it). */
   pointerState() {
     return { paths: this.paths, offFor60s: this.paths === "off" && this.offUntil > 0, at: this.at, display: this.display, views: this.views,
