@@ -11,7 +11,8 @@ import { fittsMs, median, mean, pathShape, wholeMsShare, isWholeMs, type PathSha
 export type Rec = Record<string, any> & { e: string; f?: string; t: number };
 /** What a step does: the harness's scenarios tag each step, and the score reads the steps of each kind. */
 export type StepKind = "idle" | "click" | "hover" | "move" | "box" | "dblclick" | "modclick" | "type" | "fill" | "wheel" | "far" | "drag";
-export type StepMark = { name: string; source: string; kind: StepKind; ok: boolean; t0: number; t1: number; width?: number; error?: string };
+/** `path`: the id of a planned path that two sources play (XTEST's M1 paths and the CDP form on them), for P1's same-path row. */
+export type StepMark = { name: string; source: string; kind: StepKind; ok: boolean; t0: number; t1: number; width?: number; error?: string; path?: string };
 /** A step's records: from 50 ms before its start to 650 ms after its end (the research's analyze.ts; a step's settle is 700 ms). */
 export const WINDOW_BEFORE_MS = 50, WINDOW_AFTER_MS = 650;
 /** The click-box stand-in's size (CSS px). */
@@ -28,6 +29,10 @@ const WORD_END = new Set([" ", ".", ",", ";", ":", "!", "?", "Enter"]);
 const FOCUS_CAUSE_MS = 1500;
 /** A wheel or a key this long before a scroll explains it. */
 const SCROLL_CAUSE_MS = 700;
+/** R11: the window's focus records of one activation come within this many ms; a box's blur this close to the top's focus means the focus moved inside the page; the first pointer event after an activation comes within this many ms. */
+const ACTIVATION_SAME_MS = 50, ACTIVATION_PAIRED_MS = 20, ACTIVATION_AFTER_MS = 2000;
+/** The recorder's target name for a window (its tid() of a window: no id and no node name). */
+const WINDOW = "[object Window]";
 
 export type PathMeasures = PathShape & { fittsRatio: number | null };
 export type PointerMeasures = {
@@ -36,15 +41,22 @@ export type PointerMeasures = {
   path: PathMeasures | null; pauseMs: number | null; pressMs: number | null; focusInPress: boolean | null;
   doubleClickGapMs: number | null; modifierLeadMs: number | null; modifierLagMs: number | null; heldMoves: number | null;
 };
+/** `pairs`: the press-to-press times of each letter pair (two keys with a character each, in lower case; K2 per letter pair). */
 export type KeyMeasures = { keys: number; holds: number[]; downToDown: number[]; wordEndExtraMs: number | null; overlaps: number; overlapShare: number | null;
-  shiftedChars: number; shiftedWithShiftDown: number; numLockOn: number; backspaces: number };
+  shiftedChars: number; shiftedWithShiftDown: number; numLockOn: number; backspaces: number; pairs: Record<string, number[]> };
 export type TextMeasures = { inputs: number; chars: number; keyChars: number; keyEventsPerChar: number | null; textsWithNoKeys: number; longTextsWithNoKeys: number };
-export type WheelMeasures = { events: number; absDeltaY: number[]; ratios: number[]; deltaModes: number[]; gapsMs: number[]; scrolls: number; scrollsWithNoWheelOrKey: number };
+/** `deltaModes`: null for an event with no deltaMode (never read as mode 0). */
+export type WheelMeasures = { events: number; absDeltaY: number[]; ratios: number[]; deltaModes: (number | null)[]; gapsMs: number[]; scrolls: number; scrollsWithNoWheelOrKey: number };
 export type BoxMeasures = { entryEdgePx: number; movesInside: number; entryToPressMs: number | null };
 export type StepMeasures = {
   name: string; source: string; kind: StepKind; ok: boolean; ms: number;
   pointer: PointerMeasures | null; box: BoxMeasures | null; keys: KeyMeasures | null; text: TextMeasures | null; wheel: WheelMeasures | null;
   focusinWithNoPress: number; untrusted: number; touch: number; idleMovesPerS: number | null;
+  /** The step's event records (the recorder gives each event `tr`; its own records, such as layout, state, frames and seq, have none). */
+  events: number;
+  /** R11: the jump (px) at each activation of the page's window in the step. */
+  activationJumps: number[];
+  path?: string;
 };
 
 const byTime = (a: Rec, b: Rec) => a.t - b.t;
@@ -64,7 +76,7 @@ export function samplesOf(moves: readonly Rec[]): (Sample & { f: string })[] {
   return out.sort((a, b) => a.t - b.t);
 }
 
-/** The pointer's measures (P1, P2, P3, P5, P8, R1, R2, R8, R9, R11, R13), or null with no pointermove and no press. `width`: the target's smaller side (Fitts). */
+/** The pointer's measures (P1, P2, P3, P5, P8, R1, R2, R8, R9, R13, and M1's moves that the movement does not explain), or null with no pointermove and no press. `width`: the target's smaller side (Fitts). */
 export function pointerMeasures(recs: readonly Rec[], width?: number): PointerMeasures | null {
   const list = [...recs].sort(byTime);
   const moves = list.filter((r) => r.e === "pointermove"), downs = list.filter((r) => r.e === "pointerdown"), ups = list.filter((r) => r.e === "pointerup");
@@ -105,8 +117,10 @@ export function pointerMeasures(recs: readonly Rec[], width?: number): PointerMe
       const lastUp = ups.at(-1), modUp = list.find((r) => r.e === "keyup" && r.k === mod.k && r.t > mod.t);
       lagMs = lastUp && modUp ? modUp.t - lastUp.t : null;
     }
+    // R8: the moves and the drag events (drag, dragover: Chromium sends no pointer event after dragstart) with the button
+    // down, between the press and the drop. A real drag's drag events have buttons 1; a protocol drag's have buttons 0.
     const end = list.find((r) => r.t >= d0.t && r !== d0 && (r.e === "drop" || r.e === "dragend" || r.e === "pointerup"));
-    held = moves.filter((r) => ((r.bs ?? 0) & 1) === 1 && r.t > d0.t && (!end || r.t < end.t)).length;
+    held = list.filter((r) => r.t > d0.t && (!end || r.t < end.t) && (r.e === "pointermove" || r.e === "drag" || r.e === "dragover") && ((r.bs ?? 0) & 1) === 1).length;
   }
   return {
     moves: moves.length, samplesPerMove: mean(nc), predictedPerMove: mean(np), sampleGaps: gaps.length, wholeMsGaps: gaps.filter((g) => isWholeMs(g)).length,
@@ -133,11 +147,12 @@ export function keyMeasures(recs: readonly Rec[]): KeyMeasures | null {
       if (d) { if (isChar(d)) holds.push(r.t - d.t); down.delete(r.c); }
     }
   }
-  const chars = kd.filter(isChar), dd: number[] = [], wordEnd: number[] = [], other: number[] = [];
+  const chars = kd.filter(isChar), dd: number[] = [], wordEnd: number[] = [], other: number[] = [], pairs: Record<string, number[]> = {};
   for (let i = 1; i < chars.length; i++) {
-    const gap = chars[i].t - chars[i - 1].t;
+    const gap = chars[i].t - chars[i - 1].t, a = chars[i - 1].k, b = chars[i].k;
     dd.push(gap);
-    (WORD_END.has(chars[i - 1].k) ? wordEnd : other).push(gap);
+    (WORD_END.has(a) ? wordEnd : other).push(gap);
+    if (typeof a === "string" && typeof b === "string" && a.length === 1 && b.length === 1) (pairs[`${a}${b}`.toLowerCase()] ??= []).push(gap);
   }
   const we = median(wordEnd), ot = median(other);
   const shifted = kd.filter((r) => SHIFTED.test(r.k));
@@ -145,7 +160,7 @@ export function keyMeasures(recs: readonly Rec[]): KeyMeasures | null {
     keys: chars.length, holds, downToDown: dd, wordEndExtraMs: we !== null && ot !== null ? we - ot : null, overlaps, overlapShare: chars.length > 1 ? overlaps / (chars.length - 1) : null,
     shiftedChars: shifted.length,
     shiftedWithShiftDown: shifted.filter((r) => kd.some((s) => s.k === "Shift" && s.t <= r.t && !ku.some((u) => u.k === "Shift" && u.t > s.t && u.t < r.t))).length,
-    numLockOn: kd.filter((r) => r.nl === 1).length, backspaces: kd.filter((r) => r.k === "Backspace").length,
+    numLockOn: kd.filter((r) => r.nl === 1).length, backspaces: kd.filter((r) => r.k === "Backspace").length, pairs,
   };
 }
 
@@ -182,7 +197,7 @@ export function wheelMeasures(recs: readonly Rec[]): WheelMeasures | null {
   }
   for (let i = 1; i < wheels.length; i++) gaps.push(wheels[i].t - wheels[i - 1].t);
   const caused = (s: Rec) => recs.some((r) => (r.e === "wheel" || r.e === "keydown") && r.t <= s.t && s.t - r.t < SCROLL_CAUSE_MS);
-  return { events: wheels.length, absDeltaY: wheels.map((w) => Math.abs(w.dy || w.dx || 0)), ratios, deltaModes: wheels.map((w) => w.dm ?? 0), gapsMs: gaps,
+  return { events: wheels.length, absDeltaY: wheels.map((w) => Math.abs(w.dy || w.dx || 0)), ratios, deltaModes: wheels.map((w) => (num(w.dm) ? w.dm : null)), gapsMs: gaps,
     scrolls: scrolls.length, scrollsWithNoWheelOrKey: scrolls.filter((s) => !caused(s)).length };
 }
 
@@ -196,6 +211,34 @@ export function boxMeasures(recs: readonly Rec[], size = BOX_SIZE): BoxMeasures 
     movesInside: box.filter((r) => r.e === "pointermove" && (!down || r.t <= down.t)).length, entryToPressMs: down ? down.t - first.t : null };
 }
 
+/**
+ * R11: for each activation of the page's window in the step, the jump (px, on the screen) from the page's last pointer
+ * position before it to the first pointer event after it. An activation is a focus of the top window that is not a move
+ * of the focus inside the page (no blur of the box's window at the same moment); its records within 50 ms are one. When
+ * Chrome brings a window forward, the page gets a real event at the X pointer (the research, section 6).
+ */
+export function activationJumps(all: readonly Rec[], m: Pick<StepMark, "t0" | "t1">): number[] {
+  const list = all.filter((r) => num(r.t)).sort(byTime);
+  const point = (r: Rec) => /^(pointer|mouse)(move|over|enter|down|up)$/.test(r.e) && num(r.sx) && num(r.sy);
+  const out: number[] = [];
+  let last = -Infinity;
+  for (const f of list.filter((r) => r.e === "focus" && frame(r) === "top" && r.tg === WINDOW)) {
+    if (f.t - last < ACTIVATION_SAME_MS) continue;
+    if (list.some((r) => r.e === "blur" && frame(r) === "box" && r.tg === WINDOW && Math.abs(r.t - f.t) <= ACTIVATION_PAIRED_MS)) continue;
+    last = f.t;
+    if (f.t < m.t0 - WINDOW_BEFORE_MS || f.t > m.t1 + WINDOW_AFTER_MS) continue;
+    const before = list.filter((r) => r.t < f.t && point(r)).at(-1), after = list.find((r) => r.t > f.t && r.t - f.t <= ACTIVATION_AFTER_MS && point(r));
+    if (before && after) out.push(Math.round(Math.hypot(after.sx - before.sx, after.sy - before.sy) * 10) / 10);
+  }
+  return out;
+}
+
+/** The beacon batches that never came: the gaps in their sequence numbers (recorder.html gives each batch one, from 0). */
+export function lostBatches(seqs: readonly number[]): number {
+  const seen = new Set(seqs);
+  return seen.size ? Math.max(...seen) + 1 - seen.size : 0;
+}
+
 /** All the measures of one step. */
 export function measureStep(all: readonly Rec[], m: StepMark): StepMeasures {
   const recs = stepRecords(all, m), pointer = pointerMeasures(recs, m.width);
@@ -204,5 +247,6 @@ export function measureStep(all: readonly Rec[], m: StepMark): StepMeasures {
     pointer, box: boxMeasures(recs), keys: keyMeasures(recs), text: textMeasures(recs), wheel: wheelMeasures(recs),
     focusinWithNoPress: focusinWithNoPress(recs), untrusted: recs.filter((r) => r.tr === 0).length, touch: recs.filter((r) => r.e.startsWith("touch")).length,
     idleMovesPerS: m.kind === "idle" ? (pointer?.moves ?? 0) / Math.max(0.001, (m.t1 - m.t0) / 1000) : null,
+    events: recs.filter((r) => r.tr === 0 || r.tr === 1).length, activationJumps: activationJumps(all, m), ...(m.path ? { path: m.path } : {}),
   };
 }

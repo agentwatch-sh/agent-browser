@@ -24,6 +24,8 @@
 //            pauseMs, pressMs                   the pause before a press and the press (P5)
 //            boxEntryEdgePx, boxMovesInside, boxEntryToPressMs   the click box's own view (P4)
 //   keys     holdMs, downToDownMs, wordEndExtraMs, overlapShare   (K1 to K3)
+//            downToDownByPairMs (optional): { "th": Dist, "he": Dist, ... }: press to press for each letter pair (K2 per
+//            letter pair); each name is two characters of the US layout's printable set (space to tilde), in lower case
 //   wheel    notchPx (a number: 120 on X11), gapMs   (P7)
 
 import type { StepMeasures } from "./measures.ts";
@@ -39,7 +41,7 @@ export type Reference = {
     straightness: Dist; maxDeviationPx: Dist; peakPxPerMs: Dist; meanPxPerMs: Dist; fittsRatio: Dist; speedPeaks: Dist;
     pauseMs: Dist; pressMs: Dist; boxEntryEdgePx: Dist; boxMovesInside: Dist; boxEntryToPressMs: Dist;
   };
-  keys: { holdMs: Dist; downToDownMs: Dist; wordEndExtraMs: Dist; overlapShare: Dist };
+  keys: { holdMs: Dist; downToDownMs: Dist; wordEndExtraMs: Dist; overlapShare: Dist; downToDownByPairMs?: Record<string, Dist> };
   wheel: { notchPx: number; gapMs: Dist };
 };
 
@@ -61,11 +63,14 @@ export const LITERATURE: { pointer: Pick<Reference["pointer"], "pauseMs" | "pres
   wheel: { notchPx: 120, gapMs: { range: [35, 90] } },
 };
 
-const D = "dist", N = "number";
+const D = "dist", N = "number", PAIRS = "pairs";
+/** Fields that a file may leave out. */
+const OPTIONAL = new Set(["keys.downToDownByPairMs"]);
+const PAIR = /^[\x20-\x7e]{2}$/;
 const SCHEMA: Record<string, Record<string, string>> = {
   pointer: { samplesPerMove: D, predictedPerMove: D, handlerLagMs: D, wholeMsShare: N, straightness: D, maxDeviationPx: D, peakPxPerMs: D, meanPxPerMs: D,
     fittsRatio: D, speedPeaks: D, pauseMs: D, pressMs: D, boxEntryEdgePx: D, boxMovesInside: D, boxEntryToPressMs: D },
-  keys: { holdMs: D, downToDownMs: D, wordEndExtraMs: D, overlapShare: D },
+  keys: { holdMs: D, downToDownMs: D, wordEndExtraMs: D, overlapShare: D, downToDownByPairMs: PAIRS },
   wheel: { notchPx: N, gapMs: D },
 };
 
@@ -90,21 +95,32 @@ function checkDist(v: unknown, path: string): void {
   if (keys[0] === "range" && !(a <= b)) refuse(path, "a range's low end is not above its high end");
 }
 
-/** The reference of a file's JSON, or an error that names the first wrong field. */
+function checkPairs(v: unknown, path: string): void {
+  if (!isObj(v)) refuse(path, "not an object of letter pairs");
+  const keys = Object.keys(v);
+  if (!keys.length) refuse(path, "no pairs");
+  for (const k of keys) {
+    if (!PAIR.test(k)) refuse(`${path}.${k}`, "not a letter pair (two characters from space to tilde)");
+    checkDist(v[k], `${path}.${k}`);
+  }
+}
+
+/** The reference of a file's JSON, or an error that names the first wrong field. Every name is checked as an own name (Object.hasOwn), so the names that every object inherits (constructor, toString, __proto__) are refused. */
 export function checkReference(raw: unknown): Reference {
   if (!isObj(raw)) refuse("the file", "not a JSON object");
   const top = ["format", "source", ...Object.keys(SCHEMA)];
   for (const k of Object.keys(raw)) if (!top.includes(k)) refuse(k, "not a field (the file holds numbers only, in the fields of format 1)");
-  for (const k of top) if (!(k in raw)) refuse(k, "missing");
+  for (const k of top) if (!Object.hasOwn(raw, k)) refuse(k, "missing");
   if (raw.format !== REFERENCE_FORMAT) refuse("format", `${REFERENCE_FORMAT} is the only format`);
   if (raw.source !== SOURCE.xtest && raw.source !== SOURCE.person) refuse("source", `${SOURCE.xtest} (XTEST) or ${SOURCE.person} (a person's recording)`);
   for (const [part, fields] of Object.entries(SCHEMA)) {
     const o = raw[part];
     if (!isObj(o)) refuse(part, "not an object");
-    for (const k of Object.keys(o)) if (!(k in fields)) refuse(`${part}.${k}`, "not a field (the file holds numbers only, in the fields of format 1)");
+    for (const k of Object.keys(o)) if (!Object.hasOwn(fields, k)) refuse(`${part}.${k}`, "not a field (the file holds numbers only, in the fields of format 1)");
     for (const [k, kind] of Object.entries(fields)) {
-      if (!(k in o)) refuse(`${part}.${k}`, "missing");
+      if (!Object.hasOwn(o, k)) { if (OPTIONAL.has(`${part}.${k}`)) continue; refuse(`${part}.${k}`, "missing"); }
       if (kind === N) { if (!isNum(o[k])) refuse(`${part}.${k}`, "not a number"); }
+      else if (kind === PAIRS) checkPairs(o[k], `${part}.${k}`);
       else checkDist(o[k], `${part}.${k}`);
     }
   }
@@ -115,8 +131,9 @@ const PATH_KINDS = new Set(["click", "hover", "move"]);
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const vals = (list: (number | null | undefined)[]) => list.filter((v): v is number => isNum(v)).map(r3);
 
-/** The reference of a run's XTEST steps: per-path values for P1, P3 and P8, per-trial values for P4, and LITERATURE for the rest. */
-export function buildReference(xtest: readonly StepMeasures[]): Reference {
+/** The reference of a run's XTEST steps (the steps that passed): per-path values for P1, P3 and P8, per-trial values for P4, and LITERATURE for the rest. */
+export function buildReference(all: readonly StepMeasures[]): Reference {
+  const xtest = all.filter((s) => s.ok); // a failed step is left out
   const paths = xtest.filter((s) => PATH_KINDS.has(s.kind) && s.pointer && s.pointer.moves >= 5);
   const shapes = paths.map((s) => s.pointer!.path).filter((p) => p !== null);
   const boxes = xtest.filter((s) => s.kind === "box" && s.box).map((s) => s.box!);

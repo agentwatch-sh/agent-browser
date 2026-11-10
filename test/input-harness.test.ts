@@ -6,14 +6,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  binomialZ, fittsMs, isWholeMs, ks1, ks2, ksBound, lognormalCdf, lognormalOf, mean, median, normalCdf, pathShape, speedPeaks, wholeMsChance, wholeMsShare, type Sample,
+  binomialZ, fittsMs, isWholeMs, ks1, ks2, ksBound, ksCdf, ksCritical, lognormalCdf, lognormalOf, mean, median, normalCdf, pathShape, speedPeaks, wholeMsChance, wholeMsShare, type Sample,
 } from "./live/input-harness/stats.ts";
 import {
-  boxMeasures, focusinWithNoPress, keyMeasures, measureStep, pointerMeasures, samplesOf, stepRecords, textMeasures, wheelMeasures,
+  activationJumps, boxMeasures, focusinWithNoPress, keyMeasures, lostBatches, measureStep, pointerMeasures, samplesOf, stepRecords, textMeasures, wheelMeasures,
   type KeyMeasures, type PathMeasures, type PointerMeasures, type Rec, type StepMeasures, type TextMeasures,
 } from "./live/input-harness/measures.ts";
 import { buildReference, checkReference, LITERATURE, type Reference } from "./live/input-harness/reference.ts";
 import { band, compareDist, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
+import { Cleanup } from "./live/input-harness/cleanup.ts";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const near = (a: number | null | undefined, b: number, eps = 1e-3) => assert.ok(a !== null && a !== undefined && Math.abs(a - b) <= eps, `${a} is not ${b} (within ${eps})`);
 const FIXTURE = JSON.parse(readFileSync(new URL("./live/input-harness/reference.fixture.json", import.meta.url), "utf8"));
@@ -47,12 +52,12 @@ function stepM(o: Omit<Partial<StepMeasures>, "pointer"> & { pointer?: Partial<P
     fractional: 0, jumps: 0, movementMismatch: 0, path: null, pauseMs: null, pressMs: null, focusInPress: null, doubleClickGapMs: null, modifierLeadMs: null,
     modifierLagMs: null, heldMoves: null, ...(o.pointer ?? {}) };
   return { name: "s", source: "x", kind: "click", ok: true, ms: 1000, box: null, keys: null, text: null, wheel: null, focusinWithNoPress: 0, untrusted: 0, touch: 0,
-    idleMovesPerS: null, ...o, pointer };
+    idleMovesPerS: null, events: 50, activationJumps: [], ...o, pointer };
 }
 /** The z values of the quantiles (i + 0.5) / 12 of a normal: a sample that a model's KS test passes. */
 const Z12 = [-1.732, -1.15, -0.812, -0.548, -0.319, -0.105, 0.105, 0.319, 0.548, 0.812, 1.15, 1.732];
 const keysM = (o: Partial<KeyMeasures> = {}): KeyMeasures => ({ keys: 13, holds: Z12.map((z) => 116 + 24 * z), downToDown: Z12.map((z) => 216.4 * Math.exp(0.446 * z)),
-  wordEndExtraMs: 100, overlaps: 4, overlapShare: 4 / 12, shiftedChars: 4, shiftedWithShiftDown: 4, numLockOn: 0, backspaces: 0, ...o });
+  wordEndExtraMs: 100, overlaps: 4, overlapShare: 4 / 12, shiftedChars: 4, shiftedWithShiftDown: 4, numLockOn: 0, backspaces: 0, pairs: {}, ...o });
 const textM = (o: Partial<TextMeasures> = {}): TextMeasures => ({ inputs: 16, chars: 16, keyChars: 16, keyEventsPerChar: 1, textsWithNoKeys: 0, longTextsWithNoKeys: 0, ...o });
 const rowOf = (rows: Row[], gap: string, measure: RegExp): Row => {
   const r = rows.find((x) => x.gap === gap && measure.test(x.measure));
@@ -83,7 +88,7 @@ test("ks1 against a model's CDF, and the bound of a KS statistic at 5%", () => {
   near(ks1([0, 0, 0], (x) => Math.min(1, Math.max(0, x))), 1);
   near(ks1([1, 1, 1], (x) => Math.min(1, Math.max(0, x))), 1, 1e-9);
   assert.equal(ks1([], (x) => x), null);
-  near(ksBound(16), 0.3395);
+  near(ksBound(16), 0.327, 0.002); // exact for n up to 35 (Miller's table: 0.32733)
   near(ksBound(8, 8), 0.679);
 });
 
@@ -282,8 +287,9 @@ test("the reference built from the XTEST steps: per-path values, the literature'
     stepM({ kind: "hover", pointer: { samplesPerMove: 2, predictedPerMove: 2.1, handlerLagMs: 7, path: pathM({ straightness: 0.9, fittsRatio: 1.6 }) } }),
     stepM({ kind: "box", pointer: { samplesPerMove: 1.5, predictedPerMove: 1.1, handlerLagMs: 9, path: pathM() }, box: { entryEdgePx: 3, movesInside: 16, entryToPressMs: 240 } }),
     stepM({ kind: "type", pointer: null, keys: keysM({ holds: [30, 31] }), text: textM() }),
+    stepM({ ok: false, pointer: { samplesPerMove: 9, predictedPerMove: 9, handlerLagMs: 9, path: pathM({ straightness: 0.1, fittsRatio: 9 }) } }),
   ];
-  const r = buildReference(steps);
+  const r = buildReference(steps); // the failed step (9s) is left out
   assert.deepEqual(checkReference(JSON.parse(JSON.stringify(r))), r);
   assert.deepEqual([r.pointer.samplesPerMove, r.pointer.predictedPerMove, r.pointer.handlerLagMs, r.pointer.straightness, r.pointer.fittsRatio], [[1.9, 2], [1.8, 2.1], [3, 7], [0.8, 0.9], [1.4, 1.6]]);
   assert.deepEqual([r.pointer.boxEntryEdgePx, r.pointer.boxMovesInside, r.pointer.boxEntryToPressMs], [[3], [16], [240]]);
@@ -332,10 +338,13 @@ test("a distribution against the reference: KS against its samples or its model 
 test("P1, P2, P8 and R10 on M1's numbers: the CDP form with whole-ms times 4 ms early meets the samples, the whole-ms share and the phase; its predicted points do not", () => {
   // M1 run 2's XTEST (the design probe's results): samples 1.89 to 1.93, predicted points 1.80 to 2.11, phase 2.3 to 8.1 ms.
   const ref = refWith((r) => { r.pointer.samplesPerMove = [1.89, 1.9, 1.93]; r.pointer.predictedPerMove = [1.84, 1.8, 2.11]; r.pointer.handlerLagMs = [8.1, 2.3, 4]; });
-  const steps = (rows: number[][]) => rows.map(([s, p, l]) => stepM({ pointer: { samplesPerMove: s, predictedPerMove: p, handlerLagMs: l } }));
-  const cdp4 = scoreSource(steps([[1.79, 2.67, 5.4], [1.73, 2.32, 5.4], [1.86, 2.64, 5.55]]), ref);
+  // The same paths: M1's XTEST predicted points on its three paths (design 9.1's bar).
+  const same = { "m1-0": 1.84, "m1-1": 1.8, "m1-2": 2.11 };
+  const steps = (rows: number[][]) => rows.map(([s, p, l], i) => stepM({ path: `m1-${i}`, pointer: { samplesPerMove: s, predictedPerMove: p, handlerLagMs: l } }));
+  const cdp4 = scoreSource(steps([[1.79, 2.67, 5.4], [1.73, 2.32, 5.4], [1.86, 2.64, 5.55]]), ref, { samePaths: same });
   assert.equal(verdict(cdp4, "P1", /samples/), "pass");
-  assert.equal(verdict(cdp4, "P1", /predicted/), "fail");
+  assert.equal(verdict(cdp4, "P1", /same paths/), "fail");
+  assert.equal(verdict(cdp4, "P1", /predicted points per pointermove/), "not scored", "with an XTEST reference, information");
   assert.equal(verdict(cdp4, "P2", /whole ms/), "pass");
   assert.match(rowOf(cdp4, "P2", /whole ms/).value, /chance 0\.3/);
   assert.equal(verdict(cdp4, "P8", /phase/), "pass");
@@ -345,18 +354,18 @@ test("P1, P2, P8 and R10 on M1's numbers: the CDP form with whole-ms times 4 ms 
   assert.equal(verdict(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: 5, wholeMsShare: 0.05 } })], ref), "P2", /whole ms/), "fail");
   const one = scoreSource([stepM({ pointer: { samplesPerMove: 1, predictedPerMove: 0, handlerLagMs: 1 } })], ref);
   assert.equal(verdict(one, "P1", /samples/), "fail");
-  const xt = scoreSource(steps([[1.89, 1.84, 8.1], [1.9, 1.8, 2.3], [1.93, 2.11, 4]]), ref);
+  const xt = scoreSource(steps([[1.89, 1.84, 8.1], [1.9, 1.8, 2.3], [1.93, 2.11, 4]]), ref, { samePaths: same });
   assert.equal(verdict(xt, "R10", /P1, P2 and P8/), "pass", "the reference against itself");
 });
 
-test("P2 events later than their handler, R1/R2 a focus after the release and jumps, R9 fractional points, R11 unexplained position changes, R12 touch: each bar is 0", () => {
+test("P2 events later than their handler, R1/R2 a focus after the release and jumps, R9 fractional points, M1's unexplained position changes, R12 touch: each bar is 0", () => {
   const ref = checkReference(FIXTURE);
   const good = scoreSource([stepM({ pointer: { focusInPress: true } })], ref);
-  for (const [gap, m] of [["P2", /handler/], ["R1/R2", /focus/], ["R1/R2", /jumps/], ["R9", /fractional/], ["R11", /position/], ["R12", /touch/]] as const) {
+  for (const [gap, m] of [["P2", /handler/], ["R1/R2", /focus/], ["R1/R2", /jumps/], ["R9", /fractional/], ["M1", /position/], ["R12", /touch/]] as const) {
     assert.equal(verdict(good, gap, m), "pass", `${gap} ${m}`);
   }
   const bad = scoreSource([stepM({ touch: 1, pointer: { eventsAfterHandler: 1, focusInPress: false, jumps: 1, fractional: 2, movementMismatch: 1 } })], ref);
-  for (const [gap, m] of [["P2", /handler/], ["R1/R2", /focus/], ["R1/R2", /jumps/], ["R9", /fractional/], ["R11", /position/], ["R12", /touch/]] as const) {
+  for (const [gap, m] of [["P2", /handler/], ["R1/R2", /focus/], ["R1/R2", /jumps/], ["R9", /fractional/], ["M1", /position/], ["R12", /touch/]] as const) {
     assert.equal(verdict(bad, gap, m), "fail", `${gap} ${m}`);
   }
 });
@@ -476,4 +485,238 @@ test("the text table: a header with each source, one line for each measure, and 
   assert.equal(lines.length, 2 + xt.length);
   assert.ok(lines.some((l) => /^P1 +samples per pointermove .* ok .* FAIL/.test(l)), lines.join("\n"));
   assert.ok(lines.some((l) => /^R8 .* - +- *$/.test(l)), "no data: a dash");
+});
+
+// ================================================================ fix round 1 (review-97)
+
+test("a gap of 0 ms (equal timestamps) or of less than 0.5 ms is not a whole-ms gap", () => {
+  assert.deepEqual([isWholeMs(0), isWholeMs(0.1), isWholeMs(1), isWholeMs(0.9)], [false, false, true, true]);
+  assert.equal(wholeMsShare([0, 0, 0]), 0);
+});
+
+test("the one-sample KS bound: exact for n up to 35 (Miller's table at 5%), asymptotic above", () => {
+  near(ksCdf(1, 0.975), 0.95, 1e-9);
+  near(ksCdf(3, 0.7076), 0.95, 2e-3);
+  for (const [n, d] of [[1, 0.975], [2, 0.8419], [3, 0.7076], [5, 0.5633], [10, 0.4093], [20, 0.2941], [35, 0.2242]] as const) near(ksCritical(n), d, 2e-3);
+  near(ksBound(3), 0.7076, 2e-3);
+  near(ksBound(100), 0.1358);
+  near(ksBound(8, 8), 0.679);
+});
+
+test("the path ends at the first press in its frame: no move after the press and no move of another frame", () => {
+  const m = [...movesOf(line(6, 100, 200, 10), { perMove: 1 }), ...movesOf(line(3, 5, 5, 3, 1012), { perMove: 1, f: "box" }), ev("pointerdown", 1045, { x: 150, y: 200 }),
+    ...movesOf(line(4, 400, 200, 10, 1050), { perMove: 1 }), ev("pointerup", 1150)];
+  const p = pointerMeasures(m)!;
+  assert.deepEqual([p.path!.samples, p.path!.chordPx], [6, 50]);
+});
+
+test("K2 per letter pair: each pair's press-to-press times, the pair in lower case, keys with no character left out", () => {
+  const k = keyMeasures([key("keydown", 0, "Shift", { c: "ShiftLeft" }), key("keydown", 60, "H", { m: 8 }), key("keyup", 150, "H"), key("keyup", 160, "Shift", { c: "ShiftLeft" }),
+    key("keydown", 300, "e"), key("keyup", 380, "e"), key("keydown", 500, "y"), key("keyup", 600, "y"), key("keydown", 800, "Enter"), key("keyup", 880, "Enter"),
+    key("keydown", 1000, "h"), key("keyup", 1080, "h"), key("keydown", 1150, "e"), key("keyup", 1230, "e")])!;
+  assert.deepEqual(k.pairs, { he: [240, 150], ey: [200] });
+});
+
+test("R8: drag and dragover events between the press and the drop count with the moves that have the button down", () => {
+  const p = pointerMeasures([ev("pointerdown", 1200), ...movesOf(line(1, 300, 300, 5, 1210), { perMove: 1, bs: 1 }), ev("dragstart", 1215), ev("drag", 1250, { bs: 1 }),
+    ev("dragover", 1252, { bs: 1 }), ev("drag", 1300, { bs: 1 }), ev("dragover", 1302, { bs: 1 }), ev("drag", 1305, { bs: 0 }), ev("dragover", 1306, { bs: 0 }),
+    ev("drop", 1320), ev("drag", 1330), ev("dragend", 1340)])!;
+  assert.equal(p.heldMoves, 5, "drag events with the button up (a protocol drag: buttons 0) do not count");
+});
+
+test("R11: the jump from the page's last pointer position to the first pointer event after an activation of its window", () => {
+  const win = (e: string, t: number, f = "top") => ev(e, t, { f, tg: "[object Window]" });
+  const at = (e: string, t: number, sx: number, sy: number, f = "top") => ev(e, t, { f, x: sx, y: sy - 100, sx, sy });
+  const base = [at("pointermove", 100, 900, 700), at("mousemove", 101, 900, 700)];
+  assert.deepEqual(activationJumps([...base, win("focus", 5000), win("focus", 5001), at("pointerover", 5002, 950, 700)], { t0: 4990, t1: 6000 }), [50]);
+  assert.deepEqual(activationJumps([...base, win("focus", 5000), at("pointerover", 5002, 900, 700)], { t0: 4990, t1: 6000 }), [0]);
+  assert.deepEqual(activationJumps([...base, win("focus", 5000), win("blur", 5001, "box"), at("pointerover", 5002, 950, 700)], { t0: 4990, t1: 6000 }), [], "the focus came from the box: no activation");
+  assert.deepEqual(activationJumps([...base, win("focus", 5000), at("pointerover", 5002, 950, 700)], { t0: 6000, t1: 7000 }), [], "outside the step");
+  assert.deepEqual(activationJumps([win("focus", 5000), at("pointerover", 5002, 950, 700)], { t0: 4990, t1: 6000 }), [], "no position before");
+});
+
+test("wheel measures: a wheel event with no deltaMode gives none, never mode 0", () => {
+  assert.deepEqual(wheelMeasures([ev("wheel", 0, { dy: 120, wdy: -120, dx: 0 })])!.deltaModes, [null]);
+});
+
+test("lost beacon batches: the gaps in the batches' sequence numbers", () => {
+  assert.deepEqual([lostBatches([0, 1, 2, 4, 5]), lostBatches([]), lostBatches([1, 2]), lostBatches([0, 0, 1])], [1, 0, 1, 0]);
+});
+
+test("a step's event count: the records of events (with isTrusted), not the page's own records", () => {
+  const s = measureStep([ev("click", 1000), ev("keydown", 1100, { k: "a", c: "KeyA" }), { e: "layout", f: "top", t: 1200 }, { e: "seq", f: "top", t: 1300, n: 0 }],
+    { name: "c", source: "x", kind: "click", ok: true, t0: 1000, t1: 1400, path: "m1-b" });
+  assert.deepEqual([s.events, s.path], [2, "m1-b"]);
+});
+
+test("the reference file: inherited names (constructor, toString, __proto__) with any value are refused; an array where a number is expected is refused", () => {
+  const text = JSON.stringify(FIXTURE);
+  for (const name of ["constructor", "toString", "__proto__"]) {
+    for (const value of ['"Mozilla/5.0 (X11; Linux x86_64)"', "1", "{}"]) {
+      for (const [part, re] of [["", new RegExp(`reference: ${name}: not a field`)], ["pointer", new RegExp(`reference: pointer\\.${name}: not a field`)], ["keys", /reference: keys\./], ["wheel", /reference: wheel\./]] as const) {
+        const edited = part ? text.replace(`"${part}":{`, `"${part}":{"${name}":${value},`) : text.replace(/^\{/, `{"${name}":${value},`);
+        assert.throws(() => checkReference(JSON.parse(edited)), re, `${part || "top"}.${name} = ${value}`);
+      }
+    }
+  }
+  const bad = (edit: (x: any) => void, want: RegExp) => { const x = structuredClone(FIXTURE); edit(x); assert.throws(() => checkReference(x), want); };
+  bad((x) => { x.pointer.wholeMsShare = [1]; }, /reference: pointer\.wholeMsShare: not a number/);
+  bad((x) => { x.wheel.notchPx = [120]; }, /reference: wheel\.notchPx: not a number/);
+});
+
+test("the reference file: press to press per letter pair (optional): two characters for each key, a distribution for each value", () => {
+  const ok = refWith((r) => { r.keys.downToDownByPairMs = { th: [100, 110, 120, 130, 140], "e ": { lognormal: [200, 0.4] } }; });
+  assert.deepEqual(Object.keys(ok.keys.downToDownByPairMs!), ["th", "e "]);
+  const bad = (pairs: unknown, want: RegExp) => assert.throws(() => refWith((r) => { r.keys.downToDownByPairMs = pairs; }), want);
+  bad({ the: [100] }, /reference: keys\.downToDownByPairMs\.the: not a letter pair/);
+  bad({ th: "x" }, /reference: keys\.downToDownByPairMs\.th: /);
+  bad({ th: [] }, /reference: keys\.downToDownByPairMs\.th: no values/);
+  bad(JSON.parse('{"__proto__": [1, 2]}'), /reference: keys\.downToDownByPairMs\.__proto__: not a letter pair/);
+  bad({}, /reference: keys\.downToDownByPairMs: no pairs/);
+  bad([1, 2], /reference: keys\.downToDownByPairMs: /);
+});
+
+test("K2 per letter pair: KS for each pair with 5 values or more in both; the pooled row stays", () => {
+  const like = [100, 110, 120, 130, 140], slow = [300, 310, 320, 330, 340];
+  const ref = refWith((r) => { r.keys.downToDownByPairMs = { th: like, he: like, zz: like }; });
+  const typing = (pairs: Record<string, number[]>) => scoreSource([stepM({ kind: "type", pointer: null, keys: keysM({ pairs }), text: textM() })], ref);
+  assert.equal(verdict(typing({ th: like.map((v) => v + 1), he: like.map((v) => v + 2), xy: [1] }), "K2", /per letter pair/), "pass");
+  const one = typing({ th: like.map((v) => v + 1), he: slow });
+  assert.equal(verdict(one, "K2", /per letter pair/), "fail");
+  assert.match(rowOf(one, "K2", /per letter pair/).value, /1 of 2 pairs pass/);
+  assert.equal(verdict(typing({ th: like.slice(0, 4) }), "K2", /per letter pair/), "no data", "4 values: too few");
+  assert.equal(verdict(scoreSource([stepM({ kind: "type", pointer: null, keys: keysM({ pairs: { th: like } }), text: textM() })], checkReference(FIXTURE)), "K2", /per letter pair/), "no data", "no pair in the reference");
+  assert.equal(verdict(one, "K2", /press to press \(all pairs/), "pass", "the pooled row");
+});
+
+test("R11 and M1: the jump at an activation (bar 0), and the position changes that the movement does not explain under their own name", () => {
+  const ref = checkReference(FIXTURE);
+  assert.equal(verdict(scoreSource([stepM({ activationJumps: [0] })], ref), "R11", /activation/), "pass");
+  assert.equal(verdict(scoreSource([stepM({ activationJumps: [0, 50] })], ref), "R11", /activation/), "fail");
+  assert.equal(verdict(scoreSource([stepM()], ref), "R11", /activation/), "no data");
+  assert.equal(verdict(scoreSource([stepM({ pointer: { movementMismatch: 1 } })], ref), "M1", /movement does not explain/), "fail");
+});
+
+test("no row passes on records that are not there: R3/R14, R7/R15 and R12 with no events, P7's ratio with no ratio, a missing deltaMode", () => {
+  const ref = checkReference(FIXTURE);
+  const empty = scoreSource([stepM({ kind: "type", pointer: null, keys: null, text: null, events: 0 })], ref);
+  assert.deepEqual([verdict(empty, "R3/R14", /focusin/), verdict(empty, "R12", /touch/), verdict(empty, "R7/R15", /untrusted/)], ["no data", "no data", "no data"]);
+  const wheel = (w: Partial<NonNullable<StepMeasures["wheel"]>>) => scoreSource([stepM({ kind: "wheel", pointer: null,
+    wheel: { events: 1, absDeltaY: [120], ratios: [-1], deltaModes: [0], gapsMs: [], scrolls: 1, scrollsWithNoWheelOrKey: 0, ...w } })], ref);
+  assert.equal(verdict(wheel({ absDeltaY: [0], ratios: [] }), "P7", /wheelDeltaY/), "no data");
+  assert.equal(verdict(wheel({ deltaModes: [null as unknown as number] }), "P7", /notch/), "fail");
+});
+
+test("P1, P2 and P8 need 30 pointermoves (P2: 30 sample gaps) and give no data below; P2 against a reference share below 1 is a z test", () => {
+  const ref = checkReference(FIXTURE);
+  const few = scoreSource([stepM({ pointer: { moves: 1, samplesPerMove: 2, predictedPerMove: 2, sampleGaps: 1, wholeMsGaps: 1, wholeMsShare: 1, handlerLagMs: 4 } })], ref);
+  for (const [gap, m] of [["P1", /samples/], ["P2", /whole ms/], ["P8", /phase/], ["R10", /together/]] as const) assert.equal(verdict(few, gap, m), "no data", `${gap} ${m}`);
+  assert.equal(verdict(scoreSource([stepM({ pointer: { moves: 30, sampleGaps: 30, wholeMsGaps: 30 } })], ref), "P2", /whole ms/), "pass");
+  assert.equal(verdict(scoreSource([stepM({ pointer: { moves: 60, sampleGaps: 60, wholeMsGaps: 0, wholeMsShare: 0 } })], ref), "P2", /whole ms/), "fail", "all gaps 0 ms");
+  const half = refWith((r) => { r.pointer.wholeMsShare = 0.5; });
+  assert.equal(verdict(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: 52 } })], half), "P2", /whole ms/), "pass");
+  assert.equal(verdict(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: 90 } })], half), "P2", /whole ms/), "fail");
+});
+
+test("a failed step is left out of every row, and counted; a source with only failed steps has no data", () => {
+  const ref = checkReference(FIXTURE);
+  const rows = scoreSource([stepM(), stepM({ ok: false, touch: 3, pointer: { jumps: 5 } })], ref);
+  assert.deepEqual([verdict(rows, "R1/R2", /jumps/), verdict(rows, "R12", /touch/)], ["pass", "pass"]);
+  assert.match(rowOf(rows, "all", /failed steps/).value, /^1$/);
+  const only = scoreSource([stepM({ ok: false })], ref);
+  assert.deepEqual([verdict(only, "P1", /samples/), verdict(only, "R12", /touch/), verdict(only, "R7/R15", /untrusted/)], ["no data", "no data", "no data"]);
+});
+
+test("lost beacon batches make every row of the source no data", () => {
+  const rows = scoreSource([stepM()], checkReference(FIXTURE), { lostBatches: 2 });
+  assert.ok(rows.filter((r) => r.gap !== "all").every((r) => r.verdict === "no data"), rows.filter((r) => r.verdict !== "no data").map((r) => r.measure).join(", "));
+  assert.match(rowOf(rows, "P1", /samples/).value, /2 batches lost/);
+});
+
+test("P1's predicted points: the bar of design 9.1 is XTEST's per-path range on the same paths with no margin; the range row is information with an XTEST reference", () => {
+  const ref = refWith((r) => { r.pointer.predictedPerMove = [1.8, 2.11]; });
+  const steps = (v: number[]) => v.map((p, i) => stepM({ path: `m1-${i}`, pointer: { predictedPerMove: p } }));
+  const same = { "m1-0": 1.77, "m1-1": 1.8, "m1-2": 2.07 };
+  const cdp = scoreSource(steps([2.47, 2.18, 2.55]), ref, { samePaths: same });
+  assert.equal(verdict(cdp, "P1", /same paths/), "fail");
+  assert.equal(verdict(scoreSource(steps([1.8, 1.9, 2.0]), ref, { samePaths: same }), "P1", /same paths/), "pass");
+  assert.equal(verdict(scoreSource(steps([2.1, 2.1, 2.1]), ref, { samePaths: same }), "P1", /same paths/), "fail", "no margin: 2.1 is above 2.07");
+  assert.equal(verdict(scoreSource([stepM()], ref, { samePaths: same }), "P1", /same paths/), "no data", "no step on those paths");
+  assert.equal(verdict(cdp, "P1", /predicted points per pointermove/), "not scored");
+  const person = refWith((r) => { r.source = 2; r.pointer.predictedPerMove = [1.8, 2.11]; });
+  assert.equal(verdict(scoreSource(steps([2.12, 2.12, 2.12]), person), "P1", /predicted points per pointermove/), "fail", "no margin: 2.12 is above 2.11");
+});
+
+test("R4's bar says what the verdict checks", () => {
+  const rows = scoreSource([stepM({ kind: "type", pointer: null, keys: keysM(), text: textM() })], checkReference(FIXTURE));
+  assert.match(rowOf(rows, "R4", /key events/).bar, /every text input of 40 characters or less: one character, with a key event/);
+});
+
+// ---------------------------------------------------------------- the run's cleanup (run.ts uses cleanup.ts)
+
+const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catch { return true; } };
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("the cleanup stops the children by pid, then removes its paths; a path whose condition says keep stays", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-ih-"));
+  const kids: ChildProcess[] = [];
+  try {
+    const c = new Cleanup({ termMs: 2000 });
+    for (let i = 0; i < 2; i++) { const k = spawn("sleep", ["60"], { stdio: "ignore" }); kids.push(k); c.child(k); }
+    for (const name of ["profile", "state", "keep"]) { mkdirSync(join(dir, name)); writeFileSync(join(dir, name, "x"), "x"); }
+    c.path(join(dir, "profile")); c.path(join(dir, "state")); c.path(join(dir, "keep"), () => false);
+    await c.stop();
+    assert.ok(kids.every((k) => k.exitCode !== null || k.signalCode !== null), "both children ended");
+    assert.deepEqual([existsSync(join(dir, "profile")), existsSync(join(dir, "state")), existsSync(join(dir, "keep"))], [false, false, true]);
+    const k = spawn("sleep", ["60"], { stdio: "ignore" }); kids.push(k);
+    const d = new Cleanup(); d.child(k); d.path(join(dir, "keep"));
+    d.stopNow();
+    assert.equal(existsSync(join(dir, "keep")), false, "stopNow removes at once");
+    for (let i = 0; i < 50 && k.exitCode === null && k.signalCode === null; i++) await sleepMs(50);
+    assert.ok(k.signalCode === "SIGTERM", "stopNow sends SIGTERM");
+  } finally { for (const k of kids) if (k.exitCode === null && k.signalCode === null) k.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("on SIGINT, SIGTERM and SIGHUP a driver with the cleanup stops its child and removes its folders before it exits", { skip: process.platform !== "linux" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-ih-"));
+  const script = join(dir, "driver.mjs");
+  writeFileSync(script, `import { Cleanup } from ${JSON.stringify(new URL("./live/input-harness/cleanup.ts", import.meta.url).pathname)};
+import { spawn } from "node:child_process"; import { mkdirSync, writeFileSync } from "node:fs";
+const d = process.argv[2], c = new Cleanup({ termMs: 2000 });
+const kid = spawn("sleep", ["60"], { stdio: "ignore" }); c.child(kid);
+mkdirSync(d + "/profile"); writeFileSync(d + "/profile/x", "x"); c.path(d + "/profile");
+c.onSignals();
+process.stdout.write("ready " + kid.pid + "\\n");
+setInterval(() => {}, 1000);
+`);
+  const left: number[] = [];
+  try {
+    for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]] as const) {
+      const run = join(dir, sig);
+      mkdirSync(run);
+      const drv = spawn(process.execPath, [script, run], { stdio: ["ignore", "pipe", "inherit"] });
+      const pid = await new Promise<number>((resolve, reject) => {
+        let out = "";
+        drv.stdout!.on("data", (b) => { out += b; const m = /ready (\d+)/.exec(out); if (m) resolve(Number(m[1])); });
+        drv.once("exit", () => reject(new Error(`the driver ended early: ${out}`)));
+      });
+      left.push(pid);
+      assert.equal(existsSync(join(run, "profile")), true);
+      const exit = new Promise<number | null>((r) => drv.once("exit", (c) => r(c)));
+      drv.kill(sig);
+      assert.equal(await exit, code, `${sig}: the exit code`);
+      assert.equal(gone(pid), true, `${sig}: the child ${pid} is gone`);
+      assert.equal(existsSync(join(run, "profile")), false, `${sig}: the profile is removed`);
+    }
+  } finally {
+    for (const pid of left) if (!gone(pid)) process.kill(pid, "SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a drag step counts in R8 only: Chromium sends no pointer event during a drag, so the first move after the drop jumps", () => {
+  const ref = checkReference(FIXTURE);
+  const rows = scoreSource([stepM(), stepM({ kind: "drag", pointer: { jumps: 1, samplesPerMove: 1, heldMoves: 119 } })], ref);
+  assert.deepEqual([verdict(rows, "R1/R2", /jumps/), verdict(rows, "P1", /samples/), verdict(rows, "R8", /button down/)], ["pass", "pass", "pass"]);
+  assert.equal(rowOf(rows, "P1", /samples/).value, "1.90");
 });

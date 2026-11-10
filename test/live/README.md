@@ -126,7 +126,8 @@ harness guard. The page is the input research's recorder on `rec.localhost`, wit
 The scenarios:
 
 - `source`: the reference, real X input (XTEST) at 125 Hz, then the design's M1 paths as CDP moves in
-  four forms of the `timestamp`.
+  four forms of the `timestamp`, the design's form on XTEST's own paths (`cdp-4ms-same`), and a drag with
+  XTEST.
 - `agent-browser`: today's input of `src/input.ts`, through agent-browser's commands.
 - `playwright`: plain Playwright. It needs `playwright-core` in a scratch folder, never in `package.json`.
   Without it, the run skips this scenario and says so.
@@ -140,11 +141,43 @@ node test/live/input-harness/run.ts --rescore $S/out/run-XXXXXX/results.json [--
 The run writes `results.json` (the page's records, which hold its state: keep them out of the
 repository), `reference.json`, `report.json` and `report.txt`, and prints the table.
 
+The cleanup (`cleanup.ts`): at its exit, and on SIGINT, SIGTERM and SIGHUP, the run stops the processes
+that it started by their pids, then removes its Chromium profiles, agent-browser's state folder, its
+socket folder, its run folder when it holds no `results.json` (a refusal or an interruption), and the out
+folder when the run made it and it is empty. A bridge that does not start stops its own Chromium and
+removes its profile.
+
 The reference: until part B (board ab-t30.7) exists, the run builds it from its own XTEST steps, and
 takes the values that XTEST cannot give from the literature (`LITERATURE` in `reference.ts`). Part B's
 numbers replace it through one file: `--reference FILE`. The file holds numbers only, in the fields of
 format 1 (the head of `reference.ts`; the fixture is `reference.fixture.json`). `checkReference` refuses
-any other field and any value that is not a number, so no user agent, screen or text can be in it.
+any other field, by its own name (so also `constructor`, `toString` and `__proto__`), and any value that
+is not a number, so no user agent, screen or text can be in it. The only names that are not fields are
+the letter pairs of the optional `keys.downToDownByPairMs`: two characters each, with numbers as values.
 
-`test/input-harness.test.ts` (in `npm test`) tests the statistics, the measures, the reference file and
-each bar with no browser.
+How the rows read:
+
+- A row is `pass`, `fail`, `not scored` (measured; its bar waits for a decision, or it is information)
+  or `no data`. No row passes on records that are not there: a step that failed is left out (the row
+  "failed steps left out" counts it), a row with no event records has no data, and a scenario that lost
+  a beacon batch (the recorder numbers its batches) has no data in every row.
+- P1, P2 and P8 need 30 pointermoves (P2: 30 sample gaps); below that, they have no data.
+- P1's predicted points: the bar of design 9.1 is XTEST's per-path range on the same paths, with no
+  margin: the row "predicted points on XTEST's same paths" (the `cdp-4ms-same` source now, the pointer
+  build's own replay later). The range row over all paths is information with an XTEST reference, and
+  the bar (with no margin) with a person's reference. P1's samples: XTEST's per-path range widened by
+  0.15 (the lead's choice; design section 16, point 6).
+- K2: the design's measure is per letter pair. The per-pair row runs a KS test for each pair with 5
+  values or more in both the source and the reference. Until part B gives values for each pair, it has
+  no data, and the pooled row counts: the literature's value (a mean of 239 ms and an SD of 112 ms)
+  pools all pairs. With part B's values, both rows count.
+- R8 counts the pointer moves and the `drag` and `dragover` events with the button down between the
+  press and the drop (Chromium sends no pointer event after `dragstart`; a real drag's drag events have
+  `buttons` 1, a protocol drag's have 0). A drag step counts in R8 only: its pointer stream is cut by the
+  drag, so the first move after the drop jumps.
+- R11 is the jump from the page's last pointer position to the first pointer event after an activation
+  of its window (bar 0). M1's check, the position changes that the movement does not explain, is its
+  own row ("M1").
+
+`test/input-harness.test.ts` (in `npm test`) tests the statistics, the measures, the reference file,
+each bar and the cleanup (with stand-in children and real signals) with no browser.

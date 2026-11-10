@@ -42,9 +42,50 @@ export function ks1(a: readonly number[], cdf: (x: number) => number): number | 
 /** c(alpha) of the Kolmogorov distribution at alpha = 0.05. */
 export const KS_C_05 = 1.358;
 
-/** The asymptotic bound of a KS statistic at 5%: c sqrt(1/n) for one sample against a model, c sqrt((n + m) / (n m)) for two. */
+/** One sample against a model: the exact bound for n up to this (the asymptotic bound is too lenient for a small n: 0.784 for n = 3, where the exact one is 0.708). */
+export const KS_EXACT_MAX = 35;
+
+function matMul(a: number[][], b: number[][]): number[][] {
+  const m = a.length, out = a.map(() => new Array<number>(m).fill(0));
+  for (let i = 0; i < m; i++) for (let k = 0; k < m; k++) { const v = a[i][k]; if (v) for (let j = 0; j < m; j++) out[i][j] += v * b[k][j]; }
+  return out;
+}
+
+/**
+ * P(D_n < d) of the one-sample KS statistic, exact: the method of Marsaglia, Tsang and Wang (2003), "Evaluating
+ * Kolmogorov's distribution", J. Stat. Softw. 8(18), with no scaling (enough for n up to KS_EXACT_MAX).
+ */
+export function ksCdf(n: number, d: number): number {
+  if (d <= 0) return 0;
+  if (d >= 1) return 1;
+  const k = Math.floor(n * d) + 1, m = 2 * k - 1, h = k - n * d;
+  const H = Array.from({ length: m }, (_, i) => Array.from({ length: m }, (_, j) => (i - j + 1 >= 0 ? 1 : 0)));
+  for (let i = 0; i < m; i++) { H[i][0] -= h ** (i + 1); H[m - 1][i] -= h ** (m - i); }
+  H[m - 1][0] += 2 * h - 1 > 0 ? (2 * h - 1) ** m : 0;
+  for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) if (i - j + 1 > 0) for (let g = 1; g <= i - j + 1; g++) H[i][j] /= g;
+  let q: number[][] | null = null, b = H, e = n;
+  while (e > 0) { if (e & 1) q = q ? matMul(q, b) : b; e >>= 1; if (e) b = matMul(b, b); }
+  let s = q![k - 1][k - 1];
+  for (let i = 1; i <= n; i++) s = (s * i) / n;
+  return s;
+}
+
+const critical = new Map<number, number>();
+
+/** The exact critical value of the one-sample KS statistic at 5% (two-sided): the d with P(D_n >= d) = 0.05 (Miller's table, 1956). */
+export function ksCritical(n: number): number {
+  const kept = critical.get(n);
+  if (kept !== undefined) return kept;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (ksCdf(n, mid) < 0.95) lo = mid; else hi = mid; }
+  critical.set(n, hi);
+  return hi;
+}
+
+/** The bound of a KS statistic at 5%. One sample against a model: exact for n up to KS_EXACT_MAX, else c / sqrt(n). Two samples: the asymptotic c sqrt((n + m) / (n m)). */
 export function ksBound(n: number, m?: number): number {
-  return m === undefined ? KS_C_05 / Math.sqrt(n) : KS_C_05 * Math.sqrt((n + m) / (n * m));
+  if (m !== undefined) return KS_C_05 * Math.sqrt((n + m) / (n * m));
+  return n <= KS_EXACT_MAX ? ksCritical(n) : KS_C_05 / Math.sqrt(n);
 }
 
 /** erf by Abramowitz and Stegun 7.1.26 (error below 1.5e-7). */
@@ -69,13 +110,13 @@ export function lognormalOf(mu: number, sd: number): [number, number] {
   return [mu / Math.sqrt(1 + (sd / mu) ** 2), Math.sqrt(v)];
 }
 
-/** A gap counts as a whole millisecond within 0.15 ms of a whole number (the research's rule, section 2). */
+/** A gap counts as a whole millisecond within 0.15 ms of a whole number of 1 ms or more (the research's rule, section 2; a gap of 0 ms is two equal times, not a whole ms). */
 export const WHOLE_MS_TOL = 0.15;
 /** The step of the page's clock (performance.now() and event.timeStamp are coarsened to 0.1 ms). */
 export const CLOCK_STEP_MS = 0.1;
 
 export function isWholeMs(gap: number, tol = WHOLE_MS_TOL): boolean {
-  return Math.abs(gap - Math.round(gap)) <= tol + 1e-9;
+  return Math.round(gap) >= 1 && Math.abs(gap - Math.round(gap)) <= tol + 1e-9;
 }
 
 export function wholeMsShare(gaps: readonly number[], tol = WHOLE_MS_TOL): number | null {

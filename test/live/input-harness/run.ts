@@ -32,7 +32,7 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -47,7 +47,8 @@ import { commands } from "../../../src/commands.ts";
 import type { BrowserOptions } from "../../../src/options.ts";
 import { planMove, pointAt, seededRandom } from "../../../src/record.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
-import { measureStep, type Rec, type StepKind, type StepMark, type StepMeasures } from "./measures.ts";
+import { Cleanup } from "./cleanup.ts";
+import { lostBatches, measureStep, type Rec, type StepKind, type StepMark, type StepMeasures } from "./measures.ts";
 import { buildReference, checkReference, type Reference } from "./reference.ts";
 import { scoreSource, textTable, type Row } from "./score.ts";
 
@@ -64,25 +65,34 @@ try {
 
 /** The sources in the report's order: the reference first. */
 const ORDER = ["xtest", "cdp-4ms", "cdp-4ms-same", "cdp-send", "cdp-frac", "cdp-none", "agent-browser", "playwright"];
-type Scenario = { t0: number; t1: number; notes?: unknown; error?: string; marks: StepMark[]; recs: Rec[] };
+type Scenario = { t0: number; t1: number; notes?: unknown; error?: string; marks: StepMark[]; recs: Rec[]; lostBatches?: number };
 type Results = { chrome?: string; display?: number; playwright?: string | null; scenarios: Record<string, Scenario> };
 
-/** Measure every step, take the reference (a file, or the run's XTEST steps), and score each source. */
-function scoreRun(out: Results, referenceFile?: string): { reference: Reference; scored: Record<string, Row[]>; steps: Record<string, StepMeasures[]> } {
-  const steps: Record<string, StepMeasures[]> = {};
-  for (const sc of Object.values(out.scenarios)) for (const m of sc.marks) (steps[m.source] ??= []).push(measureStep(sc.recs, m));
+/**
+ * Measure every step, take the reference (a file, or the run's XTEST steps), and score each source. P1's same-path row
+ * gets XTEST's predicted points on each of its paths (the steps with a path id); a scenario with lost beacon batches
+ * makes its sources' rows "no data".
+ */
+function scoreRun(out: Results, referenceFile?: string): { reference: Reference; scored: Record<string, Row[]>; steps: Record<string, StepMeasures[]>; lost: Record<string, number> } {
+  const steps: Record<string, StepMeasures[]> = {}, lost: Record<string, number> = {};
+  for (const sc of Object.values(out.scenarios)) {
+    const n = sc.lostBatches ?? lostBatches(sc.recs.filter((r) => r.e === "seq").map((r) => r.n));
+    for (const m of sc.marks) { (steps[m.source] ??= []).push(measureStep(sc.recs, m)); lost[m.source] = n; }
+  }
   const reference = referenceFile ? checkReference(JSON.parse(readFileSync(referenceFile, "utf8"))) : buildReference(steps.xtest ?? []);
+  const samePaths: Record<string, number> = {};
+  for (const s of steps.xtest ?? []) if (s.ok && s.path && s.pointer?.predictedPerMove != null) samePaths[s.path] = s.pointer.predictedPerMove;
   const names = Object.keys(steps).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
-  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference)])), steps };
+  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { samePaths, lostBatches: lost[n] })])), steps, lost };
 }
 
 function writeReport(dir: string, out: Results, referenceFile?: string): string {
-  const { reference, scored, steps } = scoreRun(out, referenceFile);
+  const { reference, scored, steps, lost } = scoreRun(out, referenceFile);
   const failed = Object.values(out.scenarios).flatMap((sc) => sc.marks.filter((m) => !m.ok).map((m) => `${m.source}: ${m.name}: ${m.error}`));
   const errors = Object.entries(out.scenarios).filter(([, sc]) => sc.error).map(([n, sc]) => `${n}: ${sc.error!.split("\n")[0]}`);
   writeFileSync(join(dir, "reference.json"), JSON.stringify(reference, null, 1) + "\n");
   writeFileSync(join(dir, "report.json"), JSON.stringify({ chrome: out.chrome, playwright: out.playwright, display: out.display, referenceFile: referenceFile ? "given" : "the run's XTEST steps",
-    failedSteps: failed, scenarioErrors: errors, sources: scored, steps }, null, 1) + "\n");
+    failedSteps: failed, scenarioErrors: errors, lostBatches: lost, sources: scored, steps }, null, 1) + "\n");
   const text = textTable(scored) + (failed.length ? `\nsteps that failed:\n${failed.map((f) => `  ${f}`).join("\n")}\n` : "") + (errors.length ? `\nscenario errors:\n${errors.map((f) => `  ${f}`).join("\n")}\n` : "");
   writeFileSync(join(dir, "report.txt"), text);
   return text;
@@ -121,25 +131,30 @@ if (ONLY.includes("playwright")) {
   }
 }
 if (!ONLY.length) refuse("no scenario left to run");
+// The cleanup (cleanup.ts): at the exit, and on SIGINT, SIGTERM and SIGHUP, the run stops the processes that it started by
+// their pids, then removes what it made: its socket folder, its Chromium profiles and agent-browser's state folder, its run
+// folder when it holds no results.json (a refusal or an interruption), and the out folder when the run made it and it is empty.
+const cleanup = new Cleanup();
+process.on("exit", () => cleanup.stopNow());
+cleanup.onSignals();
 const OUT = resolve(values["out-dir"]!);
+if (!existsSync(OUT)) cleanup.path(OUT, () => { try { return readdirSync(OUT).length === 0; } catch { return false; } });
 mkdirSync(OUT, { recursive: true });
 const RUN = mkdtempSync(join(OUT, "run-"));
+cleanup.path(RUN, () => !existsSync(join(RUN, "results.json")));
 const SOCKS = mkdtempSync(join(tmpdir(), "abih-"));
-process.on("exit", () => rmSync(SOCKS, { recursive: true, force: true }));
+cleanup.path(SOCKS);
 
 // ------------------------------------------------------------------ Xvfb (own display, own X authority)
 const field = (b: Buffer) => { const n = Buffer.alloc(2); n.writeUInt16BE(b.length); return Buffer.concat([n, b]); };
 const xauth = join(RUN, "Xauthority");
 writeFileSync(xauth, Buffer.concat([Buffer.from([0xff, 0xff]), field(Buffer.alloc(0)), field(Buffer.from(String(DISPLAY))),
   field(Buffer.from("MIT-MAGIC-COOKIE-1")), field(randomBytes(16))]), { mode: 0o600 });
-const children: ChildProcess[] = [];
-process.on("exit", () => { for (const c of children.reverse()) if (c.exitCode === null && c.signalCode === null) c.kill("SIGTERM"); });
-for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
 const harness = await harnessGuard("input-harness");
 if (existsSync(`/tmp/.X11-unix/X${DISPLAY}`)) refuse(`display :${DISPLAY} is in use; pass --display N`);
 const SCREEN = { w: 1920, h: 1080 };
 const xvfb = spawn("Xvfb", [`:${DISPLAY}`, "-auth", xauth, "-nolisten", "tcp", "-screen", "0", `${SCREEN.w}x${SCREEN.h}x24`], { stdio: "ignore" });
-children.push(xvfb);
+cleanup.child(xvfb);
 harness.track(xvfb.pid, "Xvfb");
 for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY}`) && xvfb.exitCode === null; i++) await sleep(100);
 await sleep(300);
@@ -148,7 +163,7 @@ const XENV: NodeJS.ProcessEnv = { ...process.env, DISPLAY: `:${DISPLAY}`, XAUTHO
 delete XENV.WAYLAND_DISPLAY; delete XENV.XDG_SESSION_TYPE;
 // agent-browser's own commands reach the X pointer of this run's Xvfb only (input.ts, xAccess): never another display.
 process.env.DISPLAY = `:${DISPLAY}`; process.env.XAUTHORITY = xauth; delete process.env.WAYLAND_DISPLAY;
-say(`Xvfb :${DISPLAY} pid ${xvfb.pid}; run folder ${RUN}`);
+say(`driver pid ${process.pid}; Xvfb :${DISPLAY} pid ${xvfb.pid}; run folder ${RUN}`);
 
 // ------------------------------------------------------------------ the local server: the recorder, the box, the log
 let scenarioName = "none";
@@ -164,7 +179,9 @@ const server = createServer((req, res) => {
     req.setEncoding("utf8");
     req.on("data", (d) => { body += d; });
     req.on("end", () => {
-      try { const list = JSON.parse(body) as Rec[]; (recs[scenarioName] ??= []).push(...list); } catch { /* a broken beacon */ }
+      // A batch goes to the scenario that its page names (its seq record's run label), so a late batch is not filed under the
+      // next scenario; a broken beacon is lost, and its gap in the sequence shows it.
+      try { const list = JSON.parse(body) as Rec[]; const run = list.find((r) => r.e === "seq")?.run; (recs[typeof run === "string" && run ? run : scenarioName] ??= []).push(...list); } catch { /* a broken beacon */ }
       res.writeHead(204).end();
     });
     return;
@@ -214,7 +231,7 @@ const xAt = (p: Pt): [string, string] => { const o = origin(); return [String(Ma
 
 // ------------------------------------------------------------------ marks and steps
 const marks: Record<string, StepMark[]> = {};
-async function step(source: string, kind: StepKind, name: string, fn: () => Promise<unknown>, o: { width?: number; limitMs?: number; settle?: number } = {}): Promise<void> {
+async function step(source: string, kind: StepKind, name: string, fn: () => Promise<unknown>, o: { width?: number; limitMs?: number; settle?: number; path?: string } = {}): Promise<void> {
   const t0 = now(), limit = o.limitMs ?? 20_000;
   let ok = true, error: string | undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -222,7 +239,7 @@ async function step(source: string, kind: StepKind, name: string, fn: () => Prom
   catch (e) { ok = false; error = String((e as Error).message ?? e).split("\n")[0].slice(0, 240); }
   finally { clearTimeout(timer); }
   const t1 = now();
-  (marks[scenarioName] ??= []).push({ name, source, kind, ok, t0, t1, ...(o.width ? { width: o.width } : {}), ...(error ? { error } : {}) });
+  (marks[scenarioName] ??= []).push({ name, source, kind, ok, t0, t1, ...(o.width ? { width: o.width } : {}), ...(o.path ? { path: o.path } : {}), ...(error ? { error } : {}) });
   say(`${source}: ${name} ${ok ? "ok" : `FAILED: ${error}`} (${Math.round(t1 - t0)} ms)`);
   await sleep(o.settle ?? 700);
 }
@@ -282,7 +299,8 @@ class Chromium {
     mkdirSync(this.dir, { recursive: true });
     const fd = openSync(join(RUN, `chrome-${name}.log`), "a");
     this.proc = spawn(CHROME, [...BASE_ARGS, `--user-data-dir=${this.dir}`, ...urls], { env: XENV, stdio: ["ignore", fd, fd, "pipe", "pipe"] });
-    children.push(this.proc);
+    cleanup.child(this.proc);
+    cleanup.path(this.dir);
     harness.track(this.proc.pid, "Chromium");
     // agent-browser takes agent mode's endpoint form only (ws+unix://); the run folder's path is too long for a socket.
     this.sock = join(SOCKS, `${name}.sock`);
@@ -353,7 +371,7 @@ class Chromium {
 }
 async function startChrome(name: string, urls: string[]): Promise<Chromium> {
   const c = new Chromium(name, urls);
-  await c.listen();
+  try { await c.listen(); } catch (e) { await c.stop(); throw e; } // a bridge that did not start: its Chromium stops and its profile goes
   return c;
 }
 /** A tiny CDP client over the bridge (no Playwright): the CDP forms' own calls. */
@@ -395,7 +413,8 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
           const w = widthOf(ids[i]), pts = await plan(starts[i], centre(ids[i]), round === 0 ? m1 : random, 24);
           if (round === 0) m1Paths.push(pts);
           xdo(["mousemove", ...xAt(starts[i])]); await sleep(400);
-          await step("xtest", "click", `x: ${round === 0 ? "M1's " : ""}path at 125 Hz to #${ids[i]} (${pts.length} moves), press 90 ms`, async () => script([...pathLines(pts), ...press(90)]), { width: w });
+          await step("xtest", "click", `x: ${round === 0 ? "M1's " : ""}path at 125 Hz to #${ids[i]} (${pts.length} moves), press 90 ms`, async () => script([...pathLines(pts), ...press(90)]),
+            { width: w, ...(round === 0 ? { path: `m1-${ids[i]}` } : {}) });
         }
       }
       for (const from of [{ x: 900, y: 520 }, { x: 260, y: 400 }]) {
@@ -468,10 +487,20 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
             await send("Input.dispatchMouseEvent", { type: "mousePressed", x: end.x, y: end.y, button: "left", buttons: 1, clickCount: 1, force: 0.5, ...extra() });
             await sleep(90);
             await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: end.x, y: end.y, button: "left", buttons: 0, clickCount: 1, ...extra() });
-          }, { width: w });
+          }, { width: w, ...(source === "cdp-4ms-same" ? { path: `m1-${ids[i]}` } : {}) });
         }
       }
       cdp.close();
+      // R8 with real X input: a drag of #drag onto #drop (the page does not accept the drop), last, after the CDP forms.
+      {
+        await sleep(300);
+        const from = centre("drag"), to = centre("drop"), pts = await plan(from, to, random, 24);
+        xdo(["mousemove", ...xAt({ x: from.x, y: from.y + 30 })]); await sleep(300);
+        script([...pathLines(await plan({ x: from.x, y: from.y + 30 }, from, random, 24))]); await sleep(300);
+        await step("xtest", "drag", `x: press on #drag, path at 125 Hz to #drop (${pts.length} moves), release`, async () => {
+          script(["mousedown 1", "sleep 0.120", ...pathLines(pts), "sleep 0.150", "mouseup 1"]); await sleep(400);
+        }, { limitMs: 20_000 });
+      }
       return {};
     } finally { await c.stop(); }
   },
@@ -480,6 +509,7 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
   async "agent-browser"() {
     const c = await startChrome("agent-browser", [`http://rec.localhost:${PORT}/blank.html`]);
     const stateDir = join(RUN, "state-agent-browser");
+    cleanup.path(stateDir);
     try {
       const o: BrowserOptions = { stateDir, cdpUrl: c.cdpUrl, allow: ["rec.localhost", "box.localhost"], commandName: "input harness",
         log: (l) => say(/^agent-browser\b/.test(l) ? l : `agent-browser: ${l}`) };
@@ -570,7 +600,8 @@ for (const name of ONLY) {
   try { notes = await SCENARIOS[name](); }
   catch (e) { error = String((e as Error).stack ?? e).slice(0, 600); say(`${name}: ERROR ${error}`); }
   await sleep(500);
-  out.scenarios[name] = { t0, t1: now(), notes, error, marks: marks[name] ?? [], recs: recs[name] ?? [] };
+  const list = recs[name] ?? [];
+  out.scenarios[name] = { t0, t1: now(), notes, error, marks: marks[name] ?? [], recs: list, lostBatches: lostBatches(list.filter((r) => r.e === "seq").map((r) => r.n)) };
 }
 writeFileSync(join(RUN, "results.json"), JSON.stringify(out) + "\n");
 let text: string;
