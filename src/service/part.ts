@@ -9,6 +9,8 @@ export interface ServicePart {
   readonly ops: Readonly<Record<string, (req: Req) => Answer | Promise<Answer>>>;
   /** The control door's event stream, at the open. */
   attach?(emit: (ev: Record<string, unknown>) => void): void;
+  /** After stage 1a applied `config`, with agentwatch's browser.* keys (stage 1b part 1's Chrome unit). */
+  onConfig?(keys: Record<string, unknown>): void;
   /** After stage 1a applied `set_sessions` (a complete snapshot). */
   setSessions?(req: Req): void;
   /** After stage 1a applied `session_ended`. */

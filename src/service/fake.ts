@@ -38,7 +38,7 @@ export const FAKE_STATE = {
     ready: { agent_text: "The agent browser is ready.", operator_text: "The agent browser is ready." },
     off: { agent_text: "The agent browser is not running.", operator_text: "The agent browser is not running. A start on the Browser page starts it." },
   },
-  chrome: { kind: "chrome", version: "157.0.7000.1", pid: 4242 },
+  chrome: { kind: "google-chrome", version: "157.0.7000.1-1", pid: 4242 },
   extension_version: "0.3.6",
   update: "current",
   endpoint: { form: "pidfd" },

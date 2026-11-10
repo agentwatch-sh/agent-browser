@@ -127,7 +127,7 @@ async function world(o: { wrap?: boolean } = {}): Promise<World> {
       const state = new Stage1a({ agentDoor: { url: (scope) => scope, state: () => ({ form: "pidfd" }) } });
       const control = await ControlDoor.open({ path: sock, handler: state, log: (l) => logs.push(l),
         admit: daemonAdmission({ reader: wrapped(t.reader, () => main.pid, race), pidfd: await loadPidfdOpen(), mainPid, commandFile: file }) });
-      service = { control, agent: null as never, state, stop: () => control.stop() };
+      service = { control, agent: null as never, state, part: null, lost: new Promise<string>(() => {}), stop: () => control.stop() };
     } else service = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: sock, daemonCommand: file, log: (l) => logs.push(l), mainPid });
   } catch (e) { rmSync(dir, { recursive: true, force: true }); throw e; }
   const procs: Proc[] = [], pids: number[] = [];

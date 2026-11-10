@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { OPS, ControlDoor, type Admit, type Req } from "../src/service/control.ts";
 import { LATER_OPS, Stage1a, STAGE_1A_OPS } from "../src/service/service.ts";
+import { STAGE_1B1_OPS } from "../src/service/unit/part.ts";
 import { NO_RECEIVER, ReceiverError, type ReceiverEvents, type ReceiverPort } from "../src/service/receiver.ts";
 import { AGENT_LISTS_WAIT, DISMISS_WRITE_ERROR, IMPORT_WAIT_MS, LAUNCH_HELD_TEXT, LIST_DAMAGED_ERROR, LISTS_FOLDER_TEXT, PUSH_RETRY_MS, SCOPES_ERROR_TEXT, SET_SCOPES_WAIT_MS, Stage1c, STAGE_1C_OPS, UNREAD_LIST_ERROR, UNREAD_TEXT, type Clock } from "../src/service/stage1c.ts";
 import { DAMAGED_TEXT } from "../src/service/lists/lists.ts";
@@ -127,11 +128,11 @@ const failingDisk = (disk: { failing: boolean }) => (p: string, v: unknown) => {
 
 // ------------------------------------------------------------------ the ops and the port
 
-test("stage 1c adds its seven ops to the service's table; start, stop and sender stay later (stage 1b), and each op of C12 is in one place", withRig(async (r) => {
+test("stage 1c adds its seven ops to the service's table; start and stop come with stage 1b part 1's part, sender stays later (stage 1b part 2), and each op of C12 is in one place", withRig(async (r) => {
   assert.deepEqual([...STAGE_1C_OPS].sort(), ["import", "launch_check", "list_set", "lists_get", "prompt_allow", "prompt_dismiss", "prompts_get"]);
   assert.deepEqual(Object.keys(r.part.ops).sort(), [...STAGE_1C_OPS].sort());
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sender: "1b", start: "1b", stop: "1b" });
-  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort());
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sender: "1b2" });
+  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort());
   for (const op of STAGE_1C_OPS) assert.equal(r.svc.has(op), true, op);
   for (const op of Object.keys(LATER_OPS)) assert.equal(r.svc.has(op), false, op);
   assert.equal(new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) } }).has("list_set"), false, "a service with no part");

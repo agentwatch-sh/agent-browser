@@ -69,8 +69,8 @@
    }
   },
   "chrome": {
-   "kind": "chrome",
-   "version": "157.0.7000.1",
+   "kind": "google-chrome",
+   "version": "157.0.7000.1-1",
    "pid": 4242
   },
   "extension_version": "0.3.6",
@@ -332,8 +332,8 @@
      "state": "ready",
      "agent_text": "The agent browser is ready.",
      "operator_text": "The agent browser is ready.",
-     "chrome_kind": "chrome",
-     "chrome_version": "157.0.7000.1",
+     "chrome_kind": "google-chrome",
+     "chrome_version": "157.0.7000.1-1",
      "chrome_pid": 4242,
      "extension_version": "0.3.6",
      "update": "current",
@@ -1280,7 +1280,7 @@
     "t": "ev",
     "ev": "ready",
     "chrome_pid": 4242,
-    "chrome_version": "157.0.7000.1",
+    "chrome_version": "157.0.7000.1-1",
     "extension_version": "0.3.6",
     "endpoint": {
      "form": "pidfd"
@@ -1293,7 +1293,7 @@
     "t": "ev",
     "ev": "ready",
     "chrome_pid": 4242,
-    "chrome_version": "157.0.7000.1",
+    "chrome_version": "157.0.7000.1-1",
     "extension_version": "0.3.6",
     "endpoint": {
      "form": null,
@@ -1371,7 +1371,7 @@
    "ev": {
     "t": "ev",
     "ev": "chrome",
-    "version": "157.0.7000.1",
+    "version": "157.0.7000.1-1",
     "update": "current"
    }
   },
