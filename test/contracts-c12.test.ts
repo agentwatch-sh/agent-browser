@@ -63,6 +63,17 @@ const RULES = part(C12, "The field rules (the shape step).");
 const PATTERN = /`(\^[^`]+\$)`/.exec(RULES)?.[1] ?? "^$";
 const scope = (x: unknown) => typeof x === "string" && new RegExp(PATTERN).test(x);
 const isRoot = (r: any) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid >= 2 && Number.isSafeInteger(r.start) && r.start >= 0;
+/** `mcp_token` (the token design): null, or the 64 lowercase hex digits of a SHA-256. */
+const FINGERPRINT = /^[0-9a-f]{64}$/;
+const fingerprintOrNull = (x: unknown) => x === null || (typeof x === "string" && FINGERPRINT.test(x));
+const onceEach = (list: unknown[]) => new Set(list).size === list.length;
+/** The snapshot's rules of the token design: one fingerprint once, one scope once in each list, no fingerprint with a null lifetime id. */
+function snapshotFits(req: any): boolean {
+  const ss = Array.isArray(req.sessions) ? req.sessions.filter(isObj) : [];
+  const rs = Array.isArray(req.remote) ? req.remote.filter(isObj) : [];
+  const fps = [...ss, ...rs].map((x: any) => x.mcp_token).filter((t: unknown) => typeof t === "string");
+  return onceEach(fps) && onceEach(ss.map((s: any) => s.scope)) && onceEach(rs.map((x: any) => x.scope)) && ss.every((s: any) => s.lifetime_id !== null || s.mcp_token === null);
+}
 // A rule checks one field (f, its value), or the whole request against the fields of its row (whole).
 type FieldRule = [string, (f: string, v: any) => boolean | null, ((req: any, fields: string[]) => boolean)?];
 const FIELD_RULES: FieldRule[] = [
@@ -71,10 +82,15 @@ const FIELD_RULES: FieldRule[] = [
   ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
     (f, v) => (f === "scope" || f === "list" ? scope(v) : null)],
   ["A root (`roots` of `set_sessions`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
-  ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots), a `cgroup` (a string or `null`) and a `lifetime_id` (a string or `null`). `remote` is a list of objects with the strings `scope`, `box` and `list`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
+  ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots), a `cgroup` (a string or `null`), a `lifetime_id` (a string or `null`) and an `mcp_token`. `remote` is a list of objects with the strings `scope`, `box` and `list` and an `mcp_token`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
     (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string") && (s.lifetime_id === null || typeof s.lifetime_id === "string"))
       : f === "remote" ? Array.isArray(v) && v.every((x: any) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string")
       : f === "box" ? isObj(v) && strings(v.hosts) && strings(v.cookie_names) : null],
+  // The token design (board ab-v16.94.10; this stage, board ab-v16.94.5): the fingerprint of each session's connection token, never the token.
+  ["`mcp_token` (of an item of `sessions` or of `remote`) is `null` or 64 lowercase hex digits: the fingerprint of the session's connection token, the lowercase hex SHA-256 of the token's ASCII bytes (the connection tokens, below). It is never the token itself.",
+    (f, v) => (f === "sessions" || f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || fingerprintOrNull(x.mcp_token)) : null)],
+  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5): the daemon sends no item for a launch name that two live sessions have, so neither of them gets a list or a token. An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
+    () => null, (req, fields) => !fields.includes("sessions") || snapshotFits(req)],
   ["`enabled` and `control` are booleans; `chrome_bin` is a string or `null`; `chrome_args` is a list of strings.",
     (f, v) => (f === "enabled" || f === "control" ? typeof v === "boolean" : f === "chrome_bin" ? v === null || typeof v === "string" : f === "chrome_args" ? strings(v) : null)],
   ["`add` and `remove` are lists of strings, and each entry is checked later by the host rules (`list_set`, below). `prompt` and `host` are strings of one character or more.",
@@ -160,8 +176,9 @@ test("C12 states the door: compact UTF-8 lines, the daemon's own size check (413
     "A line is at most `CONTROL_MAX_LINE = 33619968` bytes (the 33,554,432 bytes of a C2 payload and 64 KiB more).",
     "The daemon measures each line before it sends it. When a line is longer than `CONTROL_MAX_LINE`, the daemon does not send it, and it answers its own caller with a 413. So the service never has to close the control connection for a line's size. A side that still reads a longer line closes the connection.",
     "The daemon sends the requests. The service sends the answers and the events. The service sends no request.",
-    "No side logs page content, a cookie, a URL path or a payload in any log line. A line that a side refuses for its size or its shape is never logged.",
+    "No side logs page content, a cookie, a URL path, a payload, a token or a token's fingerprint in any log line. A line that a side refuses for its size or its shape is never logged.",
   ]);
+  assert.ok(!says(C12, "No side logs page content, a cookie, a URL path or a payload in any log line."), "the old log rule is gone (the token design)");
   assert.equal(control.constants.CONTROL_MAX_LINE, 33554432 + 65536, "the C2 limit and 64 KiB");
   for (const v of [...control.requests, ...control.badRequests]) {
     const line = JSON.stringify(v.req);
@@ -211,11 +228,11 @@ test("C12 states the hello (C7): its two shapes, v 1, the commit for the pin onl
     "A side that reads a hello whose `v` is not 1 closes the connection and sends no request and no answer; the daemon shows it in `agentwatch health`. A new `v` is a new door, not an additive change.",
     "Fields and features are only added, never changed: a side ignores a field and a feature that it does not know.",
     "A request for an op that the service does not have gets `{\"t\":\"res\",\"id\":\"<id>\",\"ok\":false,\"error\":\"unsupported\"}`. So an older service and a newer daemon (or the reverse) degrade, with no lock-step bump.",
-    "Feature names: `fake` (the hello of `agent-browser service --fake`, a scripted state with no Chrome, for agentwatch's hermetic tests). A stage that adds an op or a field adds its feature name to this list first.",
+    "Feature names: `fake` (the hello of `agent-browser service --fake`, a scripted state with no Chrome, for agentwatch's hermetic tests), and `mcp_token` (the service checks each MCP request's connection token against the `mcp_token` of `set_sessions`: the connection tokens, below). A stage that adds an op or a field adds its feature name to this list first.",
     "`agent-browser service --hello` prints the service's hello as one line and exits, with no service running.",
     "The daemon sends no request before it has read the service's hello, and the service answers no request before it has read the daemon's hello.",
   ]);
-  const FEATURES = ["fake"];
+  const FEATURES = ["fake", "mcp_token"];
   const sides = new Set<string>();
   for (const { note, line, newer } of control.hellos) {
     assert.equal(line.t, "hello", note);
@@ -236,6 +253,8 @@ test("C12 states the hello (C7): its two shapes, v 1, the commit for the pin onl
   }
   assert.deepEqual([...sides].sort(), ["daemon", "service"], "both sides");
   assert.ok(control.hellos.some((h: any) => h.line.features.includes("fake")), "the hello of --fake");
+  assert.deepEqual(control.hellos.find((h: any) => h.line.features.includes("fake")).line.features, ["fake", "mcp_token"], "the fake's hello has the feature mcp_token (the token design)");
+  assert.deepEqual(control.hellos.find((h: any) => h.line.side === "service" && !h.line.features.includes("fake")).line.features, [], "the service of stages 1a to 1c: no feature mcp_token before its token check");
   // A reader closes at a hello of the wrong side or another v (D2, F9).
   const closes = (reader: string, line: any) => line.v !== 1 || line.side !== (reader === "daemon" ? "service" : "daemon");
   for (const h of control.badHellos) assert.equal(closes(h.reader, h.line), h.closes, h.note);
@@ -291,7 +310,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
     if (OPS[op].fields.length === 0) assert.equal(cells[0], "none", `${op}: no field`);
   }
   assert.deepEqual(spans(rows.get("list_set")![0]), ["list", "add", "remove"], "list_set: add and remove, no whole list");
-  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\"}]`), `remote` (`[{\"scope\",\"box\",\"list\"}]`, empty until stage 5), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11), remote and box");
+  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, empty until stage 5), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
   sayAll(C12, [
     "Applies agentwatch's `browser.*` config keys, as data. The daemon sends it at each connect and at each change. `chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` makes the endpoint and the MCP path answer their 503 (C11, from stage 3); `enabled: false` stops the browser.",
     "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4).",
@@ -313,6 +332,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
     "The sender's ID, its version and its package (C1, C9).",
     "Stage 1a (board ab-v16.94.2) fixes the keys of the `data` of `status`, `lists_get`, `prompts_get`, `endpoint` and `sender` in the part \"The data of the reads\", below, with the daemon lead's review. They include:",
     "It keeps each session's `lifetime_id` (agentwatch's id of that run of the session) for the recipients of a prompt.",
+    "It keeps each session's `mcp_token` (the fingerprint of the session's connection token, or `null`) in memory only, for the token check of the MCP path (C11). The service drops a session's fingerprint with the session, and closes the MCP connections of a session that the snapshot drops or whose `mcp_token` changed.",
     "the agent's text and the operator's text of a state as two separate keys, because the gateway gives the operator's text only to a password login;",
     "each prompt's recipients, the session name and the lifetime id of each session that the block stopped, because the daemon sends them the allow notice (today's gateway does, at an allow);",
     "the MCP's state, for `agentwatch health`.",
@@ -468,7 +488,7 @@ test("C12 fixes the keys of the data of the reads (D11): the agent's text and th
     "`update` is Chrome's update state, as the `update` of the `chrome` event, or `null`: it is the update state of the requests' table and of a daemon's connect.",
     "`endpoint` is the endpoint's state, as in the `ready` event: `{\"form\":\"<form>\"}` or `{\"form\":null,\"reason\":\"<text>\"}`.",
     "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>}`. `state` is `none` while the service has no MCP (before stage 1d), and then `address` is `null`. Stage 1d names the other states and fixes the form of `address`, an opaque text that the daemon shows as it is. This file fixes no transport of the MCP.",
-    "`sessions` holds each session of the last `set_sessions`, as `{\"scope\",\"repo\",\"list\"}`: `list` is the name of the scope's list, or `null` while the scope has no list. `lists` holds the names of the lists that the service has.",
+    "`sessions` holds each session of the last `set_sessions`, as `{\"scope\",\"repo\",\"list\",\"mcp_token\"}`: `list` is the name of the scope's list, or `null` while the scope has no list, and `mcp_token` is `true` while the session's item has a fingerprint, else `false`: `status` never gives the fingerprint. `lists` holds the names of the lists that the service has.",
     "`last_stop` is `null`, or `{\"reason\",\"at\",\"by\"}`: the reason of the last `stopped` event, its time in UTC (ISO 8601, for example `2026-11-10T06:30:00Z`), and its `by` (`null` for a reason other than `stop`).",
     "Each prompt has its `id`, `host` and `list`, the list's `repo` (or `null`), the `scopes` that its blocks came from, its `from` host (or `null`), its `warnings`, and its `recipients`: the session name (`session`) and the lifetime id (`lifetime_id`) of each session that a block of the prompt stopped, from that session's `lifetime_id` in `set_sessions`. The daemon sends each recipient the allow notice. No log line holds a lifetime id.",
     "`lists_get`: each list with its `name`, its `repo` (or `null`), its entries (`allow`, as `list_set` names them), the scopes that use it (`sessions`), and its read error (`error`, `\"\"` when it has none); `old_allow` is the old single list, read only (`[]` when it cannot be read).",
@@ -493,7 +513,12 @@ test("the read vectors (q1 to q5) have exactly the keys of C12's data, and statu
   assert.doesNotMatch(status.agent_text, /\b(stop|start|restart)/i, "I2: the agent's text names no stop and no start");
   assert.deepEqual(status.mcp, { state: "none", address: null }, "the MCP's state before stage 1d (the only vector of mcp now)");
   assert.deepEqual(keysOf(status.endpoint), ["form"]);
-  for (const s of status.sessions) assert.deepEqual(keysOf(s), ["list", "repo", "scope"]);
+  for (const s of status.sessions) assert.deepEqual(keysOf(s), ["list", "mcp_token", "repo", "scope"]);
+  // mcp_token in status: true or false for each session of the snapshot, never the fingerprint (the token design).
+  const items = control.requests.find((v: any) => v.req.op === "set_sessions").req.sessions;
+  assert.deepEqual(status.sessions.map((s: any) => [s.scope, s.mcp_token]), items.map((s: any) => [s.scope, s.mcp_token !== null]), "status's mcp_token: whether the item has a fingerprint");
+  assert.ok(status.sessions.some((s: any) => s.mcp_token === true) && status.sessions.some((s: any) => s.mcp_token === false), "both values");
+  assert.ok(!/[0-9a-f]{64}/.test(JSON.stringify(status.sessions)), "no fingerprint in status");
   assert.ok(strings(status.lists));
   assert.equal(status.last_stop, null);
   for (const p of [...status.prompts, ...data("prompts_get").prompts]) {
@@ -548,7 +573,8 @@ test("C12 states the part of stage 1c: the files, a session's repo, the object, 
     "The service sends `set_scopes` with `default` `null` and `operator` `\"*\"` (C4). It keeps C4's rules 1 and 2 of the tabs of a session that ended: no object before the first complete `set_sessions`, the file of ended scopes and the restart gate. An ok in time is an ok within 10 s on the same link. Only then does the model get the allowlist line, with each session's roots. With no ok in time, the service sends its current object again every 10 s.",
     "At `session_ended` the service writes the file of ended scopes first, then sends `end_scope` to the model (not for a scope that another live session holds), then sends the object without the scope.",
     "The list copy of a scope is `<state>/session-lists/<scope>/allowlist.json`, `{\"allow\":[<host>...]}`: the hosts of the scope's list, for agent-browser's CLI.",
-    "At the same times it removes each copy that it wrote whose scope the object no longer names (also a name that two live sessions share) or names with no list, `unread-repo` or a list with no file, so the CLI refuses that session and never reads an old list's hosts.",
+    "At the same times it removes each copy that it wrote whose scope the object no longer names (also a launch name that two live sessions have: the daemon sends no item for it, by the field rules) or names with no list, `unread-repo` or a list with no file, so the CLI refuses that session and never reads an old list's hosts.",
+    "A session's `list` in the status is the list that the current object gives its scope, or `null` while the object gives none (a launch that the restart gate holds, an ended name). A launch name that two live sessions have has no session in the status: the daemon sends no item for it (the field rules), so neither session gets a list.",
     "`launch_check`'s refusal is today's text: \"A session named <scope> ended a moment ago, and the agent browser could not record it (<error>). Choose another name, or wait until the agent browser confirms its lists.\" The vectors' `r6` gives it with the error `the file of ended scopes cannot be written: ENOSPC`, and the fake answers so.",
     "Each entry of `refused` has the host rules' reason, for example `paste the host only` (the vectors' `r7`).",
     "`list_set` changes nothing and answers an error for the list `unread-repo` (`the list unread-repo is always empty, so it takes no entry`), for a list file that it cannot read (`the list file of <list> cannot be read, so the service does not change it`), and for a write that fails (`the list file of <list> cannot be written: <kind>`).",
@@ -561,6 +587,7 @@ test("C12 states the part of stage 1c: the files, a session's repo, the object, 
     "An answer can come after the answers of later requests: an `import` answers when the receiver answers, and the service answers the other requests of the connection in that time. The daemon matches each answer by its `id`. When the daemon ends its side of the connection, it still gets the answers that the service owes it; then the service ends its side.",
     "No log line holds an entry of a `list_set`, a refused entry, a lifetime id, a cookie, a storage value or a payload.",
   ]);
+  for (const old of ["(also a name that two live sessions share)", "while the object gives none (a launch name that two live sessions have,"]) assert.ok(!says(C12, old), `C12: no ${old} (review-113 B1)`);
   // The texts that the part names are the code's (one text on both sides).
   const r7 = control.requests.find((v: any) => v.req.id === "r7");
   assert.deepEqual(r7.res.data.refused, [{ entry: "https://bad/x", reason: "paste the host only" }], "r7: the host rules' reason");
@@ -640,12 +667,15 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
   ]);
   sayAll(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), [
     "`agent-browser service --fake --control-door <path>` serves the control door for agentwatch's hermetic tests, with the scripted state of the vectors (the `state` of `test/vectors/control.json`) and no Chrome. Its code is `src/service/fake.ts`.",
-    "Its hello has `\"commit\":null` and the feature `fake`. It has every op of the requests' table, and it gives each request vector its answer when the vectors run in their order on one connection.",
+    "Its hello has `\"commit\":null` and the features `fake` and `mcp_token`. It has every op of the requests' table, and it gives each request vector its answer when the vectors run in their order on one connection.",
+    "It takes `mcp_token` by the field rules and keeps it for each session of the last `set_sessions`, in memory only, and its `status` gives `mcp_token` (`true` or `false`) for each session. It serves no MCP.",
     "It admits each connection that reaches its socket: the socket has mode 0600 in a folder of mode 0700, and the fake holds no list, no sign-in, no Chrome and no data of the user. It never listens in the service's run folder: the folder of the default `control.sock`, and on Linux also `/run/user/<uid>/agent-browser/` (the default when `XDG_RUNTIME_DIR` is not set). It compares the real folder of its socket (after links, before and after it makes the folder) with each of them, so it never takes the place of the service. With `--refuse`, each connection gets the refused line of rule 2 of the vectors, and the fake closes it.",
     "Its own rules where the vectors stop: it starts in the state `ready`. A `start` in the state `off` sends the vectors' first `ready` event, and a `stop` in the state `ready` sends `stopped` with the reason `stop` and the stop's `by`. An allow or a dismissal closes the prompt, with a `prompt` event in the state `closed`. `session_ended` holds the ended scope until the next `set_sessions`. `endpoint` gives the URL of the address of `--agent-door` (no agent door listens), else of the vectors' address.",
     "Each line on its standard input that is an event of the event table, with exactly its fields, goes to each connection that has sent its hello. The fake drops each other line. So a test sends the events that it needs.",
     "After its socket listens, the fake prints one line on its standard output, `{\"t\":\"listening\"}`, so that a test waits for that line.",
   ]);
+  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b32` break each rule of `mcp_token`, each with the fixed `bad request` answer. `r14` is the daemon's snapshot while two live sessions have one launch name: it has no item for that name. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
+  assert.ok(!says(C12, "Its hello has `\"commit\":null` and the feature `fake`."), "the fake's old hello sentence is gone");
   assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads. Its `badLines` are lines as bytes (in hex) that close the connection: a byte order mark, a CR, and bytes that are not UTF-8."));
   // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
   for (const p of control.state.prompts) assert.deepEqual(keysOf(p), PROMPT_KEYS, p.id);
@@ -666,6 +696,102 @@ test("C12 states the recipients' lifetime ids (B4): the run that the block stopp
   assert.ok(nulls.length > 0, "a recipient with a null lifetime id");
   for (const r of nulls) assert.ok(snap.some((s: any) => s.scope === r.session && s.lifetime_id === null), r.session);
   assert.ok(!/MCP port/.test(C12), "no MCP port in C12 (B3)");
+});
+
+// ---- The connection tokens (board ab-v16.94.5, build task 1 of the token design, board ab-v16.94.10): C12's part, the field and its vectors ----
+
+const TOKEN_HEADING = "The connection tokens (from stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10).";
+// The part's lead paragraph and its bullets, in order: the part holds exactly these.
+const TOKEN_PART: string[] = [
+  `**${TOKEN_HEADING}** The token design is \`docs/superpowers/specs/2026-11-10-mcp-connection-tokens-design.md\`, with the operator's answers of 2026-11-10. agentwatch's daemon mints a connection token for each session that it launches while the rules of the token design's section 9.1 hold (agentwatch launches the session with a lifetime id and the switch on; the session's repo's list has a site; the service's hello has the feature \`mcp_token\`; the \`LISTEN\` line of the MCP path's TCP port has the user's uid; the client takes the entry's form). It writes the token into the session's MCP entry only after the service took the token's fingerprint (rule 6). The service never gets a token: \`set_sessions\` carries only each token's fingerprint, in the session's own item (\`mcp_token\`). C11 states the token check of the MCP path (its admission, step 7).`,
+  "No new op and no provenance change: `set_sessions` stays `kind: daemon`.",
+  "The daemon sends `mcp_token` in each item of `sessions`, to every service: the fingerprint of the session's token, or `null` for a session that has no token. An item with no `mcp_token` gets `bad request` (the field rules). The daemon writes no MCP entry for a service whose hello has no feature `mcp_token`, and it then sends `null` for each session.",
+  "The service keeps the fingerprints of the last `set_sessions` in memory only, never on disk, and it drops a session's fingerprint with the session. Its log and its `status` name a scope and say whether the session has a token, never a fingerprint.",
+  "The `bad request` answer to `set_sessions` never echoes the snapshot or any field of it: no scope, no lifetime id and no fingerprint.",
+  "Before a launch with the entry, the daemon waits up to 5 s for the answer to the `set_sessions` that carries the session's fingerprint. At a failure (`bad request`, or no answer in 5 s) it writes no entry file, it launches the session without the entry, and its next snapshot carries `\"mcp_token\":null` for that session.",
+  "When a `set_sessions` that drops a session or a remote fingerprint fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to 60 s, and at each reconnect. A `bad request` on such a snapshot is a fault: the daemon's health line is red. \"Drops\" compares with the last snapshot that the service took, so the daemon sends again until the service takes a snapshot without that session or that fingerprint. Each resend is the current snapshot, so it also carries each later change. The daemon may send every failed snapshot again in the same way, and the service takes each one as it takes any `set_sessions`.",
+  "Each item of `remote` carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token). `remote` stays empty until stage 5.",
+  "The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. Before stage 1d the service takes the field by the field rules and gives it in `status`, and it serves no MCP.",
+];
+
+test("C12's part on the connection tokens holds exactly its sentences, after the part of stage 1b part 2 and before the part of stage 1c (the token design, section 13)", () => {
+  const P = part(C12, TOKEN_HEADING);
+  assert.ok(P, "the part");
+  const items = P.trim().split("\n- ").map((x) => flat(x).trim());
+  assert.deepEqual(items, TOKEN_PART.map(flat), "the part holds exactly its sentences, in order");
+  assert.ok(C12.indexOf("**The ops of stage 1b part 2 (board ab-v16.94.9).**") < C12.indexOf(`**${TOKEN_HEADING}**`), "after the part of stage 1b part 2");
+  assert.ok(C12.indexOf(`**${TOKEN_HEADING}**`) < C12.indexOf("**The lists, the scopes, the prompts and the sign-ins (stage 1c).**"), "before the part of stage 1c");
+  // No token, no box path and no MCP port in the part (C12's own rules).
+  assert.ok(!/abt1_[A-Za-z0-9_-]/.test(C12) && !/\/home\//.test(P) && !/MCP port/.test(P));
+});
+
+const sha256 = (s: string) => createHash("sha256").update(s, "ascii").digest("hex");
+const setSessionsLines = () => [...control.requests, ...control.badRequests].filter((v: any) => v.req.op === "set_sessions");
+const strsOf = (x: unknown): string[] => typeof x === "string" ? [x] : Array.isArray(x) ? x.flatMap(strsOf) : isObj(x) ? Object.values(x).flatMap(strsOf) : [];
+/** The fields of a set_sessions line that its answer must not echo: each scope, lifetime id and mcp_token (and a remote item's box and list). */
+const lineFields = (req: any) => [...(Array.isArray(req.sessions) ? req.sessions : []), ...(Array.isArray(req.remote) ? req.remote : [])]
+  .flatMap((x: any) => strsOf([x.scope, x.lifetime_id, x.mcp_token, x.box, x.list])).filter((s) => s.length >= 4);
+const echoes = (res: unknown, fields: string[]) => fields.filter((f) => JSON.stringify(res).includes(f));
+
+test("the test tokens are made-up values in a token's form (abt1_ and 43 base64url characters, 32 bytes of their own ASCII label), each with its fingerprint (the lowercase hex SHA-256 of its ASCII bytes)", () => {
+  assert.ok(control.testTokens.length >= 2, "two test tokens");
+  for (const t of control.testTokens) {
+    assert.match(t.token, /^abt1_[A-Za-z0-9_-]{43}$/, t.name);
+    const raw = Buffer.from(t.token.slice(5), "base64url");
+    assert.equal(raw.length, 32, `${t.name}: 32 bytes`);
+    assert.equal(raw.toString("base64url"), t.token.slice(5), `${t.name}: the canonical base64url of its bytes`);
+    assert.ok(/^test, not a token: [ -~]+$/.test(raw.toString("latin1")), `${t.name}: its bytes name it a test value`);
+    assert.equal(t.fingerprint, sha256(t.token), `${t.name}: the fingerprint`);
+  }
+  assert.ok(says(control.testTokensNote, "none is a real token"), "the note names them test values");
+});
+
+test("the set_sessions vectors carry mcp_token: a good line with two fingerprints and nulls, and a bad line for each rule of mcp_token, each with the fixed bad request answer (the token design, section 13)", () => {
+  const fp = (name: string) => control.testTokens.find((t: any) => t.name === name).fingerprint;
+  const token = (name: string) => control.testTokens.find((t: any) => t.name === name).token;
+  const good = control.requests.filter((v: any) => v.req.op === "set_sessions");
+  for (const { note, req } of good) {
+    for (const s of req.sessions) assert.ok(Object.hasOwn(s, "mcp_token") && fingerprintOrNull(s.mcp_token), `${note}: ${s.scope} carries its mcp_token`);
+    assert.ok(snapshotFits(req), note);
+  }
+  const r3 = good.find((v: any) => v.req.id === "r3").req.sessions;
+  assert.deepEqual(r3.filter((s: any) => s.mcp_token !== null).map((s: any) => [s.scope, s.mcp_token]), [["web-1", fp("web-1")], ["tool-4", fp("tool-4")]], "r3: two sessions with their own fingerprints");
+  assert.ok(r3.some((s: any) => s.lifetime_id === null && s.mcp_token === null), "r3: a session with no lifetime id has no fingerprint");
+  const bad = control.badRequests.filter((v: any) => v.req.op === "set_sessions");
+  for (const v of bad) assert.deepEqual(v.res, { t: "res", id: v.req.id, ok: false, error: "bad request" }, `${v.note}: the fixed answer`);
+  const items = (v: any) => [...v.req.sessions, ...v.req.remote];
+  // Each rule has a bad line that breaks it.
+  const by = (what: string, f: (v: any) => boolean) => assert.ok(bad.some((v: any) => f(v)), what);
+  by("63 hex digits", (v) => items(v).some((x: any) => typeof x.mcp_token === "string" && /^[0-9a-f]{63}$/.test(x.mcp_token)));
+  by("65 hex digits in a remote item", (v) => v.req.remote.some((x: any) => /^[0-9a-f]{65}$/.test(x.mcp_token)));
+  by("uppercase hex", (v) => items(v).some((x: any) => typeof x.mcp_token === "string" && /^[0-9A-F]{64}$/.test(x.mcp_token) && /[A-F]/.test(x.mcp_token)));
+  by("a token in place of its fingerprint (never on the door)", (v) => items(v).some((x: any) => x.mcp_token === token("web-1")));
+  by("an item with no mcp_token", (v) => v.req.sessions.some((s: any) => !Object.hasOwn(s, "mcp_token")) && v.req.sessions.every((s: any) => !Object.hasOwn(s, "mcp_token") || fingerprintOrNull(s.mcp_token)));
+  by("one fingerprint in two items", (v) => v.req.sessions.length === 2 && v.req.sessions[0].mcp_token !== null && v.req.sessions[0].mcp_token === v.req.sessions[1].mcp_token && v.req.sessions[0].scope !== v.req.sessions[1].scope);
+  by("one scope in two items (each with no fingerprint)", (v) => v.req.sessions.length === 2 && v.req.sessions[0].scope === v.req.sessions[1].scope && v.req.sessions.every((s: any) => s.mcp_token === null));
+  by("a fingerprint with the lifetime id null", (v) => v.req.sessions.some((s: any) => s.lifetime_id === null && FINGERPRINT.test(s.mcp_token ?? "")));
+  by("one fingerprint in a session and in a remote item", (v) => v.req.sessions.some((s: any) => v.req.remote.some((x: any) => x.mcp_token === s.mcp_token && s.mcp_token !== null)));
+  by("one remote scope in two remote items", (v) => v.req.remote.length === 2 && v.req.remote[0].scope === v.req.remote[1].scope && v.req.remote[0].mcp_token !== v.req.remote[1].mcp_token);
+  by("a remote item with no mcp_token (review-113)", (v) => v.req.remote.length > 0 && v.req.remote.some((x: any) => !Object.hasOwn(x, "mcp_token")) && v.req.sessions.length === 0);
+  // review-113 B1: the daemon sends no item for a launch name that two live sessions have (r14 and its live sessions).
+  const shared = good.find((v: any) => Array.isArray(v.live));
+  assert.ok(shared, "a set_sessions vector with the daemon's live sessions (r14)");
+  const names = shared.live.map((s: any) => s.scope);
+  assert.ok(names.some((n: string) => names.indexOf(n) !== names.lastIndexOf(n)), "two live sessions with one launch name");
+  assert.deepEqual(shared.req.sessions.map((s: any) => s.scope), names.filter((n: string) => names.indexOf(n) === names.lastIndexOf(n)), "an item for each launch name of one live session only");
+  for (const s of shared.req.sessions) assert.equal(s.lifetime_id, shared.live.find((x: any) => x.scope === s.scope).lifetime_id, `${s.scope}: its lifetime id`);
+  assert.deepEqual(shared.res, { t: "res", id: shared.req.id, ok: true, data: {} });
+  // The bad request answer echoes no field of the refused snapshot (14.1: the scan of the answer), and the scan reads its text (its twin).
+  for (const v of bad) assert.deepEqual(echoes(v.res, lineFields(v.req)), [], `${v.note}: no field of the line in the answer`);
+  const planted = bad.map((v: any) => ({ ...v.res, error: `bad request: ${lineFields(v.req)[0]}` }));
+  for (const [i, v] of bad.entries()) assert.notDeepEqual(echoes(planted[i], lineFields(v.req)), [], `${v.note}: the scan finds a planted field (its twin)`);
+  // No line of the door carries a token, except b24, which shows a token in place of its fingerprint (a bad request).
+  const withToken = [...control.requests, ...control.badRequests, ...control.events].filter((v: any) => /abt1_/.test(JSON.stringify(v.req ?? v.ev)) || /abt1_/.test(JSON.stringify(v.res ?? null)));
+  assert.deepEqual(withToken.map((v: any) => v.req?.id), ["b24"], "only b24 carries a token, and its answer does not");
+  assert.ok(!/abt1_/.test(JSON.stringify(control.state)) && !/abt1_/.test(JSON.stringify(control.hellos)), "no token in the state or the hellos");
+  assert.ok(/abt1_/.test(JSON.stringify({ ...control.events[0], ev: { ...control.events[0].ev, chrome_version: token("web-1") } })), "the token scan finds a planted token (its twin)");
+  assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18 and b22 to b32");
+  assert.equal(setSessionsLines().length, good.length + bad.length);
 });
 
 test("the line rules' vectors (badLines, B1): a byte order mark, a CR and bytes that are not UTF-8 each close the connection, by the reference of C12's line rules", () => {

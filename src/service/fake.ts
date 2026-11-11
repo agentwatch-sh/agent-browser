@@ -7,6 +7,10 @@
 // sign-in, no Chrome and no data of the user. It refuses the default path of control.sock, so it never takes the place
 // of the service. Each line on its standard input that is an event of C12's table, with exactly its fields, goes to
 // each connection past the hellos.
+//
+// The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
+// each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
+// has a fingerprint (never the fingerprint). It serves no MCP.
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -49,6 +53,8 @@ export const FAKE_STATE = {
     package: { name: "agentwatch-sender-0.2.0.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
   },
 };
+/** The fake's features (C12, the hello): the fake, and the connection tokens' field (the token design). */
+export const FAKE_FEATURES = ["fake", "mcp_token"] as const;
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
 // The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
@@ -80,7 +86,8 @@ export class FakeService implements Handler {
   private state: "ready" | "off" = FAKE_STATE.state as "ready";
   private prompts: Prompt[] = copy(FAKE_STATE.prompts);
   private readonly lists = new Map<string, List>(copy(FAKE_STATE.lists).map((l) => [l.name, l]));
-  private sessions: { scope: string; repo: string | null }[] = [];
+  /** The sessions of the last set_sessions, each with its fingerprint or null (in memory only; the token design). */
+  private sessions: { scope: string; repo: string | null; mcp_token: string | null }[] = [];
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
@@ -88,7 +95,7 @@ export class FakeService implements Handler {
   constructor(o: { agentDoor?: string; now?: () => Date }) {
     this.agentDoor = o.agentDoor ?? FAKE_STATE.agent_door;
     this.now = o.now ?? (() => new Date());
-    this.hello = serviceHello(packageInfo().version, null, ["fake"]);
+    this.hello = serviceHello(packageInfo().version, null, FAKE_FEATURES);
   }
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
@@ -126,7 +133,7 @@ export class FakeService implements Handler {
       chrome_kind: ready ? c.kind : null, chrome_version: ready ? c.version : null, chrome_pid: ready ? c.pid : null,
       extension_version: ready ? FAKE_STATE.extension_version : null, update: FAKE_STATE.update,
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
-      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo) })),
+      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo), mcp_token: s.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
     };
   }
@@ -136,7 +143,7 @@ export class FakeService implements Handler {
     switch (req.op) {
       case "config": return { data: {} };
       case "set_sessions":
-        this.sessions = (req.sessions as { scope: string; repo: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo }));
+        this.sessions = (req.sessions as { scope: string; repo: string | null; mcp_token: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo, mcp_token: s.mcp_token }));
         this.box = { hosts: [...(req.box as any).hosts], cookie_names: [...(req.box as any).cookie_names] };
         this.held.clear();
         return { data: {} };

@@ -8,7 +8,8 @@
 // service.ts, the fake in fake.ts) does each op after the door's checks, in C12's order: the op (`unsupported`), the
 // shape of `by` and of the fields (`bad request`), then the kind (`not the operator`, else `bad request`).
 //
-// The log rule (C12): no log line holds page content, a cookie, a URL path or a payload. The door logs the admission's
+// The log rule (C12): no log line holds page content, a cookie, a URL path, a payload, a token or a token's fingerprint
+// (`mcp_token` of set_sessions, the token design). The door logs the admission's
 // result, each act with its provenance (the op, the kind, the user and the via; never a field), and the closes. A line
 // that the door refuses for its size or its shape is never logged.
 
@@ -69,13 +70,16 @@ const text1 = (x: unknown) => typeof x === "string" && x.length > 0;
 const scope = (x: unknown) => typeof x === "string" && SCOPE.test(x);
 const strOrNull = (x: unknown) => x === null || typeof x === "string";
 const isRoot = (r: unknown) => isObj(r) && Number.isSafeInteger(r.pid) && (r.pid as number) >= 2 && Number.isSafeInteger(r.start) && (r.start as number) >= 0;
+/** `mcp_token` (the token design): null, or the fingerprint of a connection token, the 64 lowercase hex digits of a SHA-256. */
+export const FINGERPRINT = /^[0-9a-f]{64}$/;
+const fingerprintOrNull = (x: unknown) => x === null || (typeof x === "string" && FINGERPRINT.test(x));
 
 /** C12's field rules (the shape step), one field at a time: false when the field breaks its rule. */
 export function fieldFits(f: string, v: unknown): boolean {
   switch (f) {
     case "scope": case "list": return scope(v);
-    case "sessions": return Array.isArray(v) && v.every((s) => isObj(s) && scope(s.scope) && strOrNull(s.repo) && Array.isArray(s.roots) && s.roots.every(isRoot) && strOrNull(s.cgroup) && strOrNull(s.lifetime_id));
-    case "remote": return Array.isArray(v) && v.every((x) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string");
+    case "sessions": return Array.isArray(v) && v.every((s) => isObj(s) && scope(s.scope) && strOrNull(s.repo) && Array.isArray(s.roots) && s.roots.every(isRoot) && strOrNull(s.cgroup) && strOrNull(s.lifetime_id) && fingerprintOrNull(s.mcp_token));
+    case "remote": return Array.isArray(v) && v.every((x) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string" && fingerprintOrNull(x.mcp_token));
     case "box": return isObj(v) && strings(v.hosts) && strings(v.cookie_names);
     case "enabled": case "control": return typeof v === "boolean";
     case "chrome_bin": return strOrNull(v);
@@ -84,6 +88,19 @@ export function fieldFits(f: string, v: unknown): boolean {
     case "payload": return isObj(v);
     default: return true;
   }
+}
+
+/**
+ * C12's rules of a whole snapshot (the token design): one fingerprint at most once in `sessions` and `remote` together,
+ * one scope at most once in `sessions` and one remote scope at most once in `remote`, and no fingerprint on an item whose
+ * `lifetime_id` is null. The daemon sends no item for a launch name that two live sessions have, so a snapshot with two
+ * items of one scope is a bad request. Only for a request whose fields passed fieldFits.
+ */
+export function snapshotFits(req: Record<string, unknown>): boolean {
+  const sessions = req.sessions as Record<string, unknown>[], remote = req.remote as Record<string, unknown>[];
+  const once = (xs: unknown[]) => new Set(xs).size === xs.length;
+  const prints = [...sessions, ...remote].map((x) => x.mcp_token).filter((t) => t !== null);
+  return once(prints) && once(sessions.map((s) => s.scope)) && once(remote.map((x) => x.scope)) && sessions.every((s) => s.lifetime_id !== null || s.mcp_token === null);
 }
 
 /** The shape of provenance (R7): exactly `kind`, `user` and `via`, each of its set. */
@@ -96,6 +113,7 @@ export function checkRequest(req: Record<string, unknown>, has: (op: string) => 
   const op = typeof req.op === "string" && Object.hasOwn(OPS, req.op) && has(req.op) ? OPS[req.op] : null;
   if (!op) return ERR.unsupported;
   if (!byFits(req.by) || !op.fields.every((f) => Object.hasOwn(req, f) && fieldFits(f, req[f]))) return ERR.bad;
+  if (req.op === "set_sessions" && !snapshotFits(req)) return ERR.bad;
   if (op.kinds !== null && !op.kinds.includes((req.by as By).kind)) return op.kinds === ACT ? ERR.notOperator : ERR.bad;
   return null;
 }

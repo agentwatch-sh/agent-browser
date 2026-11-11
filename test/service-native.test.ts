@@ -81,7 +81,7 @@ async function rig(t: { after: (f: () => Promise<void> | void) => void }) {
   const sessions = (list: Record<string, string[]>) => {
     mkdirSync(join(dir, "lists"), { recursive: true });
     for (const [name, allow] of Object.entries(list)) writeFileSync(join(dir, "lists", `${name}.json`), JSON.stringify({ allow, repo: "owner/repo" }));
-    stage1c.setSessions({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [{ scope: "web-1", repo: "owner/repo", roots: [{ pid: process.pid, start: 1 }], cgroup: null, lifetime_id: "lt-1" }], remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any);
+    stage1c.setSessions({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [{ scope: "web-1", repo: "owner/repo", roots: [{ pid: process.pid, start: 1 }], cgroup: null, lifetime_id: "lt-1", mcp_token: null }], remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any);
   };
   return { dir, logs, events, link, carrier, port, stage1c, relay, model: relay.model, shim, sessions };
 }
@@ -231,7 +231,7 @@ test("the service's wiring: a shim on its link gets stage 1c's set_scopes, the m
   try {
     await new Promise((r) => shim.s.once("connect", r));
     shim.send(HELLO);
-    s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [{ scope: "web-1", repo: "owner/repo", roots: [{ pid: process.pid, start: 1 }], cgroup: null, lifetime_id: null }], remote: [], box: { hosts: [], cookie_names: [] } } as any);
+    s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [{ scope: "web-1", repo: "owner/repo", roots: [{ pid: process.pid, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null }], remote: [], box: { hosts: [], cookie_names: [] } } as any);
     await until(() => shim.main.some((q) => q.op === "set_scopes"));
     const watchPort = (s.part as any).o.link;
     await until(() => watchPort.confirmed() === true);

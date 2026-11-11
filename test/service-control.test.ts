@@ -54,7 +54,7 @@ async function hello(path: string): Promise<{ c: DaemonClient; hello: any }> {
 
 // ------------------------------------------------------------------ the hello
 
-test("the service's hello is its first line after the admission: v 1, side service, the package's version, the commit that it runs, and the features ([] for stage 1a, [\"fake\"] with commit null for the fake)", async () => {
+test("the service's hello is its first line after the admission: v 1, side service, the package's version, the commit that it runs, and the features ([] for stage 1a, [\"fake\",\"mcp_token\"] with commit null for the fake)", async () => {
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
   assert.deepEqual(packageInfo(), { version: VERSION, commit: head }, "this checkout's version and commit");
   const real = await openDoor(stage1a());
@@ -68,6 +68,7 @@ test("the service's hello is its first line after the admission: v 1, side servi
     const hb = await b.next();
     const vector = control.hellos.find((h: any) => h.line.features.includes("fake")).line;
     assert.deepEqual(hb, { ...vector, version: VERSION }, "the fake's hello: the vector's, with this package's version");
+    assert.deepEqual(hb.features, ["fake", "mcp_token"], "the fake's features: fake and mcp_token (the token design)");
     a.end(); b.end();
   } finally { await real.close(); await fake.close(); }
 });
@@ -237,11 +238,45 @@ test("the stage 1a status: state off, the agent's text and the operator's text a
       state: "off", agent_text: STAGE_1A_TEXTS.agent_text, operator_text: STAGE_1A_TEXTS.operator_text,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: { form: "pidfd" }, mcp: { state: "none", address: null },
-      sessions: [{ scope: "shell-2", repo: null, list: null }, { scope: "web-2", repo: "owner/repo", list: null }], lists: [], last_stop: null, prompts: [],
+      sessions: [{ scope: "shell-2", repo: null, list: null, mcp_token: false }, { scope: "web-2", repo: "owner/repo", list: null, mcp_token: false }, { scope: "tool-4", repo: null, list: null, mcp_token: true }], lists: [], last_stop: null, prompts: [],
     });
     assert.deepEqual((await c.answer("u")).data, { url: `ws+unix://${AGENT_DOOR}:/devtools/browser/shell-2` });
     c.end();
   } finally { await d.close(); }
+});
+
+// ------------------------------------------------------------------ the connection tokens (board ab-v16.94.5; the token design, board ab-v16.94.10)
+
+test("a refused set_sessions (each bad line of mcp_token, b22 to b32) gets the fixed bad request, which echoes no field of the line, and the service and the fake keep their old snapshot", async () => {
+  const strs = (x: unknown): string[] => typeof x === "string" ? [x] : Array.isArray(x) ? x.flatMap(strs) : x && typeof x === "object" ? Object.values(x).flatMap(strs) : [];
+  const r3 = control.requests.find((v: any) => v.req.id === "r3").req;
+  const bad = control.badRequests.filter((v: any) => v.req.op === "set_sessions" && /^b(2[2-9]|3[0-2])$/.test(v.req.id));
+  assert.equal(bad.length, 11, "the bad lines b22 to b32");
+  const own = { kind: "daemon", user: "ann", via: "daemon" };
+  const want = r3.sessions.map((s: any) => [s.scope, s.mcp_token !== null]);
+  for (const make of [stage1a, () => new FakeService({ agentDoor: AGENT_DOOR })]) {
+    const d = await openDoor(make());
+    try {
+      const { c } = await hello(d.path);
+      c.send(r3);
+      assert.equal((await c.answer("r3")).ok, true);
+      for (const v of bad) {
+        c.send(v.req);
+        const a = await c.answer(v.req.id);
+        assert.deepEqual(a, v.res, v.note);
+        // The scan of the answer: no scope, lifetime id, fingerprint or token of the line (each string of 4 characters or more).
+        const fields = strs([v.req.sessions, v.req.remote]).filter((s) => s.length >= 4);
+        for (const f of fields) assert.ok(!JSON.stringify(a).includes(f), `${v.note}: the answer holds ${f}`);
+        c.send({ t: "req", id: `s-${v.req.id}`, op: "status", by: own });
+        const s = (await c.answer(`s-${v.req.id}`)).data;
+        assert.deepEqual(s.sessions.map((x: any) => [x.scope, x.mcp_token]), want, `${v.note}: the old snapshot stays`);
+      }
+      c.end();
+      // No log line holds a fingerprint or a token of the vectors (C12's log rule).
+      const secret = [...control.testTokens.flatMap((t: any) => [t.token, t.fingerprint]), ...bad.flatMap((v: any) => strs([v.req.sessions, v.req.remote]).filter((x) => /^[0-9a-fA-F]{63,65}$|^abt1_/.test(x)))];
+      for (const l of d.logs) for (const x of secret) assert.ok(!l.includes(x), `a log line holds ${x}: ${l}`);
+    } finally { await d.close(); }
+  }
 });
 
 // ------------------------------------------------------------------ the line limit and the log rule
