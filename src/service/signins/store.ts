@@ -64,6 +64,8 @@ type Credential = { fails: number; stopped: boolean; hour: number[] };
 type Fields = { id: string; name: string; origin: string; path: string; send_to: string[] };
 
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
+/** A credential's id (C12, the rules of record): `c-` and 8 lowercase hex digits. Only such ids go into the service's file. */
+const CRED_ID = /^c-[0-9a-f]{8}$/;
 const RID = /^[A-Za-z0-9_-]{22,64}$/;
 const AT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{3})?Z$/;
 /** An `at` of C12's form that is a real time in UTC: the calendar date and the time exist (no February 30, no hour 24). */
@@ -161,7 +163,7 @@ export class SignInStore {
     let f: any;
     try { f = parseJsonBytes(raw); if (!isObj(f) || f.v !== 1) throw new SyntaxError("not the state file"); }
     catch (e) { this.o.log(`sign-ins: the state file cannot be read (${errorKind(e)}); the service starts with no gen and no removed id`); return; }
-    const ID = /^c-[0-9a-f]{8}$/;
+    const ID = CRED_ID;
     if (isObj(f.highest)) for (const [id, g] of Object.entries(f.highest)) if (ID.test(id) && Number.isSafeInteger(g) && (g as number) >= 1) this.highest.set(id, g as number);
     if (Array.isArray(f.removed)) for (const id of f.removed) if (typeof id === "string" && ID.test(id)) this.removed.add(id);
     if (isObj(f.credentials)) for (const [id, c] of Object.entries(f.credentials)) {
@@ -235,7 +237,7 @@ export class SignInStore {
     let changed = false;
     for (const r of this.snap?.records ?? []) {
       const id = r.id;
-      if (typeof id !== "string" || ids.has(id) || this.removed.has(id)) continue;
+      if (typeof id !== "string" || !CRED_ID.test(id) || ids.has(id) || this.removed.has(id)) continue;
       this.removed.add(id);
       // A removed id is no credential: its stop, its count and its hour's acts go (open point 9 of PR #112).
       this.creds.delete(id);
@@ -243,7 +245,7 @@ export class SignInStore {
     }
     for (const r of records) {
       const id = r.id, gen = r.gen;
-      if (typeof id === "string" && Number.isSafeInteger(gen) && (gen as number) >= 1 && (gen as number) > (this.highest.get(id) ?? 0)) { this.highest.set(id, gen as number); changed = true; }
+      if (typeof id === "string" && CRED_ID.test(id) && Number.isSafeInteger(gen) && (gen as number) >= 1 && (gen as number) > (this.highest.get(id) ?? 0)) { this.highest.set(id, gen as number); changed = true; }
     }
     // A key that is null, or whose public half is not the open key's, drops the open key (C12, the state).
     if (this.openKey && (key === null || key.public !== b64u(this.openKey.pub))) this.lock();
