@@ -493,8 +493,14 @@ export class Stage {
     try {
       if (st.gone) return await this.goneStep(page, st, e);
       if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
-      // A call that is not a key ends the tab's key run (C11, the input lock): the run's planned releases go first.
-      if (e.kind !== "key" && e.kind !== "text" && st.runOpen) await this.endRun(page, st);
+      // A call that is not a key ends the tab's key run (C11, the input lock): the run's planned releases go first, and an
+      // action that holds nothing then ends (the next action takes the lock and runs the activation again).
+      if (e.kind !== "key" && e.kind !== "text" && st.runOpen) {
+        await this.endRun(page, st);
+        if (st.action && !st.action.over && !st.buttons.size && !st.keys.size && !st.rest) this.close(st, page.id);
+      }
+      // fill's text is the next Input.insertText only when no other call comes between.
+      if (e.kind !== "text" && e.kind !== "field") st.fillNext = false;
       if (e.kind === "setup") return await this.setupStep(page, st, e);
       if (e.kind === "field") return await this.fieldStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
