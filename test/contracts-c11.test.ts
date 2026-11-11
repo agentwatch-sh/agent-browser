@@ -1303,6 +1303,8 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   for (const [what, answer] of [["Origin", "fromPage"], ["Host", "badHost"], ["the path", "mcpNotFound"], ["the path's scope", "session"]]) has(`${what} before step 7`, (x) => x.r.answer === answer && x.h("authorization").length === 0);
   has("step 7 before step 8", (x) => x.r.answer === "needsToken" && x.c.service.ready !== "ready");
   has("the admission before the transport", (x) => x.r.answer === "needsToken" && x.h("mcp-session-id").length > 0);
+  has("step 1 before step 7: another uid with no token", (x) => x.r.answer === "peerUnread" && x.h("authorization").length === 0);
+  has("step 2 before step 7: no session with no token", (x) => x.r.answer === "session" && x.h("authorization").length === 0 && x.r.path === "/mcp/md-lead" && mcpConnection(x.c).answer === "session");
   has("steps 3 to 8 for each request", (x) => x.c.requests.length === 2 && x.r.answer !== "pass");
   for (const id of ["controlOff", "notConnected", "notConfirmed", "tooOld"]) has(`step 8: ${id}`, (x) => x.r.answer === id);
   for (const a of endpoint.mcpAnswers) has(`a vector of ${a.id}`, (x) => x.r.answer === a.id);
