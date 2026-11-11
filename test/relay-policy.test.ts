@@ -50,6 +50,20 @@ test("each call goes where the routing vectors say", () => {
   for (const v of endpointV.passes) assert.notEqual(to(route(v.method, v.params, v.session === "page")), "refused", `${v.session} ${v.method}`);
 });
 
+// The master of C11's vectors (test/vectors/endpoint.json, in this repository since stage 0): its routing rows and its
+// refusals of the sign-in act's methods (board ab-v16.97.1, review-112 B6). The relay and the service share route():
+// AgentBrowser.* is refused on a page session (C11's table), so it never reaches Chrome, and on the root it is outside
+// the set until the service's model has the act (stage 1e part 2; the row's withAct).
+test("the master's routing vectors: each call goes where they say, and the sign-in act's methods are refused on a page session with the model's text", () => {
+  const master = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
+  const to = (r: ReturnType<typeof route>) => (typeof r === "object" ? "refused" : r === "model" ? "the model" : "Chrome");
+  for (const v of master.routing) assert.equal(to(route(v.method, v.params, v.session === "page", { child: !!v.child })), v.to, `${v.session} ${v.method}`);
+  const signIn = master.refusals.filter((v: any) => v.method.startsWith("AgentBrowser."));
+  assert.deepEqual(signIn.map((v: any) => [v.session, v.method]), [["page", "AgentBrowser.signIn"], ["page", "AgentBrowser.signIns"]]);
+  for (const v of signIn) assert.deepEqual(route(v.method, v.params, true), { refused: v.error }, v.method);
+  assert.deepEqual(route("AgentBrowser.anyOther", {}, true), { refused: "Not available in the agent browser: AgentBrowser.anyOther." }, "the whole domain");
+});
+
 test("each refusal vector that needs no model state gets its exact text from the policy", () => {
   for (const v of endpointV.refusals) {
     const r = route(v.method, v.params, v.session === "page");

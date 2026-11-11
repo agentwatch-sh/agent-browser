@@ -703,10 +703,12 @@ test("at each allowlist line: each close vector follows C11", () => {
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are
-// the service's model's from stage 1e: on a page session they are refused, and they are in no vector of the relay.
+// the service's model's from stage 1e part 2 (`act`: a model with the act): on the root the model answers them then,
+// and before that they are outside the set. On a page session they are refused in each model (review-112 B6). The
+// routing vectors give both: `to` for today's model (the relay's), and `withAct` for a model with the act.
 const SIGN_IN_METHODS = ["AgentBrowser.signIn", "AgentBrowser.signIns"];
-function route(session, method, params = {}, child = false) {
-  if (session === "root") return endpoint.modelSet.includes(method) || SIGN_IN_METHODS.includes(method) ? "the model" : "refused";
+function route(session, method, params = {}, child = false, act = false) {
+  if (session === "root") return endpoint.modelSet.includes(method) || (act && SIGN_IN_METHODS.includes(method)) ? "the model" : "refused";
   if (/^AgentBrowser\./.test(method)) return "refused";
   if (method === "Target.setAutoAttach") return "Chrome";
   if (method === "Target.getTargetInfo") return params.targetId === undefined ? "Chrome" : "the model";
@@ -723,7 +725,12 @@ test("C11's table says where each call of the model's set goes, and the routing 
     assert.equal(cells[0], "the model", method);
     assert.ok(cells[1].startsWith(route("page", method)), `${method}: ${cells[1]}`);
   }
-  for (const r of endpoint.routing) assert.equal(route(r.session, r.method, r.params, r.child === true), r.to, `${r.session} ${r.method} ${JSON.stringify(r.params)}`);
+  for (const r of endpoint.routing) {
+    assert.equal(route(r.session, r.method, r.params, r.child === true), r.to, `${r.session} ${r.method} ${JSON.stringify(r.params)}`);
+    if (r.withAct !== undefined) assert.equal(route(r.session, r.method, r.params, r.child === true, true), r.withAct, `${r.session} ${r.method}: with the act`);
+  }
+  // Each method of the sign-in act has a routing row on the root and on a page session (review-112 B6).
+  for (const m of SIGN_IN_METHODS) for (const session of ["root", "page"]) assert.ok(endpoint.routing.some((r) => r.method === m && r.session === session && r.withAct !== undefined), `${session} ${m}: a routing row`);
   for (const m of endpoint.pageModelSet) assert.ok(endpoint.modelSet.includes(m), m);
 });
 
@@ -2037,7 +2044,7 @@ test("C11 states the changed rules of the sign-in act in their parts: the part t
   for (const [heading, list] of Object.entries(SIGN_IN_CHANGED)) sayAll(partOr(heading), list);
   for (const s of SIGN_IN_GONE) assert.ok(!says(C11, s), `C11 no longer says: ${s}`);
   // The two methods route as the table says: the model on the root, refused on a page session.
-  for (const m of SIGN_IN_METHODS) assert.deepEqual([route("root", m), route("page", m)], ["the model", "refused"], m);
+  for (const m of SIGN_IN_METHODS) assert.deepEqual([route("root", m, {}, false, true), route("page", m, {}, false, true)], ["the model", "refused"], m);
 });
 
 // The table of what the agent sees: the cause, the result (C12's `end` event and the log line) and the text.

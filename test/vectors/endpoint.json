@@ -45,6 +45,8 @@
     {"session": "root", "method": "Browser.getHistograms", "params": {}, "example": true, "error": "Not available in the agent browser: Browser.getHistograms."},
     {"session": "page", "method": "Extensions.loadUnpacked", "params": {"path": "/x"}, "error": "Not available in the agent browser: Extensions.loadUnpacked."},
     {"session": "root", "method": "Target.exposeDevToolsProtocol", "params": {"targetId": "D1E2F3"}, "error": "Not available in the agent browser: Target.exposeDevToolsProtocol."},
+    {"session": "page", "method": "AgentBrowser.signIn", "params": {"name": "staging"}, "note": "The sign-in act's method on a page session: the model's text, never Chrome's (C11's table; review-112 B6).", "error": "Not available in the agent browser: AgentBrowser.signIn."},
+    {"session": "page", "method": "AgentBrowser.signIns", "params": {}, "note": "As AgentBrowser.signIn.", "error": "Not available in the agent browser: AgentBrowser.signIns."},
     {"session": "page", "method": "Network.setRequestInterception", "params": {"patterns": [{"urlPattern": "*"}]}, "error": "Not available in the agent browser: Network.setRequestInterception."},
     {"session": "page", "method": "Page.navigate", "params": {"url": "chrome://version"}, "error": "Not available in the agent browser: chrome: URLs (Page.navigate). Agent mode opens web pages only."},
     {"session": "page", "method": "Page.navigate", "params": {"url": "javascript:void(0)"}, "error": "Not available in the agent browser: javascript: URLs (Page.navigate). Agent mode opens web pages only."},
@@ -144,7 +146,11 @@
     {"session": "page", "method": "Browser.getWindowForTarget", "params": {}, "to": "the model"},
     {"session": "page", "method": "Browser.getVersion", "params": {}, "to": "refused"},
     {"session": "page", "method": "Target.exposeDevToolsProtocol", "params": {"targetId": "D1E2F3"}, "to": "refused"},
-    {"session": "page", "method": "Runtime.evaluate", "params": {"expression": "1"}, "to": "Chrome"}
+    {"session": "page", "method": "Runtime.evaluate", "params": {"expression": "1"}, "to": "Chrome"},
+    {"session": "root", "method": "AgentBrowser.signIn", "params": {"name": "staging"}, "note": "The sign-in act (C11): withAct is where the call goes in the service's model with the act (from stage 1e part 2, board ab-v16.97.4). The relay, and the model before that stage, have no act: the call is outside their set.", "to": "refused", "withAct": "the model"},
+    {"session": "root", "method": "AgentBrowser.signIns", "params": {}, "note": "As AgentBrowser.signIn: refused until the model has the act, then the model's.", "to": "refused", "withAct": "the model"},
+    {"session": "page", "method": "AgentBrowser.signIn", "params": {"name": "staging"}, "note": "Refused on a page session, with the act too: it never reaches Chrome (review-112 B6).", "to": "refused", "withAct": "refused"},
+    {"session": "page", "method": "AgentBrowser.signIns", "params": {}, "note": "Refused on a page session, with the act too.", "to": "refused", "withAct": "refused"}
   ],
   "cookieLimits": ["`DOMStorage.*`", "`IndexedDB.*`", "`Runtime`", "`rawCookieLine`", "`context.request`", "`page.request`", "`route.fetch()`", "`routeFromHAR`"],
   "procsNote": "The fake process tables of the session check (C11, the scope's session). world: the table; pid, ppid (field 4), start (field 22 on Linux; pbi_start_tvsec * 1000000 + pbi_start_tvusec on the Mac), state (field 3; Z on the Mac is SZOMB) and cgroup (the 0:: line; null on the Mac) of each process, as the relay reads them at the line and at the check. Every value is a sample. The relay's uid is 1001.",
