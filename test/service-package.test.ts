@@ -87,9 +87,15 @@ test("a folder without a usable key has no ID; a folder with a key has its ID", 
 test("no code of the service names the signing key (a .pem file) or reads a private key", () => {
   const src = fileURLToPath(new URL("../src/service/", import.meta.url));
   const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith(".ts") ? [join(d, e.name)] : []);
+  // Board ab-v16.97.2: the stored sign-ins' crypto builds X25519 keys from bytes in its memory (the store key, the pane
+  // key, an ephemeral key) with createPrivateKey; it reads no file and names no .pem or PEM key.
+  const KEYS_IN_MEMORY = join(src, "signins", "seal.ts");
   for (const f of walk(src)) {
     const text = readFileSync(f, "utf8");
-    assert.doesNotMatch(text, /agent-extension\.pem|PRIVATE KEY|createPrivateKey/, f);
+    if (f === KEYS_IN_MEMORY) {
+      assert.doesNotMatch(text, /agent-extension\.pem|\.pem\b|PRIVATE KEY|readFile|node:fs|format: "pem"/, f);
+      assert.match(text, /createPrivateKey\(\{ key: der, format: "der", type: "pkcs8" \}\)/, "a key from bytes in memory");
+    } else assert.doesNotMatch(text, /agent-extension\.pem|PRIVATE KEY|createPrivateKey/, f);
   }
 });
 
