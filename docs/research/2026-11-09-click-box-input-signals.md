@@ -167,12 +167,12 @@ wheel (part A), and at part B's tasks.
 | --- | --- | --- | --- | --- |
 | `isTrusted` | true (`untrusted` 0 in all 42 steps) | true | true; but `selectOption` and `setInputFiles` give `input` and `change` with false (2 events each), and `dispatchEvent('click')` gives a `click` with false | true |
 | `pointerType`, `pointerId`, `isPrimary` | `mouse`, 1, true: the Mac trackpad is a mouse to the page (all 5051 `pointermove`, `pointerdown` and `pointerup` events) | same | same | same |
-| `pressure` down / up | 0.5 / 0 (64 presses); 0.5 on moves with the button down [1] | 0.5 / 0 | 0.5 / 0 | 0.5 / 0 |
+| `pressure` down / up | 0.5 / 0: 0.5 on all 64 `pointerdown` events, 0 on all 63 `pointerup` events (the drag's press ended in `pointercancel`); 0.5 on moves with the button down [1] | 0.5 / 0 | 0.5 / 0 | 0.5 / 0 |
 | `width`, `height`, tilt, `twist`, `tangentialPressure`, `altitudeAngle` | 1, 1, 0, 0, 0, pi/2 in every pointer event [1] | same | same | same |
 | `screenX - clientX`, `screenY - clientY` | the content's offset on the screen (recorded; this doc gives no window place) | [0, 87] (its own window, no info bar) | [0, 143] | [0, 143] |
 | Fractional coordinates | integer on X11 at a pixel ratio of 1 (XTEST). The Mac trackpad: every `pointermove` (3208 of 3208 in the steps), `pointerdown` (64 of 64) and `pointerup` (63 of 63), with any fraction (256 distinct fractional parts); `mousemove` and `mousedown`: whole numbers (0 fractional) | 0 (it rounds) | when the element's middle is fractional: 1 of 1 for `check()` and for `mouse.click` at .5 | 0 |
 | Moves before a click | task 2: `movesBeforePress` median 53 (16 to 97, n 20) | 26 to 58 | 1 (one jump to the target) | as scripted (25 to 40) |
-| Pointer jumps (one move of more than 100 px) | 6 moves in the whole recording: 3 inside fast moves (7.4 to 13.4 px/ms), 3 the first move after a gap of 0.4 to 1 s (two after the pointer left the box); `jumpsOver100` 0 in 33 of 39 steps with moves | 0 | 1 at each click from another point | 1 only for a scripted jump |
+| Pointer jumps (one move of more than 100 px) | 6 `pointermove` events of the whole recording (5 of them in the steps) have \|`movementX`\| or \|`movementY`\| over 100: 3 inside fast moves (the screen distance from the move before, divided by the gap: 7.4, 9.9 and 13.4 px/ms), 3 the first move after a gap of 0.4 to 1.0 s (2 of them after the pointer left the box); `jumpsOver100` (per step; a move in two steps' windows counts in both) is 0 in 33 of 39 steps with moves | 0 | 1 at each click from another point | 1 only for a scripted jump |
 | Samples in each `pointermove` (`getCoalescedEvents()`) | the trackpad at about 120 Hz on a 120 Hz display: `coalesced.mean` 1.01 to 1.19 per step (median 1.05, n 38), `coalesced.max` 3; of 3208 moves, 95.1% have 1 sample, 4.8% 2, 0.1% 3. More than 1 when the device reports faster than the frame rate; "Mice deliver input typically at 100Hz" [7]; a mouse: not measured | 1 | 1 | 125 Hz: mean 1.85 to 2.0, max 3; about 400 Hz: mean 5.3 to 5.5, max 10; 60 Hz: 1 |
 | Predicted points (`getPredictedEvents()`) | `predicted.mean` 2.15 to 2.79 per step (median 2.46, p10 2.22, p90 2.69, n 38), `predicted.max` 3; of 3208 moves, 72.5% have 3, 12.6% 2, 0.2% 1, 14.7% 0 | mean 0.8 to 0.95, max 1 or 2 | 0 for a click; 0.85 for `steps` | 125 Hz: mean 1.86 to 2.71, max 3; about 400 Hz: 8; 60 Hz: 0.9 |
 | Gap between samples | the trackpad's: `sampleGapMs.median` 8.1 ms in every step; the gaps of 20 ms or less (95% of 3319): median 8.1, p10 7.9, p90 8.3, mean 8.30 ms, 78% from 7.95 to 8.25 ms. The frames: `frameGapMs` 8.3 ms | 16 to 17 ms | `steps`: 16.4 to 16.9 ms | as scripted: 8 ms (125 Hz), 2 to 3 ms, 17 ms |
@@ -196,10 +196,10 @@ wheel (part A), and at part B's tasks.
 | A field gets the focus with no press | no; part B: `focusWithNoPress` 0 | 0 | 1 for each of `fill`, `pressSequentially`, `type`, `press`, `focus` and `selectText` on a field without the focus | 0 |
 | Modifiers at a click | a modifier key held from before the press to after the release (not measured: no task) | not measured (no modifier click) | `click({ modifiers })`: the modifier's `keydown`, then the click with the modifier flag, then its `keyup`, 6 ms in all | not measured |
 | Other buttons and clicks | `contextmenu` and `auxclick` for the right button, `auxclick` for the middle one (not measured: no task) | not measured | the right button: `pointerdown`, `mousedown`, `contextmenu`, `pointerup`, `mouseup`, `auxclick`; the middle one: the same without `contextmenu`; `clickCount: 3` and `dblclick`: 3 and 2 clicks 0.1 ms apart | not measured |
-| Wheel notch on X11 | `deltaY` 120, `wheelDeltaY` -120, `deltaMode` 0 (measured with XTEST button 5). The Mac trackpad: `deltaMode` 0 in all 572 wheel events; whole-px deltas, \|`deltaY`\| median 13 (p10 3, p90 38; 1 to 60); `wheelDeltaY` = -3 x `deltaY`; `deltaX` not 0 in 74 events (at most 11 px); one event each frame (`gapMs.median` 8.3); a scroll of 36 to 133 events (section 8.3) | `deltaY` 100, `wheelDeltaY` -120, 20 notches, gaps 35 to 86 ms (median 55 to 65 ms) | `mouse.wheel(0, 600)`: one event, `deltaY` 600, `wheelDeltaY` -120 | `deltaY` 120, `wheelDeltaY` -120 |
+| Wheel notch on X11 | `deltaY` 120, `wheelDeltaY` -120, `deltaMode` 0 (measured with XTEST button 5). The Mac trackpad: `deltaMode` 0 in all 572 wheel events; whole-px deltas; `wheelTrains.absDeltaYPx` (\|`deltaY`\|): median 13 (p10 3, p90 38; 1 to 60); `wheelDeltaRatio` -3 (-2.95 to -3: `wheelDeltaY` = -3 x `deltaY`); `deltaXEvents` 74 (`absDeltaXPx` 1 to 11, median 2); one event each frame (`wheel.gapMs.median` 8.3 in each leg); a scroll of 36 to 133 events (section 8.3) | `deltaY` 100, `wheelDeltaY` -120, 20 notches, gaps 35 to 86 ms (median 55 to 65 ms) | `mouse.wheel(0, 600)`: one event, `deltaY` 600, `wheelDeltaY` -120 | `deltaY` 120, `wheelDeltaY` -120 |
 | A scroll with no wheel or key | no; part B: `scrollsWithNoWheelOrKey` 0 in the 4 legs of task 4 | 0 | 1 for `scrollIntoViewIfNeeded` and for a click below the fold | 0 |
-| Drag | pointer moves with the button down, then the drop. Part B, one drag: a `dragstart` with the press's own event time (its handler runs 145 ms later), 2 moves with the button down, `pointercancel`, then 208 `drag` and 207 `dragover` events, 201 of each with `buttons` 1 (the rest after the release, with 0); no `drop` (the page takes none); `dragend` 1090 ms after the `dragstart` | not measured (no drag command) | one move with the button down; `dragstart`, `pointercancel`, `dragend`; the drop goes by `Input.dispatchDragEvent` | not measured |
-| Event time later than the handler's time (raw CDP with a `timestamp` in the future: every event, 12 to 304 ms later, median 123 and 130 ms in the two runs) | never (part B: 0 of 13,572 events) | never | never | never |
+| Drag | pointer moves with the button down, then the drop. Part B, one drag (`dragEvents`): a `dragstart` with the press's own event time (`pressToDragstartMs` 0; `dragstartLagMs` 145.4), 2 moves with the button down (`movesHeld`), a `pointercancel` (`pointercancelMs` 133.2), then 208 `drag` and 207 `dragover` events, 201 of each with `buttons` 1 (`dragButton1`, `dragoverButton1`; the rest after the release, with 0); no `drop` (the page takes none); `dragMs` 1090.4 from the `dragstart` to the `dragend` | not measured (no drag command) | one move with the button down; `dragstart`, `pointercancel`, `dragend`; the drop goes by `Input.dispatchDragEvent` | not measured |
+| Event time later than the handler's time (raw CDP with a `timestamp` in the future: every event, 12 to 304 ms later, median 123 and 130 ms in the two runs) | never (part B: 0 of the 13,572 records with a handler time, by the harness's `eventsAfterHandler` rule) | never | never | never |
 | The page's own state (`pointer: fine`, `hover`, `maxTouchPoints` 0) | the machine's (recorded; this doc names only macOS, Chrome 156, the trackpad and the 120 Hz display) | same in all paths (the Chromium and Xvfb of the run) | same | same |
 
 ## 4. What each path shows
@@ -389,10 +389,10 @@ are not yet bars (ab-t30.13 sets the parameters and the bars from them).
 | P1 | Report rate: samples per `pointermove` and predicted points | 60 Hz: 1 sample, 0 or 1 predicted point | the person's device rate. Part B (the trackpad, a 120 Hz display): `coalesced.mean` 1.01 to 1.19 per step (median 1.05, n 38), `predicted.mean` 2.15 to 2.79 (median 2.46), sample gaps median 8.1 ms (p10 7.9, p90 8.3; n 3152). The counts follow the device rate against the frame rate; a mouse: not measured | the distributions of `nc` and `np`, and of the sample gaps, against the person's |
 | P2 | Sample times | 31% to 75% on a whole millisecond (chance: about 30%) | whole milliseconds on Linux (X11); the Mac (part B): not whole milliseconds (the gaps outside the 8 ms cluster: 25%, n 222); never later than the handler's time (part B: 0 of 13,572) | the share of whole-millisecond gaps; the count of events with a time after the handler's time |
 | P3 | Path shape | ghost-cursor: straightness 0.72 to 0.97, 0.4 to 1.1 s for each measured path (its settings: a Fitts time of 300 to 1000 ms, and an overshoot for a move over 500 px) | a person's curvature, speed profile, sub-movements and end corrections; a person's spread, not one model. Part B, task 2 (n 20): straightness median 0.95 (0.18 to 1.0; 10 of 20 above 0.94), maximum deviation median 24.8 px, peak speed median 3.56 px/ms (max 13.38), the harness's `fittsRatio` median 0.91 (0.30 to 1.53), one speed peak in 15 of 20 | straightness, maximum deviation, peak and mean speed, duration against Fitts's index of difficulty, the number of speed peaks; distance between distributions (for example a Kolmogorov-Smirnov statistic) |
-| P4 | The end of the path in the box | 7 to 10 moves inside the box, almost straight (0.98 to 1.0) | a person's approach to a 24 px target in a 300 x 65 box. Part B, task 1 (n 10): the entry 0.2 to 12.2 px from the edge (median 4), 25 to 65 samples in the box before the press (median 41, p90 47), 236 to 747 ms from the entry to the press (median 518), straightness in the box 0.24 to 0.99 (median 0.89) | the box frame's own view: entry point, moves inside, straightness, time from entry to press |
+| P4 | The end of the path in the box | 7 to 10 moves inside the box, almost straight (0.98 to 1.0) | a person's approach to a 24 px target in a 300 x 65 box. Part B, task 1 (n 10), the harness's box measures: `entryEdgePx` 0.2 to 12.2 (median 4), `entryToPressMs` 236 to 747 (median 518), `straightness` 0.24 to 0.99 (median 0.89); and 25 to 65 samples in the box before the press (`path.samples`, median 41, p90 47) | the box frame's own view: entry point, moves inside, straightness, time from entry to press |
 | P5 | Pause before the press, and the press | pause 96 to 183 ms, press 73 to 94 ms (uniform, fixed ranges) | the person's distributions. Part B, tasks 1 and 2 (n 30): `pauseBeforePressMs` median 19.1 (p10 17.2, p90 43.4), `pressMs` median 87.6 (p10 74.9, p90 104; 70.8 to 154.3) | the pause and press distributions |
 | P6 | The pointer between commands | no movement at all between commands | a person's idle hand. Part B, task 6: no move in 10 s with the hand on the trackpad | moves per second between steps; time from the page's load to the first move |
-| P7 | Wheel | notches of 100 px with `wheelDeltaY` -120, 35 to 86 ms apart (median 55 to 65 ms) | the platform's notch (X11: 120 px, measured) or the Mac trackpad's scroll (part B): `deltaMode` 0, \|`deltaY`\| median 13 px (1 to 60), `wheelDeltaY` -3 x `deltaY`, one event each frame (8.3 ms), 36 to 133 events in a scroll with a rise and a long falling tail (section 8.3) | `deltaY` values, `wheelDeltaY / deltaY`, gaps between wheel events, wheel events per scroll |
+| P7 | Wheel | notches of 100 px with `wheelDeltaY` -120, 35 to 86 ms apart (median 55 to 65 ms) | the platform's notch (X11: 120 px, measured) or the Mac trackpad's scroll (part B): `deltaMode` 0, \|`deltaY`\| median 13 px (`absDeltaYPx`, 1 to 60), `wheelDeltaRatio` -3, one event each frame (`gapMs` 8.3 ms), 36 to 133 events in a scroll (`wheelTrains`) with a rise and a long falling tail (section 8.3) | `deltaY` values, `wheelDeltaY / deltaY`, gaps between wheel events, wheel events per scroll |
 | P8 | Frame phase: handler time minus event time | median 10 to 15 ms in most steps (4.1 to 14.8): one move just after each frame | a person's phase at the person's rate (X input at 125 Hz: 1.8 to 8.7 ms; at 60 Hz: 7.4 to 13.4 ms; part B, the Mac trackpad at 120 Hz: 4.8 to 10.3 ms per step, median 6.8) | `handlerLagMs` (`analyze.ts`): its distribution per step against the person's, read together with P1's rate |
 
 ### ab-t30.4: keyboard patterns
@@ -417,7 +417,7 @@ are not yet bars (ab-t30.13 sets the parameters and the bars from them).
 | R5 | `mouse.wheel` | one wheel event of 600 px | notches of the platform's size at a person's rate (P7) | as P7 |
 | R6 | `scrollIntoViewIfNeeded`, the scroll before a click below the fold | a scroll with no wheel (`DOM.scrollIntoViewIfNeeded`) | answer the call with wheel notches that bring the element into view, as `src/input.ts` does | scrolls with no wheel or key: 0 |
 | R7 | `selectOption`, `setInputFiles` | script events with `isTrusted` false; no input | the design decides: for example a click and keys for a `select`, a click that opens the file chooser for a file input (as `setFiles` does) | untrusted events: 0 |
-| R8 | `dragTo` | one move with the button down; the drop by protocol | a path with the button down at a person's rate (part B: a Mac drag gives `drag` and `dragover` events with `buttons` 1, in bursts about 8 ms apart) | moves with `buttons` 1 between `pointerdown` and the drop |
+| R8 | `dragTo` | one move with the button down; the drop by protocol | a path with the button down at a person's rate (part B: a Mac drag gives `drag` and `dragover` events with `buttons` 1, in bursts: `dragEvents.gapMs` median 0.3 ms, at most 10.7) | moves with `buttons` 1 between `pointerdown` and the drop |
 | R9 | all pointer actions | `x.5` points from element middles | whole device pixels on Linux; on the Mac (part B), fractional points with any fraction in every pointer event, whole numbers in mouse events | fractional coordinate count |
 | R10 | all input | CDP times, one call a frame | the `timestamp` parameter at the real send time, rounded to a whole millisecond on Linux (P2), never in the future; moves sent without waiting for each answer, at the device rate (P1, P8) | as P1, P2 and P8 |
 | R11 | all input | the X pointer stays where it was | the X pointer at each activation (the earlier report, section 5; ab-v16.71) | pointer jumps at an activation: 0 |
@@ -459,82 +459,100 @@ no typed text, no key value, no user agent, no screen or window size or place, n
 
 The person column of section 3 and the targets of section 7 hold them, each with its measure and its n (section 3
 says how). `analyze.ts` gives the per-step values, and since part B also the drag's step (`dragEvents`) and the wheel
-trains (`wheelTrains`: a train ends at a gap over 100 ms or at a change of direction). The harness's `measures.ts`
-gives the values per event (`holds`, `downToDown`, the samples per move, the box's entry). A person's numbers file
-holds each step's key codes and first points: it is never committed.
+trains (`wheelTrains`: a train ends at a gap over 100 ms or at a change of direction, each axis against itself). The
+harness's `measures.ts` gives the values per event (`holds`, `downToDown`, the samples per move, the sample gaps, the
+box's entry). A few values are this doc's own counts from the harness's records and samples; each one says so. A
+person's numbers file holds each step's key codes and first points: it is never committed.
 
 ### 8.3 What part B changes for later work
 
 Part B measures; it sets no parameter and no bar. Board task ab-t30.13 (design section 14, task 9) sets them.
 
-1. **The rate (P1; the harness's P1 bar and `STAGE_MOVE_MS`).** The trackpad samples at about 120 Hz: sample gaps
-   median 8.1 ms (p10 7.9, p90 8.3; mean 8.30 ms for the gaps of 20 ms or less), on a display with a frame gap of
-   8.3 ms. So a `pointermove` holds 1.01 to 1.19 samples on average per step (median 1.05), where XTEST at 125 Hz on
-   taylor's Xvfb (60 Hz frames) gives 1.87 to 1.97 (design 9.1). The count follows the device rate against the frame
-   rate: the Mac's count is no bar for a run on taylor, and XTEST's is none for the Mac. The person's gaps (8.0 to 8.3
-   ms) lie between C11's first value of 8 ms and the 8.33 ms at which the player's predicted points pass XTEST's
-   same-path bar (ab-t30.3: 1.92 at 8.33 ms, 2.42 at 8 ms).
-2. **Predicted points (P1; design 9.1, open point 3).** 2.15 to 2.79 per step (median 2.46). Design 9.1 says that
-   after part B the bar is the person's range. CDP's design form gave 2.3 to 2.7 on taylor (M1): inside it. XTEST gave
-   1.80 to 2.11. The person's range comes from a 120 Hz display; on a 60 Hz display it is not measured.
+1. **The rate (P1; the harness's P1 bar and `STAGE_MOVE_MS`).** The trackpad samples at about 120 Hz: the gaps between
+   the coalesced samples (the harness's sample gaps, each once; the 95% of 20 ms or less) have a median of 8.1 ms
+   (p10 7.9, p90 8.3) and a mean of 8.30 ms, on a display with a frame gap of 8.3 ms (`frameGapMs`). So a
+   `pointermove` holds 1.01 to 1.19 samples on average per step (`coalesced.mean`, median 1.05), where XTEST at 125 Hz
+   on taylor's Xvfb (60 Hz frames) gives 1.87 to 1.97 (design 9.1). The count follows the device rate against the frame
+   rate: the Mac's count is no bar for a run on taylor, and XTEST's is none for the Mac. C11's first value for the
+   player's period is 8 ms. PR #109 (ab-t30.3) found that the player's predicted points on XTEST's paths depend on that
+   period (its board comment on ab-t30.13 gives the values at 8 ms and at 8.33 ms).
+2. **Predicted points (P1; design 9.1, open point 3).** `predicted.mean` 2.15 to 2.79 per step (median 2.46, n 38), in
+   one session on a 120 Hz display. Design 9.1 says that after part B the bar is the person's range. But M1's CDP form
+   (2.3 to 2.7) and XTEST (1.80 to 2.11, below the person's range) ran on taylor's Xvfb with 60 Hz frames, and the
+   counts per `pointermove` depend on the rate of the samples against the frames (point 1). So this comparison does not
+   settle open point 3: ab-t30.13 decides it.
 3. **The times (P2, R10).** The Mac's event times are not on whole milliseconds (R10 rounds on Linux only). The
    share of whole-ms gaps, 0.55 to 0.83 per step (`sampleGapMs.wholeMs`), comes from the cluster of gaps at 8.0 to
-   8.2 ms, within 0.15 ms of 8. The gaps outside 7.5 to 20 ms are 25% whole (n 222), near chance (30%), and the
-   wheel's gaps 13%. So a P2 bar for the Mac compares the gaps, not only the share. No event came after its handler
-   (0 of 13,572).
-4. **Path shapes (P3).** Task 2's 20 moves: straightness median 0.95, and 10 of 20 above 0.94, between [13]'s 28.6%
-   and the generator's 85% (ab-t30.3). Peak speed median 3.56 px/ms (max 13.38): 11 of 20 are above the design's
-   limit of 3.5 px/ms. The harness's `fittsRatio` (the time against Fitts's time with the design's first values):
-   median 0.91 (0.30 to 1.53). One speed peak in 15 of 20 moves. The 4 moves with a chord over 400 px (at most 865 px)
-   took 510 to 1278 ms; part B has no move of 1000 px or more (the task area is 900 px wide).
+   8.2 ms, within 0.15 ms of 8. By the same rule (the harness's `isWholeMs`), the sample gaps outside 7.5 to 20 ms are
+   25% whole (n 222), near chance (30%), and the gaps between wheel events 13%. So a P2 bar for the Mac compares the
+   gaps, not only the share. No event came after its handler (0 of the 13,572 records with a handler time, by the
+   harness's `eventsAfterHandler` rule).
+4. **Path shapes (P3).** Task 2's 20 moves: `path.straightness` median 0.95, and 10 of 20 above 0.94, between [13]'s
+   28.6% and the 85% that the generator's first values give (PR #109; its board comment on ab-t30.13).
+   `path.peakPxPerMs` median 3.56 (max 13.38): 11 of 20 are above the design's limit of 3.5 px/ms. The harness's
+   `fittsRatio` (the time against Fitts's time with the design's first values): median 0.91 (0.30 to 1.53). One speed
+   peak (the harness's `speedPeaks`) in 15 of 20 moves. The 4 moves with a chord over 400 px (the harness's `chordPx`,
+   at most 865 px) took 510 to 1278 ms (`path.ms`); part B has no move of 1000 px or more (the task area is 900 px
+   wide).
 5. **The box approach (P4; ab-t30.13's B2 note).** 25 to 65 samples inside the 300 x 65 frame before the press
-   (median 41, p90 47; n 10), at about 120 Hz. Design 10.1 says 8 to 20; the generator gives a median of about 24 and
-   a 90% value of about 46 (review-109 B2). The entry: 0.2 to 12.2 px from the edge (median 4). From the entry to the
-   press: 236 to 747 ms (median 518). The path in the box is not straight: straightness median 0.89 (0.24 to 0.99).
+   (`path.samples` of the box's press: median 41, p90 47; n 10), at about 120 Hz. Design 10.1 says 8 to 20; the
+   generator gives a median of about 24 and a 90% value of about 46 (review-109 B2). The harness's box measures:
+   `entryEdgePx` 0.2 to 12.2 (median 4); `entryToPressMs` 236 to 747 (median 518); `straightness` 0.24 to 0.99 (median
+   0.89): the path in the box is not straight.
 6. **The pause and the press (P5).** `pauseBeforePressMs` median 19.1 ms (p10 17.2, p90 43.4; n 30), against the
    design's first value (a lognormal, median 140 ms, 80 to 400 ms). The trackpad's pointer drifts by less than a
    pixel up to the press: the last sample 1 px or more from the press point comes a median of 49.5 ms before the press
    (p10 35.3, p90 78.2; 26.1 to 188.9; this doc's count from the harness's samples, not an `analyze.ts` field).
    `pressMs` median 87.6 ms (70.8 to 154.3; the 38 presses of the steps fit a lognormal with median 87.6 and sigma
-   0.20), against the design's median of 100 ms (60 to 180). In 38 of the recording's 63 presses, one `pointermove` of
-   less than 1 px comes between `pointerdown` and `pointerup`; the stage's press has none.
+   0.20), against the design's median of 100 ms (60 to 180). In 38 of the recording's 63 presses with a `pointerup`,
+   one `pointermove` of less than 1 px comes between `pointerdown` and `pointerup` (this doc's count); the stage's
+   press has none.
 7. **The idle hand (P6, Q4).** Task 6: no move and no wheel event in 10 s with the hand on the trackpad, as Q4's
    answer (no idle moves) has it.
 8. **The Mac's wheel (P7; design 8.5, build task 9).** All 572 wheel events have `deltaMode` 0 and whole-px deltas.
-   \|`deltaY`\| median 13 px (p10 3, p90 38; 1 to 60). `wheelDeltaY` is -3 x `deltaY` (an X11 notch: -1 x; CDP on
-   Linux Chromium gives -120 or 120 for any delta, section 4.4; CDP on the Mac: not measured). `deltaX` is not 0 in 74
-   events (at most 11 px). One event comes each frame (gap median 8.3 ms). A scroll (a wheel train) has 36 to 133
-   events (median 67, n 7), lasts 289 to 1264 ms and moves 428 to 2231 px. Its \|delta\| rises to a peak of 16 to 60 px
-   within 7 to 21 events, then falls: the last run of events whose \|delta\| does not rise holds 14 to 82 events (167 to
-   675 ms) and ends at 1 to 15 px. That tail is the trackpad's momentum (inferred: a page cannot see the trackpad's
-   phase). The stage's notches (120 px, 35 to 90 ms apart) are a Linux wheel's; the Mac trackpad's scroll has another
-   shape.
-9. **Keys (K1 to K5; ab-t30.4, design 10.2).** Hold median 80.3 ms (mean 81.8, SD 19.0), against design 10.2's mean
-   of 116 ms (SD 24). Press to press median 128.9 ms (mean 207), against 239 ms on average. Overlap: 16.5% of keys, at
-   the low end of the harness's bar (15% to 50%). Shift: a Shift press before each shifted character (10 of 10). From
-   the Shift's `keydown` to the character's: median 147.7 ms (47.8 to 471.8), against the design's 45 to 95 ms. The
-   Shift goes up after the character's `keyup` in 7 of 10 (median 38.0 ms after; -40.2 to 384.8), against the
-   design's 15 to 60 ms. The Shift of the other hand (`shiftOtherHand`): 5 of the 8 Shift presses with a side and a
-   shifted first character (`shiftSided`; the design: about 70%). 4 Backspace in 106 keys.
+   \|`deltaY`\| median 13 px (`absDeltaYPx`: p10 3, p90 38; 1 to 60). `wheelDeltaY` is -3 x `deltaY`
+   (`wheelDeltaRatio`; an X11 notch: -1 x; CDP on Linux Chromium gives -120 or 120 for any delta, section 4.4; CDP on
+   the Mac: not measured). `deltaX` is not 0 in 74 events (`deltaXEvents`; `absDeltaXPx` 1 to 11, median 2). One event
+   comes each frame (`wheel.gapMs.median` 8.3 ms in each leg). A scroll (a wheel train) has 36 to 133 events
+   (`events`, median 67, n 7), lasts 289 to 1264 ms (`ms`) and moves 428 to 2231 px down or up (`px`, the sum of
+   \|`deltaY`\|) and 6 to 48 px sideways (`pxX`). Its \|`deltaY`\| rises to a peak of 16 to 60 px (`peakPx`) within 7
+   to 21 events (`toPeak`), then falls: the last run of events whose \|`deltaY`\| does not rise holds 14 to 82 events
+   (`tailEvents`; 167 to 675 ms, `tailMs`) and ends at 1 to 15 px (`lastPx`). That tail is the trackpad's momentum
+   (inferred: a page cannot see the trackpad's phase). The stage's notches (120 px, 35 to 90 ms apart) are a Linux
+   wheel's; the Mac trackpad's scroll has another shape.
+9. **Keys (K1 to K5; ab-t30.4, design 10.2).** Hold median 80.3 ms (the harness's `holds`: mean 81.8, SD 19.0),
+   against design 10.2's mean of 116 ms (SD 24). Press to press median 128.9 ms (`downToDown`: mean 207), against 239
+   ms on average. Overlap: 17 of 103 keys (`overlaps`: 16.5%), at the low end of the harness's bar (15% to 50%). Shift:
+   a Shift press before each shifted character (`shiftedWithShiftKeyDown` 10 of 10). From the Shift's `keydown` to the
+   character's: median 147.7 ms (47.8 to 471.8), against the design's 45 to 95 ms; the Shift goes up after the
+   character's `keyup` in 7 of 10 (`shiftUpAfter`), a median of 38.0 ms after it (-40.2 to 384.8), against the design's
+   15 to 60 ms (these two times are this doc's count: the Shift `keydown` that holds the character, and the first Shift
+   `keyup` after it). The Shift of the other hand: 5 (`shiftOtherHand`) of the 8 Shift presses with a side and a
+   shifted first character (`shiftSided`; the design: about 70%). 4 Backspace in 106 keys (`backspaces`).
 10. **Bars that are Linux bars (R9, M1, R1, R2).** On the Mac, every pointer event has a fractional point with any
-    fraction, and every mouse event a whole one: R9's bar of 0 is Linux's. `movementX/Y` differs from the rounded
-    change of the screen point in 30% to 53% of a step's moves (`movementMismatch`, median 40%): the harness's M1 row
-    (bar 0) would fail the person. Fast moves (7.4 to 13.4 px/ms) give a `movementX/Y` over 100 px three times: R1
-    and R2's bar of 0 jumps would count them. CDP's own events on the Mac: not measured.
+    fraction, and every mouse event a whole one (`fractional.pointer` equals `moves` in each step; `fractional.mouse`
+    0): R9's bar of 0 is Linux's. `movementX/Y` differs from the rounded change of the screen point in many moves:
+    `movementMismatch` (a count) is 0.30 to 0.53 of `moves` per step (median 0.40), so the harness's M1 row (bar 0)
+    would fail the person. 6 moves of the recording have a `movementX/Y` over 100 px (section 3): 3 inside fast moves
+    (7.4, 9.9 and 13.4 px/ms), and 3 after a gap; R1 and R2's bar of 0 jumps would count them. CDP's own events on the
+    Mac: not measured.
 11. **The drag (R8; PR #97's open point 8).** Yes: a Mac drag gives `drag` and `dragover` events with `buttons` 1:
-    201 of 208 `drag` and 201 of 207 `dragover`. The last 7 and 6, after the release, have `buttons` 0. The harness's R8
-    count (moves and drag events with the button down from the press to the `dragend`) is 404 (bar: 6 or more). The
-    `dragstart` carries the press's own event time, and its handler runs 145.4 ms later. `pointercancel` comes 133 ms
-    after the press, the first `drag` 153.8 ms after it. The `drag` events come in bursts about 8 ms apart (gap median
-    0.3 ms; 71% repeat the point before; the event time is the handler's time). `dragend` comes 1090 ms after the
-    `dragstart`, 564 ms after the first `drag` with `buttons` 0 (the drop was refused). One drag only.
+    201 of 208 `drag` and 201 of 207 `dragover` (`dragButton1`, `dragoverButton1`). The last 7 and 6, after the
+    release, have `buttons` 0. The harness's R8 count (moves and drag events with the button down from the press to
+    the `dragend`) is 404 (bar: 6 or more). The `dragstart` carries the press's own event time (`pressToDragstartMs`
+    0), and its handler runs 145.4 ms later (`dragstartLagMs`). The `pointercancel` comes 133.2 ms after the press
+    (`pointercancelMs`), the first `drag` 153.8 ms after it (`firstDragMs`). The `drag` events come in bursts:
+    `gapMs` median 0.3 ms (0 to 10.7), 71% repeat the point before (`samePointShare`), and the event time is the
+    handler's time (`lagMs` 0). `dragMs` 1090.4 from the `dragstart` to the `dragend`, 564 ms after the first `drag`
+    with `buttons` 0 (this doc's count; the drop was refused). One drag only.
 12. **Tab (task 5).** One Tab reached the box's square in both rounds: the plan's open question about the Mac's
     keyboard setting has its answer for this Mac.
 
 ### 8.4 The plan (the record of how part B ran)
 
-The plan, as written before the run. The run followed it, with three differences: one device, one drag of the three,
-and the drag between tasks 1 and 2.
+The plan, as written before the run: tasks 1 to 7. The run followed it with one device only. This plan has no drag:
+after PR #97, the lead's steps for the operator added task 8 (three drags of "Drag me" onto "Drop here"), and the
+recording holds one of those drags, between tasks 1 and 2.
 
 A person moves, clicks and types on the recorder page: the operator, at the Mac, in Google Chrome. It runs later,
 through the manager, when the operator is at the Mac, under the Mac rules. No agent runs anything on the Mac for it.

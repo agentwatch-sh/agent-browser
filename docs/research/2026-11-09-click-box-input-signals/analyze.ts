@@ -1,5 +1,6 @@
 // The analysis of the input probe (probe.ts) and of a person's recording (recorder.html, "Save JSON") for board task
-// ab-t30.1 (docs/research/2026-11-09-click-box-input-signals.md). Not part of `npm test`.
+// ab-t30.1 (docs/research/2026-11-09-click-box-input-signals.md). `npm test` runs it on small recordings and on the
+// committed results (test/click-box-analyze.test.ts).
 //
 //   node analyze.ts RESULTS.json [--summary OUT.json] [--traces OUT.json]
 //
@@ -216,6 +217,7 @@ function metrics(list: R[]) {
   if (dg.length || dov.length) {
     const ds = by("dragstart")[0], de = ds ? by("dragend").find((r) => r.t >= ds.t) : undefined;
     const press = ds ? downs.filter((r) => r.f === ds.f && r.t <= ds.t).at(-1) : undefined;
+    const cancel = press ? by("pointercancel").find((r) => r.t >= press.t) : undefined;
     const held = (r: R) => ((r.bs ?? 0) & 1) === 1;
     const dgg: number[] = [];
     let same = 0;
@@ -223,6 +225,7 @@ function metrics(list: R[]) {
     out.dragEvents = { drag: dg.length, dragover: dov.length, dragButton1: dg.filter(held).length, dragoverButton1: dov.filter(held).length,
       dragstarts: by("dragstart").length, dragends: by("dragend").length, drops: by("drop").length, pointercancel: by("pointercancel").length,
       pressToDragstartMs: ds && press ? r1(ds.t - press.t) : null, dragstartLagMs: ds && typeof ds.h === "number" ? r1(ds.h - ds.t) : null,
+      pointercancelMs: press && cancel ? r1(cancel.t - press.t) : null,
       firstDragMs: press && dg[0] ? r1(dg[0].t - press.t) : null, dragMs: ds && de ? r1(de.t - ds.t) : null,
       movesHeld: press ? moves.filter((r) => r.t > press.t && held(r)).length : null,
       gapMs: { median: r1(median(dgg)), range: range(dgg) }, lagMs: r1(median(dg.map((r) => r.h - r.t))), samePointShare: dgg.length ? r2(same / dgg.length) : null };
@@ -236,31 +239,41 @@ function metrics(list: R[]) {
 
 /**
  * The wheel's trains (P7: wheel events per scroll; part B): a train ends at a gap above WHEEL_TRAIN_GAP_MS or at a change
- * of direction. For each train: the step that holds its start, its events, time and pixels (the sum of |delta|), its peak
- * |delta| and the events before the peak, its tail (the last run of events whose |delta| does not rise: a trackpad's
- * momentum ends a scroll so) with that run's events and time, its last |delta| and its median gap. |delta| is |deltaY|,
- * or |deltaX| when deltaY is 0. Also the |delta| distribution and the wheelDelta / delta ratios of all the wheel events.
+ * of direction, each axis against itself: the sign of a deltaY against the train's last deltaY that is not 0; in a train
+ * with no deltaY yet (a sideways scroll), the sign of an event's deltaX (with deltaY 0) against the train's last deltaX
+ * that is not 0. A sideways drift that turns in a vertical scroll (a trackpad gives one) does not end it. For each train: the step that holds its start, its events,
+ * its time, its pixels (px: the sum of |deltaY|; pxX: the sum of |deltaX|), and on its events with a deltaY that is not
+ * 0: the peak |deltaY| and the events before the peak, its tail (the last run of events whose |deltaY| does not rise: a
+ * trackpad's momentum ends a scroll so) with that run's events and time, and its last |deltaY|; its median gap. Also, of
+ * all the wheel events: the |deltaY| distribution (deltaY not 0), the count and the |deltaX| distribution of the events
+ * with a deltaX that is not 0, and the wheelDelta / delta ratios.
  */
 function wheelTrains(wheels: R[], stepOf: (t: number) => string | null) {
-  const d = (r: R) => (r.dy || r.dx || 0) as number;
+  const dy = (r: R) => (r.dy || 0) as number, dx = (r: R) => (r.dx || 0) as number;
+  const lastSign = (t: R[], d: (r: R) => number) => { const r = [...t].reverse().find((x) => d(x)); return r ? Math.sign(d(r)) : 0; };
+  const turnsOn = (t: R[], w: R, d: (r: R) => number) => d(w) !== 0 && lastSign(t, d) !== 0 && Math.sign(d(w)) !== lastSign(t, d);
+  const turns = (t: R[], w: R) => turnsOn(t, w, dy) || (dy(w) === 0 && !t.some((x) => dy(x) !== 0) && turnsOn(t, w, dx));
   const trains: R[][] = [];
   for (const w of wheels) {
-    const last = trains.at(-1)?.at(-1);
-    if (!last || w.t - last.t > WHEEL_TRAIN_GAP_MS || (d(w) && d(last) && Math.sign(d(w)) !== Math.sign(d(last)))) trains.push([w]);
-    else trains.at(-1)!.push(w);
+    const cur = trains.at(-1), last = cur?.at(-1);
+    if (!cur || !last || w.t - last.t > WHEEL_TRAIN_GAP_MS || turns(cur, w)) trains.push([w]);
+    else cur.push(w);
   }
-  const abs = wheels.map((w) => Math.abs(d(w))).sort((a, b) => a - b);
-  const q = (p: number) => abs[Math.min(abs.length - 1, Math.floor(p * (abs.length - 1) + 0.5))];
+  const dist = (a: number[]) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), q = (p: number) => s[Math.min(s.length - 1, Math.floor(p * (s.length - 1) + 0.5))];
+    return { p10: r2(q(0.1)), median: r2(median(s)), p90: r2(q(0.9)), range: range(s) }; };
+  const ys = wheels.filter((w) => dy(w) !== 0), xs = wheels.filter((w) => dx(w) !== 0);
   const ratios = wheels.map((w) => (w.dy && typeof w.wdy === "number" ? w.wdy / w.dy : w.dx && typeof w.wdx === "number" ? w.wdx / w.dx : null)).filter((v) => v !== null);
-  return { splitMs: WHEEL_TRAIN_GAP_MS, absDeltaPx: { p10: r2(q(0.1)), median: r2(median(abs)), p90: r2(q(0.9)), range: range(abs) }, wheelDeltaRatio: uniq(ratios.map((v) => r2(v))).slice(0, 4),
+  return { splitMs: WHEEL_TRAIN_GAP_MS, absDeltaYPx: dist(ys.map((w) => Math.abs(dy(w)))), deltaXEvents: xs.length, absDeltaXPx: dist(xs.map((w) => Math.abs(dx(w)))),
+    wheelDeltaRatio: uniq(ratios.map((v) => r2(v))).slice(0, 4),
     trains: trains.map((t) => {
-      const a = t.map((w) => Math.abs(d(w))), peak = Math.max(...a);
+      const yt = t.filter((w) => dy(w) !== 0), a = yt.map((w) => Math.abs(dy(w))), peak = a.length ? Math.max(...a) : null;
       let k = a.length - 1;
       while (k > 0 && a[k] <= a[k - 1]) k--;
       const g: number[] = [];
       for (let i = 1; i < t.length; i++) g.push(t[i].t - t[i - 1].t);
-      return { step: stepOf(t[0].t), events: t.length, ms: r1(t.at(-1)!.t - t[0].t), px: r1(a.reduce((x, y) => x + y, 0)), peakPx: peak, toPeak: a.indexOf(peak),
-        tailEvents: a.length - k, tailMs: r1(t.at(-1)!.t - t[k].t), lastPx: a.at(-1)!, gapMs: r1(median(g)) };
+      return { step: stepOf(t[0].t), events: t.length, ms: r1(t.at(-1)!.t - t[0].t), px: r1(a.reduce((x, y) => x + y, 0)), pxX: r1(t.reduce((x, w) => x + Math.abs(dx(w)), 0)),
+        peakPx: peak, toPeak: peak === null ? null : a.indexOf(peak), tailEvents: a.length ? a.length - k : 0, tailMs: a.length ? r1(yt.at(-1)!.t - yt[k].t) : null,
+        lastPx: a.length ? a.at(-1)! : null, gapMs: r1(median(g)) };
     }) };
 }
 
