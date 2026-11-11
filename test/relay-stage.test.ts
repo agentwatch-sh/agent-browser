@@ -763,6 +763,22 @@ test("review B1 case 2: mouse.down() whose mousedown opens confirm(), no client 
   assert.equal(r.stage.lock.held, 0);
 });
 
+test("review B1 case 2, with no step running: a dialog that opens after mouse.down()'s answer (a timer of the page): the end's own step holds the tab's gate until the close and the stage's release; a later call goes after both", async () => {
+  const v = own([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }, { at: 1500, method: "Page.handleJavaScriptDialog", params: { accept: true } }]);
+  const r = await runVector(v, { maxMs: 10_000, tab: (t) => { t.clock.timer(300, () => {
+    t.clientEvents.push({ t: t.clock.now(), method: "Page.javascriptDialogOpening" });
+    t.stage.event(t, undefined, "Page.javascriptDialogOpening", DIALOG);
+    t.dialogSeen = true;
+  }); } });
+  assert.ok(r.answers.find((a) => a.id === 1)!.t < 300, "mouse.down() answered before the dialog: no step runs at its open");
+  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!, rel = r.tab.sent.find((s) => s.params?.type === "mouseReleased"), later = r.tab.sent.find((s) => s.pass === 2)!;
+  assert.ok(rel, "the stage releases the button that the plan holds");
+  assert.ok(r.tab.sent.indexOf(close) < r.tab.sent.indexOf(rel!) && r.tab.sent.indexOf(rel!) < r.tab.sent.indexOf(later), "the close, the release, then the later call");
+  assert.ok(!rel!.dropped, "the release went after the close: Chrome did not drop it");
+  assert.equal(r.answers.length, 3);
+  assert.equal(r.stage.lock.held, 0);
+});
+
 test("review B3: STAGE_ACTION_MAX_MS frees the lock at once; the tab's ended calls take it again later (every call ends)", async () => {
   const { A, B, stage } = await twoTabs([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 26_000, ...mouse("mouseReleased", 900, 700) }], [{ at: 10, ...mouse("mouseMoved", 500, 400) }]);
   const eb = events(B.t);
@@ -824,6 +840,23 @@ test("review N4: a move to the page's last point takes no lock and runs no activ
   assert.equal(B.t.activations.length, 0, "no activation");
   assert.ok(B.answers[0].t <= 11, `answered at once (${B.answers[0].t})`);
   void A;
+});
+
+test("a move to the pointer's own point while a hover's rest waits: no event, the rest dropped, the lock free", async () => {
+  const v = vec("hover");
+  v.in = v.in.filter((c: any) => c.id === 1);
+  const r = await runVector(v);
+  const n = events(r.tab).length, at = moves(r.tab).at(-1)!.params;
+  assert.ok(r.stage.state(r.tab.id)!.action, "the hover's action holds the lock: its rest waits for Playwright's move");
+  let body: any;
+  r.tab.queue(undefined, "Input.dispatchMouseEvent", mouse("mouseMoved", at.x, at.y).params, (b) => { body = b; });
+  await r.clock.run(() => body !== undefined, r.clock.now() + 1000);
+  assert.deepEqual(body, { result: {} });
+  assert.equal(events(r.tab).length, n, "no event: the pointer is at that point");
+  assert.equal(r.stage.counts.sameMoves, 1);
+  assert.equal(r.stage.counts.hoverRestsDropped ?? 0, 0, "the move drops the rest: no rest at HOVER_WAIT_MS");
+  await r.clock.advance(1500);
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
 });
 
 test("review N7: the kept quads and handles of a tab are bounded, and a navigation of its main frame clears them", async () => {
