@@ -409,11 +409,13 @@ try {
     EXTERNAL ? "external endpoint: the run needs the stand-in daemon's played paths and its own Xvfb" : "POINTER_DAEMON=old: a daemon with no pointer ops");
   else if (CASES.includes("pointer")) await pointerCases({ daemon: daemon!, url, run: RUN, relayBin: RELAY_BIN, pw, WebSocket: WS, record, relayLines, display: `:${DISPLAY_N}`, xauth: XAUTH, tracked });
   // STAGE_PARTS (default pointer,keys): the stage's parts whose live rows run (board ab-t30.10 adds the keys and the text).
-  const stageParts = (process.env.STAGE_PARTS ?? "pointer,keys").split(",");
-  const stageContext = { url, run: RUN, chromium: CHROMIUM, display: `:${DISPLAY_N}`, xauth: XAUTH, record, relayLines, profileDir: (name: string) => makePart(join(RUN, name)),
-    pws: [{ version: "1.64.1", pw }, ...STAGE_PLAYWRIGHT.map((v) => ({ version: v, pw: createRequire(join(RUN, `pw-${v}`, "package.json"))("playwright-core") }))] };
-  if (STAGE && stageParts.includes("pointer")) await stageCases(stageContext);
-  if (STAGE && stageParts.includes("keys")) await stageKeyCases(stageContext);
+  if (STAGE) {
+    const stageParts = (process.env.STAGE_PARTS ?? "pointer,keys").split(",");
+    const stageContext = { url, run: RUN, chromium: CHROMIUM, display: `:${DISPLAY_N}`, xauth: XAUTH, record, relayLines, profileDir: (name: string) => makePart(join(RUN, name)),
+      pws: [{ version: "1.64.1", pw }, ...STAGE_PLAYWRIGHT.map((v) => ({ version: v, pw: createRequire(join(RUN, `pw-${v}`, "package.json"))("playwright-core") }))] };
+    if (stageParts.includes("pointer")) await stageCases(stageContext);
+    if (stageParts.includes("keys")) await stageKeyCases(stageContext);
+  }
   if (CASES.includes("scopes") && EXTERNAL) skip("scopes", "the group scopes (two scopes with two lists, the end of a scope, the sweep)",
     "external endpoint: the real daemon makes the lists (agentwatch's test browser has one: a.localhost), and the run can send no set_scopes or allowlist line");
   else if (CASES.includes("scopes")) await scopeCases(pw, WS);
