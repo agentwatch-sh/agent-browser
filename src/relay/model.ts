@@ -662,6 +662,8 @@ export class Model {
         void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
         return;
       }
+      // The client's Page.disable: no Page.javascriptDialogClosed can come after it, so the stage's wait for a close ends.
+      if (method === "Page.disable" && !child) this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
       // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.
       const page = this.stagePage(tab), entry = this.stage.arrive(page, child, method, params, answer as (body: Body) => void);
       if (entry) {
@@ -723,16 +725,21 @@ export class Model {
     page = {
       id: tab.id,
       get person() { return model.personOf(tab.scope); },
+      // The stage's own commands go as the model's (C11, the input stage: the source): withForce, and a command that
+      // reaches C10's timeout detaches the tab (a command that waits for no promise still runs in Chrome).
       send: (child, method, params) => {
         const target = child ? { tabId: tab.id, sessionId: child } : { tabId: tab.id };
-        const call = this.bridge.call("debugger.sendCommand", [target, method, params]);
-        if (method.startsWith("Input.")) this.tracked(tab, child, method, params, call);
+        const sent = withForce(method, params);
+        const call = this.bridge.call("debugger.sendCommand", [target, method, sent]);
+        if (method.startsWith("Input.")) this.tracked(tab, child, method, sent, call);
+        call.catch((e) => { if (isTimeout(e) && !awaitsPromise(method, sent)) void this.reattach(tab); });
         return call;
       },
       pass: (child, method, params, answer) => this.sendNow(tab, child, method, params, answer as (body: object) => void, false).then(() => {}, () => {}),
       error: (method, e) => cdpError(method, e),
       ownRead: (fn, args) => this.stageRead(tab, fn, args),
       activate: () => this.stageActivate(tab),
+      inGate: (fn) => this.behind(tab, (tab.gate ?? Promise.resolve()).then(fn).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`))),
       point: () => this.pointOf(tab),
       xPoint: () => this.stageXPoint(tab),
     };
@@ -1701,7 +1708,8 @@ export class Model {
     }
     if (method === "Target.detachedFromTarget" && this.hidden.delete(params.sessionId)) return;
     // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
-    if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
+    if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Page.frameNavigated" || method === "Inspector.targetCrashed"
+      || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);
     let p = hidesCookies(method) ? hideCookies(params) : params;

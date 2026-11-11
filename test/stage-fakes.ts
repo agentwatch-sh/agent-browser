@@ -79,6 +79,10 @@ export class FakeTab implements StagePage {
   onClientEvent: (method: string) => void = () => {};
   /** The model's point of the page (an X record: x11 true). */
   modelPoint: { x: number; y: number; x11: boolean } | null;
+  /** The tab's gate (the model's): each step after the one before. */
+  gate: Promise<void> = Promise.resolve();
+  /** The tab is gone (a detach or a removal): Chrome refuses every command of it. */
+  closed = false;
   private dialogOpen = false;
   /** A test opened a dialog by its own hook (the client got Page.javascriptDialogOpening). */
   dialogSeen = false;
@@ -115,6 +119,12 @@ export class FakeTab implements StagePage {
     throw new Error(`no fake for ${fn.slice(0, 40)}`);
   }
   async activate(): Promise<void> { this.activations.push(this.clock.now()); }
+  inGate(fn: () => Promise<void>): void { this.gate = this.gate.then(fn).catch(() => {}); }
+  /** A client's call in the tab's gate: the stage's step for a call that it takes, else the call as it is. */
+  queue(child: string | undefined, method: string, params: any, answer: (body: Body) => void): void {
+    const e = this.stage.arrive(this, child, method, params, answer);
+    this.gate = this.gate.then(() => (e ? this.stage.step(this, e) : this.pass(child, method, params, answer)));
+  }
   point() { return this.modelPoint; }
 
   /** The element of the top page at a point: the smallest node box that holds it (a frame's element is the frame). */
@@ -145,6 +155,7 @@ export class FakeTab implements StagePage {
     const V = this.v, ch = V.chrome ?? {};
     const h = await this.hook(s);
     if (h !== undefined) { s.answered = this.clock.now(); return h; }
+    if (this.closed) throw Object.assign(new Error("No target with given id found"), { code: -32602 });
     if (s.method.startsWith("Input.") && (this.dialogOpen || this.dialogSeen)) { s.dropped = true; s.answered = this.clock.now(); return {}; }
     if (s.method.startsWith("Input.")) {
       const k = this.outIndexOf(s);
@@ -213,20 +224,20 @@ export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => 
   o.tab?.(tab);
   if (!o.noAttach) for (const [name, f] of Object.entries<any>(v.page.frames ?? {})) if (f.origin === "cross") stage.event(tab, undefined, "Target.attachedToTarget", { sessionId: "child", targetInfo: { type: "iframe", targetId: `F-${name}` } });
   const answers: Answer[] = [], arrived = new Map<number, number>();
-  let gate: Promise<void> = Promise.resolve();
   const send = (c: any) => {
     arrived.set(c.id, clock.now());
     const child = c.session === "child" ? "child" : undefined;
     const answer = (body: Body) => { assert.ok(!answers.some((a) => a.id === c.id), `${v.id}: one answer for call ${c.id}`); answers.push({ id: c.id, t: clock.now(), body, n: tab.sent.length }); onAnswer(c.id); };
     if (c.method === "Page.handleJavaScriptDialog") { void tab.pass(child, c.method, c.params, answer); return; }
-    const e = stage.arrive(tab, child, c.method, c.params, answer);
-    if (e) gate = gate.then(() => stage.step(tab, e));
-    else gate = gate.then(() => tab.pass(child, c.method, c.params, answer));
+    tab.queue(child, c.method, c.params, answer);
   };
   const later = (c: any) => (c.waitMs ? clock.timer(c.waitMs, () => send(c)) : send(c));
   const onAnswer = (id: number) => { for (const c of v.in) if (c.after === id) later(c); };
   tab.onClientEvent = (method) => { for (const c of v.in) if (c.afterEvent === method) later(c); };
-  for (const c of v.in) if (c.at !== undefined) clock.timer(c.at, () => later(c));
+  // The calls of one time arrive in one tick, as Playwright's Promise.all sends a click's move, press and release.
+  const byTime = new Map<number, any[]>();
+  for (const c of v.in) if (c.at !== undefined) byTime.set(c.at, [...(byTime.get(c.at) ?? []), c]);
+  for (const [at, cs] of byTime) clock.timer(at, () => { for (const c of cs) later(c); });
   await clock.run(() => answers.length === v.in.length && clock.t > 0 || answers.length === v.in.length && v.in.length === 0, o.maxMs ?? 120_000);
   await idle();
   return { clock, tab, stage, answers, arrived, logs };

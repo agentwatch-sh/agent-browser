@@ -251,12 +251,8 @@ async function twoTabs(callsA: any[], callsB: any[]) {
     const v = own(calls);
     const t = new FakeTab(v, clock, { id });
     t.stage = stage;
-    let gate: Promise<void> = Promise.resolve();
     const answers: { id: number; t: number }[] = [];
-    for (const c of v.in) clock.timer(c.at ?? 0, () => {
-      const e = stage.arrive(t, undefined, c.method, c.params, () => answers.push({ id: c.id, t: clock.now() }));
-      gate = gate.then(() => (e ? stage.step(t, e) : t.pass(undefined, c.method, c.params, () => answers.push({ id: c.id, t: clock.now() }))));
-    });
+    for (const c of v.in) clock.timer(c.at ?? 0, () => t.queue(undefined, c.method, c.params, () => answers.push({ id: c.id, t: clock.now() })));
     return { t, v, answers };
   };
   const A = mk(1, callsA), B = mk(2, callsB);
@@ -548,7 +544,8 @@ test("at most two recoveries in one action: a target that is always covered gets
   const r = await runVector(m.v, { tab: (t) => { t.hook = m.hook(t); } });
   assert.equal(r.stage.counts.recoveries, 2, "two recoveries");
   assert.equal(r.stage.counts.recoveryLimits, 1);
-  assert.equal(r.stage.state(7)!.plain, true, "the rest goes as Playwright sends it");
+  assert.ok(r.stage.counts.plainAttempts >= 1, "each later attempt goes as Playwright sends it");
+  assert.equal(r.stage.state(7)!.plain, false, "the plain mode ends with its attempt (here the setup's own miss)");
   assert.equal(r.answers.length, n, "every setup answered (Playwright retries until its timeout)");
 });
 
@@ -694,12 +691,10 @@ test("a hover's action holds the lock from its first sample to its last: another
   const stage = new Stage({ log: () => {}, random: seededRandom(9), platform: "linux", clock, stamp: clock.stamp });
   const A = new FakeTab(hov, clock, { id: 1 }), B = new FakeTab(own([]), clock, { id: 2 });
   A.stage = stage; B.stage = stage;
-  let gateA: Promise<void> = Promise.resolve(), gateB: Promise<void> = Promise.resolve();
   const answers: string[] = [];
-  const sendA = (c: any) => { const e = stage.arrive(A, undefined, c.method, c.params, () => { answers.push(`A${c.id}`); if (c.id === 1) clock.timer(500, () => sendA(hov.in[1])); if (c.id === 2) sendA(hov.in[2]); });
-    gateA = gateA.then(() => (e ? stage.step(A, e) : A.pass(undefined, c.method, c.params, () => answers.push(`A${c.id}`)))); };
+  const sendA = (c: any) => A.queue(undefined, c.method, c.params, () => { answers.push(`A${c.id}`); if (c.id === 1) clock.timer(500, () => sendA(hov.in[1])); if (c.id === 2) sendA(hov.in[2]); });
   clock.timer(0, () => sendA(hov.in[0]));
-  clock.timer(10, () => { const m = mouse("mouseMoved", 500, 400); const e = stage.arrive(B, undefined, m.method, m.params, () => answers.push("B1"))!; gateB = gateB.then(() => stage.step(B, e)); });
+  clock.timer(10, () => { const m = mouse("mouseMoved", 500, 400); B.queue(undefined, m.method, m.params, () => answers.push("B1")); });
   await clock.run(() => answers.length === 4);
   const lastA = moves(A).at(-1)!, firstB = moves(B)[0];
   assert.ok(firstB.t >= lastA.t, `B's first move (${firstB.t}) after A's last (${lastA.t})`);
@@ -712,3 +707,155 @@ test("a hover's action holds the lock from its first sample to its last: another
   assert.equal(r.stage.counts.hoverRestsDropped, 1);
 });
 
+
+// ================================================================ review-116, round 1
+
+const DIALOG = { type: "alert", message: "x", url: "http://a.localhost/", hasBrowserHandler: false, defaultPrompt: "" };
+/** A dialog that opens at the fifth move of the tab (a mouseover handler): Chrome drops what it gets while the dialog is open. */
+function dialogAtFifthMove(t: FakeTab) {
+  let n = 0;
+  t.hook = (s) => {
+    if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" && ++n === 5) {
+      t.clientEvents.push({ t: t.clock.now(), method: "Page.javascriptDialogOpening" });
+      t.stage.event(t, undefined, "Page.javascriptDialogOpening", DIALOG);
+      setImmediate(() => { t.dialogSeen = true; });
+    }
+    return undefined;
+  };
+}
+/** A vector of its own whose first press opens a dialog (a confirm() in mousedown): Chrome keeps that press until the close. */
+function pressOpensDialog(calls: any[], extra: Partial<any> = {}) {
+  return own(calls, {}, { events: [{ method: "Page.javascriptDialogOpening", params: DIALOG, at: "out:0" }], dialog: { opensAt: "out:0" } },
+    { out: [{ method: "Input.dispatchMouseEvent", type: "mousePressed" }], ...extra });
+}
+
+test("review B1 case 1: at the close, the ended plan's events take the lock again after another tab's action, and the activation runs before the ended press", async () => {
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
+  const A = new FakeTab(own([]), clock, { id: 1 }), B = new FakeTab(own([]), clock, { id: 2 });
+  A.stage = stage; B.stage = stage;
+  dialogAtFifthMove(A);
+  const answers: string[] = [];
+  const click = (t: FakeTab, x: number, y: number, tag: string) => { for (const c of [mouse("mouseMoved", x, y), mouse("mousePressed", x, y), mouse("mouseReleased", x, y)]) t.queue(undefined, c.method, c.params, () => answers.push(tag)); };
+  clock.timer(0, () => click(A, 300, 200, "A"));
+  clock.timer(100, () => click(B, 700, 500, "B"));
+  clock.timer(250, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => answers.push("A-dialog")); });
+  await clock.run(() => answers.length === 7);
+  const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, eb = events(B), aAfter = events(A).filter((s) => s.t >= close && !s.dropped);
+  assert.ok(eb[0].t < close && eb.at(-1)!.t > close, "B's action runs at A's close");
+  assert.deepEqual(aAfter.map((s) => s.params.type), ["mouseMoved", "mousePressed", "mouseReleased"]);
+  assert.ok(aAfter[0].t >= eb.at(-1)!.t, `A's ended events (${aAfter[0].t}) wait for the end of B's action (${eb.at(-1)!.t})`);
+  const act = A.activations.filter((t) => t >= close), press = aAfter.find((s) => s.params.type === "mousePressed")!;
+  assert.ok(act.length >= 1 && act[0] <= press.t, "the activation before A's ended press");
+  assert.equal(stage.lock.held, 0);
+});
+
+test("review B1 case 2: mouse.down() whose mousedown opens confirm(), no client call left: the gate opens only after the close and the stage's release; a later call goes after both", async () => {
+  const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 200, method: "Runtime.evaluate", params: { expression: "1" } }, { at: 1000, method: "Page.handleJavaScriptDialog", params: { accept: true } }]);
+  const r = await runVector(v, { maxMs: 10_000 });
+  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!, rel = r.tab.sent.find((s) => s.params?.type === "mouseReleased"), later = r.tab.sent.find((s) => s.pass === 2)!;
+  assert.ok(rel, "the stage releases the button that the plan holds");
+  assert.ok(r.tab.sent.indexOf(close) < r.tab.sent.indexOf(rel!) && r.tab.sent.indexOf(rel!) < r.tab.sent.indexOf(later), "the close, the release, then the later call");
+  assert.ok(!rel!.dropped, "the release went after the close: Chrome did not drop it");
+  assert.equal(r.answers.length, 3);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review B3: STAGE_ACTION_MAX_MS frees the lock at once; the tab's ended calls take it again later (every call ends)", async () => {
+  const { A, B, stage } = await twoTabs([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 26_000, ...mouse("mouseReleased", 900, 700) }], [{ at: 10, ...mouse("mouseMoved", 500, 400) }]);
+  const eb = events(B.t);
+  assert.ok(eb.length > 0 && eb[0].t >= STAGE_ACTION_MAX_MS && eb[0].t <= STAGE_ACTION_MAX_MS + 10, `B's first event at ${eb[0]?.t}`);
+  assert.equal(events(A.t).filter((s) => s.params.type === "mouseReleased").length, 1, "A's own release later, as the client sent it");
+  assert.equal(stage.lock.held, 0);
+});
+
+test("review B2: after two recoveries the plain mode covers only that attempt: a later mouse call with no setup, and a later action of the node with no miss before it, get the person's input", async () => {
+  const m = menuRun({ always: true });
+  const calls: any[] = [];
+  for (let k = 0; k < 4; k++) calls.push({ ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }), ...(k === 0 ? { at: 0 } : { after: k }) });
+  calls.push({ after: 4, ...mouse("mouseMoved", 300, 500) }, { after: 4, ...mouse("mousePressed", 300, 500) }, { after: 4, ...mouse("mouseReleased", 300, 500) });
+  // 5 s later, a new action of the same node that passes: its setup (no miss before it in 2 s), its click.
+  calls.push({ ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }), after: 7, waitMs: 5000 });
+  calls.push({ after: 8, ...mouse("mouseMoved", 640, 320) }, { after: 8, ...mouse("mousePressed", 640, 320) }, { after: 8, ...mouse("mouseReleased", 640, 320) });
+  m.v.in = calls.map((c, i) => ({ id: i + 1, ...c }));
+  const r = await runVector(m.v, { tab: (t) => {
+    const h = m.hook(t);
+    t.hook = (s) => (s.pass === 8 ? { result: { type: "object", objectId: "7.3.20" } } : h(s));
+  } });
+  assert.equal(r.stage.counts.recoveries, 2);
+  const arrive = (id: number) => r.arrived.get(id)!;
+  const first = moves(r.tab).filter((s) => s.t >= arrive(5) && s.t < arrive(9)), second = moves(r.tab).filter((s) => s.t >= arrive(9));
+  assert.ok(first.length > 5, `a path for the mouse call with no setup (${first.length} moves)`);
+  assert.ok(second.length > 5, `a path for the later action with no miss (${second.length} moves)`);
+});
+
+test("the daemon lead's point: when the tab closes or detaches while the stage holds an ended plan's events, each held client call gets Chrome's error, and the gate opens", async () => {
+  const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 0, ...mouse("mouseReleased", 900, 700) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }]);
+  const r = await runVector(v, { maxMs: 10_000, tab: (t) => { t.clock.timer(500, () => { t.closed = true; t.stage.drop(t.id); }); } });
+  const rel = r.answers.find((a) => a.id === 2)!, later = r.answers.find((a) => a.id === 3);
+  assert.ok(rel.body.error && /No target/.test(rel.body.error.message), `the held release gets Chrome's error: ${JSON.stringify(rel.body)}`);
+  assert.ok(later, "the gate opened: the later call went");
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review N1: the dialog's wait ends at each of its signals with no Closed event: the client's Page.disable, a navigation of the main frame, a crash", async () => {
+  for (const [method, params] of [["Page.disable", {}], ["Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/next" } }], ["Inspector.targetCrashed", {}]] as const) {
+    const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 0, ...mouse("mouseReleased", 900, 700) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }]);
+    const r = await runVector(v, { maxMs: 10_000, tab: (t) => { t.clock.timer(500, () => t.stage.event(t, undefined, method, params)); } });
+    // The press waits for the dialog's close (Chrome keeps it); the fake's dialog stays open, so only the press waits.
+    assert.ok([2, 3].every((id) => r.answers.some((a) => a.id === id)), `${method}: the held release and the later call answered`);
+    const rel = r.tab.sent.find((s) => s.params?.type === "mouseReleased")!;
+    assert.ok(rel && rel.t >= 500 && rel.t <= 501, `${method}: the held release went at the signal (${rel?.t})`);
+  }
+  // A main frame's navigation also clears the tab's kept quads and handles (N7).
+});
+
+test("review N3: the stage's own release of a held button has the clickCount of its press", async () => {
+  const r = await runVector(own([{ at: 0, ...mouse("mousePressed", 900, 700, { clickCount: 2 }) }]), { tab: (t) => { t.hook = (s) => (s.params?.type === "mousePressed" ? new Promise(() => {}) : undefined); }, maxMs: 10_000 });
+  const rel = events(r.tab).find((s) => s.params.type === "mouseReleased")!;
+  assert.equal(rel.params.clickCount, 2);
+});
+
+test("review N4: a move to the page's last point takes no lock and runs no activation", async () => {
+  const { A, B } = await twoTabs([{ at: 0, ...mouse("mousePressed", 900, 700) }], [{ at: 10, ...mouse("mouseMoved", 900, 700) }]);
+  assert.equal(events(B.t).length, 0, "no event");
+  assert.equal(B.t.activations.length, 0, "no activation");
+  assert.ok(B.answers[0].t <= 11, `answered at once (${B.answers[0].t})`);
+  void A;
+});
+
+test("review N7: the kept quads and handles of a tab are bounded, and a navigation of its main frame clears them", async () => {
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
+  const t = new FakeTab(own([]), clock);
+  t.stage = stage;
+  for (let i = 0; i < 300; i++) stage.saw(t, undefined, "DOM.getContentQuads", { objectId: `o${i}` }, { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] });
+  assert.ok(stage.state(t.id)!.quads <= 64, `${stage.state(t.id)!.quads} quads kept`);
+  stage.event(t, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/next" } });
+  assert.equal(stage.state(t.id)!.quads, 0);
+  assert.equal(stage.state(t.id)!.handles, 0);
+});
+
+test("review N8: an error of a hover's own sample stops the plan as an error of an event does (no more samples, the lock free); the setup goes as the client sent it", async () => {
+  let n = 0;
+  const r = await runVector(vec("hover"), { hook: (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" && ++n === 3 ? Promise.reject(Object.assign(new Error("Internal error"), { code: -32000 })) : undefined) });
+  const setup = r.tab.sent.find((s) => s.pass === 1)!;
+  assert.equal(moves(r.tab).filter((s) => s.t <= setup.t).length, 3, "no sample after the refused one");
+  assert.equal(r.stage.counts.eventErrors, 1);
+  assert.equal(r.answers.length, 3);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review N6 and N12: the dialog vector's note says that the plan's own events are dropped; the parameter files cite C11's text", () => {
+  const note: string = vec("rule-dialog-at-press").note;
+  assert.ok(note.includes("its own events are dropped") && !note.includes("its own events go"), note);
+  const C11 = readFileSync(new URL("../docs/contracts/C11.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  for (const p of [paramsFor("linux"), paramsFor("darwin")] as any[]) {
+    for (const k of ["path.short", "press.modifierAfterMs"]) {
+      const src: string = p.sources[k];
+      assert.ok(!/shortMovePx|shortSpeedPxPerMs|modifierAfterMs/.test(src), `${k}: no vector name in its source`);
+      const quoted = [...src.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      assert.ok(quoted.length > 0 && quoted.every((q) => C11.includes(q)), `${k}: its source quotes C11's text: ${src}`);
+    }
+  }
+});

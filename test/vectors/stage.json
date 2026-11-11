@@ -5001,7 +5001,7 @@
   {
    "id": "rule-dialog-at-press",
    "rule": "Dialogs (the input design, section 4.3a).",
-   "note": "A confirm() in the page's mousedown handler: the dialog opens at the press. Chrome keeps the input events that it got before the dialog opened, and drops those that it gets while the dialog is open (measured by board ab-t30.9: it answers them at once, and the page never gets them). The plan ends: its own events go (the rest of the hold), and the lock is free; the client's release waits for the dialog's close and then goes at once (a hold counts from the press's send). The client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate, and gets its answer first; then Chrome answers the press (kept from before the dialog) and the release (sent after the close).",
+   "note": "A confirm() in the page's mousedown handler: the dialog opens at the press. Chrome keeps the input events that it got before the dialog opened, and drops those that it gets while the dialog is open (measured by board ab-t30.9: it answers them at once, and the page never gets them). The plan ends: its own events are dropped (the rest of the hold), and the lock is free; the client's release waits for the dialog's close and then goes at once (a hold counts from the press's send). The client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate, and gets its answer first; then Chrome answers the press (kept from before the dialog) and the release (sent after the close).",
    "platform": "linux",
    "seed": 62,
    "clock": 0,

@@ -28,7 +28,7 @@ import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
 import { draw, uniform, type Random } from "../human/random.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
-import { PLAYWRIGHT_FOCUS } from "./policy.ts";
+import { PLAYWRIGHT_FOCUS, startsAction } from "./policy.ts";
 
 // ------------------------------------------------------------------ the switch and the constants (C11)
 
@@ -55,8 +55,12 @@ export const STAGE_SCROLL_ROUNDS = 4;
 /** The recovery (C11, the hit-target check): the exit point is this far outside the boxes; the way around widens the kept box by this much. */
 export const RECOVERY_EXIT_PX = 15;
 export const AROUND_MARGIN_PX = 10;
-/** At most this many recoveries in one action (the setups of one node with no setup of another node between them). */
+/** At most this many recoveries in one action: the setups of one node, each within RETRY_MARK_MS of a miss of that node. */
 export const RECOVERIES_MAX = 2;
+/** A miss marks the tab for the next setup of its node within this time (Playwright retries at most 500 ms after a miss). */
+export const RETRY_MARK_MS = 2000;
+/** The kept quads and handles of a tab (a navigation of its main frame clears them). */
+export const KEPT_MAX = 64;
 /** A hover's action ends at Playwright's move: with no pointer input of the tab this long after the setup's answer, the rest goes and the lock is free. */
 export const HOVER_WAIT_MS = 1000;
 /** The default width of a target for Fitts's law when the stage knows no target (a plain mouse.move): input.ts's moveTo. */
@@ -165,6 +169,8 @@ export type StagePage = {
   ownRead(fn: string, args: number[]): Promise<unknown>;
   /** The activation before the first event of an action (C11, "The window comes forward for input"). */
   activate(): Promise<void>;
+  /** A step of the stage's own in the tab's gate (the end of a plan with no client call left): the tab's later calls wait for it. */
+  inGate(fn: () => Promise<void>): void;
   /** The page's last point as the model keeps it, with `x11` true for the X record of an activation; or null. */
   point(): { x: number; y: number; x11: boolean } | null;
   /** The X pointer's place mapped into the page (Linux, with the pointer paths on), or null (outside the page, unknown, the Mac). */
@@ -230,20 +236,24 @@ class TabState {
   lastMoveAt = -Infinity;
   releasedAt = -Infinity;
   press: Press | null = null;
-  /** The buttons and the keys that the stage's events hold down (a key by its code). */
-  readonly buttons = new Set<string>();
+  /** The buttons that the stage's events hold down, each with the clickCount of its press, and the keys (by their code). */
+  readonly buttons = new Map<string, number>();
   readonly keys = new Map<string, { at: number; params: any }>();
   /** The buttons and keys ("key:<code>") that the stage released at the end of a plan: the client's own release gets no event. */
   readonly released = new Set<string>();
   action: Action | null = null;
   running = false;
+  /** The lock that an ended plan's events took again (C11: every end of a plan frees the lock; its later events take it again). */
+  tail: (() => void) | null = null;
+  tailActive = false;
   setup: Setup | null = null;
   /** The handles that the tab's hit-target setups returned (the stop recognizer's first handle). */
   readonly handles = new Set<string>();
   /** The answers of the client's own DOM.getContentQuads, by the node's objectId (condition 2 of the press point). */
   readonly quads = new Map<string, Box>();
   miss = false;
-  recov: { node: string | undefined; n: number } | null = null;
+  missAt = -Infinity;
+  recov: { node: string | undefined; n: number; limited?: boolean } | null = null;
   /** After the limit of recoveries: the rest of the action goes as Playwright sends it. */
   plain = false;
   avoid: Rect | null = null;
@@ -326,7 +336,8 @@ export class Stage {
   /** What the stage keeps of a tab (the tests; no client sees it). */
   state(id: number) {
     const s = this.tabs.get(id);
-    return s ? { last: s.last, buttons: [...s.buttons], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length } : null;
+    return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
   /** A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. */
@@ -390,7 +401,7 @@ export class Stage {
       if (!st.action?.failed) e.answer({ error: page.error(e.method, err) });
     } finally {
       st.running = false;
-      this.afterStep(page, st);
+      await this.afterStep(page, st);
     }
   }
 
@@ -399,13 +410,16 @@ export class Stage {
     const st = this.st(page);
     if (method === "DOM.getContentQuads" && typeof params?.objectId === "string") {
       const r = quadRect(result?.quads?.[0]);
-      if (r) st.quads.set(params.objectId, { x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 });
+      if (r) { st.quads.delete(params.objectId); st.quads.set(params.objectId, { x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 }); }
+      while (st.quads.size > KEPT_MAX) st.quads.delete(st.quads.keys().next().value!);
       return;
     }
     const u = utilityCall(method, params);
     if (u?.name === "the check's stop" && u.handles[0] && st.handles.has(u.handles[0])) {
+      // The stop ends its attempt: the plain mode after the recoveries' limit covers that attempt only.
+      st.plain = false;
       const v = result?.result?.value;
-      if (v !== undefined && v !== "done") { st.miss = true; this.count("stopMisses"); }
+      if (v !== undefined && v !== "done") { st.miss = true; st.missAt = this.clock.now(); this.count("stopMisses"); }
     }
   }
 
@@ -416,7 +430,13 @@ export class Stage {
       if (!st.dialog) { let close!: () => void; const closed = new Promise<void>((r) => (close = r)); st.dialog = { closed, close }; }
       return this.end(page, st, "dialog");
     }
-    if (method === "Page.javascriptDialogClosed") { st.dialog?.close(); st.dialog = null; return; }
+    // The signals that end a dialog's wait (C11, dialogs): its close, Chrome's answer to the client's
+    // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (no Closed event can
+    // come then), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
+    const mainNav = method === "Page.frameNavigated" && !child && !params?.frame?.parentId;
+    if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
+    if (mainNav) { st.quads.clear(); st.handles.clear(); }
+    if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
     if (method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") st.frames.delete(params.sessionId);
@@ -426,6 +446,7 @@ export class Stage {
   drop(id: number): void {
     const st = this.tabs.get(id);
     st?.dialog?.close();
+    if (st) st.dialog = null;
     if (st?.action) this.close(st, id);
     this.tabs.delete(id);
     this.players.delete(id);
@@ -450,10 +471,11 @@ export class Stage {
   }
 
   /** At the end of a step: a live action with nothing held and no input waiting frees the lock; an ended one, once its client calls have gone. */
-  private afterStep(page: StagePage, st: TabState): void {
+  private async afterStep(page: StagePage, st: TabState): Promise<void> {
     const a = st.action;
-    if (!a) return;
-    if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.finish(page, st, a.ended !== "limit" && !a.failed); return; }
+    // No action (the tab was dropped, or the plan failed): an ended event's lock goes with its last ended call.
+    if (!a) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.freeTail(st); return; }
+    if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); return; }
     if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
   }
 
@@ -465,7 +487,7 @@ export class Stage {
       if (!st.rest) return;
       st.rest = null;
       this.count("hoverRestsDropped");
-      if (!st.running) this.afterStep(page, st);
+      if (!st.running) void this.afterStep(page, st);
     });
   }
   private dropRest(st: TabState): void { st.rest = null; st.restTimer?.(); st.restTimer = null; }
@@ -474,6 +496,7 @@ export class Stage {
     const a = st.action;
     if (!a) return;
     st.action = null;
+    st.plain = false; // the end of the stage's action ends a plain attempt (the recoveries' limit)
     if (this.o.trace && id !== undefined) this.o.log(`relay: the input stage: tab ${id}: an action of ${a.events} events in ${Math.round(this.clock.now() - a.started)} ms${a.ended ? ` (ended: ${a.ended})` : a.failed ? " (failed)" : ""}`);
     this.dropRest(st);
     a.watchdog?.(); a.limit?.();
@@ -494,16 +517,48 @@ export class Stage {
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
     for (const x of st.pending) if (x.kind !== "setup") x.ended = true;
     this.dropRest(st);
-    // At a dialog the lock is free at once; the plan's client events wait for the close in the tab's gate.
-    if (why === "dialog") a.release();
-    if (!st.running && !st.pending.some((x) => x.ended)) this.finish(page, st, why !== "limit");
+    // Every end of a plan frees the lock at once. The plan's client events that go later (at a dialog: after its close)
+    // take the lock again, in the order of arrival, with the activation before an ended press or key press.
+    a.release();
+    // With no client call left, the end's own step (the releases) goes in the tab's gate: later calls wait for it.
+    if (!st.running && !st.pending.some((x) => x.ended)) page.inGate(() => this.finish(page, st, a));
   }
 
-  /** After an ended plan's client calls: the releases of what it holds (at a dialog or STAGE_EVENT_WAIT_MS), and the lock. */
-  private finish(page: StagePage, st: TabState, releases: boolean): void {
-    if (releases && st.dialog) { const d = st.dialog; void d.closed.then(() => this.releaseHeld(page, st)); }
-    else if (releases) this.releaseHeld(page, st);
+  /**
+   * After an ended plan's client calls: the releases of what it holds (at a dialog or STAGE_EVENT_WAIT_MS; at the limit the
+   * client still holds its button, and its own release goes later), under the lock that the ended events took again, after
+   * the dialog's close; then the lock is free, and the tab's gate opens when this step ends.
+   */
+  private async finish(page: StagePage, st: TabState, a: Action): Promise<void> {
+    if (st.action !== a) { this.freeTail(st); return; }
+    if (a.ended !== "limit" && !a.failed && (st.buttons.size || st.keys.size)) {
+      await this.dialogGone(st);
+      await this.retake(page, st, false);
+      this.releaseHeld(page, st);
+    }
+    this.freeTail(st);
     this.close(st, page.id);
+  }
+
+  /** The lock again for an ended plan's events (the order of arrival), and the activation before its first press or key press. */
+  private async retake(page: StagePage, st: TabState, activate: boolean): Promise<void> {
+    if (!st.tail) st.tail = await this.lock.acquire();
+    if (activate && !st.tailActive) {
+      st.tailActive = true;
+      try { await page.activate(); } catch (err) { this.o.log(`relay: the input stage: the activation of tab ${page.id} failed: ${(err as Error).message}`); }
+    }
+  }
+  private freeTail(st: TabState): void { const t = st.tail; st.tail = null; st.tailActive = false; t?.(); }
+
+  /**
+   * A client's event of an ended plan: after the dialog's close (when the stage knows of a dialog), with the lock taken
+   * again and the activation before a press or a key press; its timestamp from the send. The send's answer comes later.
+   */
+  private async endedSend(page: StagePage, st: TabState, e: Entry, params: Record<string, unknown>): Promise<{ sent: Promise<any> }> {
+    await this.dialogGone(st);
+    await this.retake(page, st, startsAction(e.method, params));
+    if (e.kind !== "text") params.timestamp = this.stamp(page, st);
+    return { sent: this.sendEvent(page, st, undefined, e.method, params) };
   }
 
   /**
@@ -515,8 +570,8 @@ export class Stage {
   /** The release of each button and key that the stage's events hold, at once, with no wait for the answers. */
   private releaseHeld(page: StagePage, st: TabState): void {
     const at = st.last ?? { x: 0, y: 0 };
-    for (const b of [...st.buttons]) {
-      void this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: b, buttons: 0, clickCount: 1, timestamp: this.stamp(page, st) }).catch(() => {});
+    for (const [b, clickCount] of [...st.buttons]) {
+      void this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: b, buttons: 0, clickCount, timestamp: this.stamp(page, st) }).catch(() => {});
       st.released.add(b);
     }
     st.buttons.clear();
@@ -535,15 +590,27 @@ export class Stage {
    * go gets the same error.
    */
   private fail(page: StagePage, st: TabState, e: Entry, err: unknown): void {
-    const body = page.error(e.method, err);
+    const body = this.stopPlan(page, st, e.method, err);
+    e.answer({ error: body });
+    this.freeTail(st);
+    this.close(st, page.id);
+  }
+
+  /**
+   * The plan stops at a refused event: no more of its events, the release of each button and key that it holds first,
+   * and each client call of the plan whose events did not go gets the same error. A sample that the stage sends before a
+   * hit-target setup (the hover's samples outside the target, a recovery's move out) belongs to no client call that has
+   * come: the plan stops in the same way, and the setup goes as the client sent it.
+   */
+  private stopPlan(page: StagePage, st: TabState, method: string, err: unknown): { code: number; message: string } {
+    const body = page.error(method, err);
     const a = st.action;
     if (a) { a.failed = true; a.fire(); }
     this.count("eventErrors");
     for (const x of st.pending) if (x.kind !== "setup") x.failedWith = body;
     this.dropRest(st); st.spread = null;
     this.releaseHeld(page, st);
-    e.answer({ error: body });
-    this.close(st, page.id);
+    return body;
   }
 
   // ---------------------------------------------------------------- sending
@@ -701,20 +768,17 @@ export class Stage {
 
   /** An event of an ended plan: the client's own event at once (C11, dialogs), and Chrome's own answer when it comes. */
   private async endedEvent(page: StagePage, st: TabState, e: Entry): Promise<void> {
-    const p = e.params;
-    await this.dialogGone(st);
-    if (e.kind === "text") { this.answerWith(page, e, page.send(undefined, e.method, p)); return; }
-    const params: Record<string, unknown> = { ...p };
+    const p = e.params, params: Record<string, unknown> = { ...p };
     if (e.kind === "mouse") {
       const pr = p.type === "mouseReleased" && st.press?.button === p.button ? st.press : null;
       const pt = pr && same(pr.client, this.fit(p)) ? pr.point : this.fit(p);
       params.x = pt.x; params.y = pt.y;
-      if (p.type === "mousePressed") st.buttons.add(p.button);
-      if (p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
     }
+    const { sent } = await this.endedSend(page, st, e, params);
+    if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
+    if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(p.code); else st.keys.set(p.code, { at: this.clock.now(), params: p }); }
-    params.timestamp = this.stamp(page, st);
-    this.answerWith(page, e, this.sendEvent(page, st, undefined, e.method, params));
+    this.answerWith(page, e, sent);
   }
 
   /** A call that goes as the client sent it, with the stage's timestamp, in the lock (the cases of no change). */
@@ -724,7 +788,7 @@ export class Stage {
     const p = e.params, params: Record<string, unknown> = { ...p };
     if (e.kind === "mouse" && typeof p.x === "number" && typeof p.y === "number") { const q = this.fit(p); params.x = q.x; params.y = q.y; }
     if (e.kind !== "text") params.timestamp = this.stamp(page, st);
-    if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.add(p.button);
+    if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") st.buttons.delete(p.button);
     const pr = this.sendEvent(page, st, undefined, e.method, params);
     const r = await this.settle(a, pr);
@@ -737,6 +801,8 @@ export class Stage {
   private async moveStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params, to = this.fit(p);
     if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
+    // A move to the page's last point sends nothing: it takes no lock and runs no activation.
+    if (!st.rest && same(this.from(page, st), to) && !st.action?.over) { st.setup = st.setup && { ...st.setup, used: true }; e.answer({ result: {} }); this.count("sameMoves"); return; }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
     const extra = { modifiers: p.modifiers ?? 0 };
@@ -758,12 +824,11 @@ export class Stage {
     const r = await this.play(page, st, a, samples, extra);
     if (r.error !== undefined) return this.fail(page, st, e, r.error);
     if (r.stopped) {
-      // The bound or the end of the plan: the client's own move at once (its point), with Chrome's own answer.
+      // The bound or the end of the plan: the client's own move (its point), with Chrome's own answer.
       st.spread = null;
-      if (a.over) await this.dialogGone(st);
+      if (a.over) { const { sent } = await this.endedSend(page, st, e, { ...p, x: to.x, y: to.y }); this.answerWith(page, e, sent); return; }
       const params = { ...p, x: to.x, y: to.y, timestamp: this.stamp(page, st) };
       const pr = this.sendEvent(page, st, undefined, e.method, params);
-      if (a.over) { this.answerWith(page, e, pr); return; }
       const s = await this.settle(a, pr);
       if ("ended" in s) { this.answerWith(page, e, pr); return; }
       if (!s.ok) return this.fail(page, st, e, s.error);
@@ -828,11 +893,17 @@ export class Stage {
     // A press with no path after the client's modifier press (the pointer was there already): a chord's time after it.
     const mods = [...st.keys.values()].filter((k) => MODIFIER_KEYS.has(k.params.key)).map((k) => k.at);
     if (mods.length) await this.until(a, Math.max(...mods) + draw(this.o.random, P.params.keys.chord.beforeMs));
-    if (a.over) await this.dialogGone(st);
+    if (a.over) {
+      const { sent } = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y, force: force(P) });
+      st.buttons.set(p.button, p.clickCount ?? 1);
+      st.press = { at: this.clock.now(), hold: 0, client, point, button: p.button };
+      this.answerWith(page, e, sent);
+      return;
+    }
     const params = { ...p, x: point.x, y: point.y, force: force(P), timestamp: this.stamp(page, st) };
     const at = this.clock.now();
     const pr = this.sendEvent(page, st, undefined, e.method, params);
-    st.buttons.add(p.button);
+    st.buttons.set(p.button, p.clickCount ?? 1);
     st.press = { at, hold: holdMs(P, this.o.random), client, point, button: p.button };
     if (a.over) { this.answerWith(page, e, pr); return; }
     const r = await this.settle(a, pr);
@@ -853,7 +924,12 @@ export class Stage {
     const pr0 = st.press && st.press.button === p.button ? st.press : null;
     const point = pr0 && same(pr0.client, client) ? pr0.point : client;
     if (pr0) await this.until(a, pr0.at + pr0.hold);
-    if (a.over) await this.dialogGone(st);
+    if (a.over) {
+      const { sent } = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y });
+      st.buttons.delete(p.button); st.releasedAt = this.clock.now(); st.press = null; st.spread = null;
+      this.answerWith(page, e, sent);
+      return;
+    }
     const params = { ...p, x: point.x, y: point.y, timestamp: this.stamp(page, st) };
     const pr = this.sendEvent(page, st, undefined, e.method, params);
     st.buttons.delete(p.button);
@@ -885,7 +961,7 @@ export class Stage {
       st.keys.set(p.code, { at: this.clock.now(), params: p });
       if (!MODIFIER_KEYS.has(p.key)) this.count("plainKeys");
     }
-    if (a.over) await this.dialogGone(st);
+    if (a.over) { const { sent } = await this.endedSend(page, st, e, { ...p }); this.answerWith(page, e, sent); return; }
     const pr = this.sendEvent(page, st, undefined, e.method, { ...p, timestamp: this.stamp(page, st) });
     if (a.over) { this.answerWith(page, e, pr); return; }
     const r = await this.settle(a, pr);
@@ -904,15 +980,21 @@ export class Stage {
     const node = nodeArg?.handle;
     const action = String(opts?.actionType ?? ""), trial = opts?.trial === true;
     const hit = opts?.hitPoint && typeof opts.hitPoint.x === "number" && typeof opts.hitPoint.y === "number" ? { x: opts.hitPoint.x, y: opts.hitPoint.y } : null;
-    if (!st.recov || st.recov.node !== node) { st.recov = { node, n: 0 }; st.plain = false; }
+    // A miss marks the tab for the next setup of its node within RETRY_MARK_MS; one action's recoveries are the setups of
+    // one node that each follow such a miss. A setup with no such miss starts a new count.
+    const marked = st.miss && this.clock.now() - st.missAt <= RETRY_MARK_MS;
+    st.miss = false;
+    if (!st.recov || st.recov.node !== node || !marked) st.recov = { node, n: 0 };
+    // The plain mode covers one attempt: from this setup to its own miss, its stop's answer, or the end of the stage's action.
+    st.plain = false;
     st.setup = { node, child: e.child, action, hit, trial, used: false };
     st.spread = null; this.dropRest(st);
     const live = !st.action?.over;
     if (live && !trial && hit && node) {
-      if (st.miss) {
-        st.miss = false;
+      if (marked) {
         if (st.recov.n >= RECOVERIES_MAX) {
-          if (!st.plain) { this.count("recoveryLimits"); this.o.log(`relay: the input stage: tab ${page.id} reached ${RECOVERIES_MAX} recoveries in one action; the rest goes as the client sends it`); }
+          if (!st.recov.limited) { st.recov.limited = true; this.count("recoveryLimits"); this.o.log(`relay: the input stage: tab ${page.id} reached ${RECOVERIES_MAX} recoveries in one action; each later attempt goes as the client sends it`); }
+          this.count("plainAttempts");
           st.plain = true;
         } else {
           st.recov.n++;
@@ -925,10 +1007,11 @@ export class Stage {
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a setup of ${action || "?"}${trial ? " (trial)" : ""}, ${st.recov.n} recoveries of its node${st.plain ? ", plain" : ""}`);
     await page.pass(e.child, e.method, e.params, (body: any) => {
       const r = body?.result?.result;
-      if (r?.type === "string") { st.miss = true; this.count("setupMisses"); }
+      // A miss of the setup ends its attempt (Playwright sends no input for it), so its plain mode ends too.
+      if (r?.type === "string") { st.miss = true; st.missAt = this.clock.now(); st.plain = false; this.count("setupMisses"); }
       else if (typeof r?.objectId === "string") st.handles.add(r.objectId);
       // A kept rest waits for Playwright's move from the setup's answer on (a miss: Playwright sends no move).
-      if (st.rest) { if (r?.type === "string") { this.dropRest(st); if (!st.running) this.afterStep(page, st); } else this.keepRest(page, st); }
+      if (st.rest) { if (r?.type === "string") { this.dropRest(st); if (!st.running) void this.afterStep(page, st); } else this.keepRest(page, st); }
       e.answer(body);
     });
   }
@@ -988,7 +1071,8 @@ export class Stage {
     const i = samples.findIndex((q) => inside(q, box));
     const before = i < 0 ? samples : samples.slice(0, i);
     const r = await this.play(page, st, a, before, { modifiers: 0 });
-    if (r.error !== undefined || r.stopped) return;
+    if (r.error !== undefined) { this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); this.freeTail(st); this.close(st, page.id); return; }
+    if (r.stopped) return;
     if (i < 0) return;
     if (before.length) from = st.last!;
     const t0 = i > 0 ? samples[i - 1].t : 0;
@@ -1026,7 +1110,8 @@ export class Stage {
         .sort((p, q) => Math.hypot(q.x - H.x, q.y - H.y) - Math.hypot(p.x - H.x, p.y - H.y));
       if (exits[0] && !same(at, exits[0])) {
         const r = await this.play(page, st, a, this.plan(page, st, at, exits[0], DEFAULT_WIDTH), { modifiers: 0 });
-        if (r.error !== undefined || r.stopped) return;
+        if (r.error !== undefined) { this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); this.freeTail(st); this.close(st, page.id); return; }
+        if (r.stopped) return;
       }
       await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: handle, functionDeclaration: TWO_FRAMES, awaitPromise: true, returnByValue: true }));
       const again = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: handle, functionDeclaration: OBSTACLE_AGAIN, returnByValue: true }));

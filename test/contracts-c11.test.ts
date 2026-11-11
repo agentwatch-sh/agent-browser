@@ -1506,6 +1506,8 @@ const STAGE_ITEMS: string[] = [
   "The stage sends CDP input (`Input.*` through `debugger.sendCommand`) on every platform.",
   "Real X input stays only for the X pointer's path at an activation (the pointer at an activation, above).",
   "On the Mac the stage uses no X input and never the operator's own pointer.",
+  // Review-116 (board ab-t30.9), N2.
+  "The stage's own commands go as the model sends a client's: a press, or a move with a button down, that has no `force` gets `force` 0.5, and a command that reaches C10's timeout detaches the tab (where each call goes, above).",
   "The calls that the stage takes.",
   "On a page session of a tab (the tab's own session), the stage takes these calls:",
   "`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.insertText`, of every `type`;",
@@ -1533,7 +1535,9 @@ const STAGE_ITEMS: string[] = [
   "Another tab's input waits for the lock, in the order of arrival, and that tab's later calls wait behind it in its own gate.",
   "In the service, agent-browser's own commands reach Chrome through the endpoint and the stage, so they share the lock.",
   "The file lock `input.lock` stays only for agent-browser's direct mode (its own Chrome, with no endpoint).",
-  "A hold has the limit `STAGE_ACTION_MAX_MS = 25000`: at the limit the stage sends the rest of the action at once, with no person's timing, and logs it.",
+  // Review-116, B3 (before: "at the limit the stage sends the rest of the action at once, with no person's timing, and logs it.").
+  "A hold has the limit `STAGE_ACTION_MAX_MS = 25000`: at the limit the plan ends (dialogs, below), so the lock is free at once, the rest of the action goes with no person's timing, and the stage logs it.",
+  "At this limit the stage sends no release of its own: the client still holds its button or key, and its own release goes later.",
   "The answers.",
   "A held answer.",
   "The stage answers a client call only after it has sent the events of that call and Chrome has answered them:",
@@ -1555,6 +1559,8 @@ const STAGE_ITEMS: string[] = [
   "When Chrome refuses an event of a plan, the stage stops the plan and sends no more of its events.",
   "First it sends the release of each button and key that the plan holds.",
   "The client call of the refused event gets Chrome's error, and each other client call of the plan whose events did not go gets the same error.",
+  // Review-116, N8.
+  "A sample that the stage sends before a hit-target setup (the hover's samples outside the target, the recovery's move out) belongs to no client call that has come: at its error the plan stops in the same way, and the setup goes as the client sent it.",
   "Shift and rollover.",
   "A key with no Shift that follows a shifted key waits for the planned release of that key and for the release of Shift.",
   "The stage never sends a release before its planned hold has passed.",
@@ -1573,11 +1579,19 @@ const STAGE_ITEMS: string[] = [
   // Chrome drops input events while a dialog is open, this rule changes first: then the client calls of an ended plan get
   // an error that names the dialog").
   "It frees the input lock at once.",
-  "When the dialog closes (`Page.javascriptDialogClosed`, or Chrome's answer to the client's `Page.handleJavaScriptDialog`), it sends at once, in order, each event that a client call of the plan asked for and that has not gone (the move to the client's point, the press, the release), and the release of each button and key that the plan holds.",
-  "Then it opens the tab's gate.",
+  // Review-116, B1 and N3 (before: "When the dialog closes (`Page.javascriptDialogClosed`, or Chrome's answer to the
+  // client's `Page.handleJavaScriptDialog`), it sends at once, in order, ... and the release of each button and key that
+  // the plan holds. Then it opens the tab's gate.").
+  "When the dialog closes, it takes the input lock again, in the order of arrival, and it runs the activation before an ended press or key press (the window comes forward for input, above).",
+  "It sends at once, in order, each event that a client call of the plan asked for and that has not gone (the move to the client's point, the press, the release), and the release of each button and key that the plan holds, with the `clickCount` of its press.",
+  "Then it frees the lock, and only then does it open the tab's gate.",
   "Chrome keeps the input events that it got before the dialog opened, and it drops each input event that it gets while the dialog is open: it answers that event at once, and the page never gets it (measured by board ab-t30.9 on Chromium 156: a release and a move sent while the `confirm()` of a `mousedown` handler was open were answered at once and never reached the page, and the press that opened the dialog was answered after the close).",
   "So the stage holds the events of an ended plan until the close, and the page gets what Playwright's own input gives it.",
   "The stage never goes on with a plan after its dialog closes, and the tab's later calls wait in its gate behind those events, so no event of a plan goes after a later client call.",
+  // Review-116, B1 and B3: one rule for every end of a plan; N1 and the daemon lead's point: the end of the wait.
+  "Every end of a plan (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`) follows these steps; only at a dialog do steps 3 and 4 wait for the close.",
+  "The end of the wait for a close: `Page.javascriptDialogClosed`; Chrome's answer to the client's `Page.handleJavaScriptDialog`; the client's `Page.disable` (no `Page.javascriptDialogClosed` can come after it); a navigation of the tab's main frame (`Page.frameNavigated` with no parent); `Inspector.targetCrashed`; and the end of the tab in the model (its target ends, the tab closes, Chrome detaches it, or the client's session or connection ends).",
+  "Then the stage sends the held events, and each held client call gets Chrome's answer, or Chrome's error for a closed target; then the gate opens.",
   "Each client call of an ended plan gets Chrome's own answer to its event when that answer comes, or Chrome's error.",
   "The stage gives no answer of its own.",
   "Each read of the stage waits at most `GEOMETRY_WAIT_MS` (200 ms).",
@@ -1586,7 +1600,7 @@ const STAGE_ITEMS: string[] = [
   "At the limit the plan ends as at a dialog.",
   "This also covers a dialog when no client has `Page` enabled, and a dialog between two events of a plan.",
   "A late answer changes nothing.",
-  "With no `Page.javascriptDialogOpening` the stage knows of no dialog, and it sends the events of the ended plan at once.",
+  "With no `Page.javascriptDialogOpening` the stage knows of no dialog, and it sends the events of the ended plan with no wait for a close.",
   "A hold counts from the send of the press, not from its answer, so a `confirm()` in a `mousedown` handler does not make the hold longer.",
   "When the answer of the press does not come, the plan ends by these rules, and the release goes at the dialog's close (at once when the stage knows of no dialog).",
   "The timestamps and the rate.",
@@ -1627,7 +1641,7 @@ const STAGE_ITEMS: string[] = [
   "The pointer:",
   "`Input.dispatchMouseEvent`.",
   "`mouseMoved` with no button down, to the page's last point: no event, because a mouse that does not move sends none.",
-  "The stage answers it at once.",
+  "The stage answers it at once, with no lock and no activation.",
   "`mouseMoved` with no button down, at most 50 px from the page's last point: samples of the client's line at the rate of the device.",
   "Their speed is 0.5 to 1.5 px/ms, with 0 to 1 px of jitter across the line.",
   "Such a move is a step of `mouse.move` with `steps` or of `click({ steps })`, or a short move.",
@@ -1801,8 +1815,12 @@ const STAGE_ITEMS: string[] = [
   "Then it sends the setup.",
   "The way around.",
   "The next path to the target goes around that box: when the straight way crosses the box (10 px wider on each side), the path goes through the corner of the wider box that gives the shortest way, as two paths.",
-  "At most two recoveries in one action: the setups of one node with no setup of another node between them.",
-  "After them, the stage sends the rest of the action's input as Playwright sends it, with only the timestamps and the rate above, and counts it.",
+  // Review-116, B2 (before: "the setups of one node with no setup of another node between them." and "After them, the
+  // stage sends the rest of the action's input as Playwright sends it, with only the timestamps and the rate above, and
+  // counts it.").
+  "At most two recoveries in one action: the setups of one node, each within 2 s of a miss of that node (Playwright tries again at most 500 ms after a miss).",
+  "After them, each later attempt of that node goes as Playwright sends it, with only the timestamps and the rate above, and the stage counts it: its input from its setup to the end of that attempt (the setup's own miss, its stop's answer, or the end of the stage's action).",
+  "A mouse call with no setup, and a setup with no miss of its node in the 2 s before it, get the person's input.",
   "The frame mapping.",
   "Playwright gives the hit point of a frame's element in the frame's own points, and it sends the input on the top page's session, in the top page's points.",
   "So the stage maps a hit point by the frame of the node of the call, on every session:",
