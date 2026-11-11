@@ -163,10 +163,21 @@ async function stateOf(p: any): Promise<unknown> {
   for (const f of p.frames()) { const o = /o=(same|cross)/.exec(f.url())?.[1]; if (o) frames[o] = await f.evaluate(() => { const x = (window as any).__f; return { click: x.click, enter: x.enter, moved: x.moves > 0 }; }).catch((e: Error) => `error: ${e.message.split("\n")[0]}`); }
   return { ev: s.ev, hov: { entered: s.hov.enter > 0, shift: s.hov.shift }, card: s.card.enter > 0, last: s.last, conf: s.conf, sel: s.sel, checked: s.checked, frames };
 }
-/** The fields of a row's state that depend on the row (a move's last point only for a row that ends with a move). */
+/**
+ * The fields of a row's state that the row decides: the click events, the selection, the check box and the dialog always;
+ * a move's last point for a mouse.move row; the hover's state for a hover row; the card for M8; in each frame its clicks,
+ * and its hover for a frame hover. A path of the stage crosses other elements on its way (no click), so the hover and the
+ * moves of the elements on the way are no part of a row's result.
+ */
 function compared(row: Row, st: any): unknown {
-  const moveRow = /mouse\.move|hover/.test(row.name);
-  return { ...st, last: moveRow && !/hover\(|M8|M10|frame/.test(row.name) ? st.last : undefined, hov: row.name.includes("hover") && !/frame|M8/.test(row.name) ? st.hov : undefined };
+  const frameRow = /frame/.test(row.name), hoverRow = /hover/.test(row.name);
+  return {
+    ev: st.ev, sel: st.sel, checked: st.checked, conf: st.conf,
+    last: /^mouse\.move/.test(row.name) ? st.last : undefined,
+    hov: hoverRow && !frameRow && !/M8/.test(row.name) ? st.hov : undefined,
+    card: /M8/.test(row.name) ? st.card : undefined,
+    frames: Object.fromEntries(Object.entries<any>(st.frames).map(([k, f]) => [k, typeof f === "string" ? f : { click: f.click, ...(frameRow && hoverRow ? { entered: f.enter > 0 } : {}) }])),
+  };
 }
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number; value?: T; error?: string }> {
