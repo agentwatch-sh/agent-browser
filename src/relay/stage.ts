@@ -1455,6 +1455,7 @@ export class Stage {
     if (!rule.typed) {
       // The text as it is (C11, the cases of no change: a text that the typing rule refuses).
       this.count("textAsIs"); this.count(`textAsIs:${rule.why}`);
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a text as it is (${rule.why})`);
       await this.until(a, ins.t);
       if (a.over) return this.endedEvent(page, st, e);
       const pr = this.sendEvent(page, st, undefined, e.method, { ...e.params });
@@ -1467,6 +1468,7 @@ export class Stage {
     }
     this.count("typedTexts");
     if (rule.plan.pace === "fast") this.count("typedTextsFast");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: typed keys (${rule.plan.pace === "fast" ? "the fast end" : "the person's speed"}, ${Math.round(rule.plan.plan.ms)} ms)`);
     const t0 = ins.t, mac = !this.linux();
     const items: KeyItem[] = rule.plan.plan.events.map((ev) => ({ ev: { ...ev, t: ev.t + t0 }, typed: { commands: mac && !ev.own ? [] : undefined } }));
     this.enqueue(st, items);
@@ -1520,33 +1522,38 @@ export class Stage {
     const node = (args[1] as Handle | undefined)?.handle, fill = u.name === "fill", reset = !fill && args[2] === true;
     if (node) { st.field = { child: e.child, node, follow: fill }; if (e.child) { st.childNodes.delete(e.child); st.childNodes.set(e.child, node); while (st.childNodes.size > KEPT_MAX) st.childNodes.delete(st.childNodes.keys().next().value!); } }
     st.fillNext = fill;
+    const why = (k: string) => this.noClick(page, k);
     const pass = () => page.pass(e.child, e.method, e.params, e.answer);
-    if (!node || st.action?.over) { this.count("fieldNoRead"); return pass(); }
+    if (!node || st.action?.over) { why("fieldNoRead"); return pass(); }
     // Playwright's focus call starts an action (C11, the window comes forward for input): the lock and the activation first.
     let a = !fill ? await this.begin(page, st) : null;
     if (a?.over) return pass();
     const f = await this.fieldRead(page, st, e.child, node, fill);
-    if (!f) { this.count("fieldNoRead"); return pass(); }
+    if (!f) { why("fieldNoRead"); return pass(); }
     // fill's own script selects the text: the field needs only the focus of its document; Playwright's focusNode reads the window's too.
-    if (f.kind === "other" || (fill ? f.active : f.focused)) { this.count(f.kind === "other" ? "fieldNotText" : "fieldFocused"); return pass(); }
+    if (f.kind === "other" || (fill ? f.active : f.focused)) { why(f.kind === "other" ? "fieldNotText" : "fieldFocused"); return pass(); }
     a ??= await this.begin(page, st);
     if (a.over) return pass();
     // The read again after the activation: the window's focus can be the field's now (Playwright's focusNode then resets nothing).
     const g = fill ? f : await this.fieldRead(page, st, e.child, node, fill);
-    if (!g || g.focused) { this.count(g ? "fieldFocused" : "fieldNoRead"); return pass(); }
+    if (!g || g.focused) { why(g ? "fieldFocused" : "fieldNoRead"); return pass(); }
     const at = await this.clickPoint(page, st, e.child, node, g, fill);
     if (!at) return pass();
     // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
     const want = g.kind === "input" && reset ? { s: 0, e: 0 } : typeof g.s === "number" && typeof g.e === "number" ? { s: g.s, e: g.e } : null;
     this.count("focusClicks");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click (${g.kind})`);
     if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(g.box.x1 - g.box.x0, g.box.y1 - g.box.y0))))) return pass();
     if (!fill && want && (g.kind === "input" || g.kind === "textarea")) {
       const h = await this.fieldRead(page, st, e.child, node, fill);
-      if (!h || !h.active) this.count("focusClickMissed");
-      else if (h.s !== want.s || h.e !== want.e) await this.caret(page, st, a, e.child, node, g, want);
+      if (!h || !h.active) why("focusClickMissed");
+      else if (h.s !== want.s || h.e !== want.e) { if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: the caret moves`); await this.caret(page, st, a, e.child, node, g, want); }
     }
     return pass();
   }
+
+  /** No focus click (or a click that missed): the count, and with the trace a log line of its reason (never a point). */
+  private noClick(page: StagePage, k: string): void { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: no focus click (${k})`); }
 
   /** The focus click's read of the field (FIELD_STATE), with its box in the top page's points (the frame mapping), or null. */
   private async fieldRead(page: StagePage, st: TabState, child: string | undefined, node: string, follow: boolean): Promise<FieldRead | null> {
@@ -1566,7 +1573,7 @@ export class Stage {
    */
   private async clickPoint(page: StagePage, st: TabState, child: string | undefined, node: string, f: FieldRead, follow: boolean): Promise<Pt | null> {
     const b = f.box, w = b.x1 - b.x0, h = b.y1 - b.y0;
-    if (!(w >= 1 && h >= 1)) { this.count("focusNoBox"); return null; }
+    if (!(w >= 1 && h >= 1)) { this.noClick(page, "focusNoBox"); return null; }
     const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
     const v = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
     const R = this.o.random, editable = f.kind === "editable", text = f.len > 0 || editable;
@@ -1580,9 +1587,9 @@ export class Stage {
     };
     const p = { x: pick(xa, xb, b.x0, b.x1 - 1), y: pick(ya, yb, b.y0, b.y1 - 1) };
     // A field out of view (C11: notches first, then the click): the notches are board ab-t30.11's; until then no click.
-    if (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight)) { this.count("focusOutOfView"); return null; }
+    if (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight)) { this.noClick(page, "focusOutOfView"); return null; }
     const hit = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: p.x - f.ox + f.lox }, { value: p.y - f.oy + f.loy }, { value: follow }], returnByValue: true }));
-    if (hit === TIMEOUT || (hit as any)?.result?.value !== true) { this.count("focusCovered"); return null; }
+    if (hit === TIMEOUT || (hit as any)?.result?.value !== true) { this.noClick(page, "focusCovered"); return null; }
     return p;
   }
 
