@@ -59,11 +59,11 @@ const holdsCanary = (text: string, canaries: string[] = control.signInScan.canar
 
 type World = { dir: string; logs: string[]; part: SignInsPart; events: any[]; clock: { t: number }; ask: (op: string, fields?: Record<string, unknown>, by?: Req["by"]) => Promise<any>; close: () => void };
 let ids = 0;
-function world(o: { protections?: () => Unprotected | null; paneSecret?: Buffer; kdfN?: number; wrongWaitMs?: number; dir?: string } = {}): World {
+function world(o: { protections?: () => Unprotected | null; paneSecret?: Buffer; kdfN?: number; wrongWaitMs?: number; dir?: string; onStep?: (step: string) => void } = {}): World {
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), "ab-signins-"));
   const logs: string[] = [], events: any[] = [];
   const clock = { t: T0 };
-  const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(clock.t), paneSecret: o.paneSecret, kdfN: o.kdfN ?? KDF.minN, wrongWaitMs: o.wrongWaitMs });
+  const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(clock.t), paneSecret: o.paneSecret, kdfN: o.kdfN ?? KDF.minN, wrongWaitMs: o.wrongWaitMs, onStep: o.onStep });
   part.attach((ev) => events.push(ev));
   const ask = async (op: string, fields: Record<string, unknown> = {}, by: Req["by"] = op === "sign_ins" ? DAEMON : OP) => {
     const r = await part.ops[op]({ t: "req", id: `x${++ids}`, op, by, ...fields } as Req);
@@ -291,16 +291,15 @@ test("the pane's seal in the store: a replayed rid, an at more than 120 s from t
     const s = sealReq(w, REC);
     cases.push(["another name", { ...s, record: { ...REC, name: "staging-x" } }], ["another path", { ...s, record: { ...REC, path: "/other" } }], ["another send_to", { ...sealReq(w, REC), record: { ...REC, send_to: [ORIGIN, "https://login.example.com"] } }], ["an offer's seal", { ...sealReq(w, REC, true), offer: false }]);
     for (const [what, fields] of cases) assert.deepEqual(await w.ask("sign_in_seal", fields), { error: TEXT.sealed }, what);
-    // An at that is no real time, whose lenient date (November 31 is December 1) is the clock's time: refused for its form.
-    const clock = w.clock.t;
-    w.clock.t = Date.parse("2026-12-01T20:00:00Z");
-    assert.deepEqual(await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: "2026-11-31T20:00:00Z" })), { error: TEXT.sealed }, "November 31");
-    assert.ok((await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: "2026-12-01T20:00:00Z" }))).data, "the same time, written as a real time");
-    w.clock.t = clock;
-    // 120 s exactly still opens; the rid of a refused seal is spent, and after 120 s a rid can come again.
+    // 120 s exactly still opens; after 120 s a rid can come again.
     assert.ok((await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: new Date(T0 - 120_000).toISOString() }))).data);
     w.clock.t += 121_000;
     assert.ok((await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { rid }))).data, "a rid older than 120 s");
+    // An at that is no real time, whose lenient date (November 31 is December 1) is the clock's time: refused for its form.
+    // (The store's clock never goes back, so this case comes last.)
+    w.clock.t = Date.parse("2026-12-01T20:00:00Z");
+    assert.deepEqual(await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: "2026-11-31T20:00:00Z" })), { error: TEXT.sealed }, "November 31");
+    assert.ok((await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: "2026-12-01T20:00:00Z" }))).data, "the same time, written as a real time");
   } finally { w.close(); }
 });
 
@@ -318,13 +317,14 @@ test("review-118 B2: the service keeps a seal's rid until that seal can no longe
     w.clock.t = T0 + 179_000;
     assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: ahead }), { error: TEXT.sealed }, "the same line at the clock + 179 s (its at is 119 s in the past)");
     // A seal whose at is 130 s ahead is refused for its time and its rid is not taken: it opens once when its time comes.
-    w.clock.t = T0;
-    const early = passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }, { at: new Date(T0 + 130_000).toISOString() });
+    // (The store's clock never goes back, so this part counts from the clock's time now.)
+    const base = w.clock.t;
+    const early = passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }, { at: new Date(base + 130_000).toISOString() });
     assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: early }), { error: TEXT.sealed }, "130 s ahead");
-    w.clock.t = T0 + 20_000;
+    w.clock.t = base + 20_000;
     assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: early }), { data: {} }, "within 120 s: it opens once");
     await w.ask("sign_ins_lock");
-    w.clock.t = T0 + 200_000;
+    w.clock.t = base + 200_000;
     assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: early }), { error: TEXT.sealed }, "and not again");
   } finally { w.close(); }
 });
@@ -395,7 +395,7 @@ test("review-118 notes 5, 7, 8 and 9: a seal with no padding opens; an unknown r
     const a = await w.ask("sign_in_seal", sealReq(w, REC));
     await w.ask("sign_ins", { key, records: [fileOf(a)] });
     assert.deepEqual(await w.ask("sign_in_reseal", { record: { ...REC, path: "/lögin" } }), { error: TEXT.record("path") });
-    assert.deepEqual(await w.ask("sign_in_seal", sealReq(w, { ...REC, path: "/" })), { error: TEXT.record("path") });
+    assert.deepEqual(await w.ask("sign_in_seal", sealReq(w, { ...REC, path: "/\x01" })), { error: TEXT.record("path") });
     assert.equal(keyFits({ ...key, v: 2 }), false);
     await w.ask("sign_ins_lock");
     await w.ask("sign_ins", { key: { ...key, v: 2 }, records: [] });
@@ -409,6 +409,77 @@ test("review-118 notes 5, 7, 8 and 9: a seal with no padding opens; an unknown r
     c.setAAD(Buffer.from(JSON.stringify(["agentwatch-browser-sign-ins-key-v1", 1, key.public, key.kdf.name, key.kdf.n, key.kdf.r, key.kdf.p, key.kdf.salt])));
     const ct = Buffer.concat([c.update(secret), c.final()]);
     assert.throws(() => unwrapKey({ ...key, wrapped: { iv: b64u(iv8), ct: b64u(ct), tag: b64u(c.getAuthTag()) } }, kek), "an IV of 8 bytes");
+  } finally { w.close(); }
+});
+
+test("the daemon lead's condition (review-118b): at most two set-ups, unlocks or rekeys wait behind the one that runs; one more gets the busy text at once, with no derivation and no wait", { timeout: 60_000 }, async () => {
+  const w = world();
+  const req = (op: string, fields: Record<string, unknown> = {}) => ({ t: "req", id: `z${++ids}`, op, by: OP, ...fields }) as Req;
+  try {
+    await setUp(w);
+    await w.ask("sign_ins_lock");
+    const unlock = (pass: string) => w.part.ops.sign_ins_unlock(req("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: pass }) }));
+    const t0 = Date.now();
+    const running = unlock(WRONG), waits1 = unlock(PASSPHRASE), waits2 = unlock(PASSPHRASE);
+    const more = [unlock(PASSPHRASE), w.part.ops.sign_ins_setup(req("sign_ins_setup", { sealed: passSeal(w, "sign_ins_setup", { passphrase: PASSPHRASE }) })), w.part.ops.sign_ins_rekey(req("sign_ins_rekey", { sealed: passSeal(w, "sign_ins_rekey", { old: PASSPHRASE, new: NEW_PASSPHRASE }) }))];
+    for (const m of more) {
+      assert.ok(!(m instanceof Promise), "an answer at once, with no derivation and no wait");
+      assert.deepEqual(m, { error: TEXT.busy });
+    }
+    assert.ok(Date.now() - t0 < 100, "at once");
+    assert.deepEqual(await running, { error: TEXT.wrongPassphrase });
+    assert.deepEqual([await waits1, await waits2], [{ data: {} }, { data: {} }], "the two that waited");
+    // The queue is free again.
+    await w.ask("sign_ins_lock");
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} });
+  } finally { w.close(); }
+});
+
+test("review-118b open point 2: a lock wins over an earlier unlock that waits in the queue: U1 with a wrong passphrase runs its 2 s, U2 with the right one waits, then Lock: U2 answers the store is locked, and the store stays locked", { timeout: 60_000 }, async () => {
+  const w = world();
+  const req = (op: string, fields: Record<string, unknown> = {}) => ({ t: "req", id: `z${++ids}`, op, by: OP, ...fields }) as Req;
+  try {
+    await setUp(w);
+    await w.ask("sign_ins_lock");
+    const u1 = w.part.ops.sign_ins_unlock(req("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: WRONG }) }));
+    const u2 = w.part.ops.sign_ins_unlock(req("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(await w.part.ops.sign_ins_lock(req("sign_ins_lock")), { data: {} });
+    assert.deepEqual(await u1, { error: TEXT.wrongPassphrase });
+    assert.deepEqual(await u2, { error: TEXT.locked }, "the lock came after U2 and before its answer");
+    assert.equal(w.part.store.holdsOpenKey(), false);
+    assert.equal(w.part.store.state(), "locked");
+  } finally { w.close(); }
+});
+
+test("review-118b open point 1: a lock during the rekey's new passphrase's derivation (after the old one's check) wins: the rekey answers the store is locked and gives no key", { timeout: 60_000 }, async () => {
+  let w!: World;
+  w = world({ onStep: (step) => { if (step === "rekey: the new passphrase's derivation") void w.part.ops.sign_ins_lock({ t: "req", id: "hook-lock", op: "sign_ins_lock", by: OP } as Req); } });
+  try {
+    const key = await setUp(w);
+    assert.deepEqual(await w.ask("sign_ins_rekey", { sealed: passSeal(w, "sign_ins_rekey", { old: PASSPHRASE, new: NEW_PASSPHRASE }) }), { error: TEXT.locked });
+    assert.equal(w.part.store.holdsOpenKey(), false);
+    assert.ok(w.logs.includes("sign-ins: the store closed during the rekey's derivations, so it gives no key"), w.logs.join("\n"));
+    // The old key file still opens with the old passphrase: nothing wrapped a zeroed private half.
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} });
+    assert.equal(b64u(publicRaw(privateKeyOf(unwrapKey(key, await deriveKey(PASSPHRASE, key.kdf))))), key.public);
+  } finally { w.close(); }
+});
+
+test("review-118b open point 4: the clock of the seals' checks never goes back: after a step back of the clock, a seal whose rid the service dropped does not open again", { timeout: 60_000 }, async () => {
+  const w = world();
+  try {
+    await setUp(w);
+    await w.ask("sign_ins_lock");
+    const a = passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE });
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: a }), { data: {} });
+    await w.ask("sign_ins_lock");
+    w.clock.t = T0 + 121_000;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} }, "a new seal: the old rid goes from the set");
+    await w.ask("sign_ins_lock");
+    w.clock.t = T0 + 10_000;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: a }), { error: TEXT.sealed }, "the captured line after a step back of 111 s");
+    assert.equal(w.part.store.state(), "locked");
   } finally { w.close(); }
 });
 
@@ -773,7 +844,7 @@ async function realDoor(o: { protections?: () => Unprotected | null } = {}) {
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const isB64u = (x: unknown, n?: number) => typeof x === "string" && /^[A-Za-z0-9_-]+$/.test(x) && (n === undefined || Buffer.from(x, "base64url").length === n);
 
-test("the replay: the real store answers each vector of the stored sign-ins as the vectors say (s1 to s57 in their order, the bad requests b33 to b52, the unprotected cases), with its own key and sealed parts in the later snapshots as the daemon writes them; its events are the fake's; nothing that it sends or logs holds a canary", { timeout: 180_000 }, async () => {
+test("the replay: the real store answers each vector of the stored sign-ins as the vectors say (s1 to s59 in their order, the bad requests b33 to b53, the unprotected cases, and the busy case), with its own key and sealed parts in the later snapshots as the daemon writes them; its events are the fake's; nothing that it sends or logs holds a canary", { timeout: 180_000 }, async () => {
   const d = await realDoor();
   const sent: string[] = [];
   try {
@@ -846,6 +917,22 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
     assert.ok(d.logs.includes("control: sign_in_seal by operator ann via web: ok") && d.logs.includes("control: sign_ins_setup by operator ann via web: ok"), logs);
     assert.ok(d.logs.filter((l) => l.startsWith("sign-ins: ")).every((l) => /^sign-ins: (the store is (set up and open|open)|the store has a new passphrase|sealed( again)? c-[0-9a-f]{8} [A-Za-z0-9._-]+( \(an offer\))?|start again c-[0-9a-f]{8})$/.test(l)), logs);
   } finally { await d.close(); }
+  // The busy case (the daemon lead's condition): the first lines in order, then the pipelined lines in one write.
+  {
+    const b = await realDoor();
+    try {
+      let realKey: any = null;
+      for (const v of control.busy.first) {
+        const line = v.req.op === "sign_ins" && v.req.key ? { ...v.req, key: realKey } : v.req;
+        b.c.send(line);
+        const got = await b.c.answer(v.req.id, 30_000);
+        if (v.req.op === "sign_ins_setup") { assert.equal(got.ok, true); realKey = got.data.key; } else assert.deepEqual(got, v.res, v.note);
+      }
+      b.c.send(control.busy.pipelined.map((v: any) => JSON.stringify(v.req)).join("\n") + "\n");
+      for (const v of control.busy.pipelined) assert.deepEqual(await b.c.answer(v.req.id, 30_000), v.res, v.note);
+      assert.deepEqual(b.c.lines.filter((l) => l.t === "res" && /^busy-[5-8]$/.test(l.id)).map((l) => l.id), control.busy.order, "the order of the answers");
+    } finally { await b.close(); }
+  }
   // The unprotected cases, each on a new store with its failing protections (the order of protect.ts: dumpable first).
   for (const k of control.unprotected.cases) {
     const failing = new Set<string>(k.failing);

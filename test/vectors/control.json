@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints. The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s57 run in their order after r14 (s53 after s17, s54 after s10, s55 after s13, s56 after s36, s57 after s38, s58 and s59 after s51) with the fake values of state.sign_ins (the fake opens no seal), the bad requests b33 to b53 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected and its reason; failing names each protection that does not hold), and signInScan holds the canaries of the scan. Board ab-v16.97.2: each pane's seal is a real seal of agentwatch's screen-seal.js to the test pane key of paneSeal (test/vectors/sign-in-seals.mjs writes them), and paneSeal holds one shared seal with its binding, its bytes, its test keys and its payload; the real service answers these lines too, with its own key and sealed parts in the later sign_ins (C12, the vectors).",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints. The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s57 run in their order after r14 (s53 after s17, s54 after s10, s55 after s13, s56 after s36, s57 after s38, s58 and s59 after s51) with the fake values of state.sign_ins (the fake opens no seal), the bad requests b33 to b53 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected and its reason; failing names each protection that does not hold), and signInScan holds the canaries of the scan. Board ab-v16.97.2: each pane's seal is a real seal of agentwatch's screen-seal.js to the test pane key of paneSeal (test/vectors/sign-in-seals.mjs writes them), and paneSeal holds one shared seal with its binding, its bytes, its test keys and its payload; the real service answers these lines too, with its own key and sealed parts in the later sign_ins (C12, the vectors). busy holds the case of a full queue (lines in one write: C12, the vectors).",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -5498,5 +5498,240 @@
    "sealed": "aw1:3jqR34UmfFZpyT6YjoXJ9HN8C4kP85i3_A5IqHWgzQWSFNNbgWBoubNsS01qsvC84ds5evIYqpHmGa6UfieGhvI-OTLG6DkRzhfjhH-gjR-GULkWgpucMReyNa8YMpH6hlOSCYYa-OZUkJ4NQki_z18ISXja9K0sYjrppSGLuhyc3SbVtzOFU_sKjbSnT6QxSgy9qik8jhxVZjU-nFTl_5HmDw1n_qCy9ZbCjsAjmzzLeAqDkj_2sVVcNCBQjOONzXOSxM4ckbbt5OsIkBKlPH2HPt0rXWh5imt9zDWWoePrS5YQSX8SpGs4lnUTh1ZvLSkVH0Izhd7bwAxEMyHxVDnbiUXrPkY1HcFjNkwGqVkNZxyIOGMZ77dQgAdC2MY0PTKBQnNR2r_hDyrJMyyDHLROukNRLGingId-UgcFrbzFY_FPaQmxIvYJYA6vTKNZ",
    "sender_public_b64": "feblh0cy5XL4P1ZTJAcsoYwLN4pWQ1CYRdZfK81iRkY="
   }
+ },
+ "busy": {
+  "note": "The bound of the queue of sign_ins_setup, sign_ins_unlock and sign_ins_rekey (C12, the passphrase; the daemon lead's condition of review-118b). On a new fake or service: the lines of first run in their order, each after its answer; then the lines of pipelined go in one write. busy-5 holds the vectors' wrong_passphrase (s28's seal), so it runs for 2 s; busy-6 and busy-7 wait behind it; busy-8 is one more, and it gets the busy text at once. order gives the ids in the order of their answers. The real service answers busy-2 with its own key, and a test sends that key in busy-3 in place of the vectors' key.",
+  "first": [
+   {
+    "note": "the first snapshot: no key.json",
+    "req": {
+     "t": "req",
+     "id": "busy-1",
+     "op": "sign_ins",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "key": null,
+     "records": []
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-1",
+     "ok": true,
+     "data": {
+      "records": 0
+     }
+    }
+   },
+   {
+    "note": "the set-up: the store is open",
+    "req": {
+     "t": "req",
+     "id": "busy-2",
+     "op": "sign_ins_setup",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:xPe2PjnEH2mSuA0_Ps8_gNNsSexq6WnglwrKl6ZYn2Hq4SCfOgyZ09ckBVn2gWIfwJxv0vx9XyHzFlwwYnQtvlPUjPWMm2Wco8srjDRoPXNk8jOgG23fwz_1m4jMf0oXGOrD1jPUqWbIXJST47QrnEtIAFk2RBi631xfFROOhwYIHQxn7tSAIiThT198kblzQexSCsVGssSDXurKe3t5-uYNVqLGwe5ZBYWnmkAi10hCmUNpFK5A1qIz7YF4tADK79VLiv_kU_m5kPGOdx4oa_-oQ3Xazzk2ePOyTsi3O4keu7LHhLWZDjAznzTSdNKkWuQPOQMlswgjFtDnxtJ25HFgxMybGK97pu3gjSM3vPsgUK5KCPuZUsiqHNMMF0qpxHwYCBBl_7NvqDIyeTWZYXJaNZUpxTKLI_nfdLEFzJWGVDOFuiivxLrPKCk4WcSv",
+      "sender": "GUVQ/7RklRhtGnjm2IZvV771xqcLcYxQ1rO/E7U1NiI=",
+      "rid": "QnVzeTJTZXRVcE9mVGhlUXVldWU",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-2",
+     "ok": true,
+     "data": {
+      "key": {
+       "v": 1,
+       "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+       "kdf": {
+        "name": "scrypt",
+        "n": 131072,
+        "r": 8,
+        "p": 1,
+        "salt": "XtlD_scc1BSqO7QI6IJgPg"
+       },
+       "wrapped": {
+        "iv": "B4obup7UgkQF8GYX",
+        "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+        "tag": "jk4pUJmfRHDzXStJGojQwA"
+       }
+      }
+     }
+    }
+   },
+   {
+    "note": "the snapshot with the key.json",
+    "req": {
+     "t": "req",
+     "id": "busy-3",
+     "op": "sign_ins",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "key": {
+      "v": 1,
+      "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+      "kdf": {
+       "name": "scrypt",
+       "n": 131072,
+       "r": 8,
+       "p": 1,
+       "salt": "XtlD_scc1BSqO7QI6IJgPg"
+      },
+      "wrapped": {
+       "iv": "B4obup7UgkQF8GYX",
+       "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+       "tag": "jk4pUJmfRHDzXStJGojQwA"
+      }
+     },
+     "records": []
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-3",
+     "ok": true,
+     "data": {
+      "records": 0
+     }
+    }
+   },
+   {
+    "note": "the lock",
+    "req": {
+     "t": "req",
+     "id": "busy-4",
+     "op": "sign_ins_lock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-4",
+     "ok": true,
+     "data": {}
+    }
+   }
+  ],
+  "pipelined": [
+   {
+    "note": "an unlock with the vectors' wrong passphrase: it runs, and it answers 2 s after its turn began",
+    "req": {
+     "t": "req",
+     "id": "busy-5",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju",
+      "sender": "oVUwk8z77oyfkItyqrSXuilz5armZzp+ZicR2Hw9Zzg=",
+      "rid": "gWrHTL47w856uBML1f51lA",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-5",
+     "ok": false,
+     "error": "the passphrase does not open the store"
+    }
+   },
+   {
+    "note": "an unlock that waits behind busy-5: it opens the store",
+    "req": {
+     "t": "req",
+     "id": "busy-6",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:PZUxxmCZU1l4ybLtFx334voj8A05AflybWnOhJo-2Rk5ExDXdNIAvpv36fTUMWjStvqWE5AjDCJXzra6yhHzZCfHm3tcs-g7cyRtCqIAXOGsZVtN3W4HG8E-ZizrZ22LDJm643eNlCcRtDSkJCDLiipTMovybeMOlZ4q1x_x27AqEwtvv8XNOAL88uA8zf_tACMU4AoFJAiJsv8HTFIe6mdj1KCHZOB_MPwgzcKG82AosEzWELyrDKcA2u1p5LoJ6pV5Rmy5BIg6_moZiekc24i5B6ci-XfAVdaOvIctn-ShPtZcf-u1LwpMDlmOHjIOUudDAUNWVOaW_CCBbAdapEFiZwd1joznUpE8QmBVQw-cTKcUoT21UDEcUZL49OTU3Y35FOFRzEK-F5XgXFhp11dKQzcocy8M5vtXeXLYTXfH4bZp1DpkErw2-yJ6aQlP",
+      "sender": "JmJQ8xJ9v7I6bz0OddxY8s3VOEIbd88QA/ydp1nzMjg=",
+      "rid": "QnVzeTZXYWl0c0ZpcnN0T2ZUd28",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-6",
+     "ok": true,
+     "data": {}
+    }
+   },
+   {
+    "note": "an unlock that waits behind busy-6: the store is open then, so it answers {} and changes nothing",
+    "req": {
+     "t": "req",
+     "id": "busy-7",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:3IfjfB8p6eoXOwLLuzC9zdbpAKu7IISaY1D4YA4h9WBm1iFNrO99jdp5dLhHFTn0DZ6o72qp6XAm5Wn2_Cqvuy3HDJZZGgS36-PJ6ytzQJ9wIRlEljn9_LXsmSlSYkz4EjXDGxE_2ux6OHAxqgnkyi7yKxlpD9Vp3w5kj6Z4aWmOroBW_j5RoIakSxL0W1KUuSbn8aJC4AfVF-o1PSqLbHesBNVs3I1H7V0fh-o9270FJp007EhqMR1e5wqabRMSNMXz9t7U2DHsEeZJkRCkcZ_vuC0WZRrDMzRpSL-_JCW3kKDlAz7xnGxI5v9T9BEghhcN7KxdocCKsBIcu7ws0J-m6lM-367AoDF7lPTX3gZaJMMjVmp198vd57oNrWhpu7hfLoo1D-1V870yeThFPAAmYGfwOIv9CqMYWyHXjfKF26QRX-4rkx5uJYnCKnLu",
+      "sender": "qzrYxYi+1R07wZq1JM3XfoLPBFdzBh/Ner8TMnaqGCo=",
+      "rid": "QnVzeTdXYWl0c1NlY29uZE9mVHdv",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-7",
+     "ok": true,
+     "data": {}
+    }
+   },
+   {
+    "note": "one more unlock while one runs and two wait: the store is busy, at once, with no derivation and no wait",
+    "req": {
+     "t": "req",
+     "id": "busy-8",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:3Fn5F6oIJDNM8EEMqGVgn0hr3HnQHWoNIp8gJcKMKnY9c8pQvIkkTPtpcvUeIpiB6WUs-DFKn8mTe-ynCLCg3T_vK3SekDymyNsiptPj_Uk4YR2FZK0JBFEWgI9pbeCY2QR0M5m3UKiwXjKqNUjo_qiwoQXJ4Vyqi_jlh2j8ae_Dh0pJ37hribuAsL4RnJoiAuXLz-J6WM48Keewvww3BgsnNTOegqQjkHL4i2PAzfEp-CKPjGEIoB0hrcOqzEY7C6PXQhtpe4W6QILL-qDnrK_AULbclaufj85I1FRlQTWpzHoNc_LJJSg5w8yWi0yoTaU0PC-eyMmrsPeXxiJQ-Fd3E1XOl9tF2LVQ-chzTAtP2IIlSKYwz3m0NXtAlILrX6MRkjGKjPHw6Mbr-pGsWr9rGiob8KF9FTcJMH1KQD7y4t-WdyyLdlbvyh1ITzjr",
+      "sender": "kYB2JhCFVYpi9RJenE0dhEgl6yJVwCvQw9xWwUCOPFI=",
+      "rid": "QnVzeThPbmVNb3JlVGhhblR3bw",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-8",
+     "ok": false,
+     "error": "the store is busy; try again"
+    }
+   }
+  ],
+  "order": [
+   "busy-8",
+   "busy-5",
+   "busy-6",
+   "busy-7"
+  ]
  }
 }

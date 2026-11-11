@@ -363,13 +363,13 @@ a week), and each one locks the store until the operator's next unlock.
 
 **The seal.** For each record: an ephemeral X25519 key pair, two shared secrets (the ephemeral key's with the store's
 public key, and the store's private key's with the store's public key, as HPKE's auth mode does, so only the open store
-key makes a seal that opens: review-118 B1), HKDF-SHA256 to a 32-byte key, and AES-256-GCM over the JSON `{"username":...,"password":...,"totp":null}`. The
-additional data is every field that decides where the password goes, who may use it and whether the operator
-approved it: `v`, `id`, `gen`, `name`, `origin`, `path`, `send_to`, `repos`, `by` and `approved`. The service checks
-the tag at each open. So a program of the user that edits a record's file (adds its own repo, changes the sign-in
-path to a page that it controls, adds an origin to `send_to`, marks an offer as approved) or moves the sealed part
-to another record breaks the record: the service refuses it ("the stored sign-in cannot be opened"). The plain
-`state` field is not in it, and no decision of the act reads it (section 5.3).
+key makes a seal that opens: review-118 B1), HKDF-SHA256 to a 32-byte key, and AES-256-GCM over the JSON
+`{"username":...,"password":...,"totp":null}`. The additional data is every field that decides where the password goes,
+who may use it and whether the operator approved it: `v`, `id`, `gen`, `name`, `origin`, `path`, `send_to`, `repos`,
+`by` and `approved`. The service checks the tag at each open. So a program of the user that edits a record's file (adds
+its own repo, changes the sign-in path to a page that it controls, adds an origin to `send_to`, marks an offer as
+approved) or moves the sealed part to another record breaks the record: the service refuses it ("the stored sign-in
+cannot be opened"). The plain `state` field is not in it, and no decision of the act reads it (section 5.3).
 
 - **`by` and `approved` (review-104 B5).** `by` is `operator` for a credential that the operator added and
   `offer` for an agent's offer (Q3 b). `approved` is `true` only in a seal that an operator act made: an add, a

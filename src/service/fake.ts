@@ -104,7 +104,7 @@ function recordBreaks(r: RecordFields): string | null {
   return null;
 }
 /**
- * A key.json that the service takes: a string `public`, an object `wrapped` of the strings iv, ct and tag, and the KDF
+ * A key.json that the service takes: `v` 1, a string `public`, an object `wrapped` of the strings iv, ct and tag, and the KDF
  * bounds (scrypt, N a power of two from 2^15 to 2^18, r 8, p 1, a salt of 16 bytes).
  */
 function keyFits(key: Record<string, any>): boolean {
@@ -134,14 +134,39 @@ class FakeStore {
   /** C12's status key: the fake runs no act, so no act and no stopped credential. */
   status() { return { state: this.state(), records: this.snap?.records.length ?? 0, acts: 0, pane_key: FAKE_STATE.sign_ins.pane_key, stopped: [] as string[], unprotected: this.unprotected }; }
 
-  /** The pane's seal: the form of `rid` and `at`, an `at` that is a real time, a `rid` seen in the last 120 s, and the vectors' stale seal. */
+  /**
+   * The pane's seal: the form of `rid` and `at`, an `at` that is a real time, the vectors' stale seal (whose rid the fake
+   * does not take, as the service takes no rid of a seal that its time refuses), then a `rid` that the fake keeps.
+   */
   private seal(sealed: { text: string; rid: string; at: string }): boolean {
-    if (!RID.test(sealed.rid) || !atFits(sealed.at)) return false;
+    if (!RID.test(sealed.rid) || !atFits(sealed.at) || sealed.text === FAKE_STATE.sign_ins.stale_seal) return false;
     const t = this.now().getTime();
     for (const [rid, until] of this.rids) if (t > until) this.rids.delete(rid);
     if (this.rids.has(sealed.rid)) return false;
     this.rids.set(sealed.rid, Math.max(t, Date.parse(sealed.at)) + RID_MS);
-    return sealed.text !== FAKE_STATE.sign_ins.stale_seal;
+    return true;
+  }
+
+  /** The set-ups, unlocks and rekeys that have not answered, and the one at a time (the service's queue and its bound). */
+  private pending = 0;
+  private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * A set-up, an unlock or a rekey, as the service runs them: one at a time, at most two that wait (one more gets the
+   * busy text at once), and the vectors' wrong passphrase answers 2 s after the op's turn began.
+   */
+  keyOp(req: Req): Answer | Promise<Answer> {
+    if (this.pending > 2) return { error: "the store is busy; try again" };
+    this.pending++;
+    const run = this.queue.then(async () => {
+      const started = Date.now();
+      const a = this.handle(req);
+      if ("error" in a && a.error === "the passphrase does not open the store") await new Promise((r) => setTimeout(r, Math.max(0, 2000 - (Date.now() - started))));
+      return a;
+    });
+    const done = () => { this.pending--; };
+    run.then(done, done);
+    this.queue = run.catch(() => {});
+    return run;
   }
 
   /** The vectors' seal texts that stand for a new passphrase of fewer than 16 characters (a set-up's and a rekey's). */
@@ -282,6 +307,15 @@ export class FakeService implements Handler {
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
   has(): boolean { return true; }
 
+  /** The state of the last `sign_ins` event: the store starts in `none`, and each change of the state sends one. */
+  private told: "none" | "locked" | "open" = "none";
+  private tell(): void {
+    const state = this.store.state();
+    if (state === this.told) return;
+    this.told = state;
+    this.emit({ t: "ev", ev: "sign_ins", state, pane_key: FAKE_STATE.sign_ins.pane_key });
+  }
+
   private listOf(repo: string | null): string | null {
     for (const l of this.lists.values()) if (repo !== null && l.repo === repo) return l.name;
     return null;
@@ -320,7 +354,7 @@ export class FakeService implements Handler {
     };
   }
 
-  handle(req: Req): Answer {
+  handle(req: Req): Answer | Promise<Answer> {
     const prompt = () => this.prompts.find((p) => p.id === req.prompt);
     switch (req.op) {
       case "config": return { data: {} };
@@ -367,11 +401,15 @@ export class FakeService implements Handler {
         if (!this.sessions.some((s) => s.scope === req.scope)) return { error: ERR.noSession };
         return { data: { url: agentDoorUrl(this.agentDoor, req.scope as string) } };
       case "sender": return { data: copy(FAKE_STATE.sender) };
-      case "sign_ins_setup": case "sign_ins_unlock": case "sign_ins_lock": case "sign_ins_rekey": case "sign_in_seal": case "sign_in_reseal": case "sign_in_start_again": case "sign_ins": {
-        const before = this.store.state();
+      case "sign_ins_setup": case "sign_ins_unlock": case "sign_ins_rekey": {
+        // The service's queue: such an op answers later, and its event goes out after its answer.
+        const a = this.store.keyOp(req);
+        if (!(a instanceof Promise)) return a;
+        return a.finally(() => setImmediate(() => this.tell()));
+      }
+      case "sign_ins_lock": case "sign_in_seal": case "sign_in_reseal": case "sign_in_start_again": case "sign_ins": {
         const a = this.store.handle(req);
-        const after = this.store.state();
-        if (after !== before) this.emit({ t: "ev", ev: "sign_ins", state: after, pane_key: FAKE_STATE.sign_ins.pane_key });
+        this.tell();
         return a;
       }
       default: return { error: ERR.unsupported };

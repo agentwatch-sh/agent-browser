@@ -212,8 +212,26 @@ test("the fake with a protection that does not hold answers each case of the vec
   assert.throws(() => new FakeService({ unprotected: "other" as any }), /dumpable or signal/);
 });
 
+// The daemon lead's condition of review-118b: the fake keeps the service's queue and its bound, and a wrong passphrase's 2 s.
+test("the fake answers the vectors' busy case: three unlocks wait behind one with the wrong passphrase, which answers 2 s after its turn; the last gets the busy text first, at once", async () => {
+  const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR, now: () => new Date(Date.parse("2026-11-10T20:00:00Z")) }));
+  try {
+    const { c } = await hello(d.path);
+    for (const v of control.busy.first) { c.send(v.req); assert.deepEqual(await c.answer(v.req.id), v.res, v.note); }
+    const t0 = Date.now();
+    c.send(control.busy.pipelined.map((v: any) => JSON.stringify(v.req)).join("\n") + "\n");
+    const busy = await c.answer("busy-8");
+    assert.ok(Date.now() - t0 < 500, "the busy text at once");
+    assert.deepEqual(busy, control.busy.pipelined[3].res);
+    for (const v of control.busy.pipelined) assert.deepEqual(await c.answer(v.req.id, 10_000), v.res, v.note);
+    assert.ok(Date.now() - t0 >= 1990, "the wrong passphrase 2 s after its turn");
+    assert.deepEqual(c.lines.filter((l) => l.t === "res" && /^busy-[5-8]$/.test(l.id)).map((l) => l.id), control.busy.order);
+    c.end();
+  } finally { await d.close(); }
+});
+
 // review-118 B2 and note 7: the fake keeps a rid as the service does, and it ignores a field that an op does not take.
-test("the fake keeps a seal's rid until that seal can no longer open (its at 60 s ahead, the same line at its clock + 121 s), and it ignores a record field on an op that takes none", async () => {
+test("the fake keeps a seal's rid until that seal can no longer open (its at 60 s ahead, the same line at its clock + 121 s), takes no rid of the stale seal, and ignores a record field on an op that takes none", async () => {
   let t = Date.parse("2026-11-10T20:00:00Z");
   const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR, now: () => new Date(t) }));
   try {
@@ -226,6 +244,10 @@ test("the fake keeps a seal's rid until that seal can no longer open (its at 60 
     assert.deepEqual((await ask("f3", "sign_ins_lock", { record: {} })).data, {}, "a record field on the lock is ignored");
     t += 121_000;
     assert.equal((await ask("f4", "sign_ins_unlock", { sealed })).error, "the sealed value cannot be opened", "the same line at its clock + 121 s");
+    // review-118b open point 3: the fake takes no rid of the vectors' stale seal, as the service takes none of a seal that its time refuses.
+    const rid = "U3RhbGVTZWFsUmlkT2ZUaGVGYWtl";
+    assert.equal((await ask("f5", "sign_ins_unlock", { sealed: { ...sealed, text: control.state.sign_ins.stale_seal, rid, at: "2026-11-10T20:02:01Z" } })).error, "the sealed value cannot be opened", "the stale seal");
+    assert.deepEqual((await ask("f6", "sign_ins_unlock", { sealed: { ...sealed, rid, at: "2026-11-10T20:02:01Z" } })).data, {}, "its rid was not taken");
     c.end();
   } finally { await d.close(); }
 });

@@ -79,8 +79,10 @@ async function reseal(req) {
 }
 
 let n = 0;
-for (const x of [...v.requests, ...v.badRequests, ...v.unprotected.cases.flatMap((c) => c.requests)]) if (await reseal(x.req)) n++;
+for (const x of [...v.requests, ...v.badRequests, ...v.unprotected.cases.flatMap((c) => c.requests), ...v.busy.first, ...v.busy.pipelined]) if (await reseal(x.req)) n++;
 const text = (id) => v.requests.find((x) => x.req.id === id).req.sealed.text;
+// The busy case's running unlock is s28's seal itself (the vectors' wrong_passphrase), so the fake takes it as wrong too.
+v.busy.pipelined.find((x) => x.req.id === "busy-5").req.sealed = { ...v.requests.find((x) => x.req.id === "s28").req.sealed };
 const S = v.state.sign_ins;
 S.pane_key = PANE_KEY;
 S.wrong_passphrase = text("s28");

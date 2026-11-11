@@ -43,6 +43,7 @@ export const TEXT = {
   cannotOpen: "the stored sign-in cannot be opened",
   nameTaken: "another stored sign-in has this name",
   offerId: "an offer needs a new id",
+  busy: "the store is busy; try again",
   record: (field: string) => `the stored sign-in is not valid (field ${field})`,
   unprotected: (reason: Unprotected) => `the service's memory is not protected (${reason})`,
 } as const;
@@ -57,6 +58,8 @@ export const IN_A_ROW = 3;
 /** The results of C11's lockout guard that count in a row. */
 const FAILED_RESULTS = new Set(["not_accepted", "timeout", "second_factor"]);
 export const STATE_FILE = "sign-ins-state.json";
+/** At most this many set-ups, unlocks or rekeys wait behind the one that runs (the daemon lead's condition of review-118b). */
+export const QUEUE_WAITING = 2;
 
 export type StoreState = "none" | "locked" | "open";
 type Snapshot = { key: Record<string, unknown> | null; records: Record<string, unknown>[] };
@@ -116,6 +119,8 @@ export type SignInStoreOptions = {
   wrongWaitMs?: number;
   /** Tests only: scrypt's N of a set-up and a new passphrase (C12: 2^17; within the bounds). */
   kdfN?: number;
+  /** Tests only: called at a step of a key op ("rekey: the new passphrase's derivation"), so a test can lock there. */
+  onStep?: (step: string) => void;
 };
 
 /** The service's part of the stored sign-ins: the open key, the pane key, the last snapshot and its own file. */
@@ -133,8 +138,12 @@ export class SignInStore {
    * open, its at more than 120 s in the past and at least 120 s after the rid was first seen (review-118 B2).
    */
   private readonly rids = new Map<string, number>();
-  /** The number of locks since the start: an op whose derivation saw a lock opens nothing (review-118 note 3). */
+  /** The number of locks since the start: an op that a lock came after opens nothing (review-118 note 3; review-118b). */
   private locks = 0;
+  /** The set-ups, unlocks and rekeys that have not answered: the one that runs and those that wait. */
+  private pending = 0;
+  /** The highest time that the clock gave: the clock of the seals' checks never goes back (review-118b open point 4). */
+  private highestTime = 0;
   private actCount = 0;
   /** The one set-up, unlock or rekey that runs (C12: one at a time). */
   private queue: Promise<unknown> = Promise.resolve();
@@ -207,7 +216,7 @@ export class SignInStore {
   private openSeal(req: Req, fields: Record<string, string>): Record<string, unknown> | null {
     const s = req.sealed as { text: string; sender: string; rid: string; at: string };
     if (!RID.test(s.rid) || !atFits(s.at)) return null;
-    const t = this.now().getTime(), at = Date.parse(s.at);
+    const t = (this.highestTime = Math.max(this.highestTime, this.now().getTime())), at = Date.parse(s.at);
     if (Math.abs(t - at) > SEAL_MS) return null;
     for (const [rid, until] of this.rids) if (t > until) this.rids.delete(rid);
     if (this.rids.has(s.rid)) return null;
@@ -228,8 +237,15 @@ export class SignInStore {
       case "sign_ins_lock": this.lock(); return { data: {} };
       case "sign_ins": return this.snapshot(req.key as Record<string, unknown> | null, req.records as Record<string, unknown>[]);
       case "sign_ins_setup": case "sign_ins_unlock": case "sign_ins_rekey": {
+        // The bound of the queue: one runs and at most two wait; one more is busy at once (C12, the passphrase).
+        if (this.pending > QUEUE_WAITING) return { error: TEXT.busy };
+        // A lock that comes after this request and before its answer wins: read the count of locks now (review-118b).
+        const locks = this.locks;
         // One at a time, each in the order that it came, with all its checks inside (C12).
-        const run = this.queue.then(() => this.keyOp(req));
+        this.pending++;
+        const run = this.queue.then(() => this.keyOp(req, locks));
+        const done = () => { this.pending--; };
+        run.then(done, done);
         this.queue = run.catch(() => {});
         return run;
       }
@@ -266,7 +282,7 @@ export class SignInStore {
     return { data: { records: records.length } };
   }
 
-  private async keyOp(req: Req): Promise<Answer> {
+  private async keyOp(req: Req, locks: number): Promise<Answer> {
     const started = Date.now();
     if (!this.snap) return { error: TEXT.noSnapshot };
     const snapKey = this.snap.key;
@@ -287,8 +303,8 @@ export class SignInStore {
     const text = (k: string) => (typeof value[k] === "string" ? value[k] as string : null);
     // C12: the 2 s count from the start of the op's turn, and the next op begins only after this answer.
     const wrong = async (): Promise<Answer> => { await sleep(Math.max(0, (this.o.wrongWaitMs ?? WRONG_WAIT_MS) - (Date.now() - started))); return { error: TEXT.wrongPassphrase }; };
-    // A lock from here on wins: after each derivation the op checks the lock and the last snapshot again (review-118 notes 3, 4).
-    const locks = this.locks;
+    // A lock since the request came wins: after each derivation the op checks the lock and the last snapshot again
+    // (review-118 notes 3, 4; review-118b open point 2).
     const lockedSince = () => this.locks !== locks;
     if (req.op === "sign_ins_setup") {
       const pass = text("passphrase");
@@ -336,13 +352,15 @@ export class SignInStore {
     if ([...next].length < MIN_PASSPHRASE) return { error: TEXT.shortPassphrase };
     if (!keyFits(snapKey)) return { error: TEXT.keyFile };
     const open = this.openKey!;
-    const closed = (): Answer => { this.o.log("sign-ins: the store closed during the new passphrase's derivation, so it gives no key"); return { error: this.state() === "none" ? TEXT.notSetUp : TEXT.locked }; };
+    const closed = (): Answer => { this.o.log("sign-ins: the store closed during the rekey's derivations, so it gives no key"); return { error: this.state() === "none" ? TEXT.notSetUp : TEXT.locked }; };
     const secret = await this.unwrap(old, snapKey);
     if (lockedSince() || this.openKey !== open) { zero(secret); return closed(); }
     // A constant-time compare of the two private halves (review-118 note 1); unwrapKey gives 32 bytes.
     const same = secret !== null && timingSafeEqual(secret, open.secret);
     zero(secret);
     if (!same) return wrong();
+    // The check after the new derivation below is the one that keeps a zeroed private half out of a key file.
+    this.o.onStep?.("rekey: the new passphrase's derivation");
     const kdf = newKdf(this.o.kdfN ?? KDF.n);
     const kek = await deriveKey(next, kdf);
     try {
