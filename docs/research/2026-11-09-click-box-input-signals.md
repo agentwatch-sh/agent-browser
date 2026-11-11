@@ -53,12 +53,12 @@ analysis and the results (section 10).
    arrive as script calls, not input. A click in a cross-origin frame checks the element on the frame's own session
    and sends the input on the top page's session.
 
-7. **A person on the Mac (part B: the operator, a trackpad, Chrome 156, a 120 Hz display) differs from both.** The
-   trackpad samples at about 120 Hz (sample gaps: median 8.1 ms), so a `pointermove` has 1.01 to 1.19 samples on
-   average, with 2.15 to 2.79 predicted points. The points are fractional, the event times are not on whole
-   milliseconds, the pointer drifts until about 19 ms before the press, and a press takes 71 to 154 ms (median 88).
-   A scroll is 36 to 133 wheel events of 1 to 60 px, one each frame, with a long falling tail. A drag gives `drag`
-   events with `buttons` 1. Section 8.
+7. **A person on the Mac (part B: the operator, a trackpad, Chrome 156, a 120 Hz display) differs from CDP input and
+   from XTEST on taylor.** The trackpad samples at about 120 Hz (sample gaps: median 8.1 ms), so a `pointermove` has
+   1.01 to 1.19 samples on average, with 2.15 to 2.79 predicted points. The points are fractional, the event times
+   are not on whole milliseconds, the pointer drifts until about 19 ms before the press, and a press takes 71 to 154
+   ms (median 88). A scroll is 36 to 133 wheel events of 1 to 60 px, one each frame, with a long falling tail. A drag
+   gives `drag` events with `buttons` 1. Section 8.
 
 The gaps that ab-t30.3, ab-t30.4 and ab-t30.6 must close, and how the harness (ab-t30.2) measures each one, are in
 section 7. Part B (section 8) measured one person: the person column of section 3 now gives the operator's numbers.
@@ -431,7 +431,7 @@ are not yet bars (ab-t30.13 sets the parameters and the bars from them).
 Part B ran once, on 2026-11-11: the operator, at the Mac, in Google Chrome 156 on macOS, with the trackpad, on a 120 Hz
 display (the page's frame gap: 8.3 ms). The manager's Mac session put the recorder page (`recorder.html` as on main,
 the same file as at c6d0d7e) into the Mac's Downloads. The operator ran tasks 1 to 7, made one drag, pressed "Save
-JSON" and gave the file to the lead. No agent ran anything on the Mac. The file stays in the agent's own folder on
+JSON" and gave the file to the lead. No agent made any input on the Mac. The file stays in the agent's own folder on
 taylor, outside every checkout (section 8.4, "How the results join this doc", step 1), and never goes into a
 repository. `analyze.ts --numbers` wrote the step numbers into the same folder. This doc holds only numbers from them:
 no typed text, no key value, no user agent, no screen or window size or place, no time of day.
