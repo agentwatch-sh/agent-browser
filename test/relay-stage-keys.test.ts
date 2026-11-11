@@ -520,3 +520,46 @@ test("the focus test: before fill, a field that is the active element of its doc
   assert.ok(pressOf(p.tab), "Playwright's focus call: a click (the document has the focus, the window does not)");
   assert.ok(p.tab.activations[0] <= mouseEvents(p.tab)[0].t, "the activation before the read and the click");
 });
+
+/** keyboard.type('hello') whose third key opens an alert in a keydown handler (the client answers it after `answerMs`, or never). */
+function keyOpensDialog(t: FakeTab, n = 3) {
+  let k = 0;
+  t.hook = (s) => {
+    if (s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === n) {
+      t.clientEvents.push({ t: t.clock.now(), method: "Page.javascriptDialogOpening" });
+      t.stage.event(t, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "key" });
+      t.onClientEvent("Page.javascriptDialogOpening");
+      setImmediate(() => { t.dialogSeen = true; });
+    }
+    return undefined;
+  };
+}
+
+test("an end of a key plan at a navigation of the main frame (the daemon lead's point, C11 sentence 6): a dialog at a key with the plan's later calls held; a navigation closes it: no held key press reaches the new page, the held calls get the error that the context is gone, only the releases of the held keys go", async () => {
+  // H opens an alert in its keydown handler; the client's release of H and its press of i are calls of the plan (they came
+  // before the end: a client that does not wait for each answer), so they are held until the close.
+  const v = own([{ at: 0, ...kd("H") }, { at: 0, ...ku("H") }, { at: 0, ...kd("i") }], FIELD);
+  const r = await runVector(v, { maxMs: 20_000, tab: (t) => { keyOpensDialog(t, 1); t.clock.timer(1000, () => t.navigate()); } });
+  const ev = keyEvents(r.tab), after = ev.filter((s) => s.t >= 1000);
+  assert.deepEqual(after.map((s) => [s.params.type, s.params.key]).sort(), [["keyUp", "H"], ["keyUp", "Shift"]], "only the releases of the held keys (H and the stage's own Shift)");
+  assert.ok(!ev.some((s) => s.params.key === "i"), "the held press of i never goes");
+  assert.deepEqual([answerOf(r, 2).body.error?.message, answerOf(r, 3).body.error?.message].map((m) => /context was destroyed/.test(m ?? "")), [true, true], "the held calls get the error that the context is gone");
+  assert.equal(r.stage.counts.navigationDrops, 1);
+});
+
+test("an end of a key plan at the client's session end (the daemon lead's point): the stage sends no held key event and nothing goes back; it releases the held keys at the drop; the lock is free", async () => {
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
+  const v = own([{ at: 0, ...kd("H") }, { at: 0, ...ku("H") }, { at: 0, ...kd("i") }], FIELD), t = new FakeTab(v, clock);
+  t.stage = stage;
+  keyOpensDialog(t, 1);
+  const answers: number[] = [];
+  for (const c of v.in) clock.timer(c.at, () => t.queue(undefined, c.method, c.params, () => answers.push(c.id)));
+  clock.timer(1000, () => stage.drop(t.id, "session"));
+  await clock.run(() => false, 20_000);
+  const ev = keyEvents(t), after = ev.filter((s) => s.t >= 1000);
+  assert.deepEqual(after.map((s) => [s.params.type, s.params.key, s.t]).sort(), [["keyUp", "H", 1000], ["keyUp", "Shift", 1000]], "only the releases, at once at the drop");
+  assert.ok(!ev.some((s) => s.params.key === "i"), "the held press of i never goes");
+  assert.ok(!answers.includes(2) && !answers.includes(3), "nothing goes back for the held calls");
+  assert.equal(stage.lock.held, 0);
+});
