@@ -274,6 +274,12 @@ test("the pane's seal in the store: a replayed rid, an at more than 120 s from t
     const s = sealReq(w, REC);
     cases.push(["another name", { ...s, record: { ...REC, name: "staging-x" } }], ["another path", { ...s, record: { ...REC, path: "/other" } }], ["another send_to", { ...sealReq(w, REC), record: { ...REC, send_to: [ORIGIN, "https://login.example.com"] } }], ["an offer's seal", { ...sealReq(w, REC, true), offer: false }]);
     for (const [what, fields] of cases) assert.deepEqual(await w.ask("sign_in_seal", fields), { error: TEXT.sealed }, what);
+    // An at that is no real time, whose lenient date (November 31 is December 1) is the clock's time: refused for its form.
+    const clock = w.clock.t;
+    w.clock.t = Date.parse("2026-12-01T20:00:00Z");
+    assert.deepEqual(await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: "2026-11-31T20:00:00Z" })), { error: TEXT.sealed }, "November 31");
+    assert.ok((await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: "2026-12-01T20:00:00Z" }))).data, "the same time, written as a real time");
+    w.clock.t = clock;
     // 120 s exactly still opens; the rid of a refused seal is spent, and after 120 s a rid can come again.
     assert.ok((await w.ask("sign_in_seal", sealReq(w, REC, false, undefined, { at: new Date(T0 - 120_000).toISOString() }))).data);
     w.clock.t += 121_000;
@@ -467,6 +473,15 @@ test("Start again: it clears the stop and the count of failed results in a row, 
       assert.deepEqual(again.part.store.status().stopped, [REC.id]);
       assert.equal(again.part.store.status().acts, 0, "acts count since the service's start");
     } finally { again.part.stop(); }
+    // A stop that the file holds for a removed id (a file of an older service, or one that a program wrote): the removed id
+    // is no credential, also when the last snapshot holds its file.
+    writeFileSync(join(w.dir, "state", STATE_FILE), JSON.stringify({ v: 1, highest: { "c-0000000f": 1 }, removed: ["c-0000000f"], credentials: { "c-0000000f": { fails: 3, stopped: true, hour: [] } } }));
+    const third = world({ dir: w.dir });
+    try {
+      await third.ask("sign_ins", { key, records: [fileOf(a, { id: "c-0000000f" })] });
+      assert.deepEqual(third.part.store.status().stopped, [], "stopped names no removed id");
+      assert.deepEqual(await third.ask("sign_in_start_again", { credential: "c-0000000f" }), { error: TEXT.noSuchId });
+    } finally { third.part.stop(); }
   } finally { w.close(); }
 });
 
