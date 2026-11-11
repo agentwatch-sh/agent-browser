@@ -77,14 +77,14 @@ test("analyze: drag events need no press: a step with drag events and no dragsta
   assert.equal(d.samePointShare, null, "one drag event has no event before it");
 });
 
-/** Wheel events of task 4: three trains. A: 7 events 8 ms apart with a peak and a falling tail; a gap of 150 ms; B: 3
- * events up (deltaY < 0); C: at once 2 events down again (a change of direction ends B). */
+/** Wheel events of task 4: three trains. A: 7 events down, 8 ms apart, with a peak and a falling tail; a gap of 150 ms
+ * (the gap alone ends A); B: 3 events down; C: at once 2 events up (deltaY < 0: the change of direction alone ends B). */
 function wheelRecording(): Rec[] {
   const recs: Rec[] = [task("begin", 990, { task: "4-scroll" }), task("trial", 1000, { task: "4-scroll", n: 0, leg: "down" })];
   const w = (t: number, dy: number) => ev("wheel", t, { dx: 0, dy, dz: 0, dm: 0, wdx: 0, wdy: -3 * dy, bs: 0, m: 0 });
   [2, 5, 9, 7, 6, 6, 3].forEach((dy, i) => recs.push(w(1100 + 8 * i, dy)));
-  [-4, -8, -3].forEach((dy, i) => recs.push(w(1298 + 8 * i, dy)));
-  [5, 4].forEach((dy, i) => recs.push(w(1322 + 8 * i, dy)));
+  [4, 8, 3].forEach((dy, i) => recs.push(w(1298 + 8 * i, dy)));
+  [-5, -4].forEach((dy, i) => recs.push(w(1322 + 8 * i, dy)));
   recs.push(task("trial", 1500, { task: "4-scroll", n: 0, leg: "up" }), task("end", 1600, { task: "4-scroll" }));
   return recs;
 }
