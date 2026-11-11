@@ -359,7 +359,8 @@ test("an error of an event: the plan stops, the held key is released first, the 
   assert.deepEqual(err(3), { code: -32000, message: "Internal error" }, "the move gets Chrome's error");
   assert.deepEqual([err(4), err(5)], [err(3), err(3)], "the press and the release get the same error");
   assert.ok(!ev.some((s) => s.params.type === "mousePressed"), "no press");
-  assert.ok(up[0].t <= r.answers.find((a) => a.id === 3)!.t, "the release before the error's answer");
+  const a3 = r.answers.find((a) => a.id === 3)!;
+  assert.ok(r.tab.sent.indexOf(up[0]) < a3.n, "the stage's own release of Shift went before the error's answer");
   assert.deepEqual(r.answers.find((a) => a.id === 6)!.body, { result: {} }, "the client's own Shift release later gets no event");
   assert.equal(r.stage.lock.held, 0);
 });
@@ -415,6 +416,28 @@ test("the press point's hit test: a spread point where the stage's own hit test 
     assert.deepEqual([press.params.x, press.params.y], [100, 240], "the client's point");
   }
   assert.equal(reads, 4, "one hit test each");
+});
+
+test("the press point's conditions 1 and 3 alone: a locator double click at a button's middle, and a click at a div's middle (with the client's quad), press at the client's point", async () => {
+  // Condition 1: the click vector (its quad, a button at its middle) as a double click: no press of the action spreads.
+  const d = vec("click");
+  const press2 = { ...structuredClone(d.in[5]), id: 8, params: { ...d.in[5].params, clickCount: 2 } }, release2 = { ...structuredClone(d.in[6]), id: 9, params: { ...d.in[6].params, clickCount: 2 } };
+  const stop = { ...structuredClone(d.in[7]), id: 10, after: 9 };
+  d.in = [...d.in.slice(0, 7), press2, release2, stop];
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const r = await runVector(d, { seed });
+    const presses = events(r.tab).filter((s) => s.params.type === "mousePressed");
+    assert.equal(presses.length, 2);
+    for (const p of presses) assert.deepEqual([p.params.x, p.params.y], [100, 240], `seed ${seed}: a double click presses at the client's point`);
+  }
+  // Condition 3: the same click on a div (no element whose effect does not depend on the point).
+  const c = vec("click");
+  c.page.nodes["7.3.10"].tag = "div";
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const r = await runVector(c, { seed });
+    const press = events(r.tab).find((s) => s.params.type === "mousePressed")!;
+    assert.deepEqual([press.params.x, press.params.y], [100, 240], `seed ${seed}: a div presses at the client's point`);
+  }
 });
 
 test("the press point's spread: within 1/4 of the smaller side of the middle, with a standard deviation near 1/8 of it", async () => {

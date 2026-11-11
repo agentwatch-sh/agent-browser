@@ -165,3 +165,22 @@ test("with the stage on and the pointer paths on: the window comes forward befor
     assert.ok(Math.hypot(first.x - 100, first.y - 100) <= 60, `the path from the recorded point: ${first.x},${first.y}`);
   } finally { await h!.close(); }
 });
+
+test("with the stage on: a client's Page.handleJavaScriptDialog does not wait behind the tab's input that waits for the input lock (another tab's action holds it)", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    // B's client holds a button: B's action keeps the input lock (until STAGE_ACTION_MAX_MS).
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, B.sessionId);
+    // A's client moves: its step waits for the lock in A's gate. A page script of A opened a dialog; A's client answers it.
+    void c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 300, y: 200, modifiers: 0 }, A.sessionId).catch(() => {});
+    await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    await c.send("Page.handleJavaScriptDialog", { accept: true }, A.sessionId);
+    assert.ok(Date.now() - t0 < 1000, `the dialog's answer at once (${Date.now() - t0} ms), not after B's action`);
+    assert.ok(cmds(h).some((x) => x.method === "Page.handleJavaScriptDialog"));
+    assert.ok(!cmds(h).some((x) => x.method === "Input.dispatchMouseEvent" && x.params.type === "mouseMoved" && x.params.x === 300), "A's move still waits for the lock");
+  } finally { await h.close(); }
+});
