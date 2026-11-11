@@ -134,3 +134,34 @@ test("with the stage on: a client's Page.handleJavaScriptDialog goes to Chrome a
     await until(() => h.relay.model.stageState(p.tab.id)?.action === false, "the lock to be free");
   } finally { await h.close(); }
 });
+
+test("with the stage on and the pointer paths on: the window comes forward before the path (C11, the window comes forward for input), and the path starts at the X record of the activation", async () => {
+  process.env.AGENT_BROWSER_POINTER_LOG = "1";
+  let h: Harness;
+  try { h = await harness({ stage: true }); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
+  try {
+    // A daemon with both pointer ops: the pointer at 640,500 on a 1280 x 900 display (each page's content from y 91).
+    let pos = { x: 640, y: 500 };
+    h.fake.daemon = ({ op, args }) => {
+      if (op === "daemon.pointerAt") return { ...pos, width: 1280, height: 900, views: 0 };
+      if (op === "daemon.movePointer") { const last = args[0].path.at(-1); pos = { x: last.x, y: last.y }; return { ...pos, views: 0 }; }
+      return { error: "unknown op" };
+    };
+    await h.ready();
+    await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const move = (p: { sessionId: string }, x: number, y: number) => c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 }, p.sessionId);
+    await move(A, 100, 100);
+    await move(B, 700, 300);
+    const from = h.fake.requests.length, l0 = h.logs.length;
+    await move(A, 300, 200);
+    const ops = h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? `${r.args[1]} ${r.args[2]?.type ?? ""}`.trim() : r.op));
+    const raise = ops.indexOf("windows.update"), firstMove = ops.indexOf("Input.dispatchMouseEvent mouseMoved");
+    assert.ok(raise >= 0 && firstMove > raise, `the raise before the path's first move: ${ops.slice(0, 12).join(", ")}`);
+    assert.ok(h.logs.slice(l0).some((l) => /^relay: step input of tab \d+: a path of \d+ points, ok/.test(l)), "the activation played its X path");
+    // The X path ended at A's last point (100,100): the stage's path starts there, one step away at most.
+    const first = h.fake.requests.slice(from).find((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent")!.args[2];
+    assert.ok(Math.hypot(first.x - 100, first.y - 100) <= 60, `the path from the recorded point: ${first.x},${first.y}`);
+  } finally { await h!.close(); }
+});
