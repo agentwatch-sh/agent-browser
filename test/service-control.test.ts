@@ -212,6 +212,24 @@ test("the fake with a protection that does not hold answers each case of the vec
   assert.throws(() => new FakeService({ unprotected: "other" as any }), /dumpable or signal/);
 });
 
+// review-118 B2 and note 7: the fake keeps a rid as the service does, and it ignores a field that an op does not take.
+test("the fake keeps a seal's rid until that seal can no longer open (its at 60 s ahead, the same line at its clock + 121 s), and it ignores a record field on an op that takes none", async () => {
+  let t = Date.parse("2026-11-10T20:00:00Z");
+  const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR, now: () => new Date(t) }));
+  try {
+    const { c } = await hello(d.path);
+    const OPR = { kind: "operator", user: "ann", via: "web" }, DMN = { kind: "daemon", user: "ann", via: "daemon" };
+    const ask = async (id: string, op: string, fields: Record<string, unknown>, by: object = OPR) => { c.send({ t: "req", id, op, by, ...fields }); return c.answer(id); };
+    assert.equal((await ask("f1", "sign_ins", { key: control.state.sign_ins.key, records: [] }, DMN)).ok, true);
+    const sealed = { text: "aw1:dGVzdCBzZWFsIG9mIHRoZSBmYWtl", sender: "AAAA", rid: "QWhlYWRPZlRoZUNsb2NrMQ", at: "2026-11-10T20:01:00Z" };
+    assert.deepEqual((await ask("f2", "sign_ins_unlock", { sealed })).data, {});
+    assert.deepEqual((await ask("f3", "sign_ins_lock", { record: {} })).data, {}, "a record field on the lock is ignored");
+    t += 121_000;
+    assert.equal((await ask("f4", "sign_ins_unlock", { sealed })).error, "the sealed value cannot be opened", "the same line at its clock + 121 s");
+    c.end();
+  } finally { await d.close(); }
+});
+
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
   // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts), stage 1b part 1's part start and stop

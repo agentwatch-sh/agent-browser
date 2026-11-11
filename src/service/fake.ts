@@ -99,7 +99,7 @@ function recordBreaks(r: RecordFields): string | null {
   if (!/^c-[0-9a-f]{8}$/.test(r.id)) return "id";
   if (!SCOPE.test(r.name)) return "name";
   if (!originFits(r.origin)) return "origin";
-  if (!/^\/[^?#]*$/.test(r.path)) return "path";
+  if (!/^\/[\x20-\x7e]*$/.test(r.path) || /[?#]/.test(r.path)) return "path";
   if (!r.send_to.includes(r.origin) || !r.send_to.every(originFits) || new Set(r.send_to).size !== r.send_to.length) return "send_to";
   return null;
 }
@@ -109,7 +109,7 @@ function recordBreaks(r: RecordFields): string | null {
  */
 function keyFits(key: Record<string, any>): boolean {
   const k = key.kdf, w = key.wrapped;
-  return typeof key.public === "string" && isObj(w) && ["iv", "ct", "tag"].every((x) => typeof w[x] === "string")
+  return key.v === 1 && typeof key.public === "string" && isObj(w) && ["iv", "ct", "tag"].every((x) => typeof w[x] === "string")
     && isObj(k) && k.name === "scrypt" && Number.isSafeInteger(k.n) && k.n >= 2 ** 15 && k.n <= 2 ** 18 && (k.n & (k.n - 1)) === 0 && k.r === 8 && k.p === 1
     && typeof k.salt === "string" && /^[A-Za-z0-9_-]+$/.test(k.salt) && Buffer.from(k.salt, "base64url").length === 16;
 }
@@ -121,7 +121,10 @@ class FakeStore {
   private openPublic: string | null = null;
   private readonly highest = new Map<string, number>();
   private readonly removed = new Set<string>();
-  /** Each `rid` of a pane's seal that the fake opened, and when (C12: a rid seen in the last 120 s does not open). */
+  /**
+   * Each `rid` of a pane's seal that the fake took, and the time until which it keeps it (C12): until the seal's `at` is
+   * more than 120 s in the past by the fake's clock and at least 120 s after the fake first saw the rid.
+   */
   private readonly rids = new Map<string, number>();
   private readonly now: () => Date;
   private readonly unprotected: Unprotected | null;
@@ -135,9 +138,9 @@ class FakeStore {
   private seal(sealed: { text: string; rid: string; at: string }): boolean {
     if (!RID.test(sealed.rid) || !atFits(sealed.at)) return false;
     const t = this.now().getTime();
-    for (const [rid, at] of this.rids) if (t - at > RID_MS) this.rids.delete(rid);
+    for (const [rid, until] of this.rids) if (t > until) this.rids.delete(rid);
     if (this.rids.has(sealed.rid)) return false;
-    this.rids.set(sealed.rid, t);
+    this.rids.set(sealed.rid, Math.max(t, Date.parse(sealed.at)) + RID_MS);
     return sealed.text !== FAKE_STATE.sign_ins.stale_seal;
   }
 
@@ -159,7 +162,8 @@ class FakeStore {
   /** An op of the stored sign-ins after the door's checks (the op, the shape and the kind). */
   handle(req: Req): Answer {
     const err = (error: string): Answer => ({ error });
-    const record = req.record as RecordFields | undefined;
+    // The rules of record, only for the ops that take a record: a side ignores a field that it does not know.
+    const record = req.op === "sign_in_seal" || req.op === "sign_in_reseal" ? req.record as RecordFields : undefined;
     if (record) { const f = recordBreaks(record); if (f) return err(`the stored sign-in is not valid (field ${f})`); }
     if (req.op === "sign_ins_lock") { this.open = false; return { data: {} }; }
     if (req.op === "sign_ins") {

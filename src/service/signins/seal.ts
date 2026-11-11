@@ -6,9 +6,12 @@
 //   (RFC 9180) base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, single shot, no additional data,
 //   with the binding's bytes as the info; inside, a sender tag (HMAC-SHA256 over the info and the JSON, keyed by HKDF of
 //   X25519(sender, pane key)), then the JSON, padded with spaces. The text is "aw1:" and base64url of enc || ciphertext.
-// - The record's seal: an ephemeral X25519 key, the shared secret with the store's public half, HKDF-SHA256 to a 32-byte
-//   key (salt: the ephemeral public half and the store's public half; info RECORD_LABEL), and AES-256-GCM over
-//   {"username","password","totp":null} with the record's ten plain fields as the additional data (recordAd).
+// - The record's seal: an ephemeral X25519 key; HKDF-SHA256 to a 32-byte key from two shared secrets, DH(ephemeral, store
+//   public) and DH(store private, store public), as HPKE's auth mode does with the store key as the sender and the
+//   recipient (salt: the ephemeral public half and the store's public half; info RECORD_LABEL); and AES-256-GCM over
+//   {"username","password","totp":null} with the record's ten plain fields as the additional data (recordAd). The second
+//   secret needs the open store key, so a program that reads key.json's public half cannot make a seal that opens
+//   (review-118 B1).
 // - The store key's wrap: AES-256-GCM of the 32-byte private half under scrypt(passphrase, salt), with the key file's
 //   plain fields (v, public, kdf) as the additional data, so a key file whose public half or KDF values a program
 //   changed does not open.
@@ -138,7 +141,7 @@ export function openPaneSeal(text: string, sender: string, info: Buffer, pane: {
     const d = createDecipheriv("chacha20-poly1305", key, nonce, { authTagLength: AEAD_TAG_LEN });
     d.setAAD(EMPTY, { plaintextLength: ct.length });
     d.setAuthTag(aeadTag);
-    inner = Buffer.concat([d.update(ct), d.final()]);
+    inner = decrypt(d, ct);
     if (inner.length < TAG_LEN) throw new Error("no sender tag");
     // The sender tag (mail_crypto._auth_key and _tag): HKDF-SHA256 with no salt of X25519(pane key, sender).
     authIkm = dh(pane.key, senderRaw);
@@ -152,6 +155,15 @@ export function openPaneSeal(text: string, sender: string, info: Buffer, pane: {
   } finally { zero(dhBytes, eae, shared, secret, key, nonce, inner, authIkm, auth); }
 }
 
+/** A decipher's whole output in one buffer; the parts are filled with zeros (review-118 note 2). */
+function decrypt(d: { update(b: Buffer): Buffer; final(): Buffer }, ct: Buffer): Buffer {
+  const head = d.update(ct);
+  try {
+    const tail = d.final();
+    try { return Buffer.concat([head, tail]); } finally { zero(tail); }
+  } finally { zero(head); }
+}
+
 // ---- The record's seal (the design, sections 5.2 and 5.3) ----
 
 /** The label of a record's key derivation and of its additional data. */
@@ -162,23 +174,26 @@ export type RecordFields = { v: number; id: string; gen: number; name: string; o
 export const recordAd = (r: RecordFields): Buffer => Buffer.from(JSON.stringify([RECORD_LABEL, r.v, r.id, r.gen, r.name, r.origin, r.path, r.send_to, r.repos, r.by, r.approved]));
 export type SealedPart = { epk: string; iv: string; ct: string; tag: string };
 
-function recordKey(shared: Buffer, epk: Buffer, storePub: Buffer): Buffer {
-  return Buffer.from(hkdfSync("sha256", shared, Buffer.concat([epk, storePub]), Buffer.from(RECORD_LABEL), 32));
+/** The record key: HKDF-SHA256 of DH(ephemeral, store public) || DH(store private, store public), salt epk || store public. */
+function recordKey(ephemeralShared: Buffer, staticShared: Buffer, epk: Buffer, storePub: Buffer): Buffer {
+  const ikm = Buffer.concat([ephemeralShared, staticShared]);
+  try { return Buffer.from(hkdfSync("sha256", ikm, Buffer.concat([epk, storePub]), Buffer.from(RECORD_LABEL), 32)); } finally { zero(ikm); }
 }
 
-/** Seal the plain JSON of a record's values to the store's public half, with the record's additional data. */
-export function sealRecord(storePub: Buffer, ad: Buffer, plain: Buffer, random: (n: number) => Buffer = randomBytes): SealedPart {
+/** Seal the plain JSON of a record's values with the open store key (its private half too: review-118 B1), with the record's additional data. */
+export function sealRecord(store: { key: KeyObject; pub: Buffer }, ad: Buffer, plain: Buffer, random: (n: number) => Buffer = randomBytes): SealedPart {
   const e = newKeyPair(random);
-  let shared: Buffer | null = null, key: Buffer | null = null;
+  let shared: Buffer | null = null, own: Buffer | null = null, key: Buffer | null = null;
   try {
-    shared = dh(e.key, storePub);
-    key = recordKey(shared, e.pub, storePub);
+    shared = dh(e.key, store.pub);
+    own = dh(store.key, store.pub);
+    key = recordKey(shared, own, e.pub, store.pub);
     const iv = random(12);
     const c = createCipheriv("aes-256-gcm", key, iv);
     c.setAAD(ad);
     const ct = Buffer.concat([c.update(plain), c.final()]);
     return { epk: b64u(e.pub), iv: b64u(iv), ct: b64u(ct), tag: b64u(c.getAuthTag()) };
-  } finally { zero(e.secret, shared, key); }
+  } finally { zero(e.secret, shared, own, key); }
 }
 
 /** Open a record's sealed part with the store's open key: the plain JSON (the caller zeros it). Each failure throws. */
@@ -187,15 +202,16 @@ export function openRecord(store: { key: KeyObject; pub: Buffer }, ad: Buffer, s
   const p = s as Record<string, unknown>;
   const epk = fromB64u(p.epk), iv = fromB64u(p.iv), ct = fromB64u(p.ct), tag = fromB64u(p.tag);
   if (!epk || !iv || !ct || !tag || epk.length !== X25519_LEN || iv.length !== 12 || tag.length !== 16) throw new Error("not a sealed part");
-  let shared: Buffer | null = null, key: Buffer | null = null;
+  let shared: Buffer | null = null, own: Buffer | null = null, key: Buffer | null = null;
   try {
     shared = dh(store.key, epk);
-    key = recordKey(shared, epk, store.pub);
+    own = dh(store.key, store.pub);
+    key = recordKey(shared, own, epk, store.pub);
     const d = createDecipheriv("aes-256-gcm", key, iv);
     d.setAAD(ad);
     d.setAuthTag(tag);
-    return Buffer.concat([d.update(ct), d.final()]);
-  } finally { zero(shared, key); }
+    return decrypt(d, ct);
+  } finally { zero(shared, own, key); }
 }
 
 /** The plain JSON of a record's values (the design, section 5.2: no second factor with the answer Q4 a). */
@@ -227,11 +243,11 @@ export function kdfFits(kdf: unknown): kdf is Kdf {
   return k.name === "scrypt" && Number.isSafeInteger(n) && n >= KDF.minN && n <= KDF.maxN && (n & (n - 1)) === 0 && k.r === KDF.r && k.p === KDF.p
     && fromB64u(k.salt)?.length === KDF.saltBytes;
 }
-/** A key file that the service takes (C12): a string `public`, an object `wrapped` of the strings iv, ct and tag, and the KDF bounds. */
+/** A key file that the service takes (C12): `v` 1, a string `public`, an object `wrapped` of the strings iv, ct and tag, and the KDF bounds. */
 export function keyFits(key: unknown): key is KeyFile {
   if (key === null || typeof key !== "object") return false;
   const k = key as Record<string, any>;
-  return typeof k.public === "string" && k.wrapped !== null && typeof k.wrapped === "object" && !Array.isArray(k.wrapped)
+  return k.v === 1 && typeof k.public === "string" && k.wrapped !== null && typeof k.wrapped === "object" && !Array.isArray(k.wrapped)
     && ["iv", "ct", "tag"].every((x) => typeof k.wrapped[x] === "string") && kdfFits(k.kdf);
 }
 
@@ -255,11 +271,11 @@ export function wrapKey(secret: Buffer, pub: Buffer, kdf: Kdf, kek: Buffer, rand
 /** The private half of a key file, with the key that its passphrase gives; throws when it does not open. */
 export function unwrapKey(key: KeyFile, kek: Buffer): Buffer {
   const iv = fromB64u(key.wrapped.iv), ct = fromB64u(key.wrapped.ct), tag = fromB64u(key.wrapped.tag);
-  if (!iv || !ct || !tag || tag.length !== 16 || iv.length === 0) throw new Error("not a wrapped key");
+  if (!iv || !ct || !tag || tag.length !== 16 || iv.length !== 12) throw new Error("not a wrapped key");
   const d = createDecipheriv("aes-256-gcm", kek, iv);
   d.setAAD(keyAd((key as { v: unknown }).v, key.public, key.kdf));
   d.setAuthTag(tag);
-  const secret = Buffer.concat([d.update(ct), d.final()]);
+  const secret = decrypt(d, ct);
   if (secret.length !== X25519_LEN) { zero(secret); throw new Error("not a wrapped key"); }
   return secret;
 }

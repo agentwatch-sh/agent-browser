@@ -45,7 +45,7 @@ function payload(req) {
     case "s30": return { old: WRONG, new: SHORT };
     case "s31": return { old: PASSPHRASE, new: NEW_PASSPHRASE };
     // After the rekey (s31) the store's passphrase is the new one.
-    case "s47": case "s49": case "s51": return { passphrase: NEW_PASSPHRASE };
+    case "s47": case "s49": case "s51": case "s59": return { passphrase: NEW_PASSPHRASE };
   }
   switch (req.op) {
     case "sign_ins_setup": case "sign_ins_unlock": return { passphrase: PASSPHRASE };

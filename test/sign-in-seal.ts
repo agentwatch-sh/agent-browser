@@ -36,11 +36,12 @@ export function info(purpose: string, fields: Record<string, string>): Buffer {
 }
 
 /** sealPayload: the seal of a JSON object to `recipient` (standard base64), with fixed test keys or new ones. */
-export function sealPayload(payload: object, binding: { purpose: string; fields: Record<string, string> }, recipient: string, keys: { ephemeral?: Buffer; sender?: Buffer } = {}): { sealed: string; senderPublicB64: string } {
+export function sealPayload(payload: object, binding: { purpose: string; fields: Record<string, string> }, recipient: string, keys: { ephemeral?: Buffer; sender?: Buffer } = {}, pad = true): { sealed: string; senderPublicB64: string } {
   const pkR = Buffer.from(recipient, "base64");
   const bindingBytes = info(binding.purpose, binding.fields);
   const json = Buffer.from(JSON.stringify(payload));
-  const plain = Buffer.alloc(Math.max(256, Math.ceil(json.length / 256) * 256), 0x20);
+  // screen-seal.js pads the JSON with spaces to a multiple of 256 bytes; mail_crypto.seal_payload does not (pad false).
+  const plain = pad ? Buffer.alloc(Math.max(256, Math.ceil(json.length / 256) * 256), 0x20) : Buffer.alloc(json.length);
   json.copy(plain);
   const sender = keys.sender ?? randomBytes(32);
   const auth = Buffer.from(hkdfSync("sha256", diffieHellman({ privateKey: priv(sender), publicKey: pubOf(pkR) }), Buffer.alloc(32), Buffer.from("agentwatch-mail-auth-v1"), 32));
@@ -58,10 +59,10 @@ export function sealPayload(payload: object, binding: { purpose: string; fields:
 }
 
 /** A pane's seal of C12 (`sealed`) for a request: its op, a new rid (or `rid`), the time `at`, and the record's fields of a seal. */
-export function paneSeal(paneKey: string, payload: object, req: { op: string; record?: { name: string; origin: string; path: string; send_to: string[] }; offer?: boolean }, o: { at: string; rid?: string; keys?: { ephemeral?: Buffer; sender?: Buffer } }) {
+export function paneSeal(paneKey: string, payload: object, req: { op: string; record?: { name: string; origin: string; path: string; send_to: string[] }; offer?: boolean }, o: { at: string; rid?: string; keys?: { ephemeral?: Buffer; sender?: Buffer }; pad?: boolean }) {
   const rid = o.rid ?? randomBytes(16).toString("base64url");
   const fields: Record<string, string> = { op: req.op, rid, at: o.at };
   if (req.op === "sign_in_seal") Object.assign(fields, { name: req.record!.name, origin: req.record!.origin, path: req.record!.path, send_to: req.record!.send_to.join(" "), offer: String(req.offer) });
-  const s = sealPayload(payload, { purpose: "browser-sign-in", fields }, paneKey, o.keys);
+  const s = sealPayload(payload, { purpose: "browser-sign-in", fields }, paneKey, o.keys, o.pad ?? true);
   return { text: s.sealed, sender: s.senderPublicB64, rid, at: o.at };
 }

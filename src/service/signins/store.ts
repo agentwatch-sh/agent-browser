@@ -24,7 +24,7 @@ import {
   b64u, bindingInfo, deriveKey, KDF, keyFits, newKdf, newKeyPair, openPaneSeal, openRecord, plainFits, privateKeyOf, publicRaw,
   recordAd, recordPlain, sealRecord, SIGN_IN_PURPOSE, unwrapKey, wrapKey, zero, type KeyFile, type RecordFields,
 } from "./seal.ts";
-import type { KeyObject } from "node:crypto";
+import { timingSafeEqual, type KeyObject } from "node:crypto";
 import type { Unprotected } from "./protect.ts";
 
 /** C12's texts of the stored sign-ins. */
@@ -86,7 +86,8 @@ export function recordBreaks(r: Fields): string | null {
   if (!/^c-[0-9a-f]{8}$/.test(r.id)) return "id";
   if (!SCOPE.test(r.name)) return "name";
   if (!originFits(r.origin)) return "origin";
-  if (!/^\/[^?#]*$/.test(r.path)) return "path";
+  // review-118 note 8: printable ASCII only, as the binding of a pane's seal needs.
+  if (!/^\/[\x20-\x7e]*$/.test(r.path) || /[?#]/.test(r.path)) return "path";
   if (!r.send_to.includes(r.origin) || !r.send_to.every(originFits) || new Set(r.send_to).size !== r.send_to.length) return "send_to";
   return null;
 }
@@ -127,8 +128,13 @@ export class SignInStore {
   private readonly highest = new Map<string, number>();
   private readonly removed = new Set<string>();
   private readonly creds = new Map<string, Credential>();
-  /** Each rid of a pane's seal that the service took in the last 120 s, and when. */
+  /**
+   * Each rid of a pane's seal that the service took, and the time until which it keeps it: until the seal can no longer
+   * open, its at more than 120 s in the past and at least 120 s after the rid was first seen (review-118 B2).
+   */
   private readonly rids = new Map<string, number>();
+  /** The number of locks since the start: an op whose derivation saw a lock opens nothing (review-118 note 3). */
+  private locks = 0;
   private actCount = 0;
   /** The one set-up, unlock or rekey that runs (C12: one at a time). */
   private queue: Promise<unknown> = Promise.resolve();
@@ -184,6 +190,7 @@ export class SignInStore {
   }
 
   private lock(): void {
+    this.locks++;
     if (this.openKey) zero(this.openKey.secret);
     this.openKey = null;
   }
@@ -192,15 +199,19 @@ export class SignInStore {
 
   // ---- the pane's seal ----
 
-  /** C12's checks of a pane's seal: the form of rid and at, a real time, a rid seen in the last 120 s, the age, then the open. */
+  /**
+   * C12's checks of a pane's seal: the form of rid and at, a real time, the age (120 s before or after the clock), a rid
+   * that the service keeps, then the open. The service takes the rid of a seal that passed the age check, and keeps it
+   * until that seal can no longer open (review-118 B2).
+   */
   private openSeal(req: Req, fields: Record<string, string>): Record<string, unknown> | null {
     const s = req.sealed as { text: string; sender: string; rid: string; at: string };
     if (!RID.test(s.rid) || !atFits(s.at)) return null;
-    const t = this.now().getTime();
-    for (const [rid, at] of this.rids) if (t - at > SEAL_MS) this.rids.delete(rid);
+    const t = this.now().getTime(), at = Date.parse(s.at);
+    if (Math.abs(t - at) > SEAL_MS) return null;
+    for (const [rid, until] of this.rids) if (t > until) this.rids.delete(rid);
     if (this.rids.has(s.rid)) return null;
-    this.rids.set(s.rid, t);
-    if (Math.abs(t - Date.parse(s.at)) > SEAL_MS) return null;
+    this.rids.set(s.rid, Math.max(t, at) + SEAL_MS);
     let info: Buffer;
     try { info = bindingInfo(SIGN_IN_PURPOSE, { op: req.op, rid: s.rid, at: s.at, ...fields }); } catch { return null; }
     try { return openPaneSeal(s.text, s.sender, info, this.pane); } catch { return null; }
@@ -210,7 +221,8 @@ export class SignInStore {
 
   /** An op of the stored sign-ins after the door's checks; the set-up, the unlock and the rekey answer later. */
   handle(req: Req): Answer | Promise<Answer> {
-    const record = req.record as Fields | undefined;
+    // The rules of record, only for the ops that take a record: a side ignores a field that it does not know (review-118 note 7).
+    const record = req.op === "sign_in_seal" || req.op === "sign_in_reseal" ? req.record as Fields : undefined;
     if (record) { const f = recordBreaks(record); if (f) return { error: TEXT.record(f) }; }
     switch (req.op) {
       case "sign_ins_lock": this.lock(); return { data: {} };
@@ -273,16 +285,31 @@ export class SignInStore {
     const value = this.openSeal(req, {});
     if (!value) return { error: TEXT.sealed };
     const text = (k: string) => (typeof value[k] === "string" ? value[k] as string : null);
+    // C12: the 2 s count from the start of the op's turn, and the next op begins only after this answer.
     const wrong = async (): Promise<Answer> => { await sleep(Math.max(0, (this.o.wrongWaitMs ?? WRONG_WAIT_MS) - (Date.now() - started))); return { error: TEXT.wrongPassphrase }; };
+    // A lock from here on wins: after each derivation the op checks the lock and the last snapshot again (review-118 notes 3, 4).
+    const locks = this.locks;
+    const lockedSince = () => this.locks !== locks;
     if (req.op === "sign_ins_setup") {
       const pass = text("passphrase");
       if (pass === null) return { error: TEXT.sealed };
       if ([...pass].length < MIN_PASSPHRASE) return { error: TEXT.shortPassphrase };
       const pair = newKeyPair();
       const kdf = newKdf(this.o.kdfN ?? KDF.n);
-      const kek = await deriveKey(pass, kdf);
+      let kek: Buffer;
+      try { kek = await deriveKey(pass, kdf); } catch (e) { zero(pair.secret); throw e; }
       try {
+        if (this.snap.key !== null) {
+          zero(pair.secret);
+          this.o.log("sign-ins: a key.json came during the set-up, so it gives no key");
+          return { error: TEXT.setUp };
+        }
         const file = wrapKey(pair.secret, pair.pub, kdf, kek);
+        if (lockedSince()) {
+          zero(pair.secret);
+          this.o.log("sign-ins: the store is set up; a lock came during the set-up, so it stays closed");
+          return { data: { key: file } };
+        }
         this.openKey = pair;
         this.o.log("sign-ins: the store is set up and open");
         return { data: { key: file } };
@@ -294,11 +321,12 @@ export class SignInStore {
       if (!keyFits(snapKey)) return { error: TEXT.keyFile };
       const secret = await this.unwrap(pass, snapKey);
       if (!secret) return wrong();
-      const key = privateKeyOf(secret);
-      this.openKey = { secret, key, pub: publicRaw(key) };
-      // A snapshot that came during the derivation with another key drops it again (C12, the state).
+      // The last snapshot and the lock again: a key.json that went or changed during the derivation, or a lock, wins.
       const now = this.snap.key;
-      if (now === null || now.public !== b64u(this.openKey.pub)) this.lock();
+      const key = privateKeyOf(secret), pub = publicRaw(key);
+      if (now === null) { zero(secret); this.o.log("sign-ins: the key.json went during the unlock, so the store is not set up"); return { error: TEXT.notSetUp }; }
+      if (lockedSince() || now.public !== b64u(pub)) { zero(secret); this.o.log("sign-ins: a lock or another key.json came during the unlock, so the store stays locked"); return { error: TEXT.locked }; }
+      this.openKey = { secret, key, pub };
       this.o.log("sign-ins: the store is open");
       return { data: {} };
     }
@@ -307,13 +335,18 @@ export class SignInStore {
     if (old === null || next === null) return { error: TEXT.sealed };
     if ([...next].length < MIN_PASSPHRASE) return { error: TEXT.shortPassphrase };
     if (!keyFits(snapKey)) return { error: TEXT.keyFile };
+    const open = this.openKey!;
+    const closed = (): Answer => { this.o.log("sign-ins: the store closed during the new passphrase's derivation, so it gives no key"); return { error: this.state() === "none" ? TEXT.notSetUp : TEXT.locked }; };
     const secret = await this.unwrap(old, snapKey);
-    const open = this.openKey;
-    if (!secret || !open || !secret.equals(open.secret)) { zero(secret); return wrong(); }
+    if (lockedSince() || this.openKey !== open) { zero(secret); return closed(); }
+    // A constant-time compare of the two private halves (review-118 note 1); unwrapKey gives 32 bytes.
+    const same = secret !== null && timingSafeEqual(secret, open.secret);
     zero(secret);
+    if (!same) return wrong();
     const kdf = newKdf(this.o.kdfN ?? KDF.n);
     const kek = await deriveKey(next, kdf);
     try {
+      if (lockedSince() || this.openKey !== open) return closed();
       this.o.log("sign-ins: the store has a new passphrase");
       return { data: { key: wrapKey(open.secret, open.pub, kdf, kek) } };
     } finally { zero(kek); }
@@ -336,7 +369,8 @@ export class SignInStore {
     const gen = (this.highest.get(r.id) ?? 0) + 1;
     const record: RecordFields = { v: 1, id: r.id, gen, name: r.name, origin: r.origin, path: r.path, send_to: by === "offer" && !approved ? [r.origin] : [...r.send_to], repos: null, by, approved };
     // The public half that the service derives from its open private half, never the `public` of a key file (C12).
-    const sealed = sealRecord(this.openKey!.pub, recordAd(record), plain);
+    // The open store key seals (its private half too: review-118 B1); never the `public` of a key file.
+    const sealed = sealRecord(this.openKey!, recordAd(record), plain);
     this.highest.set(r.id, gen);
     this.writeFile();
     return { data: { record, sealed } };

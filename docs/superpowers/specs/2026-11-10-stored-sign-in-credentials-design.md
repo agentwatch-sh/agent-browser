@@ -312,7 +312,9 @@ the daemon. So the design keeps every plain value out of the daemon's and the ga
   the seal's additional data (below), a random request id and the time. The pane clears the typed field before it
   posts, as the Secret box page does.
 - The service opens the seal, checks that the info matches the request's op and plain fields, refuses a time more
-  than 120 s old and a request id that it saw in those 120 s, and only then uses the values.
+  than 120 s from its clock (before or after it) and a request id that it keeps, and only then uses the values. It keeps
+  the request id of each seal that it takes until that seal can no longer open: until its time is more than 120 s in the
+  past and at least 120 s after the service first saw the id (review-118 B2; C12 is the master).
 - The same seal covers the passphrase at the set-up, at each unlock and at a change of the passphrase, and the
   values of an agent's offer (section 6.3: the CLI seals on the agent's side).
 - So Cloudflare's edge also gets only sealed text when the operator uses the pane from another place (review-104
@@ -338,7 +340,8 @@ attach in that window stays after the daemon is non-dumpable again, so the daemo
   AES-256-GCM under a key from scrypt (first values: N = 2^17, r = 8, p = 1, a 16-byte salt). It answers the
   public half and the wrapped private half, and the daemon writes them into `key.json`.
 - The scrypt bounds (review-104 note 3). N = 2^17 and r = 8 need 128 MiB, and Node's `crypto.scrypt` allows 32
-  MiB by default, so the service passes `maxmem` = 256 MiB. The service takes the KDF values from `key.json` only
+  MiB by default, so the service passes `maxmem` = 257 MiB: scrypt needs 128 times r times (N + 2) bytes and more, so N =
+  2^18 does not derive under 256 MiB (measured; board ab-v16.97.2). The service takes the KDF values from `key.json` only
   within fixed bounds: `name` `scrypt`, N a power of two from 2^15 to 2^18, r = 8, p = 1, a salt of 16 bytes.
   Any other value gets "the store's key file is not valid", and no derivation runs. So a planted N = 2^30 cannot
   make the service take gigabytes of memory (taylor has no guard against that).
@@ -358,8 +361,9 @@ it: the service keeps its key and its last snapshot. A restart of the service lo
 pin change of agent-browser, at a reboot and at a crash. During the build months, pin changes come often (several
 a week), and each one locks the store until the operator's next unlock.
 
-**The seal.** For each record: an ephemeral X25519 key pair, the shared secret with the store's public key,
-HKDF-SHA256 to a 32-byte key, and AES-256-GCM over the JSON `{"username":...,"password":...,"totp":null}`. The
+**The seal.** For each record: an ephemeral X25519 key pair, two shared secrets (the ephemeral key's with the store's
+public key, and the store's private key's with the store's public key, as HPKE's auth mode does, so only the open store
+key makes a seal that opens: review-118 B1), HKDF-SHA256 to a 32-byte key, and AES-256-GCM over the JSON `{"username":...,"password":...,"totp":null}`. The
 additional data is every field that decides where the password goes, who may use it and whether the operator
 approved it: `v`, `id`, `gen`, `name`, `origin`, `path`, `send_to`, `repos`, `by` and `approved`. The service checks
 the tag at each open. So a program of the user that edits a record's file (adds its own repo, changes the sign-in
@@ -1068,8 +1072,9 @@ change):
 - The generation: a lower `gen` than the highest seen does not open; a removed id does not open; the high-water
   file holds no secret.
 - The pane's seal: a round trip with a seal made by agentwatch's `screen-seal.js` (a shared vector of fake
-  values); an info that does not match the op or the plain fields is refused; a time older than 120 s, and a
-  request id seen twice, are refused; a new start of the service gives a new pane key.
+  values); an info that does not match the op or the plain fields is refused; a time more than 120 s from the clock
+  (before or after it), and a request id seen twice while its seal can still open, are refused; a new start of the
+  service gives a new pane key.
 - The lock: locked at the start; the unlock; the lock; the rekey; a refused unlock waits 2 s; no open key after a
   lock (a test hook reads the state).
 - The ops: each op of section 6.2 with each kind; `not the operator` for each other kind; an offer sealed with

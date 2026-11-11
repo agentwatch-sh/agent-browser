@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createCipheriv, diffieHellman, hkdfSync } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,11 +20,25 @@ import { serviceFeatures } from "../src/service/main.ts";
 import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
 import { nonDumpableStart, protectionReason, signalHeld, type Unprotected } from "../src/service/signins/protect.ts";
 import {
-  b64u, bindingInfo, deriveKey, KDF, kdfFits, keyFits, newKeyPair, openPaneSeal, openRecord, privateKeyOf, publicRaw, recordAd, recordPlain, sealRecord, unwrapKey, type RecordFields,
+  b64u, bindingInfo, deriveKey, KDF, kdfFits, keyFits, newKeyPair, openPaneSeal, openRecord, privateKeyOf, publicKeyOf, publicRaw, recordAd, recordPlain, sealRecord, unwrapKey, type RecordFields,
 } from "../src/service/signins/seal.ts";
 import { atFits, HOUR_MS, STATE_FILE, TEXT } from "../src/service/signins/store.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { paneSeal, sealPayload, testBytes } from "./sign-in-seal.ts";
+
+/**
+ * review-118 B1: a record that a program of the user seals with key.json's public half alone (the first build's
+ * construction: HKDF of DH(ephemeral, store public) and public values only). It must not open.
+ */
+function forgeRecord(storePub: Buffer, ad: Buffer, plain: Buffer) {
+  const e = newKeyPair();
+  const key = Buffer.from(hkdfSync("sha256", diffieHellman({ privateKey: e.key, publicKey: publicKeyOf(storePub) }), Buffer.concat([e.pub, storePub]), Buffer.from("agentwatch-browser-sign-in-record-v1"), 32));
+  const iv = Buffer.alloc(12, 9);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  c.setAAD(ad);
+  const ct = Buffer.concat([c.update(plain), c.final()]);
+  return { epk: b64u(e.pub), iv: b64u(iv), ct: b64u(ct), tag: b64u(c.getAuthTag()) };
+}
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const BIN = join(ROOT, "bin/agent-browser.js");
@@ -127,11 +142,11 @@ test("the time of a pane's seal: the form of C12 and a real time in UTC (no Febr
 
 // ------------------------------------------------------------------ the record's seal and the key file
 
-test("the record's seal: a round trip with the store's key; each of the ten plain fields, a changed byte of ct or tag, another store key, or a moved sealed part does not open", () => {
+test("the record's seal: a round trip with the store's key; each of the ten plain fields, a changed byte of ct or tag, another store key, a moved sealed part, or a seal with the public half alone does not open", () => {
   const store = newKeyPair();
   const rec: RecordFields = { v: 1, id: "c-0000000a", gen: 1, name: "staging", origin: ORIGIN, path: "/login", send_to: [ORIGIN], repos: null, by: "operator", approved: true };
   const plain = recordPlain(USER, PASS);
-  const s = sealRecord(store.pub, recordAd(rec), plain);
+  const s = sealRecord(store, recordAd(rec), plain);
   assert.deepEqual(Object.keys(s), ["epk", "iv", "ct", "tag"]);
   assert.equal(openRecord(store, recordAd(rec), s).toString("utf8"), JSON.stringify({ username: USER, password: PASS, totp: null }));
   for (const [k, x] of [["v", 2], ["id", "c-0000000b"], ["gen", 2], ["name", "other"], ["origin", "https://login.example.com"], ["path", "/elsewhere"], ["send_to", [ORIGIN, "https://tracker.example"]], ["repos", ["example-org.site-a"]], ["by", "offer"], ["approved", false]] as const) {
@@ -139,8 +154,10 @@ test("the record's seal: a round trip with the store's key; each of the ten plai
   }
   for (const part of ["ct", "tag"] as const) { const b = Buffer.from(s[part], "base64url"); b[0] ^= 1; assert.throws(() => openRecord(store, recordAd(rec), { ...s, [part]: b64u(b) }), `a changed byte of ${part}`); }
   assert.throws(() => openRecord(newKeyPair(), recordAd(rec), s), "another store key");
-  const other = sealRecord(store.pub, recordAd({ ...rec, id: "c-0000000b" }), plain);
+  const other = sealRecord(store, recordAd({ ...rec, id: "c-0000000b" }), plain);
   assert.throws(() => openRecord(store, recordAd(rec), other), "a sealed part moved from another record");
+  // review-118 B1: only the open store key seals: a seal with the public half alone does not open.
+  assert.throws(() => openRecord(store, recordAd(rec), forgeRecord(store.pub, recordAd(rec), plain)), "a seal with the public half alone");
 });
 
 test("the KDF: the bounds of C12 (scrypt, N a power of two from 2^15 to 2^18, r 8, p 1, a salt of 16 bytes), checked before any derivation; maxmem lets N = 2^18 derive", { timeout: 60_000 }, async () => {
@@ -287,14 +304,120 @@ test("the pane's seal in the store: a replayed rid, an at more than 120 s from t
   } finally { w.close(); }
 });
 
+test("review-118 B2: the service keeps a seal's rid until that seal can no longer open: a seal whose at is 60 s ahead, opened at the clock, does not open again at the clock + 121 s", { timeout: 60_000 }, async () => {
+  const w = world();
+  try {
+    await setUp(w);
+    await w.ask("sign_ins_lock");
+    const ahead = passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }, { at: new Date(T0 + 60_000).toISOString() });
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: ahead }), { data: {} });
+    await w.ask("sign_ins_lock");
+    w.clock.t = T0 + 121_000;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: ahead }), { error: TEXT.sealed }, "the same line at the clock + 121 s");
+    assert.equal(w.part.store.state(), "locked");
+    w.clock.t = T0 + 179_000;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: ahead }), { error: TEXT.sealed }, "the same line at the clock + 179 s (its at is 119 s in the past)");
+    // A seal whose at is 130 s ahead is refused for its time and its rid is not taken: it opens once when its time comes.
+    w.clock.t = T0;
+    const early = passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }, { at: new Date(T0 + 130_000).toISOString() });
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: early }), { error: TEXT.sealed }, "130 s ahead");
+    w.clock.t = T0 + 20_000;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: early }), { data: {} }, "within 120 s: it opens once");
+    await w.ask("sign_ins_lock");
+    w.clock.t = T0 + 200_000;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: early }), { error: TEXT.sealed }, "and not again");
+  } finally { w.close(); }
+});
+
+test("review-118 notes 3 and 4: a lock that comes during the derivation of a set-up, an unlock or a rekey wins; a set-up and an unlock check the last snapshot again after their derivation; each answers C12's text", { timeout: 60_000 }, async () => {
+  const w = world();
+  const req = (op: string, fields: Record<string, unknown> = {}) => ({ t: "req", id: `y${++ids}`, op, by: op === "sign_ins" ? DAEMON : OP, ...fields }) as Req;
+  const tick = () => new Promise((r) => setImmediate(r));
+  try {
+    await w.ask("sign_ins", { key: null, records: [] });
+    // A lock during the set-up: the set-up answers its key (the daemon writes it), and the store stays closed.
+    const setup = w.part.ops.sign_ins_setup(req("sign_ins_setup", { sealed: passSeal(w, "sign_ins_setup", { passphrase: PASSPHRASE }) }));
+    await tick();
+    assert.deepEqual(await w.part.ops.sign_ins_lock(req("sign_ins_lock")), { data: {} });
+    const s1 = await setup as any;
+    assert.ok(s1.data?.key, JSON.stringify(s1));
+    assert.equal(w.part.store.holdsOpenKey(), false, "the lock won");
+    const key = s1.data.key;
+    await w.ask("sign_ins", { key, records: [] });
+    assert.equal(w.part.store.state(), "locked");
+    // A lock during the unlock: the unlock answers the store is locked.
+    const unlock = w.part.ops.sign_ins_unlock(req("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }));
+    await tick();
+    await w.part.ops.sign_ins_lock(req("sign_ins_lock"));
+    assert.deepEqual(await unlock, { error: TEXT.locked });
+    assert.equal(w.part.store.state(), "locked");
+    // A snapshot with no key, or with another public half, during the unlock.
+    const u2 = w.part.ops.sign_ins_unlock(req("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }));
+    await tick();
+    await w.part.ops.sign_ins(req("sign_ins", { key: null, records: [] }));
+    assert.deepEqual(await u2, { error: TEXT.notSetUp });
+    await w.ask("sign_ins", { key, records: [] });
+    const u3 = w.part.ops.sign_ins_unlock(req("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }));
+    await tick();
+    await w.part.ops.sign_ins(req("sign_ins", { key: { ...key, public: b64u(newKeyPair().pub) }, records: [] }));
+    assert.deepEqual(await u3, { error: TEXT.locked });
+    assert.equal(w.part.store.state(), "locked");
+    assert.ok(!w.logs.includes("sign-ins: the store is open"), "no unlock logged the store open");
+    // A rekey and a lock: the rekey gives no key.
+    await w.ask("sign_ins", { key, records: [] });
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} });
+    const rekey = w.part.ops.sign_ins_rekey(req("sign_ins_rekey", { sealed: passSeal(w, "sign_ins_rekey", { old: PASSPHRASE, new: NEW_PASSPHRASE }) }));
+    await tick();
+    await w.part.ops.sign_ins_lock(req("sign_ins_lock"));
+    assert.deepEqual(await rekey, { error: TEXT.locked });
+    // A set-up while a key.json comes: the set-up gives no key.
+    const w2 = world();
+    try {
+      await w2.ask("sign_ins", { key: null, records: [] });
+      const s2 = w2.part.ops.sign_ins_setup(req("sign_ins_setup", { sealed: passSeal(w2, "sign_ins_setup", { passphrase: PASSPHRASE }) }));
+      await tick();
+      await w2.part.ops.sign_ins(req("sign_ins", { key, records: [] }));
+      assert.deepEqual(await s2, { error: TEXT.setUp });
+      assert.equal(w2.part.store.holdsOpenKey(), false);
+    } finally { w2.close(); }
+  } finally { w.close(); }
+});
+
+test("review-118 notes 5, 7, 8 and 9: a seal with no padding opens; an unknown record field on an op that takes none is ignored; a path outside printable ASCII breaks the rule of path; a key with v 2 is not valid, and a wrap with another IV length does not open", { timeout: 60_000 }, async () => {
+  const w = world();
+  try {
+    const key = await setUp(w);
+    await w.ask("sign_ins_lock");
+    const plain = paneSeal(paneKey(w), { passphrase: PASSPHRASE }, { op: "sign_ins_unlock" }, { at: at(w), pad: false });
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: plain }), { data: {} }, "the service does not check the padding");
+    assert.deepEqual(await w.ask("sign_ins_lock", { record: {} }), { data: {} }, "a field that the op does not take");
+    assert.deepEqual(await w.ask("sign_ins_unlock", { record: { id: "x" }, sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} });
+    const a = await w.ask("sign_in_seal", sealReq(w, REC));
+    await w.ask("sign_ins", { key, records: [fileOf(a)] });
+    assert.deepEqual(await w.ask("sign_in_reseal", { record: { ...REC, path: "/lögin" } }), { error: TEXT.record("path") });
+    assert.deepEqual(await w.ask("sign_in_seal", sealReq(w, { ...REC, path: "/" })), { error: TEXT.record("path") });
+    assert.equal(keyFits({ ...key, v: 2 }), false);
+    await w.ask("sign_ins_lock");
+    await w.ask("sign_ins", { key: { ...key, v: 2 }, records: [] });
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { error: TEXT.keyFile });
+    const kek = await deriveKey(PASSPHRASE, key.kdf);
+    assert.ok(unwrapKey(key, kek).length === 32);
+    // A wrap that a program made with an IV of 8 bytes and the right key: only the IV's length refuses it.
+    const secret = unwrapKey(key, kek);
+    const iv8 = Buffer.alloc(8, 5);
+    const c = createCipheriv("aes-256-gcm", kek, iv8);
+    c.setAAD(Buffer.from(JSON.stringify(["agentwatch-browser-sign-ins-key-v1", 1, key.public, key.kdf.name, key.kdf.n, key.kdf.r, key.kdf.p, key.kdf.salt])));
+    const ct = Buffer.concat([c.update(secret), c.final()]);
+    assert.throws(() => unwrapKey({ ...key, wrapped: { iv: b64u(iv8), ct: b64u(ct), tag: b64u(c.getAuthTag()) } }, kek), "an IV of 8 bytes");
+  } finally { w.close(); }
+});
+
 // ------------------------------------------------------------------ the ops of the records
 
 test("sign_in_seal and sign_in_reseal: v 1, gen + 1, repos null, by and approved; the answer's record opens with the store's key; an offer is by offer, approved false and send_to [origin] whatever the request holds; the approval keeps by and seals approved true", { timeout: 60_000 }, async () => {
   const w = world();
   try {
     const key = await setUp(w);
-    const store = (() => { const k = privateKeyOf(Buffer.alloc(32)); return k; })();
-    void store;
     const kek = await deriveKey(PASSPHRASE, key.kdf);
     const secret = unwrapKey(key, kek);
     const open = { key: privateKeyOf(secret), pub: publicRaw(privateKeyOf(secret)) };
@@ -330,6 +453,33 @@ test("sign_in_seal and sign_in_reseal: v 1, gen + 1, repos null, by and approved
       // A bad record breaks only itself.
       assert.ok("password" in w.part.store.openForUse(fileOf(ap)), `${what}: the other record still opens`);
     }
+  } finally { w.close(); }
+});
+
+test("review-118 B1: a record that a program seals with key.json's public half alone opens for no act and no reseal: the review's case (approved true, its own send_to), an agent's own offer sealed again with approved true, and a planted record of the same name", { timeout: 60_000 }, async () => {
+  const w = world();
+  try {
+    const key = await setUp(w);
+    const pub = Buffer.from(key.public, "base64url");
+    const a = await w.ask("sign_in_seal", sealReq(w, REC));
+    const o = await w.ask("sign_in_seal", sealReq(w, { ...REC, id: "c-0000000b" }, true), TOKEN);
+    const plain = recordPlain("agent.user@attacker.example.test", "agent-pass-test-value");
+    // The review's case: a new record with approved true and an origin of the program in send_to.
+    const forged: RecordFields = { v: 1, id: "c-0badc0de", gen: 1, name: "staging2", origin: ORIGIN, path: "/login", send_to: [ORIGIN, "https://attacker.example"], repos: null, by: "operator", approved: true };
+    const file = { ...forged, state: "usable", added: null, changed: null, sealed: forgeRecord(pub, recordAd(forged), plain) };
+    // The variants: the agent's own offer sealed again with approved true (it knows the values), and a planted "staging".
+    const offerAgain: RecordFields = { ...o.data.record, gen: 2, approved: true };
+    const offerFile = { ...offerAgain, state: "usable", added: null, changed: null, sealed: forgeRecord(pub, recordAd(offerAgain), recordPlain(USER, PASS)) };
+    const planted: RecordFields = { ...a.data.record };
+    const plantedFile = { ...planted, state: "usable", added: null, changed: null, sealed: forgeRecord(pub, recordAd(planted), plain) };
+    await w.ask("sign_ins", { key, records: [file, offerFile, plantedFile] });
+    for (const [what, f] of [["the review's case", file], ["the offer sealed again", offerFile], ["a planted staging", plantedFile]] as const) {
+      assert.deepEqual(w.part.store.openForUse(f), { refused: "cannot_open" }, what);
+      assert.deepEqual(await w.ask("sign_in_reseal", { record: { id: f.id, name: `${f.name}-x`, origin: f.origin, path: f.path, send_to: [f.origin] } }), { error: TEXT.cannotOpen }, `${what}: no reseal`);
+    }
+    // The service's own seals still open.
+    await w.ask("sign_ins", { key, records: [fileOf(a), fileOf(o)] });
+    assert.ok("password" in w.part.store.openForUse(fileOf(a)));
   } finally { w.close(); }
 });
 
