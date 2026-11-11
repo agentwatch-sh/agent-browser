@@ -88,7 +88,7 @@ export class McpPort {
     const a = listener.address();
     if (a === null || typeof a === "string" || a.family !== "IPv4" || a.address !== "127.0.0.1") {
       await new Promise<void>((r) => listener.close(() => r()));
-      throw new Error(`the MCP port listens on 127.0.0.1 only, not on ${typeof a === "string" ? "a Unix socket" : a ? `${a.address}:${a.port}` : "no address"}`);
+      throw new Error(`the MCP port listens on 127.0.0.1 only, not on ${a !== null && typeof a !== "string" ? `${a.address}:${a.port}` : "a socket that is not TCP"}`);
     }
     const port = new McpPort(o, listener, a.port);
     listener.on("connection", (socket: Socket) => port.accept(socket));
@@ -153,7 +153,7 @@ export class McpPort {
     const r = admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
     if (r === null) { this.o.handler.request(req, res, conn.scope); return; }
     // The first refusal closes the connection.
-    res.writeHead(r.status, { "Content-Type": "text/plain", ...(r.status === 401 ? { "WWW-Authenticate": WWW_AUTHENTICATE } : {}), Connection: "close" }).end(r.body);
+    res.writeHead(r.status, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(r.body), ...(r.status === 401 ? { "WWW-Authenticate": WWW_AUTHENTICATE } : {}), Connection: "close" }).end(r.body);
     this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request refused at step ${r.step} (${r.status})`);
   }
 
