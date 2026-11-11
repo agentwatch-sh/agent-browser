@@ -28,6 +28,13 @@ const SETUP = { functionDeclaration: "(utilityScript, ...args) => utilityScript.
     { value: 1 }, { value: { a: [{ h: 0 }, { h: 1 }, { o: [{ k: "actionType", v: "mouse" }, { k: "hitPoint", v: { o: [{ k: "x", v: 100 }, { k: "y", v: 240 }] } }, { k: "trial", v: false }] }] } },
     { objectId: "7.3.2" }, { objectId: "7.3.10" }] };
 
+/** Playwright's focusNode with the caret reset, and fill's call, on node 7.3.18 (Playwright 1.65.0's texts). */
+const util = (fn: string, arg: unknown) => ({ functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "7.3.1", returnByValue: true, awaitPromise: true, userGesture: true,
+  arguments: [{ objectId: "7.3.1" }, { value: true }, { value: true }, { value: fn }, { value: 1 }, { value: { a: [{ h: 0 }, { h: 1 }, arg] } }, { objectId: "7.3.2" }, { objectId: "7.3.18" }] });
+const PW_FOCUS = util("([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)", true);
+const PW_FILL = util("async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }",
+  { o: [{ k: "value", v: "jane.doe@example.com" }, { k: "force", v: false }, { k: "frameVisible", v: true }] });
+
 test("the build switch off (the default): the relay sends each input call as today, unchanged and in the client's order, with no event of its own", async () => {
   const saved = process.env[STAGE_TEST_ENV];
   delete process.env[STAGE_TEST_ENV];
@@ -47,6 +54,22 @@ test("the build switch off (the default): the relay sends each input call as tod
       ["Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: 8, location: 1 }],
       ["Input.dispatchKeyEvent", { type: "keyUp", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: 0, location: 1 }],
       ["Input.insertText", { text: "abc" }],
+      // The key and text rows (board ab-t30.10): Playwright's capital with modifiers 0, a char, a chord, the focus and fill
+      // calls, a typed-able text, the Delete of clear(): each as the client sent it, with no Shift and no click of the stage.
+      ["Runtime.callFunctionOn", PW_FOCUS],
+      ["Input.dispatchKeyEvent", { type: "keyDown", modifiers: 0, windowsVirtualKeyCode: 72, code: "KeyH", commands: [], key: "H", text: "H", unmodifiedText: "H", autoRepeat: false, location: 0, isKeypad: false }],
+      ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: "H", windowsVirtualKeyCode: 72, code: "KeyH", location: 0, isKeypad: false }],
+      ["Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 0, windowsVirtualKeyCode: 65, code: "KeyA", key: "a" }],
+      ["Input.dispatchKeyEvent", { type: "char", modifiers: 0, key: "a", code: "KeyA", text: "a", unmodifiedText: "a", windowsVirtualKeyCode: 65 }],
+      ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: "a", code: "KeyA", windowsVirtualKeyCode: 65 }],
+      ["Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 17, code: "ControlLeft", commands: [], key: "Control", text: "", unmodifiedText: "", autoRepeat: false, location: 1, isKeypad: false }],
+      ["Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 65, code: "KeyA", commands: [], key: "A", text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false }],
+      ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 2, key: "A", windowsVirtualKeyCode: 65, code: "KeyA", location: 0, isKeypad: false }],
+      ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: "Control", windowsVirtualKeyCode: 17, code: "ControlLeft", location: 1, isKeypad: false }],
+      ["Runtime.callFunctionOn", PW_FILL],
+      ["Input.insertText", { text: "jane.doe@example.com" }],
+      ["Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 0, windowsVirtualKeyCode: 46, code: "Delete", commands: [], key: "Delete", text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false }],
+      ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: "Delete", windowsVirtualKeyCode: 46, code: "Delete", location: 0, isKeypad: false }],
       ["DOM.scrollIntoViewIfNeeded", { objectId: "7.3.10" }],
       ["Page.handleJavaScriptDialog", { accept: true }],
     ];
@@ -409,4 +432,27 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       await until(() => (h.relay.model as any).stage.lock.held === 0, `${signal}: the lock to be free`);
     } finally { await h.close(); }
   }
+});
+
+test("with the stage on (board ab-t30.10): keyboard.type('Hi') through the model gets a Shift press and H with modifiers 8; a Runtime.evaluate after it waits in the tab's gate until every keyUp went (the model asks the stage before each call that it does not take)", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const from = h.fake.requests.length;
+    const kd = (ch: string, code: string, kc: number) => ({ type: "keyDown", modifiers: 0, windowsVirtualKeyCode: kc, code, commands: [], key: ch, text: ch, unmodifiedText: ch, autoRepeat: false, location: 0, isKeypad: false });
+    const ku = (ch: string, code: string, kc: number) => ({ type: "keyUp", modifiers: 0, key: ch, windowsVirtualKeyCode: kc, code, location: 0, isKeypad: false });
+    for (const [ch, code, kc] of [["H", "KeyH", 72], ["i", "KeyI", 73]] as const) {
+      await c.send("Input.dispatchKeyEvent", kd(ch, code, kc), p.sessionId);
+      await c.send("Input.dispatchKeyEvent", ku(ch, code, kc), p.sessionId);
+    }
+    await c.send("Runtime.evaluate", { expression: "2" }, p.sessionId);
+    const sent = cmds(h, from).filter((x) => x.method === "Input.dispatchKeyEvent" || (x.method === "Runtime.evaluate" && x.params.expression === "2"));
+    assert.deepEqual(sent.map((x) => x.params.type ?? "evaluate").slice(-1), ["evaluate"], "the evaluate after every key event");
+    const keys = sent.filter((x) => x.method === "Input.dispatchKeyEvent");
+    assert.deepEqual(keys.map((x) => [x.params.type, x.params.key, x.params.modifiers]),
+      [["rawKeyDown", "Shift", 8], ["keyDown", "H", 8], ["keyUp", "H", 8], ["keyUp", "Shift", 0], ["keyDown", "i", 0], ["keyUp", "i", 0]]);
+    assert.ok(keys.every((x) => typeof x.params.timestamp === "number"), "each key event has the stage's timestamp");
+  } finally { await h.close(); }
 });
