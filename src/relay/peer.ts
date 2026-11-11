@@ -172,6 +172,27 @@ export class RootState {
     return null;
   }
 
+  /** Whether `root` is a root of `scope` that counts at this state's read (the MCP path's close at a change; C11). */
+  counts(scope: string, root: Root): boolean {
+    return (this.byScope.get(scope) ?? []).some((r) => r.counts && r.root.pid === root.pid && r.root.start === root.start);
+  }
+
+  /**
+   * The MCP path's walk of one holder (C11, the admission of the MCP path, step 2): the scope whose root that counts
+   * admits `peer`, with that root, or null. The walk's first root picks the scope (a root that counts has one scope);
+   * when the walk meets no root, on Linux, the cgroup of a root whose cgroup counts picks it. Then C11's session check
+   * (check, below) runs for that scope, so each rule of the scope's session applies as on the endpoint.
+   */
+  scopeOf(reader: PeerReader, peer: Peer): { scope: string; root: Root } | null {
+    const met = this.walk(reader, peer.pid);
+    const cg = met === null && reader.form !== "mac" ? reader.cgroup(peer.pid) : null;
+    const picks = (r: RootInfo) => (met !== null ? r.counts && key(r.root.pid, r.root.start) === met : cg !== null && r.cgroup !== null && (cg === r.cgroup || cg.startsWith(`${r.cgroup}/`)));
+    const scopes = [...this.byScope].filter(([, list]) => list.some(picks)).map(([scope]) => scope);
+    if (scopes.length !== 1) return null;
+    const root = this.check(reader, scopes[0], peer);
+    return root ? { scope: scopes[0], root } : null;
+  }
+
   /**
    * C11's session check (step 6) for a connection of `scope`: the root that admits the peer, or null for the
    * session's 403. In order: the peer is alive; the walk, which admits only at a root of the scope that counts and
@@ -295,6 +316,16 @@ export function parseCgroup(raw: string): string | null {
   return null;
 }
 
+/** A process's /proc/<pid>/stat (Linux), or null when it cannot be read: the relay's reader and the MCP path's read it so. */
+export function readProc(pid: number): Proc | null {
+  try { return parseStat(readFileSync(`/proc/${pid}/stat`, "latin1")); } catch { return null; }
+}
+
+/** A process's cgroup (the `0::` line of /proc/<pid>/cgroup), or null when it cannot be read. */
+export function readCgroup(pid: number): string | null {
+  try { return parseCgroup(readFileSync(`/proc/${pid}/cgroup`, "latin1")); } catch { return null; }
+}
+
 export class LinuxReader implements PeerReader {
   readonly form: "pidfd" | "stat";
   private readonly libc: Libc;
@@ -328,13 +359,9 @@ export class LinuxReader implements PeerReader {
     return { ...c, pidfd: null, start: c.pid > 0 ? this.proc(c.pid)?.start ?? null : null };
   }
 
-  proc(pid: number): Proc | null {
-    try { return parseStat(readFileSync(`/proc/${pid}/stat`, "latin1")); } catch { return null; }
-  }
+  proc(pid: number): Proc | null { return readProc(pid); }
 
-  cgroup(pid: number): string | null {
-    try { return parseCgroup(readFileSync(`/proc/${pid}/cgroup`, "latin1")); } catch { return null; }
-  }
+  cgroup(pid: number): string | null { return readCgroup(pid); }
 
   poll(pidfd: number): number {
     const fds = Buffer.alloc(8);
