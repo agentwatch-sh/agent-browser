@@ -440,14 +440,14 @@ no typed text, no key value, no user agent, no screen or window size or place, n
 
 - **Task 1, click box:** 10 trials, each a press in the box's frame: 10 steps.
 - **Task 2, targets:** 20 targets, 4 of each size from 16 to 64 px: 20 steps.
-- **Task 3, typing:** the three lines, one step each: 106 key presses with a character, all with their key events;
-  9 Shift presses; 4 Backspace.
+- **Task 3, typing:** the three lines, one step each: 106 key presses other than Shift, 9 Shift presses, 4 of the 106
+  Backspace; every typed character came with its key events.
 - **Task 4, scroll:** 2 rounds, so 4 legs (down, up, down, up): 520 wheel events in the legs (67 to 193 a leg) and
   52 between two tasks; 7 wheel trains in all.
 - **Task 5, keys to box:** 2 rounds. In each, one Tab gave the box's square the focus, and Space checked it: with this
   Mac's settings, Tab reaches a check box (the plan did not know).
 - **Task 6, rest:** 10.0 s with no pointer move and no wheel event.
-- **Task 7, switch away:** one switch to another app and back, then a click on "Button".
+- **Task 7, switch away:** one switch away from the page and back, then a click on "Button".
 - **Task 8, drag:** the steps that the lead sent after PR #97 asked for three drags of "Drag me" onto "Drop here"; the
   page has no button for it. The recording holds one drag, between tasks 1 and 2. `analyze.ts` makes it a step of its
   own, `drag #0`. The page's drop zone takes no drop, so the drag ends with no `drop` event.
