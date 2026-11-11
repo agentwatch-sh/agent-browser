@@ -727,15 +727,17 @@ test("review-115 B1: the service opens its MCP path before its control door: whi
   const gate = new Promise<void>((r) => { release = r; });
   try {
     const started = startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") }, mcp: { listen: { port: 0 }, openGate: gate } });
-    await sleep(500);
-    assert.equal(existsSync(join(dir, "control.sock")), false, "no control door (so no hello) before the MCP's open ends");
-    release();
-    const s = await started;
+    let s: Awaited<typeof started> | null = null;
     try {
+      await sleep(500);
+      const early = existsSync(join(dir, "control.sock"));
+      release();
+      s = await started;
+      assert.equal(early, false, "no control door (so no hello) before the MCP's open ends");
       assert.equal(existsSync(join(dir, "control.sock")), true);
       assert.deepEqual((s.state.hello as any).features, ["mcp_token"], "the first hello already lists mcp_token");
       assert.equal((s.state.status() as any).mcp.state, "ready");
-    } finally { await s.stop(); }
+    } finally { release(); s ??= await started.catch(() => null); await s?.stop(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -877,6 +879,7 @@ test("review-115 notes 5, 6 and 9: the list test reads strings in anyOf, oneOf, 
   assert.deepEqual(withProp({ type: ["string", "null"], description: "a directory" }), [RULES.pathKey], "a type list");
   assert.deepEqual(withProp({ $ref: "#/definitions/x" }), [RULES.shape], "a shape that the test cannot read");
   assert.deepEqual(withProp({}), [RULES.shape], "a schema with no type");
+  assert.deepEqual(withProp({ type: "object", patternProperties: { ".*": { type: "string", description: "a file" } } }), [RULES.shape], "a keyword that the test does not know, with a type");
   assert.deepEqual(withProp({ anyOf: [{ type: "string" }, { type: "null" }], description: "a colour" }), [], "a string that speaks of no file");
   assert.deepEqual(withProp({ anyOf: [{ type: "string", description: "The file to read" }] }, { keys: [...LIST.tools.browser_wait_for.keys, "extra"], paths: ["extra"] }), [], "marked as a path");
   // A required key left out of keys.
