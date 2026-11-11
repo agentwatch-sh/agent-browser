@@ -16,7 +16,7 @@ import { UsageError } from "../errors.ts";
 import { defaultDaemonCommandFile } from "./admission.ts";
 import { agentDoorAddress } from "./agent-door.ts";
 import { encodeLine, serviceHello } from "./control.ts";
-import { FAKE_FEATURES, serviceRunFolders, startFake } from "./fake.ts";
+import { FAKE_FEATURES, serviceRunFolders, startFake, UNPROTECTED, type Unprotected } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
@@ -25,7 +25,7 @@ import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
 
 export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT]"
-  + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse]"
+  + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
 
@@ -97,6 +97,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.all === true) throw new UsageError("--all goes with service stop");
   const fake = v.fake === true, test = v.test === true;
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
+  if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
+  if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
   for (const k of ["test-display", "test-chrome-source"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
@@ -108,7 +110,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
     const controlDoor = str("control-door");
     if (!controlDoor) throw new UsageError("--fake needs --control-door: the fake never takes the place of the service");
     const agentDoor = str("agent-door");
-    const f = await startFake({ controlDoor: resolve(controlDoor), agentDoor: agentDoor === undefined ? undefined : agentDoorAddress(agentDoor), refuse: v.refuse === true, input: io.stdin, log });
+    const f = await startFake({ controlDoor: resolve(controlDoor), agentDoor: agentDoor === undefined ? undefined : agentDoorAddress(agentDoor), refuse: v.refuse === true, unprotected: v.unprotected as Unprotected | undefined, input: io.stdin, log });
     // One line after the socket listens, so that a test waits for it (C12, the fake).
     await new Promise<void>((r) => io.stdout.write(encodeLine({ t: "listening" }), () => r()));
     await signalled();

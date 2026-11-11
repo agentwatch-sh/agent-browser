@@ -44,7 +44,7 @@ test("service --hello prints the service's hello as one line and exits, with no 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the usage of service: --agent-door, --lists-folder and --state-folder are required (no default folder of the lists or the state); its flags are its own and no other command takes them; --refuse goes with --fake, and --fake with --control-door", async () => {
+test("the usage of service: --agent-door, --lists-folder and --state-folder are required (no default folder of the lists or the state); its flags are its own and no other command takes them; --refuse and --unprotected go with --fake, and --fake with --control-door", async () => {
   for (const [args, what] of [
     [["service"], /--agent-door is required/],
     [["service", "--agent-door", "/x/cdp.sock"], /--lists-folder is required: the folder of the lists/],
@@ -56,6 +56,8 @@ test("the usage of service: --agent-door, --lists-folder and --state-folder are 
     [["service", "extra", "--agent-door", "/x/cdp.sock"], /usage: agent-browser service/],
     [["service", "--fake"], /--fake needs --control-door/],
     [["service", "--refuse", "--agent-door", "/x/cdp.sock"], /--refuse goes with --fake/],
+    [["service", "--unprotected", "dumpable", "--agent-door", "/x/cdp.sock"], /--unprotected goes with --fake/],
+    [["service", "--fake", "--control-door", "/x/c.sock", "--unprotected", "other"], /--unprotected takes dumpable or signal/],
     [["commands", "--agent-door", "/x/cdp.sock"], /--agent-door is only for service/],
     [["relay", "--socket", "/x/cdp.sock", "--fake"], /--fake is only for service/],
   ] as const) {
@@ -104,7 +106,7 @@ test("the fake as a process (agentwatch's hermetic tests): {\"t\":\"listening\"}
     assert.equal(out, '{"t":"listening"}\n');
     assert.ok(existsSync(sock), "the socket listens before the line");
     const c = await daemonClient(sock);
-    assert.deepEqual((await c.next()).features, ["fake", "mcp_token"]);
+    assert.deepEqual((await c.next()).features, ["fake", "mcp_token", "sign_ins"]);
     c.send(DAEMON_HELLO);
     for (const v of control.requests.slice(0, 3)) { c.send(v.req); assert.deepEqual(await c.answer(v.req.id), v.res, v.note); }
     const ev = control.events.find((v: any) => v.ev.ev === "prompt").ev;
@@ -114,6 +116,27 @@ test("the fake as a process (agentwatch's hermetic tests): {\"t\":\"listening\"}
     child.kill("SIGTERM");
     assert.equal(await new Promise((r) => child.once("exit", (c) => r(c))), 0, err);
     assert.equal(existsSync(sock), false);
+  } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
+// review-112 B5: the fake's command takes --unprotected, so agentwatch's hermetic tests get the error and the status key.
+test("the fake as a process with --unprotected signal: the vectors' case of that reason", { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-fake-"));
+  const sock = join(dir, "control.sock");
+  const child = spawn(process.execPath, [BIN, "service", "--fake", "--control-door", sock, "--unprotected", "signal"], { stdio: ["pipe", "pipe", "pipe"] });
+  let err = "", out = "";
+  child.stderr!.on("data", (d) => (err += d));
+  child.stdout!.on("data", (d) => (out += d));
+  try {
+    await until(() => out.includes("\n"), "the listening line");
+    const c = await daemonClient(sock);
+    await c.next();
+    c.send(DAEMON_HELLO);
+    const k = control.unprotected.cases.find((x: any) => x.reason === "signal");
+    for (const v of k.requests) { c.send(v.req); assert.deepEqual(await c.answer(v.req.id), v.res, v.note); }
+    c.end();
+    child.kill("SIGTERM");
+    assert.equal(await new Promise((r) => child.once("exit", (c) => r(c))), 0, err);
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
 });
 
