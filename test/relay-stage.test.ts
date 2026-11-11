@@ -12,11 +12,11 @@ import { paramsFor } from "../src/human/person.ts";
 import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
   STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_RUN_SLOW_MS, STAGE_SCROLL_ROUNDS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
-  TWO_FRAMES, utilityCall, type Body,
+  TWO_FRAMES, utilityCall,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { FakeClock, FakeTab, idle, runVector, topBox, type Sent } from "./stage-fakes.ts";
+import { FakeClock, FakeTab, runVector, topBox, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
 const F = V.firstValues, K = V.constants;
@@ -96,8 +96,6 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
     // The time of the item's first event from its reference.
     const t0 = fromT(o.from), dt = items[k].first - t0;
     assert.ok(dt >= o.at[0] && dt <= o.at[1], `${at}: ${dt} ms after ${o.from}, not in ${o.at}`);
-    // Each event of the stage has a timestamp a person's latency before its send, in whole ms on Linux, never in the future.
-    for (const q of sent.slice(i - (o.path || o.line ? 0 : 1)).slice(0, 0)) void q;
   }
   assert.equal(i, sent.length, `${w}: no event after the vector's last (${sent.slice(i).map((x) => `${x.method} ${x.params?.type ?? x.pass}`).join(", ")})`);
   for (const s of sent.filter((x) => x.method.startsWith("Input.") && x.method !== "Input.insertText" && x.pass === undefined)) {
@@ -639,4 +637,3 @@ test("a hover's action holds the lock from its first sample to its last: another
   assert.equal(r.stage.counts.hoverRestsDropped, 1);
 });
 
-void Stage; void idle; void ({} as Body);

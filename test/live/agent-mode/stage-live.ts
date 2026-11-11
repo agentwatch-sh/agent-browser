@@ -78,8 +78,9 @@ body{margin:0;font:16px sans-serif;height:1400px;position:relative}
 <script>
 window.__s = { ev: [], hov: { enter: 0, shift: null }, card: { enter: 0 }, last: null, conf: [], sel: '' };
 const id = (t) => t && t.id || (t && t.parentElement && t.parentElement.id) || '';
+// On the document in the bubble phase, as a page's own scripts listen: after Playwright's hit-target check on the window.
 for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu', 'auxclick'])
-  addEventListener(type, (e) => { const t = id(e.target); if (t && t !== 'sf' && t !== 'xf') __s.ev.push([type, t, e.button, e.detail, e.shiftKey, ...(t === 'pad' ? [e.offsetX, e.offsetY] : [])]); }, true);
+  document.addEventListener(type, (e) => { const t = id(e.target); if (t && t !== 'sf' && t !== 'xf') __s.ev.push([type, t, e.button, e.detail, e.shiftKey, ...(t === 'pad' ? [e.offsetX, e.offsetY] : [])]); });
 document.getElementById('hov').addEventListener('mouseenter', () => __s.hov.enter++);
 document.getElementById('hov').addEventListener('mousemove', (e) => { __s.hov.shift = e.shiftKey; });
 document.getElementById('card').addEventListener('mouseenter', () => __s.card.enter++);
@@ -281,6 +282,7 @@ async function measures(o: StageContext, ctx: any, plain: any, ROWS_URL: string,
   {
     const p = await plain.newPage();
     try {
+      p.on("dialog", () => {}); // a listener of its own: Playwright then leaves the dialog open (the raw session closes it)
       await p.goto(ROWS_URL);
       await p.waitForFunction(() => document.readyState === "complete");
       await p.evaluate(() => { (window as any).__d = []; for (const t of ["mousedown", "mouseup", "click", "mousemove"]) addEventListener(t, (e: any) => (window as any).__d.push([t, Math.round(performance.timeOrigin + performance.now())]), true); });

@@ -37,7 +37,8 @@
 // itself), KEEP_RUN (1: the run removes nothing, below), SITE_PORT (the
 // probe's site; default 8781, which the cases need; 0 only for the spawn tests of `npm test`: a free port, and no
 // check), CASES (default all:
-// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone) runs some groups only. The agent
+// playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone; stage only alone: the input
+// stage's live rows, stage-live.ts, with the relay's stage on and STAGE_REFERENCE for its harness rows) runs some groups only. The agent
 // package must be chrome-extension main c99bebb (0.3.1) or later: the per-scope receiver (parts 1a and 1b: set_scopes,
 // the tab-to-scope map, bridge.tabScope and bridge.tabScopes, the removal queue and its window rule, the retry of a
 // popup). It uses port 8781 (the probe's site), a free port of its own for the popup site of the group `scopes`, and
