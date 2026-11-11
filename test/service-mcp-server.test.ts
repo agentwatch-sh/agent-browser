@@ -173,6 +173,38 @@ test("the MCP never launches or downloads a browser: a tool call goes only to th
   }
 });
 
+test("under Node's permission model with reads only (no write, no network, no child process, no worker), the MCP answers initialize, tools/list and each tool call through the getter alone", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const { execFile } = await import("node:child_process");
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-perm-"));
+  const script = `
+    const { openMcpServer } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/session.ts"))});
+    const { readAllowList } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/allow-list.ts"))});
+    const got = [];
+    const s = await openMcpServer({ list: readAllowList(), folder: process.argv[1], context: async () => { throw new Error("the test's getter: no browser"); }, answer: (m) => got.push(m) });
+    const wait = async (id) => { for (let i = 0; i < 400 && !got.some((m) => m.id === id); i++) await new Promise((r) => setTimeout(r, 25)); };
+    s.deliver(${JSON.stringify(INIT)}); await wait(1);
+    s.deliver({ jsonrpc: "2.0", method: "notifications/initialized" });
+    s.deliver({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }); await wait(2);
+    let id = 10;
+    for (const [name, args] of [["browser_navigate", { url: "https://a.example/" }], ["browser_snapshot", {}], ["browser_take_screenshot", { scale: "css" }], ["browser_tabs", { action: "list" }], ["browser_file_upload", {}]]) {
+      s.deliver({ jsonrpc: "2.0", id: ++id, method: "tools/call", params: { name, arguments: args } }); await wait(id);
+    }
+    await s.close();
+    console.log(JSON.stringify(got));`;
+  try {
+    const out = await new Promise<string>((resolve, reject) => execFile(process.execPath, ["--permission", "--allow-fs-read=*", "--input-type=module", "-e", script, `${dir}/`], { cwd: ROOT, timeout: 50_000 }, (e, stdout, stderr) => (e ? reject(new Error(`${e.message}\n${stderr}`)) : resolve(stdout))));
+    const got = JSON.parse(out.trim().split("\n").pop()!) as Message[];
+    assert.equal((got.find((m) => m.id === 2)!.result as any).tools.length, 25, "the pinned tools/list");
+    const calls = got.filter((m) => (m.id as number) > 10);
+    assert.equal(calls.length, 5);
+    for (const c of calls) {
+      const text = JSON.stringify(c.result);
+      assert.ok(text.includes("the test's getter: no browser"), `the getter's error: ${text}`);
+      assert.ok(!/ERR_ACCESS_DENIED|Access to this API/.test(text), `no write, network, child process or worker: ${text}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the MCP's request of the client's roots is answered with the scope's folder; a client's own capabilities never reach it", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-roots-"));
   const got: Message[] = [];
@@ -569,4 +601,53 @@ test("the service with the MCP option (stage 1d part 2b): the port opens after t
       assert.equal(s2.mcp, null);
     } finally { await s2.stop(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------ the log rule (C11, C12; the token design, section 12)
+
+const CANARY = `abt1_${"C".repeat(43)}`;
+test("the log rule: the MCP path's log holds no token, fingerprint, tool argument, URL path, payload or MCP session id, and the worker's output never reaches it; each scan finds its planted twin", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const { McpPart } = await import("../src/service/mcp/part.ts");
+  const { createHash } = await import("node:crypto");
+  const { parseStat } = await import("../src/relay/peer.ts");
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-log-"));
+  const log: string[] = [];
+  const print = createHash("sha256").update(CANARY, "latin1").digest("hex");
+  const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: (l) => log.push(l) });
+  const secrets = [CANARY, print, "https://canary.example/secret-path", "canary-file.png", "canary-payload-value"];
+  try {
+    const self = parseStat(readFileSync(`/proc/${process.pid}/stat`, "latin1"))!;
+    p.setSessions({ sessions: [{ scope: "t-log", repo: null, roots: [{ pid: process.pid, start: self.start }], cgroup: null, lifetime_id: "lt-canary-test-value", mcp_token: print }] } as any);
+    await p.open({ url: (s) => s, readiness: () => ({ controlOff: false, notReady: null, sites: 1 }) });
+    const url = `http://127.0.0.1:${p.mcpPort!.port}/mcp/t-log?q=canary-payload-value`;
+    const auth = { Authorization: `Bearer ${CANARY}` };
+    const r = await post(url, INIT, undefined, auth);
+    const sid = r.sid!;
+    secrets.push(sid);
+    await post(url, { jsonrpc: "2.0", method: "notifications/initialized" }, sid, auth);
+    await post(url, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: { url: "https://canary.example/secret-path", headers: { cookie: "canary-payload-value" } } } }, sid, auth);
+    await post(url, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_take_screenshot", arguments: { filename: "/etc/canary-file.png", scale: "css" } } }, sid, auth);
+    await post(url, { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_navigate", arguments: { url: "https://canary.example/secret-path" } } }, sid, auth);
+    await post(url, "{canary-payload-value", sid, auth);
+    await post(url, { jsonrpc: "2.0", id: 5, method: "ping" }, sid, { Authorization: "Bearer abt1_canary-payload-value" });
+    await fetch(url, { method: "DELETE", headers: { "Mcp-Session-Id": sid, ...auth } }).then((x) => x.text());
+    p.sessionEnded("t-log");
+    const text = log.join("\n");
+    assert.ok(log.some((l) => l.startsWith("mcp: MCP session 1 of scope t-log begins")) && log.some((l) => l.includes("a tools/call refused")), "the scan reads the MCP path's lines");
+    assert.deepEqual(secrets.filter((s) => text.includes(s)), [], "no secret in the log");
+    for (const s of secrets) assert.deepEqual([s].filter((x) => `${text}\n${s}`.includes(x)), [s], "the twin: a planted secret is found");
+  } finally { await p.close(); rmSync(dir, { recursive: true, force: true }); }
+  // The worker's own output: read by the service (a stream of its own), never in its log.
+  const dir2 = mkdtempSync(join(tmpdir(), "ab-mcp-out-"));
+  const log2: string[] = [];
+  const w = new ScopeWorker("t-out", { list: LIST, folder: `${dir2}/`, ticketUrl: () => null, ended: () => {}, log: (l) => log2.push(l), heapMb: 32, entry: new URL("./fixtures/mcp-heap-worker.ts", import.meta.url) });
+  let out = "";
+  w.worker.stdout.on("data", (d) => (out += d));
+  w.worker.stderr.on("data", (d) => (out += d));
+  try {
+    assert.equal(await w.open("s1"), null);
+    await until(() => out.includes("worker stderr"), "the worker's output");
+    assert.ok(out.includes(CANARY), "the output stream holds what the worker wrote (the twin)");
+    assert.ok(!log2.join("\n").includes(CANARY), "the service's log does not");
+  } finally { await w.stop(); rmSync(dir2, { recursive: true, force: true }); }
 });

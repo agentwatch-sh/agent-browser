@@ -859,3 +859,33 @@ test("review-114 note 10: an admitted connection that sends nothing, a header th
     assert.ok(p.log.some((l) => l.endsWith("closed: no request header in time")) && p.log.some((l) => l.endsWith("closed: the request body paused too long")));
   } finally { await p.port.stop(); }
 });
+
+test("review-114 note 5: a connection that a root's cgroup admitted closes when only that root's cgroup stops counting; one that the walk admitted stays", async () => {
+  const r = new WorldReader();
+  const handler = stub();
+  const log: string[] = [];
+  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: () => READY, log: (l) => log.push(l), reader: { tcp: () => r.tcp(), holders: (i) => r.holders(i), proc: (p) => r.proc(p), cgroup: (p) => r.cgroup(p) }, uid: UID });
+  r.service = `127.0.0.1:${port.port}`;
+  port.listener.prependListener("connection", (s: Socket) => r.accepted(`127.0.0.1:${s.remotePort}`));
+  try {
+    port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
+    // 3110: a nohup job of md-lead, re-parented: the walk meets no root, and md-lead's pane cgroup admits it.
+    r.pending.push([3110]);
+    const byCgroup = rawClient(await dial(port.port));
+    byCgroup.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+    assert.equal((await byCgroup.response()).status, 200);
+    // 3102: a tool command of md-lead under its pane: the walk admits it.
+    r.pending.push([3102]);
+    const byWalk = rawClient(await dial(port.port));
+    byWalk.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+    assert.equal((await byWalk.response()).status, 200);
+    assert.equal(port.connections("md-lead"), 2);
+    // The pane 3100 moves into its parent's cgroup: the root still counts for the walk, but its cgroup no longer counts.
+    r.w.set(3100, { ...r.w.get(3100)!, cgroup: r.w.get(3000)!.cgroup });
+    port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
+    await byCgroup.closes();
+    assert.equal(port.connections("md-lead"), 1, "the walk's connection stays");
+    assert.ok(log.some((l) => /^mcp: connection 1 \(scope md-lead\) closed: a root that admitted it no longer counts$/.test(l)), log.join("\n"));
+    assert.deepEqual(handler.ended, ["md-lead"], "its MCP sessions end with it (OP4)");
+  } finally { await port.stop(); }
+});

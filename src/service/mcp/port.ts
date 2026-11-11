@@ -242,7 +242,8 @@ export class McpPort {
   /**
    * C12's set_sessions (after the door's shape step): the new snapshot, then the close at a change (C11). A connection
    * closes when the snapshot drops its session, when its session's mcp_token changed, or when a root that admitted it
-   * is no longer a root of its scope that counts. The handler ends the MCP sessions of each such session, and of each
+   * no longer counts for its scope: also when only that root's cgroup stops counting, for a connection that the
+   * root's cgroup admitted (the review of part 2a, note 5). The handler ends the MCP sessions of each such session, and of each
    * session that the snapshot drops or whose mcp_token changed, also with no open connection.
    */
   setSessions(req: Req): void {
@@ -258,7 +259,7 @@ export class McpPort {
       const now = next.items.get(c.scope);
       const why = now === undefined ? "the snapshot drops its session"
         : now.mcp_token !== c.token ? "its session's connection token changed"
-        : c.roots.every((r: Root) => next.roots.counts(c.scope, r)) ? null : "a root that admitted it no longer counts";
+        : c.roots.every((r: Root) => next.roots.counts(c.scope, r) && (!c.byCgroup.some((b) => b.pid === r.pid && b.start === r.start) || next.roots.cgroupCounts(c.scope, r))) ? null : "a root that admitted it no longer counts";
       if (why === null) continue;
       this.close(c, why);
       ended.add(c.scope);
