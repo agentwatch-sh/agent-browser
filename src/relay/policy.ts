@@ -214,7 +214,9 @@ export function route(method: string, params: any, onPage: boolean, o: { child?:
   if (o.windowPerPage && method === FOCUS_EMULATION) return "model";
   if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && o.child)) return "chrome";
   if (PAGE_MODEL_SET.has(method)) return "model";
-  if (method.startsWith("Browser.") || method.startsWith("Target.")) return { refused: TEXT.generic(method) };
+  // The sign-in act's domain (C11's table, from stage 1e): refused on a page session, so it never reaches Chrome
+  // (board ab-v16.97.1, review-112 B6).
+  if (method.startsWith("Browser.") || method.startsWith("Target.") || method.startsWith("AgentBrowser.")) return { refused: TEXT.generic(method) };
   return "chrome";
 }
 

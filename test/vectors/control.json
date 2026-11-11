@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints.",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints. The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s53 run in their order after r14 (s53 after s17) with the fake values of state.sign_ins (the fake opens no seal), the bad requests b33 to b52 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected), and signInScan holds the canaries of the scan.",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -91,6 +91,50 @@
     "sha256": "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85",
     "base64": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="
    }
+  },
+  "sign_ins": {
+   "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+   "key": {
+    "v": 1,
+    "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+    "kdf": {
+     "name": "scrypt",
+     "n": 131072,
+     "r": 8,
+     "p": 1,
+     "salt": "XtlD_scc1BSqO7QI6IJgPg"
+    },
+    "wrapped": {
+     "iv": "B4obup7UgkQF8GYX",
+     "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+     "tag": "jk4pUJmfRHDzXStJGojQwA"
+    }
+   },
+   "rekeyed": {
+    "v": 1,
+    "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+    "kdf": {
+     "name": "scrypt",
+     "n": 131072,
+     "r": 8,
+     "p": 1,
+     "salt": "0_XWx6Xj1oofUDswBrKe5g"
+    },
+    "wrapped": {
+     "iv": "a3IUxpg3ws4tUVUs",
+     "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+     "tag": "hNF_MZqahErAHIr8y361MQ"
+    }
+   },
+   "sealed": {
+    "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+    "iv": "Thcyq0pYkHTUDuOs",
+    "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+    "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+   },
+   "wrong_passphrase": "aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA",
+   "short_passphrase": "aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg",
+   "stale_seal": "aw1:a2jCo0nw6AU1LWE5RQK2nzAESR8SKExc8ENZuhmNxO0UNjqzO6vkolcg3p3Jxsx1oIZh4EuudXcj2zIwrYPBDupDFA-dUtjm4D9pCJfAKpJdoNetmyX0ry7fw8BuaKRAGe5Rzj-yVkUpIdu081H9QYmOFt_JW1zvVW9ws8-RW_i33vDY4kvC_MXt0KiZ_QDB_7ZSwGVyOefB_f3rf3qpc2PdzY9mlelxs0Aj2gSI03TRRGaGoXO2baF6yPiVFUajLT_y5oowFTWYhTlx5s2E5Of5OLsdjy-dxo2c4tgIPbdel44X-qAu15xFsGN3XEEcdFeYqXx7HaSXQnlsHUmtMb7SqSMIqYJm_GOXgIxQyqEwxpMN44sHZeWtSjA5jjfNr0kXrgfBiVyIOx9879pimw"
   }
  },
  "hellos": [
@@ -106,7 +150,7 @@
    }
   },
   {
-   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake and mcp_token",
+   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token and sign_ins",
    "line": {
     "t": "hello",
     "v": 1,
@@ -115,7 +159,8 @@
     "commit": null,
     "features": [
      "fake",
-     "mcp_token"
+     "mcp_token",
+     "sign_ins"
     ]
    }
   },
@@ -330,7 +375,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -431,7 +476,15 @@
         }
        ]
       }
-     ]
+     ],
+     "sign_ins": {
+      "state": "none",
+      "records": 0,
+      "acts": 0,
+      "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+      "stopped": [],
+      "unprotected": null
+     }
     }
    }
   },
@@ -903,6 +956,2189 @@
     "id": "r14",
     "ok": true,
     "data": {}
+   }
+  },
+  {
+   "note": "sign_in_seal before the first sign_ins since the service's start: the snapshot comes before the state",
+   "req": {
+    "t": "req",
+    "id": "s1",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:vU-U-NTIW1uybh0wn51WZBhoQ0vTiLjVIDomJvwPf6yS0AdPph7dVupmtlxxQBhbZfeKb-b0rbe7BRMR20UnIbU5oi5NWM3S9Sbvmd_oqDFdtv1cUVEo2q0XxjXYp05oYB9XWlRipPs_thO1i_UACMC9dyyu1mUl20XNP61i6qAK4_wa6Ny886NuAi4xW90fjrLRZ33mHK2p7kqxlwRUyFhh4XmEO8YrS-SzXiWzkmbM4A4CL1Ea3kethzEmifzdGmqkxXHMYcUm_ahJYiI4Ynx16l2xA6mpM_ifzo7qLpiLhWsMljKpaJcFdB8yupoS0KuJA94YmkVCCynb0-PFrE25mNvWqZ5CpCOgamtnXitYW3zaEFBY7boeUEkdkSgN_jpu80vBJNDr4gareXYu9Q",
+     "sender": "BzGev/D69RP3DQrv/pHO7cIaux5Dem+Kg84xLTET9oA=",
+     "rid": "cb4XzFwBD8NAHd0-veMPhA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s1",
+    "ok": false,
+    "error": "the stored sign-ins have no snapshot yet"
+   }
+  },
+  {
+   "note": "sign_in_start_again before the first sign_ins: the snapshot comes first here too (review-112 B4)",
+   "req": {
+    "t": "req",
+    "id": "s2",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-3f9a2b7c"
+   },
+   "res": {
+    "t": "res",
+    "id": "s2",
+    "ok": false,
+    "error": "the stored sign-ins have no snapshot yet"
+   }
+  },
+  {
+   "note": "sign_ins: the first snapshot of the store's files, with no key.json and no record (the store is not set up)",
+   "req": {
+    "t": "req",
+    "id": "s3",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": null,
+    "records": []
+   },
+   "res": {
+    "t": "res",
+    "id": "s3",
+    "ok": true,
+    "data": {
+     "records": 0
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock in the state none: the store is not set up",
+   "req": {
+    "t": "req",
+    "id": "s4",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:rl-rXPY_5raIS5gk8bqQJxIPPDLnqFDWS_engAmxmAkYlULbXNKnODQuf3Rp5zI-vFOZQFiphBmLHePQHhV7aKunCZ7YySUpnGCk0J60vU3oB9LDxaixlAxR8tdVEnNnEiibkiTjJAonObPeU6cztLKVV866i3KO9EjwPtRqZa7KmXA7gMvrWyEfjQYuLJvoVRhpZqyVjRBcMwuS52j20i9vEWidGE48hokXRpidXavEoYwRjDtOaR6FYqqfmDKTXVJ7shLj6-U8-97qreFLPjkIY5hsAmmQ0HfbkU4ec_vzxAfSqi0Ft7JSVmqLl0xKumRvjihZ9zyKsGVbRRakH-_05APoJNsxN9rou2wyypqL6nYde34Rv20N_bAPkoiNQgtNCuTw0GsMVLvJaq5C0g",
+     "sender": "VDQO6DO7//Du+sl16GJ8HFsiTwiRb+xm/HJHWCl3WZo=",
+     "rid": "dKUu1PAUNWEQWx6fzX09MA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s4",
+    "ok": false,
+    "error": "the store is not set up"
+   }
+  },
+  {
+   "note": "sign_ins_setup with a passphrase of fewer than 16 characters (the fake's short_passphrase): the store stays not set up",
+   "req": {
+    "t": "req",
+    "id": "s5",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg",
+     "sender": "Vn6CqcsAMbc4+Us8lnbP6WbP2/lvFBxRnTvcH5szxvQ=",
+     "rid": "lZ4UQM1kyo1NCepMis--jw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s5",
+    "ok": false,
+    "error": "the passphrase has fewer than 16 characters"
+   }
+  },
+  {
+   "note": "sign_ins_setup (the operator in the Browser pane, with the pane's seal of the passphrase): the content of key.json; the store is open (a sign_ins event)",
+   "req": {
+    "t": "req",
+    "id": "s6",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:G_VgpOKfDN4fhGeFmPJYM6R5e3Nu6dpQkKUhrb4Kff_-ib5ezjbMnKgcyB-ObqCR5Sh87AZipmb7i5m-Os0pZ9vxYAQxsqqoSkMAhyj2C5oaxOXi5iXIXK_1h-h6nQ91X_8X-DkWzMjgyXobJieOtW38zOXTX3ppdKevwx7d9Jb5_hob7lEY4dFHln5fYgGpfbHhl14d74UtAE-oQ6rT7h3opCcDxtjD9ixCdwdAGZGuypiIPZrFaQ4HSz0OhlN3yoyNEzfrwrlEM5p339VuS4fuXxzPSQsLzvmP_RQyaXOaYOxdK9ZRYQxo8NEDb6zQPQLyl3voJ09zEu-2jydbgCtjaxZvWvJDNxAaMZlyUksGPfS97zDFcsEO9CGWOxHuqZu5NBpAZWrQTZih4itdYw",
+     "sender": "RZgvd2To7GKhWIkriSXromCyCVxblY+01xC/UG2DoRw=",
+     "rid": "SvZiotHMulGiTkxW3FyLkQ",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s6",
+    "ok": true,
+    "data": {
+     "key": {
+      "v": 1,
+      "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+      "kdf": {
+       "name": "scrypt",
+       "n": 131072,
+       "r": 8,
+       "p": 1,
+       "salt": "XtlD_scc1BSqO7QI6IJgPg"
+      },
+      "wrapped": {
+       "iv": "B4obup7UgkQF8GYX",
+       "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+       "tag": "jk4pUJmfRHDzXStJGojQwA"
+      }
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_ins_setup while the store is open: set up already",
+   "req": {
+    "t": "req",
+    "id": "s7",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:zW9hCq8FWMSE7LoFcVhPy7xx-H3M5THI42pWszdgqVnlYMBtMkhhrNphqhfo9meXQM3gLsTSoFZsQ1SPTfOWcR7V61QFCMek9jZtKPgJYriKAh9Owu5B76itiDkxBAK8N0URv3ixauU3CBE5Yr_m4P1-ABT3q6auYI6M0_6fcEmfLIoeELwHZqjw6pqnfS0z3Uhoj9VkuYNJX3c_toxRM7UQvnsnyduau0DcEflrrw5D1gQLpN7B2Cxrkv0XSMmel0FKrl8aqf8fx5LqKMUzqlWxkV5i0jj25P_EyMqyJgg5yEFcOWUoTBW7NVTXwotOy03R48NxDA7ykvYpJXyd4BPfPchqNLamueet1RGYnMQaoVjb0o9c9iLtX1VErcHSSiwm5XDh0AYW6QyCZY5YxQ",
+     "sender": "AiuXM6GA2sPIcKKdRp4VmQ07EfoPcXE9YwvJ+3v1yqE=",
+     "rid": "UvZhduq2R6PEWITmMPijhg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s7",
+    "ok": false,
+    "error": "the store is set up already"
+   }
+  },
+  {
+   "note": "sign_ins_unlock while the store is open: {} and no change (no sign_ins event)",
+   "req": {
+    "t": "req",
+    "id": "s8",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:Y-hDCIMHHcLNsYuAHAG4GL-E63xHcg4i69SFsmHnpbnz9pP20dLFen0TopsQU7tIkck1tXrN_miiargRN3ai8gpW9L-cq5KYlJ7RLziwNS-Tvd8a0cDX0u9H3DOheJECRXfUDBB1evwdacQGjRajlZUfOpcqNb4SURCEutgP8Ga-AHvdASX0OrXc6jMtuomSrQeCrU0EuZPP8Ec_AwXyDdE6NuJoWeZam9hjLpYfOoTUuYBXT0B7guogOKvuZSwlVbrZs98YpcpJFIE87WFZjZ22rMX--6wlTrvbwjIlYii2JJ2-xjmYH6v7Reyoq_bzWxGGXCncwFG1igYyBobZxB3c6caWynfU1KN0_tYaTpPpgtVqmu3qblyfaYY-1VL5_jtYmmqks8q8w7mlmUl0hQ",
+     "sender": "iWEb8+Z9sIKuQPe/U0Nch+DnhA8aeciI1iJoJCqVsfg=",
+     "rid": "2aAzDEA4ohpai0bU19Kbsg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s8",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "sign_ins with the new key.json: the store stays open (the same public half)",
+   "req": {
+    "t": "req",
+    "id": "s9",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "XtlD_scc1BSqO7QI6IJgPg"
+     },
+     "wrapped": {
+      "iv": "B4obup7UgkQF8GYX",
+      "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+      "tag": "jk4pUJmfRHDzXStJGojQwA"
+     }
+    },
+    "records": []
+   },
+   "res": {
+    "t": "res",
+    "id": "s9",
+    "ok": true,
+    "data": {
+     "records": 0
+    }
+   }
+  },
+  {
+   "note": "sign_in_seal by the operator: sealed with v 1, gen 1, repos null (Q2 b), by operator and approved true; the answer's record and the sealed part",
+   "req": {
+    "t": "req",
+    "id": "s10",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:31ja8Tn90wXh-8ibeja-qKvgz3PCu6s4ZRuDnD8lCH7EAtC9ZJ3HD8ZiBym6pLoVNOT9tKfeIv6xZxIiumKQxuRrR6dCySyjpP6uRltk2HL9Nzk9B8F6jxMFQCaNeL99pnWCHvhGcRJIfRv7JPy7VM88ngCX9wGqC7Ymlp3JN_WNSeikA8TyDuFAgJTRdGhY5Lf-8WoR5uLtEEBVTQuC9TIQWF8nI_gUJbnOzsxDa00aM-1riB8-RseYbkXTbIOCqk918B7s61ShkaXauCcDdN-Y4ifo6pK5QHfbKGvfywpy305NVgrxS7mFWAAOxRWUEA84C_f-ei555-hE3eMzhLhR2x4JR6lQaOpKNnwICvGAOGh1Gh0w_LoaxPJdOeHF1H-JvxQRUf49wo4T54eTGg",
+     "sender": "pqiINnz2snrGe/Hc2actKc7DQhFTVrY3MSUwXXmTv3g=",
+     "rid": "_MCtSkbiAH963_HUbB-xiA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s10",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-3f9a2b7c",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "operator",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_in_seal with a seal more than 120 s from the service's clock (the fake's stale_seal; its at is 150 s before the other seals')",
+   "req": {
+    "t": "req",
+    "id": "s11",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:a2jCo0nw6AU1LWE5RQK2nzAESR8SKExc8ENZuhmNxO0UNjqzO6vkolcg3p3Jxsx1oIZh4EuudXcj2zIwrYPBDupDFA-dUtjm4D9pCJfAKpJdoNetmyX0ry7fw8BuaKRAGe5Rzj-yVkUpIdu081H9QYmOFt_JW1zvVW9ws8-RW_i33vDY4kvC_MXt0KiZ_QDB_7ZSwGVyOefB_f3rf3qpc2PdzY9mlelxs0Aj2gSI03TRRGaGoXO2baF6yPiVFUajLT_y5oowFTWYhTlx5s2E5Of5OLsdjy-dxo2c4tgIPbdel44X-qAu15xFsGN3XEEcdFeYqXx7HaSXQnlsHUmtMb7SqSMIqYJm_GOXgIxQyqEwxpMN44sHZeWtSjA5jjfNr0kXrgfBiVyIOx9879pimw",
+     "sender": "csOO7Ozp/kAxpVpHNoPmpz2/kBCY5xdm+dNe2SLZOUE=",
+     "rid": "-CO8lMR3LuYz6nPB55hqgg",
+     "at": "2026-11-10T19:57:30Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s11",
+    "ok": false,
+    "error": "the sealed value cannot be opened"
+   }
+  },
+  {
+   "note": "sign_in_seal whose rid has fewer than 22 base64url characters",
+   "req": {
+    "t": "req",
+    "id": "s12",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:fuvrSrXOSyDZDNYxpiPx67KfjVN4m63vj2gpBT4Yg7pwYdfAnjoy5DlQItW37T76PJMNT29ax76SkMhRKSDsvSufXVnLaW0yx_NN8t6Uzdj2MaLYqh5G_lUCHJc6fj18q5F2gKNE7eC7izUPJ-ctfIf1v8B4vAgF75L8Moqjj722MjNGNy-J7jAi_yVvzNg4zx_7y7d0XmdwAOlWacWQff6Aswsi9Z23ZNCU7FLF0PacR0ryPWrg7huXc-A43KH0K-iWuQl7lQZQh2KDpVWa683CeiFN99czHVaOCnEoMqGz3xHoWVR30Kf-XOSLqt3AsbJkZ1h5ZsICbPmemMbev5YtO9s4DJ8OgNgjWEaDjeEJU4TTmXzqFsbpd854Z6RzWxPC6k74f19INj4VO1HB_w",
+     "sender": "1LOg7yDaoLDEFyv4wHjdnafcAuf8ayJZC1hIeHvSo/4=",
+     "rid": "c2hvcnQ",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s12",
+    "ok": false,
+    "error": "the sealed value cannot be opened"
+   }
+  },
+  {
+   "note": "sign_in_seal whose at is not a time in UTC of the form of C12 (a space, no Z)",
+   "req": {
+    "t": "req",
+    "id": "s13",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:VniIq3FsgLtAgZGM_bfCQ9JrVG8w41QLJbqc-D2XVCS5cr-faYTIylZAZA-1vtgY_e-GVUavzie6yRjGeTBH_Wqm-CHB-VAAPXnq-bypT6_ElcZUzXW9O3pky1ByVGxFQXqc5fQZdYkzee316V1BoRyQa5OQIpdh9OOpiBuWrI6om_quE8VQBjsnBknCWFUZb0BrElLsQzmkrc6699JF7oIdlqLekPpexvUc9rrOj5gTd-xvaJUTWtH_F94l3-YbfhRvJl4D2WIHDX5Nv-R3kNMiIa4Y-Vw9gWKx-ID7pBxzw3-uDpDjtrdB98uO3FC5QTjW5o_uNCFLIkMpRioGaYopK-jv_Q5MyCHvgqprFuPVu7Qqsa_U2ste03g3y6B5h8rl_zeSpSV6XKuCpojhjg",
+     "sender": "/QAvY3SAz6r3hZ29jcjZIiGEO9/EvPw6dtczWyuYsEY=",
+     "rid": "gQy0jXDisOHceRJbQrfe4A",
+     "at": "2026-11-10 20:00:00"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s13",
+    "ok": false,
+    "error": "the sealed value cannot be opened"
+   }
+  },
+  {
+   "note": "an agent's offer (Q3 b; kind token from the daemon's walk): sealed with by offer, approved false and send_to [origin], whatever the request holds (here another origin, approved, by and repos); its name is the name of a credential, and an offer can have it (the design, section 6.3)",
+   "req": {
+    "t": "req",
+    "id": "s14",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com",
+      "https://tracker.example"
+     ],
+     "approved": true,
+     "by": "operator",
+     "repos": [
+      "example-org.site-a"
+     ]
+    },
+    "offer": true,
+    "sealed": {
+     "text": "aw1:dEQZqhxoVKqHe7YQnL_aBsICMIjAlX3LQqtzRYtu9z6T8Evu9C-iN_tr78KQr-zNb8GQlZDylVMOTT0nCUgoi-cTwN5K6zsXmwoW97pK24fYiSVcWMEI3s8qRWh31ICcALMxE9e19WEA4W1PjHXObk0mumjbzvBrc3G6Te8MomPh6Jp6l6xgwbrH3bZFRFtozK1KBfcY3Xsxu4NHIgiEdRg8plD-4DHGSZQ9DceYeUVUbSSQAqPGlz8H46eLEfqn13lXPMjJyY59Cfdpz-SfEeCUVaWcPgkgTsjkQUCgd7SPl6ZbJTJv5FsuBHQtmaA430z4pQ9j8UFkN8gmcHWP3Y5GJDMyQUlaGF6i6PiunmRN2Yz2sgIx4n8MhFpd12BaZinpdIYw5XZ0cNs-IAkGJA",
+     "sender": "Fl0zAw1u1tRhCY5DqG+GG46Rmuv0HtpHgUcnQwmmjpA=",
+     "rid": "-no645-RqdJ-mgRzveGQig",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s14",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": false
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_ins with the two records: the approved credential staging and the offer of the same name (an offer can have the name of a credential; the names of the approved records are unique)",
+   "req": {
+    "t": "req",
+    "id": "s15",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "XtlD_scc1BSqO7QI6IJgPg"
+     },
+     "wrapped": {
+      "iv": "B4obup7UgkQF8GYX",
+      "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+      "tag": "jk4pUJmfRHDzXStJGojQwA"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-3f9a2b7c",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "operator",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "changed": null,
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     },
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": false,
+      "state": "offered",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": null,
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s15",
+    "ok": true,
+    "data": {
+     "records": 2
+    }
+   }
+  },
+  {
+   "note": "an offer with the id of a credential that the last sign_ins holds: an offer never changes or replaces a credential",
+   "req": {
+    "t": "req",
+    "id": "s16",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging-x",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": true,
+    "sealed": {
+     "text": "aw1:EICYRUntphmDYPo5NXqcHzlXFn33zzEtH_csL8QII5MtWu1HI5FfXoYgGAUTpRClgZ79WyQTokUACQkHveyS7Wj3jAnR51QFMB0gb82Zr2BJaNWLmhzR9egmOCuvHbhhSwTsLiTZYCbRvVk9wYrcPHTePRvrJs05fcWl7Sj-WnBe_lWCjfhOM-oTdNGqvRzlV5RFPpdMridc9MuM68Yv0Muift7ezWKzW9HF1jDsHfLgSzRp7wA9AHO2E2BLKThW6pi_oE_eRX-V5wTmL5Dn-EvTDlwHnm-gyoIX7XODYZTbfMi_vpaAeuUlwVjTv-b-SsvQdG3Pbq8-gvwXbbCJAM_wkXYnU8FMvInQ6hAcYsmzB_AH9wqU6iYsbUroLKoHUMaWWmEyY8mVHPzCJ_bW-Q",
+     "sender": "x8GIg9tBc96FvYh+dRHRpz0DRzwwuxOgUPpC9Oln/Ck=",
+     "rid": "TP5F_MqnLo7hPWJpbRleFQ",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s16",
+    "ok": false,
+    "error": "an offer needs a new id"
+   }
+  },
+  {
+   "note": "sign_in_reseal: the operator's approval of the offer with the name staging, which the approved credential c-3f9a2b7c has",
+   "req": {
+    "t": "req",
+    "id": "s17",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s17",
+    "ok": false,
+    "error": "another stored sign-in has this name"
+   }
+  },
+  {
+   "note": "sign_in_reseal of the approved credential staging, with its own name, while the offer of the same name is not approved: an offer holds no name (only an approved record does), so the reseal is sealed, gen 2 (the lead's merge commit; it runs after s17)",
+   "req": {
+    "t": "req",
+    "id": "s53",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s53",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-3f9a2b7c",
+      "gen": 2,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "operator",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_in_seal by the operator of a new id with the name staging, which the approved credential c-3f9a2b7c has",
+   "req": {
+    "t": "req",
+    "id": "s18",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-7d8e9f0a",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:pkq54WGFaH-VhLmmn4ZZ-4PGkCdt92rNIdcQfWiTgZ4UACx2bdQMygOVzLUfcFWDllBrySVWH70Mq_43XapTJwkpTKtHH2K3Rl6b3_WKtqf4niaMyLCAVLP85dH0E7Kr2h7X0nzbWYGWF_GCka9FsvHhJ_6HKv2-y9AKP69JDOko3iQ4Ubo-fu-ZrHtxo0JUVPn8cmHg2qsTt5wkTHWqveCDgfoPRA0eavmQWjMNaWevC_1e82t1knyxaP87lBk2-MIXVevcQPOr_yeEaQoqcBdQj_ZmsBGNuqrbbl5SOJuHwujcit7aibio3bbfop-jso3o8ZDCHha0ylO8PyUfu_zTSJb98_0d3JCV4HoIKiXZudOHKnCxdnSF_qYrR5QEuGKeBZgrF-iI1j1B-APr8A",
+     "sender": "TZX1e18zuL8r2SYJe/6K3k40Hi9R06tcFYAi2XOSCF0=",
+     "rid": "pdbXTGKguCr3HRBY9EWcyg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s18",
+    "ok": false,
+    "error": "another stored sign-in has this name"
+   }
+  },
+  {
+   "note": "sign_in_reseal: the operator's approval of the offer, with a new name: the record's by stays offer, approved true, gen 2",
+   "req": {
+    "t": "req",
+    "id": "s19",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s19",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of an id that the last sign_ins does not hold",
+   "req": {
+    "t": "req",
+    "id": "s20",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-99999999",
+     "name": "staging-9",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s20",
+    "ok": false,
+    "error": "there is no stored sign-in with this id"
+   }
+  },
+  {
+   "note": "sign_in_reseal with another origin than the record's: a change of the origin needs the password again",
+   "req": {
+    "t": "req",
+    "id": "s21",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://login.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://login.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s21",
+    "ok": false,
+    "error": "a change of the origin needs a new seal of the password"
+   }
+  },
+  {
+   "note": "sign_in_seal with the rid of an earlier seal (s10): a replay is refused",
+   "req": {
+    "t": "req",
+    "id": "s22",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:89pqqcgB2EFiXv640S_o-GQaVIThRiD7ttAZPEBgE8NyO51bf2DllGqsRRKzdUrzWW5Xz058qzSx6FgUdqtHSvQHatUsgD8FGOVckVMTgegJ6ZnOZrn9crhxe_tf6_Voqj5WyIZG-hb2nT1cgGxzv7o7QrWzCD0JCahK1LaVj-ZUyD5-paJYv9yZ6gIzr_2NIp4RzDPJr_2OjY36ulcE6byoXBOlm0MrA1XbB3ihK09nbcGyGZ73UwUSryq101L2gyHBlXRthP0k_Xn2N7_z8KWiPEVmEFDSITbrOPt0oGD3VZWYPd82WXs9wxjZ47HGYdGe8Je5K0PIMCgnASdVJslLCDAZke7YT0ZvkaovMOtSr9e5iOG2HdFHbI7ZfwOE8lizyW55cI43HkhNMIWMdg",
+     "sender": "OREWVtP3O6DD8QWz4irVItyUePz+eXLBk1PjQS2CSCA=",
+     "rid": "_MCtSkbiAH963_HUbB-xiA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s22",
+    "ok": false,
+    "error": "the sealed value cannot be opened"
+   }
+  },
+  {
+   "note": "sign_in_start_again of a credential of the last sign_ins that is not stopped: {} (review-112 B4)",
+   "req": {
+    "t": "req",
+    "id": "s23",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-3f9a2b7c"
+   },
+   "res": {
+    "t": "res",
+    "id": "s23",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "sign_in_start_again of an id that the last sign_ins does not hold: the text of sign_in_reseal",
+   "req": {
+    "t": "req",
+    "id": "s24",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-99999999"
+   },
+   "res": {
+    "t": "res",
+    "id": "s24",
+    "ok": false,
+    "error": "there is no stored sign-in with this id"
+   }
+  },
+  {
+   "note": "sign_ins_lock by the daemon (the uninstall): the store is locked (a sign_ins event)",
+   "req": {
+    "t": "req",
+    "id": "s25",
+    "op": "sign_ins_lock",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s25",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "sign_in_seal while the store is locked",
+   "req": {
+    "t": "req",
+    "id": "s26",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:FDCIew6OROg5WTiH8WWb3M5xfEsBYDGg30tNmWVptM1vXI49h8rkNAt_udm3nUR3NlJagVbhOGnE5cZpRfN9NUFah_K_MxBFkCGdaYCCDPdVQL-OneWZ58F9tOEM_nv5s2JnTjKJUjlOh025dITGdJz7b02GXSI3MzxW2rzXCz2sx9uJwEP9SQyQp4XvdEGVlQujWG0ubv6jBfbsy56alJ3oNMRcgL3iXVgtyrHTF_T0W-_C4n0nJ1Tv9LgegImJTK8U7ElhDGTAF3JbZD1YcsdC38UXgzC-rDPAnsa7CbYdt3VZu3pnGm_lPKKala-6wrGW9zJOn2M8iRfaz2NqNF1qx-LuPis2YoJYbBuSenOKfZFAacjsCoN7eM6UAiVUFTTtofEvMlfxWOUqcqVkxw",
+     "sender": "GF/nI3uI0uE+n+jkEz/nQ/d4sR/lC3tVP7gzdD74h8w=",
+     "rid": "4hY1OwBebsLFgrw_ivWC9Q",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s26",
+    "ok": false,
+    "error": "the store is locked"
+   }
+  },
+  {
+   "note": "sign_in_start_again while the store is locked: it needs no state",
+   "req": {
+    "t": "req",
+    "id": "s27",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-0a1b2c3d"
+   },
+   "res": {
+    "t": "res",
+    "id": "s27",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "sign_ins_unlock with a passphrase that does not open the wrapped key (the fake's wrong_passphrase)",
+   "req": {
+    "t": "req",
+    "id": "s28",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA",
+     "sender": "luKH9Hp4Q8530yt+y0mBb8VNHPk+m12l//Wm7yZV27c=",
+     "rid": "gWrHTL47w856uBML1f51lA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s28",
+    "ok": false,
+    "error": "the passphrase does not open the store"
+   }
+  },
+  {
+   "note": "sign_ins_unlock: the store is open again (a sign_ins event)",
+   "req": {
+    "t": "req",
+    "id": "s29",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:XanZlSGro-0dIiFxJ4XkX9yxda309ObUSKVYsIu37C9B9JK-p-OC77-TEP_0aeMmMq_sWYVuLxhy1g2tFNvtyrl_Wa3J0e20og9MdQqOcGHwkP102RXL9jzragwhr46BiIgtmjx9zPy2GmLjkjfksvke1RauJAmNVVqOLe4bQnBp7caoKsf2RjoRY4b2lJ-wxm1aGYFmT2JEJqgrPuka-dampZI-WZF4Kqq5R0rydFlKjynxDDz-s6BBb6SMjAK95hxuII0Y3Vpf_-Ev8pn9JIx-In2b2BL_FKmD4DM1vKL4D0IyZVp_gPGkUUAr1WGw9qkGUr8PRctsqoqZl2drTAMpzrdHYzMXoGNbqKfbc7GTVTugAiefTLQX-9xOS3PfZAMafQ_gojJostbvHxsMmg",
+     "sender": "cGuH6e6UPlFmDcBxd5dUEGvfvEINB2B4bsn38k21hz8=",
+     "rid": "lkDfaBcE8DgxP99mSSTgVw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s29",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "sign_ins_rekey whose new passphrase has fewer than 16 characters and whose old one does not open the store (the fake's short_passphrase): the length comes first",
+   "req": {
+    "t": "req",
+    "id": "s30",
+    "op": "sign_ins_rekey",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg",
+     "sender": "4meB93Hn8ts5B1RlFsd2BgMDTpvouRNSGaCeKrcSlFg=",
+     "rid": "66ev97Z-AkkJnSlxlTkDNw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s30",
+    "ok": false,
+    "error": "the passphrase has fewer than 16 characters"
+   }
+  },
+  {
+   "note": "sign_ins_rekey: the new content of key.json (the same public half, a new salt and a new wrap)",
+   "req": {
+    "t": "req",
+    "id": "s31",
+    "op": "sign_ins_rekey",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:wwd84S3mx7tINSrEuNDcgrMAWYvoLaJewhXeGSfHOhPjFhYWu1ioW2pCdx6dcrdeKgDLOD-tPopsAy4evWwVmZf6MiybZ0c7-5Q-eZGoBkzVAlek5GDtOi7cNNqxpuVE2jFDR7KcbsNyVQU0FW_Rav2SK5Uf2Twl3jfcAQLXetKki3IZ_SwzH980uAWvTBTXXzwLaNQL_K0ih3rReoEQ2DuqfPXyjPriluEUScqMdOXI2VPJQc0Y0fspSMsyxDTu3_k5TeaQy7JXS-4wiDRMW8JwkeeabhBNpiR4ru8kxq9nBIcswByOtfE5Li3Oy1-g3EFNH1OVA51EPdephegjh_CrzucidAnBD_PrgFs7HVGxw-ITlb4Lx6CUTbFKBBZmIDpMjMMoK92NSMqirftg8Q",
+     "sender": "DIX8xIngw0T4LSknaRhSXKdY0LRidjbZdtZVtNOlnxs=",
+     "rid": "AlMyAPxtYrCTEnev1YMq_g",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s31",
+    "ok": true,
+    "data": {
+     "key": {
+      "v": 1,
+      "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+      "kdf": {
+       "name": "scrypt",
+       "n": 131072,
+       "r": 8,
+       "p": 1,
+       "salt": "0_XWx6Xj1oofUDswBrKe5g"
+      },
+      "wrapped": {
+       "iv": "a3IUxpg3ws4tUVUs",
+       "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+       "tag": "hNF_MZqahErAHIr8y361MQ"
+      }
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_ins with the new key.json and the approved record (gen 2)",
+   "req": {
+    "t": "req",
+    "id": "s32",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-3f9a2b7c",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "operator",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "changed": null,
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     },
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s32",
+    "ok": true,
+    "data": {
+     "records": 2
+    }
+   }
+  },
+  {
+   "note": "sign_ins with an old copy of a record (gen 1 after gen 2): a program of the user put it back",
+   "req": {
+    "t": "req",
+    "id": "s33",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-3f9a2b7c",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "operator",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "changed": null,
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     },
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": false,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": null,
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s33",
+    "ok": true,
+    "data": {
+     "records": 2
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of the old copy: its gen is lower than the highest that the service saw",
+   "req": {
+    "t": "req",
+    "id": "s34",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s34",
+    "ok": false,
+    "error": "the stored sign-in cannot be opened"
+   }
+  },
+  {
+   "note": "sign_ins without c-3f9a2b7c: the operator removed it, and its id is a removed id from then on",
+   "req": {
+    "t": "req",
+    "id": "s35",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s35",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_seal with the removed id",
+   "req": {
+    "t": "req",
+    "id": "s36",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:cv8lCkxc1WMQTMyNpP-W-fDqmdgDAbULqtHzs9or2gRzwg34udFuRygPpW3VSI11csXBX3jYWhsBLtLxxwgIxmLljzt7lPanz6h56X8FwXZ6FLoIPhubboZV5qPDBomKVJergkKBye72UHNWNcO0pPongPURZbuVTUqTHGayzX6LrJI01Y6cpC9Eq7MxDd63i7wVlg4ln9cVLhWcLo0QqzSSGLtaY3tf0uK9CndXn5oWVDjrwUlj7RmF3g0cG_umCcKVIDRfy4nVap1XtkZUiBotTAUKayxMykLVWUKqA1jccIL7G1MKsprfu-0CramnkDBSGJ3aeyap7GRl-Ir3mrRVZdxO-vGem1JRYf-5-zcfU4tWwx7G-Vom0V4jI0MfhV3vH2VZe5sCXvL-WgblZA",
+     "sender": "aaLNMSGRrK8m7tH6WMr4/EqYRgZna1huIyWmumvt8OI=",
+     "rid": "nBEil5hlgtS4ydYnoDL--Q",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s36",
+    "ok": false,
+    "error": "the stored sign-in was removed"
+   }
+  },
+  {
+   "note": "sign_ins with the file of the removed id again (a program of the user put it back)",
+   "req": {
+    "t": "req",
+    "id": "s37",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-3f9a2b7c",
+      "gen": 1,
+      "name": "staging",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "operator",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "changed": null,
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     },
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s37",
+    "ok": true,
+    "data": {
+     "records": 2
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of the removed id that the snapshot holds again: it does not open",
+   "req": {
+    "t": "req",
+    "id": "s38",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s38",
+    "ok": false,
+    "error": "the stored sign-in cannot be opened"
+   }
+  },
+  {
+   "note": "sign_ins whose record c-0a1b2c3d breaks its shape (gen is a string) and that does not hold c-3f9a2b7c: the broken record keeps its id, so the id is not removed",
+   "req": {
+    "t": "req",
+    "id": "s39",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": "2",
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s39",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of the record that breaks its shape: it does not open",
+   "req": {
+    "t": "req",
+    "id": "s40",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s40",
+    "ok": false,
+    "error": "the stored sign-in cannot be opened"
+   }
+  },
+  {
+   "note": "sign_ins with the record whole again",
+   "req": {
+    "t": "req",
+    "id": "s41",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s41",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of c-0a1b2c3d: it opens, because a file that was bad for one snapshot removed nothing; gen 3",
+   "req": {
+    "t": "req",
+    "id": "s42",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s42",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 3,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
+   "note": "sign_ins with a key.json whose public half is not the open key's (a program of the user replaced it): the store locks (a sign_ins event)",
+   "req": {
+    "t": "req",
+    "id": "s43",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "CW2qqouubcGngXm4gcR1GXOrBJ-xFpHrJ8gKu1Vwou4",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s43",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_seal right after that snapshot: the store is locked now (a new id, so only the state refuses it)",
+   "req": {
+    "t": "req",
+    "id": "s44",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-5e6f7a8b",
+     "name": "staging-3",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:1WZQxaD9T54tvzMfLY3xiqM4tqStoibywxxkYyJldhiRWgcx3EkEPAtOIUHV0zF7hKsAJQOyglhONoNTkk0nrMjodMqrcM0qO3MwMHmePRUdhZC7QinEBCdk_C_XsTk7QEUbtDkVg9DK74Ishk1e_1yU9XDebtWj6epRm6YQRHDaUnub-idCIAMDg2NRWeDKo3ZecmeKMH1sqEoy8EkxFTuUaPda8F-x9EIr0TF3yjvoLFM_h8DiWKAveEvA9TKlU_2DOgFNZWNnl7qHshKDxyI6CVZpIjOqGMdgVZTUHbHXWgWt1X5ymY9ngX2WsZB-y1Ytjp0iH1Xo9EoULIg-XiS5LXaPNUmEyho5EYCkOs55nBMg9huLi2QZ7VToCyGWtmWG50ThB2Vw_GOOI-c3Iw",
+     "sender": "tAJpXg5/Ygw1V1gAe6XqOPioXvsLOLrOKh+x0JDPcPk=",
+     "rid": "uDSkPpu-d3WxBcen7u1McQ",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s44",
+    "ok": false,
+    "error": "the store is locked"
+   }
+  },
+  {
+   "note": "sign_ins_lock by the operator while the store is locked: {} and no change",
+   "req": {
+    "t": "req",
+    "id": "s45",
+    "op": "sign_ins_lock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s45",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "sign_ins with a key.json that has no wrapped part",
+   "req": {
+    "t": "req",
+    "id": "s46",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s46",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with that key: the store's key file is not valid",
+   "req": {
+    "t": "req",
+    "id": "s47",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:2fW4yaaLicfzxowvioNregWR9kqZgRoCkHSnInCZdQVrf9zD99N2_CPv9ghGfG9CijyMmuw3Xc-bf7bv3NCRgrkqCcW_VoHB1m8XrzQy0VVsMdENMld8Iu226L4cc1nHKmrIggSC_JvXs4-COCa8UM70hEfT2n2lRzy4ZF25csBB9Ua2DOgDFIzkW-7Gh5LAzFXTjXTnJmiTRejOc1x4LlHX-G2SGB6uFjo-A-0roWDzupz_H2Fz92zfRDtNyKn6ri78ooZPXefTGoL5Vk5yOhsfORABZXPj6woXGKyYHSBsy5E1HjPUFKcUvdtXH4PDrTuCX4EC4V9uo0eKrns_3Hsmuj-KDwcuVnZYjCd-6DG6hEKvSbPv1Yt1QRNT5mKksCmDtVf3T3YpvOQj00E5nQ",
+     "sender": "z+2vedIBFI6OAlecy7+zQ0TXwuXliGGHfr/Uf3LEub0=",
+     "rid": "3mPQOYJBIGmcnBhWiI3JEw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s47",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins with a key.json that has no public half",
+   "req": {
+    "t": "req",
+    "id": "s48",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s48",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with that key: the store's key file is not valid",
+   "req": {
+    "t": "req",
+    "id": "s49",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:sAb9lCctwKga4qieqiYblC-1AV7HEn623fc4f-2CdKa0jzAAsDpAhGZ3n6_Gr_UIb8KtO2tiCTwcuDMmLJa7uSpwhCYgN2zDSNmhAQr3Z0qF8qc4nkNyPYhxRlJc60ZeFAnh2otYxiy0hw8G9QHdVCh0IH3Hz0PAtgOWSuDBFUwMdnQUoCGZ1eTxXUJhA6T5K7i3ZcpzyqKxVUsQpSov47uJP3QKr7YeUWCyGyE2Q974KGj28yIdILaTvjOoXFmW_dq8kxXuD90j2lC3HPRmmi4tUBaGGXuMapIyUOwczUm9WVnd03eMD6YcB2jSdzm-g0s5cxqCH4XQNV1WsfMxpiKXKZW_VBQ99eStYSYDIPDINzAK_CSKm5tm7EgG73s1Fp_b9U65bfXocqifzaQFiA",
+     "sender": "Pp4O9zwlCndGaaMJE+TDSN3UOwf1lJACHSAoE1Me3iU=",
+     "rid": "q-J8euPcLXZksnfOGwfelw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s49",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins with a key.json whose scrypt N (2^30) is outside the bounds: a program of the user planted it",
+   "req": {
+    "t": "req",
+    "id": "s50",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 1073741824,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s50",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with the planted key: no derivation runs",
+   "req": {
+    "t": "req",
+    "id": "s51",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:Y_ODa-gm9RMTaVb9IwSpd6dsA_peMIVIBQa_r1AShkDFwDaJ_L3MEynTmh0eyRP8-hRyELPkYbQcdIAxEUcn43-0RpDWVrT8jbOZd5CXJtcZuzGA5pTSWngGgKzn4OMO8uhHydQ-v6UVh4wQD-FJeJNPqyj1Dpa-I8QbDtYpVcx05Ej3TwRCGPzqYO4GXEEz9dbFy0zwsMw2a5e0Sk5kmbU397FZ-NgPVY6q9AmWA2UDto-pe1hsYTFCn_4Nxs7EED_x4ERi-FYe1rz2JBX8aXCzu-eqMj6tItjKQ9NySDsyttmcTT5sK98QJrUvFRT9iMy_pV6wDN3Bbbf283BNe_qCGzBQ8s2BXXvW4fh8jkeHRG3uLEtnuYsweZJschCvEYyNd4ba383gv5HPfTGNoA",
+     "sender": "yBST6/fY24C0agOFj2cQJrkJXzPFyADykpyBeAtWJjc=",
+     "rid": "o2gUwebdzVtughhqUQJF5Q",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s51",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins with no key.json and no record: the operator removed all stored sign-ins; the state is none (a sign_ins event)",
+   "req": {
+    "t": "req",
+    "id": "s52",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": null,
+    "records": []
+   },
+   "res": {
+    "t": "res",
+    "id": "s52",
+    "ok": true,
+    "data": {
+     "records": 0
+    }
    }
   }
  ],
@@ -1816,6 +4052,555 @@
     "ok": false,
     "error": "bad request"
    }
+  },
+  {
+   "note": "sign_ins_setup with the API token: never an operator act",
+   "req": {
+    "t": "req",
+    "id": "b33",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "sealed": {
+     "text": "aw1:vSrhfxoTPNZOoenyvYsoJeXONIRv-5BIBGoeSkUa4YAf0Mm3CZBYxDplrC2hr82DytEBWqmWp343xMXJp4RQ29JdMvpxrP4e22JqebzTog--kAQZaUQitBJ8GsIK2F8sc7fIL7Fl6Sa7-ea5GkmL7ZiqmqVCVrWwEMlqKPJDlNSgME3ZRSKlCG0ITRB4lLUloplDM26FqETcOvF-BdLIuczmTHJO1xexPD0nt9SN_pQoFmnwfqCAaA_HpyhuCrktEkHkPwSF7Z0LYPjZjAwcRQ_C59tZ7HPp9IvtzUFkThgyc0TFNGkUAshiPjULCxRbDJ4XEGgwgoJZKgBykQJM50R43gE9Y33sJoYr99pv-CDfMWO88NG0ewRXHKqmC52MvTo1zmmJAOgtFZevDCxJuw",
+     "sender": "qFO0HxyhbB+nyKFnqfbTdPs6LyyWBpdZIu0gN9xyX2E=",
+     "rid": "Z80J8Uip01Vm1oddjo6H_g",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b33",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "sign_ins_unlock from the daemon itself: never an operator act",
+   "req": {
+    "t": "req",
+    "id": "b34",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sealed": {
+     "text": "aw1:8fpojodgJrmjpq3g62HkNcucZlosiWHwt4iyGsgxlIYNEqNOaFur91abxHB2B4UHZju3qoMO1yoKQnVARByl0eqGEPhhoWxWLv9b6QeGrlVElkt8WwO1G_tHuH4FW__WhbMmeC4knAgNmvQ4f9Ep0OWcF3VkJSFLt_cBL5I5tKI4-EQ884tnmoQN_51deaOcLGuD1Anfr730qtviw2ZcqVB847B8IMCfyzRd8lVoH92qyoSjBEG8u5t35dcGbBaiWIkfzdEVmuGJr631_AeFz-dHjXix0LGJR7DWtuTc_ER0MNfCSHAhlvOTZUyMU_qxWZDRAUOlwhPLCYuRlEoc6HmlGSL__3crE3SKtxlLMRCrb4I7Gyg8Km7hWie9h26EPRXvUW9pvNst0NNZNAzcAw",
+     "sender": "pRiCf8Db789/YFdIzziDTVycYUHZNNWUAgUm2bmO068=",
+     "rid": "JX6jNzioyXQ3_dcZSYZ3_w",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b34",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "sign_ins_rekey with the API token",
+   "req": {
+    "t": "req",
+    "id": "b35",
+    "op": "sign_ins_rekey",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "sealed": {
+     "text": "aw1:AFy_hWsk2NdGMUkwplMcDSnFGG4yimanysydJdNMdJ1mFCuQobUCw-EGcSfI9KCiIKRHU4HO3Vxl7pPaWyB9304f1PqELwrVgb9VE5M5pysNFoxC0276Yj5xN6YkHNNsn750vTk6-Ob73yiZOkxDCIkS6K4A1-Ova11qUY-LsL5-Yl-N4zje29nkU3soVyN5Tg4RpUhHBWBjS6Fo0GmBgXaA90KrIt0j1_HG5Rsr6C6F1yIv-GXw4c8hVESx0wSxi4akGHD_0fv9cvlgYB_6blFA8UCSA75xu8rFMDfmXkF_xRZgvMSczK26dBsouKkCXgkZUms1e5rlgeee9v-gP8deak7OpfaQo6KUKpWbqO-fWuqYQzcgp2l2AvK74DhRm_z2u607_v-Q2Sd1crlWtg",
+     "sender": "nYL6B17XFVu+D43ZTveSFbVoo83YyioG1eLWxZa0EN4=",
+     "rid": "GMG3TnjNa_TeQW3DjeNpGg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b35",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "sign_in_seal with the API token and no offer: only the operator adds; an agent only offers",
+   "req": {
+    "t": "req",
+    "id": "b36",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:1rmZw_HMtwiW5LSki_G0JhrCP7dnzNJPOG9UPOoHCfZmBK0Kh1Sz2GacpfjrtJDRUvoZe2kMNcmdxY4SnMxrU7WcnaR0y58UbO-loD2H0zvkOddMlI5GmELhEOvHbzvb51XuSuSAQt5jWuYjG9eufvIw2fb4B0wf_DXdk0k2gHRb5dQW2s_Xw_W3fKJ46mN24TR8volS_jFEkzsDhHAijA9VObsDivIbJWHydDDmBS0kVcIyIhvCEwyinEb19ajRkMhYvR6oi2a5lj2sDw1gjIRNQR-84Xg3ItY6M5OX02iOMkxENb-TNaR3_cUlfinpKz-mBDGKm73QPlIOOToIdoqksJ9fLP0z_p2eCRA6wUCUInqXVAK2H7Ba05-FpK8qlNPzEz4wL4XShmiWEbqb7g",
+     "sender": "oA1xiLpNkqqTKqwGSibbMJIkhvbmCm1f7FOk/tfmmoM=",
+     "rid": "WmT3ElJq5yfuR0CuhuMNQg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b36",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "sign_in_reseal from the daemon itself: the approval is the operator's act",
+   "req": {
+    "t": "req",
+    "id": "b37",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b37",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "an offer with kind operator: an offer takes only kind token",
+   "req": {
+    "t": "req",
+    "id": "b38",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": true,
+    "sealed": {
+     "text": "aw1:qMauW12NuW-8uqjOKRrF29u-AQENCmhkAghCsTUdcPlipHeXm0iVFrEUF9Oe6QnX3qmKEvCsIHcUseJy7_zs2hioQQAXAue1NQQEW48gm2-B_h-9u5032pYhz1X6D1ECW46m_8234NaGVs_OBkvdTpdjZ8ffFWKNNkx5OPWwK7J2RWgg3ZtLnMDEBH_7wSkeZOpddjOH8LTQ1z8A3rLBduciD3IvBFizOY0jnmRD_e00gV7WRVHhypd8a8UyGyg-nQm2ZYwtn2HG8u-zPy8sTwJX7GUe121SvrmYkxkH1TkLOt1khrAmoDb47lan5uCTCuDtXL47jWxJEihiuXjsSKmXJ4wTQIMNpgWnCGzXtqBbvvXadmfDkcVOFTsx4F1oAQHY6QdqYV5Nu511b7u9Cg",
+     "sender": "kRU7q8e0LqQQz9pgGUgt5ma1ifPwgILcOR4FQ/Acmuo=",
+     "rid": "OL40Z99W2WHVv_z7RJvejQ",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b38",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_ins by the operator: the snapshot is the daemon's own request",
+   "req": {
+    "t": "req",
+    "id": "b39",
+    "op": "sign_ins",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "key": null,
+    "records": []
+   },
+   "res": {
+    "t": "res",
+    "id": "b39",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_ins_lock with the API token: the operator or the daemon only",
+   "req": {
+    "t": "req",
+    "id": "b40",
+    "op": "sign_ins_lock",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b40",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_in_seal whose sealed is a string, not a pane's seal",
+   "req": {
+    "t": "req",
+    "id": "b41",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": "aw1:1RejjQjgr5TqSg74Wb16tmqRiC5-YIIUkHwWQ5HGy8ae5z_6upCpxw"
+   },
+   "res": {
+    "t": "res",
+    "id": "b41",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_in_seal with no offer field",
+   "req": {
+    "t": "req",
+    "id": "b42",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "sealed": {
+     "text": "aw1:G0ekkYRbsIKB0kWRT6yAdQP-V0GAqyjhExnZhlxtq38lxA59Xb4ACXjFpRIb70vZFLbrF4jN6iYXa8lQTvOr5rgYtwJfL8ac4rrIFnJhBmNlvBVThpSmOnXKbpxOHcmciHebBS6uPx0rLiH2goiectqzTuVm1MY4vQMJalgGy1QSIj7BWV9TWGu0R9HAQG7gSWgqSCRPQ-d_esuRVWInbRv5vYu9Yc7Y0P7sx93RWtYqrtIXk_yoEmGUrrA5eMjVi0ADNilKfb6jYx7KPmWNYBUbv-b2068Ui7i5CqoIX3evcLoiieodhskiVWjhxFtFk1Y0K8kqlnSYF8o9mrv4j_3_J4ALxKupz0hucIWJ0yQ0GgO5TG9hdeXb3KV9HLHh8BQy0es_SNwarEhwClU27w",
+     "sender": "OT6/OOFnMlr6YnGbFk9opg1UNzgvksV6h1UzCzRJuhQ=",
+     "rid": "r6PPw3XH4Nc5Z_jSXBsMsA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b42",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_ins whose records is not a list",
+   "req": {
+    "t": "req",
+    "id": "b43",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": null,
+    "records": {}
+   },
+   "res": {
+    "t": "res",
+    "id": "b43",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_ins_unlock whose pane's seal has no rid",
+   "req": {
+    "t": "req",
+    "id": "b44",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:ontew87IqhzuwR4mm72TKfoc57laCsdiUz2tS63cwjL8GyElOvOeRA",
+     "sender": "ontew87IqhzuwR4mm72TKfoc57laCsdiUz2tS63cwjI=",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b44",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_in_seal with an http: origin that is not a loopback host: the rule of origin",
+   "req": {
+    "t": "req",
+    "id": "b45",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "http://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "http://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:6i_XYS-daNeoxJTbgtZbyr5a5a8QQrTcQ5pFyjGOv38IrheJR2Pm2lM2022yWlOo53OwQDX0CULuNpbnbrGL-kvA-QA3brIhdSHVlILL-MgSzQkB0IG3aUWskmJlOqpvSqcJ9zpaEO4QMG9Fp4OjeOJvyXe5hgtjewMJxzh5ClIrryV6czD_t5DSgRebx7U7fJfEOSGXdd4T8RVtLn0sxVeUyFXi1ATRdB2-kIrWHDk3tNcDKo7_OeW_pqhZfzC6VbJpgTkWhOCExBMppZrH7rQ5L-nuXrDgpu4Ylq6Fot34ZRIBULBZ13uMLoPt1LGvEP3irs09ZRM575ZLN26E81IazL_os__hntwS9LmAs8GURIUB46DMnOvy0D23FaDqrSAUy-vQWP98avwjLYA4XA",
+     "sender": "sO5PwY+rs1HQ0L5fYcZHZ90V84PhxspLAy5dNubX4Tc=",
+     "rid": "LhzPSnm_lfOqMc_vO52paA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b45",
+    "ok": false,
+    "error": "the stored sign-in is not valid (field origin)"
+   }
+  },
+  {
+   "note": "sign_in_seal whose send_to does not hold the origin",
+   "req": {
+    "t": "req",
+    "id": "b46",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://tracker.example"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:We8zJJHUxbK_z-fLAkGpFefsNoYOoLDvDogbVSGJHnGZArkd2j1tTWo0GJ5OZwNWsOO8QKU7vGOLtsNP9K2aX4uGOmIsx_ybPaam9gxUtllMH_5cEXQntDakX9yaJHjlp5ks-WWQGavkZ4tp3Ut-eC-KEZZ8gUtVuKaeGLxJfNzI8ZuKdO_KTgV5ZvsbNbH31pHE67qgBQF8QMUN3q77DpwUfGW9fJBOAnCfi8ipAjUNsY1R8leQvjV1MspiAcy9PS8ChcfPZT-68lIuEt4uwVeAQ8vQovzm0DxqzDzMhmL_HfkEOlG8_FhXCDu0LlHfM2tIwIAjR8I0nqLnVRSOrpwlp4d3eKnKOIJp2WfyV277dErLw9w7vW4upIreyONLWzXDvMpkTo5K9s_2Hvs5Ag",
+     "sender": "rdfMe+FE5r4uiwZ9L2qGP44MZWuQ+V9/WldQVSUyzD0=",
+     "rid": "zYzg8Kw6Mu8WMyQ88wk4lw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b46",
+    "ok": false,
+    "error": "the stored sign-in is not valid (field send_to)"
+   }
+  },
+  {
+   "note": "sign_in_reseal with an id that is not c- and 8 lowercase hex digits",
+   "req": {
+    "t": "req",
+    "id": "b47",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-XYZ",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b47",
+    "ok": false,
+    "error": "the stored sign-in is not valid (field id)"
+   }
+  },
+  {
+   "note": "an offer whose name does not match the scope pattern",
+   "req": {
+    "t": "req",
+    "id": "b48",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "two words",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": true,
+    "sealed": {
+     "text": "aw1:-ZPjRbQ27j5AH3FVy1LlP1GasnToQGyvyJ7FFe2ESTlNo49eMywUna6yWTbFM6nNCCfUzDKVgMKnByEPROTySyPDdKL_GNdH1BV7kNfgkoe-49MZHR2ei-2vHIKlBsA0XS7TwfytgFgslmfUbP4ykRyD5TGkqwbsooby-HkFaZHEDnO4eDYa6fc6jRhE5gPbX7fqBbAWU2kRenp5KYpyRMQoKbJqmIOmaUwB4o-_uzRltI6nkanTNxtgDe8tXCIaKxQH-pcrNZSsACeYZVJ44pKD-_lcsVSjetW_rsLRIQBgsPRw5uSxXBpJEpTUtX7IJ0hmxCHJYkNQKZsu64eZoKrzCQAkIUWznLU5eti6l5PAg4IHkVzHaAE59RCMemjn6ygV26ZVZFljJ04nQ1rRFw",
+     "sender": "d2n4oO9BWtyk9XdzOWUIKCbXGr+p1FjIQhM0plqPcfE=",
+     "rid": "9JDJxLJB3rGy4LOzMlqE_A",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b48",
+    "ok": false,
+    "error": "the stored sign-in is not valid (field name)"
+   }
+  },
+  {
+   "note": "sign_in_seal whose path holds a query",
+   "req": {
+    "t": "req",
+    "id": "b49",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login?next=/",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:9TQGHNgdo2oUGxOOcqBZxzpGTcJw56Brph8h-tckAQYAA-L_I6AkqmgxV9LrLYyFycVjqreZpGpERa9Ck-og7nHNPcelXdwwkIM7cbs322B9SK87LX2Kzct_ds-j4t6cm-jB2g0aNTmz6M2oU9mVr58NjkuX8a6fH6sllLRtyeSlavLYP3Sj1_8tsXk2xBj48hkSoEnY6v-3TMi_dwhkB9eBLslwcb_qrFu-FkQBkJ1Na89nbcjz6aAVd9uya6HckvTSzcN2-dQ-M-ZcorxG1Q1fwOINblgWmIv9O16slO0sjHO1kVLu0HOYfOxMpriQV_eRVaOaA7L5nFjr4dP2tKDlmVjCQOdvVgNp8V6qU604oQm2VMXy1FeWThojidCBtcu3vO6oZ7WFjnrCjCMNKA",
+     "sender": "QUQXJ75vE9DyZhje9yATfLPRz3ilDfRpVNWMvB/S0KM=",
+     "rid": "r7AbGv2gE6sN4ubD0fZdww",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b49",
+    "ok": false,
+    "error": "the stored sign-in is not valid (field path)"
+   }
+  },
+  {
+   "note": "sign_in_start_again with the API token: the operator's act only (review-112 B4)",
+   "req": {
+    "t": "req",
+    "id": "b50",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "credential": "c-3f9a2b7c"
+   },
+   "res": {
+    "t": "res",
+    "id": "b50",
+    "ok": false,
+    "error": "not the operator"
+   }
+  },
+  {
+   "note": "sign_in_start_again whose credential is not c- and 8 lowercase hex digits",
+   "req": {
+    "t": "req",
+    "id": "b51",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-XYZ"
+   },
+   "res": {
+    "t": "res",
+    "id": "b51",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_in_start_again with no credential field (id is the request's id, a line key)",
+   "req": {
+    "t": "req",
+    "id": "b52",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b52",
+    "ok": false,
+    "error": "bad request"
+   }
   }
  ],
  "events": [
@@ -1932,6 +4717,145 @@
      "errors": 1
     }
    }
+  },
+  {
+   "note": "sign_ins: a change of the store's state, with the pane key's public half",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_ins",
+    "state": "open",
+    "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A="
+   }
+  },
+  {
+   "note": "sign_in at the start of an act, with its act id: the live view sends no frame from here",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "start",
+    "act": "200da900f2a41f25",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": "c-0a1b2c3d",
+    "name": "staging-2",
+    "origin": "https://staging.example.com",
+    "at": "2026-11-10T20:10:00Z"
+   }
+  },
+  {
+   "note": "sign_in for a request of the same credential that check 6 refused at once while the act runs (the hour's limit): an end with its own act id and no start, so it ends no blank (review-112 B3)",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "end",
+    "act": "c2610e74d5f67af6",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": "c-0a1b2c3d",
+    "name": "staging-2",
+    "origin": "https://staging.example.com",
+    "at": "2026-11-10T20:10:02Z",
+    "result": "hour_limit",
+    "ms": 1,
+    "blocked": 0,
+    "guarded": 0,
+    "stopped_now": false
+   }
+  },
+  {
+   "note": "sign_in at the end of the act: signed in; it counts the requests that the block and the guard stopped, and names no host (review-112 B1)",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "end",
+    "act": "200da900f2a41f25",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": "c-0a1b2c3d",
+    "name": "staging-2",
+    "origin": "https://staging.example.com",
+    "at": "2026-11-10T20:10:05Z",
+    "result": "signed_in",
+    "ms": 4800,
+    "blocked": 2,
+    "guarded": 1,
+    "stopped_now": false
+   }
+  },
+  {
+   "note": "sign_in for a request that check 4 refused (the store is locked): an end with no start; the daemon sends one Web Push",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "end",
+    "act": "2f981e999556e1de",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": "c-0a1b2c3d",
+    "name": "staging-2",
+    "origin": "https://staging.example.com",
+    "at": "2026-11-10T20:20:00Z",
+    "result": "locked",
+    "ms": 2,
+    "blocked": 0,
+    "guarded": 0,
+    "stopped_now": false
+   }
+  },
+  {
+   "note": "sign_in for a request that check 2 refused (no such name for the scope): an end that names no credential",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "end",
+    "act": "ff298ae962bf48d3",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": null,
+    "name": null,
+    "origin": null,
+    "at": "2026-11-10T20:21:00Z",
+    "result": "no_such_name",
+    "ms": 1,
+    "blocked": 0,
+    "guarded": 0,
+    "stopped_now": false
+   }
+  },
+  {
+   "note": "sign_in at the start of another act",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "start",
+    "act": "9c37a308b5a7193f",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": "c-0a1b2c3d",
+    "name": "staging-2",
+    "origin": "https://staging.example.com",
+    "at": "2026-11-10T20:30:00Z"
+   }
+  },
+  {
+   "note": "sign_in at its end: the third timeout in a row stops the credential (stopped_now; status gives its id in stopped)",
+   "ev": {
+    "t": "ev",
+    "ev": "sign_in",
+    "phase": "end",
+    "act": "9c37a308b5a7193f",
+    "scope": "web-1",
+    "repo": "owner/repo",
+    "id": "c-0a1b2c3d",
+    "name": "staging-2",
+    "origin": "https://staging.example.com",
+    "at": "2026-11-10T20:30:31Z",
+    "result": "timeout",
+    "ms": 31000,
+    "blocked": 0,
+    "guarded": 0,
+    "stopped_now": true
+   }
   }
  ],
  "newerEvents": [
@@ -1974,5 +4898,182 @@
    "token": "abt1_dGVzdCwgbm90IGEgdG9rZW46IHRvb2wtNC4uLi4uLi4",
    "fingerprint": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
   }
- ]
+ ],
+ "signInScan": {
+  "note": "The canaries of the stored sign-ins' scan (fake values): no line of these vectors holds one in a form of the guard (plain, URL-encoded, JSON-escaped, base64, base64url).",
+  "canaries": [
+   "canary.user@staging.example.test",
+   "Canary-Pass-5Qv!9-x",
+   "canary passphrase of the scan 2026"
+  ]
+ },
+ "unprotected": {
+  "note": "The cases of a protection of the service's memory that does not hold (C12, the stored sign-ins: the protections; the design, section 5.5). Each case runs on a new fake with --unprotected <reason>, in its order on one connection after the hellos; sign_ins is the key of status after its requests.",
+  "cases": [
+   {
+    "note": "the process is dumpable: sign_ins_setup gets the error with the reason dumpable",
+    "reason": "dumpable",
+    "requests": [
+     {
+      "note": "the first snapshot: no key.json",
+      "req": {
+       "t": "req",
+       "id": "u-dumpable-1",
+       "op": "sign_ins",
+       "by": {
+        "kind": "daemon",
+        "user": "ann",
+        "via": "daemon"
+       },
+       "key": null,
+       "records": []
+      },
+      "res": {
+       "t": "res",
+       "id": "u-dumpable-1",
+       "ok": true,
+       "data": {
+        "records": 0
+       }
+      }
+     },
+     {
+      "note": "sign_ins_setup: the protection comes before the pane's seal",
+      "req": {
+       "t": "req",
+       "id": "u-dumpable-2",
+       "op": "sign_ins_setup",
+       "by": {
+        "kind": "operator",
+        "user": "ann",
+        "via": "web"
+       },
+       "sealed": {
+        "text": "aw1:P3hL1HSbo9ANXERltwVFEVUvigbBNFp3GwLeHKMVYCzErRYdHUzDFAxv90laudQ9TVNdCZ4WJqHk_M9ua_bRvtWbstornCFvN5sXYI2V_nrot1AAdJ-Z6zeY9GvpfePi5U2jgW80xsZILZgsHW_vmn0Zhgv_7do375RWBu6M_UHL3fpZjwQ1NSaTYdP49yiLRbsXZu7MgDTZkIPicHXJNSei4gZq5TFGTm9dE32S2HNjRKOXP7l7PxGiXa-4JI5DjaGXVyvKifeItwrDlogl_00tTlcX4VsIcoeq5rBHFdTHkbqdLKZUHUuWFPOqs0DAIxco4iroQYHGDE2hUxFrgbbYm_o0eYqbqsmcPDkvtp7DCTS-wDzle__aq-kEUgPLksUvKDvlVUC3IJPw8BsqPw",
+        "sender": "JpBZZw2xc14cXPcHi2wC1sBaRhyw+fXnvWxeViA385k=",
+        "rid": "KsgOqlfL8CFuUWYiMCNHfQ",
+        "at": "2026-11-10T20:00:00Z"
+       }
+      },
+      "res": {
+       "t": "res",
+       "id": "u-dumpable-2",
+       "ok": false,
+       "error": "the service's memory is not protected (dumpable)"
+      }
+     }
+    ],
+    "sign_ins": {
+     "state": "none",
+     "records": 0,
+     "acts": 0,
+     "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+     "stopped": [],
+     "unprotected": "dumpable"
+    }
+   },
+   {
+    "note": "the protection of board ab-v16.96 does not hold: sign_ins_unlock gets the error with the reason signal",
+    "reason": "signal",
+    "requests": [
+     {
+      "note": "a snapshot with a key.json",
+      "req": {
+       "t": "req",
+       "id": "u-signal-1",
+       "op": "sign_ins",
+       "by": {
+        "kind": "daemon",
+        "user": "ann",
+        "via": "daemon"
+       },
+       "key": {
+        "v": 1,
+        "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+        "kdf": {
+         "name": "scrypt",
+         "n": 131072,
+         "r": 8,
+         "p": 1,
+         "salt": "XtlD_scc1BSqO7QI6IJgPg"
+        },
+        "wrapped": {
+         "iv": "B4obup7UgkQF8GYX",
+         "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+         "tag": "jk4pUJmfRHDzXStJGojQwA"
+        }
+       },
+       "records": []
+      },
+      "res": {
+       "t": "res",
+       "id": "u-signal-1",
+       "ok": true,
+       "data": {
+        "records": 0
+       }
+      }
+     },
+     {
+      "note": "sign_ins_unlock: the protection comes before the pane's seal",
+      "req": {
+       "t": "req",
+       "id": "u-signal-2",
+       "op": "sign_ins_unlock",
+       "by": {
+        "kind": "operator",
+        "user": "ann",
+        "via": "web"
+       },
+       "sealed": {
+        "text": "aw1:jkjaWCJF4viAo8gDlFb0G8GTDvSZhAh7cZtr3A2cNgboKZNMhR6LwOxsgjhlOwW74wBk6LBvMMOXte14o9TMEwTGOk4_eSoPsF4a_mwLT4ZOY1uFX4GbbiH9f-i3aGPHsn8HoQCHQDjHgvX7l70B5d2uIbmV55zvocMui8XmCSl2NSMnK5RA_G7ifjsaZU9S3ldgRt6wELvPt7kdM5GpgMJcwT0KTFPkGQDc9vedMwYuJ-qenPzPr2epbvzkIWDI4kF6Iie9uxI37wsFjFUsu3y58i8NTUTJiXLJf4yCpwyUBWfeIhCg0dP6vNd-_vi7PtIR-fWVLzulUUhPWXbqvcb3f3_bkPcGt1jrJERSSrStUfJR19dJA7i9QIVQphktPuj5cTfjVQQpAAYhndB30g",
+        "sender": "sQaOuY57iADsZ4I+2pXKEzQXAKsuPOn3lcAnSydH2fc=",
+        "rid": "3nmIdzciHufVru_vEH-EiQ",
+        "at": "2026-11-10T20:00:00Z"
+       }
+      },
+      "res": {
+       "t": "res",
+       "id": "u-signal-2",
+       "ok": false,
+       "error": "the service's memory is not protected (signal)"
+      }
+     },
+     {
+      "note": "sign_ins_setup while the last sign_ins has a key: the state comes before the protection",
+      "req": {
+       "t": "req",
+       "id": "u-signal-3",
+       "op": "sign_ins_setup",
+       "by": {
+        "kind": "operator",
+        "user": "ann",
+        "via": "web"
+       },
+       "sealed": {
+        "text": "aw1:wDqKZVqH0f2Hqxctpq9xZWQiNV_TZD_pQ4lvZscJ19HaY_1nHBXacc3RMGyM3KHN624G_rUN53S7Shz6pTMj3pcnfetLH6k6tGvpL6ZCDqPMQ9ue7n5xorvdiRcendL8VqoeXS-Wpu1mFU11OO2Y17cubPTew5DoseCUax_KfdF_MrhgB-JsCB_hdXOqPgoQKviG_2RgV2uQav2OrWMwo0U1wVGMaSMpzIiZHzTldCgqRl4p5niRzmL2OYkEex58polh2AtPstDOwje_cUSu5QKHoWfKO9LWF6oemb_qQNDrqprUM4TpK6Ku9CbQHIBsc1CTN_0rTjH1S9sW7qmYRnVF_VCyL3jyDStn9MjBo04QG6NspilptdSovUa-GBckOqEHLfgCJf1dLUFjfDfxCg",
+        "sender": "clyP+Oi5PAo7HJvhro10CRZPAbOXLbsJPw1VvZW0iWU=",
+        "rid": "QzLbxL-nsr-f7PLmA9MuZA",
+        "at": "2026-11-10T20:00:00Z"
+       }
+      },
+      "res": {
+       "t": "res",
+       "id": "u-signal-3",
+       "ok": false,
+       "error": "the store is set up already"
+      }
+     }
+    ],
+    "sign_ins": {
+     "state": "locked",
+     "records": 0,
+     "acts": 0,
+     "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+     "stopped": [],
+     "unprotected": "signal"
+    }
+   }
+  ]
+ }
 }

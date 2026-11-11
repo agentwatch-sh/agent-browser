@@ -1,5 +1,5 @@
 {
- "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path.",
+ "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path. The service's own tools (board ab-v16.97.1): service_tools holds exactly the value of the format's text; a call's admission is local unless it says remote; toolsLists gives the names of tools/list for each admission.",
  "folder": "/state/mcp/web-1/",
  "pin": "0.0.85",
  "list": {
@@ -87,6 +87,36 @@
        "description": "The file name to save the screenshot to"
       }
      }
+    }
+   }
+  },
+  "service_tools": {
+   "browser_sign_in": {
+    "keys": [
+     "name"
+    ],
+    "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "The name of a stored sign-in"
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "browser_sign_ins": {
+    "keys": [],
+    "description": "List the stored sign-ins that this session may use, and the state of the store.",
+    "schema": {
+     "type": "object",
+     "properties": {},
+     "additionalProperties": false
     }
    }
   },
@@ -254,6 +284,36 @@
       }
      }
     },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
     "refused": {
      "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
     }
@@ -347,6 +407,36 @@
          "description": "The file name to save the screenshot to"
         }
        }
+      }
+     }
+    },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
       }
      }
     },
@@ -462,6 +552,36 @@
       }
      }
     },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
     "refused": {}
    }
   },
@@ -553,6 +673,36 @@
          "description": "The file name to save the screenshot to"
         }
        }
+      }
+     }
+    },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
       }
      }
     },
@@ -650,6 +800,36 @@
          "description": "The file name to save the screenshot to"
         }
        }
+      }
+     }
+    },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
       }
      }
     },
@@ -751,6 +931,36 @@
       }
      }
     },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
     "refused": {
      "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
     }
@@ -842,6 +1052,36 @@
          "description": "The file name to save the screenshot to"
         }
        }
+      }
+     }
+    },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
       }
      }
     },
@@ -942,6 +1182,36 @@
       }
      }
     },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
     "refused": {
      "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
     }
@@ -1038,10 +1308,386 @@
       }
      }
     },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
     "refused": {
      "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
     }
    }
+  },
+  {
+   "note": "a newer pinned version whose tools/list has a tool of a service tool's name (the list refuses it, so only this rule breaks)",
+   "pinnedTools": [
+    {
+     "name": "browser_navigate",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "url": {
+        "type": "string",
+        "description": "The URL to navigate to"
+       }
+      }
+     }
+    },
+    {
+     "name": "browser_snapshot",
+     "inputSchema": {
+      "type": "object",
+      "properties": {}
+     }
+    },
+    {
+     "name": "browser_click",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "element": {
+        "type": "string",
+        "description": "A description of the element"
+       },
+       "target": {
+        "type": "string",
+        "description": "The element's ref from the snapshot"
+       }
+      }
+     }
+    },
+    {
+     "name": "browser_file_upload",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "paths": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        },
+        "description": "The absolute paths of the files to upload"
+       }
+      }
+     }
+    },
+    {
+     "name": "browser_take_screenshot",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "filename": {
+        "type": "string",
+        "description": "The file name to save the screenshot to"
+       }
+      }
+     }
+    },
+    {
+     "name": "browser_run_code_unsafe",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "code": {
+        "type": "string",
+        "description": "The JavaScript to run"
+       }
+      }
+     }
+    },
+    {
+     "name": "browser_sign_in",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "site": {
+        "type": "string",
+        "description": "A site"
+       }
+      }
+     }
+    }
+   ],
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state.",
+     "browser_sign_in": "A tool of the pinned version with the name of the service's own tool."
+    }
+   },
+   "breaks": "no service tool is a tool of the pinned tools/list"
+  },
+  {
+   "note": "service_tools with a key that the format does not give (a password argument)",
+   "list": {
+    "package": "@playwright/mcp",
+    "version": "0.0.85",
+    "capabilities": [
+     "core"
+    ],
+    "tools": {
+     "browser_navigate": {
+      "keys": [
+       "url"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The URL to navigate to"
+        }
+       }
+      }
+     },
+     "browser_snapshot": {
+      "keys": [],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {}
+      }
+     },
+     "browser_click": {
+      "keys": [
+       "element",
+       "target"
+      ],
+      "paths": [],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "A description of the element"
+        },
+        "target": {
+         "type": "string",
+         "description": "The element's ref from the snapshot"
+        }
+       }
+      }
+     },
+     "browser_file_upload": {
+      "keys": [
+       "paths"
+      ],
+      "paths": [
+       "paths"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "description": "The absolute paths of the files to upload"
+        }
+       }
+      }
+     },
+     "browser_take_screenshot": {
+      "keys": [
+       "filename"
+      ],
+      "paths": [
+       "filename"
+      ],
+      "schema": {
+       "type": "object",
+       "properties": {
+        "filename": {
+         "type": "string",
+         "description": "The file name to save the screenshot to"
+        }
+       }
+      }
+     }
+    },
+    "service_tools": {
+     "browser_sign_in": {
+      "keys": [
+       "name",
+       "password"
+      ],
+      "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string",
+         "description": "The name of a stored sign-in"
+        },
+        "password": {
+         "type": "string",
+         "description": "A password"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_sign_ins": {
+      "keys": [],
+      "description": "List the stored sign-ins that this session may use, and the state of the store.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
+     }
+    },
+    "refused": {
+     "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
+    }
+   },
+   "breaks": "service_tools is exactly the service's own tools"
   }
  ],
  "calls": [
@@ -1167,6 +1813,124 @@
     "code": -32602,
     "message": "Not available in the agent browser: filename must name a file in the session's folder /state/mcp/web-1/"
    }
+  },
+  {
+   "note": "browser_sign_in for a request with a local admission (the uid check and the walk): the service runs the sign-in act",
+   "call": {
+    "name": "browser_sign_in",
+    "arguments": {
+     "name": "staging"
+    }
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_sign_ins for a request with a local admission",
+   "call": {
+    "name": "browser_sign_ins",
+    "arguments": {}
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_sign_in with no name, for a request with a local admission: the service runs the act's method, and check 2 refuses it with <name> null (C11, the sign-in act)",
+   "call": {
+    "name": "browser_sign_in",
+    "arguments": {}
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_sign_in with an argument key that its keys do not name",
+   "call": {
+    "name": "browser_sign_in",
+    "arguments": {
+     "name": "staging",
+     "password": "x"
+    }
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: the argument password of browser_sign_in"
+   }
+  },
+  {
+   "note": "browser_sign_in for a request that a remote token admitted: the tool error of check 1",
+   "admission": "remote",
+   "call": {
+    "name": "browser_sign_in",
+    "arguments": {
+     "name": "staging"
+    }
+   },
+   "answer": {
+    "isError": true,
+    "text": "Not signed in: Stored sign-ins work only for sessions of this box."
+   }
+  },
+  {
+   "note": "browser_sign_ins for a request that a remote token admitted: the tool error of check 1",
+   "admission": "remote",
+   "call": {
+    "name": "browser_sign_ins",
+    "arguments": {}
+   },
+   "answer": {
+    "isError": true,
+    "text": "Not signed in: Stored sign-ins work only for sessions of this box."
+   }
+  },
+  {
+   "note": "browser_sign_in from a remote admission with another key: check 1 first, whatever its arguments",
+   "admission": "remote",
+   "call": {
+    "name": "browser_sign_in",
+    "arguments": {
+     "name": "staging",
+     "password": "x"
+    }
+   },
+   "answer": {
+    "isError": true,
+    "text": "Not signed in: Stored sign-ins work only for sessions of this box."
+   }
+  },
+  {
+   "note": "a pinned tool from a remote admission: the allow list as for a local one",
+   "admission": "remote",
+   "call": {
+    "name": "browser_navigate",
+    "arguments": {
+     "url": "https://a.example/"
+    }
+   },
+   "answer": "pass"
+  }
+ ],
+ "toolsLists": [
+  {
+   "note": "tools/list for a request with a local admission: the allowed tools and the service's own tools",
+   "admission": "local",
+   "names": [
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_file_upload",
+    "browser_take_screenshot",
+    "browser_sign_in",
+    "browser_sign_ins"
+   ]
+  },
+  {
+   "note": "tools/list for a request that a remote token admitted: no tool of service_tools",
+   "admission": "remote",
+   "names": [
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_file_upload",
+    "browser_take_screenshot"
+   ]
   }
  ]
 }
