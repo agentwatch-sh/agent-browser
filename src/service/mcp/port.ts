@@ -3,8 +3,16 @@
 // on 127.0.0.1 only, or the socket of agent-browser-mcp.socket that systemd passes (listen-fds.ts). At each accept the
 // socket stays paused, and steps 1 and 2 of the admission run before the service reads any byte (admission.ts); a
 // refusal writes its 403 and closes, with no read. Only an admitted connection goes to the HTTP server, where steps 3 to
-// 8 run for each request. A request that passes goes to the MCP handler (part 2b plugs the transport in). On the Mac the
-// port accepts and closes each connection (fail closed) until the Mac's TCP peer reader exists (stage 4).
+// 8 run for each request. A request that passes goes to the MCP handler (part 2b: the transport, transport.ts). On the Mac
+// the port accepts and closes each connection (fail closed) until the Mac's TCP peer reader exists (stage 4).
+//
+// The rules of part 2b for an admitted connection (the review of part 2a, notes 2, 8 and 10): after the first refusal of
+// steps 3 to 8 the connection is marked, and each later request on it (a pipelined one) is dropped with no handler call;
+// a request with `Expect` runs steps 3 to 8 before any 100 or 417 answer; CONNECT stays refused (Node closes it); an
+// exception of the request path gives a 500 with a fixed text and never stops the service; and the connection has
+// timeouts of its own (Node's server never listens here, so its headersTimeout and requestTimeout do not run): a request
+// header must come whole within MCP_HEADERS_MS of the admission or of the last answer, and a body that pauses for
+// MCP_IDLE_MS closes the connection, each with no answer.
 //
 // The close at a change (C11, C12): at session_ended the port closes the scope's connections; at each set_sessions it
 // closes each connection whose admitting root no longer counts, and each connection of a session that the snapshot
@@ -26,14 +34,20 @@ import { procReader, walkReader, type McpReader } from "./proc.ts";
 
 /** The MCP handler behind the admission (part 2b: the Streamable HTTP transport and the Playwright MCP). */
 export interface McpHandler {
-  /** A request that passed steps 1 to 8, of the connection's scope: the handler answers it. */
-  request(req: IncomingMessage, res: ServerResponse, scope: string): void;
+  /** A request that passed steps 1 to 8, of the connection's scope: the handler answers it (a rejection gets the 500). */
+  request(req: IncomingMessage, res: ServerResponse, scope: string): void | Promise<void>;
   /** End the MCP sessions of `scope` (C11: at session_ended, and at the close at a change). */
   endSessions(scope: string): void;
 }
 
 /** A refused connection's socket closes this long after its answer at the latest (the client reads the answer first). */
 const REFUSED_CLOSE_MS = 1000;
+/** An admitted connection's request header comes whole within this time of the admission or of the last answer (C11: first value). */
+export const MCP_HEADERS_MS = 10_000;
+/** A request body that pauses this long closes its connection (C11: first value). */
+export const MCP_IDLE_MS = 30_000;
+/** The 500 of an exception in the request path (C11): a fixed text, which echoes nothing. */
+export const MCP_FAILED = "The agent browser could not answer this request.";
 
 export type McpPortOptions = {
   /** A TCP port on 127.0.0.1 (0: a free one), or the fd of agent-browser-mcp.socket (listen-fds.ts). */
@@ -47,10 +61,13 @@ export type McpPortOptions = {
   platform?: NodeJS.Platform;
   uid?: number;
   compare?: (a: Buffer, b: Buffer) => boolean;
+  /** Tests only: the timeouts of an admitted connection. */
+  headersMs?: number;
+  idleMs?: number;
 };
 
 /** An admitted connection: its number, its socket, its scope, the roots that admitted it, and its session's fingerprint at the admission. */
-type Conn = Admitted & { readonly n: number; readonly socket: Socket; readonly token: string | null };
+type Conn = Admitted & { readonly n: number; readonly socket: Socket; readonly token: string | null; refused: boolean; timer: NodeJS.Timeout | null; reading: boolean };
 
 export class McpPort {
   /** The TCP listener (paused sockets), and the port that it listens on. */
@@ -75,6 +92,9 @@ export class McpPort {
     this.uid = o.uid ?? process.getuid!();
     // No Host header is the Host's 403 of step 4, not Node's own 400.
     this.http = createHttp({ requireHostHeader: false }, (req, res) => this.request(req, res));
+    // Expect: steps 3 to 8 come before any 100 or 417 answer (Node would answer them first).
+    this.http.on("checkContinue", (req: IncomingMessage, res: ServerResponse) => this.request(req, res, "continue"));
+    this.http.on("checkExpectation", (req: IncomingMessage, res: ServerResponse) => this.request(req, res, "expectation"));
   }
 
   /** Listen on 127.0.0.1 only (a port, or systemd's socket), or fail: a socket on another address is refused. */
@@ -132,16 +152,28 @@ export class McpPort {
       this.o.log(`mcp: connection ${n} refused at step ${a.step} (${a.status})`);
       return;
     }
-    const conn: Conn = { ...a, n, socket, token: this.snapshot.items.get(a.scope)?.mcp_token ?? null };
+    const conn: Conn = { ...a, n, socket, token: this.snapshot.items.get(a.scope)?.mcp_token ?? null, refused: false, timer: null, reading: false };
     let set = this.byScope.get(a.scope);
     if (!set) this.byScope.set(a.scope, (set = new Set()));
     set.add(conn);
     this.bySocket.set(socket, conn);
-    socket.once("close", () => this.forget(conn));
+    socket.once("close", () => { this.forget(conn); this.untime(conn); });
+    // The idle time of a request body: a pause this long while the body is read closes the connection, with no answer.
+    socket.on("timeout", () => { if (conn.reading && !socket.destroyed) this.close(conn, "the request body paused too long"); });
     this.o.log(`mcp: connection ${n} admitted for scope ${a.scope}`);
     this.http.emit("connection", socket);
+    this.timeHeader(conn);
     socket.resume();
   }
+
+  /** The header timeout: a request header comes whole in time, or the connection closes with no answer. */
+  private timeHeader(c: Conn): void {
+    this.untime(c);
+    if (c.socket.destroyed) return;
+    c.timer = setTimeout(() => { c.timer = null; if (!c.socket.destroyed) this.close(c, "no request header in time"); }, this.o.headersMs ?? MCP_HEADERS_MS);
+    c.timer.unref();
+  }
+  private untime(c: Conn): void { if (c.timer) { clearTimeout(c.timer); c.timer = null; } }
 
   private forget(c: Conn): void {
     this.bySocket.delete(c.socket);
@@ -152,12 +184,48 @@ export class McpPort {
 
   // ------------------------------------------------------------------ each request: steps 3 to 8
 
-  private request(req: IncomingMessage, res: ServerResponse): void {
+  private request(req: IncomingMessage, res: ServerResponse, expect: "continue" | "expectation" | null = null): void {
     const conn = this.bySocket.get(req.socket as Socket);
     if (!conn) { req.socket.destroy(); return; }
-    const r = admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
-    if (r === null) { this.o.handler.request(req, res, conn.scope); return; }
+    // After a refusal, a later request on the connection (a pipelined one) is dropped: no step, no handler, no answer.
+    if (conn.refused) { req.socket.destroy(); return; }
+    this.untime(conn);
+    // A body that pauses for the idle time closes the connection; while the service works on the request, no timeout
+    // runs; after the answer the next request's header has its time.
+    conn.reading = !req.complete;
+    if (conn.reading) {
+      conn.socket.setTimeout(this.o.idleMs ?? MCP_IDLE_MS);
+      req.once("end", () => { conn.reading = false; conn.socket.setTimeout(0); });
+    }
+    res.once("finish", () => this.timeHeader(conn));
+    const fail = () => {
+      // An exception of the request path: the fixed 500, which echoes nothing, and the connection closes.
+      conn.refused = true;
+      if (!res.headersSent && !res.destroyed) res.writeHead(500, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(MCP_FAILED), Connection: "close" }).end(MCP_FAILED);
+      else conn.socket.destroy();
+      this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request failed (500)`);
+    };
+    let r;
+    try {
+      r = admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
+    } catch { fail(); return; }
+    if (r === null) {
+      if (expect === "expectation") {
+        // Steps 3 to 8 passed; an expectation that the service does not know gets the 417, and the connection closes.
+        conn.refused = true;
+        res.writeHead(417, { "Content-Type": "text/plain", "Content-Length": 18, Connection: "close" }).end("Expectation Failed");
+        this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request with an expectation refused (417)`);
+        return;
+      }
+      if (expect === "continue") res.writeContinue();
+      try {
+        const p = this.o.handler.request(req, res, conn.scope);
+        if (p && typeof (p as Promise<void>).then === "function") (p as Promise<void>).catch(fail);
+      } catch { fail(); }
+      return;
+    }
     // The first refusal closes the connection.
+    conn.refused = true;
     res.writeHead(r.status, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(r.body), ...(r.status === 401 ? { "WWW-Authenticate": WWW_AUTHENTICATE } : {}), Connection: "close" }).end(r.body);
     this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request refused at step ${r.step} (${r.status})`);
   }
@@ -166,6 +234,7 @@ export class McpPort {
 
   private close(c: Conn, why: string): void {
     this.forget(c);
+    this.untime(c);
     c.socket.destroy();
     this.o.log(`mcp: connection ${c.n} (scope ${c.scope}) closed: ${why}`);
   }
