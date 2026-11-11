@@ -555,6 +555,8 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     // review-112b: the vectors that only the order shows (Start again while locked, a record that breaks its shape, a key
     // file with no public or no wrapped half).
     if (req.op === "sign_in_start_again" && storeState(store) === "locked" && res.ok) seen.add("start again while locked");
+    // R24: an offer holds no name; only an approved record does (the lead's merge commit: s53).
+    if (req.op === "sign_in_reseal" && res.ok && store.snap?.records.some((x: any) => x.id !== req.record?.id && x.name === req.record?.name && x.approved !== true)) seen.add("an offer holds no name");
     if (req.op === "sign_in_reseal" && store.snap?.records.some((x: any) => x.id === req.record?.id && !Number.isSafeInteger(x.gen)) && res.error === "the stored sign-in cannot be opened") seen.add("a broken shape does not open");
     for (const half of ["public", "wrapped"]) if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && !Object.hasOwn(store.snap.key, half) && res.error === "the store's key file is not valid") seen.add(`unlock with a key with no ${half}`);
     if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (!Number.isSafeInteger(r.gen)) broken.add(r.id);
@@ -580,7 +582,7 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (res.ok && req.op === "set_sessions") scopes = new Set(req.sessions.map((x: any) => x.scope));
     if (res.ok && req.op === "session_ended") scopes.delete(req.scope);
   }
-  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "reseal of a removed id", "start again while locked", "unlock while open", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112 and review-112b that need the order");
+  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "an offer holds no name", "reseal of a removed id", "start again while locked", "unlock while open", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112 and review-112b that need the order");
   // A1: endpoint for a scope that the service does not have, and for a scope that ended: no such session.
   assert.ok(has0((v) => v.req.op === "endpoint" && v.req.scope === "web-3" && v.res.error === "no such session"), "endpoint: a scope never named");
   assert.ok(has0((v) => v.req.op === "endpoint" && control.requests.some((r: any) => r.req.op === "session_ended" && r.req.scope === v.req.scope) && v.res.error === "no such session"), "endpoint: a scope that ended");
