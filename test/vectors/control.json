@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s27 run in their order after r13 with the fake values of state.sign_ins (the fake opens no seal), the bad requests b22 to b38 refuse a kind, a shape or a rule of record, and signInScan holds the canaries of the scan.",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s29 run in their order after r13 with the fake values of state.sign_ins (the fake opens no seal), the bad requests b22 to b38 refuse a kind, a shape or a rule of record, and signInScan holds the canaries of the scan.",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -1863,10 +1863,115 @@
    }
   },
   {
-   "note": "sign_ins_lock by the operator (a sign_ins event)",
+   "note": "sign_ins with a key.json whose public half is not the open key's (a program of the user replaced it): the store locks (a sign_ins event)",
    "req": {
     "t": "req",
     "id": "s24",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "CW2qqouubcGngXm4gcR1GXOrBJ-xFpHrJ8gKu1Vwou4",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s24",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_seal right after that snapshot: the store is locked now (a new id, so only the state refuses it)",
+   "req": {
+    "t": "req",
+    "id": "s25",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-5e6f7a8b",
+     "name": "staging-3",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:IN_cPtioTCxCBqoZiziGT7hsWHDeXtTcYFUbBwVhyW5GwZ6iYA7ZPCZ-vJyrRKsg2WdNH-bDt6gr6WbyV4_wHKC1si6cPfPdg85IkXJK0kPKvO6Wbd0w3KcV9pGlzfsAT6GC8fL8MezQD8neCxxhyJ_qdNHyTCvI6WqdtpiKbxSRkodYhBphzYU32dTB0jPK-j9HLMvgAKitvJirZORdzmaBUon_LS7OYUvFFyk_drE_Q3_4N4J4uu8mpjCsQkR9QVzKmBR92wkWT9nqgEtTMrJwChPTFSBEakT2J4g0e24iO7ozW6JHLScjDwRMjhHGl9me_VSVeDhOT3AIDVSTD4dfT8QMZoRyRKdnNZS4zhlaa8TVGdo6tpU5-ScIr0N_pWsIqVndoACP1dkAq7yveA",
+     "sender": "Da65Qt3gownSeBvH69acUI6vKYK/9pF6PnLx2zjcvEA=",
+     "rid": "Af-7YhkmtcSbTAEd0hF4Cw",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s25",
+    "ok": false,
+    "error": "the store is locked"
+   }
+  },
+  {
+   "note": "sign_ins_lock by the operator while the store is locked: {} and no change",
+   "req": {
+    "t": "req",
+    "id": "s26",
     "op": "sign_ins_lock",
     "by": {
      "kind": "operator",
@@ -1876,7 +1981,7 @@
    },
    "res": {
     "t": "res",
-    "id": "s24",
+    "id": "s26",
     "ok": true,
     "data": {}
    }
@@ -1885,7 +1990,7 @@
    "note": "sign_ins with a key.json whose scrypt N (2^30) is outside the bounds: a program of the user planted it",
    "req": {
     "t": "req",
-    "id": "s25",
+    "id": "s27",
     "op": "sign_ins",
     "by": {
      "kind": "daemon",
@@ -1944,7 +2049,7 @@
    },
    "res": {
     "t": "res",
-    "id": "s25",
+    "id": "s27",
     "ok": true,
     "data": {
      "records": 1
@@ -1955,7 +2060,7 @@
    "note": "sign_ins_unlock with the planted key: no derivation runs",
    "req": {
     "t": "req",
-    "id": "s26",
+    "id": "s28",
     "op": "sign_ins_unlock",
     "by": {
      "kind": "operator",
@@ -1963,15 +2068,15 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:FDCIew6OROg5WTiH8WWb3M5xfEsBYDGg30tNmWVptM1vXI49h8rkNAt_udm3nUR3NlJagVbhOGnE5cZpRfN9NUFah_K_MxBFkCGdaYCCDPdVQL-OneWZ58F9tOEM_nv5s2JnTjKJUjlOh025dITGdJz7b02GXSI3MzxW2rzXCz2sx9uJwEP9SQyQp4XvdEGVlQujWG0ubv6jBfbsy56alJ3oNMRcgL3iXVgtyrHTF_T0W-_C4n0nJ1Tv9LgegImJTK8U7ElhDGTAF3JbZD1YcsdC38UXgzC-rDPAnsa7CbYdt3VZu3pnGm_lPKKala-6wrGW9zJOn2M8iRfaz2NqNF1qx-LuPis2YoJYbBuSenOKfZFAacjsCoN7eM6UAiVUFTTtofEvMlfxWOUqcqVkxw",
-     "sender": "GF/nI3uI0uE+n+jkEz/nQ/d4sR/lC3tVP7gzdD74h8w=",
-     "rid": "4hY1OwBebsLFgrw_ivWC9Q",
+     "text": "aw1:nRqk554ACphqJS_6NyKAtmGxKIpd4phu2E9bTbeFykFA7ghjlQm-7dfwRE2oQTZFcp6CT_J3BX7lAZyiov_7Jz0w0sS3sKg3QXPGu2iQOfGqhG24Q-ce-qXnSUYpWp2m50hv5TUqmQccjaWCm4TM3qHV4VIIX9Mh9fIb0k15j74vy1UDM00m1b532JQMeMQ8mZIhrzaqquQ0OqVwP8NHYvn0HHnJhTVM7ystGBrm9hRUVT5lTBgC-8wDIPEPh-TzEUekgrfq0xq86MaR6MUsR5dM9QLLda7NCsi4Rb9VkRIS1KazOn7yICVD1dAy6jMlP5GlCMFxro_-AP_YK2HHHJLIIUNRv1XsJnNRoheaZOdEZpFQf0odCNBAcLT87SWP_p9p7xmJV3o2hG8sWSeD5g",
+     "sender": "HM2P26ws9187X0zj8O67Ofk80vXN+M0rqoPzSosWrMA=",
+     "rid": "_9VLwN4VQGER3E1lJgUqsA",
      "at": "2026-11-10T20:00:00Z"
     }
    },
    "res": {
     "t": "res",
-    "id": "s26",
+    "id": "s28",
     "ok": false,
     "error": "the store's key file is not valid"
    }
@@ -1980,7 +2085,7 @@
    "note": "sign_ins with no key.json and no record: the operator removed all stored sign-ins; the state is none (a sign_ins event)",
    "req": {
     "t": "req",
-    "id": "s27",
+    "id": "s29",
     "op": "sign_ins",
     "by": {
      "kind": "daemon",
@@ -1992,7 +2097,7 @@
    },
    "res": {
     "t": "res",
-    "id": "s27",
+    "id": "s29",
     "ok": true,
     "data": {
      "records": 0

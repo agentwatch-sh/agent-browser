@@ -186,7 +186,7 @@ test("the fake answers every request vector and every bad request vector as the 
       { t: "ev", ev: "prompt", id: "p1", state: "closed", host: p1.host, scope: "web-1", list: p1.list, from: null, warnings: [] },
       { t: "ev", ev: "prompt", id: "p2", state: "closed", host: p2.host, scope: "web-1", list: p2.list, from: null, warnings: [] },
       { t: "ev", ev: "stopped", reason: "stop", by: control.requests.find((v: any) => v.req.id === "r12").req.by },
-      // The stored sign-ins: each change of the store's state (s4 open, s14 locked, s17 open, s24 locked, s27 none).
+      // The stored sign-ins: each change of the store's state (s4 open, s14 locked, s17 open, s24 locked, s29 none).
       ...["open", "locked", "open", "locked", "none"].map((state) => ({ t: "ev", ev: "sign_ins", state, pane_key: control.state.sign_ins.pane_key })),
     ]);
     c.end();
