@@ -186,19 +186,35 @@ test("the fake answers every request vector and every bad request vector as the 
       { t: "ev", ev: "prompt", id: "p1", state: "closed", host: p1.host, scope: "web-1", list: p1.list, from: null, warnings: [] },
       { t: "ev", ev: "prompt", id: "p2", state: "closed", host: p2.host, scope: "web-1", list: p2.list, from: null, warnings: [] },
       { t: "ev", ev: "stopped", reason: "stop", by: control.requests.find((v: any) => v.req.id === "r12").req.by },
-      // The stored sign-ins: each change of the store's state (s4 open, s14 locked, s17 open, s24 locked, s29 none).
+      // The stored sign-ins: each change of the store's state (s6 open, s25 locked, s29 open, s43 locked, s52 none).
       ...["open", "locked", "open", "locked", "none"].map((state) => ({ t: "ev", ev: "sign_ins", state, pane_key: control.state.sign_ins.pane_key })),
     ]);
     c.end();
   } finally { await d.close(); }
 });
 
+// review-112 B5: each case of a protection that does not hold runs on a new fake with that reason (--unprotected).
+test("the fake with a protection that does not hold answers each case of the vectors' unprotected, and its status gives the reason", async () => {
+  assert.deepEqual(control.unprotected.cases.map((x: any) => x.reason).sort(), ["dumpable", "signal"]);
+  for (const k of control.unprotected.cases) {
+    const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR, unprotected: k.reason }));
+    try {
+      const { c } = await hello(d.path);
+      for (const v of k.requests) { c.send(v.req); assert.deepEqual(await c.answer(v.req.id), v.res, v.note); }
+      c.send({ t: "req", id: "st", op: "status", by: { kind: "daemon", user: "ann", via: "daemon" } });
+      assert.deepEqual((await c.answer("st")).data.sign_ins, k.sign_ins, `${k.note}: status`);
+      c.end();
+    } finally { await d.close(); }
+  }
+  assert.throws(() => new FakeService({ unprotected: "other" as any }), /dumpable or signal/);
+});
+
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
   // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts), stage 1b part 1's part start and stop
   // (test/service-unit-part.test.ts), stage 1b part 2's part sender (test/service-native.test.ts); the stored sign-ins'
-  // seven ops come with stage 1e part 1 (board ab-v16.97.2).
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sign_in_reseal: "1e1", sign_in_seal: "1e1", sign_ins: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_ins_setup: "1e1", sign_ins_unlock: "1e1" });
+  // eight ops come with stage 1e part 1 (board ab-v16.97.2).
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sign_in_reseal: "1e1", sign_in_seal: "1e1", sign_in_start_again: "1e1", sign_ins: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_ins_setup: "1e1", sign_ins_unlock: "1e1" });
   assert.deepEqual([...STAGE_1B1_OPS], ["start", "stop"]);
   assert.deepEqual([...STAGE_1B2_OPS], ["sender"]);
   assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...STAGE_1B2_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
@@ -281,8 +297,9 @@ test("the log rule: the service logs each act with its provenance, and no log li
   const secrets = new Set<string>();
   for (const v of [...control.requests, ...control.badRequests]) {
     const { t, id, op, by, ...fields } = v.req;
-    // The words of provenance are logged by design (a record file of the stored sign-ins holds "by":"operator").
-    for (const s of strs(fields)) if (s.length >= 4 && !["operator", "token", "daemon", "config", "send"].includes(s)) secrets.add(s);
+    // The words of provenance are logged by design (a record file of the stored sign-ins holds "by":"operator"), and so is
+    // the record's other `by`, "offer", in a fixed error text (`an offer needs a new id`, review-112).
+    for (const s of strs(fields)) if (s.length >= 4 && !["operator", "offer", "token", "daemon", "config", "send"].includes(s)) secrets.add(s);
   }
   secrets.add("lt-1a2b");
   for (const make of [stage1a, () => new FakeService({ agentDoor: AGENT_DOOR })]) {

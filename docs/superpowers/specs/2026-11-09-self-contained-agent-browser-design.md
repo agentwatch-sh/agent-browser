@@ -494,7 +494,7 @@ The control door follows the daemon lead's proposal and review.
 | `prompt_allow {id}`, `prompt_dismiss {id}` (operator) | The service owns the prompts and their dismissals. The allow adds the host to the prompt's list, as a `list_set`. |
 | `import {payload}` (operator, `via: send`) | Checks the payload (C2), drops the box's own sign-in cookies (the hosts and names of `set_sessions`), sends `import` to the receiver, answers the counts. Nothing is written to disk. |
 | `start`, `stop` (`by.kind`: `operator` or `token`) | Starts or stops Chrome and Xvfb. Today's rule stays during the move (the API token may start and stop); Q5 asks about a change. |
-| `sign_ins_setup {sealed}`, `sign_ins_unlock {sealed}`, `sign_ins_rekey {sealed}`, `sign_in_seal {record, offer, sealed}`, `sign_in_reseal {record}` (operator; an offer with `kind: token`), `sign_ins_lock` (operator, or the daemon at the uninstall) | The stored sign-ins (C12; the sign-in design, section 6.2): the set-up, the unlock, a new passphrase, the seal and the new seal of a record, the lock. Only sealed text crosses the door. |
+| `sign_ins_setup {sealed}`, `sign_ins_unlock {sealed}`, `sign_ins_rekey {sealed}`, `sign_in_seal {record, offer, sealed}`, `sign_in_reseal {record}`, `sign_in_start_again {credential}` (operator; an offer with `kind: token`), `sign_ins_lock` (operator, or the daemon at the uninstall) | The stored sign-ins (C12; the sign-in design, section 6.2): the set-up, the unlock, a new passphrase, the seal and the new seal of a record, the operator's "Start again" of a stopped credential, the lock. Only sealed text crosses the door. |
 | `sign_ins {key, records}` | A complete snapshot of the store's files, at each connect after `set_sessions` and at each change. |
 | `status`, `lists_get`, `prompts_get`, `endpoint {scope}`, `sender` | The status of section 5.6, with an agent's text and an operator's text (I2); the lists and the old single list (read only); the open prompts; the agent door's URL for a scope (for `agentwatch browser endpoint` and `env`); the sender's ID, version and package (C1, C9). |
 
@@ -505,7 +505,7 @@ The control door follows the daemon lead's proposal and review.
 | `stopped` | a reason: `receiver_missing`, `sessions_unread`, a failed start, a stop with its caller's kind (the daemon lead's C4: the daemon sees each fail-closed stop) |
 | `chrome` | the version and the update state |
 | `error` | a user, a domain and counts only, never a page, a cookie or a URL path |
-| `sign_in` | the act's `phase` (`start` or `end`), the scope, the repo, the credential's id, name and origin, and the time; at the end also the result, the act's time and the blocked hosts; never a username, a password or a form value |
+| `sign_in` | the act's `phase` (`start` or `end`) and its act id, the scope, the repo, the credential's id, name and origin, and the time; at the end also the result, the time, the numbers of the requests that the block and the guard stopped (no host), and whether the act stopped the credential; never a username, a password or a form value |
 | `sign_ins` | the store's state and the pane key's public half |
 
 ### 7.2 What agentwatch keeps

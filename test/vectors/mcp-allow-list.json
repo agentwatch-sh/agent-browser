@@ -1833,6 +1833,14 @@
    "answer": "service"
   },
   {
+   "note": "browser_sign_in with no name, for a request with a local admission: the service runs the act's method, and check 2 refuses it with <name> null (C11, the sign-in act)",
+   "call": {
+    "name": "browser_sign_in",
+    "arguments": {}
+   },
+   "answer": "service"
+  },
+  {
    "note": "browser_sign_in with an argument key that its keys do not name",
    "call": {
     "name": "browser_sign_in",

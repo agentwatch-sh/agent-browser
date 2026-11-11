@@ -55,6 +55,8 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   "agent-door": { type: "string" }, "control-door": { type: "string" }, "daemon-unit": { type: "string" }, "daemon-command": { type: "string" },
   "lists-folder": { type: "string" }, "state-folder": { type: "string" },
   hello: { type: "boolean" }, fake: { type: "boolean" }, refuse: { type: "boolean" },
+  // The fake as a process where a protection of the service's memory does not hold (C12, the fake; review-112 B5).
+  unprotected: { type: "string" },
   // The Chrome unit (stage 1b part 1, board ab-v16.94.3).
   "tools-dir": { type: "string" }, "service-unit": { type: "string" },
   test: { type: "boolean" }, "test-display": { type: "string" }, "test-chrome-source": { type: "string" },

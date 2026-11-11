@@ -59,10 +59,12 @@ export const OPS: Readonly<Record<string, { readonly fields: readonly string[]; 
   sign_ins_rekey: { fields: ["sealed"], kinds: ACT },
   sign_in_seal: { fields: ["record", "offer", "sealed"], kinds: ACT },
   sign_in_reseal: { fields: ["record"], kinds: ACT },
+  // The operator's "Start again" of a stopped credential (review-112 B4); its field is not `id`, a line key.
+  sign_in_start_again: { fields: ["credential"], kinds: ACT },
   sign_ins: { fields: ["key", "records"], kinds: OWN },
 };
 /** The ops of the stored sign-ins (the feature `sign_ins`). */
-export const SIGN_IN_OPS = ["sign_ins_setup", "sign_ins_unlock", "sign_ins_lock", "sign_ins_rekey", "sign_in_seal", "sign_in_reseal", "sign_ins"] as const;
+export const SIGN_IN_OPS = ["sign_ins_setup", "sign_ins_unlock", "sign_ins_lock", "sign_ins_rekey", "sign_in_seal", "sign_in_reseal", "sign_in_start_again", "sign_ins"] as const;
 /** The reads: no act, so the door does not log them. */
 export const READS: ReadonlySet<string> = new Set(["status", "lists_get", "prompts_get", "endpoint", "sender"]);
 
@@ -73,7 +75,7 @@ export const EVENTS: Readonly<Record<string, readonly string[]>> = {
   stopped: ["reason"],
   chrome: ["version", "update"],
   error: ["op", "user", "domain", "counts"],
-  sign_in: ["phase", "scope", "repo", "id", "name", "origin", "at"],
+  sign_in: ["phase", "act", "scope", "repo", "id", "name", "origin", "at"],
   sign_ins: ["state", "pane_key"],
 };
 
@@ -101,6 +103,7 @@ export function fieldFits(f: string, v: unknown): boolean {
     case "offer": return typeof v === "boolean";
     case "key": return v === null || isObj(v);
     case "records": return Array.isArray(v) && v.every(isObj);
+    case "credential": return typeof v === "string" && /^c-[0-9a-f]{8}$/.test(v);
     default: return true;
   }
 }
@@ -121,13 +124,15 @@ export function checkRequest(req: Record<string, unknown>, has: (op: string) => 
   return null;
 }
 
+/** The extra fields of the end of a sign-in act (review-112: counts in place of hosts, and the stop of the credential). */
+export const SIGN_IN_END = ["result", "ms", "blocked", "guarded", "stopped_now"] as const;
 /**
  * An event of C12's table with exactly its fields, and a `by` of the right shape for a stop (the fake's standard input).
- * A stop also has `by`, and the end of a sign-in act also has `result`, `ms` and `blocked`.
+ * A stop also has `by`, and the end of a sign-in act also has the fields of SIGN_IN_END.
  */
 export function eventFits(ev: unknown): boolean {
   if (!isObj(ev) || ev.t !== "ev" || typeof ev.ev !== "string" || !Object.hasOwn(EVENTS, ev.ev)) return false;
-  const want = ["t", "ev", ...EVENTS[ev.ev], ...(ev.ev === "stopped" && ev.reason === "stop" ? ["by"] : []), ...(ev.ev === "sign_in" && ev.phase === "end" ? ["result", "ms", "blocked"] : [])].sort();
+  const want = ["t", "ev", ...EVENTS[ev.ev], ...(ev.ev === "stopped" && ev.reason === "stop" ? ["by"] : []), ...(ev.ev === "sign_in" && ev.phase === "end" ? SIGN_IN_END : [])].sort();
   const keys = Object.keys(ev).sort();
   return keys.length === want.length && keys.every((k, i) => k === want[i]) && (ev.by === undefined || byFits(ev.by));
 }

@@ -131,7 +131,7 @@ const failingDisk = (disk: { failing: boolean }) => (p: string, v: unknown) => {
 test("stage 1c adds its seven ops to the service's table; start and stop come with stage 1b part 1's part, sender with stage 1b part 2's, and each op of C12 is in one place", withRig(async (r) => {
   assert.deepEqual([...STAGE_1C_OPS].sort(), ["import", "launch_check", "list_set", "lists_get", "prompt_allow", "prompt_dismiss", "prompts_get"]);
   assert.deepEqual(Object.keys(r.part.ops).sort(), [...STAGE_1C_OPS].sort());
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sign_in_reseal: "1e1", sign_in_seal: "1e1", sign_ins: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_ins_setup: "1e1", sign_ins_unlock: "1e1" });
+  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sign_in_reseal: "1e1", sign_in_seal: "1e1", sign_in_start_again: "1e1", sign_ins: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_ins_setup: "1e1", sign_ins_unlock: "1e1" });
   assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...STAGE_1B2_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort());
   for (const op of STAGE_1C_OPS) assert.equal(r.svc.has(op), true, op);
   for (const op of Object.keys(LATER_OPS)) assert.equal(r.svc.has(op), false, op);
