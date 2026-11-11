@@ -2,7 +2,7 @@
 // steps 4 to 6): on Linux each input command (click, click --text, Tab.clickAt, hover, type, press, setFiles) brings
 // its page's window forward when the page has no focus (Page.bringToFront), holds the input lock of the state folder
 // across processes, and sends a person's input: a pointer path from the real pointer, a press of 70 to 90 ms with force
-// 0.5, one key-event pair per character, a click on a field in place of el.focus() that leaves the caret where
+// 0.5, a person's keys per character (the keyboard model, ab-t30.4), a click on a field in place of el.focus() that leaves the caret where
 // `type --into` put it, wheel events in place of scrollIntoView, and a click that opens the file chooser before
 // setFiles. Against the fake Chrome (fake-chrome.ts: windows, the X pointer's event at an activation, a scrolling page,
 // the caret, the file chooser). An explicit `open --tab`, the Mac and personal mode keep today's input.
@@ -102,8 +102,9 @@ const keys = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatch
 const methods = (calls: Call[]) => calls.map((x) => x.method);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
 
-test("the input timing: the defaults of the input design (the pointer's bounds of design 10.1 and 8.2), a partial option, and the CLI's --input-timing", () => {
-  assert.deepEqual(INPUT_TIMING, { pressMs: [60, 180], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
+test("the input timing: the defaults of the input design (the pointer's bounds of design 10.1 and 8.2, the keys' of 10.2), a partial option, and the CLI's --input-timing", () => {
+  // keyMs: a range that does not bind the keyboard model (board ab-t30.4); holdMs: a key's hold of 50 to 250 ms (design 10.2).
+  assert.deepEqual(INPUT_TIMING, { pressMs: [60, 180], keyMs: [20, 3000], holdMs: [50, 250], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
   assert.deepEqual(resolveOptions(c.options()).inputTiming, INPUT_TIMING);
   assert.deepEqual(resolveOptions(c.options({ inputTiming: { pressMs: [10, 20] } })).inputTiming, { ...INPUT_TIMING, pressMs: [10, 20] });
   for (const bad of [{ pressMs: [20, 10] }, { keyMs: [-1, 5] }, { moveScale: 0 }, { activateMs: Number.NaN }, { nope: 1 }, { holdMs: [1] }])
@@ -257,7 +258,8 @@ test("type --into a field in the middle of a caret, and a field that a click doe
   f.setSelectionRange(1, 1); // an earlier focus left the caret after "a"
   const calls = await callsOf(page, () => commands.type(linux(), { tab: name, text: "Q", into: "#set" }));
   assert.equal(f.value, "aQbc");
-  assert.deepEqual(keys(calls).filter((x) => x.params.type !== "keyUp").map((x) => x.params.key), ["Home", "ArrowRight", "Q"]);
+  // The capital Q gets a real Shift key before it (the keyboard model, design 10.2; board ab-t30.4).
+  assert.deepEqual(keys(calls).filter((x) => x.params.type !== "keyUp").map((x) => x.params.key), ["Home", "ArrowRight", "Shift", "Q"]);
   const lines: string[] = [];
   const cover = page.select("#hov")[0];
   cover.rect = [40, 160, 200, 24]; // another element over #i: the click hits it
@@ -269,18 +271,67 @@ test("type --into a field in the middle of a caret, and a field that a click doe
   await commands.close(linux(), { tab: name });
 });
 
-test("the keys of type: one pair per character, 90 to 150 ms apart by default, held down a short time", async () => {
+test("the keys of type with the default timing: the keyboard model's holds (50 to 250 ms) and times from one press to the next, each key event with a person's timestamp", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   await commands.click(linux(), { tab: name, target: "#i" });
   const calls = await callsOf(page, () => commands.type(linux({ inputTiming: undefined }), { tab: name, text: "abcd" }));
-  const downs = keys(calls).filter((x) => x.params.type === "keyDown");
+  const ev = keys(calls), downs = ev.filter((x) => x.params.type === "keyDown");
   assert.deepEqual(downs.map((x) => x.params.key), ["a", "b", "c", "d"]);
-  for (let i = 1; i < downs.length; i++) {
-    const gap = downs[i].t - downs[i - 1].t;
-    assert.ok(gap >= 85 && gap <= 190, `gap ${gap} ms`);
+  for (const d of downs) {
+    const up = ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!;
+    assert.ok(up.t - d.t >= 45 && up.t - d.t <= 270, `the hold of ${d.params.key}: ${up.t - d.t} ms`);
+  }
+  // The model's holds (mean 116 ms, SD 24 ms): the mean of four is above 80 ms (today's 20 to 50 ms gave about 35).
+  const holds = downs.map((d) => ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!.t - d.t);
+  assert.ok(holds.reduce((a, b) => a + b, 0) / holds.length > 80, `the mean hold: ${holds.join(", ")} ms`);
+  for (let i = 1; i < downs.length; i++) assert.ok(downs[i].t - downs[i - 1].t >= 15, `gap ${downs[i].t - downs[i - 1].t} ms`);
+  for (const x of ev) {
+    // The fake's receive time (x.t) adds the delivery to the 3 to 5 ms of the latency: on a loaded box (load average 6) up to
+    // 10 ms in all. The upper bound allows that; a missing timestamp or one with no latency still fails.
+    const ts = x.params.timestamp * 1000;
+    assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6 && x.t - ts >= 2.5 && x.t - ts <= 20, `a whole-ms timestamp 3 to 5 ms before the send: ${x.t - ts} ms`);
   }
   assert.equal(page.select("#i")[0].value, "abcd");
+  await commands.close(linux(), { tab: name });
+});
+
+test("type with the keyboard model: a capital gets a real Shift key (45 to 95 ms before it, location 1 or 2, up 15 to 60 ms after its release); a run of capitals keeps it; a key with no Shift waits", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  const calls = await callsOf(page, () => commands.type(linux(), { tab: name, text: "Hi OK", into: "#i" }));
+  assert.equal(page.select("#i")[0].value, "Hi OK");
+  const ev = keys(calls).filter((x) => x.t >= (keys(calls).find((y) => y.params.key === "H")?.t ?? 0) - 200);
+  assert.deepEqual(ev.map((x) => `${x.params.type} ${x.params.key}`).filter((x) => /Shift|keyDown/.test(x)),
+    ["rawKeyDown Shift", "keyDown H", "keyUp Shift", "keyDown i", "keyDown  ", "rawKeyDown Shift", "keyDown O", "keyDown K", "keyUp Shift"]);
+  const at = (type: string, key: string, n = 0) => ev.filter((x) => x.params.type === type && x.params.key === key)[n];
+  for (const [n, first, last] of [[0, "H", "H"], [1, "O", "K"]] as const) {
+    const down = at("rawKeyDown", "Shift", n), up = at("keyUp", "Shift", n);
+    assert.ok(down.params.location === 1 || down.params.location === 2, `location ${down.params.location}`);
+    assert.equal(down.params.code, down.params.location === 1 ? "ShiftLeft" : "ShiftRight");
+    assert.deepEqual([down.params.modifiers, at("keyDown", first).params.modifiers, at("keyUp", last).params.modifiers, up.params.modifiers], [8, 8, 8, 0]);
+    assert.ok(at("keyDown", first).t - down.t >= 40 && at("keyDown", first).t - down.t <= 110, `Shift ${at("keyDown", first).t - down.t} ms before ${first}`);
+    const lastUp = Math.max(...[first, last].map((k) => at("keyUp", k).t));
+    assert.ok(up.t - lastUp >= 10 && up.t - lastUp <= 75, `the Shift release ${up.t - lastUp} ms after the last key's`);
+  }
+  assert.ok(at("keyDown", "i").t > at("keyUp", "Shift").t, "i waits for the Shift release");
+  await commands.close(linux(), { tab: name });
+});
+
+test("type with the keyboard model: rollover: a key's press comes before the release of the key before (its early answer); an inserted text and the field's read come after every release", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  await commands.click(linux(), { tab: name, target: "#i" });
+  // Holds of 20 to 30 ms and times of 6 to 9 ms from one press to the next: each release is answered early and comes after the next press.
+  const calls = await callsOf(page, () => commands.type(linux({ inputTiming: { ...FAST, keyMs: [6, 9], holdMs: [20, 30] } }), { tab: name, text: "abc\u00e9def" }));
+  assert.equal(page.select("#i")[0].value, "abc\u00e9def");
+  const ev = keys(calls), down = (k: string) => ev.find((x) => x.params.type === "keyDown" && x.params.key === k)!, up = (k: string) => ev.find((x) => x.params.type === "keyUp" && x.params.key === k)!;
+  for (const [a, b] of [["a", "b"], ["b", "c"], ["d", "e"], ["e", "f"]]) assert.ok(calls.indexOf(down(b)) < calls.indexOf(up(a)), `${b} goes down before ${a} goes up`);
+  for (const k of "abcdef") assert.ok(up(k).t - down(k).t >= 18, `the hold of ${k}: ${up(k).t - down(k).t} ms`);
+  const ins = calls.findIndex((x) => x.method === "Input.insertText");
+  assert.ok(ins > calls.indexOf(up("c")) && ins < calls.indexOf(down("d")), "the inserted text after c's release, before d");
+  const lastKey = Math.max(...ev.map((x) => calls.indexOf(x))), read = calls.findIndex((x, i) => i > calls.indexOf(down("f")) && !/^Input\./.test(x.method));
+  assert.ok(read > lastKey, `the field's read (${calls[read]?.method}) after the last key event`);
   await commands.close(linux(), { tab: name });
 });
 

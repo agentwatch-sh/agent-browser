@@ -23,8 +23,11 @@
 //   500 px, a tremor and a slow approach to a small target, one sample each 8 ms in whole px, sent by the CDP player at
 //   its time with no wait for each answer, with a person's timestamp; a pause on the target, a press with force 0.5 at a
 //   spread point of the element; the wheel brings an element into view (120 px a notch); one person for each endpoint
-//   scope (pointer.json keeps its seed). One key-event pair per character, 90 to 150 ms apart (the keyboard model is
-//   board ab-t30.4); a field gets the focus by a click, and the caret goes where el.focus() would have put it; a file
+//   scope (pointer.json keeps its seed). The keys follow the keyboard model of src/human/keys.ts (board ab-t30.4; the
+//   design's section 10.2): a person's hold for each key, the time from one press to the next with its letter-pair
+//   part, pauses at word and line ends, a slow drift of the speed, rollover (the next press before this key's release),
+//   a real Shift key before a capital, chords with their modifier keys, the fast end after 12 s of a run, each event with
+//   a person's timestamp; a field gets the focus by a click, and the caret goes where el.focus() would have put it; a file
 //   input gets a click that opens Chrome's file chooser (intercepted), and the files go to the input that it names.
 //   The times are the inputTiming option (options.ts, INPUT_TIMING): its ranges bound the generator's draws.
 
@@ -36,8 +39,10 @@ import { displayOf, onlyWindowsOf, pidOf, type DisplayInfo, type XAccess } from 
 import { AgentBrowserError } from "./errors.ts";
 import { withFileLock } from "./lock.ts";
 import { statePath, type InputTiming, type Settings } from "./options.ts";
-import { charKey, parseKey, sendKey, type KeyEvent, type Point } from "./record.ts";
+import { keyFields } from "./browser.ts";
+import { charKey, macCommands, parseKey, type Point } from "./record.ts";
 import { CdpPlayer, systemClock } from "./human/cdp-player.ts";
+import { KeyStream, type Key, type KeyEv } from "./human/keys.ts";
 import { planPath, startPoint } from "./human/path.ts";
 import { paramsFor, personFor, type Person } from "./human/person.ts";
 import { force, holdMs, pauseMs, spreadPoint } from "./human/press.ts";
@@ -289,8 +294,10 @@ export class Hands {
   private readonly random: Random = Math.random;
   private readonly player: CdpPlayer;
   private recordMoved = false;
-  private lastKey = 0;
   private keys = 0;
+  /** The key run's stream (src/human/keys.ts), and its events that wait for their time (an early-answered release, the Shift release). */
+  private keyStream: KeyStream | undefined;
+  private keyQueue: { ev: KeyEv; commands?: string[] }[] = [];
 
   private constructor(tab: Tab, at: Point, known: boolean, x: XAccess | undefined, geo: Geo, state: PointerState, guard: () => void) {
     this.tab = tab;
@@ -394,6 +401,8 @@ export class Hands {
    * to the cursor's end; after a path of this file it is there already (the path's last step).
    */
   async end(): Promise<void> {
+    // The key run's last releases first. A page that left the allowlist gets none: the guard refuses each event.
+    await this.endKeys().catch(() => {});
     if (this.recordMoved && this.x) await this.xMove(this.at);
     this.state.pages[this.tab.targetId] = { x: Math.round(this.at.x * 100) / 100, y: Math.round(this.at.y * 100) / 100 };
     writePointer(this.tab.browser.settings, this.state);
@@ -431,6 +440,7 @@ export class Hands {
    * press. When the page answers none of 8 moves (a dialog), the path stops and one move goes to `to`.
    */
   async moveTo(to: Point, width = 24): Promise<void> {
+    await this.endKeys(); // a pointer path after keys waits for their releases (design 4.5)
     to = { x: Math.round(to.x), y: Math.round(to.y) };
     const from = { x: Math.round(this.at.x), y: Math.round(this.at.y) };
     const { samples } = planPath(from, to, width, this.person, this.random);
@@ -461,6 +471,7 @@ export class Hands {
    * press.
    */
   async press(before?: () => Promise<boolean>): Promise<boolean> {
+    await this.endKeys();
     await sleep(pauseMs(this.person, this.random, this.timing.settleMs));
     this.guard();
     await this.tab.assertAllowed();
@@ -600,8 +611,9 @@ export class Hands {
     await this.tab.evaluate(scriptCaret, a, z);
   }
 
-  /** The page is still on the allowlist: the guard, then the list read again (Tab.assertAllowed). */
+  /** The page is still on the allowlist: the key run's releases, the guard, then the list read again (Tab.assertAllowed). */
   async check(): Promise<void> {
+    await this.endKeys();
     this.guard();
     await this.tab.assertAllowed();
     this.guard();
@@ -613,30 +625,69 @@ export class Hands {
     if (this.keys++ % 16 === 0) { await this.tab.assertAllowed(); this.guard(); }
   }
 
-  /** One key: down, held a short time, up. */
-  async key(k: KeyEvent): Promise<void> {
-    await this.beforeKey();
-    // The guard also before the keyUp: a keydown can take the page off the allowlist (review-47b).
-    await sendKey(this.tab, k, between(this.timing.holdMs), () => this.guard());
+  /** The key run's stream: inputTiming's holdMs bounds each hold, and keyMs each time from one press to the next. */
+  private get keysOf(): KeyStream {
+    return this.keyStream ??= new KeyStream(this.person, this.random, { holdMs: this.timing.holdMs, keyMs: this.timing.keyMs });
   }
 
-  /** `press`: Tab.press's own key events (a keyDown with the key's text, and a keyUp), held down a short time. */
+  /** CDP's fields of a key event: keyFields (a function key stays in the page), the text of a press, a Shift's or modifier's location, on macOS its editing commands. */
+  private keyParams(ev: KeyEv, commands?: string[]): Record<string, unknown> {
+    return { type: ev.type, ...keyFields(ev.key, ev.code, ev.keyCode, ev.modifiers), ...(ev.location ? { location: ev.location } : {}),
+      ...(ev.type !== "keyUp" && ev.text ? { text: ev.text, unmodifiedText: ev.text } : {}), ...(commands?.length ? { commands } : {}) };
+  }
+
+  /**
+   * The queued key events and `evs`, in time order, each at its time through the CDP player (the guard before each one, a
+   * person's timestamp), up to `until`: a later event (a release after the next press: rollover) stays queued.
+   */
+  private async playKeys(evs: { ev: KeyEv; commands?: string[] }[], until = Infinity): Promise<void> {
+    this.keyQueue.push(...evs);
+    this.keyQueue.sort((a, b) => a.ev.t - b.ev.t);
+    while (this.keyQueue.length && this.keyQueue[0].ev.t <= until) {
+      const { ev, commands } = this.keyQueue.shift()!;
+      await sleep(ev.t - systemClock.now());
+      await this.player.event("Input.dispatchKeyEvent", this.keyParams(ev, commands));
+    }
+  }
+
+  /**
+   * One key by the keyboard model (src/human/keys.ts): a Shift or a chord's modifiers when the key needs them, the press at
+   * its time, the release after the key's hold. When the next key can overlap (the early answer of design 4.5), the
+   * release stays queued and the next key's press can come before it. `commands`: macOS's editing commands of the key.
+   */
+  async key(k: Key, commands = true): Promise<void> {
+    await this.beforeKey();
+    const s = this.keysOf, cmds = commands && process.platform === "darwin" ? macCommands(k) : undefined;
+    const press = s.next(k, systemClock.now());
+    await this.playKeys(press.map((ev) => ({ ev, commands: ev.own ? undefined : cmds })), press.at(-1)!.t);
+    const r = s.release(k, systemClock.now());
+    if (r.early) this.keyQueue.push(...r.events.map((ev) => ({ ev })));
+    else await this.playKeys(r.events.map((ev) => ({ ev })));
+  }
+
+  /** The end of a key run: every queued release and the release of the stream's own Shift. Every input that is not a key comes after it (design 4.5). */
+  async endKeys(): Promise<void> {
+    if (!this.keyStream && !this.keyQueue.length) return;
+    await this.playKeys((this.keyStream?.end(systemClock.now()) ?? []).map((ev) => ({ ev })));
+  }
+
+  /** `press`: Tab.press's own key (a keyDown with the key's text, and a keyUp), held a person's time, as a run of its own. */
   async keyPress(fields: object, text?: string): Promise<void> {
-    await this.beforeKey();
-    await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...fields, text });
-    await sleep(between(this.timing.holdMs));
-    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...fields });
+    const f = fields as { key: string; code: string; windowsVirtualKeyCode: number };
+    await this.key({ key: f.key, code: f.code, keyCode: f.windowsVirtualKeyCode, ...(text !== undefined ? { text } : {}), modifiers: 0, type: "keyDown" }, false);
+    await this.endKeys();
   }
 
-  /** One character as a key-event pair, keyMs after the last one's press; a character with no US key as inserted text. */
+  /** One character as a key by the keyboard model; a character with no US key as inserted text, after the run's releases, one interval after the last press. */
   async typeChar(ch: string): Promise<void> {
-    if (this.lastKey) await sleep(this.lastKey + between(this.timing.keyMs) - Date.now());
-    this.lastKey = Date.now();
     if (ch === "\n") return this.key(parseKey("Enter"));
     if (ch === "\t") return this.key(parseKey("Tab"));
     const k = charKey(ch);
     if (k) return this.key(k);
     await this.beforeKey();
+    const r = this.keysOf.insert(systemClock.now());
+    await this.playKeys(r.events.map((ev) => ({ ev })));
+    await sleep(r.t - systemClock.now());
     await this.send("Input.insertText", { text: ch });
   }
 

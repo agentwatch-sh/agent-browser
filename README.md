@@ -345,8 +345,14 @@ person's input**) and `log` (progress lines; default standard error).
     person's spread around the element's middle (a standard deviation of 1/8 of its smaller side, at
     most 1/4 of it, where a hit test finds the element), then a pause of 80 to 400 ms (median 140) and
     a press of 60 to 180 ms (median 100) with `force: 0.5`. Each endpoint scope moves as one person of
-    its own (`pointer.json` keeps the seed). One key-event pair per character, 90 to 150 ms apart, each
-    key down 20 to 50 ms, in place of `Input.insertText` (a character with no US-keyboard key still goes
+    its own (`pointer.json` keeps the seed). The keys follow a person's keyboard patterns
+    (`src/human/keys.ts`, the design's section 10.2): each key held 50 to 250 ms (mean 116), the time
+    from one press to the next with a part for each letter pair (two hands fastest), 20 to 120 ms more
+    after a space, 80 to 250 ms more after a mark and 200 to 600 ms more after Enter, a speed that drifts
+    from word to word, rollover (the next key down before this one is up, in about 25% of keys), a real
+    Shift key (location 1 or 2) 45 to 95 ms before a capital and up 15 to 60 ms after it (a run of
+    capitals keeps it down), Control and its key as a chord, the fast end (100 to 120 ms a key) after 12 s
+    of typing, each event with a timestamp; in place of `Input.insertText` (a character with no US-keyboard key still goes
     as inserted text). An element out of view comes into view by the wheel (120 px a notch, 35 to 90 ms
     apart, with the pointer over the element's scroller), in place of `scrollIntoView`. `type --into` clicks the
     field in place of `el.focus()`, and `setFiles` clicks the file input (or its label) so that Chrome
@@ -421,15 +427,16 @@ person's input**) and `log` (progress lines; default standard error).
   - **The cost.** Input: a click took 1.20 to 1.33 s with an activation and a path of some hundred
     pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s; the path here takes 300 to
     1000 ms by Fitts's law, as `record`'s cursor), `type --into` with 5 characters 1.25 to 1.30 s, a click
-    below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s. The lock: two
+    below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s (measured before the
+keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s of a run). The lock: two
     agents that type at once took 39 to 57% longer than one agent alone (3 runs after review-47; before it:
     46 to 56%; the research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used 608 to 775 MB
     (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8
     background tabs: 32 to 46 MB more for each window, and every agent page draws at full rate, also
     behind another window. The input timing is the `inputTiming` option (CLI `--input-timing JSON`,
-    Python `input_timing=`), in parts: `pressMs` [60, 180], `keyMs` [90, 150], `holdMs` [20, 50],
-    `settleMs` [80, 400], `wheelMs` [35, 90] (ranges in ms: the pointer's ranges bound the person's
-    draws), `moveScale` 1 (a factor on each path's time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`), `showMs` 2500 (on macOS, the wait
+    Python `input_timing=`), in parts: `pressMs` [60, 180], `keyMs` [20, 3000], `holdMs` [50, 250],
+    `settleMs` [80, 400], `wheelMs` [35, 90] (ranges in ms: they bound the person's draws; `keyMs`, the
+    time from one key press to the next, does not bind the keyboard model by default), `moveScale` 1 (a factor on each path's time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`), `showMs` 2500 (on macOS, the wait
     for a hidden window page to show again: **One window per agent page on the Mac**) and `lockWaitMs`
     600000.
   - **What a site can still see** (the research's section 8, and the runs of this build): the pace and
@@ -442,7 +449,7 @@ person's input**) and `log` (progress lines; default standard error).
     the URL); `record`'s device metrics override and its overlay in the DOM (see **Recording**), and
     its cursor's first move when the page last saw the pointer outside the recorded size, its own
     input (its presses have `force: 0.5` and 70 to 90 ms, but its cursor's path has no X-pointer step, and
-    it types at its script's pace: 55 ms a character by default, faster than the 90 to 150 ms of `type`),
+    it types at its script's pace: 55 ms a character by default, faster than a person's `type`),
     the user activation of its `eval` steps, and one move with no movement at the pointer's place when
     its size override takes effect (Chrome's own); `eval`'s user activation (an agent's
     expression runs as a user gesture, so that it can open a popup); the ways out of the caret item above, each with a log line; `outline`'s
@@ -1873,8 +1880,9 @@ Each argument from `state_dir` to `input_timing` is the CLI flag of the same nam
 a mapping that goes as the JSON of `--input-timing`). `node`,
 `package_dir`, `timeout` and `env` tell the adapter how to run the CLI. `timeout` (120 s) is the limit of
 each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
-input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.2 s for each
-character of the text (in agent mode on Linux a person's typing takes about 0.12 s a character), so a long
+input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.35 s for each
+character of the text (in agent mode on Linux a person's typing takes about 0.2 to 0.3 s a character for the
+first 12 s of a run, then about 0.12 s), so a long
 text and a wait for another agent's input fit. `text`, `outline` and `eval` wait for the input lock inside
 their `timeout`, as the Node client's `Tab.waitFor` does (review-52): a read of a hidden window page brings
 its tab in front inside the lock (**One window per agent page**), and that wait may take all of the timeout
@@ -2220,7 +2228,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   90 ms with the default timing; the X pointer moves to each path's end only through xdotool on a
   display that holds the agent browser only; `type --into` clicks the field where `el.focus()` puts
   the caret (keys correct it; a field that the click does not focus gets `el.focus()` with a log
-  line), and types one key pair per character 90 to 150 ms apart; the wheel brings an element into
+  line), and types with a person's keyboard patterns (holds, rollover, a real Shift key); the wheel brings an element into
   view (no `scrollIntoView`); `setFiles` clicks the input or its label and fills the chooser's input;
   two processes' input commands never overlap (`input.lock`); a popup is driven in its tab, and the
   opener comes back with a tab switch; `open --tab`, the Mac and personal mode keep today's input.

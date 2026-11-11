@@ -158,7 +158,8 @@ numbers replace it through one file: `--reference FILE`. The file holds numbers 
 format 1 (the head of `reference.ts`; the fixture is `reference.fixture.json`). `checkReference` refuses
 any other field, by its own name (so also `constructor`, `toString` and `__proto__`), and any value that
 is not a number, so no user agent, screen or text can be in it. The only names that are not fields are
-the letter pairs of the optional `keys.downToDownByPairMs`: two characters each, with numbers as values.
+the letter pairs of the optional `keys.downToDownByPairMs` (two characters each) and the keys of the optional
+`keys.holdByKeyMs` (one character each), with numbers as values.
 
 How the rows read:
 
@@ -186,6 +187,12 @@ How the rows read:
   the bar (the reference's range).
 - P6's load to the first move (board ab-t30.3): the time from the top page's load to its first trusted
   pointer move, on the step that holds that move; measured, not scored (Q4; part B's task 6).
+- K1 per key (board ab-t30.4): a KS test of each key's holds (5 values or more, the key's character in
+  lower case) against the key's own reference (`keys.holdByKeyMs`, part B), else against the reference of
+  all holds. The agent-browser scenario types a second, longer text into the text area for it.
+- K4's Shift (board ab-t30.4): the Shift keydowns with a location of 1 or 2 (CDP's default is 0), and the
+  shifted characters whose Shift goes up after their own keyup (bars: every one); the share of Shift
+  presses on the other hand's side of their first character (design 10.2: about 70%) is information.
 - K2: the design's measure is per letter pair. The per-pair row runs a KS test for each pair with 5
   values or more in both the source and the reference. Until part B gives values for each pair, it has
   no data, and the pooled row counts: the literature's value (a mean of 239 ms and an SD of 112 ms)

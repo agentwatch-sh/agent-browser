@@ -29,17 +29,19 @@ export function validateApprove(spec: ApproveSpec): void {
 
 /**
  * The shape of a person's input in a window of its own (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md,
- * section 5). Ranges are [min, max] in ms. The pointer's draws come from the person of src/human/ (board ab-t30.3; the
- * input design, section 10.1), bounded by these ranges: the defaults are the design's bounds, and a shorter range (a
- * test's) keeps every draw inside it. The keys' values are drawn at random between them (the keyboard model is board
- * ab-t30.4).
+ * section 5). Ranges are [min, max] in ms. The pointer's and the keys' draws come from the person of src/human/ (boards
+ * ab-t30.3 and ab-t30.4; the input design, sections 10.1 and 10.2), bounded by these ranges: the defaults are the design's
+ * bounds (keyMs: a range that does not bind the model), and a shorter range (a test's) keeps every draw inside it.
  */
 export type InputTiming = {
   /** From a click's press to its release: a lognormal, median 100 ms, within this range (design 10.1: 60 to 180 ms). */
   pressMs: [number, number];
-  /** From one typed character's key press to the next one's. */
+  /**
+   * From one typed key's press to the next one's: the keyboard model's time (a person's, with the letter pair's part, the
+   * pauses at word and line ends, the drift; the fast end after 12 s of a run) is kept inside this range.
+   */
   keyMs: [number, number];
-  /** How long each key stays down. */
+  /** How long each key stays down: a lognormal, mean 116 ms, SD 24 ms, within this range (design 10.2: 50 to 250 ms). */
   holdMs: [number, number];
   /** The pause on the target after the pointer arrives, before the press: a lognormal, median 140 ms, within this range (design 10.1: 80 to 400 ms). */
   settleMs: [number, number];
@@ -62,9 +64,12 @@ export type InputTiming = {
   lockWaitMs: number;
 };
 
-/** The defaults: a person's input (the input design's first values). A click costs about 0.5 to 1.5 s, a typed character about 0.13 s. */
+/**
+ * The defaults: a person's input (the input design's first values). A click costs about 0.5 to 1.5 s, a typed character
+ * about 0.2 to 0.3 s for the first 12 s of a run and 0.1 to 0.12 s after them.
+ */
 export const INPUT_TIMING: Readonly<InputTiming> = Object.freeze({
-  pressMs: [60, 180], keyMs: [90, 150], holdMs: [20, 50], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000,
+  pressMs: [60, 180], keyMs: [20, 3000], holdMs: [50, 250], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000,
 }) as Readonly<InputTiming>;
 
 /** The input timing of a caller's partial option, checked: each range two numbers, 0 <= min <= max; the factor and the waits positive. */

@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s52 run in their order after r13 with the fake values of state.sign_ins (the fake opens no seal), the bad requests b22 to b41 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected), and signInScan holds the canaries of the scan.",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints. The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s52 run in their order after r14 with the fake values of state.sign_ins (the fake opens no seal), the bad requests b33 to b52 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected), and signInScan holds the canaries of the scan.",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -150,7 +150,7 @@
    }
   },
   {
-   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests)",
+   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token and sign_ins",
    "line": {
     "t": "hello",
     "v": 1,
@@ -159,6 +159,7 @@
     "commit": null,
     "features": [
      "fake",
+     "mcp_token",
      "sign_ins"
     ]
    }
@@ -292,7 +293,7 @@
    }
   },
   {
-   "note": "set_sessions: a complete snapshot of three local sessions (each with its lifetime id, or null: web-2 has none), no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
+   "note": "set_sessions: a complete snapshot of four local sessions (each with its lifetime id, or null: shell-2 and web-2 have none), each with its mcp_token (the fingerprint of its connection token: web-1 and tool-4 have one, and a session whose lifetime id is null has null), no remote scope before stage 5, and the box's own sign-in hosts and cookie names",
    "req": {
     "t": "req",
     "id": "r3",
@@ -313,7 +314,8 @@
        }
       ],
       "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope",
-      "lifetime_id": "lt-1a2b"
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
      },
      {
       "scope": "shell-2",
@@ -325,7 +327,8 @@
        }
       ],
       "cgroup": null,
-      "lifetime_id": null
+      "lifetime_id": null,
+      "mcp_token": null
      },
      {
       "scope": "web-2",
@@ -337,7 +340,21 @@
        }
       ],
       "cgroup": null,
-      "lifetime_id": null
+      "lifetime_id": null,
+      "mcp_token": null
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
      }
     ],
     "remote": [],
@@ -358,7 +375,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3, the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store)",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -393,17 +410,26 @@
       {
        "scope": "web-1",
        "repo": "owner/repo",
-       "list": "owner-repo"
+       "list": "owner-repo",
+       "mcp_token": true
       },
       {
        "scope": "shell-2",
        "repo": null,
-       "list": null
+       "list": null,
+       "mcp_token": false
       },
       {
        "scope": "web-2",
        "repo": "owner/repo",
-       "list": "owner-repo"
+       "list": "owner-repo",
+       "mcp_token": false
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "list": null,
+       "mcp_token": true
       }
      ],
      "lists": [
@@ -854,6 +880,80 @@
    "res": {
     "t": "res",
     "id": "r13",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "set_sessions while two live sessions have the launch name web-5 (live: the daemon's live sessions): the daemon sends no item for web-5, so neither of them gets a list or a token; each other live session has its item (review-113 B1)",
+   "live": [
+    {
+     "scope": "shell-2",
+     "lifetime_id": null
+    },
+    {
+     "scope": "tool-4",
+     "lifetime_id": "lt-4d5e"
+    },
+    {
+     "scope": "web-5",
+     "lifetime_id": "lt-5e6f"
+    },
+    {
+     "scope": "web-5",
+     "lifetime_id": "lt-6f70"
+    }
+   ],
+   "req": {
+    "t": "req",
+    "id": "r14",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "shell-2",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3200,
+        "start": 6100
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null,
+      "mcp_token": null
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [
+      "box.example"
+     ],
+     "cookie_names": [
+      "box_login"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r14",
     "ok": true,
     "data": {}
    }
@@ -3460,10 +3560,455 @@
    }
   },
   {
-   "note": "sign_ins_setup with the API token: never an operator act",
+   "note": "a set_sessions whose mcp_token has 63 hex digits: the whole snapshot is a bad request, and the answer echoes no field of it",
    "req": {
     "t": "req",
     "id": "b22",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24f"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b22",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose mcp_token is uppercase hex: a bad request",
+   "req": {
+    "t": "req",
+    "id": "b23",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": "9B02720EFDA0D5B7D07668DB748060C1448F31F0B8F01806E3EA3C00007C24FE"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b23",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions that carries a token in place of its fingerprint (the door carries only fingerprints): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b24",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": "abt1_dGVzdCwgbm90IGEgdG9rZW46IHdlYi0xLi4uLi4uLi4"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b24",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose session has no mcp_token (each item carries it, or null): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b25",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b25",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with one fingerprint in two items: a bad request",
+   "req": {
+    "t": "req",
+    "id": "b26",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b26",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with one scope in two items (each with no fingerprint): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b27",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": null
+     },
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3101,
+        "start": 6010
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-9f8e",
+      "mcp_token": null
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b27",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose session has a fingerprint and the lifetime id null: a bad request",
+   "req": {
+    "t": "req",
+    "id": "b28",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-2",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3300,
+        "start": 6200
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null,
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b28",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with one fingerprint in a session and in a remote item (stage 5's field): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b29",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "web-1",
+      "repo": "owner/repo",
+      "roots": [
+       {
+        "pid": 3100,
+        "start": 6000
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-1a2b",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+     }
+    ],
+    "remote": [
+     {
+      "scope": "taylor/web-9",
+      "box": "taylor",
+      "list": "mac-grant",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b29",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with one remote scope in two remote items: a bad request",
+   "req": {
+    "t": "req",
+    "id": "b30",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "taylor/web-9",
+      "box": "taylor",
+      "list": "mac-grant",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+     },
+     {
+      "scope": "taylor/web-9",
+      "box": "taylor",
+      "list": "mac-grant",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b30",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has an mcp_token of 65 hex digits: a bad request",
+   "req": {
+    "t": "req",
+    "id": "b31",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "taylor/web-9",
+      "box": "taylor",
+      "list": "mac-grant",
+      "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe0"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b31",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has no mcp_token (stage 5's field; each item carries it, or null): a bad request (review-113)",
+   "req": {
+    "t": "req",
+    "id": "b32",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "taylor/web-9",
+      "box": "taylor",
+      "list": "mac-grant"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b32",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_ins_setup with the API token: never an operator act",
+   "req": {
+    "t": "req",
+    "id": "b33",
     "op": "sign_ins_setup",
     "by": {
      "kind": "token",
@@ -3479,7 +4024,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b22",
+    "id": "b33",
     "ok": false,
     "error": "not the operator"
    }
@@ -3488,7 +4033,7 @@
    "note": "sign_ins_unlock from the daemon itself: never an operator act",
    "req": {
     "t": "req",
-    "id": "b23",
+    "id": "b34",
     "op": "sign_ins_unlock",
     "by": {
      "kind": "daemon",
@@ -3504,7 +4049,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b23",
+    "id": "b34",
     "ok": false,
     "error": "not the operator"
    }
@@ -3513,7 +4058,7 @@
    "note": "sign_ins_rekey with the API token",
    "req": {
     "t": "req",
-    "id": "b24",
+    "id": "b35",
     "op": "sign_ins_rekey",
     "by": {
      "kind": "token",
@@ -3529,7 +4074,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b24",
+    "id": "b35",
     "ok": false,
     "error": "not the operator"
    }
@@ -3538,7 +4083,7 @@
    "note": "sign_in_seal with the API token and no offer: only the operator adds; an agent only offers",
    "req": {
     "t": "req",
-    "id": "b25",
+    "id": "b36",
     "op": "sign_in_seal",
     "by": {
      "kind": "token",
@@ -3564,7 +4109,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b25",
+    "id": "b36",
     "ok": false,
     "error": "not the operator"
    }
@@ -3573,7 +4118,7 @@
    "note": "sign_in_reseal from the daemon itself: the approval is the operator's act",
    "req": {
     "t": "req",
-    "id": "b26",
+    "id": "b37",
     "op": "sign_in_reseal",
     "by": {
      "kind": "daemon",
@@ -3592,7 +4137,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b26",
+    "id": "b37",
     "ok": false,
     "error": "not the operator"
    }
@@ -3601,7 +4146,7 @@
    "note": "an offer with kind operator: an offer takes only kind token",
    "req": {
     "t": "req",
-    "id": "b27",
+    "id": "b38",
     "op": "sign_in_seal",
     "by": {
      "kind": "operator",
@@ -3627,7 +4172,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b27",
+    "id": "b38",
     "ok": false,
     "error": "bad request"
    }
@@ -3636,7 +4181,7 @@
    "note": "sign_ins by the operator: the snapshot is the daemon's own request",
    "req": {
     "t": "req",
-    "id": "b28",
+    "id": "b39",
     "op": "sign_ins",
     "by": {
      "kind": "operator",
@@ -3648,7 +4193,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b28",
+    "id": "b39",
     "ok": false,
     "error": "bad request"
    }
@@ -3657,7 +4202,7 @@
    "note": "sign_ins_lock with the API token: the operator or the daemon only",
    "req": {
     "t": "req",
-    "id": "b29",
+    "id": "b40",
     "op": "sign_ins_lock",
     "by": {
      "kind": "token",
@@ -3667,7 +4212,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b29",
+    "id": "b40",
     "ok": false,
     "error": "bad request"
    }
@@ -3676,7 +4221,7 @@
    "note": "sign_in_seal whose sealed is a string, not a pane's seal",
    "req": {
     "t": "req",
-    "id": "b30",
+    "id": "b41",
     "op": "sign_in_seal",
     "by": {
      "kind": "operator",
@@ -3697,7 +4242,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b30",
+    "id": "b41",
     "ok": false,
     "error": "bad request"
    }
@@ -3706,7 +4251,7 @@
    "note": "sign_in_seal with no offer field",
    "req": {
     "t": "req",
-    "id": "b31",
+    "id": "b42",
     "op": "sign_in_seal",
     "by": {
      "kind": "operator",
@@ -3731,7 +4276,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b31",
+    "id": "b42",
     "ok": false,
     "error": "bad request"
    }
@@ -3740,7 +4285,7 @@
    "note": "sign_ins whose records is not a list",
    "req": {
     "t": "req",
-    "id": "b32",
+    "id": "b43",
     "op": "sign_ins",
     "by": {
      "kind": "daemon",
@@ -3752,7 +4297,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b32",
+    "id": "b43",
     "ok": false,
     "error": "bad request"
    }
@@ -3761,7 +4306,7 @@
    "note": "sign_ins_unlock whose pane's seal has no rid",
    "req": {
     "t": "req",
-    "id": "b33",
+    "id": "b44",
     "op": "sign_ins_unlock",
     "by": {
      "kind": "operator",
@@ -3776,7 +4321,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b33",
+    "id": "b44",
     "ok": false,
     "error": "bad request"
    }
@@ -3785,7 +4330,7 @@
    "note": "sign_in_seal with an http: origin that is not a loopback host: the rule of origin",
    "req": {
     "t": "req",
-    "id": "b34",
+    "id": "b45",
     "op": "sign_in_seal",
     "by": {
      "kind": "operator",
@@ -3811,7 +4356,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b34",
+    "id": "b45",
     "ok": false,
     "error": "the stored sign-in is not valid (field origin)"
    }
@@ -3820,7 +4365,7 @@
    "note": "sign_in_seal whose send_to does not hold the origin",
    "req": {
     "t": "req",
-    "id": "b35",
+    "id": "b46",
     "op": "sign_in_seal",
     "by": {
      "kind": "operator",
@@ -3846,7 +4391,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b35",
+    "id": "b46",
     "ok": false,
     "error": "the stored sign-in is not valid (field send_to)"
    }
@@ -3855,7 +4400,7 @@
    "note": "sign_in_reseal with an id that is not c- and 8 lowercase hex digits",
    "req": {
     "t": "req",
-    "id": "b36",
+    "id": "b47",
     "op": "sign_in_reseal",
     "by": {
      "kind": "operator",
@@ -3874,7 +4419,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b36",
+    "id": "b47",
     "ok": false,
     "error": "the stored sign-in is not valid (field id)"
    }
@@ -3883,7 +4428,7 @@
    "note": "an offer whose name does not match the scope pattern",
    "req": {
     "t": "req",
-    "id": "b37",
+    "id": "b48",
     "op": "sign_in_seal",
     "by": {
      "kind": "token",
@@ -3909,7 +4454,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b37",
+    "id": "b48",
     "ok": false,
     "error": "the stored sign-in is not valid (field name)"
    }
@@ -3918,7 +4463,7 @@
    "note": "sign_in_seal whose path holds a query",
    "req": {
     "t": "req",
-    "id": "b38",
+    "id": "b49",
     "op": "sign_in_seal",
     "by": {
      "kind": "operator",
@@ -3944,7 +4489,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b38",
+    "id": "b49",
     "ok": false,
     "error": "the stored sign-in is not valid (field path)"
    }
@@ -3953,7 +4498,7 @@
    "note": "sign_in_start_again with the API token: the operator's act only (review-112 B4)",
    "req": {
     "t": "req",
-    "id": "b39",
+    "id": "b50",
     "op": "sign_in_start_again",
     "by": {
      "kind": "token",
@@ -3964,7 +4509,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b39",
+    "id": "b50",
     "ok": false,
     "error": "not the operator"
    }
@@ -3973,7 +4518,7 @@
    "note": "sign_in_start_again whose credential is not c- and 8 lowercase hex digits",
    "req": {
     "t": "req",
-    "id": "b40",
+    "id": "b51",
     "op": "sign_in_start_again",
     "by": {
      "kind": "operator",
@@ -3984,7 +4529,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b40",
+    "id": "b51",
     "ok": false,
     "error": "bad request"
    }
@@ -3993,7 +4538,7 @@
    "note": "sign_in_start_again with no credential field (id is the request's id, a line key)",
    "req": {
     "t": "req",
-    "id": "b41",
+    "id": "b52",
     "op": "sign_in_start_again",
     "by": {
      "kind": "operator",
@@ -4003,7 +4548,7 @@
    },
    "res": {
     "t": "res",
-    "id": "b41",
+    "id": "b52",
     "ok": false,
     "error": "bad request"
    }
@@ -4290,6 +4835,19 @@
    "note": "a line with the bytes of a lone surrogate (ED A0 80) in a string: not UTF-8; it closes the connection",
    "hex": "7b2274223a22726571222c226964223a226c31222c226f70223a22737461747573222c226279223a7b226b696e64223a226461656d6f6e222c2275736572223a22616e6e222c22766961223a226461656d6f6e227d2c2278223a22eda080227d0a",
    "closes": true
+  }
+ ],
+ "testTokensNote": "Made-up test values in the form of a connection token (abt1_ and 43 base64url characters, 32 bytes; the token design): the bytes of each one are its own ASCII label, so none is a real token. fingerprint: the lowercase hex SHA-256 of the token's ASCII bytes, as set_sessions carries it. The door never carries a token: b24 shows a token in place of its fingerprint, which is a bad request.",
+ "testTokens": [
+  {
+   "name": "web-1",
+   "token": "abt1_dGVzdCwgbm90IGEgdG9rZW46IHdlYi0xLi4uLi4uLi4",
+   "fingerprint": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
+  },
+  {
+   "name": "tool-4",
+   "token": "abt1_dGVzdCwgbm90IGEgdG9rZW46IHRvb2wtNC4uLi4uLi4",
+   "fingerprint": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
   }
  ],
  "signInScan": {

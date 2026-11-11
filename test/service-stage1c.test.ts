@@ -109,8 +109,8 @@ function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; write
 function withRig(f: (r: Rig) => Promise<void>, o?: Parameters<typeof rig>[0]): () => Promise<void> {
   return async () => { const r = rig(o); try { await f(r); } finally { r.done(); } };
 }
-const sess = (scope: string, repo: string | null = "a/b", roots: [number, number][] = [[101, 5000]], lifetime_id: string | null = `lt-${scope}`) =>
-  ({ scope, repo, roots: roots.map(([pid, start]) => ({ pid, start })), cgroup: null, lifetime_id });
+const sess = (scope: string, repo: string | null = "a/b", roots: [number, number][] = [[101, 5000]], lifetime_id: string | null = `lt-${scope}`, mcp_token: string | null = null) =>
+  ({ scope, repo, roots: roots.map(([pid, start]) => ({ pid, start })), cgroup: null, lifetime_id, mcp_token });
 const BOX = { hosts: ["box.localhost"], cookie_names: ["__Host-session"] };
 const setSessions = (r: Rig, sessions: unknown[], box = BOX) => r.req("set_sessions", { sessions, remote: [], box });
 const W = sess("w");
@@ -760,11 +760,14 @@ test("sends run one at a time: the second waits for the first", withRig(async (r
 // ------------------------------------------------------------------ item 5: the status texts (I2)
 
 test("status with stage 1c: C12's keys, the sessions with the list that the object gives them (null while it gives none), the lists and the prompts; no agent's text names a stop or a start (I2)", withRig(async (r) => {
-  await setSessions(r, [W, sess("m", null)]);
-  await setSessions(r, [W, sess("m", null), sess("z", "c/d")]); // z is a launch: the gate holds it
+  // m has a fingerprint (the token design): status says true, and never gives the fingerprint.
+  const m = sess("m", null, undefined, undefined, "a".repeat(64));
+  await setSessions(r, [W, m]);
+  await setSessions(r, [W, m, sess("z", "c/d")]); // z is a launch: the gate holds it
   const s = await status(r);
   assert.deepEqual(Object.keys(s).sort(), ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "state", "update"]);
-  assert.deepEqual(s.sessions, [{ scope: "w", repo: "a/b", list: "a.b" }, { scope: "m", repo: null, list: "no-repo" }, { scope: "z", repo: "c/d", list: null }]);
+  assert.deepEqual(s.sessions, [{ scope: "w", repo: "a/b", list: "a.b", mcp_token: false }, { scope: "m", repo: null, list: "no-repo", mcp_token: true }, { scope: "z", repo: "c/d", list: null, mcp_token: false }]);
+  assert.ok(!JSON.stringify(s).includes("a".repeat(64)), "status gives no fingerprint");
   // Each note that the part can add: no agent's note names a stop or a start, and the operator's notes stay out of the agent's text.
   r.rx.mode = "refuse";
   r.rx.connect();

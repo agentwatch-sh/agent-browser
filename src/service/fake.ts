@@ -14,6 +14,9 @@
 // the key's form and its KDF bounds, the names and ids, the fields that the service seals, the generation, the removed
 // ids and "Start again". The vectors' scripted seal texts stand for a wrong passphrase, a short one and a stale seal.
 // With `unprotected` (`--unprotected`), it answers as a process where that protection does not hold (review-112 B5).
+// The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
+// each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
+// has a fingerprint (never the fingerprint). It serves no MCP.
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -62,8 +65,9 @@ export const FAKE_STATE = {
    */
   sign_ins: {"pane_key":"cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=","key":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"XtlD_scc1BSqO7QI6IJgPg"},"wrapped":{"iv":"B4obup7UgkQF8GYX","ct":"ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6","tag":"jk4pUJmfRHDzXStJGojQwA"}},"rekeyed":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"0_XWx6Xj1oofUDswBrKe5g"},"wrapped":{"iv":"a3IUxpg3ws4tUVUs","ct":"2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU","tag":"hNF_MZqahErAHIr8y361MQ"}},"sealed":{"epk":"ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk","iv":"Thcyq0pYkHTUDuOs","ct":"eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3","tag":"JMg6-BFlhxw7HHdyxOgcnQ"},"wrong_passphrase":"aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA","short_passphrase":"aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg","stale_seal":"aw1:a2jCo0nw6AU1LWE5RQK2nzAESR8SKExc8ENZuhmNxO0UNjqzO6vkolcg3p3Jxsx1oIZh4EuudXcj2zIwrYPBDupDFA-dUtjm4D9pCJfAKpJdoNetmyX0ry7fw8BuaKRAGe5Rzj-yVkUpIdu081H9QYmOFt_JW1zvVW9ws8-RW_i33vDY4kvC_MXt0KiZ_QDB_7ZSwGVyOefB_f3rf3qpc2PdzY9mlelxs0Aj2gSI03TRRGaGoXO2baF6yPiVFUajLT_y5oowFTWYhTlx5s2E5Of5OLsdjy-dxo2c4tgIPbdel44X-qAu15xFsGN3XEEcdFeYqXx7HaSXQnlsHUmtMb7SqSMIqYJm_GOXgIxQyqEwxpMN44sHZeWtSjA5jjfNr0kXrgfBiVyIOx9879pimw"},
 };
-/** The features of the fake's hello: `fake`, and `sign_ins` (it has the stored sign-ins' ops, C12). */
-export const FAKE_FEATURES = ["fake", "sign_ins"] as const;
+/** The fake's features (C12, the hello): the fake, the connection tokens' field (the token design), and the
+ * stored sign-ins' ops (C12). */
+export const FAKE_FEATURES = ["fake", "mcp_token", "sign_ins"] as const;
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
 // The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
@@ -249,7 +253,8 @@ export class FakeService implements Handler {
   private state: "ready" | "off" = FAKE_STATE.state as "ready";
   private prompts: Prompt[] = copy(FAKE_STATE.prompts);
   private readonly lists = new Map<string, List>(copy(FAKE_STATE.lists).map((l) => [l.name, l]));
-  private sessions: { scope: string; repo: string | null }[] = [];
+  /** The sessions of the last set_sessions, each with its fingerprint or null (in memory only; the token design). */
+  private sessions: { scope: string; repo: string | null; mcp_token: string | null }[] = [];
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
@@ -298,7 +303,7 @@ export class FakeService implements Handler {
       chrome_kind: ready ? c.kind : null, chrome_version: ready ? c.version : null, chrome_pid: ready ? c.pid : null,
       extension_version: ready ? FAKE_STATE.extension_version : null, update: FAKE_STATE.update,
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
-      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo) })),
+      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo), mcp_token: s.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
       sign_ins: this.store.status(),
     };
@@ -309,7 +314,7 @@ export class FakeService implements Handler {
     switch (req.op) {
       case "config": return { data: {} };
       case "set_sessions":
-        this.sessions = (req.sessions as { scope: string; repo: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo }));
+        this.sessions = (req.sessions as { scope: string; repo: string | null; mcp_token: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo, mcp_token: s.mcp_token }));
         this.box = { hosts: [...(req.box as any).hosts], cookie_names: [...(req.box as any).cookie_names] };
         this.held.clear();
         return { data: {} };

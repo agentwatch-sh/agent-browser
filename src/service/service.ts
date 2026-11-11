@@ -8,7 +8,10 @@
 // Each later stage adds a part with its ops (part.ts): stage 1c (board ab-v16.94.4) the lists, the scopes, the prompts
 // and the sign-ins (stage1c.ts); stage 1b part 1 (board ab-v16.94.3) the Chrome unit and its owner rule with the ops
 // start and stop (unit/part.ts); stage 1b part 2 (board ab-v16.94.9) the native link (link/), the agent package
-// (package/) and the model in this process, the X pointer, and the op sender.
+// (package/) and the model in this process, the X pointer, and the op sender. The connection tokens (board
+// ab-v16.94.5, part 1; the token design, board ab-v16.94.10): the door's shape step takes set_sessions' mcp_token (control.ts), the service keeps
+// each session's fingerprint in memory only, and status says whether a session has one; the hello gets the feature
+// mcp_token with the token check of the MCP path (stage 1d).
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -117,7 +120,8 @@ export function defaultControlDoor(env: Record<string, string | undefined> = pro
   return run && isAbsolute(run) ? join(run, "agent-browser", "control.sock") : null;
 }
 
-type Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null };
+/** A session of the last set_sessions; `mcp_token` is the fingerprint of its connection token, or null (C12, the token design: in memory only). */
+type Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token: string | null };
 
 /** The ops of stage 1a, with the service's state in memory. */
 export class Stage1a implements Handler {
@@ -158,7 +162,7 @@ export class Stage1a implements Handler {
       state: "off", ...STAGE_1A_TEXTS,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: this.agentDoor.state(), mcp: { state: "none", address: null },
-      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null })), lists: [], last_stop: null, prompts: [],
+      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null, mcp_token: s.mcp_token !== null })), lists: [], last_stop: null, prompts: [],
     };
     // Each part gives its keys (the Chrome unit's part gives the state and its two texts), then its sentences for the
     // two texts (I2: no agent's text names a stop or a start).
@@ -180,7 +184,7 @@ export class Stage1a implements Handler {
         return { data: {} };
       }
       case "set_sessions":
-        this.sessions = (req.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id }));
+        this.sessions = (req.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
         this.sessionsRead = true;
         for (const p of this.parts) p.setSessions?.(req);
         return { data: {} };
