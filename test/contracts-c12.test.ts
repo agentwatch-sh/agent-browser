@@ -89,7 +89,7 @@ const FIELD_RULES: FieldRule[] = [
   // The token design (board ab-v16.94.10; this stage, board ab-v16.94.5): the fingerprint of each session's connection token, never the token.
   ["`mcp_token` (of an item of `sessions` or of `remote`) is `null` or 64 lowercase hex digits: the fingerprint of the session's connection token, the lowercase hex SHA-256 of the token's ASCII bytes (the connection tokens, below). It is never the token itself.",
     (f, v) => (f === "sessions" || f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || fingerprintOrNull(x.mcp_token)) : null)],
-  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5): the daemon sends no item for a launch name that two live sessions have, so neither of them gets a list or a token. An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
+  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5): the daemon sends no item for a launch name that two live sessions have, so neither of them gets a list or a token. The daemon sends `session_ended` for a launch name only when the last live session of that name ends: when one of two live sessions of a name ends, its next snapshot names the survivor with the survivor's own `lifetime_id` and an `mcp_token` that is the fingerprint of the token that the daemon minted at the survivor's own launch, or `null` when it minted none then (a session launched while the name was shared has none, so its MCP gets the second 401 of C11's step 7). An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
     () => null, (req, fields) => !fields.includes("sessions") || snapshotFits(req)],
   ["`enabled` and `control` are booleans; `chrome_bin` is a string or `null`; `chrome_args` is a list of strings.",
     (f, v) => (f === "enabled" || f === "control" ? typeof v === "boolean" : f === "chrome_bin" ? v === null || typeof v === "string" : f === "chrome_args" ? strings(v) : null)],
@@ -674,7 +674,7 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
     "Each line on its standard input that is an event of the event table, with exactly its fields, goes to each connection that has sent its hello. The fake drops each other line. So a test sends the events that it needs.",
     "After its socket listens, the fake prints one line on its standard output, `{\"t\":\"listening\"}`, so that a test waits for that line.",
   ]);
-  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b32` break each rule of `mcp_token`, each with the fixed `bad request` answer. `r14` is the daemon's snapshot while two live sessions have one launch name: it has no item for that name. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
+  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b32` break each rule of `mcp_token`, each with the fixed `bad request` answer. `r14` is the daemon's snapshot while two live sessions have one launch name: it has no item for that name. `r15` is its next snapshot after one of them ended, with no `session_ended`: it names the survivor with its own `lifetime_id` and `\"mcp_token\":null`. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
   assert.ok(!says(C12, "Its hello has `\"commit\":null` and the feature `fake`."), "the fake's old hello sentence is gone");
   assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads. Its `badLines` are lines as bytes (in hex) that close the connection: a byte order mark, a CR, and bytes that are not UTF-8."));
   // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
@@ -792,6 +792,27 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   assert.ok(/abt1_/.test(JSON.stringify({ ...control.events[0], ev: { ...control.events[0].ev, chrome_version: token("web-1") } })), "the token scan finds a planted token (its twin)");
   assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18 and b22 to b32");
   assert.equal(setSessionsLines().length, good.length + bad.length);
+});
+
+// Open point 6 (the daemon lead's decision): the daemon sends session_ended for a launch name only when the last live
+// session of that name ends, and its next snapshot names the survivor with the survivor's own lifetime id and token.
+test("C12 states the daemon's rule for a launch name that two live sessions had (open point 6), and r15 follows it after r14", () => {
+  assert.ok(says(C12, "The daemon sends `session_ended` for a launch name only when the last live session of that name ends: when one of two live sessions of a name ends, its next snapshot names the survivor with the survivor's own `lifetime_id` and an `mcp_token` that is the fingerprint of the token that the daemon minted at the survivor's own launch, or `null` when it minted none then (a session launched while the name was shared has none, so its MCP gets the second 401 of C11's step 7)."), "C12: the daemon's rule of open point 6");
+  const at = (id: string) => control.requests.findIndex((v: any) => v.req.id === id);
+  const r14 = control.requests[at("r14")], r15 = control.requests[at("r15")];
+  assert.ok(r15 && at("r15") > at("r14"), "r15 follows r14");
+  // No session_ended for web-5 between them: a live session of that name is left.
+  assert.ok(!control.requests.slice(at("r14"), at("r15")).some((v: any) => v.req.op === "session_ended" && v.req.scope === r15.ended.scope), "no session_ended for the shared name");
+  const left = r14.live.filter((s: any) => !(s.scope === r15.ended.scope && s.lifetime_id === r15.ended.lifetime_id));
+  assert.deepEqual(r15.live, left, "r15's live sessions: r14's, less the one that ended");
+  const survivor = r15.req.sessions.find((s: any) => s.scope === r15.ended.scope);
+  assert.ok(survivor, "r15 names the survivor");
+  assert.equal(survivor.lifetime_id, r15.live.find((s: any) => s.scope === r15.ended.scope).lifetime_id, "the survivor's own lifetime id");
+  assert.notEqual(survivor.lifetime_id, r15.ended.lifetime_id, "not the lifetime id of the session that ended");
+  assert.equal(survivor.mcp_token, null, "a session launched while the name was shared has no token");
+  assert.deepEqual(r15.req.sessions.map((s: any) => s.scope).sort(), r15.live.map((s: any) => s.scope).sort(), "an item for each live launch name, each once");
+  assert.ok(snapshotFits(r15.req), "r15 fits the snapshot rules");
+  assert.deepEqual(r15.res, { t: "res", id: "r15", ok: true, data: {} });
 });
 
 test("the line rules' vectors (badLines, B1): a byte order mark, a CR and bytes that are not UTF-8 each close the connection, by the reference of C12's line rules", () => {
