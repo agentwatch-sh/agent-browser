@@ -141,7 +141,8 @@ of `input-harness/run.ts --only source`. It writes `stage-live.json`, `stage-har
 `stage-harness-report.txt` in the run folder.
 
 The keys and the text (board ab-t30.10, `stage-keys-live.ts`) are a part of the same group. `STAGE_PARTS=keys` runs
-this part alone (the default is `pointer,keys`). Its page on `a.localhost` holds the fields of the key and text rows
+this part alone (the default is `pointer,keys`), and `STAGE_KEY_ROWS=<a regular expression>` only its rows whose names
+match (with no harness rows). Its page on `a.localhost` holds the fields of the key and text rows
 (an input, a textarea, a number and an email input, a contenteditable, a form, a field whose `keydown` opens an alert, a
 field whose `blur` opens an alert, and a field in a cross-origin frame on `b.localhost`) and the widgets of the input
 design's open points 1 and 2 (a date picker and a combobox that open at a click, a tag input and an input mask). Each

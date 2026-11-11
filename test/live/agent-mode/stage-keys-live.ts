@@ -44,9 +44,9 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 #ce{left:100px;top:220px;width:300px;height:40px;border:1px solid #888}
 #q{left:100px;top:290px;width:240px;height:30px}#kd{left:380px;top:290px;width:240px;height:30px}#blur{left:660px;top:290px;width:240px;height:30px}
 #mask{left:100px;top:350px;width:240px;height:30px}#tags{left:380px;top:350px;width:300px;height:30px}#chips{left:700px;top:350px;width:300px;height:30px}
-#dp{left:100px;top:420px;width:200px;height:30px}#dpop{display:none;left:100px;top:452px;width:280px;height:200px;background:#ddf}
+#dp{left:100px;top:420px;width:200px;height:30px}#dpop{display:none;left:100px;top:452px;width:280px;height:200px;background:#ddf;z-index:10}
 #after{left:150px;top:520px;width:140px;height:40px}
-#cb{left:420px;top:420px;width:200px;height:30px}#cblist{display:none;left:420px;top:452px;width:220px;height:160px;background:#fdd}
+#cb{left:420px;top:420px;width:200px;height:30px}#cblist{display:none;left:420px;top:452px;width:220px;height:160px;background:#fdd;z-index:10}
 #after2{left:450px;top:520px;width:140px;height:40px}
 #xf{position:absolute;left:100px;top:700px;width:360px;height:120px;border:3px solid #000;padding:4px}
 </style></head><body>
@@ -175,7 +175,9 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
       const browser = await pw.chromium.connectOverCDP(o.url("stage"), { timeout: 20_000 });
       const ctx = browser.contexts()[0];
       try {
-        for (const row of ROWS) {
+        // STAGE_KEY_ROWS: a regular expression of the rows' names to run (all rows when it is not set).
+        const only = process.env.STAGE_KEY_ROWS ? new RegExp(process.env.STAGE_KEY_ROWS) : null;
+        for (const row of ROWS.filter((r) => !only || only.test(r.name))) {
           const name = `${row.name} (Playwright ${version})`;
           const run = async (p: any) => {
             p.on("dialog", (d: any) => { void d.accept(); });
@@ -201,7 +203,7 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail });
           (out.rows as unknown[]).push({ version, row: row.name, measure: row.measure ?? null, stage: s, own: q, same, trace });
         }
-        if (version === "1.65.0") await harnessKeys(o, ctx, port, recs, out);
+        if (version === "1.65.0" && !process.env.STAGE_KEY_ROWS) await harnessKeys(o, ctx, port, recs, out);
       } finally {
         await browser.close().catch(() => {});
         await plain.close().catch(() => {});
