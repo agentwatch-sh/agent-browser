@@ -1052,14 +1052,14 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     "The service reads the uid column of that line. A uid other than the service's gets the peer's 403 (`The agent browser cannot tell which program connects, so it refuses the connection.`), before any other check.",
     "2. The walk. The service finds each process that holds the socket's inode (`/proc/<pid>/fd`), and walks each holder by the rules of the scope's session (above).",
     "Each holder must reach a root that counts, and all holders the roots of one scope: that scope is the connection's scope.",
-    "No holder, a holder that reaches no root, or holders of two scopes get the session's 403. So the walk refuses a browser process: Chrome is no session's process.",
+    "No holder gets the peer's 403, which names no pid. A holder that reaches no root, or holders of two scopes get the session's 403. So the walk refuses a browser process: Chrome is no session's process.",
     "The service then reads the client's line of `/proc/net/tcp` again, and a line that changed gets the session's 403 too.",
     "The connection's scope gives its session, and `set_sessions` gives the session's `mcp_token` (from the one item of that scope: C12's rule of one scope once).",
     "3. A request with an `Origin` header: its 403 (`A web page cannot connect to the agent browser.`).",
     "4. A `Host` header that is not exactly `127.0.0.1:<port>` or `localhost:<port>`, or no `Host` header: 403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.` This check stops DNS rebinding. It keeps both forms, although each entry that agentwatch writes names `127.0.0.1`.",
     "5. A path that is not `/mcp` or `/mcp/<scope>` with a scope that matches the scope pattern: 404 `Not found. Connect an MCP client to /mcp/<scope>.`",
     "6. A path whose scope is not the connection's scope: the session's 403.",
-    "7. The token (the token design). A request has an `Authorization: Bearer <token>` header when it has exactly one `Authorization` header, and that header's value is `Bearer` (in any case), one space and a token of one character or more.",
+    "7. The token (the token design). A request has an `Authorization: Bearer <token>` header when it has exactly one `Authorization` header line (the service counts the header lines as the request carries them, whatever the case of their name), and that header's value is `Bearer` (in any case), one space and a token of one character or more.",
     "The token is every character after that one space: after two spaces the token starts with a space, and text after the token is part of the token, so each is a token that the service does not know. A tab in place of the space is not this form.",
     "The service hashes the token with SHA-256 and compares the digest with the session's `mcp_token` in constant time. The first of these three cases that holds gives its answer:",
     "no `Authorization: Bearer <token>` header: 401 `The agent browser needs this session's connection token. agentwatch adds it to the sessions that it starts while the repo's list has a site.`;",
@@ -1074,7 +1074,7 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     "An `Origin` header, a wrong `Host` and the walk's refusal of a browser process are three separate checks, and the service keeps all three.",
     "At C12's `session_ended`, the service closes the scope's MCP connections and ends its MCP sessions.",
     "At each C12 `set_sessions`, the service closes each MCP connection whose admitting root is no longer a root of its scope that counts, as the endpoint's 1008 close does at an `allowlist` line (when a connection ends, above), and each MCP connection of a session that the snapshot drops or whose `mcp_token` changed.",
-    "The shared vectors: `mcpChecks` and `mcpCloses` in `test/vectors/endpoint.json`, with `mcpSnapshots`, `mcpTokens`, `mcpSessionIds` and `mcpAnswers` (each case gives the lines of `/proc/net/tcp`, the holders and a fake process table, so both sides test with a fake reader; the tokens are made-up test values).",
+    "The shared vectors: `mcpChecks` and `mcpCloses` in `test/vectors/endpoint.json`, with `mcpSnapshots`, `mcpLists`, `mcpTokens`, `mcpSessionIds` and `mcpAnswers` (each case gives the lines of `/proc/net/tcp`, the holders and a fake process table, so both sides test with a fake reader; the tokens are made-up test values).",
   ]);
   for (const old of ["7. The readiness and the scope's list", "Steps 3 to 7 run for each request"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
   assert.ok(!says(C11, "by the client's port, and reads its uid"), "no match by the client's port alone (F5)");
@@ -1095,6 +1095,32 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
   // The reused texts are the endpoint's own answers (the vectors).
   const bodies = new Set(endpoint.upgradeAnswers.map((a: any) => a.body));
   for (const b of ["The agent browser cannot tell which program connects, so it refuses the connection.", "A web page cannot connect to the agent browser."]) assert.ok(bodies.has(b), `an answer of the endpoint: ${b}`);
+});
+
+// The lead's decisions on the open points of stage 1d part 2a (board ab-v16.94.5): each has its C11 sentences, exactly,
+// and the old sentence is gone. OP6 (session_ended for a shared launch name) is the daemon lead's.
+test("C11 states the lead's decisions OP1 to OP5 and OP7 on the MCP path's admission, and the token design's section 6.4 says OP1", () => {
+  const A = partOr("The admission of the MCP path (from stage 1d; the daemon lead's conditions for the TCP choice).");
+  sayAll(A, [
+    // OP1: C11's order holds; before the first set_sessions no root counts.
+    "Before the service's first `set_sessions` no root counts, so each connection gets the session's 403, whose text says to connect again in a few seconds.",
+    // OP2: on the MCP path the list is the allow.
+    "On the MCP path a scope whose list has no site gets the no-list 503 too: the list is the allow (the token design, sections 6.5 and 7.2). The endpoint keeps its own rule: there a scope whose list is empty is admitted, and it can open `about:blank` only.",
+    // OP3: no holder, no pid.
+    "No holder gets the peer's 403, which names no pid. A holder that reaches no root, or holders of two scopes get the session's 403.",
+    "A connection with no holder gets the peer's 403 (step 2), so the session's 403 always names a holder.",
+    // OP4: the close at a change also ends the MCP sessions.
+    "It also ends the MCP sessions of each such session, as at `session_ended`: of a session that the snapshot drops or whose `mcp_token` changed (also when it has no open connection), and of a scope whose connection closed for its root.",
+    // OP5: the raw headers and the raw path.
+    "exactly one `Authorization` header line (the service counts the header lines as the request carries them, whatever the case of their name)",
+    "The path is the request target as the client sent it, up to its first `?`, with no normalization: `/mcp/./<scope>`, `/mcp/x/../<scope>`, `//mcp/<scope>` and a percent-encoded scope get this 404. A query does not change the path.",
+    // OP7: the header's value without its leading and trailing whitespace.
+    "The header's value is its field value without its leading and trailing spaces and tabs (RFC 9110), as Node's HTTP parser gives it: so `Bearer <token> ` with a space after the token carries that token, and `Bearer` with only spaces after it is not this form.",
+  ]);
+  for (const old of ["No holder, a holder that reaches no root, or holders of two scopes get the session's 403.", "exactly one `Authorization` header, and that header's value"]) assert.ok(!says(C11, old), `C11: no ${old}`);
+  const T = readOr("docs/superpowers/specs/2026-11-10-mcp-connection-tokens-design.md");
+  assert.ok(says(T, "Until the daemon's first `set_sessions`, no root counts, so each MCP connection gets the session's 403 of step 2: C11's order holds, and the 403's text says to connect again in a few seconds."), "the token design's 6.4: OP1");
+  assert.ok(!says(T, "each MCP request gets the readiness 503 of step 8"), "the token design's 6.4: no readiness 503 before the first set_sessions");
 });
 
 test("C11 states the MCP inside the service and how a session gets the MCP (the answers Q2 and Q4; the daemon lead's condition 4 and D19)", () => {
@@ -1163,16 +1189,19 @@ function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>):
   return scopes.size === 1 ? [...scopes][0] : null;
 }
 const lowest = (pids: number[]) => (pids.length ? Math.min(...pids) : null);
+/** The snapshot of a check: its set_sessions, or none before the first one (no session, so no root counts: OP1). */
+const snapOf = (c: any) => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
 /** Steps 1 and 2: the connection's scope, or the refusal with the pid of the session's 403. */
 function mcpConnection(c: any): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
   const line = clientLine(tcpLines(c, false), c.connection.client);
   if (!line || line.uid !== MCP_UID) return { answer: "peerUnread", pid: null };
-  const w = worldOf(c), snap = endpoint.mcpSnapshots[c.service.snapshot];
+  const w = worldOf(c), snap = snapOf(c);
   const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s: any) => [s.scope, s.roots])), w);
   const holders: number[] = c.connection.holders;
+  if (holders.length === 0) return { answer: "peerUnread", pid: null }; // OP3: no holder names no pid
   const scopes = holders.map((pid) => holderScope(w, pid, named));
   const refused = holders.filter((_, i) => scopes[i] === null);
-  if (holders.length === 0 || refused.length) return { answer: "session", pid: lowest(refused) };
+  if (refused.length) return { answer: "session", pid: lowest(refused) };
   if (new Set(scopes).size !== 1) return { answer: "session", pid: lowest(holders) };
   const again = clientLine(tcpLines(c, true), c.connection.client);
   if (!again || JSON.stringify(again) !== JSON.stringify(line)) return { answer: "session", pid: lowest(holders) };
@@ -1180,14 +1209,15 @@ function mcpConnection(c: any): { scope: string; pid: number | null } | { answer
 }
 /** Steps 3 to 8 for one request, then the transport's check of its MCP session id. */
 function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any): { answer: string; pid?: number | null } {
-  const h = (n: string) => r.headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v);
+  // OP7: each value without its leading and trailing spaces and tabs (RFC 9110's OWS), as Node's parser gives it.
+  const h = (n: string) => r.headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
   if (h("origin").length) return { answer: "fromPage" }; // 3
   const host = h("host");
   if (host.length !== 1 || ![`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`].includes(host[0])) return { answer: "badHost" }; // 4
-  const m = /^\/mcp(?:\/([^/]*))?$/.exec(new URL(r.path, "http://x").pathname);
+  const m = /^\/mcp(?:\/([^/]*))?$/.exec(r.path.split("?")[0]); // OP5: the raw path, up to its first ?
   if (!m || (m[1] !== undefined && !SCOPE.test(m[1]))) return { answer: "mcpNotFound" }; // 5
   if (m[1] !== undefined && m[1] !== conn.scope) return { answer: "session", pid: conn.pid }; // 6
-  const snap = endpoint.mcpSnapshots[c.service.snapshot];
+  const snap = snapOf(c);
   const item = snap.sessions.find((s: any) => s.scope === conn.scope);
   const auth = h("authorization");
   const bearer = auth.length === 1 ? /^bearer (.+)$/i.exec(auth[0]) : null;
@@ -1195,7 +1225,7 @@ function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any)
   if (item.mcp_token === null) return { answer: "noToken" };
   if (mcpSha256(bearer[1]) !== item.mcp_token) return { answer: "unknownToken" };
   if (c.service.ready !== "ready") return { answer: c.service.ready }; // 8
-  if (snap.lists[conn.scope] === null) return { answer: "noList" };
+  if (snap.lists[conn.scope] === null || endpoint.mcpLists[snap.lists[conn.scope]].length === 0) return { answer: "noList" }; // OP2: a list with no site
   const sid = h("mcp-session-id"); // the transport, after the admission
   if (sid.length && endpoint.mcpSessionIds[sid[0]] !== conn.scope) return { answer: "unknownSession" };
   return { answer: "pass" };
@@ -1237,7 +1267,11 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
       assert.ok(s.lifetime_id !== null || s.mcp_token === null, `${id}: ${s.scope}: no fingerprint with a null lifetime id`);
     }
     assert.deepEqual(Object.keys(snap.lists).sort(), [...scopes].sort(), `${id}: a list (or null) for each scope`);
+    for (const l of Object.values<any>(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
   }
+  // mcpLists: each list's sites, each a host of C5's form; a list with no site, and a list with sites.
+  for (const [name, hosts] of Object.entries<any>(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
+  assert.ok(Object.values<any>(endpoint.mcpLists).some((h) => h.length === 0) && Object.values<any>(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
   assert.ok(!Object.values<any>(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s: any) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
   // The answers: each id once, each text of C11, with its WWW-Authenticate for a 401; no answer holds a token or a fingerprint.
   const ids = MCP_ANSWERS.map((a: any) => a.id);
@@ -1257,7 +1291,7 @@ test("the MCP path's admission: each check vector gets the answers of C11's orde
   const known = new Set([...MCP_ANSWERS.map((a: any) => a.id), "pass"]);
   for (const c of endpoint.mcpChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "world", "procs", "service", "connection", "requests"].includes(k), `${c.note}: a known field ${k}`);
-    assert.ok(["linux", "noScope"].includes(c.world) && Object.hasOwn(endpoint.mcpSnapshots, c.service.snapshot), c.note);
+    assert.ok(["linux", "noScope"].includes(c.world) && (c.service.snapshot === null || Object.hasOwn(endpoint.mcpSnapshots, c.service.snapshot)), c.note);
     assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r: any) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
     const got = mcpRun(c);
     const want = c.requests.map((r: any) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
@@ -1266,7 +1300,9 @@ test("the MCP path's admission: each check vector gets the answers of C11's orde
     for (const [i, w] of want.entries()) {
       assert.equal(got[i].answer, w.answer, c.note);
       if (Object.hasOwn(w, "pid")) assert.equal(got[i].pid, w.pid, `${c.note}: the pid of the session's 403`);
-      if (w.answer === "session" && !Object.hasOwn(w, "pid")) assert.deepEqual(c.connection.holders, [], `${c.note}: no pid only with no holder`);
+      // OP3: a connection with no holder gets the peer's 403, so each session's 403 names a holder's pid.
+      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.includes(w.pid), `${c.note}: the session's 403 names a holder`);
+      if (c.connection.holders.length === 0) assert.equal(w.answer, "peerUnread", `${c.note}: no holder, the peer's 403`);
     }
   }
 });
@@ -1275,7 +1311,7 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   const cases = endpoint.mcpChecks.map((c: any) => ({ c, r: c.requests.at(-1), h: (n: string) => c.requests.at(-1).headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v) }));
   const has = (what: string, f: (x: any) => boolean) => assert.ok(cases.some(f), what);
   const T = endpoint.mcpTokens, bearer = (x: any) => x.h("authorization")[0]?.slice(7);
-  const own = (x: any) => endpoint.mcpSnapshots[x.c.service.snapshot].sessions.find((s: any) => s.scope === mcpConnection(x.c).scope);
+  const own = (x: any) => snapOf(x.c).sessions.find((s: any) => s.scope === mcpConnection(x.c).scope);
   const lineOf = (x: any) => clientLine(tcpLines(x.c, false), x.c.connection.client);
   // F11: the uid, two scopes, the Host forms, /mcp alone, a wrong path scope, a session id of another scope.
   has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l: any) => l.remote === x.c.connection.client && l.uid === MCP_UID));
@@ -1283,10 +1319,10 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l: any) => l.local === x.c.connection.client));
   has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l: any) => l.local === x.c.connection.client).length === 2);
   has("a line that changed at the second read", (x) => x.r.answer === "session" && Object.hasOwn(x.c.connection, "tcpAgain"));
-  has("no holder", (x) => x.r.answer === "session" && x.c.connection.holders.length === 0);
+  has("no holder: the peer's 403 (OP3)", (x) => x.r.answer === "peerUnread" && x.c.connection.holders.length === 0 && !Object.hasOwn(x.r, "pid"));
   has("a forked client: two holders of one session", (x) => x.r.answer === "pass" && x.c.connection.holders.length === 2);
   has("step 1 before step 3", (x) => x.r.answer === "peerUnread" && x.h("origin").length > 0);
-  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(endpoint.mcpSnapshots[x.c.service.snapshot].sessions.map((s: any) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
+  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s: any) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
   for (const host of [`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`]) has(`the Host ${host} admitted`, (x) => x.r.answer === "pass" && x.h("host")[0] === host);
   for (const host of [`[::1]:${MCP_PORT}`, "127.0.0.1", `127.0.0.1:${MCP_PORT + 1}`, `LOCALHOST:${MCP_PORT}`]) has(`the Host ${host} refused`, (x) => x.r.answer === "badHost" && x.h("host")[0] === host);
   has("no Host", (x) => x.r.answer === "badHost" && x.h("host").length === 0);
@@ -1326,6 +1362,13 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("steps 3 to 8 for each request", (x) => x.c.requests.length === 2 && x.r.answer !== "pass");
   for (const id of ["controlOff", "notConnected", "notConfirmed", "tooOld"]) has(`step 8: ${id}`, (x) => x.r.answer === id);
   for (const a of endpoint.mcpAnswers) has(`a vector of ${a.id}`, (x) => x.r.answer === a.id);
+  // The lead's decisions on the open points of part 2a.
+  has("OP1: before the first set_sessions the walk's session's 403, with the session's own token", (x) => x.c.service.snapshot === null && x.r.answer === "session" && bearer(x) === T.leadRun2.token);
+  has("OP2: a list with no site: the no-list 503 with the session's own token", (x) => x.r.answer === "noList" && x.c.service.snapshot !== null && endpoint.mcpLists[snapOf(x.c).lists[mcpConnection(x.c).scope]]?.length === 0 && mcpSha256(bearer(x)) === own(x)?.mcp_token);
+  for (const path of ["/mcp/./md-lead", "/mcp/x/../md-lead", "//mcp/md-lead", "/mcp/md%2Dlead", "http://127.0.0.1:47311/mcp/md-lead"]) has(`OP5: the raw path ${path}: the 404`, (x) => x.r.answer === "mcpNotFound" && x.r.path === path && bearer(x) === T.leadRun2.token);
+  has("OP5: a query does not change the path", (x) => x.r.answer === "pass" && x.r.path.startsWith("/mcp/md-lead?"));
+  has("OP7: a space after the session's own token: admitted", (x) => x.r.answer === "pass" && x.h("authorization")[0] === `Bearer ${T.leadRun2.token} `);
+  has("OP7: Bearer with only spaces after it: no token", (x) => x.r.answer === "needsToken" && /^Bearer {2,}$/.test(x.h("authorization")[0] ?? ""));
 });
 
 test("at each set_sessions: each MCP close vector follows C11 (a session that the snapshot drops, a changed mcp_token, an admitting root that left)", () => {

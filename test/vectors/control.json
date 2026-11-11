@@ -3140,6 +3140,93 @@
      "records": 0
     }
    }
+  },
+  {
+   "note": "set_sessions after one of the two live sessions of web-5 ended (ended: the session that ended; live: the daemon's live sessions after it): the daemon sent no session_ended, because a live session of that launch name is left, and the snapshot names the survivor with its own lifetime id; the survivor launched while the name was shared, so the daemon minted no token for it: its mcp_token is null, and its MCP gets the second 401 until it restarts (the daemon lead's rule, open point 6)",
+   "ended": {
+    "scope": "web-5",
+    "lifetime_id": "lt-5e6f"
+   },
+   "live": [
+    {
+     "scope": "shell-2",
+     "lifetime_id": null
+    },
+    {
+     "scope": "tool-4",
+     "lifetime_id": "lt-4d5e"
+    },
+    {
+     "scope": "web-5",
+     "lifetime_id": "lt-6f70"
+    }
+   ],
+   "req": {
+    "t": "req",
+    "id": "r15",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "shell-2",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3200,
+        "start": 6100
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null,
+      "mcp_token": null
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
+     },
+     {
+      "scope": "web-5",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3600,
+        "start": 6500
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-6f70",
+      "mcp_token": null
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [
+      "box.example"
+     ],
+     "cookie_names": [
+      "box_login"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r15",
+    "ok": true,
+    "data": {}
+   }
   }
  ],
  "badRequests": [
