@@ -1,4 +1,4 @@
-// The package as consumers get it: ws as the only dependency, the exports, an install under
+// The package as consumers get it: the vetted dependencies only, the exports, an install under
 // node_modules (where Node refuses to strip types by itself), no consumer's paths, no CI workflow.
 
 import { test } from "node:test";
@@ -15,7 +15,8 @@ import { ROOT, consumer } from "./helpers.ts";
 const run = promisify(execFile);
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
-// The vetted set (docs/supply-chain/ghost-cursor-1.4.2.md for ghost-cursor and what it brings).
+// The vetted set (docs/supply-chain/ghost-cursor-1.4.2.md for ghost-cursor and what it brings;
+// docs/supply-chain/playwright-mcp-0.0.83.md for the Playwright MCP of the service and its two packages).
 const LOCKED: Record<string, string> = {
   "node_modules/ws": "8.21.0",
   "node_modules/ghost-cursor": "1.4.2",
@@ -23,10 +24,14 @@ const LOCKED: Record<string, string> = {
   "node_modules/debug": "4.4.3",
   "node_modules/ms": "2.1.3",
   "node_modules/@types/bezier-js": "4.1.3",
+  "node_modules/@playwright/mcp": "0.0.83",
+  "node_modules/playwright": "1.64.0-alpha-1790635538000",
+  "node_modules/playwright-core": "1.64.0-alpha-1790635538000",
 };
 
-test("the dependencies are ws and ghost-cursor, pinned exactly, and the lockfile holds only the vetted set", () => {
-  assert.deepEqual(pkg.dependencies, { "ghost-cursor": "1.4.2", ws: "8.21.0" });
+test("the dependencies are ws, ghost-cursor and the Playwright MCP's three packages, pinned exactly, and the lockfile holds only the vetted set", () => {
+  assert.deepEqual(pkg.dependencies, { "@playwright/mcp": "0.0.83", "ghost-cursor": "1.4.2", playwright: "1.64.0-alpha-1790635538000", "playwright-core": "1.64.0-alpha-1790635538000", ws: "8.21.0" });
+  for (const v of Object.values<string>(pkg.dependencies)) assert.doesNotMatch(v, /[\^~*<>=| ]/, `an exact pin: ${v}`);
   assert.equal(pkg.devDependencies, undefined);
   assert.equal(pkg.optionalDependencies, undefined);
   assert.equal(pkg.engines.node, ">=26");
@@ -53,6 +58,31 @@ test("ghost-cursor loads without puppeteer, and only when a recording needs it",
   assert.equal(before, 0, "the library does not load ghost-cursor until a recording runs");
   assert.ok(after.some((m: string) => m.startsWith("ghost-cursor/")), "ghost-cursor loaded");
   assert.ok(!after.some((m: string) => m.includes("puppeteer")), `no puppeteer: ${after.join(" ")}`);
+});
+
+test("the Playwright MCP's packages load only when an MCP session needs them: the library, the CLI's service and the MCP path's modules load no Playwright; @playwright/mcp's dependency is the pinned playwright-core", async () => {
+  const { stdout } = await run(process.execPath, ["--input-type=module", "-e", `
+    const { createRequire } = await import("node:module");
+    const req = createRequire(${JSON.stringify(join(ROOT, "index.js"))});
+    await import(${JSON.stringify(join(ROOT, "src", "index.ts"))});
+    await import(${JSON.stringify(join(ROOT, "src", "service", "main.ts"))});
+    const session = await import(${JSON.stringify(join(ROOT, "src", "service", "mcp", "session.ts"))});
+    const before = Object.keys(req.cache).filter((k) => k.includes("playwright"));
+    session.mcpEntry();
+    const after = Object.keys(req.cache).filter((k) => k.includes("node_modules/playwright-core/"));
+    console.log(JSON.stringify({ before, after: after.length }));`], { cwd: ROOT });
+  const got = JSON.parse(stdout);
+  assert.deepEqual(got.before, [], "no Playwright module at import");
+  assert.ok(got.after > 0, "the MCP's entry loads the pinned playwright-core (the scan reads the cache)");
+  const mcp = JSON.parse(readFileSync(join(ROOT, "node_modules", "@playwright", "mcp", "package.json"), "utf8"));
+  assert.deepEqual(mcp.dependencies, { playwright: pkg.dependencies.playwright, "playwright-core": pkg.dependencies["playwright-core"] });
+  const pw = JSON.parse(readFileSync(join(ROOT, "node_modules", "playwright", "package.json"), "utf8"));
+  assert.deepEqual(pw.dependencies, { "playwright-core": pkg.dependencies["playwright-core"] });
+  assert.equal(pw.optionalDependencies, undefined, "no optional package (no fsevents)");
+  for (const p of ["@playwright/mcp", "playwright", "playwright-core"]) {
+    const j = JSON.parse(readFileSync(join(ROOT, "node_modules", p, "package.json"), "utf8"));
+    for (const k of ["preinstall", "install", "postinstall", "prepare"]) assert.equal(j.scripts?.[k], undefined, `${p} has no ${k} script`);
+  }
 });
 
 test("index.js re-exports every runtime export of src/index.ts", async () => {

@@ -338,6 +338,15 @@ export class Model {
     return this.ended.has(scope) || (this.lastApplied !== null && this.lastApplied.listOf(scope) === null);
   }
 
+  /**
+   * The MCP path's step 8 (C11, from stage 1d): the number of sites of `scope`'s list, or null when the last line does not
+   * name the scope or gives it no list (the no-list 503 of steps 5 and 7 before the upgrade).
+   */
+  sitesOf(scope: string): number | null {
+    if (!this.named(scope) || this.noList(scope)) return null;
+    return this.entriesOf(scope)?.length ?? null;
+  }
+
   /** The entries of a scope's list in the last allowlist line, or null for a scope with no list. */
   private entriesOf(scope: string): readonly string[] | null {
     return this.allowlist?.entriesOf(scope) ?? null;

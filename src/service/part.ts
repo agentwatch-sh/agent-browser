@@ -19,6 +19,8 @@ export interface ServicePart {
   status?(): Record<string, unknown>;
   /** Sentences that the part adds to the state's texts: `agent` to the agent's text (I2: none names a stop or a start), `operator` to the operator's. */
   notes?(): { agent: string[]; operator: string[] };
+  /** The hello's feature names that the part gives now (C12, the hello: the MCP path's `mcp_token` while its port runs). */
+  features?(): readonly string[];
   /** The service stops. */
   stop?(): void;
 }

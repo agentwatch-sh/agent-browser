@@ -177,20 +177,26 @@ export class RootState {
     return (this.byScope.get(scope) ?? []).some((r) => r.counts && r.root.pid === root.pid && r.root.start === root.start);
   }
 
+  /** Whether `root` is a root of `scope` whose cgroup counts too at this state's read (the MCP path's close at a change for a connection that a cgroup admitted; C11). */
+  cgroupCounts(scope: string, root: Root): boolean {
+    return (this.byScope.get(scope) ?? []).some((r) => r.counts && r.cgroup !== null && r.root.pid === root.pid && r.root.start === root.start);
+  }
+
   /**
    * The MCP path's walk of one holder (C11, the admission of the MCP path, step 2): the scope whose root that counts
    * admits `peer`, with that root, or null. The walk's first root picks the scope (a root that counts has one scope);
    * when the walk meets no root, on Linux, the cgroup of a root whose cgroup counts picks it. Then C11's session check
    * (check, below) runs for that scope, so each rule of the scope's session applies as on the endpoint.
    */
-  scopeOf(reader: PeerReader, peer: Peer): { scope: string; root: Root } | null {
+  scopeOf(reader: PeerReader, peer: Peer): { scope: string; root: Root; byCgroup: boolean } | null {
     const met = this.walk(reader, peer.pid);
     const cg = met === null && reader.form !== "mac" ? reader.cgroup(peer.pid) : null;
     const picks = (r: RootInfo) => (met !== null ? r.counts && key(r.root.pid, r.root.start) === met : cg !== null && r.cgroup !== null && (cg === r.cgroup || cg.startsWith(`${r.cgroup}/`)));
     const scopes = [...this.byScope].filter(([, list]) => list.some(picks)).map(([scope]) => scope);
     if (scopes.length !== 1) return null;
     const root = this.check(reader, scopes[0], peer);
-    return root ? { scope: scopes[0], root } : null;
+    // The walk met no root: the check admitted the peer by a root's cgroup (C11, the scope's session).
+    return root ? { scope: scopes[0], root, byCgroup: met === null } : null;
   }
 
   /**
