@@ -42,7 +42,8 @@ export class FakeClock implements StageClock {
 }
 export const idle = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
 
-export type Sent = { t: number; child?: string; method: string; params: any; pass?: number; read?: boolean; answered?: number };
+/** A command that the tab sent: its time, session, method and params; `dropped`: an input event that Chrome got while a dialog was open. */
+export type Sent = { t: number; child?: string; method: string; params: any; pass?: number; read?: boolean; answered?: number; dropped?: boolean };
 /** An answer to the client: its call, its time, its body, and how many commands the tab had sent then. */
 export type Answer = { id: number; t: number; body: Body; n: number };
 type Box = { x: number; y: number; width: number; height: number };
@@ -79,6 +80,8 @@ export class FakeTab implements StagePage {
   /** The model's point of the page (an X record: x11 true). */
   modelPoint: { x: number; y: number; x11: boolean } | null;
   private dialogOpen = false;
+  /** A test opened a dialog by its own hook (the client got Page.javascriptDialogOpening). */
+  dialogSeen = false;
   private held: (() => void)[] = [];
   private errorsUsed = new Set<string>();
   private eventsDone = new Set<number>();
@@ -133,11 +136,16 @@ export class FakeTab implements StagePage {
     return -1;
   }
 
-  /** Chrome's answer. While a dialog is open, Chrome answers no input event; after the close it answers them in order. */
+  /**
+   * Chrome's answer. An input event that Chrome got before a dialog opened waits for the dialog's close (its answer comes
+   * then); one that it gets while the dialog is open is dropped: answered at once, and the page never gets it (measured
+   * by board ab-t30.9, the input design's open point 5).
+   */
   private async chrome(s: Sent): Promise<any> {
     const V = this.v, ch = V.chrome ?? {};
     const h = await this.hook(s);
     if (h !== undefined) { s.answered = this.clock.now(); return h; }
+    if (s.method.startsWith("Input.") && (this.dialogOpen || this.dialogSeen)) { s.dropped = true; s.answered = this.clock.now(); return {}; }
     if (s.method.startsWith("Input.")) {
       const k = this.outIndexOf(s);
       if (k >= 0) {
@@ -159,12 +167,10 @@ export class FakeTab implements StagePage {
     }
     if (s.method === "Page.handleJavaScriptDialog") {
       s.answered = this.clock.now();
-      if (this.dialogOpen) {
-        this.dialogOpen = false;
-        const held = this.held.splice(0);
-        // Chrome answers the dialog's command first, then the input events that it kept, in order.
-        setImmediate(() => { for (const r of held) r(); });
-      }
+      this.dialogOpen = false; this.dialogSeen = false;
+      const held = this.held.splice(0);
+      // Chrome answers the dialog's command first, then the input events that it kept, in order, and the close event.
+      setImmediate(() => { for (const r of held) r(); this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }); });
       return {};
     }
     s.answered = this.clock.now();
@@ -178,6 +184,7 @@ export class FakeTab implements StagePage {
       const cross = f?.origin === "cross", b = cross ? n.box : top, ox = cross ? 0 : top.x - n.box.x, oy = cross ? 0 : top.y - n.box.y;
       return { result: { type: "object", value: { ox, oy, top: !cross, flat: true, box: { x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height } } } };
     }
+    if (s.method === "Target.getTargetInfo" && s.child) return { targetInfo: { targetId: `F-${Object.keys(V.page.frames).find((k) => V.page.frames[k].origin === "cross")}`, type: "iframe" } };
     if (s.method === "DOM.getFrameOwner") return { backendNodeId: 900 + Object.keys(V.page.frames).indexOf(String(p.frameId).replace(/^F-/, "")) };
     if (s.method === "DOM.getBoxModel") {
       const name = Object.keys(V.page.frames)[p.backendNodeId - 900], f = V.page.frames[name], d = (f.border ?? 0) + (f.padding ?? 0);
@@ -195,7 +202,7 @@ export class FakeTab implements StagePage {
  * step of the gate, any other call is sent when it leaves the gate (an ordinary call does not wait for its answer), and a
  * client's Page.handleJavaScriptDialog goes at once, before the gate.
  */
-export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => any; tab?: (t: FakeTab) => void; maxMs?: number } = {}) {
+export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => any; tab?: (t: FakeTab) => void; maxMs?: number; noAttach?: boolean } = {}) {
   const clock = new FakeClock();
   const seed = o.seed ?? v.seed;
   const tab = new FakeTab({ ...v, seed }, clock);
@@ -204,7 +211,7 @@ export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => 
   tab.stage = stage;
   if (o.hook) tab.hook = o.hook;
   o.tab?.(tab);
-  for (const [name, f] of Object.entries<any>(v.page.frames ?? {})) if (f.origin === "cross") stage.event(tab, undefined, "Target.attachedToTarget", { sessionId: "child", targetInfo: { type: "iframe", targetId: `F-${name}` } });
+  if (!o.noAttach) for (const [name, f] of Object.entries<any>(v.page.frames ?? {})) if (f.origin === "cross") stage.event(tab, undefined, "Target.attachedToTarget", { sessionId: "child", targetInfo: { type: "iframe", targetId: `F-${name}` } });
   const answers: Answer[] = [], arrived = new Map<number, number>();
   let gate: Promise<void> = Promise.resolve();
   const send = (c: any) => {

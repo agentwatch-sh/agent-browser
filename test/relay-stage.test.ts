@@ -285,7 +285,7 @@ test("the gate's order: a held answer comes after its events; the press is answe
   assert.ok(evaluate.t >= rel.t, "the Runtime.evaluate after the click goes after the release");
 });
 
-test("a dialog between two moves of a path (a mouseover handler opens an alert): the plan ends; the client's move, press and release go at once; the lock is free; no event of the plan after the client's later call", async () => {
+test("a dialog between two moves of a path (a mouseover handler opens an alert): the plan ends; no event while the dialog is open; the client's move, press and release go at once after its close; the lock is free at once; no event of the plan after the client's later call", async () => {
   const calls = [{ at: 0, ...mouse("mouseMoved", 300, 200) }, { at: 0, ...mouse("mousePressed", 300, 200) }, { at: 0, ...mouse("mouseReleased", 300, 200) },
     { afterEvent: "Page.javascriptDialogOpening", waitMs: 20_000, method: "Page.handleJavaScriptDialog", params: { accept: true } },
     { after: 4, method: "Runtime.evaluate", params: { expression: "1" } }];
@@ -296,6 +296,7 @@ test("a dialog between two moves of a path (a mouseover handler opens an alert):
       if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" && ++n === 5) {
         t.clientEvents.push({ t: t.clock.now(), method: "Page.javascriptDialogOpening" });
         t.stage.event(t, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" });
+        setImmediate(() => { t.dialogSeen = true; }); // Chrome got this move before the dialog opened
         t.onClientEvent("Page.javascriptDialogOpening");
       }
       return undefined;
@@ -304,24 +305,29 @@ test("a dialog between two moves of a path (a mouseover handler opens an alert):
   const ev = events(r.tab), opened = r.tab.clientEvents[0].t;
   const after = ev.slice(5);
   assert.equal(ev[4].t, opened, "the dialog opens at the fifth move");
-  assert.deepEqual(after.map((s) => s.params.type), ["mouseMoved", "mousePressed", "mouseReleased"], "the client's own three events, at once");
-  assert.ok(after.every((s) => s.t - opened <= 1), "at once");
-  assert.deepEqual([after[0].params.x, after[0].params.y], [300, 200], "the move to the client's point");
-  assert.equal(r.stage.lock.held, 0, "the lock is free");
   const dialog = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!, later = r.tab.sent.find((s) => s.pass === 5)!;
   assert.ok(dialog.t >= opened + 20_000, "the client answers the dialog after 20 s");
-  assert.ok(ev.every((s) => s.t < later.t), "no event of the plan after the client's later call");
+  assert.ok(!ev.some((s) => s.dropped), "no input event while the dialog is open (Chrome would drop it)");
+  assert.deepEqual(after.map((s) => s.params.type), ["mouseMoved", "mousePressed", "mouseReleased"], "the client's own three events");
+  assert.ok(after.every((s) => s.t - dialog.t >= 0 && s.t - dialog.t <= 1), "at once after the dialog's close");
+  assert.deepEqual([after[0].params.x, after[0].params.y], [300, 200], "the move to the client's point");
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+  assert.ok(ev.every((s) => r.tab.sent.indexOf(s) < r.tab.sent.indexOf(later)), "no event of the plan after the client's later call (it waits in the gate)");
   assert.equal(r.stage.counts.dialogEnds, 1);
 });
 
-test("a dialog at a press that the client answers after 20 s: each input call gets Chrome's own answer after the close, never the stage's; the hold counts from the press's send", async () => {
+test("a dialog at a press that the client answers after 20 s: the lock is free at once; the release waits for the close and goes at once after it; each input call gets Chrome's own answer, never the stage's", async () => {
   const v = vec("rule-dialog-at-press");
   v.in[3].waitMs = 20_000;
-  const r = await runVector(v);
+  let heldAtClose = -1;
+  const r = await runVector(v, { tab: (t) => { t.hook = (s) => { if (s.method === "Page.handleJavaScriptDialog") heldAtClose = t.stage.lock.held; return undefined; }; } });
+  assert.equal(heldAtClose, 0, "the lock is free while the dialog is open");
   const dialog = r.answers.find((a) => a.id === 4)!;
   for (const id of [2, 3]) assert.ok(r.answers.find((a) => a.id === id)!.t >= dialog.t, `call ${id} answers after the dialog's close (Chrome's answer)`);
-  const ev = events(r.tab), press = ev.find((s) => s.params.type === "mousePressed")!, rel = ev.find((s) => s.params.type === "mouseReleased")!;
-  assert.ok(rel.t - press.t <= 1, `the release at once (${rel.t - press.t} ms): the hold does not grow by the dialog's time`);
+  const ev = events(r.tab), rel = ev.find((s) => s.params.type === "mouseReleased")!;
+  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+  assert.ok(rel.t >= close && rel.t - close <= 1, `the release at once after the close (${rel.t - close} ms)`);
+  assert.ok(!ev.some((s) => s.dropped), "no input event while the dialog is open");
   assert.equal(r.stage.lock.held, 0);
 });
 
@@ -560,6 +566,38 @@ test("the frame mapping of a cross-origin frame: the owner on the parent's sessi
   assert.ok(before.length > 3 && before.every((s) => !inBox(s.params, box)), "the samples outside the box first");
   assert.ok(inBox(after[0].params, box), "the first move after the setup inside the frame's element");
   assert.deepEqual([after.at(-1)!.params.x, after.at(-1)!.params.y], [382, 357], "Playwright's point in the top page");
+});
+
+test("a cross-origin frame with no attach record of its session: the frame's id from the session's own target info; the mapping holds", async () => {
+  const v = vec("frame-hover");
+  v.page.frames.inner.origin = "cross";
+  v.page.nodes["7.4.10"].mapped = undefined;
+  v.in[0].session = "child"; v.in[2].session = "child";
+  const r = await runVector(v, { noAttach: true });
+  const box = topBox(v, "7.4.10")!, setup = r.tab.sent.find((s) => s.pass === 1)!;
+  assert.ok(r.tab.sent.some((s) => s.method === "Target.getTargetInfo" && s.child === "child"));
+  const after = moves(r.tab).filter((s) => s.t > setup.t);
+  assert.ok(moves(r.tab).filter((s) => s.t < setup.t).length > 3, "the samples outside the box before the setup");
+  assert.ok(inBox(after[0].params, box), "the first move after the setup inside the frame's element");
+});
+
+test("a page with no last point and an X pointer over it (Linux, at an activation): the path starts at the X pointer's place", async () => {
+  const v = own([{ at: 0, ...mouse("mouseMoved", 600, 400) }], { last: null });
+  const r = await runVector(v, { tab: (t) => { t.xPoint = async () => ({ x: 150.4, y: 620.6 }); } });
+  const f = moves(r.tab)[0];
+  assert.ok(Math.hypot(f.params.x - 150, f.params.y - 621) <= F.maxSpeedPxPerMs * 2 * 8 + 2, `the first move ${f.params.x},${f.params.y} is one step from the X pointer`);
+  assert.equal(r.stage.counts.startsAtXPointer, 1);
+});
+
+test("a click with a modifier when the pointer is on the target already (no path): the press comes 40 to 120 ms after the modifier's press", async () => {
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const v = vec("click-modifiers");
+    v.page.last = { x: 500, y: 150 };
+    const r = await runVector(v, { seed });
+    const ev = events(r.tab), down = ev.find((s) => s.method === "Input.dispatchKeyEvent")!, press = ev.find((s) => s.params.type === "mousePressed")!;
+    assert.equal(moves(r.tab).length, 0, "no path");
+    assert.ok(press.t - down.t >= 40 && press.t - down.t <= 120, `seed ${seed}: ${press.t - down.t} ms after the modifier's press`);
+  }
 });
 
 test("the hover: a pointer inside the target already sends the whole path after the setup; a move that does not move sends nothing", async () => {

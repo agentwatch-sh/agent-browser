@@ -111,11 +111,25 @@ test("with the stage on: a client's Page.handleJavaScriptDialog goes to Chrome a
     const p = await page(h, c);
     // Chrome answers no press while the dialog is open (a confirm() in mousedown); the client answers the dialog.
     let open = false;
-    const held: (() => void)[] = [];
+    const held: (() => void)[] = [], dropped: string[] = [];
+    // Chrome answers input in order: an event after the kept press is answered after it.
+    let pressDone: Promise<void> | null = null;
     h.fake.command = (target, method, params) => {
-      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") { open = true; h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" } }); }
-      if (method === "Page.handleJavaScriptDialog") { open = false; setTimeout(() => { for (const r of held.splice(0)) r(); }, 5); return {}; }
-      if (open && method.startsWith("Input.")) return new Promise((r) => held.push(() => r({})));
+      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
+        open = true;
+        h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" } });
+        const p = new Promise((r) => held.push(() => r({})));
+        pressDone = p.then(() => {});
+        return p;
+      }
+      if (method === "Page.handleJavaScriptDialog") {
+        open = false;
+        setTimeout(() => { for (const r of held.splice(0)) r(); h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogClosed", params: { result: true, userInput: "" } }); }, 5);
+        return {};
+      }
+      // Chrome keeps the press that opened the dialog; it drops an input event that it gets while the dialog is open.
+      if (open && method.startsWith("Input.")) { dropped.push(params.type); return {}; }
+      if (pressDone && method.startsWith("Input.")) return pressDone.then(() => ({}));
       return undefined;
     };
     const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
@@ -130,7 +144,8 @@ test("with the stage on: a client's Page.handleJavaScriptDialog goes to Chrome a
     assert.deepEqual(order, ["dialog", "press", "release"], "the dialog's answer first, then Chrome's own answers of the press and the release");
     const sent = cmds(h).map((x) => x.params?.type ?? x.method);
     const d = sent.indexOf("Page.handleJavaScriptDialog");
-    assert.ok(d > sent.indexOf("mouseReleased"), "the release went at once when the dialog opened, before the dialog's answer");
+    assert.ok(d < sent.indexOf("mouseReleased"), "the release waits for the dialog's close: Chrome drops what it gets while the dialog is open");
+    assert.deepEqual(dropped, [], "no input event while the dialog is open");
     await until(() => h.relay.model.stageState(p.tab.id)?.action === false, "the lock to be free");
   } finally { await h.close(); }
 });

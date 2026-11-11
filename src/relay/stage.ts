@@ -26,7 +26,7 @@ import { CdpPlayer, systemClock, linuxStamp, macStamp, type Clock } from "../hum
 import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
-import { uniform, type Random } from "../human/random.ts";
+import { draw, uniform, type Random } from "../human/random.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
 import { PLAYWRIGHT_FOCUS } from "./policy.ts";
 
@@ -167,6 +167,8 @@ export type StagePage = {
   activate(): Promise<void>;
   /** The page's last point as the model keeps it, with `x11` true for the X record of an activation; or null. */
   point(): { x: number; y: number; x11: boolean } | null;
+  /** The X pointer's place mapped into the page (Linux, with the pointer paths on), or null (outside the page, unknown, the Mac). */
+  xPoint?(): Promise<{ x: number; y: number } | null>;
 };
 
 /** The stage's clock: the player's (now, sleep) and a timer that can be cancelled. A test gives a fake one. */
@@ -252,6 +254,8 @@ class TabState {
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
+  /** An open dialog of the tab: the ended plan's events wait for its close (Chrome drops the input that it gets while it is open). */
+  dialog: { closed: Promise<void>; close: () => void } | null = null;
 }
 
 /** The input lock: one for all pages of the agent browser, in the order of arrival. */
@@ -368,7 +372,7 @@ export class Stage {
     try {
       if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
       if (e.kind === "setup") return await this.setupStep(page, st, e);
-      if (e.ended) return this.endedEvent(page, st, e);
+      if (e.ended) return await this.endedEvent(page, st, e);
       if (e.kind === "mouse") {
         const t = e.params.type;
         if (t === "mouseMoved" && !e.params.buttons && (e.params.button ?? "none") === "none") return await this.moveStep(page, st, e);
@@ -407,7 +411,11 @@ export class Stage {
   /** A Chrome event of the tab that goes to the client: a dialog ends the plan; the frames' sessions for the mapping. */
   event(page: StagePage, child: string | undefined, method: string, params: any): void {
     const st = this.st(page);
-    if (method === "Page.javascriptDialogOpening") return this.end(page, st, "dialog");
+    if (method === "Page.javascriptDialogOpening") {
+      if (!st.dialog) { let close!: () => void; const closed = new Promise<void>((r) => (close = r)); st.dialog = { closed, close }; }
+      return this.end(page, st, "dialog");
+    }
+    if (method === "Page.javascriptDialogClosed") { st.dialog?.close(); st.dialog = null; return; }
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
     if (method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") st.frames.delete(params.sessionId);
@@ -416,6 +424,7 @@ export class Stage {
   /** The tab is gone or detached: its action ends and the lock is free. */
   drop(id: number): void {
     const st = this.tabs.get(id);
+    st?.dialog?.close();
     if (st?.action) this.close(st, id);
     this.tabs.delete(id);
     this.players.delete(id);
@@ -484,14 +493,23 @@ export class Stage {
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
     for (const x of st.pending) if (x.kind !== "setup") x.ended = true;
     this.dropRest(st);
+    // At a dialog the lock is free at once; the plan's client events wait for the close in the tab's gate.
+    if (why === "dialog") a.release();
     if (!st.running && !st.pending.some((x) => x.ended)) this.finish(page, st, why !== "limit");
   }
 
   /** After an ended plan's client calls: the releases of what it holds (at a dialog or STAGE_EVENT_WAIT_MS), and the lock. */
   private finish(page: StagePage, st: TabState, releases: boolean): void {
-    if (releases) this.releaseHeld(page, st);
+    if (releases && st.dialog) { const d = st.dialog; void d.closed.then(() => this.releaseHeld(page, st)); }
+    else if (releases) this.releaseHeld(page, st);
     this.close(st, page.id);
   }
+
+  /**
+   * Chrome drops an input event that it gets while a dialog is open (measured: board ab-t30.9, open point 5), and keeps
+   * the events that it got before. So an ended plan's client events wait for the dialog's close.
+   */
+  private async dialogGone(st: TabState): Promise<void> { if (st.dialog) await st.dialog.closed; }
 
   /** The release of each button and key that the stage's events hold, at once, with no wait for the answers. */
   private releaseHeld(page: StagePage, st: TabState): void {
@@ -610,6 +628,9 @@ export class Stage {
 
   /** A page with no last point: a random point of the viewport's middle (30% to 70%), from the stage's read of the viewport. */
   private async startOf(page: StagePage): Promise<Pt | null> {
+    // C11: the X pointer's place mapped into the page (Linux, at an activation): the page got a real event there.
+    const x = page.xPoint ? await this.read(page.xPoint()) : null;
+    if (x && x !== TIMEOUT) { this.count("startsAtXPointer"); return this.fit(x); }
     const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
     const v = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
     if (!v || !(v.clientWidth > 0) || !(v.clientHeight > 0)) return null;
@@ -678,8 +699,9 @@ export class Stage {
   // ---------------------------------------------------------------- the steps
 
   /** An event of an ended plan: the client's own event at once (C11, dialogs), and Chrome's own answer when it comes. */
-  private endedEvent(page: StagePage, st: TabState, e: Entry): void {
+  private async endedEvent(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params;
+    await this.dialogGone(st);
     if (e.kind === "text") { this.answerWith(page, e, page.send(undefined, e.method, p)); return; }
     const params: Record<string, unknown> = { ...p };
     if (e.kind === "mouse") {
@@ -737,6 +759,7 @@ export class Stage {
     if (r.stopped) {
       // The bound or the end of the plan: the client's own move at once (its point), with Chrome's own answer.
       st.spread = null;
+      if (a.over) await this.dialogGone(st);
       const params = { ...p, x: to.x, y: to.y, timestamp: this.stamp(page, st) };
       const pr = this.sendEvent(page, st, undefined, e.method, params);
       if (a.over) { this.answerWith(page, e, pr); return; }
@@ -801,6 +824,10 @@ export class Stage {
     }
     if ((p.clickCount ?? 1) >= 2 && st.releasedAt > -Infinity) await this.until(a, st.releasedAt + doubleClickGapMs(P, this.o.random));
     else if (st.lastWasMove) await this.until(a, st.lastMoveAt + pauseMs(P, this.o.random));
+    // A press with no path after the client's modifier press (the pointer was there already): a chord's time after it.
+    const mods = [...st.keys.values()].filter((k) => MODIFIER_KEYS.has(k.params.key)).map((k) => k.at);
+    if (mods.length) await this.until(a, Math.max(...mods) + draw(this.o.random, P.params.keys.chord.beforeMs));
+    if (a.over) await this.dialogGone(st);
     const params = { ...p, x: point.x, y: point.y, force: force(P), timestamp: this.stamp(page, st) };
     const at = this.clock.now();
     const pr = this.sendEvent(page, st, undefined, e.method, params);
@@ -825,6 +852,7 @@ export class Stage {
     const pr0 = st.press && st.press.button === p.button ? st.press : null;
     const point = pr0 && same(pr0.client, client) ? pr0.point : client;
     if (pr0) await this.until(a, pr0.at + pr0.hold);
+    if (a.over) await this.dialogGone(st);
     const params = { ...p, x: point.x, y: point.y, timestamp: this.stamp(page, st) };
     const pr = this.sendEvent(page, st, undefined, e.method, params);
     st.buttons.delete(p.button);
@@ -856,6 +884,7 @@ export class Stage {
       st.keys.set(p.code, { at: this.clock.now(), params: p });
       if (!MODIFIER_KEYS.has(p.key)) this.count("plainKeys");
     }
+    if (a.over) await this.dialogGone(st);
     const pr = this.sendEvent(page, st, undefined, e.method, { ...p, timestamp: this.stamp(page, st) });
     if (a.over) { this.answerWith(page, e, pr); return; }
     const r = await this.settle(a, pr);
@@ -916,8 +945,15 @@ export class Stage {
     let ox = v.ox, oy = v.oy, s = child;
     if (!s && !v.top) return null;
     for (let level = 0; s && level < 8; level++) {
-      const f = st.frames.get(s);
-      if (!f) return null;
+      let f = st.frames.get(s);
+      if (!f) {
+        // No attach record of this session: its own target info names the frame; its parent is the tab's own session.
+        const info = await this.read(page.send(s, "Target.getTargetInfo", {}));
+        const id = info === TIMEOUT ? undefined : (info as any)?.targetInfo?.targetId;
+        if (typeof id !== "string") { this.count("frameMapFails"); return null; }
+        f = { frameId: id, parent: undefined };
+        st.frames.set(s, f);
+      }
       const owner = await this.read(page.send(f.parent, "DOM.getFrameOwner", { frameId: f.frameId }));
       const backendNodeId = owner === TIMEOUT ? undefined : (owner as any)?.backendNodeId;
       if (!Number.isInteger(backendNodeId)) return null;

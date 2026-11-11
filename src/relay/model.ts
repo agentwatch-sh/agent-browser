@@ -656,7 +656,12 @@ export class Model {
     if (this.stage) {
       // With the stage on (C11, dialogs): a client's Page.handleJavaScriptDialog never waits, before the tab's gate and
       // before any step of the stage, of an activation or of a world lookup.
-      if (method === "Page.handleJavaScriptDialog") { void this.sendNow(tab, child, method, params, answer, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`)); return; }
+      if (method === "Page.handleJavaScriptDialog") {
+        // Chrome's answer means that the dialog closed: the stage sends the ended plan's events (also with no Page event).
+        const closed = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(this.stagePage(tab), child, "Page.javascriptDialogClosed", {}); answer(body); };
+        void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
+        return;
+      }
       // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.
       const page = this.stagePage(tab), entry = this.stage.arrive(page, child, method, params, answer as (body: Body) => void);
       if (entry) {
@@ -729,9 +734,22 @@ export class Model {
       ownRead: (fn, args) => this.stageRead(tab, fn, args),
       activate: () => this.stageActivate(tab),
       point: () => this.pointOf(tab),
+      xPoint: () => this.stageXPoint(tab),
     };
     this.stagePages.set(tab.id, page);
     return page;
+  }
+
+  /**
+   * The X pointer's place mapped into the page (C11: a path with no last point starts there, on Linux at an activation),
+   * with the pointer paths on; null when the paths are off, the read fails, or the place is outside the page's viewport.
+   */
+  private async stageXPoint(tab: Tab): Promise<Pt | null> {
+    if (!this.windowPerPage || this.paths !== "on") return null;
+    const at = await this.readPointer();
+    if (!at) return null;
+    const g = await this.geometry(tab, { keep: false });
+    return this.usableFor(g, tab) ? toPage(g, at) : null;
   }
 
   /** A read of the stage in the relay's own isolated world (the geometry read's world): `fn` called with its numbers, by value. */
@@ -1683,7 +1701,7 @@ export class Model {
     }
     if (method === "Target.detachedFromTarget" && this.hidden.delete(params.sessionId)) return;
     // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
-    if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
+    if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);
     let p = hidesCookies(method) ? hideCookies(params) : params;

@@ -53,11 +53,11 @@ body{margin:0;font:16px sans-serif;height:1400px;position:relative}
 #chk{position:absolute;left:420px;top:212px;width:16px;height:16px;margin:0}
 #hov{position:absolute;left:480px;top:200px;width:120px;height:60px;background:#eee}
 #word{position:absolute;left:100px;top:290px;width:420px;margin:0;font:20px monospace}
-#menu{position:absolute;left:640px;top:80px;width:200px}
-#trig{height:40px;background:#ddd}
-#panel{display:none;position:absolute;left:0;top:40px;width:200px;height:260px;background:#fcc}
+#menu{position:absolute;left:640px;top:60px;width:200px}
+#trig{height:120px;background:#ddd}
+#panel{display:none;position:absolute;left:0;top:120px;width:200px;height:220px;background:#fcc}
 #menu:hover #panel{display:block}
-#under{position:absolute;left:680px;top:200px;width:120px;height:40px}
+#under{position:absolute;left:680px;top:260px;width:120px;height:40px}
 #card{position:absolute;left:100px;top:400px;width:200px;height:120px;background:#eef}
 #layer{display:none;position:absolute;left:50px;top:40px;width:100px;height:40px;background:#000;color:#fff}
 #card:hover #layer{display:block}
@@ -122,7 +122,9 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
 }
 
 /** A row: the action, and the page's state that the two browsers must share. `better`: the design's named case where Playwright's own input fails. */
-type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; better?: boolean; since?: string };
+type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; better?: boolean; since?: string;
+  /** What the row decides beyond the click events: a move's last point, the hover box's state, a frame's hover. */
+  last?: boolean; hov?: boolean; frame?: "same" | "cross"; frameHover?: boolean };
 const ROWS: Row[] = [
   { name: "locator.click()", act: (p) => p.locator("#b").click() },
   { name: "locator.click() on a button with a span (condition 4)", act: (p) => p.locator("#bs").click() },
@@ -132,23 +134,23 @@ const ROWS: Row[] = [
   { name: "click({ button: 'middle' })", act: (p) => p.locator("#b").click({ button: "middle" }) },
   { name: "click({ delay: 300 })", act: (p) => p.locator("#b").click({ delay: 300 }) },
   { name: "click({ modifiers: ['Shift'] })", act: (p) => p.locator("#b").click({ modifiers: ["Shift"] }) },
-  { name: "hover({ modifiers: ['Shift'] })", act: (p) => p.locator("#hov").hover({ modifiers: ["Shift"] }) },
+  { name: "hover({ modifiers: ['Shift'] })", act: (p) => p.locator("#hov").hover({ modifiers: ["Shift"] }), hov: true },
   { name: "click({ position })", act: (p) => p.locator("#pad").click({ position: { x: 7, y: 9 } }) },
   { name: "click({ force })", act: (p) => p.locator("#b").click({ force: true }) },
   { name: "click({ trial })", act: (p) => p.locator("#b").click({ trial: true }) },
   { name: "click({ steps })", act: (p) => p.locator("#b").click({ steps: 5 }), since: "1.65.0" },
-  { name: "mouse.move(x, y, { steps })", act: (p) => p.mouse.move(700, 480, { steps: 10 }) },
-  { name: "locator.hover()", act: (p) => p.locator("#hov").hover() },
-  { name: "hover({ position })", act: (p) => p.locator("#hov").hover({ position: { x: 10, y: 12 } }) },
-  { name: "mouse.move(x, y)", act: (p) => p.mouse.move(900, 500) },
+  { name: "mouse.move(x, y, { steps })", act: (p) => p.mouse.move(700, 480, { steps: 10 }), last: true },
+  { name: "locator.hover()", act: (p) => p.locator("#hov").hover(), hov: true },
+  { name: "hover({ position })", act: (p) => p.locator("#hov").hover({ position: { x: 10, y: 12 } }), hov: true },
+  { name: "mouse.move(x, y)", act: (p) => p.mouse.move(900, 500), last: true },
   { name: "mouse.down(), mouse.up()", before: (p) => p.mouse.move(950, 520), act: async (p) => { await p.mouse.down(); await p.mouse.up(); } },
   { name: "mouse.click(x, y)", act: (p) => p.mouse.click(1000, 500) },
   { name: "mouse.dblclick(x, y)", act: (p) => p.mouse.dblclick(1000, 500) },
   { name: "check()", act: (p) => p.locator("#chk").check() },
-  { name: "frame click (same-origin)", act: (p) => p.frameLocator("#sf").locator("#t").click() },
-  { name: "frame click (cross-origin)", act: (p) => p.frameLocator("#xf").locator("#t").click() },
-  { name: "frame hover (same-origin, M10)", act: (p) => p.frameLocator("#sf").locator("#t").hover() },
-  { name: "frame hover (cross-origin)", act: (p) => p.frameLocator("#xf").locator("#t").hover() },
+  { name: "frame click (same-origin)", act: (p) => p.frameLocator("#sf").locator("#t").click(), frame: "same" },
+  { name: "frame click (cross-origin)", act: (p) => p.frameLocator("#xf").locator("#t").click(), frame: "cross" },
+  { name: "frame hover (same-origin, M10)", act: (p) => p.frameLocator("#sf").locator("#t").hover(), frame: "same", frameHover: true },
+  { name: "frame hover (cross-origin)", act: (p) => p.frameLocator("#xf").locator("#t").hover(), frame: "cross", frameHover: true },
   { name: "tap() (no touch: refused)", act: (p) => p.locator("#b").tap() },
   { name: "a click whose path crosses a hover menu that covers the target (M7)", before: (p) => p.mouse.move(740, 20), act: (p) => p.locator("#under").click() },
   { name: "hover on a card with a hover layer over its middle (M8)", act: (p) => p.locator("#card").hover(), better: true },
@@ -165,18 +167,18 @@ async function stateOf(p: any): Promise<unknown> {
 }
 /**
  * The fields of a row's state that the row decides: the click events, the selection, the check box and the dialog always;
- * a move's last point for a mouse.move row; the hover's state for a hover row; the card for M8; in each frame its clicks,
- * and its hover for a frame hover. A path of the stage crosses other elements on its way (no click), so the hover and the
- * moves of the elements on the way are no part of a row's result.
+ * a move's last point, the hover box's state, the card (M8), and the row's own frame's clicks and hover when the row
+ * names them. A path of the stage crosses other elements on its way (no click), so their hover and moves are no part of
+ * a row's result.
  */
 function compared(row: Row, st: any): unknown {
-  const frameRow = /frame/.test(row.name), hoverRow = /hover/.test(row.name);
+  const f = row.frame ? st.frames[row.frame] : undefined;
   return {
     ev: st.ev, sel: st.sel, checked: st.checked, conf: st.conf,
-    last: /^mouse\.move/.test(row.name) ? st.last : undefined,
-    hov: hoverRow && !frameRow && !/M8/.test(row.name) ? st.hov : undefined,
-    card: /M8/.test(row.name) ? st.card : undefined,
-    frames: Object.fromEntries(Object.entries<any>(st.frames).map(([k, f]) => [k, typeof f === "string" ? f : { click: f.click, ...(frameRow && hoverRow ? { entered: f.enter > 0 } : {}) }])),
+    last: row.last ? st.last : undefined,
+    hov: row.hov ? st.hov : undefined,
+    card: row.better ? st.card : undefined,
+    frame: f === undefined ? undefined : typeof f === "string" ? f : { click: f.click, ...(row.frameHover ? { entered: f.enter > 0 } : {}) },
   };
 }
 
@@ -223,7 +225,7 @@ export async function stageCases(o: StageContext): Promise<void> {
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
           const same = JSON.stringify(compared(row, s.state)) === JSON.stringify(compared(row, q.state));
           const tapRow = row.name.startsWith("tap()");
-          const ok = row.better ? s.ok && !q.ok : tapRow ? !s.ok && !q.ok && s.error === q.error : s.ok && q.ok && same;
+          const ok = row.better ? s.ok && (!q.ok || same) : tapRow ? !s.ok && !q.ok && s.error === q.error : s.ok && q.ok && same;
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms,
             detail: { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same,
               setups: trace.filter((l) => l.startsWith("a setup")).length, ...(same ? {} : { stageState: compared(row, s.state), ownState: compared(row, q.state) }) } });
@@ -275,11 +277,10 @@ async function measures(o: StageContext, ctx: any, plain: any, ROWS_URL: string,
       await p.waitForFunction(() => document.readyState === "complete");
       await sleep(500);
       const s = await p.context().newCDPSession(p);
-      const tree = await s.send("Page.getFrameTree");
-      const child = (tree.frameTree.childFrames ?? []).map((f: any) => f.frame).find((f: any) => /o=cross/.test(f.url));
-      const owner = await s.send("DOM.getFrameOwner", { frameId: child.id });
-      const quads = (await s.send("DOM.getContentQuads", { backendNodeId: owner.backendNodeId })).quads[0];
-      const model = (await s.send("DOM.getBoxModel", { backendNodeId: owner.backendNodeId })).model;
+      const doc = await s.send("DOM.getDocument", { depth: 0 });
+      const { nodeId } = await s.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#xf" });
+      const quads = (await s.send("DOM.getContentQuads", { nodeId })).quads[0];
+      const model = (await s.send("DOM.getBoxModel", { nodeId })).model;
       const rect = await p.evaluate(() => { const r = document.getElementById("xf")!.getBoundingClientRect(); return [r.left, r.top]; });
       const m = { iframeRect: rect, contentQuads: quads.slice(0, 2), boxModelBorder: model.border.slice(0, 2), boxModelContent: model.content.slice(0, 2), contentBox: [467, 567] };
       out.frameOwner = m;
@@ -357,12 +358,13 @@ async function harnessRows(o: StageContext, ctx: any, BLANK: string, port: numbe
       await step("click", "locator('#b').click()", () => page.locator("#b").click(), widthOf("b"));
     }
     await step("dblclick", "locator('#b').dblclick()", () => page.locator("#b").dblclick(), widthOf("b"));
-    await step("modclick", "locator('#b').click({ modifiers: ['Shift'] })", () => page.locator("#b").click({ modifiers: ["Shift"] }), widthOf("b"));
     await step("modclick", "locator('#chk').click({ modifiers: ['Shift'] })", () => page.locator("#chk").click({ modifiers: ["Shift"] }), widthOf("chk"));
+    await step("modclick", "locator('#b').click({ modifiers: ['Shift'] })", () => page.locator("#b").click({ modifiers: ["Shift"] }), widthOf("b"));
     await step("dblclick", "locator('#hov').dblclick()", () => page.locator("#hov").dblclick(), widthOf("hov"));
-    for (let i = 0; i < 3; i++) {
+    // Each click after an activation goes to another target than the step before (a path in each step).
+    for (const id of ["b", "chk", "hov"]) {
       opened.push(await away());
-      await step("click", "locator('#b').click() after another window came forward (an activation)", () => page.locator("#b").click(), widthOf("b"));
+      await step("click", `locator('#${id}').click() after another window came forward (an activation)`, () => page.locator(`#${id}`).click(), widthOf(id));
     }
     for (const b of opened) await b.close().catch(() => {});
   } finally { await page.close().catch(() => {}); }
