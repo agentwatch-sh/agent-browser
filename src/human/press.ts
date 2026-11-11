@@ -5,6 +5,7 @@
 // - The pause before a press: a lognormal, median 140 ms (times the person's factor), from 80 to 400 ms.
 // - The hold: a lognormal, median 100 ms (times the person's factor), from 60 to 180 ms; force 0.5.
 // - A double click's gap, from the first release to the second press: 90 to 150 ms.
+// - A click's modifier key (Playwright's ensureModifiers) goes up 60 to 200 ms after the mouse release.
 // - The press point: a person's press spreads around the middle of a target, an offset with a standard deviation of 1/8
 //   of the target's smaller side and at most 1/4 of it. For some targets the point is the client's result (a
 //   `click({ position })`, a canvas, a range input, the caret in a text field, a double click on a word), so the spread
@@ -30,6 +31,8 @@ export const pauseMs = (person: Person, random: Random, bounds?: readonly [numbe
 export const holdMs = (person: Person, random: Random, bounds?: readonly [number, number]) => scaled(random, person.params.press.holdMs, person.hold, bounds);
 /** The gap of a double click, from the first release to the second press (ms). */
 export const doubleClickGapMs = (person: Person, random: Random) => draw(random, person.params.press.doubleGapMs);
+/** The release of a click's modifier key after the mouse release (ms; C11 modifierAfterMs: Playwright's ensureModifiers). */
+export const modifierAfterMs = (person: Person, random: Random) => draw(random, person.params.press.modifierAfterMs);
 /** The press's force. */
 export const force = (person: Person) => person.params.press.force;
 

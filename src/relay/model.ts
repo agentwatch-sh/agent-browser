@@ -26,7 +26,8 @@ import { basename, join } from "node:path";
 import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge.ts";
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
-import { drawPerson, paramsFor, type Person } from "../human/person.ts";
+import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
+import { Stage, stageOn, type Body, type DropWhy, type StageClock, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
@@ -257,9 +258,19 @@ export class Model {
   private readonly random: () => number;
   /** The display's one pointer moves as one person (src/human/person.ts): the activation's paths and the catch-ups. */
   private readonly person: Person;
+  /**
+   * The input stage (stage.ts; C11 "The input stage"), behind its build switch: null while the switch is off, and then
+   * every input call goes as the rest of C11 says, as before the stage.
+   */
+  private readonly stage: Stage | null;
+  private readonly stagePages = new Map<number, StagePage>();
+  /** Each scope's person for the stage, from a seed that the relay keeps for the scope's life (C11: one person for each scope). */
+  private readonly scopePersons = new Map<string, Person>();
+  /** One activation at a time, also between the stage's activations (inside the tab's gate) and the activation chain's steps. */
+  private activating: Promise<void> = Promise.resolve();
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
-    pointerLog?: boolean; random?: () => number } = {}) {
+    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
     this.peerCheck = opts.peerCheck ?? false;
@@ -267,7 +278,16 @@ export class Model {
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
     this.person = drawPerson(paramsFor("linux"), this.random);
+    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}) }) : null;
+    if (this.stage) log("relay: the input stage is on (the build switch: for tests and the live rows only)");
   }
+
+  /** The input stage is on (its build switch). */
+  get stageOn(): boolean { return this.stage !== null; }
+  /** What the stage keeps of a tab (the tests). */
+  stageState(tabId: number) { return this.stage?.state(tabId) ?? null; }
+  /** The stage's counts (the harness and the live rows). */
+  stageCounts(): Record<string, number> { return { ...(this.stage?.counts ?? {}) }; }
 
   /** The client connections that are open now (the service's Chrome move waits while a client holds one). */
   get connectionCount(): number { return this.conns.size; }
@@ -519,7 +539,8 @@ export class Model {
   }
 
   private reset(): void {
-    for (const tab of this.tabs.values()) this.endHold(tab);
+    // The link ended: every connection closed before this (a session's end for the stage).
+    for (const tab of this.tabs.values()) { this.endHold(tab); this.stageDrop(tab.id, "session"); }
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
@@ -642,6 +663,25 @@ export class Model {
   }
 
   private forward(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): void {
+    if (this.stage) {
+      // With the stage on (C11, dialogs): a client's Page.handleJavaScriptDialog never waits, before the tab's gate and
+      // before any step of the stage, of an activation or of a world lookup.
+      if (method === "Page.handleJavaScriptDialog") {
+        // Chrome's answer means that the dialog closed: the stage sends the ended plan's events (also with no Page event).
+        const closed = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(this.stagePage(tab), child, "Page.javascriptDialogClosed", {}); answer(body); };
+        void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
+        return;
+      }
+      // The client's Page.disable: no Page.javascriptDialogClosed can come after it, so the stage's wait for a close ends.
+      if (method === "Page.disable" && !child) this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
+      // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.
+      const page = this.stagePage(tab), entry = this.stage.arrive(page, child, method, params, answer as (body: Body) => void);
+      if (entry) {
+        const before = tab.gate ?? Promise.resolve();
+        this.behind(tab, before.then(() => this.stage!.step(page, entry)).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`)));
+        return;
+      }
+    }
     // A client's Page.close goes to Chrome as any page call: the receiver runs it in its removal queue, with its window
     // rule, so it never closes the browser's last window (C10, C11; board ab-v16.41). On a child session (a frame or a
     // worker) Chrome refuses it, with no window rule.
@@ -659,6 +699,85 @@ export class Model {
     }
   }
 
+  /** One activation at a time (with the stage on): the chain's steps and the stage's activations take turns. */
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.activating.then(fn);
+    this.activating = run.then(() => {}, () => {});
+    return run;
+  }
+
+  /**
+   * The stage's activation before the first event of an action (C11, "The window comes forward for input": with the stage
+   * on, the first move of a translated pointer action is an input that starts an action too). It runs inside the tab's
+   * gate, after the stage took the input lock, so it does not wait for the activation chain (whose steps wait for the
+   * tab's gate): it takes its turn with the chain's steps. On the Mac there is no activation (every input goes at once).
+   */
+  private stageActivate(tab: Tab): Promise<void> {
+    if (!this.windowPerPage) return Promise.resolve();
+    tab.chainSteps++;
+    return this.exclusive(() => this.activate(tab, "input")).catch((e) => this.log(`relay: the activation of tab ${tab.id} failed: ${(e as Error).message}`))
+      .finally(() => { tab.chainSteps--; });
+  }
+
+  /** The person of a scope for the stage: drawn once for the scope's life (C11), from a seed that the relay keeps. */
+  private personOf(scope: string | null): Person {
+    if (scope === null) return this.person;
+    let p = this.scopePersons.get(scope);
+    if (!p) this.scopePersons.set(scope, (p = personFor(scope, Math.floor(this.random() * 2 ** 32), paramsFor(process.platform))));
+    return p;
+  }
+
+  /** The stage's host for a tab: its sends, the model's way of a client's call, its reads, its activation and its last point. */
+  private stagePage(tab: Tab): StagePage {
+    let page = this.stagePages.get(tab.id);
+    if (page) return page;
+    const model = this;
+    page = {
+      id: tab.id,
+      get person() { return model.personOf(tab.scope); },
+      // The stage's own commands go as the model's (C11, the input stage: the source): withForce, and a command that
+      // reaches C10's timeout detaches the tab (a command that waits for no promise still runs in Chrome).
+      send: (child, method, params) => {
+        const target = child ? { tabId: tab.id, sessionId: child } : { tabId: tab.id };
+        const sent = withForce(method, params);
+        const call = this.bridge.call("debugger.sendCommand", [target, method, sent]);
+        if (method.startsWith("Input.")) this.tracked(tab, child, method, sent, call);
+        call.catch((e) => { if (isTimeout(e) && !awaitsPromise(method, sent)) void this.reattach(tab); });
+        return call;
+      },
+      pass: (child, method, params, answer) => this.sendNow(tab, child, method, params, answer as (body: object) => void, false).then(() => {}, () => {}),
+      error: (method, e) => cdpError(method, e),
+      ownRead: (fn, args) => this.stageRead(tab, fn, args),
+      activate: () => this.stageActivate(tab),
+      inGate: (fn) => this.behind(tab, (tab.gate ?? Promise.resolve()).then(fn).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`))),
+      point: () => this.pointOf(tab),
+      xPoint: () => this.stageXPoint(tab),
+    };
+    this.stagePages.set(tab.id, page);
+    return page;
+  }
+
+  /**
+   * The X pointer's place mapped into the page (C11: a path with no last point starts there, on Linux at an activation),
+   * with the pointer paths on; null when the paths are off, the read fails, or the place is outside the page's viewport.
+   */
+  private async stageXPoint(tab: Tab): Promise<Pt | null> {
+    if (!this.windowPerPage || this.paths !== "on") return null;
+    const at = await this.readPointer();
+    if (!at) return null;
+    const g = await this.geometry(tab, { keep: false });
+    return this.usableFor(g, tab) ? toPage(g, at) : null;
+  }
+
+  /** A read of the stage in the relay's own isolated world (the geometry read's world): `fn` called with its numbers, by value. */
+  private async stageRead(tab: Tab, fn: string, args: number[]): Promise<unknown> {
+    if (!args.every((a) => typeof a === "number" && Number.isFinite(a))) throw new Error("a read of the stage takes numbers only");
+    const id = await this.relayWorld(tab);
+    if (id === null) throw new Error("no world");
+    const r = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Runtime.evaluate", { expression: `(${fn})(${args.join(", ")})`, contextId: id, returnByValue: true, disableBreaks: true }]);
+    return r?.result?.value;
+  }
+
   /** The tab's next calls wait for `step`; the last one clears the gate. */
   private behind(tab: Tab, step: Promise<void>): void {
     tab.gate = step;
@@ -674,10 +793,14 @@ export class Model {
   private chainStep(tab: Tab, kind: StepKind, after?: () => unknown): Promise<void> {
     const before = tab.gate ? Promise.all([this.activations, tab.gate]) : this.activations;
     tab.chainSteps++;
+    const work = async () => {
+      if (kind === "bringToFront") await this.activate(tab, kind, after as () => Promise<unknown>);
+      else { await this.activate(tab, kind); if (after) await after(); }
+    };
     const run = before.then(async () => {
       try {
-        if (kind === "bringToFront") await this.activate(tab, kind, after as () => Promise<unknown>);
-        else { await this.activate(tab, kind); if (after) await after(); }
+        // With the stage on, its activations run inside the tab's gate: the two kinds take turns, one at a time.
+        if (this.stage) await this.exclusive(work); else await work();
       } finally { tab.chainSteps--; }
     });
     const settled = run.then(() => {}, () => {});
@@ -781,6 +904,8 @@ export class Model {
       // This id belongs to the client's current world, but a cached renderer can still have a relay world with it.
       // Keep the refusal candidate; only the current document's event filter releases it.
       if (method === "Page.createIsolatedWorld" && !child) tab.worldEvents.delete((result as any)?.executionContextId);
+      // The stage watches the client's DOM.getContentQuads (the press point) and the hit-target check's stop (the miss watch).
+      if (this.stage && (method === "DOM.getContentQuads" || method === "Runtime.callFunctionOn") && this.tabs.get(tab.id) === tab) this.stage.saw(this.stagePage(tab), child, method, params, result);
       let r = hidesCookies(method) ? hideCookies(result) : result;
       if (r?.targetInfo) r = { ...r, targetInfo: { ...r.targetInfo, browserContextId: DEFAULT_CONTEXT } };
       answer({ result: r ?? {} });
@@ -876,10 +1001,22 @@ export class Model {
     for (const done of tab.released.splice(0)) done();
   }
 
-  /** The tab carries no debugger now: its hold ends, a client's device-metrics override is gone, and the relay's world needs making again. */
-  private detached(tab: Tab): void {
+  /**
+   * The tab carries no debugger now: its hold ends, a client's device-metrics override is gone, and the relay's world
+   * needs making again. `why` for the stage: "session" when the model detaches it (the client's last session of the tab
+   * or its connection ended, or a C10 timeout ended the client's sessions), "tab" when Chrome detached it.
+   */
+  private detached(tab: Tab, why: DropWhy = "session"): void {
     this.endHold(tab);
     tab.metrics = false;
+    this.stageDrop(tab.id, why);
+  }
+
+  /** The stage forgets a tab that is gone or detached: its action ends and the input lock is free (C11, dialogs: the end of the wait for a close). */
+  private stageDrop(tabId: number, why: DropWhy): void {
+    if (!this.stage) return;
+    this.stage.drop(tabId, why);
+    this.stagePages.delete(tabId);
   }
 
   /** A new tab that opens a window, or that becomes the active tab of the front page's window, is the front page: it comes on top (C11). */
@@ -1256,7 +1393,8 @@ export class Model {
    * never while the page holds a button, and none while the tab has catch-up moves without an answer.
    */
   private catchUpOf(tab: Tab, method: string, params: any): { from: Pt; to: Pt; move: boolean } | null {
-    if (!this.windowPerPage || this.paths !== "on" || !POINTER_INPUT.has(method) || this.tabs.get(tab.id) !== tab) return null;
+    // With the stage on, the catch-up is the stage's path (C11): the stage's next path starts at the recorded point.
+    if (this.stage || !this.windowPerPage || this.paths !== "on" || !POINTER_INPUT.has(method) || this.tabs.get(tab.id) !== tab) return null;
     const pt = this.pointOf(tab), p = params ?? {};
     if (!pt || (!pt.x11 && !tab.covered) || typeof p.x !== "number" || typeof p.y !== "number" || tab.pressed || tab.unanswered > 0) return null;
     const type = String(p.type);
@@ -1521,7 +1659,7 @@ export class Model {
         if (!tab) return;
         this.log(`relay: Chrome detached tab ${tab.id}`);
         tab.attached = false; tab.held = false;
-        this.detached(tab);
+        this.detached(tab, "tab");
         this.dropSessions(tab);
         tab.owner = null;
         return;
@@ -1583,6 +1721,9 @@ export class Model {
       if (method === "Target.attachedToTarget") this.children.set(params.sessionId, tab.id);
     }
     if (method === "Target.detachedFromTarget" && this.hidden.delete(params.sessionId)) return;
+    // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
+    if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Page.frameNavigated" || method === "Inspector.targetCrashed"
+      || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);
     let p = hidesCookies(method) ? hideCookies(params) : params;
@@ -1687,6 +1828,7 @@ export class Model {
   private removed(tabId: number): void {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
+    this.stageDrop(tabId, "tab");
     // Its point goes, its hold ends, and the front page is unknown when it was this page (C11).
     this.endHold(tab);
     if (tab.targetId) this.points.delete(tab.targetId);

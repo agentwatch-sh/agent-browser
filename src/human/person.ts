@@ -20,8 +20,10 @@ export type Params = {
     jitter: { px: Dist; hz: Dist; fadeShare: number };
     approach: { smallPx: number; warpSmall: Dist; warpLarge: Dist };
     start: { middle: [number, number] };
+    /** A short move (C11: at most `maxPx` from the page's last point): the client's line at a person's speed, with jitter across it. */
+    short: { maxPx: number; speed: Dist; jitterPx: Dist };
   };
-  press: { pauseMs: Dist; holdMs: Dist; force: number; doubleGapMs: Dist; spread: { sdShare: number; maxShare: number } };
+  press: { pauseMs: Dist; holdMs: Dist; force: number; doubleGapMs: Dist; spread: { sdShare: number; maxShare: number }; modifierAfterMs: Dist };
   wheel: { notchPx: number; gapMs: Dist };
   /** The keys (board ab-t30.4; design 10.2): src/human/keys.ts. */
   keys: {

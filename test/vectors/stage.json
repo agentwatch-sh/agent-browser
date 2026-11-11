@@ -5001,7 +5001,7 @@
   {
    "id": "rule-dialog-at-press",
    "rule": "Dialogs (the input design, section 4.3a).",
-   "note": "A confirm() in the page's mousedown handler: the dialog opens at the press, and Chrome answers no input event while it is open. The plan ends: the release goes at once (a hold counts from the press's send). The client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate, and gets its answer first; then Chrome answers the press and the release (its own answers, after the dialog closes).",
+   "note": "A confirm() in the page's mousedown handler: the dialog opens at the press. Chrome keeps the input events that it got before the dialog opened, and drops those that it gets while the dialog is open (measured by board ab-t30.9: it answers them at once, and the page never gets them). The plan ends: its own events are dropped (the rest of the hold), and the lock is free; the client's release waits for the dialog's close and then goes at once (a hold counts from the press's send). The client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate, and gets its answer first; then Chrome answers the press (kept from before the dialog) and the release (sent after the close).",
    "platform": "linux",
    "seed": 62,
    "clock": 0,
@@ -5020,7 +5020,7 @@
       "at": "out:1"
      }
     ],
-    "dialog": {"opensAt": "out:1", "closesAt": "out:3"}
+    "dialog": {"opensAt": "out:1", "closesAt": "out:2"}
    },
    "in": [
     {
@@ -5081,21 +5081,21 @@
      "rule": "pauseMs",
      "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": 640, "y": 360}
     },
+    {"pass": true, "for": 4, "from": "in:4", "at": [0, 0]},
     {
      "method": "Input.dispatchMouseEvent",
      "type": "mouseReleased",
      "for": 3,
-     "from": "out:1",
+     "from": "out:2",
      "at": [0, 1],
      "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": 640, "y": 360}
-    },
-    {"pass": true, "for": 4, "from": "in:4", "at": [0, 0]}
+    }
    ],
    "answers": [
     {"id": 1, "after": "out:0"},
-    {"id": 4, "after": "out:3"},
+    {"id": 4, "after": "out:2"},
     {"id": 2, "after": "out:1", "waits": 4},
-    {"id": 3, "after": "out:2", "waits": 4}
+    {"id": 3, "after": "out:3", "waits": 4}
    ]
   },
   {
