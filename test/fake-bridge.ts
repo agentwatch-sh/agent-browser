@@ -203,7 +203,7 @@ export async function until<T>(fn: () => T, what = "the condition", ms = 5000): 
 }
 
 /** A relay of its own on a short temp socket path, with the fake behind it. */
-export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate } = {}): Promise<Harness> {
+export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate; stage?: boolean } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "ab-relay-"));
   const socket = join(dir, "cdp.sock"), fake = new FakeReceiver(), logs: string[] = [], conns: CDPConnection[] = [];
   // One window per page (the Linux design) unless a test asks for the Mac's tabs: the tests do not depend on the platform.

@@ -118,6 +118,28 @@ CHROME_EXTENSION=/absolute/path/to/chrome-extension CASES=downloads DISPLAY_N=12
 Both harnesses use `harnessGuard` and check `reservedDisplay` before they start Chromium.
 The default check starts no Xvfb and uses no display.
 
+## The input stage's live rows
+
+The group `stage` of `agent-mode/run.ts` (board ab-t30.9) runs alone, in the own mode, with the relay's input stage on
+(the build switch's door for the live rows: `AGENT_BROWSER_INPUT_STAGE=test` in the relay's environment; nothing else
+turns the stage on until boards ab-t30.9 to ab-t30.12 are all merged). Its scope `stage` has the list `a.localhost` and
+`b.localhost` (a cross-site frame). It installs `playwright-core` 1.65.0 and 1.66.0-alpha-2026-11-09 (the
+playwright-core of `@playwright/mcp` 0.0.85) in folders of the run, beside the install's 1.64.1, and never downloads a
+browser: the second Chromium (Playwright's own input, with no stage) is the same Chromium binary, launched by each
+Playwright version with a profile folder of the run.
+
+```sh
+CHROME_EXTENSION=<a chrome-extension checkout> DISPLAY_N=169 CASES=stage STAGE_REFERENCE=<reference.json> \
+  flock <heavy.lock> timeout 1500 node test/live/agent-mode/run.ts
+```
+
+Each row passes when the action passes through the stage with Playwright's default timeout, and the page's state is the
+same as with Playwright's own input (M8, a hover layer over the card's middle, is the design's named better case:
+Playwright's own hover fails there). The group also measures open points 4 and 5 of the input design, and scores the
+recorder page's records through the stage (the rows R1, R2 and R9 to R13) against `STAGE_REFERENCE`, a `reference.json`
+of `input-harness/run.ts --only source`. It writes `stage-live.json`, `stage-harness-results.json` and
+`stage-harness-report.txt` in the run folder.
+
 ## Input harness
 
 `input-harness/run.ts` (board ab-t30.2) scores agent input against a reference input, gap by gap, by the

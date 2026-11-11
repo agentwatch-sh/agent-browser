@@ -1,0 +1,412 @@
+// The input stage in the model (board ab-t30.9; C11 "The input stage": the build switch, the gate, dialogs). With the
+// switch off (the default until boards ab-t30.9 to ab-t30.12 are all merged) the relay sends each input call as today:
+// unchanged, in the client's order. With the switch on (the model's option, as the tests and the live rows turn it on)
+// the stage takes the input calls in the tab's gate, a client's Page.handleJavaScriptDialog goes at once, and the
+// stage's events reach Chrome with their timestamps. The fake receiver of fake-bridge.ts stands in for Chrome.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import type { CDPConnection } from "../src/cdp.ts";
+import { Bridge } from "../src/relay/bridge.ts";
+import { Model } from "../src/relay/model.ts";
+import { STAGE_TEST_ENV } from "../src/relay/stage.ts";
+import { harness, until, type Harness } from "./fake-bridge.ts";
+
+/** A page of the connection's own (a window of its own), with auto-attach on. */
+async function page(h: Harness, c: CDPConnection) {
+  await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  const attached = c.waitForEvent("Target.attachedToTarget");
+  const { targetId } = await c.send("Target.createTarget", { url: "about:blank" });
+  const ev = await attached;
+  return { targetId, sessionId: ev.sessionId as string, tab: [...h.fake.tabs.values()].find((t) => t.targetId === targetId)! };
+}
+const cmds = (h: Harness, from = 0) => h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand").map((r) => ({ method: r.args[1] as string, params: r.args[2] }));
+
+/** Playwright's hit-target setup of a click on node 7.3.10 at 100,240 (Playwright 1.65.0's text). */
+const SETUP = { functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "7.3.1", returnByValue: false, awaitPromise: true, userGesture: true,
+  arguments: [{ objectId: "7.3.1" }, { value: true }, { value: false }, { value: "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)" },
+    { value: 1 }, { value: { a: [{ h: 0 }, { h: 1 }, { o: [{ k: "actionType", v: "mouse" }, { k: "hitPoint", v: { o: [{ k: "x", v: 100 }, { k: "y", v: 240 }] } }, { k: "trial", v: false }] }] } },
+    { objectId: "7.3.2" }, { objectId: "7.3.10" }] };
+
+test("the build switch off (the default): the relay sends each input call as today, unchanged and in the client's order, with no event of its own", async () => {
+  const saved = process.env[STAGE_TEST_ENV];
+  delete process.env[STAGE_TEST_ENV];
+  const h = await harness();
+  try {
+    assert.equal(h.relay.model.stageOn, false, "the stage is off by default");
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const from = h.fake.requests.length;
+    const calls: [string, any][] = [
+      ["Runtime.callFunctionOn", SETUP],
+      ["Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 640.5, y: 360, modifiers: 0, force: 0 }],
+      ["Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 640.5, y: 360, modifiers: 0, clickCount: 1, force: 0.5 }],
+      ["Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 640.5, y: 360, modifiers: 0, clickCount: 1 }],
+      ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 640, y: 360, deltaX: 0, deltaY: 600, modifiers: 0 }],
+      ["Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: 8, location: 1 }],
+      ["Input.dispatchKeyEvent", { type: "keyUp", key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: 0, location: 1 }],
+      ["Input.insertText", { text: "abc" }],
+      ["DOM.scrollIntoViewIfNeeded", { objectId: "7.3.10" }],
+      ["Page.handleJavaScriptDialog", { accept: true }],
+    ];
+    await Promise.all(calls.map(([m, params]) => c.send(m, params, p.sessionId)));
+    const sent = cmds(h, from).filter((x) => !["Page.createIsolatedWorld", "Runtime.evaluate"].includes(x.method));
+    assert.deepEqual(sent, calls.map(([method, params]) => ({ method, params })), "each call as the client sent it, in its order");
+    assert.ok(sent.every((x) => x.params.timestamp === undefined), "no timestamp of the stage");
+  } finally { await h.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
+});
+
+test("the build switch: the model is off unless its option or the relay's variable (the live rows) turns it on", () => {
+  const saved = process.env[STAGE_TEST_ENV];
+  const b = new Bridge(() => {});
+  try {
+    delete process.env[STAGE_TEST_ENV];
+    assert.equal(new Model(b, () => {}).stageOn, false);
+    assert.equal(new Model(b, () => {}, { stage: true }).stageOn, true);
+    process.env[STAGE_TEST_ENV] = "test";
+    assert.equal(new Model(b, () => {}).stageOn, true, "the live rows' variable");
+    assert.equal(new Model(b, () => {}, { stage: false }).stageOn, false);
+    process.env[STAGE_TEST_ENV] = "1";
+    assert.equal(new Model(b, () => {}).stageOn, false, "only the value test");
+  } finally { if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
+});
+
+test("with the stage on: a click becomes a path, a pause, a press and a hold; each event has its timestamp; a Runtime.evaluate after the click waits for the release; the answers come after their events", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 400, y: 300, modifiers: 0 }, p.sessionId);
+    const from = h.fake.requests.length, t0 = Date.now();
+    const done: string[] = [];
+    const go = (m: string, params: any, tag: string) => c.send(m, params, p.sessionId).then(() => done.push(tag));
+    await Promise.all([
+      go("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 700, y: 500, modifiers: 0, force: 0 }, "move"),
+      go("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 700, y: 500, modifiers: 0, clickCount: 1, force: 0.5 }, "press"),
+      go("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 700, y: 500, modifiers: 0, clickCount: 1 }, "release"),
+      go("Runtime.evaluate", { expression: "1" }, "evaluate"),
+    ]);
+    const ms = Date.now() - t0;
+    const sent = cmds(h, from).filter((x) => x.method === "Input.dispatchMouseEvent" || x.method === "Runtime.evaluate" && x.params.expression === "1");
+    const types = sent.map((x) => x.params.type ?? "evaluate");
+    const moves = types.filter((t) => t === "mouseMoved").length;
+    assert.ok(moves >= 10, `${moves} moves of a path`);
+    assert.deepEqual(types.slice(moves), ["mousePressed", "mouseReleased", "evaluate"], "the press, the release, then the evaluate");
+    for (const x of sent.filter((y) => y.method === "Input.dispatchMouseEvent")) {
+      assert.equal(typeof x.params.timestamp, "number");
+      assert.ok(Math.abs(x.params.timestamp * 1000 - Math.round(x.params.timestamp * 1000)) < 1e-6, "whole ms (Linux)");
+    }
+    assert.deepEqual(done, ["move", "press", "release", "evaluate"], "the answers in order");
+    assert.ok(ms >= 300 + 80 + 60, `a person's time: ${ms} ms`);
+  } finally { await h.close(); }
+});
+
+test("with the stage on: a client's Page.handleJavaScriptDialog goes to Chrome at once, before the tab's gate and the stage's step that waits", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    // Chrome answers no press while the dialog is open (a confirm() in mousedown); the client answers the dialog.
+    let open = false;
+    const held: (() => void)[] = [], dropped: string[] = [];
+    // Chrome answers input in order: an event after the kept press is answered after it.
+    let pressDone: Promise<void> | null = null;
+    h.fake.command = (target, method, params) => {
+      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
+        open = true;
+        h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" } });
+        const p = new Promise((r) => held.push(() => r({})));
+        pressDone = p.then(() => {});
+        return p;
+      }
+      if (method === "Page.handleJavaScriptDialog") {
+        open = false;
+        setTimeout(() => { for (const r of held.splice(0)) r(); h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogClosed", params: { result: true, userInput: "" } }); }, 5);
+        return {};
+      }
+      // Chrome keeps the press that opened the dialog; it drops an input event that it gets while the dialog is open.
+      if (open && method.startsWith("Input.")) { dropped.push(params.type); return {}; }
+      if (pressDone && method.startsWith("Input.")) return pressDone.then(() => ({}));
+      return undefined;
+    };
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+    const order: string[] = [];
+    const click = Promise.all([
+      c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, p.sessionId).then(() => order.push("press")),
+      c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 10, y: 10, modifiers: 0, clickCount: 1 }, p.sessionId).then(() => order.push("release")),
+    ]);
+    await dialog;
+    await c.send("Page.handleJavaScriptDialog", { accept: true }, p.sessionId).then(() => order.push("dialog"));
+    await click;
+    assert.deepEqual(order, ["dialog", "press", "release"], "the dialog's answer first, then Chrome's own answers of the press and the release");
+    const sent = cmds(h).map((x) => x.params?.type ?? x.method);
+    const d = sent.indexOf("Page.handleJavaScriptDialog");
+    assert.ok(d < sent.indexOf("mouseReleased"), "the release waits for the dialog's close: Chrome drops what it gets while the dialog is open");
+    assert.deepEqual(dropped, [], "no input event while the dialog is open");
+    await until(() => h.relay.model.stageState(p.tab.id)?.action === false, "the lock to be free");
+  } finally { await h.close(); }
+});
+
+test("with the stage on and the pointer paths on: the window comes forward before the path (C11, the window comes forward for input), and the path starts at the X record of the activation", async () => {
+  process.env.AGENT_BROWSER_POINTER_LOG = "1";
+  let h: Harness;
+  try { h = await harness({ stage: true }); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
+  try {
+    // A daemon with both pointer ops: the pointer at 640,500 on a 1280 x 900 display (each page's content from y 91).
+    let pos = { x: 640, y: 500 };
+    h.fake.daemon = ({ op, args }) => {
+      if (op === "daemon.pointerAt") return { ...pos, width: 1280, height: 900, views: 0 };
+      if (op === "daemon.movePointer") { const last = args[0].path.at(-1); pos = { x: last.x, y: last.y }; return { ...pos, views: 0 }; }
+      return { error: "unknown op" };
+    };
+    await h.ready();
+    await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const move = (p: { sessionId: string }, x: number, y: number) => c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 }, p.sessionId);
+    await move(A, 100, 100);
+    await move(B, 700, 300);
+    const from = h.fake.requests.length, l0 = h.logs.length;
+    await move(A, 300, 200);
+    const ops = h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? `${r.args[1]} ${r.args[2]?.type ?? ""}`.trim() : r.op));
+    const raise = ops.indexOf("windows.update"), firstMove = ops.indexOf("Input.dispatchMouseEvent mouseMoved");
+    assert.ok(raise >= 0 && firstMove > raise, `the raise before the path's first move: ${ops.slice(0, 12).join(", ")}`);
+    assert.ok(h.logs.slice(l0).some((l) => /^relay: step input of tab \d+: a path of \d+ points, ok/.test(l)), "the activation played its X path");
+    // The X path ended at A's last point (100,100): the stage's path starts there, one step away at most.
+    const first = h.fake.requests.slice(from).find((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent")!.args[2];
+    assert.ok(Math.hypot(first.x - 100, first.y - 100) <= 60, `the path from the recorded point: ${first.x},${first.y}`);
+  } finally { await h!.close(); }
+});
+
+test("with the stage on: a client's Page.handleJavaScriptDialog does not wait behind the tab's input that waits for the input lock (another tab's action holds it)", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    // B's client holds a button: B's action keeps the input lock (until STAGE_ACTION_MAX_MS).
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, B.sessionId);
+    // A's client moves: its step waits for the lock in A's gate. A page script of A opened a dialog; A's client answers it.
+    void c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 300, y: 200, modifiers: 0 }, A.sessionId).catch(() => {});
+    await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    await c.send("Page.handleJavaScriptDialog", { accept: true }, A.sessionId);
+    assert.ok(Date.now() - t0 < 1000, `the dialog's answer at once (${Date.now() - t0} ms), not after B's action`);
+    assert.ok(cmds(h).some((x) => x.method === "Page.handleJavaScriptDialog"));
+    assert.ok(!cmds(h).some((x) => x.method === "Input.dispatchMouseEvent" && x.params.type === "mouseMoved" && x.params.x === 300), "A's move still waits for the lock");
+  } finally { await h.close(); }
+});
+
+// ---- review-116, round 1 (the model's part)
+
+const FOCUS = { functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "9.1.1", returnByValue: true, awaitPromise: true, userGesture: true,
+  arguments: [{ objectId: "9.1.1" }, { value: true }, { value: true }, { value: "([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)" }, { value: 1 },
+    { value: { a: [{ h: 0 }, { h: 1 }, true] } }, { objectId: "9.1.2" }, { objectId: "9.1.3" }] };
+
+test("review B3 through the model: A holds the lock; B's move waits for it; B's focus call and A's focus call wait in the activation chain; A's release behind them: at STAGE_ACTION_MAX_MS the lock frees, and every call ends", async () => {
+  // The stage's clock: the real one, with STAGE_ACTION_MAX_MS of 300 ms (the test's own value).
+  const { stageClock: real, STAGE_ACTION_MAX_MS } = await import("../src/relay/stage.ts");
+  const clock = { ...real, timer: (ms: number, fn: () => void) => real.timer(ms === STAGE_ACTION_MAX_MS ? 300 : ms, fn) };
+  const h = await harness({ stage: true });
+  (h.relay.model as any).stage.clock = clock;
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const done: string[] = [];
+    const go = (p: { sessionId: string }, m: string, params: any, tag: string) => c.send(m, params, p.sessionId).then(() => done.push(tag), () => done.push(`${tag}!`));
+    void go(A, "Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, "A press");
+    await new Promise((r) => setTimeout(r, 50));
+    void go(B, "Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 300, y: 200, modifiers: 0 }, "B move");
+    void go(B, "Runtime.callFunctionOn", FOCUS, "B focus");
+    void go(A, "Runtime.callFunctionOn", FOCUS, "A focus");
+    void go(A, "Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 10, y: 10, modifiers: 0, clickCount: 1 }, "A release");
+    await until(() => done.length === 5, "every call to end", 15_000);
+    await until(() => h.relay.model.stageState(A.tab.id)?.action === false && h.relay.model.stageState(B.tab.id)?.action === false, "the lock to be free");
+  } finally { await h.close(); }
+});
+
+test("review N2: the stage's own sends go as the model's: a move with a button down and no force gets force 0.5; a command that reaches C10's timeout detaches the tab", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1 }, p.sessionId);
+    const from = h.fake.requests.length;
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, x: 20, y: 10, modifiers: 0 }, p.sessionId);
+    const moved = cmds(h, from).find((x) => x.method === "Input.dispatchMouseEvent" && x.params.type === "mouseMoved")!;
+    assert.equal(moved.params.force, 0.5, "withForce, as on main");
+    h.fake.command = (_t, method, params) => (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" ? { error: "timeout" } : undefined);
+    const before = h.fake.sent("debugger.detach").length;
+    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 20, y: 10, modifiers: 0, clickCount: 1 }, p.sessionId).catch(() => {});
+    await until(() => h.fake.sent("debugger.detach").length > before, "the tab's detach after the timeout");
+  } finally { await h.close(); }
+});
+
+test("review N5: with no Page.javascriptDialogClosed, Chrome's answer to the client's Page.handleJavaScriptDialog ends the wait: the held release goes", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    let open = false;
+    h.fake.command = (target, method, params) => {
+      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
+        open = true;
+        h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" } });
+        return new Promise((r) => setTimeout(() => r({}), 300));
+      }
+      if (method === "Page.handleJavaScriptDialog") { open = false; return {}; } // no Closed event
+      return undefined;
+    };
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+    const click = Promise.all([
+      c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, p.sessionId),
+      c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 10, y: 10, modifiers: 0, clickCount: 1 }, p.sessionId),
+    ]);
+    await dialog;
+    await c.send("Page.handleJavaScriptDialog", { accept: true }, p.sessionId);
+    await Promise.race([click, new Promise((_, j) => setTimeout(() => j(new Error("the release never went")), 3000))]);
+    assert.ok(cmds(h).some((x) => x.params?.type === "mouseReleased"));
+  } finally { await h.close(); }
+});
+
+// ---- review-116b (the narrow re-check) and the daemon lead's point (the model's part)
+
+const MOVE = (x: number, y: number) => ({ type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 });
+const PRESS = (x: number, y: number) => ({ type: "mousePressed", button: "left", buttons: 1, x, y, modifiers: 0, clickCount: 1, force: 0.5 });
+const RELEASE = (x: number, y: number) => ({ type: "mouseReleased", button: "left", buttons: 0, x, y, modifiers: 0, clickCount: 1 });
+const ALERT = { type: "alert", message: "hi", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" };
+
+/**
+ * A fake Chrome whose tab `tabId` opens an alert at the fifth move after `arm()` (a mouseover handler on the path): while
+ * it is open, Chrome answers each input event of that tab at once and drops it.
+ */
+function alertOnPath(h: Harness, tabId: () => number, extra: (target: any, method: string, params: any) => any = () => undefined) {
+  const s = { armed: false, open: false, moves: 0 };
+  h.fake.command = (target, method, params) => {
+    const x = extra(target, method, params);
+    if (x !== undefined) return x;
+    if (target.tabId !== tabId() || !method.startsWith("Input.")) return undefined;
+    if (s.open) return {};
+    if (s.armed && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && ++s.moves === 5) {
+      s.open = true;
+      h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: ALERT });
+    }
+    return undefined;
+  };
+  return s;
+}
+
+test("review-116b R1 case 1 through the model: locator.click's move, press and release in one tick, an alert in a mouseover on the path, the tab dropped before the close by each drop path: no call waits for ever, and the next tab's input goes", async () => {
+  for (const path of ["the session's end", "the tab's close", "Chrome's detach", "a C10 timeout's detach"]) {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const A = await page(h, c), B = await page(h, c);
+      const s = alertOnPath(h, () => A.tab.id, (_t, method) => (path === "a C10 timeout's detach" && method === "Page.handleJavaScriptDialog" ? { error: "timeout" } : undefined));
+      await c.send("Input.dispatchMouseEvent", MOVE(100, 100), A.sessionId);
+      s.armed = true;
+      const dialog = c.waitForEvent("Page.javascriptDialogOpening", A.sessionId);
+      const got: string[] = [];
+      const a = (params: any, tag: string) => c.send("Input.dispatchMouseEvent", params, A.sessionId, 4000).then(() => got.push(tag), (e) => { if (!/no response/.test(e.message)) got.push(`${tag}!`); });
+      const click = Promise.all([a(MOVE(900, 600), "move"), a(PRESS(900, 600), "press"), a(RELEASE(900, 600), "release")]);
+      await dialog;
+      // The drop, before the close.
+      if (path === "the session's end") await c.send("Target.detachFromTarget", { sessionId: A.sessionId });
+      else if (path === "the tab's close") { h.fake.attached.delete(A.tab.id); h.fake.tabs.delete(A.tab.id); h.fake.emit("tabs.onRemoved", { tabId: A.tab.id, removeInfo: { windowId: 1, isWindowClosing: false } }); }
+      else if (path === "Chrome's detach") { h.fake.attached.delete(A.tab.id); h.fake.emit("debugger.onDetach", { source: { tabId: A.tab.id }, reason: "canceled_by_user" }); }
+      else await c.send("Page.handleJavaScriptDialog", { accept: true }, A.sessionId).catch(() => {});
+      // The next tab's input goes.
+      const t0 = Date.now();
+      await Promise.race([
+        Promise.all([c.send("Input.dispatchMouseEvent", MOVE(300, 200), B.sessionId), c.send("Input.dispatchMouseEvent", PRESS(300, 200), B.sessionId), c.send("Input.dispatchMouseEvent", RELEASE(300, 200), B.sessionId)]),
+        new Promise((_, j) => setTimeout(() => j(new Error(`${path}: B's click waits for ever`)), 5000)),
+      ]);
+      assert.ok(Date.now() - t0 < 5000);
+      await click;
+      if (path === "the session's end" || path === "a C10 timeout's detach") assert.deepEqual(got, [], `${path}: nothing goes back to the session that ended`);
+      else assert.deepEqual(got.sort(), ["move!", "press!", "release!"], `${path}: each of A's calls gets Chrome's error`);
+      await until(() => (h.relay.model as any).stage.lock.held === 0, `${path}: the lock to be free`);
+    } finally { await h.close(); }
+  }
+});
+
+test("review-116b R1 case 2 through the model: the cycle of focus calls across two tabs (A's move, A's focus call, B's focus call, B's move, B's focus call, A's press, A's focus call, A's release; an alert on A's path): every call ends and the lock goes free", async () => {
+  // The stage's clock: the real one, with STAGE_ACTION_MAX_MS of 300 ms (the test's own value).
+  const { stageClock: real, STAGE_ACTION_MAX_MS } = await import("../src/relay/stage.ts");
+  const clock = { ...real, timer: (ms: number, fn: () => void) => real.timer(ms === STAGE_ACTION_MAX_MS ? 300 : ms, fn) };
+  const h = await harness({ stage: true });
+  (h.relay.model as any).stage.clock = clock;
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const s = alertOnPath(h, () => A.tab.id);
+    await c.send("Input.dispatchMouseEvent", MOVE(100, 100), A.sessionId);
+    s.armed = true;
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", A.sessionId);
+    const done: string[] = [];
+    const go = (p: { sessionId: string }, m: string, params: any, tag: string) => { void c.send(m, params, p.sessionId, 20_000).then(() => done.push(tag), () => done.push(`${tag}!`)); };
+    go(A, "Input.dispatchMouseEvent", MOVE(900, 600), "A move");
+    go(A, "Runtime.callFunctionOn", FOCUS, "A focus 1");
+    go(B, "Runtime.callFunctionOn", FOCUS, "B focus 2");
+    go(B, "Input.dispatchMouseEvent", MOVE(300, 200), "B move");
+    go(B, "Runtime.callFunctionOn", FOCUS, "B focus 3");
+    go(A, "Input.dispatchMouseEvent", PRESS(900, 600), "A press");
+    go(A, "Runtime.callFunctionOn", FOCUS, "A focus 4");
+    go(A, "Input.dispatchMouseEvent", RELEASE(900, 600), "A release");
+    await dialog;
+    s.open = false;
+    await c.send("Page.handleJavaScriptDialog", { accept: true }, A.sessionId);
+    h.fake.emit("debugger.onEvent", { source: { tabId: A.tab.id }, method: "Page.javascriptDialogClosed", params: { result: true, userInput: "" } });
+    // The cycle: A's focus call 4 waits for B's focus call 3 (the activation chain), which waits for B's move (B's gate),
+    // which waits for the lock that A's ended events took again, which A's release (behind A's focus call 4) would free.
+    // The taken lock's limit breaks it.
+    await until(() => done.length === 8, `every call to end (${done.join(", ")})`, 15_000);
+    await until(() => (h.relay.model as any).stage.lock.held === 0, "the lock to be free");
+  } finally { await h.close(); }
+});
+
+test("review-116b: the model gives the stage the client's Page.disable and Chrome's Page.frameNavigated and Inspector.targetCrashed: each ends the wait for a dialog's close (a press opened it)", async () => {
+  for (const signal of ["Page.disable", "Page.frameNavigated", "Inspector.targetCrashed"]) {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const p = await page(h, c);
+      let open = false;
+      const kept: (() => void)[] = [];
+      h.fake.command = (target, method, params) => {
+        if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
+          open = true;
+          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" } });
+          return new Promise((r) => kept.push(() => r({})));
+        }
+        return undefined;
+      };
+      const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+      let release = "";
+      const click = Promise.all([
+        c.send("Input.dispatchMouseEvent", PRESS(10, 10), p.sessionId, 4000).catch(() => {}),
+        c.send("Input.dispatchMouseEvent", RELEASE(10, 10), p.sessionId, 4000).then(() => { release = "ok"; }, (e) => { release = e.message; }),
+      ]);
+      await dialog;
+      await new Promise((r) => setTimeout(r, 50));
+      const from = h.fake.requests.length;
+      if (signal === "Page.disable") await c.send("Page.disable", {}, p.sessionId);
+      else h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: signal, params: signal === "Page.frameNavigated" ? { frame: { id: "main", loaderId: "L2", url: "about:blank#next" } } : {} });
+      await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), `${signal}: a release after the signal (the wait ended)`, 3000);
+      for (const k of kept.splice(0)) k();
+      await click;
+      if (signal === "Page.frameNavigated") assert.match(release, /context/i, "at a navigation the held release gets the error that the context is gone");
+      else assert.equal(release, "ok", `${signal}: the held release goes and gets Chrome's answer`);
+      await until(() => (h.relay.model as any).stage.lock.held === 0, `${signal}: the lock to be free`);
+    } finally { await h.close(); }
+  }
+});
