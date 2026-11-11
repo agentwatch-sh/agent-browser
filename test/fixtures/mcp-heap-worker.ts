@@ -2,11 +2,15 @@
 // src/service/mcp/worker.ts with no Playwright, answers initialize and ping, fills its heap at a tools/call, so that its
 // heap limit (resourceLimits) ends it, and writes a canary to its output at each open. Only the tests start it.
 
-import { parentPort } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 
 const port = parentPort!;
 const hold: unknown[] = [];
+// The scope's name sets the open's behaviour: slow-open never answers it, oom-open fills the heap at it.
+const folder = String((workerData as { folder?: string })?.folder ?? "");
 port.on("message", (m: any) => {
+  if (m.t === "open" && folder.includes("/slow-open/")) return;
+  if (m.t === "open" && folder.includes("/oom-open/")) { for (;;) hold.push(new Array(1 << 16).fill(hold.length)); }
   if (m.t === "open") { port.postMessage({ t: "opened", sid: m.sid }); return; }
   if (m.t === "close") { port.postMessage({ t: "closed", sid: m.sid }); return; }
   if (m.t !== "msg" || m.msg.id === undefined) return;

@@ -16,7 +16,7 @@ import { PeerGate, sessionRefusal, type PeerReader } from "../src/relay/peer.ts"
 import { checkCall, checkList, filterTools, LIST_FILE, NEVER_CAPABILITIES, readAllowList, refusePath, RULES, RUN_CODE, SERVICE_TOOLS, speaksOfPath, type AllowList, type PinnedTool } from "../src/service/mcp/allow-list.ts";
 import { mcpConfig, openMcpServer, SERVER_SIDE_CAPABILITIES, type Message } from "../src/service/mcp/session.ts";
 import { ticketOf, TICKET_MS, Tickets } from "../src/service/mcp/ticket.ts";
-import { MCP_ANSWER, MCP_MAX_BODY, MCP_SESSIONS_PER_SCOPE, MCP_SESSIONS_PER_SERVICE, McpTransport, scopeFolder } from "../src/service/mcp/transport.ts";
+import { MCP_ANSWER, MCP_ANSWERS, MCP_MAX_BODY, MCP_SESSIONS_PER_SCOPE, MCP_SESSIONS_PER_SERVICE, McpTransport, scopeFolder } from "../src/service/mcp/transport.ts";
 import { MCP_HEAP_MB, ScopeWorker } from "../src/service/mcp/workers.ts";
 import { harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { ROOT } from "./helpers.ts";
@@ -306,7 +306,8 @@ async function front(t: McpTransport): Promise<Http> {
 }
 type Reply = { status: number; sid: string | null; body: any; text: string; headers: Headers };
 async function post(url: string, body: unknown, sid?: string, extra: Record<string, string> = {}): Promise<Reply> {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(sid ? { "Mcp-Session-Id": sid } : {}), ...extra }, body: typeof body === "string" ? body : JSON.stringify(body) });
+  // A request that gets no answer fails the test in 30 s (review-115 note 7: no request may wait with no end).
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(sid ? { "Mcp-Session-Id": sid } : {}), ...extra }, body: typeof body === "string" ? body : JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
   const text = await r.text();
   let parsed: any = null;
   try { parsed = text ? JSON.parse(text) : null; } catch {}
@@ -321,6 +322,7 @@ async function init(url: string): Promise<string> {
 }
 
 async function withTransport(o: { perScope?: number; perService?: number; ticketUrl?: (scope: string) => string | null; worker?: any } = {}, f: (x: { t: McpTransport; h: Http; dir: string; log: string[] }) => Promise<void>): Promise<void> {
+  // (A worker of the test's own: { heapMb, entry, openWaitMs }.)
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-transport-"));
   const log: string[] = [];
   const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: o.ticketUrl ?? (() => null), log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, worker: o.worker });
@@ -507,6 +509,11 @@ test("the MCP's Playwright connects back to the agent door with a one-time ticke
       const got = await call;
       assert.equal(got.status, 200);
       assert.ok(got.body.result, "the tool answers");
+      assert.ok(!got.text.includes("ticket"), "no ticket in the tool's answer (review-115 note 10)");
+      for (const [id, name, args] of [[10, "browser_navigate", { url: "http://a.example/" }], [11, "browser_snapshot", {}], [12, "browser_tabs", { action: "list" }]] as const) {
+        const a = await post(h.url("web-1"), { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }, sid);
+        assert.ok(a.body.result && !a.text.includes("ticket"), `${name}: no ticket in its answer`);
+      }
       assert.ok(!r.logs.join("\n").includes("ticket=") && !log.join("\n").includes("ticket"), "no ticket in a log");
       // The session's end closes its browser connection.
       t.endSessions("web-1");
@@ -643,7 +650,8 @@ test("the log rule: the MCP path's log holds no token, fingerprint, tool argumen
     const text = log.join("\n");
     assert.ok(log.some((l) => l.startsWith("mcp: MCP session 1 of scope t-log begins")) && log.some((l) => l.includes("a tools/call refused")), "the scan reads the MCP path's lines");
     assert.deepEqual(secrets.filter((s) => text.includes(s)), [], "no secret in the log");
-    for (const s of secrets) assert.deepEqual([s].filter((x) => `${text}\n${s}`.includes(x)), [s], "the twin: a planted secret is found");
+    // The twins: the same scan over the log with one secret planted finds exactly that secret (review-115 note 11).
+    for (const s of secrets) assert.deepEqual(secrets.filter((x) => `${text}\n${s}`.includes(x)), [s], "the twin: a planted secret is found");
   } finally { await p.close(); rmSync(dir, { recursive: true, force: true }); }
   // The worker's own output: read by the service (a stream of its own), never in its log.
   const dir2 = mkdtempSync(join(tmpdir(), "ab-mcp-out-"));
@@ -705,4 +713,184 @@ test("step 8 of the MCP path reads the model: the number of sites of the scope's
     await until(() => m.noList("web-5"), "the end of web-5");
     assert.equal(m.sitesOf("web-5"), null);
   } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ review-115 (the fix round)
+
+const FIXTURE = new URL("./fixtures/mcp-heap-worker.ts", import.meta.url);
+
+test("review-115 B1: the service opens its MCP path before its control door: while the MCP's open waits, no control door exists; then every hello lists mcp_token", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const { startService } = await import("../src/service/service.ts");
+  const { existsSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-order-"));
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  try {
+    const started = startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") }, mcp: { listen: { port: 0 }, openGate: gate } });
+    await sleep(500);
+    assert.equal(existsSync(join(dir, "control.sock")), false, "no control door (so no hello) before the MCP's open ends");
+    release();
+    const s = await started;
+    try {
+      assert.equal(existsSync(join(dir, "control.sock")), true);
+      assert.deepEqual((s.state.hello as any).features, ["mcp_token"], "the first hello already lists mcp_token");
+      assert.equal((s.state.status() as any).mcp.state, "ready");
+    } finally { await s.stop(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review-115 B1: an MCP open that fails (its port in use) leaves the hello with no mcp_token and status.mcp failed, from the first hello on", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const { startService } = await import("../src/service/service.ts");
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-fail-"));
+  const busy = createServer(() => {});
+  await new Promise<void>((r) => busy.listen(0, "127.0.0.1", r));
+  try {
+    const s = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") }, mcp: { listen: { port: (busy.address() as { port: number }).port } } });
+    try {
+      assert.deepEqual((s.state.status() as any).mcp, { state: "failed", address: null });
+      assert.deepEqual((s.state.hello as any).features, []);
+    } finally { await s.stop(); }
+  } finally { busy.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review-115 B2: an initialize whose MCP session cannot be made gets the 503 of C11: the open passes its time, the session ends during the open, the worker passes its heap limit during the open, the service stops", { timeout: 90_000 }, async () => {
+  const notOpened = { jsonrpc: "2.0", id: 1, error: { code: -32000, message: MCP_ANSWER.notOpened } };
+  await withTransport({ worker: { heapMb: 24, entry: FIXTURE, openWaitMs: 400 } }, async ({ t, h }) => {
+    const late = await post(h.url("slow-open"), INIT);
+    assert.deepEqual([late.status, late.body], [503, notOpened], "the open passes its time");
+    const ending = post(h.url("slow-open"), INIT);
+    await until(() => t.size("slow-open") === 1, "the session in its open");
+    t.endSessions("slow-open");
+    const ended = await ending;
+    assert.deepEqual([ended.status, ended.body], [503, notOpened], "endSessions during the open");
+    const oom = await post(h.url("oom-open"), INIT);
+    assert.deepEqual([oom.status, oom.body], [503, notOpened], "the worker's memory end during the open");
+    assert.equal(t.size(), 0);
+    await t.stop();
+    const stopped = await post(h.url("web-1"), INIT);
+    assert.deepEqual([stopped.status, stopped.body], [503, notOpened], "the service stops");
+  });
+});
+
+test("review-115 B2: a body that is no JSON-RPC message gets 400 Invalid Request, and a GET gets the 405 with C11's text", { timeout: 60_000 }, async () => {
+  await withTransport({}, async ({ h }) => {
+    const sid = await init(h.url("web-1"));
+    for (const body of [{ id: 1, method: "ping" }, { jsonrpc: "1.0", id: 1, method: "ping" }, 5, "x", null]) {
+      const r = await post(h.url("web-1"), JSON.stringify(body), sid);
+      assert.deepEqual([r.status, r.body], [400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: MCP_ANSWER.invalid } }], JSON.stringify(body));
+    }
+    const get = await fetch(h.url("web-1"), { headers: { "Mcp-Session-Id": sid } });
+    assert.deepEqual([get.status, await get.json()], [405, { jsonrpc: "2.0", id: null, error: { code: -32000, message: MCP_ANSWER.noStream } }]);
+    const withId = await post(h.url("web-1"), INIT, sid);
+    assert.deepEqual([withId.status, withId.body.error], [400, { code: -32600, message: MCP_ANSWER.initializeWithId }]);
+  });
+});
+
+test("review-115 B3: only initialize, ping, tools/list and tools/call and the two notifications reach the MCP: another request, another notification and a client's answer never reach the worker", { timeout: 60_000 }, async () => {
+  await withTransport({}, async ({ t, h }) => {
+    const sid = await init(h.url("web-1"));
+    const w = t.workerOf("web-1")!;
+    const seen: string[] = [];
+    const req = w.request.bind(w), note = w.notify.bind(w);
+    w.request = (s, m) => { seen.push(`request ${String(m.method)}`); return req(s, m); };
+    w.notify = (s, m) => { seen.push(`notify ${String(m.method ?? "an answer")}`); note(s, m); };
+    const other = await post(h.url("web-1"), { jsonrpc: "2.0", id: 4, method: "resources/list" }, sid);
+    assert.deepEqual([other.status, other.body], [200, { jsonrpc: "2.0", id: 4, error: { code: -32601, message: MCP_ANSWER.methodNotFound } }]);
+    for (const m of [{ jsonrpc: "2.0", method: "notifications/roots/list_changed" }, { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: 1, progress: 1 } }, { jsonrpc: "2.0", id: 0, result: { roots: [{ uri: "file:///etc/" }] } }, { jsonrpc: "2.0", id: 1, error: { code: -1, message: "x" } }]) {
+      assert.equal((await post(h.url("web-1"), m, sid)).status, 202, JSON.stringify(m));
+    }
+    assert.deepEqual(seen, [], "nothing of these reached the worker");
+    await post(h.url("web-1"), { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 99 } }, sid);
+    assert.equal((await post(h.url("web-1"), { jsonrpc: "2.0", id: 5, method: "ping" }, sid)).status, 200);
+    assert.deepEqual(seen, ["notify notifications/cancelled", "request ping"], "the allowed ones reach it (the spy reads)");
+  });
+});
+
+test("review-115 note 7: an id that is no string and no integer gets 400 Invalid Request, an id of a request that still waits gets C11's -32600; neither reaches the worker or leaves a request waiting", { timeout: 60_000 }, async () => {
+  await withTransport({}, async ({ t, h }) => {
+    const sid = await init(h.url("web-1"));
+    const w = t.workerOf("web-1")!;
+    const seen: unknown[] = [];
+    let hold: (() => void) | null = null;
+    const req = w.request.bind(w);
+    // The spy holds the first request with the id "slow" until the test lets it go.
+    w.request = (s, m) => { seen.push(m.id); return m.id === "slow" && hold === null ? new Promise((r) => { hold = () => void req(s, m).then(r); }) : req(s, m); };
+    for (const id of [null, 1.5, true, { a: 1 }, [1]]) {
+      const r = await post(h.url("web-1"), { jsonrpc: "2.0", id, method: "ping" }, sid);
+      assert.deepEqual([r.status, r.body], [400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: MCP_ANSWER.invalid } }], JSON.stringify(id));
+    }
+    const first = post(h.url("web-1"), { jsonrpc: "2.0", id: "slow", method: "ping" }, sid);
+    await until(() => hold !== null, "the first request waits");
+    const dup = await post(h.url("web-1"), { jsonrpc: "2.0", id: "slow", method: "tools/list" }, sid);
+    assert.deepEqual([dup.status, dup.body], [400, { jsonrpc: "2.0", id: "slow", error: { code: -32600, message: MCP_ANSWER.duplicateId } }]);
+    hold!();
+    assert.deepEqual((await first).body, { jsonrpc: "2.0", id: "slow", result: {} }, "the first request keeps its own answer");
+    assert.deepEqual(seen, ["slow"], "only the first reached the worker");
+    // The id is free again after its answer.
+    assert.equal((await post(h.url("web-1"), { jsonrpc: "2.0", id: "slow", method: "ping" }, sid)).status, 200);
+  });
+});
+
+test("review-115 note 2: <state>/mcp and <state>/mcp/<scope> are made with mode 0700, and a link in their place makes the path rule refuse each path argument", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  await withTransport({}, async ({ h, dir }) => {
+    const sid = await init(h.url("web-1"));
+    const state = join(dir, "state"), folder = scopeFolder(state, "web-1");
+    assert.equal(statSync(join(state, "mcp")).mode & 0o777, 0o700);
+    assert.equal(statSync(folder).mode & 0o777, 0o700);
+    const shot = (id: number) => post(h.url("web-1"), { jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_take_screenshot", arguments: { filename: "x.png", scale: "css" } } }, sid);
+    const refused = { code: -32602, message: `Not available in the agent browser: filename must name a file in the session's folder ${folder}` };
+    // The scope's folder becomes a link to a folder of the test.
+    const { renameSync } = await import("node:fs");
+    mkdirSync(join(dir, "elsewhere"));
+    renameSync(folder, join(dir, "moved"));
+    symlinkSync(join(dir, "elsewhere"), folder.slice(0, -1));
+    assert.deepEqual((await shot(2)).body.error, refused, "the scope's folder is a link");
+    const nav = await post(h.url("web-1"), { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, sid);
+    assert.ok(nav.body.result, "a call with no path argument still passes");
+  });
+  // <state>/mcp itself a link.
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-link-"));
+  try {
+    const state = join(dir, "state");
+    mkdirSync(join(dir, "elsewhere", "web-1"), { recursive: true, mode: 0o700 });
+    mkdirSync(state);
+    symlinkSync(join(dir, "elsewhere"), join(state, "mcp"));
+    const folder = scopeFolder(state, "web-1");
+    assert.deepEqual(checkCall(LIST, { name: "browser_snapshot", arguments: { filename: "s.md" } }, folder, undefined, [join(state, "mcp"), folder]), refusePath("filename", folder));
+    assert.equal(checkCall(LIST, { name: "browser_snapshot", arguments: { filename: "s.md" } }, join(dir, "elsewhere", "web-1/"), undefined, [join(dir, "elsewhere"), join(dir, "elsewhere", "web-1")]), null, "the same call with real folders passes");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review-115 notes 5, 6 and 9: the list test reads strings in anyOf, oneOf, items and nested properties, fails at a shape that it cannot read, a required key left out of keys and a key _meta; tools/list shows only the list's keys", { timeout: 60_000 }, async () => {
+  const { tools } = await pinnedToolsList();
+  const withProp = (prop: unknown, rule?: Partial<{ keys: string[]; paths: string[] }>) => {
+    const pinned = tools.map((t) => (t.name === "browser_wait_for" ? { ...t, inputSchema: { ...t.inputSchema, properties: { ...(t.inputSchema.properties as object), extra: prop } } } : t));
+    const r = LIST.tools.browser_wait_for;
+    const list: AllowList = { ...LIST, tools: { ...LIST.tools, browser_wait_for: { keys: rule?.keys ?? [...r.keys, "extra"], paths: rule?.paths ?? [], schema: pinned.find((t) => t.name === "browser_wait_for")!.inputSchema } } };
+    return checkList(list, pinned, PIN);
+  };
+  assert.deepEqual(withProp({ anyOf: [{ type: "string", description: "The file to read" }, { type: "null" }] }), [RULES.pathKey], "a nullable string in anyOf");
+  assert.deepEqual(withProp({ oneOf: [{ type: "string" }, { type: "number" }], description: "A path" }), [RULES.pathKey], "oneOf under a description that speaks of a path");
+  assert.deepEqual(withProp({ type: "object", properties: { where: { type: "string", description: "the folder" } } }), [RULES.pathKey], "a nested property");
+  assert.deepEqual(withProp({ type: "array", items: { type: "object", properties: { file: { type: "string" } } } }), [RULES.pathKey], "a property of the items");
+  assert.deepEqual(withProp({ type: "object", additionalProperties: { type: "string", description: "a file name" } }), [RULES.pathKey], "additionalProperties");
+  assert.deepEqual(withProp({ type: ["string", "null"], description: "a directory" }), [RULES.pathKey], "a type list");
+  assert.deepEqual(withProp({ $ref: "#/definitions/x" }), [RULES.shape], "a shape that the test cannot read");
+  assert.deepEqual(withProp({}), [RULES.shape], "a schema with no type");
+  assert.deepEqual(withProp({ anyOf: [{ type: "string" }, { type: "null" }], description: "a colour" }), [], "a string that speaks of no file");
+  assert.deepEqual(withProp({ anyOf: [{ type: "string", description: "The file to read" }] }, { keys: [...LIST.tools.browser_wait_for.keys, "extra"], paths: ["extra"] }), [], "marked as a path");
+  // A required key left out of keys.
+  const shot = LIST.tools.browser_take_screenshot;
+  assert.deepEqual(checkList({ ...LIST, tools: { ...LIST.tools, browser_take_screenshot: { ...shot, keys: shot.keys.filter((k) => k !== "scale") } } }, tools, PIN), [RULES.required]);
+  // _meta: a list that names it fails, and a call with it is refused.
+  const nav = LIST.tools.browser_navigate;
+  assert.ok(checkList({ ...LIST, tools: { ...LIST.tools, browser_navigate: { ...nav, keys: [...nav.keys, "_meta"] } } }, tools, PIN).includes(RULES.meta));
+  assert.deepEqual(checkCall(LIST, { name: "browser_navigate", arguments: { url: "https://a.example/", _meta: { cwd: "/" } } }, "/s/mcp/web-1/"), { code: -32602, message: "Not available in the agent browser: the argument _meta of browser_navigate" });
+  // tools/list: each tool's input schema with only its keys, and only their required entries.
+  const listed = filterTools(LIST, tools);
+  const s = listed.find((t) => t.name === "browser_take_screenshot")!.inputSchema as any;
+  assert.deepEqual(Object.keys(s.properties).sort(), [...shot.keys].sort());
+  assert.ok(!("type" in s.properties), "the refused key type is not shown");
+  assert.deepEqual(s.required, ["scale"]);
+  for (const t of listed) assert.deepEqual(Object.keys((t.inputSchema as any).properties ?? {}).sort(), [...LIST.tools[t.name].keys].sort(), t.name);
 });

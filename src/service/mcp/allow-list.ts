@@ -10,7 +10,7 @@
 // format gives them, and the runtime of this stage serves none of them: they stay out of `tools/list`, and a call of one
 // gets the -32601 of a tool that the runtime does not serve, until stage 1e answers them.
 
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -55,6 +55,9 @@ export const RULES = {
   version: "version is the pin",
   serviceNotPinned: "no service tool is a tool of the pinned tools/list",
   serviceExact: "service_tools is exactly the service's own tools",
+  shape: "each key's schema has a shape that the test can read",
+  required: "each required key is in keys",
+  meta: "no key is _meta",
 } as const;
 
 /** The JSON-RPC answer of a refused call (the format's texts). */
@@ -89,12 +92,46 @@ export function speaksOfPath(key: string, prop: unknown): boolean {
   const p = (prop ?? {}) as { description?: unknown };
   return FILE_WORD.test(`${key} ${typeof p.description === "string" ? p.description : ""}`);
 }
-/** A string property, or a list of strings (the format's test reads both as strings). */
-function stringish(prop: unknown): boolean {
-  const p = (prop ?? {}) as { type?: unknown; items?: { type?: unknown } };
-  return p.type === "string" || (p.type === "array" && p.items?.type === "string");
-}
 const propsOf = (schema: Record<string, unknown>) => ((schema.properties ?? {}) as Record<string, unknown>);
+
+/** The keywords of a schema that the format's test reads; any other keyword (a `$ref`, `not`, `if`) is a shape that it cannot read. */
+const READ_KEYWORDS = new Set(["type", "description", "title", "default", "examples", "enum", "const", "format", "pattern", "minLength", "maxLength",
+  "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "items", "minItems", "maxItems", "uniqueItems", "properties", "required",
+  "additionalProperties", "propertyNames", "anyOf", "oneOf", "allOf", "$schema"]);
+const PRIMITIVE = new Set(["string", "number", "integer", "boolean", "null", "array", "object"]);
+
+/**
+ * Whether a key's schema holds a string that speaks of a file or a path (the format's test, review-115 note 5): the key's
+ * own string, or a string in `anyOf`, `oneOf`, `allOf`, `items`, nested `properties`, `additionalProperties` or
+ * `propertyNames`, read with
+ * the names and descriptions on its way. "unreadable" for a shape that the test cannot read (no `type` and no
+ * `anyOf`, `oneOf`, `allOf`, `enum` or `const`, or a keyword that it does not know).
+ */
+export function fileString(name: string, schema: unknown, way = ""): boolean | "unreadable" {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return "unreadable";
+  const s = schema as Record<string, unknown>;
+  if (Object.keys(s).some((k) => !READ_KEYWORDS.has(k))) return "unreadable";
+  const text = `${way} ${name} ${typeof s.description === "string" ? s.description : ""}`;
+  let found = false;
+  const sub = (n: string, x: unknown) => { const r = fileString(n, x, text); if (r === "unreadable") return false; found ||= r; return true; };
+  for (const k of ["anyOf", "oneOf", "allOf"] as const) {
+    if (s[k] === undefined) continue;
+    if (!Array.isArray(s[k]) || !(s[k] as unknown[]).every((x) => sub("", x))) return "unreadable";
+  }
+  const types = s.type === undefined ? [] : Array.isArray(s.type) ? s.type : [s.type];
+  if (!types.every((t) => typeof t === "string" && PRIMITIVE.has(t))) return "unreadable";
+  if (types.length === 0 && s.anyOf === undefined && s.oneOf === undefined && s.allOf === undefined && s.enum === undefined && s.const === undefined) return "unreadable";
+  // A string that a list of fixed values gives (enum, const) names no path.
+  if (types.includes("string") && s.enum === undefined && s.const === undefined && speaksOfPath("", { description: text })) found = true;
+  if (types.includes("array") && s.items !== undefined && !sub("", s.items)) return "unreadable";
+  if (s.properties !== undefined) {
+    if (s.properties === null || typeof s.properties !== "object") return "unreadable";
+    for (const [k, x] of Object.entries(s.properties as Record<string, unknown>)) if (!sub(k, x)) return "unreadable";
+  }
+  if (s.additionalProperties !== undefined && typeof s.additionalProperties !== "boolean" && !sub("", s.additionalProperties)) return "unreadable";
+  if (s.propertyNames !== undefined && !sub("", s.propertyNames)) return "unreadable";
+  return found;
+}
 
 /**
  * The format's test (docs/contracts/mcp-allow-list.md, "The test"): the rules that `list` breaks against the pinned
@@ -113,8 +150,13 @@ export function checkList(list: AllowList, pinned: readonly PinnedTool[], pin: s
     const props = propsOf(rule.schema);
     for (const k of rule.keys) if (!Object.hasOwn(props, k)) broken.add(RULES.keys);
     for (const k of rule.paths) if (!rule.keys.includes(k)) broken.add(RULES.paths);
+    if (rule.keys.includes("_meta") || rule.paths.includes("_meta")) broken.add(RULES.meta);
+    const required = Array.isArray(rule.schema.required) ? (rule.schema.required as unknown[]) : [];
+    for (const k of required) if (typeof k !== "string" || !rule.keys.includes(k)) broken.add(RULES.required);
     for (const [k, prop] of Object.entries(props)) {
-      if (stringish(prop) && speaksOfPath(k, prop) && rule.keys.includes(k) && !rule.paths.includes(k)) broken.add(RULES.pathKey);
+      const f = fileString(k, prop);
+      if (f === "unreadable") broken.add(RULES.shape);
+      else if (f && rule.keys.includes(k) && !rule.paths.includes(k)) broken.add(RULES.pathKey);
     }
   }
   if (list.capabilities.some((c) => NEVER_CAPABILITIES.includes(c))) broken.add(RULES.capabilities);
@@ -125,9 +167,30 @@ export function checkList(list: AllowList, pinned: readonly PinnedTool[], pin: s
   return Object.values(RULES).filter((r) => broken.has(r));
 }
 
-/** `tools/list`'s tools without each tool that the list does not name (the service's own tools of stage 1e stay out too). */
-export function filterTools<T extends { name?: unknown }>(list: AllowList, tools: readonly T[]): T[] {
-  return tools.filter((t) => typeof t.name === "string" && Object.hasOwn(list.tools, t.name));
+/**
+ * `tools/list`'s tools without each tool that the list does not name (the service's own tools of stage 1e stay out too),
+ * and each tool's input schema with only the keys of its `keys`: each other property and its `required` entry are
+ * dropped (review-115 note 6).
+ */
+export function filterTools<T extends { name?: unknown; inputSchema?: unknown }>(list: AllowList, tools: readonly T[]): T[] {
+  return tools.filter((t) => typeof t.name === "string" && Object.hasOwn(list.tools, t.name)).map((t) => {
+    const keys = list.tools[t.name as string].keys;
+    const s = t.inputSchema;
+    if (s === null || typeof s !== "object" || Array.isArray(s)) return t;
+    const schema = s as Record<string, unknown>;
+    const props = (schema.properties ?? {}) as Record<string, unknown>;
+    const kept: Record<string, unknown> = { ...schema, properties: Object.fromEntries(Object.entries(props).filter(([k]) => keys.includes(k))) };
+    if (Array.isArray(schema.required)) kept.required = schema.required.filter((k) => typeof k === "string" && keys.includes(k));
+    return { ...t, inputSchema: kept };
+  });
+}
+
+/** A folder of the service's user that is no link (lstat), for the path rule (review-115 note 2). */
+export function realFolder(path: string, uid = process.getuid?.() ?? -1): boolean {
+  try {
+    const st = lstatSync(path.replace(/\/+$/, "") || "/");
+    return st.isDirectory() && !st.isSymbolicLink() && (uid < 0 || st.uid === uid);
+  } catch { return false; }
 }
 
 /**
@@ -158,9 +221,11 @@ export const folderText = (folder: string) => (folder.endsWith("/") ? folder : `
  * A `tools/call`'s params against the list (the format, "What the service does with it"): null when the call passes,
  * else its JSON-RPC error. `folder` is the scope's folder, `<state>/mcp/<scope>/`; `real` is the realpath (tests give a
  * map). A path argument passes only when its realpath is inside the realpath of the folder (a relative one is read from
- * the folder, the MCP's root of the session); a value that is no string or list of strings is refused as a path.
+ * the folder, the MCP's root of the session); a value that is no string or list of strings is refused as a path; and when
+ * one of `folders` (the service gives `<state>/mcp` and the scope's folder) is a link or no folder of the service's user,
+ * each path argument is refused.
  */
-export function checkCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, folder: string, real: (p: string) => string = (x) => realpathSync.native(x)): Refused | null {
+export function checkCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, folder: string, real: (p: string) => string = (x) => realpathSync.native(x), folders: readonly string[] = []): Refused | null {
   const name = typeof params.name === "string" ? params.name : "";
   const rule = Object.hasOwn(list.tools, name) ? list.tools[name] : undefined;
   if (rule === undefined) return refuseTool(name);
@@ -174,6 +239,8 @@ export function checkCall(list: AllowList, params: { name?: unknown; arguments?:
     const v = (args as Record<string, unknown>)[key];
     const values = typeof v === "string" ? [v] : Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : null;
     if (values === null) return refusePath(key, shown);
+    // `<state>/mcp` and the scope's folder must be folders of the service's user, not links (lstat at each path argument).
+    if (!folders.every((f) => realFolder(f))) return refusePath(key, shown);
     inside ??= (() => { try { return folderText(realpathDeep(resolve(folder), real)); } catch { return null; } })();
     for (const value of values) {
       let r: string | null;

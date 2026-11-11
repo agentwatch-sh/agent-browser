@@ -49,6 +49,8 @@ adds it to the list.
 
 - `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a
   request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.
+- In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each
+  other property and its entry in `required`.
 - `tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call
   reaches the MCP's code, with the JSON-RPC error `-32601` and the message `Not available in the agent browser: <tool>`.
 - `tools/call` with an argument key that the tool's `keys` does not name: the service refuses it before the
@@ -77,7 +79,12 @@ CDP connection (the design, section 18), so the test needs no Chrome. It fails w
 - each string property whose schema speaks of a file or a path (its name or its description) is in `paths`, or
   is left out of `keys`; a schema speaks of a file or a path when its name or its description holds `file`, `path`,
   `folder` or `directory`, in any case, also inside a word (so `browser_take_screenshot`'s `type`, whose description
-  names the file name's extension, is left out of `keys` in the first list);
+  names the file name's extension, is left out of `keys` in the first list); the test reads each string inside a key's
+  schema too, in `anyOf`, `oneOf`, `allOf`, `items`, nested `properties`, `additionalProperties` and `propertyNames`,
+  with the names and descriptions on its way, and a key whose schema has a shape that the test cannot read (no `type`,
+  a `$ref`, or a keyword that the test does not know) fails the test;
+- each key that a tool's `schema` requires is in its `keys`;
+- no tool's `keys` names `_meta` (the package reads `arguments._meta` to change the base of relative file names);
 - `browser_run_code_unsafe` is in `refused`;
 - no name of `service_tools` is a tool of the pinned version's `tools/list`;
 - `service_tools` is exactly the value that this file gives;

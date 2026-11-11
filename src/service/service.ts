@@ -13,12 +13,14 @@
 // each session's fingerprint in memory only, and status says whether a session has one; the hello gets the feature
 // mcp_token with the token check of the MCP path (stage 1d). The MCP path (board ab-v16.94.5, part 2b; mcp/part.ts): off by
 // default; with `mcp` (the socket of agent-browser-mcp.socket, or --test's --test-mcp-port) the service opens the MCP port
-// after the agent door, the agent door takes the MCP's one-time tickets, and status gives the port's state.
+// before the control door (so the hello's features are fixed before the first hello), the agent door takes the MCP's
+// one-time tickets, and status gives the port's state.
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NOT_READY } from "../relay/model.ts";
 import { PeerGate } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
@@ -327,11 +329,27 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart()];
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
   const unit = o.daemonUnit ?? "agentwatch.service";
-  // The control door opens first, before the agent door and before any Chrome start (the design's build note 8).
-  const control = await ControlDoor.open({
-    path: o.controlDoor, handler: state, log: o.log,
-    admit: daemonAdmission({ reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (() => systemdMainPid(unit)), commandFile: o.daemonCommand }),
-  });
+  // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
+  // before the first hello (C12). Its MCP connects back to the agent door with a ticket; until the agent door opens, step
+  // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
+  if (mcp) {
+    const model = () => (agent as (AgentDoor & { relay?: { model: { notReady(): string | null; sitesOf(scope: string): number | null } } }) | null)?.relay?.model ?? null;
+    await mcp.open({
+      url: (scope) => agentDoorUrl(o.agentDoor, scope),
+      readiness: (scope) => {
+        const m = model();
+        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
+      },
+    });
+  }
+  // The control door opens next, before the agent door and before any Chrome start (the design's build note 8).
+  let control: ControlDoor;
+  try {
+    control = await ControlDoor.open({
+      path: o.controlDoor, handler: state, log: o.log,
+      admit: daemonAdmission({ reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (() => systemdMainPid(unit)), commandFile: o.daemonCommand }),
+    });
+  } catch (e) { await mcp?.close(); throw e; }
   // The owner rule at the start: a service runs only to own (the design, section 13.2). The agent door is an owner part.
   if (owner && !(await owner.check("the service's start"))) {
     state.stopParts();
@@ -348,14 +366,6 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets });
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;
-  // The MCP port opens after the agent door: its MCP connects back there with a ticket. Step 8 reads the model.
-  if (mcp) {
-    const model = (door as AgentDoor & { relay: { model: { notReady(): string | null; sitesOf(scope: string): number | null } } }).relay.model;
-    await mcp.open({
-      url: (scope) => agentDoorUrl(o.agentDoor, scope),
-      readiness: (scope) => ({ controlOff: state.config?.control === false, notReady: model.notReady(), sites: model.sitesOf(scope) }),
-    });
-  }
   // C10: the carrier's deadlines, each second.
   const expire = carrier ? setInterval(() => carrier.expire(), 1000) : null;
   expire?.unref();

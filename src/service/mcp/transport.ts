@@ -38,30 +38,35 @@ export const MCP_SESSIONS_PER_SERVICE = 32;
 /** The largest body of one POST (first value); a larger one gets 413 and the connection closes. */
 export const MCP_MAX_BODY = 1024 * 1024;
 
-/** The transport's texts (C11). No text names a stop or a start of the agent browser (I2). */
-export const MCP_ANSWER = {
-  perScope: `The agent browser serves at most ${MCP_SESSIONS_PER_SCOPE} MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.`,
-  perService: `The agent browser serves at most ${MCP_SESSIONS_PER_SERVICE} MCP sessions, and each is in use. Initialize again later.`,
-  unknownSession: "Session not found",
-  noSessionId: "Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.",
-  initializeWithId: "Bad Request: initialize makes a new MCP session, so it carries no Mcp-Session-Id.",
-  parse: "Parse error",
-  batch: "Invalid Request: the agent browser takes one JSON-RPC message in each POST.",
-  invalid: "Invalid Request",
-  tooLarge: `Request too large: the agent browser takes at most ${MCP_MAX_BODY} bytes in one POST.`,
-  noStream: "Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session.",
-  methodNotFound: "Method not found",
-  ended: "This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.",
-  memory: "This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session.",
-  failed: "This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.",
-  notOpened: "The agent browser could not make an MCP session now. Initialize again.",
-} as const;
+/** An answer of the transport: its HTTP status, its JSON-RPC code and its text (C11, the transport's table). */
+export type McpAnswer = { readonly status: number; readonly code: number; readonly text: string };
+/** The transport's answers (C11's table, row for row). No text names a stop or a start of the agent browser (I2). */
+export const MCP_ANSWERS = {
+  batch: { status: 400, code: -32600, text: "Invalid Request: the agent browser takes one JSON-RPC message in each POST." },
+  parse: { status: 400, code: -32700, text: "Parse error" },
+  invalid: { status: 400, code: -32600, text: "Invalid Request" },
+  duplicateId: { status: 400, code: -32600, text: "Invalid Request: a request with this id still waits in this MCP session." },
+  tooLarge: { status: 413, code: -32600, text: `Request too large: the agent browser takes at most ${MCP_MAX_BODY} bytes in one POST.` },
+  initializeWithId: { status: 400, code: -32600, text: "Bad Request: initialize makes a new MCP session, so it carries no Mcp-Session-Id." },
+  noSessionId: { status: 400, code: -32000, text: "Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first." },
+  unknownSession: { status: 404, code: -32001, text: "Session not found" },
+  noStream: { status: 405, code: -32000, text: "Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session." },
+  perScope: { status: 503, code: -32000, text: `The agent browser serves at most ${MCP_SESSIONS_PER_SCOPE} MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` },
+  perService: { status: 503, code: -32000, text: `The agent browser serves at most ${MCP_SESSIONS_PER_SERVICE} MCP sessions, and each is in use. Initialize again later.` },
+  notOpened: { status: 503, code: -32000, text: "The agent browser could not make an MCP session now. Initialize again." },
+  methodNotFound: { status: 200, code: -32601, text: "Method not found" },
+  ended: { status: 200, code: -32603, text: "This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session." },
+  memory: { status: 200, code: -32603, text: "This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session." },
+  failed: { status: 200, code: -32603, text: "This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session." },
+} as const satisfies Record<string, McpAnswer>;
+/** The texts of the answers, by name. */
+export const MCP_ANSWER = Object.fromEntries(Object.entries(MCP_ANSWERS).map(([k, v]) => [k, v.text])) as { readonly [K in keyof typeof MCP_ANSWERS]: string };
 
 /** The JSON-RPC methods of a client that reach the MCP (each other request gets "Method not found"). */
 export const MCP_REQUESTS: readonly string[] = Object.freeze(["initialize", "ping", "tools/list", "tools/call"]);
 export const MCP_NOTIFICATIONS: readonly string[] = Object.freeze(["notifications/initialized", "notifications/cancelled"]);
 
-type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean };
+type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Set<string> };
 
 export type McpTransportOptions = {
   list: AllowList;
@@ -70,8 +75,8 @@ export type McpTransportOptions = {
   /** A one-time ticket's URL for `scope`'s CDP path, or null. */
   ticketUrl: (scope: string) => string | null;
   log: (line: string) => void;
-  /** Tests only: the workers' heap limit and file, and other limits. */
-  worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry">;
+  /** Tests only: the workers' heap limit, file and open's wait, and other limits. */
+  worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
   perService?: number;
 };
@@ -85,6 +90,12 @@ function answer(res: ServerResponse, status: number, body: Message | null, heade
 }
 
 const isObj = (x: unknown): x is Message => x !== null && typeof x === "object" && !Array.isArray(x);
+
+/** One answer of C11's table, with the request's id (or null). */
+function send(res: ServerResponse, name: keyof typeof MCP_ANSWERS, id: unknown, headers: Record<string, string> = {}): void {
+  const a = MCP_ANSWERS[name];
+  answer(res, a.status, rpcError(id, a.code, a.text), headers);
+}
 
 /** The folder of a scope, `<state>/mcp/<scope>/` (C11), with one trailing slash. */
 export const scopeFolder = (state: string, scope: string) => `${join(state, "mcp", scope)}/`;
@@ -108,15 +119,15 @@ export class McpTransport implements McpHandler {
     if (req.method === "POST") return this.post(req, res, scope);
     if (req.method === "DELETE") { req.resume(); return this.delete(req, res, scope); }
     req.resume();
-    answer(res, 405, rpcError(null, -32000, MCP_ANSWER.noStream), { Allow: "POST, DELETE" });
+    send(res, "noStream", null, { Allow: "POST, DELETE" });
   }
 
   /** The session of a request: its one Mcp-Session-Id of this scope; else the answer of no id or of an unknown one. */
   private sessionOf(req: IncomingMessage, res: ServerResponse, scope: string, id: unknown): Session | null {
     const ids = rawValues(req.rawHeaders, "mcp-session-id");
-    if (ids.length === 0) { answer(res, 400, rpcError(id, -32000, MCP_ANSWER.noSessionId)); return null; }
+    if (ids.length === 0) { send(res, "noSessionId", id); return null; }
     const s = ids.length === 1 ? this.sessions.get(ids[0]) : undefined;
-    if (s === undefined || s.scope !== scope) { answer(res, 404, rpcError(id, -32001, MCP_ANSWER.unknownSession)); return null; }
+    if (s === undefined || s.scope !== scope) { send(res, "unknownSession", id); return null; }
     return s;
   }
 
@@ -144,12 +155,14 @@ export class McpTransport implements McpHandler {
 
   private async post(req: IncomingMessage, res: ServerResponse, scope: string): Promise<void> {
     const body = await this.readBody(req);
-    if (body === null) { answer(res, 413, rpcError(null, -32600, MCP_ANSWER.tooLarge), { Connection: "close" }); return; }
+    if (body === null) { send(res, "tooLarge", null, { Connection: "close" }); return; }
     let msg: unknown;
-    try { msg = JSON.parse(body.toString("utf8")); } catch { answer(res, 400, rpcError(null, -32700, MCP_ANSWER.parse)); return; }
-    if (Array.isArray(msg)) { answer(res, 400, rpcError(null, -32600, MCP_ANSWER.batch)); return; }
-    if (!isObj(msg) || msg.jsonrpc !== "2.0") { answer(res, 400, rpcError(null, -32600, MCP_ANSWER.invalid)); return; }
+    try { msg = JSON.parse(body.toString("utf8")); } catch { send(res, "parse", null); return; }
+    if (Array.isArray(msg)) { send(res, "batch", null); return; }
+    if (!isObj(msg) || msg.jsonrpc !== "2.0") { send(res, "invalid", null); return; }
     const isRequest = typeof msg.method === "string" && Object.hasOwn(msg, "id");
+    // A request's id is a string or an integer (MCP); another id never reaches the MCP (review-115 note 7).
+    if (isRequest && typeof msg.id !== "string" && !Number.isSafeInteger(msg.id)) { send(res, "invalid", null); return; }
     if (isRequest && msg.method === "initialize") return this.initialize(req, res, scope, msg);
     const s = this.sessionOf(req, res, scope, isRequest ? msg.id : null);
     if (s === null) return;
@@ -159,10 +172,10 @@ export class McpTransport implements McpHandler {
       answer(res, 202, null);
       return;
     }
-    if (!MCP_REQUESTS.includes(msg.method as string)) { answer(res, 200, rpcError(msg.id, -32601, MCP_ANSWER.methodNotFound)); return; }
+    if (!MCP_REQUESTS.includes(msg.method as string)) { send(res, "methodNotFound", msg.id); return; }
     if (msg.method === "tools/call") {
       const params = isObj(msg.params) ? msg.params : {};
-      const refused = checkCall(this.o.list, params, scopeFolder(this.o.stateFolder, scope));
+      const refused = checkCall(this.o.list, params, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
       if (refused !== null) {
         answer(res, 200, rpcError(msg.id, refused.code, refused.message));
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call refused (${refused.code})`);
@@ -170,12 +183,17 @@ export class McpTransport implements McpHandler {
       }
     }
     const forward = msg;
+    // An id of a request of this MCP session that still waits: refused, and the waiting request keeps its own answer.
+    const key = JSON.stringify(forward.id);
+    if (s.waiting.has(key)) { send(res, "duplicateId", forward.id); return; }
+    s.waiting.add(key);
     // A client that goes away before the answer cancels its call (the MCP's own notifications/cancelled).
     const gone = () => { if (!res.writableEnded) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: forward.id, reason: "the client closed its connection" } }); };
     res.once("close", gone);
-    const got = await s.worker.request(s.id, forward);
-    res.off("close", gone);
-    if (got === null) { answer(res, 200, rpcError(forward.id, -32603, this.endText(s))); return; }
+    let got: Message | null;
+    try { got = await s.worker.request(s.id, forward); }
+    finally { s.waiting.delete(key); res.off("close", gone); }
+    if (got === null) { send(res, this.endOf(s), forward.id); return; }
     answer(res, 200, forward.method === "tools/list" ? this.filtered(got) : got);
   }
 
@@ -186,28 +204,29 @@ export class McpTransport implements McpHandler {
     return { ...m, result: { ...r, tools: filterTools(this.o.list, r.tools as { name?: unknown }[]) } };
   }
 
-  private endText(s: Session): string {
+  /** The answer of a request whose MCP session ended while it waited: its worker's memory end, its failure, or another end. */
+  private endOf(s: Session): "ended" | "memory" | "failed" {
     const w = s.worker;
-    return !w.ended ? MCP_ANSWER.ended : this.endings.get(w) === "memory" ? MCP_ANSWER.memory : this.endings.get(w) === "error" ? MCP_ANSWER.failed : MCP_ANSWER.ended;
+    return !w.ended ? "ended" : this.endings.get(w) === "memory" ? "memory" : this.endings.get(w) === "error" ? "failed" : "ended";
   }
   private readonly endings = new WeakMap<ScopeWorker, WorkerEnd>();
 
   private async initialize(req: IncomingMessage, res: ServerResponse, scope: string, msg: Message): Promise<void> {
-    if (rawValues(req.rawHeaders, "mcp-session-id").length) { answer(res, 400, rpcError(msg.id, -32600, MCP_ANSWER.initializeWithId)); return; }
-    if (this.stopped) { answer(res, 503, rpcError(msg.id, -32000, MCP_ANSWER.notOpened)); return; }
-    if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) { answer(res, 503, rpcError(msg.id, -32000, MCP_ANSWER.perScope)); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
-    if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) { answer(res, 503, rpcError(msg.id, -32000, MCP_ANSWER.perService)); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
+    if (rawValues(req.rawHeaders, "mcp-session-id").length) { send(res, "initializeWithId", msg.id); return; }
+    if (this.stopped) { send(res, "notOpened", msg.id); return; }
+    if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
+    if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) { send(res, "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
     const worker = this.workerFor(scope);
-    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true };
+    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true, waiting: new Set() };
     this.sessions.set(s.id, s);
     const why = await worker.open(s.id);
     if (why !== null || !s.open) {
       this.end(s, "it could not be made");
-      answer(res, 503, rpcError(msg.id, -32000, MCP_ANSWER.notOpened));
+      send(res, "notOpened", msg.id);
       return;
     }
     const got = await worker.request(s.id, msg);
-    if (got === null || !s.open) { answer(res, 200, rpcError(msg.id, -32603, this.endText(s))); this.end(s, "its worker ended"); return; }
+    if (got === null || !s.open) { send(res, this.endOf(s), msg.id); this.end(s, "its worker ended"); return; }
     if (isObj(got.error)) { answer(res, 200, got); this.end(s, "its initialize failed"); return; }
     this.o.log(`mcp: MCP session ${s.n} of scope ${scope} begins`);
     answer(res, 200, got, { "Mcp-Session-Id": s.id });
@@ -218,7 +237,9 @@ export class McpTransport implements McpHandler {
     const old = this.workers.get(scope);
     if (old && !old.ended) return old;
     const folder = scopeFolder(this.o.stateFolder, scope);
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    // `<state>/mcp` and the scope's folder, each with mode 0700 (the path rule refuses each path argument when one is a link).
+    mkdirSync(this.o.stateFolder, { recursive: true, mode: 0o700 });
+    for (const f of [join(this.o.stateFolder, "mcp"), folder]) { try { mkdirSync(f, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } }
     const w: ScopeWorker = new ScopeWorker(scope, {
       list: this.o.list, folder, ticketUrl: () => this.o.ticketUrl(scope), log: this.o.log, ...this.o.worker,
       ended: (why) => {

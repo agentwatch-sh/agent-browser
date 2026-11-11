@@ -691,8 +691,8 @@ test("the service takes the socket unit's fd by the sd_listen_fds protocol: a li
 
 test("the real service opens the MCP port only with systemd's socket or --test's --test-mcp-port; with neither it has no port, no feature mcp_token and the mcp state none", () => {
   const main = readFileSync(join(ROOT, "src/service/main.ts"), "utf8");
-  assert.ok(/takeMcpSocket\(\)/.test(main), "systemd's socket");
-  assert.ok(/"test-mcp-port"/.test(main) && /if \(test && str\("test-mcp-port"\) !== undefined\)/.test(main), "--test-mcp-port only with --test");
+  assert.ok(/await mcpListen\(\{ test, testPort: test && testPort !== undefined \? testMcpPort\(testPort\) : undefined \}\)/.test(main), "systemd's socket or --test's port, through mcpListen (listen-fds.ts)");
+  assert.ok(/"test-mcp-port"/.test(main), "--test-mcp-port only with --test");
   assert.ok(!/--mcp-port|"mcp-port"/.test(main), "no other MCP flag, no default port");
   const state = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "stat" }) } });
   assert.deepEqual((state.hello as { features: string[] }).features, []);
@@ -889,4 +889,34 @@ test("review-114 note 5: a connection that a root's cgroup admitted closes when 
     assert.ok(log.some((l) => /^mcp: connection 1 \(scope md-lead\) closed: a root that admitted it no longer counts$/.test(l)), log.join("\n"));
     assert.deepEqual(handler.ended, ["md-lead"], "its MCP sessions end with it (OP4)");
   } finally { await port.stop(); }
+});
+
+test("review-115 note 1: the service removes LISTEN_PID, LISTEN_FDS and LISTEN_FDNAMES in every path (also in --test mode and when only LISTEN_FDNAMES is set), and sets FD_CLOEXEC where the fds are its own", async () => {
+  const { mcpListen } = await import("../src/service/mcp/listen-fds.ts");
+  const fcntls: number[] = [];
+  const fcntl = (f: number, cmd: number) => { if (cmd === 2) fcntls.push(f); return 0; };
+  const own = (): Record<string, string | undefined> => ({ LISTEN_PID: "4242", LISTEN_FDS: "1", LISTEN_FDNAMES: MCP_SOCKET_UNIT, KEEP: "1" });
+  // --test with the flag: its port; systemd's fd is not taken, but it is marked and the variables go.
+  let env = own(); fcntls.length = 0;
+  assert.deepEqual(await mcpListen({ test: true, testPort: 0, env, pid: 4242, fcntl }), { port: 0 });
+  assert.deepEqual([env, fcntls], [{ KEEP: "1" }, [3]]);
+  // --test with no flag: no port, and the same clean.
+  env = own(); fcntls.length = 0;
+  assert.equal(await mcpListen({ test: true, env, pid: 4242, fcntl }), null);
+  assert.deepEqual([env, fcntls], [{ KEEP: "1" }, [3]]);
+  // Only LISTEN_FDNAMES: the take fails (failed), and the variable goes.
+  env = { LISTEN_FDNAMES: MCP_SOCKET_UNIT, KEEP: "1" }; fcntls.length = 0;
+  const got = await mcpListen({ test: false, env, pid: 4242, fcntl });
+  assert.ok(got !== null && "failed" in got && /no LISTEN_PID or LISTEN_FDS/.test(got.failed), JSON.stringify(got));
+  assert.deepEqual([env, fcntls], [{ KEEP: "1" }, []]);
+  // The service's own socket: taken.
+  env = own(); fcntls.length = 0;
+  assert.deepEqual(await mcpListen({ test: false, env, pid: 4242, fcntl }), { fd: 3 });
+  assert.deepEqual(env, { KEEP: "1" });
+  // No variable: no port, nothing touched.
+  env = { KEEP: "1" }; fcntls.length = 0;
+  assert.equal(await mcpListen({ test: false, env, pid: 4242, fcntl }), null);
+  assert.deepEqual([env, fcntls], [{ KEEP: "1" }, []]);
+  // main.ts takes its listen from mcpListen only.
+  assert.match(readFileSync(join(ROOT, "src/service/main.ts"), "utf8"), /await mcpListen\(/);
 });

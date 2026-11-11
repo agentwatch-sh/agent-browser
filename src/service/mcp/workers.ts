@@ -27,9 +27,10 @@ export type ScopeWorkerOptions = {
   /** The worker ended by itself (its heap limit, or a failure): the transport drops its sessions. */
   ended: (why: WorkerEnd) => void;
   log: (line: string) => void;
-  /** Tests only: the heap limit (MiB) and the worker's file. */
+  /** Tests only: the heap limit (MiB), the worker's file and the open's wait. */
   heapMb?: number;
   entry?: URL;
+  openWaitMs?: number;
 };
 
 type Wait = { resolve: (m: Message | null) => void };
@@ -87,7 +88,7 @@ export class ScopeWorker {
   open(sid: string): Promise<string | null> {
     if (this.gone) return Promise.resolve("the scope's MCP worker has ended");
     return new Promise((resolve) => {
-      const t = setTimeout(() => { this.opens.delete(sid); resolve("the scope's MCP worker did not answer in time"); }, OPEN_WAIT_MS);
+      const t = setTimeout(() => { this.opens.delete(sid); resolve("the scope's MCP worker did not answer in time"); }, this.o.openWaitMs ?? OPEN_WAIT_MS);
       t.unref();
       this.opens.set(sid, (e) => { clearTimeout(t); resolve(e); });
       this.post({ t: "open", sid });

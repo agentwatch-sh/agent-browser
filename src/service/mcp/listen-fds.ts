@@ -50,6 +50,31 @@ async function loadFcntl(): Promise<Fcntl> {
   return functions.fcntl;
 }
 
+/** The variables of the sd_listen_fds protocol, which the service removes in every path (C11). */
+export const LISTEN_VARS = ["LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"] as const;
+
+/**
+ * Mark the passed fds close-on-exec when LISTEN_PID and LISTEN_FDS are this process's, and remove the three variables in
+ * every path (sd_listen_fds with unset_environment). The count of the fds, or why there is none; a failed fcntl throws
+ * after it tried each fd and removed the variables.
+ */
+export async function markListenFds(env: Record<string, string | undefined>, o: { pid?: number; fcntl?: Fcntl } = {}): Promise<{ count: number } | { none: string }> {
+  try {
+    const c = listenCount(env, o.pid ?? process.pid);
+    if ("none" in c) return c;
+    const fcntl = o.fcntl ?? await loadFcntl();
+    let failed: number | null = null;
+    for (let fd = LISTEN_FDS_START; fd < LISTEN_FDS_START + c.count; fd++) {
+      const flags = fcntl(fd, F_GETFD, 0);
+      if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) failed ??= fd;
+    }
+    if (failed !== null) throw new Error(`the MCP port's socket: fd ${failed} cannot be marked close-on-exec`);
+    return c;
+  } finally {
+    for (const k of LISTEN_VARS) delete env[k];
+  }
+}
+
 /**
  * Take the MCP port's fd by the sd_listen_fds protocol: the fd of agent-browser-mcp.socket. As soon as LISTEN_PID and
  * LISTEN_FDS are valid, FD_CLOEXEC goes on every passed fd, before the names are read; and LISTEN_PID, LISTEN_FDS and
@@ -58,20 +83,28 @@ async function loadFcntl(): Promise<Fcntl> {
  */
 export async function takeMcpSocket(env: Record<string, string | undefined> = process.env, o: { pid?: number; fcntl?: Fcntl } = {}): Promise<number> {
   const pid = o.pid ?? process.pid;
-  try {
-    const c = listenCount(env, pid);
-    if ("none" in c) throw new Error(`the MCP port's socket: ${c.none}`);
-    const fcntl = o.fcntl ?? await loadFcntl();
-    let failed: number | null = null;
-    for (let fd = LISTEN_FDS_START; fd < LISTEN_FDS_START + c.count; fd++) {
-      const flags = fcntl(fd, F_GETFD, 0);
-      if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) failed ??= fd;
-    }
-    if (failed !== null) throw new Error(`the MCP port's socket: fd ${failed} cannot be marked close-on-exec`);
-    const got = listenFd(env, pid);
-    if ("none" in got) throw new Error(`the MCP port's socket: ${got.none}`);
-    return got.fd;
-  } finally {
-    for (const k of ["LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"]) delete env[k];
+  // The names are read before markListenFds removes them.
+  const named = listenFd({ ...env }, pid);
+  const c = await markListenFds(env, o);
+  if ("none" in c) throw new Error(`the MCP port's socket: ${c.none}`);
+  if ("none" in named) throw new Error(`the MCP port's socket: ${named.none}`);
+  return named.fd;
+}
+
+/**
+ * The MCP port of the service's start (main.ts; C11, "The MCP path"): `--test`'s port (`testPort`), or systemd's socket
+ * when any variable of the protocol is set and the service is not in `--test` mode, else none. In every path the
+ * variables are removed and the passed fds that are this process's are marked close-on-exec: also in `--test` mode,
+ * which takes no passed fd, and when only LISTEN_FDNAMES is set (review-115 note 1). A take that fails gives `failed`.
+ */
+export async function mcpListen(o: { test: boolean; testPort?: number; env?: Record<string, string | undefined>; pid?: number; fcntl?: Fcntl }): Promise<{ port: number } | { fd: number } | { failed: string } | null> {
+  const env = o.env ?? process.env;
+  const passed = LISTEN_VARS.some((k) => env[k] !== undefined);
+  if (o.test) {
+    if (passed) { try { await markListenFds(env, o); } catch {} }
+    return o.testPort === undefined ? null : { port: o.testPort };
   }
+  if (!passed) return null;
+  try { return { fd: await takeMcpSocket(env, o) }; }
+  catch (e) { return { failed: (e as Error).message }; }
 }

@@ -4,8 +4,9 @@
 // the workers) and the tickets of the MCP's own CDP connections (ticket.ts).
 //
 // Off by default (C11: stage 1d builds it off; it serves sessions from stage 3): the service makes this part only when
-// systemd passes the socket of agent-browser-mcp.socket, or in `--test` mode with `--test-mcp-port` (main.ts). Before the
-// port opens, the part keeps the last set_sessions and gives it to the port at the open. While the port serves with its
+// systemd passes the socket of agent-browser-mcp.socket, or in `--test` mode with `--test-mcp-port` (main.ts). The
+// service opens it before its control door (review-115 B1), so its state is fixed before the first hello. The part keeps
+// the last set_sessions and gives it to the port at the open. While the port serves with its
 // token check, the hello lists `mcp_token`, and `status`'s `mcp` gives the port's state and address (C12):
 // `none` (no MCP port), `ready` (the port serves, at `127.0.0.1:<port>`), `closed` (the Mac: the port closes each
 // connection until its TCP peer reader exists) and `failed` (the service could not take or open the port).
@@ -31,6 +32,8 @@ export type McpPartOptions = {
   list?: AllowList;
   port?: Partial<Pick<McpPortOptions, "reader" | "uid" | "platform" | "compare" | "headersMs" | "idleMs">>;
   transport?: Partial<Pick<McpTransportOptions, "worker" | "perScope" | "perService">>;
+  /** Tests only: the open waits for this (the order of the service's start). */
+  openGate?: Promise<void>;
 };
 
 export class McpPart implements ServicePart {
@@ -51,6 +54,7 @@ export class McpPart implements ServicePart {
    */
   async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness }): Promise<void> {
     try {
+      if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
       if ("failed" in listen) throw new Error(listen.failed);
       const list = this.o.list ?? readAllowList();

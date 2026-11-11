@@ -23,7 +23,7 @@ import { agentDoorAddress } from "./agent-door.ts";
 import { encodeLine, serviceHello } from "./control.ts";
 import { FAKE_FEATURES, serviceRunFolders, startFake, UNPROTECTED, type Unprotected } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
-import { takeMcpSocket } from "./mcp/listen-fds.ts";
+import { mcpListen } from "./mcp/listen-fds.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
@@ -147,14 +147,10 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
   const paths = unitPaths(resolve(stateFolder), resolve(toolsDir));
   const display = test ? Number(str("test-display")) : null;
-  // The MCP port: --test's port, or systemd's socket (never in --test), else none.
-  let mcpListen: { port: number } | { fd: number } | { failed: string } | null = null;
-  if (test && str("test-mcp-port") !== undefined) mcpListen = { port: testMcpPort(str("test-mcp-port")!) };
-  else if (!test && (process.env.LISTEN_PID !== undefined || process.env.LISTEN_FDS !== undefined)) {
-    // A take that fails leaves the MCP path failed (status says so); the socket unit keeps the port (fail closed).
-    try { mcpListen = { fd: await takeMcpSocket() }; }
-    catch (e) { mcpListen = { failed: (e as Error).message }; }
-  }
+  // The MCP port: --test's port, or systemd's socket (never in --test), else none; the LISTEN_* variables go in every
+  // path. A take that fails leaves the MCP path failed (status says so); the socket unit keeps the port (fail closed).
+  const testPort = str("test-mcp-port");
+  const listen = await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   let s;
   try {
@@ -172,7 +168,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       // The native link (stage 1b part 2): link.sock next to control.sock, in the service's run folder.
       link: { socket: linkSocketFor(resolve(controlDoor)) },
       // The MCP path (stage 1d part 2b): only with its socket.
-      ...(mcpListen ? { mcp: { listen: mcpListen } } : {}),
+      ...(listen ? { mcp: { listen } } : {}),
     });
   } catch (e) {
     if (e instanceof NotOwnerAtStart) { log(`service: ${e.message}`); return 1; }
