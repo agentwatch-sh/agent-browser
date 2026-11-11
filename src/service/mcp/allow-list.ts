@@ -6,11 +6,13 @@
 // outside the scope's folder gets the format's JSON-RPC error. The format's test (checkList) runs in npm test against the
 // pinned version's own `tools/list`, which the MCP gives with no browser.
 //
-// The service's own tools of the format (`service_tools`, board ab-v16.97.5, stage 1e) have room in the file's type, and
-// the runtime of this stage serves none of them: a list that names one is read, and its tools stay out of `tools/list`.
+// The service's own tools of the format (`service_tools`, board ab-v16.97.5, stage 1e) are in the file, exactly as the
+// format gives them, and the runtime of this stage serves none of them: they stay out of `tools/list`, and a call of one
+// gets the -32601 of a tool that the runtime does not serve, until stage 1e answers them.
 
 import { readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 /** The rule of one allowed tool: the keys that the service passes, the keys of them that name a file or a path, and the pinned input schema. */
@@ -34,7 +36,12 @@ export const NEVER_CAPABILITIES: readonly string[] = Object.freeze(["core-instal
 /** The one tool that is always refused: it runs a client's JavaScript in the MCP server's process (C11, the format). */
 export const RUN_CODE = "browser_run_code_unsafe";
 /** The list file of the pinned version. */
-export const LIST_FILE = join(dirname(new URL(import.meta.url).pathname), "allow-list.json");
+export const LIST_FILE = fileURLToPath(new URL("./allow-list.json", import.meta.url));
+/** The service's own tools, exactly as the format gives them (docs/contracts/mcp-allow-list.md; stage 1e serves them). */
+export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.freeze({
+  browser_sign_in: { keys: ["name"], description: "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.", schema: { type: "object", properties: { name: { type: "string", description: "The name of a stored sign-in" } }, required: ["name"], additionalProperties: false } },
+  browser_sign_ins: { keys: [], description: "List the stored sign-ins that this session may use, and the state of the store.", schema: { type: "object", properties: {}, additionalProperties: false } },
+});
 
 /** The rules of the format's test, by the names of the vectors' `breaks`. */
 export const RULES = {
@@ -46,6 +53,8 @@ export const RULES = {
   pathKey: "a file or path key is in paths",
   capabilities: "no core-install, storage, devtools, testing or config",
   version: "version is the pin",
+  serviceNotPinned: "no service tool is a tool of the pinned tools/list",
+  serviceExact: "service_tools is exactly the service's own tools",
 } as const;
 
 /** The JSON-RPC answer of a refused call (the format's texts). */
@@ -70,12 +79,15 @@ export function readAllowList(file = LIST_FILE): AllowList {
   return o as unknown as AllowList;
 }
 
-/** A property's schema speaks of a file or a path: its name or its description (the format's test). */
-const FILE_WORD = /\b(?:file|files|filename|filenames|path|paths|folder|folders|directory|directories)\b/i;
+/**
+ * A property's schema speaks of a file or a path: its name or its description holds `file`, `path`, `folder` or
+ * `directory`, in any case and inside a word too (`filename`, `profile`): the format's test reads it widely, so a key
+ * that it names wrongly stays out of `keys` rather than outside `paths`.
+ */
+const FILE_WORD = /file|path|folder|directory/i;
 export function speaksOfPath(key: string, prop: unknown): boolean {
   const p = (prop ?? {}) as { description?: unknown };
-  const words = key.replace(/([a-z])([A-Z])/g, "$1 $2");
-  return FILE_WORD.test(words) || (typeof p.description === "string" && FILE_WORD.test(p.description));
+  return FILE_WORD.test(`${key} ${typeof p.description === "string" ? p.description : ""}`);
 }
 /** A string property, or a list of strings (the format's test reads both as strings). */
 function stringish(prop: unknown): boolean {
@@ -107,6 +119,9 @@ export function checkList(list: AllowList, pinned: readonly PinnedTool[], pin: s
   }
   if (list.capabilities.some((c) => NEVER_CAPABILITIES.includes(c))) broken.add(RULES.capabilities);
   if (list.version !== pin) broken.add(RULES.version);
+  const service = list.service_tools ?? {};
+  if (Object.keys(service).some((n) => names.includes(n))) broken.add(RULES.serviceNotPinned);
+  if (JSON.stringify(service) !== JSON.stringify(SERVICE_TOOLS)) broken.add(RULES.serviceExact);
   return Object.values(RULES).filter((r) => broken.has(r));
 }
 

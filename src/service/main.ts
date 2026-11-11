@@ -7,6 +7,11 @@
 // MainPID of the control door's admission is the service's parent (the harness). It is refused when any folder is a
 // default folder, and it needs --test-display. `service stop --all` stops the Chrome unit with no service running. The
 // folders have no default (stage 1c's rule): agentwatch's unit gives --lists-folder, --state-folder and --tools-dir.
+//
+// The MCP path (stage 1d part 2b, board ab-v16.94.5; C11: off by default, it serves sessions from stage 3): the real
+// service opens the MCP port only when systemd passes the socket of agent-browser-mcp.socket (the sd_listen_fds protocol,
+// mcp/listen-fds.ts); `--test` opens it only with `--test-mcp-port PORT`, a free port on 127.0.0.1 that the harness gives
+// (0: one that the kernel picks), never a default port. With neither, the service opens no MCP port.
 
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -18,13 +23,14 @@ import { agentDoorAddress } from "./agent-door.ts";
 import { encodeLine, serviceHello } from "./control.ts";
 import { FAKE_FEATURES, serviceRunFolders, startFake, UNPROTECTED, type Unprotected } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
+import { takeMcpSocket } from "./mcp/listen-fds.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
@@ -67,6 +73,13 @@ export function testRefusal(v: { listsFolder?: string; stateFolder?: string; too
   return null;
 }
 
+/** `--test-mcp-port`: a port number, 0 (the kernel picks a free one) or 1024 to 65535; the port is always on 127.0.0.1. */
+export function testMcpPort(raw: string): number {
+  const n = /^[0-9]{1,5}$/.test(raw) ? Number(raw) : -1;
+  if (n !== 0 && (n < 1024 || n > 65535)) throw new UsageError("--test-mcp-port must be 0 (a free port) or a port from 1024 to 65535 on 127.0.0.1");
+  return n;
+}
+
 /** The test-only source of Google Chrome (`--test-chrome-source FILE`): {"repo":"<abs folder>","key":"<abs file>","fingerprints":["<40 hex>"]}. */
 export function testChromeSource(file: string): ChromeSource {
   let o: any;
@@ -99,7 +112,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
@@ -134,6 +147,14 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
   const paths = unitPaths(resolve(stateFolder), resolve(toolsDir));
   const display = test ? Number(str("test-display")) : null;
+  // The MCP port: --test's port, or systemd's socket (never in --test), else none.
+  let mcpListen: { port: number } | { fd: number } | { failed: string } | null = null;
+  if (test && str("test-mcp-port") !== undefined) mcpListen = { port: testMcpPort(str("test-mcp-port")!) };
+  else if (!test && (process.env.LISTEN_PID !== undefined || process.env.LISTEN_FDS !== undefined)) {
+    // A take that fails leaves the MCP path failed (status says so); the socket unit keeps the port (fail closed).
+    try { mcpListen = { fd: await takeMcpSocket() }; }
+    catch (e) { mcpListen = { failed: (e as Error).message }; }
+  }
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   let s;
   try {
@@ -150,6 +171,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       },
       // The native link (stage 1b part 2): link.sock next to control.sock, in the service's run folder.
       link: { socket: linkSocketFor(resolve(controlDoor)) },
+      // The MCP path (stage 1d part 2b): only with its socket.
+      ...(mcpListen ? { mcp: { listen: mcpListen } } : {}),
     });
   } catch (e) {
     if (e instanceof NotOwnerAtStart) { log(`service: ${e.message}`); return 1; }

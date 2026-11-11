@@ -2,8 +2,9 @@
 // stage 1d part 2a, board ab-v16.94.5; the token design, board ab-v16.94.10, sections 11, 12 and 14.1). The shared vectors
 // (test/vectors/endpoint.json: mcpChecks, mcpCloses, mcpSnapshots, mcpLists, mcpTokens, mcpSessionIds, mcpAnswers) run
 // through the real port, over real loopback TCP, with a fake reader of /proc behind the port's reader interface; one test
-// connects from this test's own process with the real reader. The handler behind the admission is a stub here: part 2b
-// plugs the transport in. Every token in this file is a made-up test value in the vectors' abt1_ form.
+// connects from this test's own process with the real reader. The handler behind the admission is a stub here (part 2b's
+// transport has its own tests: test/service-mcp-server.test.ts). The last tests are part 2b's rules of an admitted
+// connection, from the review of part 2a. Every token in this file is a made-up test value in the vectors' abt1_ form.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,7 +21,7 @@ import { parseStat, PEER_UNREAD, sessionRefusal } from "../src/relay/peer.ts";
 import { ControlDoor, encodeLine } from "../src/service/control.ts";
 import { bearerOf, MCP_TEXT, rawPath, WWW_AUTHENTICATE, type McpReadiness } from "../src/service/mcp/admission.ts";
 import { LISTEN_FDS_START, listenFd, MCP_SOCKET_UNIT, takeMcpSocket } from "../src/service/mcp/listen-fds.ts";
-import { McpPort, type McpHandler } from "../src/service/mcp/port.ts";
+import { MCP_FAILED, MCP_HEADERS_MS, MCP_IDLE_MS, McpPort, type McpHandler } from "../src/service/mcp/port.ts";
 import { parseTcp, procReader, type McpReader, type TcpLine } from "../src/service/mcp/proc.ts";
 import { Stage1a } from "../src/service/service.ts";
 
@@ -129,7 +130,8 @@ function rawClient(sock: Socket) {
     const head = buf.subarray(0, end).toString("latin1");
     const headers: Record<string, string> = {};
     for (const line of head.split("\r\n").slice(1)) { const i = line.indexOf(":"); headers[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim(); }
-    const n = Number(headers["content-length"]);
+    // An interim answer (100 Continue) has no body.
+    const n = /^HTTP\/1\.1 1\d\d /.test(head) ? 0 : Number(headers["content-length"]);
     assert.ok(Number.isSafeInteger(n), `an answer with a Content-Length: ${head}`);
     if (buf.length < end + 4 + n) return null;
     const body = buf.subarray(end + 4, end + 4 + n).toString("utf8");
@@ -687,11 +689,173 @@ test("the service takes the socket unit's fd by the sd_listen_fds protocol: a li
   } finally { await new Promise<void>((r) => unix.close(() => r())); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the real service does not open the MCP port in part 2a: no flag and no start, and the hello has no feature mcp_token yet", () => {
-  const main = readFileSync(join(ROOT, "src/service/main.ts"), "utf8"), service = readFileSync(join(ROOT, "src/service/service.ts"), "utf8");
-  assert.ok(!/mcp\/port|McpPort|takeMcpSocket/.test(main + service), "neither the CLI nor the service opens the port");
-  assert.ok(!/--mcp/.test(main), "no MCP flag");
+test("the real service opens the MCP port only with systemd's socket or --test's --test-mcp-port; with neither it has no port, no feature mcp_token and the mcp state none", () => {
+  const main = readFileSync(join(ROOT, "src/service/main.ts"), "utf8");
+  assert.ok(/takeMcpSocket\(\)/.test(main), "systemd's socket");
+  assert.ok(/"test-mcp-port"/.test(main) && /if \(test && str\("test-mcp-port"\) !== undefined\)/.test(main), "--test-mcp-port only with --test");
+  assert.ok(!/--mcp-port|"mcp-port"/.test(main), "no other MCP flag, no default port");
   const state = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "stat" }) } });
   assert.deepEqual((state.hello as { features: string[] }).features, []);
   assert.deepEqual(state.status().mcp, { state: "none", address: null });
+});
+
+// ------------------------------------------------------------------ the review of part 2a: notes 1, 2, 8 and 10 (stage 1d part 2b)
+
+test("review-114 note 1: FD_CLOEXEC goes on each passed fd as soon as LISTEN_PID and LISTEN_FDS are valid, before the name check; the three variables go in every path", async () => {
+  const fcntls: number[] = [];
+  const fcntl = (f: number, cmd: number) => { if (cmd === 2) fcntls.push(f); return cmd === 1 ? 0 : 0; };
+  const base = { LISTEN_PID: "4242", LISTEN_FDS: "2", KEEP: "1" };
+  for (const names of ["other.socket:more.socket", undefined, "x"]) {
+    const env: Record<string, string | undefined> = { ...base, ...(names === undefined ? {} : { LISTEN_FDNAMES: names }) };
+    fcntls.length = 0;
+    await assert.rejects(takeMcpSocket(env, { pid: 4242, fcntl }), /does not name each fd|no socket named/);
+    assert.deepEqual(fcntls, [3, 4], `${names}: FD_CLOEXEC on fds 3 and 4 before the name check`);
+    assert.deepEqual(env, { KEEP: "1" }, `${names}: the variables are gone`);
+  }
+  for (const env of [{ LISTEN_PID: "4243", LISTEN_FDS: "1", LISTEN_FDNAMES: MCP_SOCKET_UNIT }, { LISTEN_PID: "4242", LISTEN_FDS: "0", LISTEN_FDNAMES: MCP_SOCKET_UNIT }, { LISTEN_FDS: "1" }] as Record<string, string | undefined>[]) {
+    fcntls.length = 0;
+    await assert.rejects(takeMcpSocket(env, { pid: 4242, fcntl }));
+    assert.deepEqual(fcntls, [], "fds that are not this process's are not touched");
+    assert.deepEqual(Object.keys(env), [], "the variables are gone also when they are not this process's");
+  }
+  const failing: Record<string, string | undefined> = { LISTEN_PID: "4242", LISTEN_FDS: "2", LISTEN_FDNAMES: `${MCP_SOCKET_UNIT}:x` };
+  fcntls.length = 0;
+  await assert.rejects(takeMcpSocket(failing, { pid: 4242, fcntl: (f, cmd) => { if (cmd === 2) fcntls.push(f); return f === 3 && cmd === 2 ? -1 : 0; } }), /fd 3 cannot be marked/);
+  assert.deepEqual(fcntls, [3, 4], "a failed fcntl on fd 3 does not skip fd 4");
+  assert.deepEqual(failing, {});
+});
+
+/** The port of one admitted md-lead connection (the linux world, the tokens snapshot), with a handler of the test. */
+async function onePort(o: { handler?: McpHandler; readiness?: (scope: string) => McpReadiness; headersMs?: number; idleMs?: number } = {}) {
+  const r = new WorldReader();
+  const log: string[] = [];
+  const handler = o.handler ?? stub();
+  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: o.readiness ?? (() => READY), log: (l) => log.push(l), reader: { tcp: () => r.tcp(), holders: (i) => r.holders(i), proc: (p) => r.proc(p), cgroup: (p) => r.cgroup(p) }, uid: UID, headersMs: o.headersMs, idleMs: o.idleMs });
+  r.service = `127.0.0.1:${port.port}`;
+  const servers: Socket[] = [];
+  port.listener.prependListener("connection", (s: Socket) => { servers.push(s); r.accepted(`127.0.0.1:${s.remotePort}`); });
+  port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
+  const open = async () => { r.pending.push([3102]); return rawClient(await dial(port.port)); };
+  const host = (): [string, string] => ["host", `127.0.0.1:${port.port}`];
+  const auth = (): [string, string] => ["authorization", `Bearer ${T.leadRun2.token}`];
+  return { port, log, handler, servers, open, host, auth };
+}
+
+test("review-114 note 2: after a refusal of steps 3 to 8, a pipelined request on the connection is dropped with no handler call", async () => {
+  const p = await onePort();
+  try {
+    const cl = await p.open();
+    // Two requests in one write: the first has no token (401), the second has the session's own token.
+    cl.sock.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\n\r\nGET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\n\r\n`);
+    const got = await cl.response();
+    assert.equal(got.status, 401);
+    await cl.closes();
+    assert.deepEqual((p.handler as any).requests, [], "the handler never saw the pipelined request");
+    assert.equal(cl.all.split("HTTP/1.1 ").length - 1, 1, "one answer only");
+  } finally { await p.port.stop(); }
+});
+
+test("review-114 note 2: a request with Expect runs steps 3 to 8 before any 100 or 417; CONNECT stays refused with no handler call", async () => {
+  const p = await onePort();
+  try {
+    // 100-continue with no token: the 401, never a 100.
+    const a = await p.open();
+    a.send("/mcp/md-lead", [p.host(), ["expect", "100-continue"], ["content-length", "2"]], "POST");
+    const ra = await a.response();
+    assert.equal(ra.status, 401);
+    assert.ok(!a.all.includes("100 Continue"), "no 100 before the token step");
+    // 100-continue with the session's token: the 100, then the handler's answer.
+    const b = await p.open();
+    b.send("/mcp/md-lead", [p.host(), p.auth(), ["expect", "100-continue"], ["content-length", "2"]], "POST");
+    for (let i = 0; i < 100 && !b.all.includes("100 Continue"); i++) await sleep(20);
+    assert.ok(b.all.includes("100 Continue"), "the 100 after steps 3 to 8");
+    b.sock.write("{}");
+    const rb = await b.response();
+    assert.equal(rb.status, 100);
+    const rb2 = await b.response();
+    assert.equal(rb2.status, 200);
+    // Another expectation: the steps first (no token: 401), then with the token the 417, with no handler call.
+    const c = await p.open();
+    c.send("/mcp/md-lead", [p.host(), ["expect", "something-else"]]);
+    assert.equal((await c.response()).status, 401);
+    const before = (p.handler as any).requests.length;
+    const d = await p.open();
+    d.send("/mcp/md-lead", [p.host(), p.auth(), ["expect", "something-else"]]);
+    assert.equal((await d.response()).status, 417);
+    await d.closes();
+    // CONNECT: Node closes it, with no handler call.
+    const e = await p.open();
+    e.send("127.0.0.1:1", [p.host(), p.auth()], "CONNECT");
+    await e.closes();
+    assert.equal((p.handler as any).requests.length, before, "neither the 417 nor the CONNECT reached the handler");
+  } finally { await p.port.stop(); }
+});
+
+test("review-114 note 8: an exception in the readiness or the handler gives the fixed 500, which echoes nothing, and the port goes on", async () => {
+  let mode: "readiness" | "sync" | "async" | "ok" = "readiness";
+  const handler: McpHandler = {
+    request(_req, res) {
+      if (mode === "sync") throw new Error(`a handler failure with ${T.leadRun2.token}`);
+      if (mode === "async") return Promise.reject(new Error("an async handler failure"));
+      res.writeHead(200, { "Content-Length": 2 }).end("ok");
+    },
+    endSessions() {},
+  };
+  const p = await onePort({ handler, readiness: () => { if (mode === "readiness") throw new Error("a readiness failure"); return READY; } });
+  try {
+    for (const m of ["readiness", "sync", "async"] as const) {
+      mode = m;
+      const cl = await p.open();
+      cl.send("/mcp/md-lead?q=secret-query", [p.host(), p.auth()]);
+      const got = await cl.response();
+      assert.deepEqual([got.status, got.body], [500, MCP_FAILED], m);
+      assert.ok(!cl.all.includes(T.leadRun2.token) && !cl.all.includes("secret-query"), `${m}: the 500 echoes nothing`);
+      await cl.closes();
+    }
+    mode = "ok";
+    const cl = await p.open();
+    cl.send("/mcp/md-lead", [p.host(), p.auth()]);
+    assert.equal((await cl.response()).status, 200, "the port goes on");
+    assert.equal(p.log.filter((l) => /a GET request failed \(500\)$/.test(l)).length, 3);
+    assert.ok(!p.log.join("\n").includes("secret-query") && !p.log.join("\n").includes(T.leadRun2.token));
+  } finally { await p.port.stop(); }
+});
+
+test("review-114 note 10: an admitted connection that sends nothing, a header that comes slowly and an idle keep-alive connection close after the header time; a body that pauses closes after the idle time; a long answer is not cut", { timeout: 30_000 }, async () => {
+  assert.equal(MCP_HEADERS_MS, 10_000);
+  assert.equal(MCP_IDLE_MS, 30_000);
+  let wait = 0;
+  const handler: McpHandler = {
+    async request(req, res) {
+      for await (const _ of req) { /* the body */ }
+      if (wait) await sleep(wait);
+      res.writeHead(200, { "Content-Length": 2 }).end("ok");
+    },
+    endSessions() {},
+  };
+  const p = await onePort({ handler, headersMs: 300, idleMs: 300 });
+  try {
+    const t0 = Date.now();
+    const silent = await p.open();
+    await silent.closes();
+    assert.ok(Date.now() - t0 >= 250, "nothing sent: closed after the header time");
+    assert.equal(silent.all, "", "with no answer");
+    const slow = await p.open();
+    slow.sock.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\n`);
+    await slow.closes();
+    assert.equal(slow.all, "", "a header that never ends");
+    const keep = await p.open();
+    keep.send("/mcp/md-lead", [p.host(), p.auth()]);
+    assert.equal((await keep.response()).status, 200);
+    await keep.closes();
+    const body = await p.open();
+    body.sock.write(`POST /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\ncontent-length: 10\r\n\r\n{`);
+    await body.closes();
+    assert.equal(body.all, "", "a body that pauses: closed with no answer");
+    wait = 900;
+    const long = await p.open();
+    long.send("/mcp/md-lead", [p.host(), p.auth()]);
+    assert.equal((await long.response()).status, 200, "a long answer (900 ms, past both times) is not cut");
+    assert.ok(p.log.some((l) => l.endsWith("closed: no request header in time")) && p.log.some((l) => l.endsWith("closed: the request body paused too long")));
+  } finally { await p.port.stop(); }
 });

@@ -861,6 +861,36 @@
    }
   }
  },
+ "service_tools": {
+  "browser_sign_in": {
+   "keys": [
+    "name"
+   ],
+   "description": "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "The name of a stored sign-in"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "browser_sign_ins": {
+   "keys": [],
+   "description": "List the stored sign-ins that this session may use, and the state of the store.",
+   "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+   }
+  }
+ },
  "refused": {
   "browser_run_code_unsafe": "It runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state."
  }
