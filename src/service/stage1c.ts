@@ -77,7 +77,7 @@ export type Stage1cOptions = {
   writeEnded?: (path: string, value: unknown) => void;
 };
 
-type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null };
+type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
 type ListView = { name: string; repo: string | null; allow: string[]; sessions: string[]; error: string };
 
 export class Stage1c implements ServicePart {
@@ -457,7 +457,8 @@ export class Stage1c implements ServicePart {
   status(): Record<string, unknown> {
     const t = this.book.ticket();
     return {
-      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: (t !== null ? own(t.body.scopes, s.scope) : null) ?? null })),
+      // mcp_token: whether the session's item has a fingerprint (C12, the token design); never the fingerprint.
+      sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: (t !== null ? own(t.body.scopes, s.scope) : null) ?? null, mcp_token: (s.mcp_token ?? null) !== null })),
       lists: this.listsView().lists.map((l) => l.name),
       prompts: this.prompts.views(),
     };

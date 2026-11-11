@@ -2,8 +2,9 @@
 
 **Status: Decided: the operator's answers of 2026-11-10 (section 19). The build runs in stages (board ab-v16.94).
 The operator's answer to board item ab-6ng (section 19) reverses "no secret" for the MCP: each repo gets its own
-connection token. A new design (board ab-v16.94.10) replaces the MCP's admission of section 8.3 and C11, and
-stage 1d waits for it. The operator's answer to board item ab-1n8 (Q5, section 19) makes start and stop
+connection token. The token design ([2026-11-10-mcp-connection-tokens-design.md](2026-11-10-mcp-connection-tokens-design.md),
+board ab-v16.94.10) adds a connection token for each session to the MCP's admission of section 8.3 and C11, with the
+operator's answers of 2026-11-10 (section 19). The operator's answer to board item ab-1n8 (Q5, section 19) makes start and stop
 automatic: Chrome starts at the first use and stops when no agent uses it (board ab-v16.94.11).**
 
 Date: 2026-11-09. Revised after four fresh reviews and the daemon lead's review and re-read; the
@@ -85,8 +86,9 @@ constraint.
    requests on a Unix socket. The service passes only the tools and argument keys of an allow list, which
    is fixed for each pinned MCP version; a test fails when the pinned `tools/list` changes. The list leaves
    out `browser_run_code_unsafe`, which runs client JavaScript in the server's process. A local session
-   reaches the MCP with its client's HTTP configuration, `http://127.0.0.1:<port>/mcp/<scope>`: no stdio
-   shim runs, and no key (the operator's answer Q1, section 19).
+   reaches the MCP with its client's HTTP configuration, `http://127.0.0.1:<port>/mcp/<scope>`, with the session's
+   own connection token in the `Authorization` header of its MCP entry: no stdio shim runs (the operator's answer
+   Q1, section 19, and the token design).
 6. **Loopback TCP (section 8.3).** The peer check over loopback TCP works on Linux. M2 gave the right
    decision in each case, at 10.4 ms p50 per new connection (a scan of the session's processes) or 23.1 ms
    p50 (a scan of every process). `SO_PEERCRED` on a Unix socket takes 0.02 ms. The operator chose TCP for
@@ -112,7 +114,12 @@ constraint.
 9. **The operator's answers (section 19).** The operator answered Q1 to Q4 on 2026-11-10, and the
    recommendations of the three open points of section 17 hold. The operator answered board item ab-6ng
    on 2026-11-10: each repo gets its own connection token for the MCP, and agentwatch connects the MCP when
-   an allowed session starts; board ab-v16.94.10 designs it. The operator answered Q5 on board item ab-1n8:
+   an allowed session starts; board ab-v16.94.10 designs it. The operator answered the token design's questions
+   on 2026-11-10 (board items ab-0wv, ab-sxg, ab-ufy, ab-5t3 and ab-h93; section 19): agentwatch mints a token for
+   each session at the session's start; the repo's list is the allow; the token goes in the `Authorization` header
+   of the session's MCP entry; a session of another box calls the serving box directly over HTTPS, and the serving
+   box takes its token only from that box's known addresses; a Codex session with agentwatch's app server gets no
+   MCP until a Codex release lets the app server read a profile. The operator answered Q5 on board item ab-1n8:
    start and stop are automatic (section 19); board ab-v16.94.11 builds it. Today's rule stays on the old
    path until then.
 
@@ -486,7 +493,7 @@ The control door follows the daemon lead's proposal and review.
 | Daemon to service | What the service does |
 | --- | --- |
 | `config {enabled, control, chrome_bin, chrome_args, ...}` | agentwatch's `browser.*` config keys, as data, at each connect and each change. The service applies them (`chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` closes the agent door with its 503; `enabled: false` stops the browser). |
-| `set_sessions {sessions:[{scope, repo, roots:[{pid,start}], cgroup}], remote:[{scope, box, list}], box:{hosts, cookie_names}}` | A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object and the model's line. No scope object goes out before the first complete snapshot (the daemon lead's C4). |
+| `set_sessions {sessions:[{scope, repo, roots:[{pid,start}], cgroup, mcp_token}], remote:[{scope, box, list, mcp_token}], box:{hosts, cookie_names}}` | A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object and the model's line. No scope object goes out before the first complete snapshot (the daemon lead's C4). `mcp_token` is the fingerprint of the session's connection token, or `null` (the token design); the provenance does not change. |
 | `session_ended {scope}` | Ends the scope: closes its tabs (`end_scope`, the receiver's sweep), drops its roots, removes its list copy, records the ended scope. |
 | `launch_check {scope}` | Today's `launch_refusal`: a refusal text while an ended scope of that name is held in memory only, else none. The daemon asks before each launch. If the service does not answer in 2 s, the daemon refuses only a name that ended since its own start, with a text that says to try again. |
 | `list_set {list, allow, providers}` (operator) | Checks each entry with the host rules (`normalize_entry`), answers the refused entries, writes the list file; the next `set_scopes` carries it. |
@@ -775,90 +782,117 @@ pays it once.
 and the service checks the peer over loopback TCP as M2 did, with the daemon lead's five conditions as rules
 (section 19): the uid check first, then the walk, before any request byte; an `Origin` header refused and the
 `Host` checked; the port held by a socket unit while the service is down, and the Mac closed until its reader
-exists; a per-session MCP configuration; and no secret. No stdio shim runs. Option a was this design's
+exists; a per-session MCP configuration in a 0600 file under agentwatch's tokens folder, with the session's own
+token in its `Authorization` header, which must be the token of the walk's session (the token design). No stdio shim
+runs. Option a was this design's
 recommendation before the answer: it kept the kernel's check of the Unix socket, at the cost of one shim
 process for each session. The operator's answer to board item ab-6ng (section 19) changes this reading:
-each repo gets its own connection token over HTTP or HTTPS, so "no secret" no longer holds, and the
-split of the admission between agentwatch and the service is open. Board ab-v16.94.10 designs it before
-stage 1d builds the MCP; until then, this section is the record of the earlier reading. A session on
-another box still uses HTTP over the agentwatch link (section 9) until that design says otherwise.
+each repo gets its own connection token over HTTP or HTTPS, so "no secret" no longer holds. The token design
+gives the split of the admission between agentwatch and the service: agentwatch's daemon mints a token for each
+session, and the service checks the token's fingerprint for each request, after the uid check and the walk. A
+session on another box calls the serving box directly over HTTPS (section 9, by the token design's answer D c).
 
 ### 8.4 The fallbacks
 
 - **stdio**: today's Playwright MCP keeps working as a stdio child of the session, with `--cdp-endpoint`
   (the URL of `agent-browser endpoint`). It is a CDP client of the agent door, and the walk admits it.
-- **A key per session**: not needed. The peer check holds on the Unix socket and, for the MCP port, over
-  loopback TCP (section 19), and the operator rejected keys (ab-dm6).
+- **A token for each session**: the operator's answers to ab-6ng and ab-0wv, designed in the token design; the walk
+  stays.
 
 ### 8.5 How a session gets the MCP
 
 The operator's answer Q2 (section 19): agentwatch adds the MCP's HTTP entry to the MCP configuration of a
 session that it launches when the session's scope has a list with at least one site. The entry holds the URL
-with the session's scope (a label: the walk decides the scope) and no secret. agentwatch writes it into a
-configuration of the session's own at the launch (Claude Code: a generated file with `--mcp-config`; Codex: a
-`-c` override for each launch), never into the user's global files. The entry names `127.0.0.1`, never
+with the session's scope (a label: the walk decides the scope) and the session's own token in its `Authorization`
+header. agentwatch writes it into a 0600 file under its tokens folder before the launch, and it removes the file at
+the session's end. The launch gives it to the session's own configuration (Claude Code: the session's file with
+`--mcp-config`; Codex: the session's profile `aw-<random name>` with `-p`, a link in the Codex home to the session's
+file; Codex with agentwatch's app server gets no entry until a Codex release lets the app server read a profile, by
+the operator's answer E a), never through the user's global files. The entry names `127.0.0.1`, never
 `localhost`, and agentwatch writes it only when the `LISTEN` line of `127.0.0.1:<port>` in `/proc/net/tcp` has
-the user's uid (else `agentwatch health` shows red). Nothing goes into the
-session's environment: the operator's answer age-4ks ("env: no") stays. agentwatch does not rewrite a running
+the user's uid (else `agentwatch health` shows red). agentwatch writes the entry only when the service's hello has the
+feature `mcp_token` and the service answered the `set_sessions` that carries the session's fingerprint (the token
+design, section 9.1, rules 3 and 6). Nothing goes into the session's environment: the operator's answer age-4ks
+("env: no") stays. agentwatch does not rewrite a running
 session's configuration, so a list that gets its first site after the launch takes effect at the session's
 next launch, and the session needs a restart. Each session that has the entry loads the MCP's
 tool list into its context.
 
 ## 9. Another box (task item 5)
 
-A session on taylor uses the agent browser on the operator's Mac. The Mac opens no port.
+A session on taylor uses the agent browser on the operator's Mac. The Mac opens no port. The path is the token
+design's answer D c (its section 10): the session's client calls the Mac's `agentwatch.sh` address directly over
+HTTPS, with the session's remote token in its `Authorization` header.
 
 ```
- taylor                                                        the operator's Mac
- session --stdio--> agentwatch browser mcp --box <mac>         Mac agentwatch daemon --agent door, MCP path only--> Mac service --> host shim --> Chrome
-                    (a child of the session)                     ^ checks: the link's machine key, the seal,
-                         | the daemon's new remote MCP socket    |   the browser grant, the Mac rules (consent,
-                         | (0600; kernel peer check, pane walk)  |   quiet times), the answer size, the rate
-                         v                                       |
-                    taylor agentwatch daemon ----agentwatch link (sealed MCP HTTP requests)----+
+ taylor                                                      the operator's Mac
+ session's client --HTTPS, Authorization: Bearer abt1_...--> Cloudflare's edge (TLS ends)
+                                                             --tunnel--> the Mac's gateway (tunnel-origin socket):
+                                                                         the route and the address check
+                                                             --unread--> the Mac service (remote scope, MCP path only):
+                                                                         the fingerprint check --> host shim --> Chrome
+ taylor agentwatch daemon --agentwatch link (the grant, the fingerprint lists)--> the Mac's agentwatch daemon
+                                                             --set_sessions (remote items with mcp_token)--> the Mac service
 ```
 
-**taylor.** The session's MCP configuration names `agentwatch browser mcp --box <mac>`, a stdio shim of
-agentwatch's. Today agentwatch has no socket from an agent to its daemon. The CLI talks to the gateway over HTTPS with
-the API token. The daemon's sockets are the gateway hub, the browser link and the screen link (the daemon
-lead's R5). So the remote path needs a new daemon socket:
-
-- a 0600 Unix socket in the daemon's 0700 run folder, for the remote MCP only;
-- at each accept, a kernel peer check (`SO_PEERCRED` and a pidfd on Linux, `LOCAL_PEERPID` on the Mac)
-  and the walk to a session's pane root. The walk is new Python code in agentwatch, in stage 5 (the
-  daemon lead's m3): today's walk is in agent-browser (`src/relay/peer.ts`) and moves with the service,
-  and `panes.py` holds only the facts (pane pid, start time, cgroup). It follows the same rules: pid and
-  start time to a pane root, the pane's cgroup only when the walk reaches no root, a peer that is alive
-  through the check. Its tests are the same cases as the peer admission design's and M2's: a client in
-  the session, a client of another session, a client of no session, a forked holder, a client that exits
-  at once, a re-parented job. A peer whose walk reaches no session is refused;
-- the daemon then knows the session's name, and it sends each MCP request over the agentwatch link with
-  that name. No browser logic runs on taylor for this path.
+**taylor.** The session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the
+session's remote token in its `Authorization` header. taylor's daemon mints the remote token at the session's start,
+with the local one, writes it into the session's entry file, and sends only its fingerprint over the link (the token
+design, section 10, option (i)). The remote token is not the local token, so the token that crosses Cloudflare never
+works on taylor's own MCP port. No browser logic runs on taylor for this path.
 
 **The link.**
 
 - The machine keys, and a new grant, `browser.use`, that a box asks for (`agentwatch link request`) and
   that the operator approves on the Mac's Links page (password login). Today the link has no browser grant
   (`agentwatch/linkmail/grants.py`).
-- Each request and each answer travels sealed, as the link's seal rule says for every link message.
-- A size limit for each MCP answer (first value 16 MiB). An inline screenshot or a large snapshot can be
-  large. Above the limit, the Mac's daemon sends a clear refusal ("the answer is larger than the link's
-  limit; ask for a smaller part, for example one element's snapshot or a viewport screenshot"), not a cut
-  answer.
-- A rate limit for each remote session (first values: 10 requests a second, 4 at once). Above it, the Mac's
-  daemon answers with a clear refusal and drops nothing silently.
+- The link carries the grant, the fingerprint lists of the calling box's sessions and the state of the grant's list.
+  The MCP requests go by direct HTTPS; TLS ends at Cloudflare's edge, so they are not sealed, by the operator's
+  choice (ab-h93; the token design, section 10).
+- The calling daemon sends the box's complete list of remote sessions (their fingerprints) at each change and every
+  5 minutes. The Mac's daemon drops a box's remote fingerprints 15 minutes after its last list, and all of them at
+  once when the grant ends.
+
+**The Mac's gateway.** It takes each remote MCP request on its tunnel-origin socket (the token design, section 10).
+
+- **The route** (the gateway's rules): it routes only `/mcp/<calling box>/<session>` with an
+  `Authorization: Bearer abt1_...` header to the Mac service, unread. It never takes an `abt1_` token on another
+  route and never takes agentwatch's API token on `/mcp`, and it refuses a request with a cookie or an `Origin`
+  header on `/mcp`. It never reads a user's token file, it logs no header, and it answers `/mcp` with no redirect.
+- **The address check** (the operator's answer ab-5t3): it takes a bearer on `/mcp` only when Cloudflare's
+  `CF-Connecting-IP` equals one of the known addresses, IPv4 or IPv6, of the box that the path names, from that
+  box's last status report. When one family of the box is not known, it takes no remote token from that box (fail
+  closed); a family in the state "none" counts as known.
+- A rate limit for each remote session (first values: 10 requests a second, 4 at once). Above it, the gateway
+  answers with a clear refusal and drops nothing silently.
 
 **The Mac's daemon.** It checks the link, the seal and the grant, applies the Mac rules (below), and lists
 each remote session in its `set_sessions` as `{"scope":"taylor/<session>","box":"taylor","list":<the
-grant's list>}`. It connects to the Mac service's agent door for that scope and carries the bytes.
+grant's list>,"mcp_token":"<64 hex>"}`. Each admitted request goes, unread, to the Mac service's agent door for that
+scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).
+
+- **The box comes from the link.** The daemon sets each remote item's `box`, and the box part of its scope, from
+  the link's peer identity, never from the message body. It refuses a list that names another box, whole.
+- **The check of each list before the merge.** The daemon checks each calling box's list before it merges it into
+  its service's `set_sessions`: the form of each fingerprint, each fingerprint once (in the list, against the other
+  boxes' lists and against the local sessions), each session once, and at most 64. A list that fails is refused for
+  that box alone: the daemon drops all fingerprints of that box (fail closed), and the other boxes and the Mac's own
+  sessions stay in force.
 
 **The Mac's service.**
 
-- It identifies the Mac's daemon on the agent door with the same rule as on the control door (section 7.1:
-  the launchd job's pid, or its direct child with the daemon's command line).
-- It admits the daemon only for a remote scope that the last `set_sessions` lists, and only on the MCP
+- It identifies the carrier on the agent door with the same rule as on the control door (section 7.1:
+  the launchd job's pid, or its direct child with the daemon's command line); stage 5 extends that rule if the
+  carrier is the Mac's gateway.
+- It admits the carrier only for a remote scope that the last `set_sessions` lists, and only on the MCP
   path. It refuses the CDP path for a remote scope. Raw CDP across boxes is not in this design: one tool
-  call runs many CDP calls next to Chrome, so the link carries one request and one answer for each step.
+  call runs many CDP calls next to Chrome, so the path carries one request and one answer for each step.
+- It checks each remote request's token: the SHA-256 of the request's bearer must equal that remote item's
+  `mcp_token`, with the texts of C11's token step (the token design, section 11).
+- A size limit for each MCP answer (first value 16 MiB). An inline screenshot or a large snapshot can be
+  large. Above the limit, the Mac service sends a clear refusal ("the answer is larger than the link's
+  limit; ask for a smaller part, for example one element's snapshot or a viewport screenshot"), not a cut
+  answer.
 - A local scope always needs a local walk; the daemon never gets a local scope.
 - The remote scope gets the grant's list, never a local repo's list.
 - It refuses every tool argument that the allow list marks as a path (section 8.2). Examples are the
@@ -880,16 +914,16 @@ cannot change it: no door for it.
 **The Mac rules**:
 
 - the operator's consent: the grant, which the operator can revoke at any time on the Links page;
-- the quiet times of the Mac: in a quiet window the Mac's daemon refuses a remote session's new MCP
+- the quiet times of the Mac: in a quiet window the Mac's gateway refuses a remote session's new MCP
   session, with a clear text. At the start of a quiet window, an open remote MCP session may finish the
-  request that it runs; then the Mac's daemon ends that session with the text "the Mac's quiet time
+  request that it runs; then the Mac ends that session with the text "the Mac's quiet time
   began; try again after <time>";
 - no window focus taken: the Mac service's rules of section 10.
 
 | Part | Whose |
 | --- | --- |
-| The session's identity on taylor and the new remote MCP socket, the stdio shim to it, the link, the seal, the machine keys, the grant and its approval, the answer size and rate limits, the Mac rules, the remote session in `set_sessions` | agentwatch |
-| The remote scope in the model, the grant's list in the Mac service, the MCP, the agent door's rules for remote scopes (the daemon's identity, the MCP path only, no path arguments), the remote downloads, the Mac's Chrome rules | agent-browser |
+| The remote token's mint and the session's entry on taylor, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |
+| The remote scope in the model, the grant's list in the Mac service, the MCP, the agent door's rules for remote scopes (the carrier's identity, the MCP path only, no path arguments), the remote token check, the answer size limit, the remote downloads, the Mac's Chrome rules | agent-browser |
 | The scope pattern with `<box>/` | chrome-extension (receiver) and agent-browser |
 
 ## 10. The Mac (task item 6)
@@ -939,8 +973,8 @@ Every rule of today holds. The table names where each rule lives after the chang
 | Fail closed: no confirmed receiver, Chrome stops after 60 s; no scope object before the first complete read of the sessions | the daemon (`check_receiver`, `_fail_closed`) | the owner of the Chrome unit only (section 13.2: the service's unit state); the daemon's watch reads the unit state again right before it stops Chrome; the `stopped` event to the daemon and the last stop in `status` |
 | Start and stop | the API token or a web login (#643 open) | unchanged during the move; each op names its caller's kind; Q5 asks about a change |
 | A web page cannot connect | the `Origin` 403 of the endpoint | the same on CDP and MCP paths (M3); a Unix socket is out of a web page's reach; the MCP port refuses an `Origin` header, admits only the `Host` `127.0.0.1:<port>` or `localhost:<port>`, and its walk refuses a browser process (section 19) |
-| Another OS user | the 0600 sockets in a 0700 folder | the same for the doors; on the MCP port the uid column refuses another OS user before any scan, and a socket unit holds the port while the service is down (section 19) |
-| Secrets | no secret in argv or a log; payloads in memory | the same; the service gets a payload on the control door and keeps it in memory only; logs carry a user, a domain and counts; the MCP's one-time ticket never leaves the service's process |
+| Another OS user | the 0600 sockets in a 0700 folder | the same for the doors; on the MCP port the uid column refuses another OS user before any scan, and a socket unit holds the port while the service is down (section 19); the entry files are 0600 in 0700 folders |
+| Secrets | no secret in argv or a log; payloads in memory | the same; the service gets a payload on the control door and keeps it in memory only; logs carry a user, a domain and counts; the MCP's one-time ticket never leaves the service's process; each session's token lives only in its 0600 entry file under agentwatch's tokens folder and in its client's memory; the service holds only its SHA-256 |
 | The extension signing key | agentwatch keeps the private key (0600) and pins the CRX | the service never holds the key: it checks the CRX against the pinned hash; the key stays where the release flow keeps it |
 | The box's own sign-in never moves | `payload.py` (box hosts, `BOX_COOKIE_NAMES`) | the service, with the hosts and cookie names that agentwatch gives in `set_sessions` |
 | No raw X for an agent | only the daemon runs `xdotool`, only for the relay's checked paths | only the service runs `xdotool`, only for its own model's paths |
@@ -957,7 +991,7 @@ section 11).
 | --- | --- |
 | C1. Per user, never root; the gateway reads no user file | One service per OS user; the gateway passes requests to the user's daemon, which passes them to the user's service. The sender ID comes from the service through the daemon, not from a file. |
 | C2. Operator-only acts only through a control door, provenance from the credential | Section 7.1: only the daemon process itself on the control door (R1); `by.kind: operator` only from the gateway's password-login field (R7); no such op on the agent door or in the MCP. Start and stop keep today's rule until the operator answers Q5. |
-| C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check. The operator chose loopback TCP for the MCP (Q1 b, section 19), and the daemon lead turned C3 into five conditions for it, which section 19 records as rules: the uid check first, then the walk, before any request byte; any `Origin` refused and the `Host` checked; the port held while the service is down, and the Mac closed until its reader exists; a per-session MCP configuration; no secret. The MCP's own ticket is bound to the service's pid and never leaves the process; cross-box through the link and a new kernel-checked daemon socket. |
+| C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check. The operator chose loopback TCP for the MCP (Q1 b, section 19), and the daemon lead turned C3 into five conditions for it, which section 19 records as rules: the uid check first, then the walk, before any request byte; any `Origin` refused and the `Host` checked; the port held while the service is down, and the Mac closed until its reader exists; a per-session MCP configuration in a 0600 file under agentwatch's tokens folder; the session's own token in the `Authorization` header only, checked against its fingerprint for each request. The MCP's own ticket is bound to the service's pid and never leaves the process; cross-box through the link and a new kernel-checked daemon socket. |
 | C4. Fail closed; the daemon sees the stop | Section 11; the `stopped` event, and the last stop in `status` for a daemon that was down. |
 | C5. Chrome survives restarts; the service has its own lifetime and adopts a running Chrome | Sections 5.2, 7.3 and 13.2: one owner of the Chrome unit, named by the state of the service's unit (`KillMode=process`, so a stop or crash of the service keeps Chrome); a daemon restart and a service restart keep Chrome in both modes (tested in stage 2). |
 | C6. Secrets | Section 11. |
@@ -1454,15 +1488,20 @@ build:
    another OS user cannot take the port. The Mac refuses every connection (fail closed) until its TCP peer
    reader (`libproc`) is built and measured, before stage 4.
 4. agentwatch writes the MCP's HTTP entry into each session's own MCP configuration at the launch, never into
-   the user's global files: for Claude Code a generated file for the session with `--mcp-config`, for Codex a
-   `-c` override for each launch (the daemon lead's change D19). It writes it only when the session's scope
+   the user's global files: for Claude Code a generated file for the session with `--mcp-config`, for Codex the
+   session's profile (`-p aw-<random name>`), whose file is a link to the session's 0600 file under agentwatch's
+   tokens folder (the operator's answers C and ab-ufy, the daemon lead's form); Codex with agentwatch's app server
+   gets no entry until a Codex release lets the app server read a profile (the answer E a of the token design). It
+   writes it only when the session's scope
    has a list with a site (Q2), and nothing into the environment. A list change during a session does not
    rewrite the session's configuration: the change takes effect at the session's next launch, so the session
    needs a restart.
-5. No secret is in the URL or in the configuration. The scope in the path is a label: the walk decides the
-   scope.
+5. No secret is in the URL. The session's own token is in its MCP entry's `Authorization` header, in a 0600 file
+   under agentwatch's tokens folder (the operator's answers C and ab-ufy). The scope in the path is a label: the walk
+   decides the scope.
 
-Q1 is about a local session. Section 9's path for a session of another box does not change by it.
+Q1 is about a local session. Section 9's path for a session of another box does not change by it. The token
+design's answer D c changes section 9.
 
 **Q2. Which sessions get the MCP in their configuration? The answer: "An agent with at least one site in the
 allowlist" (free text).** agentwatch adds the MCP's HTTP entry to a session's MCP configuration at the
@@ -1531,6 +1570,29 @@ and which of today's checks stay. Stage 1d (ab-v16.94.5) waits for it, and C11 c
 What follows from (2): the lead answered the question on board item ab-1n8 ("password login" means the
 operator's usual web viewer login, not a password step at each stop) and asked Q5 again there. The operator
 answered it: start and stop are automatic (Q5 above).
+
+**The token design's answers (2026-11-10, each confirmed on its board item).** The token design (board ab-v16.94.10,
+[2026-11-10-mcp-connection-tokens-design.md](2026-11-10-mcp-connection-tokens-design.md)) asked the operator its
+questions on board items ab-0wv, ab-sxg, ab-ufy, ab-5t3 and ab-h93. Its section 2 records the answers with the
+operator's words, and its sections 6 to 12 build on them:
+
+- A, who keeps the token (ab-0wv): "agentwatch mints the token and inserts it into the mcp configuration i think. can
+  we do that? so it gets generated when the session starts." agentwatch's daemon mints the token and writes it into
+  the session's MCP entry.
+- B1, what allows a repo (ab-0wv): option a. The repo's list is the allow.
+- B2, a schedule (ab-0wv): "mint the token when the agentwatch session begins." Each session gets a fresh token at
+  its start, and the token ends with the session.
+- C, how a session sends its token (ab-sxg): "can't we put the token in the MCP call in the header? i think mcp
+  protocol supports this. so it would be no extra command. it would just be in the headers." On ab-ufy: "keep it.
+  token goes in the mcp header." A fixed `Authorization` header in each session's own MCP entry, with no header
+  command.
+- D, where a token works (ab-sxg): option c, direct HTTPS to the other box.
+- The address check (ab-5t3): "you can use an IP allowlist as long as you have the ipv4 and ipv6 of each daemon."
+  The serving box takes a remote token only from the calling box's known IPv4 and IPv6 addresses.
+- E, Codex's app server (ab-h93): option a. A Codex session with agentwatch's app server gets no agent browser MCP
+  until a Codex release lets the app server read a profile; it keeps the browser through Playwright.
+- The Cloudflare question (ab-h93): "Keep direct HTTPS through Cloudflare". Cloudflare sees the token, the tool
+  arguments and the page text of each remote request, and the address check stays.
 
 **What the answers change in this design.** Sections 1, 3, 4.2, 4.3, 5.1, 6, 8.2 to 8.5, 10, 11 and 12 now
 describe the MCP port of Q1 and the session's entry of Q2. The questions of section 16 and the points of

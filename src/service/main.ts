@@ -16,7 +16,7 @@ import { UsageError } from "../errors.ts";
 import { defaultDaemonCommandFile } from "./admission.ts";
 import { agentDoorAddress } from "./agent-door.ts";
 import { encodeLine, serviceHello } from "./control.ts";
-import { serviceRunFolders, startFake } from "./fake.ts";
+import { FAKE_FEATURES, serviceRunFolders, startFake } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
@@ -101,7 +101,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
-    await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, ["fake"]) : serviceHello(version, commit, [])), () => r()));
+    await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, FAKE_FEATURES) : serviceHello(version, commit, [])), () => r()));
     return 0;
   }
   if (fake) {
