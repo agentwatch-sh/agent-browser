@@ -1,0 +1,10 @@
+{
+  "contract": "C4, docs/protocol.md, since board ab-v16.30: the rollout of set_scopes. The receiver (part 1a, board ab-v16.31) sends this hello and answers an old daemon's set_allowlist so; the daemon (agentwatch's part 3) reads features. Every value is a sample.",
+  "hello": {"t": "hello", "v": 2, "version": "0.3.0", "channels": ["main", "bridge"], "features": ["scopes"]},
+  "oldHellos": [
+    {"note": "A receiver before part 1a: no features. A new daemon sends it set_allowlist with an empty list, writes no allowlist line, and shows the Browser page text.", "hello": {"t": "hello", "v": 2, "version": "0.2.0", "channels": ["main", "bridge"]}},
+    {"note": "A receiver before the channels (C4): no features too.", "hello": {"t": "hello", "v": 1, "version": "0.1.0"}}
+  ],
+  "toOldReceiver": {"note": "A new daemon and an old receiver: the old receiver blocks every site and closes its http:/https: tabs; the relay admits no connection.", "req": {"t": "req", "id": "m1", "op": "set_allowlist", "domains": []}, "browserPage": "The agent browser's extension is too old for the per-repo allowlists. Update it."},
+  "fromOldDaemon": {"note": "A new receiver and an old daemon: the receiver applies nothing (channel main: no ch).", "req": {"t": "req", "id": "m2", "op": "set_allowlist", "domains": ["a.example"]}, "res": {"t": "res", "id": "m2", "ok": false, "error": "set_allowlist is gone: send set_scopes"}}
+}

@@ -59,6 +59,12 @@ export type UnitPartOptions = {
   sessionsComplete: () => boolean;
   /** The native link (part 2); stage 1b part 1 has none. */
   link?: LinkPort;
+  /** The agent extension's version (part 2: the receiver's hello, else the agent package that the start staged), or null. */
+  extensionVersion?: () => string | null;
+  /** After each `ready` (part 2: the end of the old owner's host, by note 7). */
+  onReady?: () => void;
+  /** Right before each stop of Chrome (part 2: the X pointer's playing path is killed). */
+  beforeStop?: () => void;
   activity?: Partial<Activity>;
   /** The unit's displays and programs (tests: also its processes, clock and spawn). */
   unit: Partial<UnitDeps> & Pick<UnitDeps, "displayFs" | "which">;
@@ -133,7 +139,7 @@ export class UnitPart implements ServicePart {
     return {
       state, ...STATE_TEXTS[state],
       chrome_kind: f?.kind ?? null, chrome_version: f?.version || null, chrome_pid: f ? this.unit.chromePid() : null,
-      extension_version: null, update: this.mover.updateState(),
+      extension_version: f ? this.extensionVersion() : null, update: this.mover.updateState(),
       last_stop: this.lastStop ? { ...this.lastStop, by: this.lastStop.by ? { ...this.lastStop.by } : null } : null,
     };
   }
@@ -148,9 +154,16 @@ export class UnitPart implements ServicePart {
     const key = `${id.pid}:${id.start}`;
     if (key === this.lastReady) return;
     this.lastReady = key;
-    this.emit({ t: "ev", ev: "ready", chrome_pid: this.unit.chromePid(), chrome_version: f.version || null, extension_version: null, endpoint: this.o.endpoint() });
+    this.emit({ t: "ev", ev: "ready", chrome_pid: this.unit.chromePid(), chrome_version: f.version || null, extension_version: this.extensionVersion(), endpoint: this.o.endpoint() });
     this.chromeChanged();
+    try { this.o.onReady?.(); } catch (e) { this.o.log(`unit: the step after ready failed (${(e as Error).name})`); }
   }
+
+  private extensionVersion(): string | null {
+    try { return this.o.extensionVersion?.() ?? null; } catch { return null; }
+  }
+
+  private beforeStop(): void { try { this.o.beforeStop?.(); } catch {} }
 
   /** One `chrome` event when the running Chrome's version or update state changed. */
   private chromeChanged(): void {
@@ -202,6 +215,7 @@ export class UnitPart implements ServicePart {
   async stopBrowser(by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a stop"))) return { error: NOT_OWNER };
     this.pendingStart = false;
+    this.beforeStop();
     const ran = await this.unit.stop();
     if (ran) this.stopped("stop", by ? { ...by } : null);
     return { data: {} };
@@ -214,6 +228,7 @@ export class UnitPart implements ServicePart {
     this.pendingStart = false;
     const p = reason === "receiver_missing" ? this.mover.probationFor() : null;
     if (p) { this.mover.revert(p, "no receiver confirmed the lists in 60 s"); return true; }
+    this.beforeStop();
     await this.unit.stop();
     this.stopped(reason, null);
     return true;
@@ -238,7 +253,7 @@ export class UnitPart implements ServicePart {
 
   /** browser.enabled false: stop Chrome and Xvfb; the record says `wanted: false` (an owner part; no event). */
   private turnOff(): Promise<void> {
-    return this.ownerPart("the stop of a browser that is turned off", async () => { await this.unit.stop(); });
+    return this.ownerPart("the stop of a browser that is turned off", async () => { this.beforeStop(); await this.unit.stop(); });
   }
 
   /** The start of a wanted Chrome with no `start` op (build note 8): at the first `config`, or in begin when that came first. */

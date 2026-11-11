@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentwatch sender: boxes</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body class="wide">
+  <h1>Boxes</h1>
+  <p class="note">A box is an agentwatch gateway. Add the address of its web viewer. Chrome asks you to allow this extension to talk to it.</p>
+  <ul id="boxes" class="rows"></ul>
+  <p id="none" class="note">No box yet.</p>
+  <form id="add-form">
+    <label>Web viewer address <input id="box-url" type="text" placeholder="box.example.com" autocomplete="off"></label>
+    <button type="submit">Add</button>
+  </form>
+  <p id="status" class="status" role="status"></p>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

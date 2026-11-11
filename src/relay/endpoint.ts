@@ -11,7 +11,7 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { WebSocketServer } from "ws";
 import { socketAlive } from "../proxy.ts";
-import { Bridge, MAX_REQUEST } from "./bridge.ts";
+import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck } from "./peer.ts";
 import { SCOPE, type Root } from "./scopes.ts";
@@ -24,7 +24,18 @@ export const FROM_PAGE = "A web page cannot connect to the agent browser.";
  * `windowPerPage`: one window per page (the model's default: Linux only). `peerCheck`: true runs the peer check with
  * its self-test (--peer-check); the tests give a gate of their own, with a fake reader.
  */
-export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate };
+export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate;
+  /**
+   * The service's in-process bridge (stage 1b part 2 of the self-contained agent browser, board ab-v16.94.9): with it the
+   * relay's model sends its requests to `transport.send` and takes the answers and the daemon's lines from the handlers
+   * that `transport.bind` gets, in place of the standard output and input lines; `input` and `output` are then unused.
+   */
+  transport?: RelayTransport };
+/** The calls between the model and the service's carrier: the same messages as the stdio lines of C10, as objects. */
+export type RelayTransport = {
+  send(line: string, msg: BridgeRequest): void;
+  bind(to: { answer(msg: { id?: unknown; ok?: unknown; data?: unknown; error?: unknown }): void; daemon(msg: unknown): void }): void;
+};
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null };
 
 /**
@@ -62,7 +73,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // The peer check's self-test runs before the endpoint socket listens (C11). A failed one fails closed: the relay
   // still serves, and each upgrade gets the 503 of step 3.
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
-  const bridge = new Bridge((line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
+  const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
   const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null,
     onRoots: (roots) => gate?.setRoots(roots) });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
@@ -117,6 +128,14 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     o.log("relay: stopped");
   })();
 
+  if (o.transport) {
+    // In the service: the carrier calls the model directly; the relay ends at its stop.
+    o.transport.bind({ answer: (msg) => bridge.answer(msg), daemon: (msg) => { if (msg && typeof msg === "object") model.onDaemon(msg); } });
+    o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"}; the bridge in this process)`);
+    let ended!: () => void;
+    const closed = new Promise<void>((resolve) => { ended = resolve; });
+    return { model, closed, stop: () => stop().then(() => ended()), peer: gate };
+  }
   const lines = createInterface({ input: o.input, crlfDelay: Infinity });
   lines.on("line", (line) => {
     if (!line.trim()) return;

@@ -45,8 +45,8 @@ export const FAKE_STATE = {
   mcp: { state: "none", address: null },
   agent_door: "/run/user/1000/agent-browser/cdp.sock",
   sender: {
-    id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.3.6",
-    package: { name: "agentwatch-sender-0.3.6.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
+    id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.2.0",
+    package: { name: "agentwatch-sender-0.2.0.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
   },
 };
 /** The refused line of `--refuse`: the vectors' line of rule 2. */

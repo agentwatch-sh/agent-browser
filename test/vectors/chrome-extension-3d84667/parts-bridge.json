@@ -1,0 +1,45 @@
+{
+  "part_bytes": 10,
+  "ch": "bridge",
+  "id": "v2",
+  "request": {
+    "t": "req",
+    "id": "v2",
+    "op": "call",
+    "n": 7
+  },
+  "parts": [
+    {
+      "t": "part",
+      "ch": "bridge",
+      "id": "v2",
+      "seq": 0,
+      "n": 4,
+      "b64": "eyJ0IjoicmVxIg=="
+    },
+    {
+      "t": "part",
+      "ch": "bridge",
+      "id": "v2",
+      "seq": 1,
+      "n": 4,
+      "b64": "LCJpZCI6InYyIg=="
+    },
+    {
+      "t": "part",
+      "ch": "bridge",
+      "id": "v2",
+      "seq": 2,
+      "n": 4,
+      "b64": "LCJvcCI6ImNhbA=="
+    },
+    {
+      "t": "part",
+      "ch": "bridge",
+      "id": "v2",
+      "seq": 3,
+      "n": 4,
+      "b64": "bCIsIm4iOjd9"
+    }
+  ]
+}

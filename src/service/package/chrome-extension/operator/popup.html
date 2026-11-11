@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentwatch sender</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Send this site</h1>
+  <p id="site-note" class="note"></p>
+  <label>Site <select id="domain"></select></label>
+  <label>Box <select id="box"></select></label>
+  <p id="no-box" class="note" hidden>No box yet. <button type="button" id="add-box">Add a box</button></p>
+  <label>User <select id="user"></select></label>
+  <p id="user-note" class="note"></p>
+  <button type="button" id="send" disabled>Send</button>
+  <p id="status" class="status" role="status"></p>
+  <p class="note">The site sees one sign-in from two places and may ask you to sign in again.</p>
+  <h2>Sites this extension can read</h2>
+  <p id="no-sites" class="note">None.</p>
+  <ul id="sites" class="rows"></ul>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -165,6 +165,13 @@ export type UnitDeps = {
   env?: Record<string, string | undefined>;
   wall?: () => number;
   random?: (n: number) => Buffer;
+  /**
+   * The agent package (stage 1b part 2, board ab-v16.94.9; package/crx.ts): before each start of a Google Chrome copy,
+   * check the pinned CRX, stage it and write the copy's external extensions file; returns the staged CRX's version.
+   * `lastFile`: the version of the copy's extensions file of an earlier start, only when its staged CRX still has the
+   * pinned SHA-256 (review-110 B1); else null, and Chrome then starts with no agent package.
+   */
+  prepare?: { run: (copy: ChromeCopy) => string; lastFile: (copy: ChromeCopy) => string | null };
 };
 
 export class ChromeUnit {
@@ -181,6 +188,8 @@ export class ChromeUnit {
   private xvfb: Child | null = null;
   private chrome: Child | null = null;
   private chromeInfo: { kind: string; version: string } | null = null;
+  /** The version of the agent package that the last start's prepare staged; null before one, for a Chromium, or after a failed one. */
+  private staged: string | null = null;
   private chromeBin = "";
   /** The newest version that the last start allowed (the way back after a failed move); the supervisor keeps it. */
   private upto: string | null = null;
@@ -410,6 +419,8 @@ export class ChromeUnit {
 
   /** What this start runs. */
   private plan(cfg: UnitConfig, fetch: boolean): Plan {
+    // Each start sets its own staged package: a Chromium of chrome_bin has none (review-110b).
+    this.staged = null;
     const chromium = (bin: string): Plan => {
       const found = this.d.which(bin);
       if (!found) throw new StartError(`Chromium not found: ${bin}`);
@@ -420,7 +431,7 @@ export class ChromeUnit {
     // The newest copy (never an install's return) whose move did not fail, not newer than `upto` (the way back).
     let copy: ChromeCopy | null = refused.size || this.upto !== null ? this.d.tools.newest(refused, this.upto) : this.d.tools.newest();
     if (!copy && this.upto !== null) copy = this.d.tools.newest(refused);
-    if (copy) return { binary: copy.binary, kind: KIND_GOOGLE, version: copy.version, recordedBin: copy.binary };
+    if (copy) return this.preparePlan(copy, fetch);
     if (refused.size && this.d.tools.newest()) throw new StartError(chromeFailed("every Google Chrome copy in the tools folder failed to start after an update; the next check installs a newer release"));
     if (!fetch) {
       // The supervisor never installs: it keeps a recorded Chromium until a start installs Google Chrome.
@@ -432,6 +443,45 @@ export class ChromeUnit {
     if (why) throw new StartError(chromeFailed(why));
     if (this.chromeInstalling()) throw new StartError(CHROME_INSTALLING);
     throw new StartError(chromeFailed("the install left no copy in the tools folder"));
+  }
+
+  /**
+   * A Google Chrome copy's plan: the agent package first (prepare), so Chrome installs it at its start. A start fails when
+   * the package cannot be checked or its file written; the supervisor then starts the copy with the file of its last
+   * start, and with no such file it starts the recorded Chromium, else it fails (agentwatch's _google_plan).
+   */
+  private preparePlan(copy: ChromeCopy, fetch: boolean): Plan {
+    const plan: Plan = { binary: copy.binary, kind: KIND_GOOGLE, version: copy.version, recordedBin: copy.binary };
+    const p = this.d.prepare;
+    this.staged = null;
+    if (!p) return plan;
+    try { this.staged = p.run(copy); return plan; }
+    catch (e) {
+      // A file error's message holds a path of the tools folder: the log takes its code only (review-110 note 3).
+      const code = (e as NodeJS.ErrnoException).code, reason = typeof code === "string" ? code : (e as Error).message || (e as Error).name;
+      if (fetch) throw new StartError(chromeFailed(reason));
+      const last = p.lastFile(copy);
+      if (last === null) {
+        const recorded = this.recordedChromium();
+        if (!recorded) throw new StartError(chromeFailed(reason));
+        this.d.log(`unit: could not write the agent package for Google Chrome ${copy.version} (${reason.slice(0, 200)}); starting the recorded Chromium again`);
+        const found = this.d.which(recorded);
+        if (!found) throw new StartError(`Chromium not found: ${recorded}`);
+        return { binary: found, kind: KIND_CHROMIUM, version: "", recordedBin: found };
+      }
+      this.staged = last;
+      this.d.log(`unit: could not write the agent package (${reason.slice(0, 200)}); Google Chrome starts with the package file of its last start`);
+      return plan;
+    }
+  }
+
+  /** The version of the agent package that the running Chrome's start staged, or null. */
+  stagedPackage(): string | null { return this.running() ? this.staged : null; }
+
+  /** The unit's own Xvfb while the unit runs: its display, its X auth file and its size (null while it is not known). */
+  xDisplay(): { display: number; xauth: string; size: [number, number] | null } | null {
+    if (!this.running() || this.display === null) return null;
+    return { display: this.display, xauth: this.d.paths.xauth, size: this.displaySize ? [this.displaySize[0], this.displaySize[1]] : null };
   }
 
   chromeInstalling(): boolean { return this.installJob !== null && !this.installJob.done; }

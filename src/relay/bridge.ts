@@ -35,7 +35,9 @@ const TAB_OPS = new Set(["debugger.attach", "debugger.detach", "debugger.sendCom
 /** The daemon's own ops (C10): the relay's own timer ends their wait, including time in the queue. */
 const isDaemonOp = (op: string) => op.startsWith("daemon.");
 
-type Request = { id: string; line: string; key: string; wait: number; resolve: (v: any) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout };
+/** One request as it goes out (C10): the relay writes its line; the service's in-process carrier also takes the object. */
+export type BridgeRequest = { t: "req"; id: string; op: string; args: unknown[]; wait: number };
+type Request = { id: string; line: string; msg: BridgeRequest; key: string; wait: number; resolve: (v: any) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout };
 
 export class Bridge {
   // A random prefix per relay: a late answer to a request of an earlier relay never matches a new request.
@@ -44,10 +46,11 @@ export class Bridge {
   private readonly pending = new Map<string, Request>();
   private readonly inFlight = new Map<string, number>();
   private readonly queued = new Map<string, Request[]>();
-  private readonly write: (line: string) => void;
+  private readonly write: (line: string, msg: BridgeRequest) => void;
   private readonly maxRequest: number;
 
-  constructor(write: (line: string) => void, opts: { maxRequest?: number } = {}) {
+  /** `write` sends one request: the relay writes `line` on its standard output; the service's carrier takes `msg` too. */
+  constructor(write: (line: string, msg: BridgeRequest) => void, opts: { maxRequest?: number } = {}) {
     this.write = write;
     this.maxRequest = opts.maxRequest ?? MAX_REQUEST;
   }
@@ -61,12 +64,13 @@ export class Bridge {
     const daemon = isDaemonOp(op);
     const wait = o.wait ?? (op === "daemon.blocked" ? BLOCKED_WAIT_MS : daemon ? POINTER_READ_WAIT_MS : op === "debugger.sendCommand" ? WAIT_MAX_MS : WAIT_DEFAULT_MS);
     const id = `${this.prefix}-${this.next++}`;
-    const line = JSON.stringify({ t: "req", id, op, args, wait });
+    const msg: BridgeRequest = { t: "req", id, op, args, wait };
+    const line = JSON.stringify(msg);
     if (Buffer.byteLength(line) > this.maxRequest) return Promise.reject(new BridgeError(REQUEST_TOO_LARGE, wait));
     const tab = op === "debugger.sendCommand" ? (args[0] as { tabId?: number } | undefined)?.tabId : args[0];
     const key = op === "daemon.blocked" ? "blocked" : daemon ? "pointer" : TAB_OPS.has(op) ? `tab ${tab}` : "shared";
     return new Promise<T>((resolve, reject) => {
-      const req: Request = { id, line, key, wait, resolve, reject };
+      const req: Request = { id, line, msg, key, wait, resolve, reject };
       if (daemon) req.timer = setTimeout(() => this.expire(req), wait);
       // At most MAX_IN_FLIGHT_PER_TAB requests per key; the next ones wait here, in order, so a long wait on one tab never keeps another back.
       if ((this.inFlight.get(key) ?? 0) < MAX_IN_FLIGHT_PER_TAB) this.send(req);
@@ -81,7 +85,7 @@ export class Bridge {
   private send(req: Request): void {
     this.inFlight.set(req.key, (this.inFlight.get(req.key) ?? 0) + 1);
     this.pending.set(req.id, req);
-    this.write(req.line);
+    this.write(req.line, req.msg);
   }
 
   /** The relay's own timer of a daemon op: the call ends, and its answer, if it comes, finds no request. */

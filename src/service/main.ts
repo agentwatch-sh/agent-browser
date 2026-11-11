@@ -31,6 +31,9 @@ export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS 
 
 type Values = Record<string, string | boolean | undefined>;
 
+/** The link socket of the native link (stage 1b part 2): `link.sock` in the folder of control.sock. */
+export const linkSocketFor = (controlDoor: string) => join(dirname(controlDoor), "link.sock");
+
 /** Resolves at the first SIGTERM or SIGINT. */
 const signalled = () => new Promise<void>((r) => { process.once("SIGTERM", () => r()); process.once("SIGINT", () => r()); });
 
@@ -143,6 +146,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
         tools: new GoogleChromeTools({ tools: paths.tools, source, log }),
         part: display !== null ? { unit: { displays: { first: display, last: display } } } : undefined,
       },
+      // The native link (stage 1b part 2): link.sock next to control.sock, in the service's run folder.
+      link: { socket: linkSocketFor(resolve(controlDoor)) },
     });
   } catch (e) {
     if (e instanceof NotOwnerAtStart) { log(`service: ${e.message}`); return 1; }
