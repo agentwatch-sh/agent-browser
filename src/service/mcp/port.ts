@@ -190,7 +190,8 @@ export class McpPort {
     const conn = this.bySocket.get(req.socket as Socket);
     if (!conn) { req.socket.destroy(); return; }
     // After a refusal, a later request on the connection (a pipelined one) is dropped: no step, no handler, no answer.
-    if (conn.refused) { req.socket.destroy(); return; }
+    // The refusal's `Connection: close` ends the socket after its own answer, which goes out whole.
+    if (conn.refused) { req.resume(); return; }
     this.untime(conn);
     // A body that pauses for the idle time closes the connection; while the service works on the request, no timeout
     // runs; after the answer the next request's header has its time.
