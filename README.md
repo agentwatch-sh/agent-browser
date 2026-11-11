@@ -2361,11 +2361,15 @@ There is no CI workflow; the tests run locally.
 
 ## Supply chain
 
-The runtime dependencies are `ws` (8.21.0, the version vedlo vetted and ships) and `ghost-cursor`
+The runtime dependencies are `ws` (8.21.0, the version vedlo vetted and ships), `ghost-cursor`
 (1.4.2, the cursor paths of `record`; it brings `bezier-js` 6.1.4, `debug` 4.4.3, `ms` 2.1.3 and
-`@types/bezier-js` 4.1.3). All are pinned exactly in `package.json` and `package-lock.json`, and
-`test/package.test.ts` fails on any other package. ghost-cursor is loaded only when a recording runs.
-See `docs/supply-chain/ghost-cursor-1.4.2.md` for its vetting. `ignore-scripts=true` stays on. The
+`@types/bezier-js` 4.1.3), and the Playwright MCP of the service: `@playwright/mcp` 0.0.83 with the
+`playwright` and `playwright-core` (1.64.0-alpha-1790635538000) that it names. All are pinned exactly in
+`package.json` and `package-lock.json`, and `test/package.test.ts` fails on any other package.
+ghost-cursor is loaded only when a recording runs; the Playwright MCP only in the service's MCP worker
+of a scope, at its first MCP session, and it never launches or downloads a browser (it connects to the
+agent door over CDP). See `docs/supply-chain/ghost-cursor-1.4.2.md` and
+`docs/supply-chain/playwright-mcp-0.0.83.md` for their vetting. `ignore-scripts=true` stays on. The
 Python adapter has no dependencies. Vet any new dependency the way vedlo's `docs/supply-chain.md` says;
 prefer none.
 

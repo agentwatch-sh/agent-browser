@@ -15,6 +15,7 @@ import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck } from "./peer.ts";
 import { SCOPE, type Root } from "./scopes.ts";
+import { ticketOf } from "../service/mcp/ticket.ts";
 
 export { SCOPE };
 export const NOT_FOUND = "Not found. Connect a CDP client to /devtools/browser/<scope>.";
@@ -30,7 +31,15 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * relay's model sends its requests to `transport.send` and takes the answers and the daemon's lines from the handlers
    * that `transport.bind` gets, in place of the standard output and input lines; `input` and `output` are then unused.
    */
-  transport?: RelayTransport };
+  transport?: RelayTransport;
+  /**
+   * The service's MCP tickets (stage 1d part 2b of the self-contained agent browser, board ab-v16.94.5): a connection
+   * from the service's own pid (`pid`) is admitted only with a live one-time ticket of its scope in the query, in place
+   * of the walk (C11, the MCP inside the service); a ticket from any other pid admits nothing.
+   */
+  tickets?: RelayTickets };
+/** The ticket check of the service's MCP connections (src/service/mcp/ticket.ts). */
+export type RelayTickets = { readonly pid: number; take(ticket: string, scope: string, peerPid: number): boolean };
 /** The calls between the model and the service's carrier: the same messages as the stdio lines of C10, as objects. */
 export type RelayTransport = {
   send(line: string, msg: BridgeRequest): void;
@@ -44,9 +53,11 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
  * failed self-test, else the peer's 403 of a peer that the relay could not read at the accept; (4) the "not ready"
  * 503s; with the peer check (5) the no-list 503 of a scope that the last line does not name, (6) the session check's
  * 403, (7) the no-list 503 of a named scope with no list; without it, the no-list 503 of a scope that the last line
- * gives no list. A browser's WebSocket always carries an Origin header.
+ * gives no list. A browser's WebSocket always carries an Origin header. With `tickets` (the service), a connection from
+ * the service's own pid passes step 6 only with a live ticket of its scope (C11, the MCP inside the service), and no
+ * root admits it; each ticket in a request is gone after this check.
  */
-function admit(req: IncomingMessage, model: Model, gate: PeerGate | null): { scope: string; root: Root | null } | [number, string] {
+function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets): { scope: string; root: Root | null } | [number, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
   const m = /^\/devtools\/browser\/([^/]*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
   if (req.method !== "GET" || !m || !SCOPE.test(m[1])) return [404, NOT_FOUND];
@@ -61,6 +72,14 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null): { sco
   const why = model.notReady();
   if (why) return [503, why];
   if (!model.named(scope)) return [503, NOT_READY.noList];
+  if (tickets) {
+    const ticket = ticketOf(req.url ?? "");
+    const ticketOk = ticket !== null && tickets.take(ticket, scope, peer.pid);
+    if (peer.pid === tickets.pid) {
+      if (!ticketOk) return [403, sessionRefusal(peer.pid)];
+      return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null };
+    }
+  }
   const root = gate.check(scope, peer);
   if (!root) return [403, sessionRefusal(peer.pid)];
   return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root };
@@ -80,7 +99,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
 
   const http = createServer((req, res) => {
     // Only the WebSocket upgrade gets a connection.
-    const a = admit(req, model, gate);
+    const a = admit(req, model, gate, o.tickets);
     const [status, body] = Array.isArray(a) ? a : [404, NOT_FOUND];
     res.writeHead(status, { "Content-Type": "text/plain" }).end(body);
   });
@@ -89,7 +108,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // The peer read, at each accept, before the relay reads the request (C11, step 3).
   if (gate) http.on("connection", (socket) => gate.accept(socket));
   http.on("upgrade", (req, socket, head) => {
-    const a = admit(req, model, gate);
+    const a = admit(req, model, gate, o.tickets);
     // The check runs once, at the upgrade: the peer's pidfd closes now, in every path.
     gate?.release(socket);
     if (Array.isArray(a)) {

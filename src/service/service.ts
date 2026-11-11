@@ -11,17 +11,22 @@
 // (package/) and the model in this process, the X pointer, and the op sender. The connection tokens (board
 // ab-v16.94.5, part 1; the token design, board ab-v16.94.10): the door's shape step takes set_sessions' mcp_token (control.ts), the service keeps
 // each session's fingerprint in memory only, and status says whether a session has one; the hello gets the feature
-// mcp_token with the token check of the MCP path (stage 1d).
+// mcp_token with the token check of the MCP path (stage 1d). The MCP path (board ab-v16.94.5, part 2b; mcp/part.ts): off by
+// default; with `mcp` (the socket of agent-browser-mcp.socket, or --test's --test-mcp-port) the service opens the MCP port
+// before the control door (so the hello's features are fixed before the first hello), the agent door takes the MCP's
+// one-time tickets, and status gives the port's state.
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NOT_READY } from "../relay/model.ts";
 import { PeerGate } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 import { Carrier } from "./link/carrier.ts";
+import { McpPart, type McpPartOptions } from "./mcp/part.ts";
 import { LinkReceiverPort, NativeLink, type LinkPeerCheck } from "./link/link.ts";
 import { shimArgv, writeHostFiles } from "./link/manifest.ts";
 import { endOldHosts, loadPidfds, type Pidfds } from "./link/old-host.ts";
@@ -125,7 +130,8 @@ type Session = { scope: string; repo: string | null; roots: { pid: number; start
 
 /** The ops of stage 1a, with the service's state in memory. */
 export class Stage1a implements Handler {
-  readonly hello: Record<string, unknown>;
+  private readonly helloOverride: Record<string, unknown> | undefined;
+  private readonly pkg: { version: string; commit: string | null };
   private readonly agentDoor: { url(scope: string): string; state(): EndpointState };
   /** agentwatch's browser.* keys of the last `config` (stage 1a keeps them: no Chrome uses them yet). */
   config: Record<string, unknown> | null = null;
@@ -138,9 +144,14 @@ export class Stage1a implements Handler {
 
   constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[] }) {
     this.agentDoor = o.agentDoor;
-    const { version, commit } = packageInfo();
-    this.hello = o.hello ?? serviceHello(version, commit, []);
+    this.pkg = packageInfo();
+    this.helloOverride = o.hello;
     this.parts = o.parts ?? [];
+  }
+
+  /** The hello (C12), read at each connection: each part's features now (the MCP path's `mcp_token` while its port runs). */
+  get hello(): Record<string, unknown> {
+    return this.helloOverride ?? serviceHello(this.pkg.version, this.pkg.commit, this.parts.flatMap((p) => p.features?.() ?? []));
   }
 
   private partOf(op: string): ServicePart | undefined { return this.parts.find((p) => Object.hasOwn(p.ops, op)); }
@@ -235,6 +246,11 @@ export type ServiceOptions = {
    * and the test seams (the pidfd calls; the shim's Node and bin; no X pointer).
    */
   link?: { socket: string; pidfds?: Pidfds | { failed: string }; shim?: { node?: string; bin?: string }; xdotool?: string | null; agentPackage?: string; peer?: LinkPeerCheck };
+  /**
+   * The MCP path (stage 1d part 2b), with the lists (its state folder): the MCP port's socket (the fd of
+   * agent-browser-mcp.socket, or --test's port on 127.0.0.1) and the test seams. Without it, no MCP port (C11: off by default).
+   */
+  mcp?: { listen: McpPartOptions["listen"] } & Partial<Omit<McpPartOptions, "listen" | "stateFolder" | "log">>;
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -247,7 +263,7 @@ export type UnitOptions = {
   part?: Partial<Omit<UnitPartOptions, "unit">> & { unit?: Partial<UnitDeps> };
 };
 /** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
-export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; lost: Promise<string>; stop: () => Promise<void> };
+export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void> };
 
 /** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
 export class NotOwnerAtStart extends Error {}
@@ -308,14 +324,32 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     },
   }) : null;
   if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log });
-  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), senderPart()];
+  // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
+  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, stateFolder: o.lists.stateFolder, log: o.log }) : null;
+  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart()];
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
   const unit = o.daemonUnit ?? "agentwatch.service";
-  // The control door opens first, before the agent door and before any Chrome start (the design's build note 8).
-  const control = await ControlDoor.open({
-    path: o.controlDoor, handler: state, log: o.log,
-    admit: daemonAdmission({ reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (() => systemdMainPid(unit)), commandFile: o.daemonCommand }),
-  });
+  // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
+  // before the first hello (C12). Its MCP connects back to the agent door with a ticket; until the agent door opens, step
+  // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
+  if (mcp) {
+    const model = () => (agent as (AgentDoor & { relay?: { model: { notReady(): string | null; sitesOf(scope: string): number | null } } }) | null)?.relay?.model ?? null;
+    await mcp.open({
+      url: (scope) => agentDoorUrl(o.agentDoor, scope),
+      readiness: (scope) => {
+        const m = model();
+        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
+      },
+    });
+  }
+  // The control door opens next, before the agent door and before any Chrome start (the design's build note 8).
+  let control: ControlDoor;
+  try {
+    control = await ControlDoor.open({
+      path: o.controlDoor, handler: state, log: o.log,
+      admit: daemonAdmission({ reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (() => systemdMainPid(unit)), commandFile: o.daemonCommand }),
+    });
+  } catch (e) { await mcp?.close(); throw e; }
   // The owner rule at the start: a service runs only to own (the design, section 13.2). The agent door is an owner part.
   if (owner && !(await owner.check("the service's start"))) {
     state.stopParts();
@@ -329,7 +363,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
       await link.start();
     }
-    agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined });
+    agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets });
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;
   // C10: the carrier's deadlines, each second.
@@ -339,9 +373,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   o.log(`service: ready (pid ${process.pid}; ${part ? `the Chrome unit runs${link ? ", with the native link" : ""}` : "stage 1a: no Chrome"})`);
   let stopping: Promise<void> | undefined;
   return {
-    control, agent: door, state, part, link, carrier, lost: owner ? owner.lost : new Promise<string>(() => {}),
+    control, agent: door, state, part, link, carrier, mcp, lost: owner ? owner.lost : new Promise<string>(() => {}),
     stop: () => stopping ??= (async () => {
       state.stopParts();
+      await mcp?.close();
       if (expire) clearInterval(expire);
       await part?.stop();
       await control.stop();
