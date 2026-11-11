@@ -36,7 +36,8 @@ const LATER_METHODS = new Set(["DOM.scrollIntoViewIfNeeded"]);
 
 const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2;
 const fits = (v: number, want: unknown) => (isRange(want) ? v >= want[0] - 1e-9 && v <= want[1] + 1e-9 : v === want);
-const inBox = (p: { x: number; y: number }, b: { x: number; y: number; width: number; height: number }) => p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
+/** The hit test of a pixel: the right and the bottom edges of a box are outside it. */
+const inBox = (p: { x: number; y: number }, b: { x: number; y: number; width: number; height: number }) => p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
 
 /** Check a run of a vector against its `out` and `answers` (the vectors' format). */
 function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number) {
@@ -597,6 +598,19 @@ test("a click with a modifier when the pointer is on the target already (no path
     const ev = events(r.tab), down = ev.find((s) => s.method === "Input.dispatchKeyEvent")!, press = ev.find((s) => s.params.type === "mousePressed")!;
     assert.equal(moves(r.tab).length, 0, "no path");
     assert.ok(press.t - down.t >= 40 && press.t - down.t <= 120, `seed ${seed}: ${press.t - down.t} ms after the modifier's press`);
+  }
+});
+
+test("the hover: a sample on the right or the bottom edge of the target's box is outside it (the hit test of that pixel finds another element)", async () => {
+  // Paths that enter #b (60..140 x 220..260) from the right and from below: over many seeds, the first sample after the
+  // setup is always inside the pixels of the box, never on its right or bottom edge.
+  for (let seed = 1; seed <= 40; seed++) {
+    const v = vec("hover");
+    v.page.last = seed % 2 ? { x: 900, y: 240 } : { x: 100, y: 700 };
+    const r = await runVector(v, { seed });
+    const setup = r.tab.sent.find((s) => s.pass === 1)!, first = moves(r.tab).find((s) => s.t > setup.t);
+    if (!first) continue;
+    assert.ok(first.params.x < 140 && first.params.y < 260 && first.params.x >= 60 && first.params.y >= 220, `seed ${seed}: ${first.params.x},${first.params.y}`);
   }
 });
 

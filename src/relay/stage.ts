@@ -279,7 +279,8 @@ const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
 const TIMEOUT = Symbol("timeout");
 const same = (a: Pt | null | undefined, b: Pt | null | undefined) => !!a && !!b && a.x === b.x && a.y === b.y;
 const near = (a: Pt, b: Pt, d: number) => Math.hypot(a.x - b.x, a.y - b.y) <= d;
-const inside = (p: Pt, r: Rect) => p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
+/** A point inside a box (the hit test of a pixel: the right and the bottom edges are outside, as for getBoundingClientRect). */
+const inside = (p: Pt, r: Rect) => p.x >= r.x0 && p.x < r.x1 && p.y >= r.y0 && p.y < r.y1;
 /** Whether the segment a-b meets the rectangle (Liang-Barsky). */
 export function crosses(a: Pt, b: Pt, r: Rect): boolean {
   let t0 = 0, t1 = 1;
