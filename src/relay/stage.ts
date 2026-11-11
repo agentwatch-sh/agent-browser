@@ -181,6 +181,8 @@ export type StageOptions = {
   clock?: StageClock;
   /** The epoch time (ms) of an event's send (the player's stamp). */
   stamp?: () => number;
+  /** A log line for each hit-target setup and each end of an action (counts and times, never a point): the live rows. */
+  trace?: boolean;
 };
 
 // ------------------------------------------------------------------ the state
@@ -207,8 +209,10 @@ class Action {
   limit: (() => void) | null = null;
   readonly latency: number;
   readonly release: () => void;
-  constructor(release: () => void, latency: number) {
-    this.release = release; this.latency = latency;
+  readonly started: number;
+  events = 0;
+  constructor(release: () => void, latency: number, started: number) {
+    this.release = release; this.latency = latency; this.started = started;
     this.endSignal = new Promise((r) => (this.fireEnd = r));
   }
   fire(): void { this.fireEnd(); }
@@ -412,7 +416,7 @@ export class Stage {
   /** The tab is gone or detached: its action ends and the lock is free. */
   drop(id: number): void {
     const st = this.tabs.get(id);
-    if (st?.action) this.close(st);
+    if (st?.action) this.close(st, id);
     this.tabs.delete(id);
     this.players.delete(id);
   }
@@ -424,7 +428,7 @@ export class Stage {
     if (st.action && !st.action.over) return st.action;
     const release = await this.lock.acquire();
     const dev = page.person.params.device;
-    const a = new Action(release, uniform(this.o.random, dev.latencyMs[0], dev.latencyMs[1]));
+    const a = new Action(release, uniform(this.o.random, dev.latencyMs[0], dev.latencyMs[1]), this.clock.now());
     st.action = a;
     a.limit = this.clock.timer(STAGE_ACTION_MAX_MS, () => {
       if (st.action !== a || a.over) return;
@@ -440,7 +444,7 @@ export class Stage {
     const a = st.action;
     if (!a) return;
     if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.finish(page, st, a.ended !== "limit" && !a.failed); return; }
-    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st);
+    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
   }
 
   /** The hover's rest is kept for Playwright's move: with none in HOVER_WAIT_MS, it goes, and an action with nothing else frees the lock. */
@@ -456,10 +460,11 @@ export class Stage {
   }
   private dropRest(st: TabState): void { st.rest = null; st.restTimer?.(); st.restTimer = null; }
 
-  private close(st: TabState): void {
+  private close(st: TabState, id?: number): void {
     const a = st.action;
     if (!a) return;
     st.action = null;
+    if (this.o.trace && id !== undefined) this.o.log(`relay: the input stage: tab ${id}: an action of ${a.events} events in ${Math.round(this.clock.now() - a.started)} ms${a.ended ? ` (ended: ${a.ended})` : a.failed ? " (failed)" : ""}`);
     this.dropRest(st);
     a.watchdog?.(); a.limit?.();
     a.release();
@@ -485,7 +490,7 @@ export class Stage {
   /** After an ended plan's client calls: the releases of what it holds (at a dialog or STAGE_EVENT_WAIT_MS), and the lock. */
   private finish(page: StagePage, st: TabState, releases: boolean): void {
     if (releases) this.releaseHeld(page, st);
-    this.close(st);
+    this.close(st, page.id);
   }
 
   /** The release of each button and key that the stage's events hold, at once, with no wait for the answers. */
@@ -519,7 +524,7 @@ export class Stage {
     this.dropRest(st); st.spread = null;
     this.releaseHeld(page, st);
     e.answer({ error: body });
-    this.close(st);
+    this.close(st, page.id);
   }
 
   // ---------------------------------------------------------------- sending
@@ -541,6 +546,7 @@ export class Stage {
       if (st.lastWasMove) st.lastMoveAt = this.clock.now();
     }
     const a = st.action;
+    if (a) a.events++;
     if (a && !a.over) {
       const rec = { t: this.clock.now() };
       a.unanswered.add(rec);
@@ -886,6 +892,7 @@ export class Stage {
       if (action === "hover" && !st.plain) await this.hoverBefore(page, st, e, node, hit);
     }
     this.count("setups");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a setup of ${action || "?"}${trial ? " (trial)" : ""}, ${st.recov.n} recoveries of its node${st.plain ? ", plain" : ""}`);
     await page.pass(e.child, e.method, e.params, (body: any) => {
       const r = body?.result?.result;
       if (r?.type === "string") { st.miss = true; this.count("setupMisses"); }

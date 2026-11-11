@@ -478,6 +478,33 @@ test("the miss watch and the recovery: a miss marks the tab; at the next setup t
   assert.ok(r.logs.some((l) => /a recovery in tab 7/.test(l)));
 });
 
+test("the miss watch at the check's stop: a stop whose answer is not \"done\" marks the tab, and the next setup of the node gets the recovery", async () => {
+  const m = menuRun();
+  // Attempt 1: the setup passes (the panel is closed), the click's press hits the opened panel (the stop's answer is a miss).
+  const calls = [setupCall("7.3.10", "mouse", { x: 640, y: 320 }), { after: 1, ...mouse("mouseMoved", 640, 320) }, { after: 1, ...mouse("mousePressed", 640, 320) },
+    { after: 1, ...mouse("mouseReleased", 640, 320) }, { ...stopCall(), after: 4 }, { ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }), after: 5 }];
+  m.v.in = calls.map((c, i) => ({ id: i + 1, ...(i === 0 ? { at: 0 } : {}), ...c }));
+  let first = true;
+  const r = await runVector(m.v, { tab: (t) => {
+    const h = m.hook(t);
+    t.hook = (s) => {
+      const p = s.params as any;
+      if (s.pass === 1) { first = false; return { result: { type: "object", objectId: "7.3.20" } }; }
+      if (s.pass === 5) return { result: { type: "string", value: "<div class=panel> intercepts pointer events" } };
+      if (first) return undefined;
+      return h(s) ?? (p?.functionDeclaration ? undefined : undefined);
+    };
+  } });
+  assert.equal(r.stage.counts.stopMisses, 1, "the stop's miss marks the tab");
+  assert.equal(r.stage.counts.recoveries, 1, "the recovery at the next setup");
+});
+
+test("a hold counts from the press's send: Chrome answers the press after 150 ms, and the release goes 60 to 180 ms after the press's send", async () => {
+  const r = await runVector(vec("mouse-click"), { tab: (t) => { t.hook = (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mousePressed" ? t.clock.sleep(150).then(() => ({})) : undefined); } });
+  const ev = events(r.tab), press = ev.find((s) => s.params.type === "mousePressed")!, rel = ev.find((s) => s.params.type === "mouseReleased")!;
+  assert.ok(rel.t - press.t >= Math.max(F.holdMs[0], 150) && rel.t - press.t <= F.holdMs[1], `the release ${rel.t - press.t} ms after the press's send`);
+});
+
 test("the way around: a path whose straight way crosses the kept box goes through a corner of the wider box, as two paths, and never enters the box", () => {
   const box = { x0: 400, y0: 200, x1: 600, y1: 260 };
   assert.ok(crosses({ x: 500, y: 100 }, { x: 500, y: 400 }, box));

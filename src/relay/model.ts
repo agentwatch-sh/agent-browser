@@ -278,7 +278,7 @@ export class Model {
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
     this.person = drawPerson(paramsFor("linux"), this.random);
-    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", ...(opts.stageClock ? { clock: opts.stageClock } : {}) }) : null;
+    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}) }) : null;
     if (this.stage) log("relay: the input stage is on (the build switch: for tests and the live rows only)");
   }
 

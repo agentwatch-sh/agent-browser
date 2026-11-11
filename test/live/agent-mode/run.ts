@@ -101,6 +101,8 @@ import { shotSite, shotFullSizeChecks } from "../shot-full-size.ts";
 import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from "./external.ts";
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
+import { stageCases } from "./stage-live.ts";
+import { STAGE_TEST_ENV } from "../../../src/relay/stage.ts";
 import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -141,6 +143,9 @@ if (EXTERNAL && CASES.includes("downloads")) { process.stderr.write("the downloa
 if (EXTERNAL && CASES.includes("shot-full-size")) { process.stderr.write("the shot-full-size group uses own mode only; external mode is refused\n"); process.exit(2); }
 const PEER = CASES.includes("peer");
 if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
+/** The group stage (board ab-t30.9) turns the input stage on in the relay (its build switch's door for the live rows), so it runs alone. */
+const STAGE = CASES.includes("stage");
+if (STAGE && (CASES.length > 1 || EXTERNAL)) { process.stderr.write("the group stage runs alone and in the own mode: CASES=stage\n"); process.exit(2); }
 /** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
 const OWN_RUN = !process.env.RUN;
 /** The own mode's relay socket is in RUN, and the client URL must keep its path (external.ts, wsPathKept). */
@@ -181,7 +186,8 @@ const A = "http://a.localhost:8781", B = "http://b.localhost:8781";
 const OFF_LIST = (host: string) => new RegExp(`Not allowed: ${host.replace(/\./g, "\\.")} is not on the allowlist`);
 /** The stand-in daemon's lists: list a is the default (every scope that `scopes` does not name), list b for the group `scopes`. */
 const SCOPES = PEER ? { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scopes: { pa: "a", pb: "b" } as Record<string, string | null>, default: null }
-  : { lists: { a: ["a.localhost"], b: ["b.localhost"] }, scopes: { "sc-b": "b", "sc-b2": "b", "ab-b": "b", "mcp-b": "b" } as Record<string, string | null>, default: "a" };
+  : { lists: { a: ["a.localhost"], b: ["b.localhost"], ...(STAGE ? { st: ["a.localhost", "b.localhost"] } : {}) },
+    scopes: { "sc-b": "b", "sc-b2": "b", "ab-b": "b", "mcp-b": "b", ...(STAGE ? { stage: "st" } : {}) } as Record<string, string | null>, default: "a" };
 const RELAY_SOCK = EXTERNAL || join(RUN, "relay.sock"), DAEMON_SOCK = join(RUN, "daemon.sock");
 /** The scopes of this run's clients: the external mode ends each through CONTROL (the probe's concurrency script uses s1 to s3). */
 const USED = new Set<string>(["s1", "s2", "s3"]);
@@ -304,6 +310,8 @@ const env = EXTERNAL ? { run: RUN, endpoint: url("s1"), external: { socket: EXTE
 console.log(`run ${RUN}\n${JSON.stringify(env)}`);
 
 const INSTALL = join(RUN, "install"), PACK = join(RUN, "pack");
+/** The group stage's other two Playwright versions (1.64.1 is the install's): the newest release and the service MCP's playwright-core. */
+const STAGE_PLAYWRIGHT = ["1.65.0", "1.66.0-alpha-2026-11-09"];
 const RELAY_BIN = join(INSTALL, "node_modules/agent-browser/bin/agent-browser.js");
 let daemon: StandInDaemon | undefined, chromium: ChildProcess | undefined, aborted: string | undefined, cleaning: Promise<void> | undefined;
 /** The relay's log lines with the time that the run read them (the group pointer reads its step lines), and this run's X auth file. */
@@ -357,6 +365,8 @@ try {
   const tarball = join(PACK, npm(["pack", "--silent", "--pack-destination", PACK], ROOT).split("\n").pop()!);
   npm(["init", "-y"], INSTALL);
   npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball, "playwright-core@1.64.1", "@playwright/mcp@0.0.84"], INSTALL);
+  // The group stage: the other two pinned Playwright versions of the input design's section 13.2, each in a folder of the run.
+  if (STAGE) for (const v of STAGE_PLAYWRIGHT) { const dir = makePart(join(RUN, `pw-${v}`)); npm(["init", "-y"], dir); npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", `playwright-core@${v}`], dir); }
 
   writeFileSync(join(RUN, "upload.txt"), "probe upload body\n");
   start(process.execPath, [join(PROBE, "site.mjs")], { env: { ...process.env, SITE_LOG: join(RUN, "site-log.jsonl") }, log: "site.log" });
@@ -395,6 +405,8 @@ try {
   if (CASES.includes("pointer") && (EXTERNAL || process.env.POINTER_DAEMON === "old")) skip("pointer", "the group pointer (the pointer design's live check)",
     EXTERNAL ? "external endpoint: the run needs the stand-in daemon's played paths and its own Xvfb" : "POINTER_DAEMON=old: a daemon with no pointer ops");
   else if (CASES.includes("pointer")) await pointerCases({ daemon: daemon!, url, run: RUN, relayBin: RELAY_BIN, pw, WebSocket: WS, record, relayLines, display: `:${DISPLAY_N}`, xauth: XAUTH, tracked });
+  if (STAGE) await stageCases({ url, run: RUN, chromium: CHROMIUM, display: `:${DISPLAY_N}`, xauth: XAUTH, record, relayLines, profileDir: (name) => makePart(join(RUN, name)),
+    pws: [{ version: "1.64.1", pw }, ...STAGE_PLAYWRIGHT.map((v) => ({ version: v, pw: createRequire(join(RUN, `pw-${v}`, "package.json"))("playwright-core") }))] });
   if (CASES.includes("scopes") && EXTERNAL) skip("scopes", "the group scopes (two scopes with two lists, the end of a scope, the sweep)",
     "external endpoint: the real daemon makes the lists (agentwatch's test browser has one: a.localhost), and the run can send no set_scopes or allowlist line");
   else if (CASES.includes("scopes")) await scopeCases(pw, WS);
@@ -431,9 +443,11 @@ async function startOwnBrowser() {
   // The daemon's pointer ops (ab-v16.71) on this run's own Xvfb only; POINTER_DAEMON=old: a daemon from before them.
   // The relay logs each activation step and catch-up (times and counts, never a point) for the group pointer.
   process.env.AGENT_BROWSER_POINTER_LOG = "1";
+  // The group stage: the relay runs with the input stage on (the build switch's door for the live rows only).
+  if (STAGE) process.env[STAGE_TEST_ENV] = "test";
   daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
     pointer: process.env.POINTER_DAEMON === "old" ? "old" : { display: `:${DISPLAY_N}`, xauth, size: { width: 1280, height: 900 } },
-    relayLog: (l) => { appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`); if (l.startsWith("relay: step ") || / catch-up /.test(l)) relayLines.push({ t: Date.now(), line: l }); } });
+    relayLog: (l) => { appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`); if (l.startsWith("relay: step ") || / catch-up /.test(l) || l.startsWith("relay: the input stage")) relayLines.push({ t: Date.now(), line: l }); } });
   start("Xvfb", [`:${DISPLAY_N}`, "-nolisten", "tcp", "-auth", xauth, "-screen", "0", "1280x900x24"], { log: "xvfb.log" });
   for (let i = 0; i < 50 && !existsSync(`/tmp/.X11-unix/X${DISPLAY_N}`); i++) await sleep(200);
   chromium = start(CHROMIUM, [`--user-data-dir=${PROFILE}`, "--no-first-run", "--no-default-browser-check", "--password-store=basic",
