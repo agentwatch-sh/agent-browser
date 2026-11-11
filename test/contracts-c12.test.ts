@@ -532,6 +532,11 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (req.op === "sign_ins_unlock" && store.open && res.ok) seen.add("unlock while open");
     if (req.op === "sign_in_reseal" && store.removed.has(req.record?.id) && store.snap?.records.some((x: any) => x.id === req.record.id) && res.error === "the stored sign-in cannot be opened") seen.add("reseal of a removed id");
     if (req.op === "sign_in_reseal" && broken.has(req.record?.id) && res.ok) seen.add("a broken shape removes nothing");
+    // review-112b: the vectors that only the order shows (Start again while locked, a record that breaks its shape, a key
+    // file with no public or no wrapped half).
+    if (req.op === "sign_in_start_again" && storeState(store) === "locked" && res.ok) seen.add("start again while locked");
+    if (req.op === "sign_in_reseal" && store.snap?.records.some((x: any) => x.id === req.record?.id && !Number.isSafeInteger(x.gen)) && res.error === "the stored sign-in cannot be opened") seen.add("a broken shape does not open");
+    for (const half of ["public", "wrapped"]) if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && !Object.hasOwn(store.snap.key, half) && res.error === "the store's key file is not valid") seen.add(`unlock with a key with no ${half}`);
     if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (!Number.isSafeInteger(r.gen)) broken.add(r.id);
     assert.equal(req.t, "req", note);
     assert.ok(typeof req.id === "string" && !ids.has(req.id), `${note}: a unique id`);
@@ -555,7 +560,7 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (res.ok && req.op === "set_sessions") scopes = new Set(req.sessions.map((x: any) => x.scope));
     if (res.ok && req.op === "session_ended") scopes.delete(req.scope);
   }
-  assert.deepEqual([...seen].sort(), ["a broken shape removes nothing", "reseal of a removed id", "unlock while open"], "the vectors of review-112 that need the order");
+  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "reseal of a removed id", "start again while locked", "unlock while open", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112 and review-112b that need the order");
   // A1: endpoint for a scope that the service does not have, and for a scope that ended: no such session.
   assert.ok(has0((v) => v.req.op === "endpoint" && v.req.scope === "web-3" && v.res.error === "no such session"), "endpoint: a scope never named");
   assert.ok(has0((v) => v.req.op === "endpoint" && control.requests.some((r: any) => r.req.op === "session_ended" && r.req.scope === v.req.scope) && v.res.error === "no such session"), "endpoint: a scope that ended");
@@ -1030,6 +1035,7 @@ test("each allow list vector follows the format: the example breaks no rule, eac
   }
   assert.ok(allowV.calls.some((c: any) => c.call.name === "browser_sign_in" && c.admission === "remote" && Object.keys(c.call.arguments).some((k) => k !== "name")), "a remote call with another key still gets check 1");
   assert.ok(allowV.calls.some((c: any) => c.call.name === "browser_sign_in" && (c.admission ?? "local") === "local" && c.answer.code === -32602), "a local call with another key gets -32602");
+  assert.ok(allowV.calls.some((c: any) => c.call.name === "browser_sign_in" && (c.admission ?? "local") === "local" && !Object.hasOwn(c.call.arguments, "name") && c.answer === "service"), "a local call with no name runs the act's method, and check 2 refuses it (review-112b)");
   // tools/list: the service's own tools for a local admission only.
   assert.deepEqual(allowV.toolsLists.map((t: any) => t.admission).sort(), ["local", "remote"]);
   for (const t of allowV.toolsLists) assert.deepEqual(t.names, toolsList(allowV.list, allowV.pinnedTools, t.admission), t.note);
@@ -1137,6 +1143,7 @@ test("each op of the stored sign-ins has a vector with fake values and its answe
   assert.ok(has1((v) => v.req.op === "sign_in_seal" && v.req.offer === true && v.res.error === "an offer needs a new id"), "an offer with the id of a credential");
   assert.ok(has1((v) => v.req.op === "sign_in_start_again" && v.res.ok) && has1((v) => v.req.op === "sign_in_start_again" && v.res.error === "there is no stored sign-in with this id") && has1((v) => v.req.op === "sign_in_start_again" && v.res.error === "the stored sign-ins have no snapshot yet"), "Start again: a credential, no such id, no snapshot");
   assert.ok(has1((v) => v.req.op === "sign_in_start_again" && typeof v.req.credential === "string" && v.res.error === "bad request"), "Start again: a credential of the wrong form");
+  assert.ok(has1((v) => v.req.op === "sign_in_start_again" && !Object.hasOwn(v.req, "credential") && v.res.error === "bad request"), "Start again: no credential field (review-112b)");
   for (const f of ["id", "name", "origin", "path", "send_to"]) assert.ok(has1((v) => v.res.error === recordError(f)), `a vector of the rule of ${f}`);
   // The offer (Q3 b): sealed by "offer", approved false and send_to [origin], whatever the request holds.
   const offer = control.requests.find((v: any) => v.req.op === "sign_in_seal" && v.req.offer === true && v.res.ok);
@@ -1257,6 +1264,8 @@ test("the stored sign-ins' events: sign_in with its act id and phase, C11's resu
       if (refusals.includes(ev.result)) assert.ok(!start, `${ev.result}: a refusal by a check is no act, so its act id has no start`);
       else assert.ok(start && start.id === ev.id && start.scope === ev.scope, `${ev.result}: the end of the start with its act id`);
       if (!named) assert.ok(["remote", "not_ready", "no_such_name"].includes(ev.result), `${ev.result}: only checks 1 and 2 name no credential`);
+      // review-112b: check 7 refuses only after its wait of at most 60 s for the act before it.
+      if (ev.result === "busy") assert.ok(ev.ms >= 60_000, "busy: the end comes after the wait of 60 s");
     }
   }
   const ends = signIns.filter((e: any) => e.phase === "end");

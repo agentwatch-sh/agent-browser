@@ -4149,7 +4149,7 @@
    }
   },
   {
-   "note": "sign_in for a request of the same credential that check 7 refused while the act runs (busy): an end with its own act id and no start, so it ends no blank (review-112 B3)",
+   "note": "sign_in for a request of the same credential that check 6 refused at once while the act runs (the hour's limit): an end with its own act id and no start, so it ends no blank (review-112 B3)",
    "ev": {
     "t": "ev",
     "ev": "sign_in",
@@ -4161,7 +4161,7 @@
     "name": "staging-2",
     "origin": "https://staging.example.com",
     "at": "2026-11-10T20:10:02Z",
-    "result": "busy",
+    "result": "hour_limit",
     "ms": 1,
     "blocked": 0,
     "guarded": 0,

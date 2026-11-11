@@ -2067,6 +2067,9 @@ test("C11 states the fixes of review-112: the Network domain from the navigation
     "and the host of each request that the block or the guard stopped",
     "A request that check 1, 2 or 3 refuses is no act: it sends no event",
   ]) assert.ok(!says(C11, s), `C11 no longer says: ${s}`);
+  // review-112b: the routing text names the refusal of every other AgentBrowser.* call on a page session, as route() does.
+  assert.ok(says(C11, "- Every other `Browser.*`, `Target.*` or `AgentBrowser.*` call on a page session is refused, as on the root."), "C11 names AgentBrowser.* on a page session");
+  assert.ok(!says(C11, "- Every other `Browser.*` or `Target.*` call on a page session is refused, as on the root."), "the old routing sentence is gone");
 });
 
 // The table of what the agent sees: the cause, the result (C12's `end` event and the log line) and the text.
