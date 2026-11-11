@@ -564,6 +564,7 @@ test("the frame mapping of a cross-origin frame: the owner on the parent's sessi
   assert.ok(before.length > 3 && before.every((s) => !inBox(s.params, box)), "the samples outside the box first");
   assert.ok(inBox(after[0].params, box), "the first move after the setup inside the frame's element");
   assert.deepEqual([after.at(-1)!.params.x, after.at(-1)!.params.y], [382, 357], "Playwright's point in the top page");
+  assert.equal(r.stage.counts.hoverLastLegs, 1, "the mapped point is Playwright's: the rest of the path goes at its move");
 });
 
 test("a cross-origin frame with no attach record of its session: the frame's id from the session's own target info; the mapping holds", async () => {
@@ -577,6 +578,7 @@ test("a cross-origin frame with no attach record of its session: the frame's id 
   const after = moves(r.tab).filter((s) => s.t > setup.t);
   assert.ok(moves(r.tab).filter((s) => s.t < setup.t).length > 3, "the samples outside the box before the setup");
   assert.ok(inBox(after[0].params, box), "the first move after the setup inside the frame's element");
+  assert.equal(r.stage.counts.hoverLastLegs, 1, "the mapped point is Playwright's: the rest of the path goes at its move");
 });
 
 test("a page with no last point and an X pointer over it (Linux, at an activation): the path starts at the X pointer's place", async () => {

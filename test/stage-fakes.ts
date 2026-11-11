@@ -197,6 +197,11 @@ export class FakeTab implements StagePage {
     }
     if (s.method === "Target.getTargetInfo" && s.child) return { targetInfo: { targetId: `F-${Object.keys(V.page.frames).find((k) => V.page.frames[k].origin === "cross")}`, type: "iframe" } };
     if (s.method === "DOM.getFrameOwner") return { backendNodeId: 900 + Object.keys(V.page.frames).indexOf(String(p.frameId).replace(/^F-/, "")) };
+    if (s.method === "DOM.getContentQuads" && typeof p.backendNodeId === "number") {
+      // A frame owner's quads: its border box (measured: DOM.getContentQuads gives the border box, not the content box).
+      const f = V.page.frames[Object.keys(V.page.frames)[p.backendNodeId - 900]];
+      return { quads: [[f.box.x, f.box.y, f.box.x + f.box.width, f.box.y, f.box.x + f.box.width, f.box.y + f.box.height, f.box.x, f.box.y + f.box.height]] };
+    }
     if (s.method === "DOM.getBoxModel") {
       const name = Object.keys(V.page.frames)[p.backendNodeId - 900], f = V.page.frames[name], d = (f.border ?? 0) + (f.padding ?? 0);
       const x0 = f.box.x + d, y0 = f.box.y + d, x1 = f.box.x + f.box.width - d, y1 = f.box.y + f.box.height - d;
