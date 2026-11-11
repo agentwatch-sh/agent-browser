@@ -986,7 +986,8 @@ test("review-116b R1: a lock that ended events take again has the limit STAGE_AC
   const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, eb = events(B);
   assert.ok(eb[0].t >= close + STAGE_ACTION_MAX_MS && eb[0].t <= close + STAGE_ACTION_MAX_MS + 50, `B's first event at ${eb[0].t}: at the limit of A's taken lock (the close at ${close})`);
   const bPress = eb.find((s) => s.params.type === "mousePressed")!, aPress = events(A).find((s) => s.params.type === "mousePressed")!;
-  assert.ok(aPress.t >= 40_000 && aPress.t < bPress.t + STAGE_ACTION_MAX_MS, `A's ended press at ${aPress.t}: after the evaluate, with no lock (B's action holds the lock until ${bPress.t + STAGE_ACTION_MAX_MS})`);
+  void bPress;
+  assert.ok(aPress.t >= 40_000 && aPress.t < 41_000, `A's ended press at ${aPress.t}: at the evaluate's answer (40000), with no lock (B's action holds the lock until ${eb[0].t + STAGE_ACTION_MAX_MS})`);
   assert.deepEqual(answers.slice(-2), ["A press", "A release"]);
   await A.clock.advance(STAGE_ACTION_MAX_MS);
   assert.equal(stage.lock.held, 0, "the lock is free");
@@ -1072,4 +1073,87 @@ test("review-116b N7: the handles that the setups returned are bounded too (KEPT
   assert.equal(r.stage.state(r.tab.id)!.miss, false, "the oldest handle is gone");
   r.stage.saw(r.tab, undefined, "Runtime.callFunctionOn", stop(`h-${n}`), { result: { type: "string", value: "error:notconnected" } });
   assert.equal(r.stage.state(r.tab.id)!.miss, true);
+});
+
+test("review-116b R1: a step that waits for the lock when the model drops its tab (a session's end) takes no action and sends nothing; the lock goes on to the next", async () => {
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
+  const A = new FakeTab(own([]), clock, { id: 1 }), B = new FakeTab(own([]), clock, { id: 2 });
+  A.stage = stage; B.stage = stage;
+  const answers: string[] = [];
+  const q = (t: FakeTab, c: any, tag: string) => t.queue(undefined, c.method, c.params, () => answers.push(tag));
+  clock.timer(0, () => q(B, mouse("mousePressed", 700, 500), "B press"));
+  clock.timer(100, () => q(A, mouse("mouseMoved", 300, 200), "A move"));
+  clock.timer(200, () => stage.drop(A.id, "session"));
+  clock.timer(1000, () => q(B, mouse("mouseReleased", 700, 500), "B release"));
+  await clock.run(() => answers.includes("B release"), 10_000);
+  await clock.advance(2000);
+  assert.equal(events(A).length, 0, "no event of A's");
+  assert.equal(A.activations.length, 0, "no action of A's (no activation)");
+  assert.ok(!answers.includes("A move"), "nothing goes back to the session that ended");
+  assert.equal(stage.lock.held, 0, "the lock is free");
+});
+
+test("the daemon lead's point (the tab's end): the held calls go to Chrome; then the stage releases only what the client did not release", async () => {
+  // A press opened confirm(); the client's move with the button down waits (no release of the client's): the stage's release goes after it.
+  const v1 = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700, { clickCount: 2 }) }, { at: 0, ...mouse("mouseMoved", 950, 700, { button: "left", buttons: 1 }) }]);
+  const r1 = await runVector(v1, { maxMs: 5_000, tab: (t) => { t.clock.timer(500, () => { t.closed = true; t.stage.drop(t.id); }); } });
+  const moved = r1.tab.sent.find((s) => s.params?.type === "mouseMoved" && s.t >= 500)!, rel1 = r1.tab.sent.filter((s) => s.params?.type === "mouseReleased");
+  assert.ok(moved && moved.params.x === 950 && moved.params.buttons === 1, "the held move went to Chrome at the drop, at the client's point");
+  assert.ok(r1.answers.find((a) => a.id === 2)?.body.error, "and got Chrome's error for the closed tab");
+  assert.equal(rel1.length, 1);
+  assert.ok(rel1[0].pass === undefined && rel1[0].params.clickCount === 2 && r1.tab.sent.indexOf(rel1[0]) > r1.tab.sent.indexOf(moved), "then the stage's own release, with the press's clickCount");
+  // The client's release waits: it goes as the client sent it, and the stage sends no second release.
+  const v2 = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 0, ...mouse("mouseReleased", 900, 700) }]);
+  const r2 = await runVector(v2, { maxMs: 5_000, tab: (t) => { t.clock.timer(500, () => { t.closed = true; t.stage.drop(t.id); }); } });
+  const rel2 = r2.tab.sent.filter((s) => s.params?.type === "mouseReleased");
+  assert.equal(rel2.length, 1, "only the client's own release, no second release of the stage's");
+  assert.ok(rel2[0].t >= 500 && r2.answers.find((a) => a.id === 2)?.body.error, "the client's release went to Chrome at the drop and got Chrome's error");
+  // The client's release waits behind its move with the button down: it goes as the client sent it, and the stage sends no second release.
+  const v3 = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 0, ...mouse("mouseMoved", 950, 700, { button: "left", buttons: 1 }) }, { at: 0, ...mouse("mouseReleased", 950, 700) }]);
+  const r3 = await runVector(v3, { maxMs: 5_000, tab: (t) => { t.clock.timer(500, () => { t.closed = true; t.stage.drop(t.id); }); } });
+  assert.deepEqual(r3.tab.sent.filter((s) => s.params?.type === "mouseReleased").map((s) => s.pass), [3], "only the client's own release, as it sent it");
+  assert.ok([2, 3].every((id) => r3.answers.some((a) => a.id === id)), "the held move and release end (the fake keeps the press's own answer: its tab closed)");
+  assert.equal(r2.stage.lock.held, 0);
+});
+
+/** Four setups of one node that Playwright retries: three misses (two recoveries), then the attempt at the limit, which passes (its handle 7.3.20). */
+function atTheLimit(after: any[]) {
+  const m = menuRun({ always: true });
+  const calls: any[] = [];
+  for (let k = 0; k < 4; k++) calls.push({ ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }), ...(k === 0 ? { at: 0 } : { after: k }) });
+  calls.push(...after);
+  m.v.in = calls.map((c, i) => ({ id: i + 1, ...c }));
+  return { v: m.v, tab: (t: FakeTab) => { const h = m.hook(t); t.hook = (s) => (s.pass === 4 ? { result: { type: "object", objectId: "7.3.20" } } : h(s)); } };
+}
+
+test("review-116b: the end of the stage's action ends the plain attempt: after the attempt at the limit, a mouse call with no setup and no stop between gets the person's input", async () => {
+  const x = atTheLimit([{ after: 4, ...mouse("mouseMoved", 640, 320) }, { after: 4, ...mouse("mousePressed", 640, 320) }, { after: 4, ...mouse("mouseReleased", 640, 320) },
+    { after: 7, waitMs: 100, ...mouse("mouseMoved", 200, 600) }]);
+  const r = await runVector(x.v, { tab: x.tab });
+  assert.equal(r.stage.counts.recoveries, 2);
+  assert.ok(r.stage.counts.plainAttempts >= 1);
+  const later = moves(r.tab).filter((s) => s.t >= r.arrived.get(8)!);
+  assert.ok(later.length > 5, `a path for the later move (${later.length} moves)`);
+});
+
+test("review-116b: the stop's answer ends the plain attempt while the action stays open (Shift held): a later mouse call gets the person's input", async () => {
+  const shift = (type: string) => ({ method: "Input.dispatchKeyEvent", params: { type, key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: type === "keyUp" ? 0 : 8, location: 1 } });
+  const x = atTheLimit([{ after: 4, ...shift("rawKeyDown") }, { after: 5, ...mouse("mouseMoved", 640, 320, { modifiers: 8 }) }, { after: 5, ...mouse("mousePressed", 640, 320, { modifiers: 8 }) },
+    { after: 5, ...mouse("mouseReleased", 640, 320, { modifiers: 8 }) }, { after: 8, ...stopCall() }, { after: 9, ...mouse("mouseMoved", 200, 600, { modifiers: 8 }) }, { after: 10, ...shift("keyUp") }]);
+  const r = await runVector(x.v, { tab: x.tab });
+  assert.ok(r.stage.counts.plainAttempts >= 1);
+  const later = moves(r.tab).filter((s) => s.t >= r.arrived.get(10)!);
+  assert.ok(later.length > 5, `a path for the later move (${later.length} moves)`);
+});
+
+test("the daemon lead's point: a navigation of the main frame during a click with Shift (an alert on the path): the stage releases the held Shift, and no mouse event goes", async () => {
+  const shift = (type: string) => ({ method: "Input.dispatchKeyEvent", params: { type, key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, modifiers: type === "keyUp" ? 0 : 8, location: 1 } });
+  const v = own([{ at: 0, ...shift("rawKeyDown") }, { after: 1, ...mouse("mouseMoved", 300, 200, { modifiers: 8 }) }, { after: 1, ...mouse("mousePressed", 300, 200, { modifiers: 8 }) },
+    { after: 1, ...mouse("mouseReleased", 300, 200, { modifiers: 8 }) }, { after: 1, ...shift("keyUp") }]);
+  const r = await runVector(v, { maxMs: 10_000, tab: (t) => { dialogAtFifthMove(t); t.clock.timer(500, () => t.navigate()); } });
+  const after = events(r.tab).filter((s) => s.t >= 500);
+  assert.deepEqual(after.map((s) => [s.method, s.params.type, s.params.key]), [["Input.dispatchKeyEvent", "keyUp", "Shift"]], "only the release of the held Shift");
+  for (const id of [2, 3, 4, 5]) assert.ok(/context/i.test(r.answers.find((a) => a.id === id)?.body.error?.message ?? ""), `call ${id}: the error that the context is gone`);
+  assert.equal(r.stage.lock.held, 0);
 });

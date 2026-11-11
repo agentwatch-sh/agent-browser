@@ -502,6 +502,9 @@ export class Stage {
   private async goneStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     if (st.gone === "session") return;
     if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
+    // The client's own release goes: the stage's release after the last call is only for what the client did not release.
+    if (e.kind === "mouse" && e.params.type === "mouseReleased") st.buttons.delete(e.params.button);
+    if (e.kind === "key" && e.params.type === "keyUp") st.keys.delete(e.params.code);
     await page.pass(e.child, e.method, e.params, e.answer);
   }
 
