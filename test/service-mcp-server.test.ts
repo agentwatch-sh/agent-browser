@@ -529,21 +529,23 @@ test("the MCP part: status's mcp and the hello's mcp_token follow the port: none
   const ready = () => ({ controlOff: false, notReady: null, sites: 1 });
   try {
     const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {} });
-    assert.deepEqual(p.status(), { mcp: { state: "none", address: null } });
-    assert.deepEqual(p.features(), []);
-    await p.open({ url: (s) => `ws+unix:///x.sock:/devtools/browser/${s}`, readiness: ready });
-    assert.deepEqual(p.status(), { mcp: { state: "ready", address: `127.0.0.1:${p.mcpPort!.port}` } });
-    assert.deepEqual(p.features(), ["mcp_token"]);
-    await p.close();
+    try {
+      assert.deepEqual(p.status(), { mcp: { state: "none", address: null } });
+      assert.deepEqual(p.features(), []);
+      await p.open({ url: (s) => `ws+unix:///x.sock:/devtools/browser/${s}`, readiness: ready });
+      assert.deepEqual(p.status(), { mcp: { state: "ready", address: `127.0.0.1:${p.mcpPort!.port}` } });
+      assert.deepEqual(p.features(), ["mcp_token"]);
+    } finally { await p.close(); }
     const log: string[] = [];
     const f = new McpPart({ listen: { failed: "the MCP port's socket: systemd passed no socket named agent-browser-mcp.socket" }, stateFolder: dir, log: (l) => log.push(l) });
     await f.open({ url: (s) => s, readiness: ready });
     assert.deepEqual([f.status(), f.features()], [{ mcp: { state: "failed", address: null } }, []]);
     assert.ok(log.some((l) => l.startsWith("mcp: the MCP port cannot open, so the service serves no MCP: the MCP port's socket")));
     const mac = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {}, port: { platform: "darwin" } });
-    await mac.open({ url: (s) => s, readiness: ready });
-    assert.deepEqual([mac.status().mcp, mac.features()], [{ state: "closed", address: `127.0.0.1:${mac.mcpPort!.port}` }, []]);
-    await mac.close();
+    try {
+      await mac.open({ url: (s) => s, readiness: ready });
+      assert.deepEqual([mac.status().mcp, mac.features()], [{ state: "closed", address: `127.0.0.1:${mac.mcpPort!.port}` }, []]);
+    } finally { await mac.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -677,13 +679,17 @@ test("the worker's standard output and error never reach the service's own (the 
     const { ScopeWorker } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/workers.ts"))});
     const { readAllowList } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/allow-list.ts"))});
     const w = new ScopeWorker("t-out", { list: readAllowList(), folder: process.argv[1], ticketUrl: () => null, ended: () => {}, log: (l) => console.error(l), heapMb: 32, entry: new URL(${JSON.stringify(new URL("./fixtures/mcp-heap-worker.ts", import.meta.url).href)}) });
-    await w.open("s1");
+    let seen = 0;
+    w.worker.stdout.on("data", (d) => (seen += d.length));
+    const opened = await w.open("s1");
     await new Promise((r) => setTimeout(r, 500));
     await w.stop();
-    console.log("DONE");`;
+    console.log(JSON.stringify({ opened, seen }));`;
   try {
     const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => execFile(process.execPath, ["--input-type=module", "-e", script, `${dir}/`], { cwd: ROOT, timeout: 50_000 }, (e, stdout, stderr) => (e ? reject(e) : resolve({ stdout, stderr }))));
-    assert.match(stdout, /DONE/);
+    const got = JSON.parse(stdout.trim().split("\n").pop()!);
+    assert.equal(got.opened, null, "the worker ran (a Node flag of the service's command line, here --input-type, does not reach it)");
+    assert.ok(got.seen > 0, "the worker wrote its canary: the service read it (the twin)");
     assert.ok(!stdout.includes(CANARY) && !stderr.includes(CANARY), "no canary on the service's own output");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -691,8 +697,12 @@ test("the worker's standard output and error never reach the service's own (the 
 test("step 8 of the MCP path reads the model: the number of sites of the scope's list, or null for a scope that the line does not name or gives no list", { timeout: 30_000 }, async () => {
   const h = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }) } as any);
   try {
-    await h.ready({ t: "allowlist", lists: { a: ["a.example", "b.example"], e: [] }, scopes: { "web-1": "a", "web-2": "e", "web-3": null }, default: null });
+    await h.ready({ t: "allowlist", lists: { a: ["a.example", "b.example"], e: [] }, scopes: { "web-1": "a", "web-2": "e", "web-3": null, "web-5": "a" }, default: null });
     const m = h.relay.model as any;
     assert.deepEqual(["web-1", "web-2", "web-3", "web-4"].map((s) => m.sitesOf(s)), [2, 0, null, null]);
+    // A scope that an end_scope ended (C10), while the line still names it: no list.
+    h.fake.line({ t: "end_scope", scope: "web-5" });
+    await until(() => m.noList("web-5"), "the end of web-5");
+    assert.equal(m.sitesOf("web-5"), null);
   } finally { await h.close(); }
 });

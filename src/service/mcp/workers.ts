@@ -49,8 +49,10 @@ export class ScopeWorker {
     this.worker = new Worker(o.entry ?? new URL("./worker.ts", import.meta.url), {
       workerData: { list: o.list, folder: o.folder },
       resourceLimits: { maxOldGenerationSizeMb: o.heapMb ?? MCP_HEAP_MB },
-      // An environment of its own: no DEBUG, NODE_OPTIONS or PLAYWRIGHT_* variable of the service's reaches Playwright.
+      // An environment of its own: no DEBUG, NODE_OPTIONS or PLAYWRIGHT_* variable of the service's reaches Playwright,
+      // and no Node flag of the service's command line (an inspector flag, a test flag).
       env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+      execArgv: [],
       stdout: true, stderr: true,
     });
     // Nothing of the worker's output reaches the service's log (C11's log rule): it is read and dropped.
