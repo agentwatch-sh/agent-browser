@@ -34,7 +34,8 @@ test("service --hello prints the service's hello as one line and exits, with no 
     assert.equal(r.stdout.split("\n").length, 2, "one line");
     const h = JSON.parse(r.stdout);
     assert.deepEqual(Object.keys(h), ["t", "v", "side", "version", "commit", "features"]);
-    assert.deepEqual([h.t, h.v, h.side, h.version, h.features], ["hello", 1, "service", VERSION, []]);
+    // Board ab-v16.97.2: the stored sign-ins' feature on Linux; the Mac has none until stage 4.
+    assert.deepEqual([h.t, h.v, h.side, h.version, h.features], ["hello", 1, "service", VERSION, process.platform === "linux" ? ["sign_ins"] : []]);
     assert.ok(h.commit === null || /^[0-9a-f]{40}$/.test(h.commit));
     assert.doesNotMatch(r.stderr, /ExperimentalWarning|FFI/);
     assert.deepEqual(readdirSync(dir), [], "no socket, no file");

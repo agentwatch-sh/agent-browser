@@ -17,6 +17,7 @@ import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handle
 import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS, STAGE_1B2_OPS } from "../src/service/service.ts";
 import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
 import { STAGE_1B1_OPS } from "../src/service/unit/part.ts";
+import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
 import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 
@@ -196,7 +197,8 @@ test("the fake answers every request vector and every bad request vector as the 
 
 // review-112 B5: each case of a protection that does not hold runs on a new fake with that reason (--unprotected).
 test("the fake with a protection that does not hold answers each case of the vectors' unprotected, and its status gives the reason", async () => {
-  assert.deepEqual(control.unprotected.cases.map((x: any) => x.reason).sort(), ["dumpable", "signal"]);
+  // Board ab-v16.97.2 (open point 5 of PR #112): the case where both protections fail runs with its first reason, dumpable.
+  assert.deepEqual(control.unprotected.cases.map((x: any) => x.reason).sort(), ["dumpable", "dumpable", "signal"]);
   for (const k of control.unprotected.cases) {
     const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR, unprotected: k.reason }));
     try {
@@ -213,12 +215,12 @@ test("the fake with a protection that does not hold answers each case of the vec
 test("the stage 1a service answers each vector of its five ops as the vectors say, and each vector of another op unsupported (C12's ops of stage 1a); it sends no event", async () => {
   assert.deepEqual([...STAGE_1A_OPS].sort(), ["config", "endpoint", "session_ended", "set_sessions", "status"]);
   // Stage 1c's part adds its seven ops (test/service-stage1c.test.ts), stage 1b part 1's part start and stop
-  // (test/service-unit-part.test.ts), stage 1b part 2's part sender (test/service-native.test.ts); the stored sign-ins'
-  // eight ops come with stage 1e part 1 (board ab-v16.97.2).
-  assert.deepEqual(Object.fromEntries(Object.entries(LATER_OPS).sort()), { sign_in_reseal: "1e1", sign_in_seal: "1e1", sign_in_start_again: "1e1", sign_ins: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_ins_setup: "1e1", sign_ins_unlock: "1e1" });
+  // (test/service-unit-part.test.ts), stage 1b part 2's part sender (test/service-native.test.ts), and stage 1e part 1's
+  // part the stored sign-ins' eight ops (board ab-v16.97.2; test/service-signins.test.ts). No later op is left.
+  assert.deepEqual(LATER_OPS, {});
   assert.deepEqual([...STAGE_1B1_OPS], ["start", "stop"]);
   assert.deepEqual([...STAGE_1B2_OPS], ["sender"]);
-  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...STAGE_1B2_OPS, ...Object.keys(LATER_OPS)].sort(), Object.keys(OPS).sort(), "each op of C12 once");
+  assert.deepEqual([...STAGE_1A_OPS, ...STAGE_1C_OPS, ...STAGE_1B1_OPS, ...STAGE_1B2_OPS, ...STAGE_1E1_OPS].sort(), Object.keys(OPS).sort(), "each op of C12 once");
   const d = await openDoor(stage1a());
   try {
     const { c, answers } = await runVectors(d.path);
@@ -330,17 +332,33 @@ test("the log rule: the service logs each act with its provenance, and no log li
   const strs = (x: unknown): string[] => typeof x === "string" ? [x] : Array.isArray(x) ? x.flatMap(strs) : x && typeof x === "object" ? Object.values(x).flatMap(strs) : [];
   // Every string of a request's fields (not t, id, op or by), and of the fake's state of prompts (lifetime ids).
   const secrets = new Set<string>();
-  for (const v of [...control.requests, ...control.badRequests]) {
+  // Open point 7 of PR #112: the unprotected cases' lines too.
+  const lines = [...control.requests, ...control.badRequests, ...control.unprotected.cases.flatMap((c: any) => c.requests)];
+  // C12: the service logs each op of the stored sign-ins with the credential's id and name (board ab-v16.97.2).
+  const named = new Set<string>(lines.flatMap((v: any) => [v.req.record?.id, v.req.record?.name, v.req.credential, ...(Array.isArray(v.req.records) ? v.req.records.flatMap((r: any) => [r.id, r.name]) : [])]).filter((x): x is string => typeof x === "string"));
+  for (const v of lines) {
     const { t, id, op, by, ...fields } = v.req;
     // The words of provenance are logged by design (a record file of the stored sign-ins holds "by":"operator"), and so is
     // the record's other `by`, "offer", in a fixed error text (`an offer needs a new id`, review-112).
-    for (const s of strs(fields)) if (s.length >= 4 && !["operator", "offer", "token", "daemon", "config", "send"].includes(s)) secrets.add(s);
+    for (const s of strs(fields)) if (s.length >= 4 && !named.has(s) && !["operator", "offer", "token", "daemon", "config", "send"].includes(s)) secrets.add(s);
   }
   secrets.add("lt-1a2b");
-  for (const make of [stage1a, () => new FakeService({ agentDoor: AGENT_DOOR })]) {
+  // The plain values that the seals hold (the canaries) are secrets too.
+  for (const s of control.signInScan.canaries) secrets.add(s);
+  const T0 = Date.parse("2026-11-10T20:00:00Z");
+  const stores: string[] = [];
+  // The real store of the stored sign-ins (board ab-v16.97.2): the vectors' test pane key and clock, so its seals open.
+  const signIns = () => {
+    const dir = mkdtempSync(join(tmpdir(), "ab-ctl-signins-"));
+    stores.push(dir);
+    return new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [new SignInsPart({ stateFolder: join(dir, "state"), log: () => {}, protections: () => null, now: () => new Date(T0), paneSecret: Buffer.from(control.paneSeal.pane_secret_hex, "hex") })] });
+  };
+  try {
+  for (const make of [stage1a, () => new FakeService({ agentDoor: AGENT_DOOR }), signIns]) {
     const d = await openDoor(make());
     try {
       const { c } = await runVectors(d.path);
+      for (const v of control.unprotected.cases.flatMap((k: any) => k.requests)) { c.send({ ...v.req, id: `u-${v.req.id}` }); await c.answer(`u-${v.req.id}`, 30_000); }
       c.send({ t: "req", id: "bad-shape", op: "list_set", by: { kind: "operator", user: "ann", via: "web" }, list: "secret-list-name", add: "not-a-list", remove: [] });
       await c.answer("bad-shape");
       // N8: a user with a newline or a control character is a bad request, so no log line gets it.
@@ -358,6 +376,7 @@ test("the log rule: the service logs each act with its provenance, and no log li
       assert.ok(!d.logs.some((l) => / status by /.test(l)), "a read is not logged");
     } finally { await d.close(); }
   }
+  } finally { for (const dir of stores) rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ------------------------------------------------------------------ the event stream

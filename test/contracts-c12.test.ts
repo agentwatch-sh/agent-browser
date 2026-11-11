@@ -207,6 +207,8 @@ function kdfFits(key: any): boolean {
 const keyFits = (key: any) => isObj(key) && typeof key.public === "string" && isObj(key.wrapped) && ["iv", "ct", "tag"].every((k) => typeof key.wrapped[k] === "string") && kdfFits(key);
 /** The form of a pane's seal's `rid` and `at` (C12, the pane's seal). */
 const RID = /^[A-Za-z0-9_-]{22,64}$/, AT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{3})?Z$/;
+/** An `at` of that form that is a real time in UTC (open point 8 of PR #112): the date and the time exist. */
+const realTime = (at: string) => { const t = Date.parse(at); return Number.isFinite(t) && new Date(t).toISOString() === (at.length === 20 ? `${at.slice(0, 19)}.000Z` : at); };
 type Store = { snap: null | { key: any; records: any[] }; open: boolean; openPublic: string | null; highest: Map<string, number>; removed: Set<string>; rids: Set<string>; unprotected: string | null };
 const newStore = (unprotected: string | null = null): Store => ({ snap: null, open: false, openPublic: null, highest: new Map(), removed: new Set(), rids: new Set(), unprotected });
 /** Another approved record of the last snapshot has this name (C12, names and ids). */
@@ -233,18 +235,20 @@ function storeAnswer(req: any, st: Store, S: any): { error: string } | { data: R
   const state = storeState(st);
   // The pane's seal: the form of rid and at, a rid seen in the last 120 s, and the vectors' seal more than 120 s from the clock.
   const seal = () => {
-    if (!RID.test(req.sealed.rid) || !AT.test(req.sealed.at) || st.rids.has(req.sealed.rid)) return false;
+    if (!RID.test(req.sealed.rid) || !AT.test(req.sealed.at) || !realTime(req.sealed.at) || st.rids.has(req.sealed.rid)) return false;
     st.rids.add(req.sealed.rid);
     return req.sealed.text !== S.stale_seal;
   };
   const sealed = err("the sealed value cannot be opened");
+  // The vectors' seal texts of a new passphrase of fewer than 16 characters: the set-up's and the rekey's.
+  const short = (text: string) => text === S.short_passphrase || text === S.short_rekey;
   const unprotected = st.unprotected === null ? null : err(unprotectedError(st.unprotected));
   switch (req.op) {
     case "sign_ins_setup":
       if (st.snap.key !== null || st.open) return err("the store is set up already");
       if (unprotected) return unprotected;
       if (!seal()) return sealed;
-      if (req.sealed.text === S.short_passphrase) return err("the passphrase has fewer than 16 characters");
+      if (short(req.sealed.text)) return err("the passphrase has fewer than 16 characters");
       st.open = true; st.openPublic = S.key.public;
       return { data: { key: S.key } };
     case "sign_ins_unlock":
@@ -261,7 +265,7 @@ function storeAnswer(req: any, st: Store, S: any): { error: string } | { data: R
       if (state === "locked") return err("the store is locked");
       if (!seal()) return sealed;
       // The new passphrase's length first (the vectors' short_passphrase also holds an old one that does not open).
-      if (req.sealed.text === S.short_passphrase) return err("the passphrase has fewer than 16 characters");
+      if (short(req.sealed.text)) return err("the passphrase has fewer than 16 characters");
       if (!keyFits(st.snap.key)) return err("the store's key file is not valid");
       if (req.sealed.text === S.wrong_passphrase) return err("the passphrase does not open the store");
       return { data: { key: S.rekeyed } };
@@ -272,7 +276,8 @@ function storeAnswer(req: any, st: Store, S: any): { error: string } | { data: R
       const r = req.record;
       const offer = req.offer === true;
       if (st.removed.has(r.id)) return err("the stored sign-in was removed");
-      if (offer && st.snap.records.some((x: any) => x.id === r.id)) return err("an offer needs a new id");
+      // Open point 10 of PR #112: also an id that has a highest gen (of a sign_ins, or of the service's own seal since).
+      if (offer && (st.snap.records.some((x: any) => x.id === r.id) || st.highest.has(r.id))) return err("an offer needs a new id");
       if (!offer && nameTaken(st, r.id, r.name)) return err("another stored sign-in has this name");
       const gen = (st.highest.get(r.id) ?? 0) + 1;
       st.highest.set(r.id, gen);
@@ -295,7 +300,8 @@ function storeAnswer(req: any, st: Store, S: any): { error: string } | { data: R
     }
     case "sign_in_start_again":
       // review-112 B4: it needs no state; an id that the last snapshot does not hold gets the reseal's text.
-      if (!st.snap.records.some((x: any) => x.id === req.credential)) return err("there is no stored sign-in with this id");
+      // Open point 9 of PR #112: a removed id is no credential, also when a later sign_ins holds its file again.
+      if (!st.snap.records.some((x: any) => x.id === req.credential) || st.removed.has(req.credential)) return err("there is no stored sign-in with this id");
       return { data: {} };
   }
   throw new Error(`not an op of the stored sign-ins: ${req.op}`);
@@ -560,6 +566,10 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (req.op === "sign_in_reseal" && store.snap?.records.some((x: any) => x.id === req.record?.id && !Number.isSafeInteger(x.gen)) && res.error === "the stored sign-in cannot be opened") seen.add("a broken shape does not open");
     for (const half of ["public", "wrapped"]) if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && !Object.hasOwn(store.snap.key, half) && res.error === "the store's key file is not valid") seen.add(`unlock with a key with no ${half}`);
     if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (!Number.isSafeInteger(r.gen)) broken.add(r.id);
+    // Open points 8, 9 and 10 of PR #112 (board ab-v16.97.2).
+    if (req.op === "sign_in_seal" && req.offer === true && store.highest.has(req.record?.id) && !store.snap?.records.some((x: any) => x.id === req.record.id) && res.error === "an offer needs a new id") seen.add("an offer with an id sealed since the last snapshot");
+    if (isObj(req.sealed) && AT.test(req.sealed.at) && !realTime(req.sealed.at) && res.error === "the sealed value cannot be opened") seen.add("an at that is no real time");
+    if (req.op === "sign_in_start_again" && store.removed.has(req.credential) && store.snap?.records.some((x: any) => x.id === req.credential) && res.error === "there is no stored sign-in with this id") seen.add("start again of a removed id whose file came back");
     assert.equal(req.t, "req", note);
     assert.ok(typeof req.id === "string" && !ids.has(req.id), `${note}: a unique id`);
     ids.add(req.id);
@@ -582,7 +592,7 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (res.ok && req.op === "set_sessions") scopes = new Set(req.sessions.map((x: any) => x.scope));
     if (res.ok && req.op === "session_ended") scopes.delete(req.scope);
   }
-  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "an offer holds no name", "reseal of a removed id", "start again while locked", "unlock while open", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112 and review-112b that need the order");
+  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "an at that is no real time", "an offer holds no name", "an offer with an id sealed since the last snapshot", "reseal of a removed id", "start again of a removed id whose file came back", "start again while locked", "unlock while open", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112, review-112b and open points 8 to 10 of PR #112 that need the order");
   // A1: endpoint for a scope that the service does not have, and for a scope that ended: no such session.
   assert.ok(has0((v) => v.req.op === "endpoint" && v.req.scope === "web-3" && v.res.error === "no such session"), "endpoint: a scope never named");
   assert.ok(has0((v) => v.req.op === "endpoint" && control.requests.some((r: any) => r.req.op === "session_ended" && r.req.scope === v.req.scope) && v.res.error === "no such session"), "endpoint: a scope that ended");
@@ -1205,26 +1215,27 @@ const STORE_HEADING = "The stored sign-ins (from stage 1e part 1; board ab-v16.9
 // Every sentence of the part, in order (a list item is one item). The part holds exactly these, and no other text.
 const STORE_ITEMS: string[] = [
   "**The stored sign-ins (from stage 1e part 1; board ab-v16.97.2).** The design is `docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md` (board ab-v16.95), sections 5, 6 and 8, with the operator's answers of 2026-11-10 (board item ab-8w8: Q1 a, Q2 b, Q3 b, Q4 a). The service holds the open store key and no file of the store. The daemon holds the store's files and no open key, and no plain value reaches it. Nothing uses this part before stage 1e part 1, and no session uses a stored sign-in before stage 3.",
-  "The feature. The service has the eight ops of the stored sign-ins (`sign_ins_setup`, `sign_ins_unlock`, `sign_ins_lock`, `sign_ins_rekey`, `sign_in_seal`, `sign_in_reseal`, `sign_in_start_again` and `sign_ins`), the events `sign_in` and `sign_ins`, and the key `sign_ins` of `status` only with the feature name `sign_ins` in its hello. A service whose hello does not have it answers the eight ops `unsupported`, sends neither event and gives no key `sign_ins`. The daemon sends the eight ops only to a service whose hello has it.",
+  "The feature. The service has the eight ops of the stored sign-ins (`sign_ins_setup`, `sign_ins_unlock`, `sign_ins_lock`, `sign_ins_rekey`, `sign_in_seal`, `sign_in_reseal`, `sign_in_start_again` and `sign_ins`), the events `sign_in` and `sign_ins`, and the key `sign_ins` of `status` only with the feature name `sign_ins` in its hello. A service whose hello does not have it answers the eight ops `unsupported`, sends neither event and gives no key `sign_ins`. The daemon sends the eight ops only to a service whose hello has it. From stage 1e part 1 the service's hello on Linux has the feature `sign_ins`, also the hello of `agent-browser service --hello`. On the Mac its hello has no `sign_ins` until stage 4 (C11, the sign-in act).",
   "Words. A credential is one stored sign-in. The store is the credentials of one OS user on one box: `key.json` and one record file for each credential in agentwatch's token store, `tokens/agent-browser/sign-ins/` (0600 files in a 0700 folder), which only the daemon writes. The store key is an X25519 key pair: its private half is on disk only wrapped, with a key that scrypt gives from the passphrase. The pane key is an X25519 key pair that the service makes at each start: its private half is only in the service's memory, and its public half is no secret.",
   "The state. `none`: the store is not open, and the last `sign_ins` has no key, or no `sign_ins` came since the service's start. `locked`: the last `sign_ins` has a key, and the service holds no open private half. `open`: the service holds the open private half in its memory. Only `sign_ins_setup` and `sign_ins_unlock` open the store. `sign_ins_lock`, a `sign_ins` whose `key` is `null` or whose `key.public` is not the open key's public half, and each stop of the service drop the open private half. A restart of the daemon, and a stop and a start of Chrome, do not drop it.",
   "The order at each connect: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins. The daemon sends `sign_ins` again at each change of the store's files.",
   "The pane's seal (`sealed`). The Browser pane, and the offer command on an agent's side, seal each plain value to the pane key's public half with agentwatch's Secret box seal (`screen-seal.js`, `sealPayload`) before the value leaves them. `text` is the seal's text (`sealed` in the answer of `sealPayload`: `aw1:` and base64url), `sender` its sender key (`senderPublicB64` in that answer: standard base64), `rid` a random request id of 22 to 64 base64url characters, and `at` the seal's time in UTC (ISO 8601). The seal's binding has the purpose `browser-sign-in` and the fields `op` (the request's op), `rid` and `at`, and for `sign_in_seal` also `name`, `origin`, `path` and `send_to` (from `record`) and `offer`, so a seal for a request with `\"offer\":true` never opens for a request with `\"offer\":false`, and the reverse. Each value of the binding is a string: `send_to` is its origins joined with one space, `offer` is `\"true\"` or `\"false\"`, and `at` is the seal's time in ISO 8601. The sealed object is `{\"passphrase\":\"<text>\"}` for `sign_ins_setup` and `sign_ins_unlock`, `{\"old\":\"<text>\",\"new\":\"<text>\"}` for `sign_ins_rekey`, and `{\"username\":\"<text>\",\"password\":\"<text>\"}` for `sign_in_seal`.",
-  "The service opens a pane's seal only with the binding that it builds from the request. A seal that does not open with that binding, a seal whose `at` is more than 120 s from the service's clock, a seal whose `rid` the service saw in the last 120 s, a `rid` that is not 22 to 64 base64url characters, and an `at` that is not a time in UTC of the form `2026-11-10T20:00:00Z` or `2026-11-10T20:00:00.000Z` get `the sealed value cannot be opened`, one text for each case. A new start of the service makes a new pane key, so a seal to an older one does not open: the pane gets the new public half from `status` or from the `sign_ins` event, and seals again.",
+  "The binding's bytes. The service builds them as `bindingInfo` of `screen-seal.js` does (agentwatch's `mail_crypto.Binding.info`): `agentwatch-browser-sign-in-v1`, one NUL byte, then the fields as JSON with sorted keys and no spaces. Each name and value is printable ASCII (the bytes 0x20 to 0x7E), so a seal for a `record` with another character in a field does not open. The service opens a seal as `mail_crypto.open_payload` does: HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305, with the binding's bytes as the info and no additional data; then the sender tag, HMAC-SHA256 over the info and the JSON, with a key from HKDF-SHA256 of X25519 of the pane key and the `sender` key; then the JSON object, which ends in spaces up to a multiple of 256 bytes.",
+  "The service opens a pane's seal only with the binding that it builds from the request. A seal that does not open with that binding, a seal whose `at` is more than 120 s from the service's clock, a seal whose `rid` the service saw in the last 120 s, a `rid` that is not 22 to 64 base64url characters, an `at` that is not a time in UTC of the form `2026-11-10T20:00:00Z` or `2026-11-10T20:00:00.000Z`, and an `at` of that form that is no real time (for example `2026-02-30T20:00:00Z`) get `the sealed value cannot be opened`, one text for each case. A new start of the service makes a new pane key, so a seal to an older one does not open: the pane gets the new public half from `status` or from the `sign_ins` event, and seals again.",
   "The passphrase. `sign_ins_setup` and `sign_ins_rekey` refuse a new passphrase of fewer than 16 characters with `the passphrase has fewer than 16 characters`; `sign_ins_rekey` checks the new passphrase's length before the old passphrase. A passphrase that does not open the wrapped key gets `the passphrase does not open the store`, 2 s after the request. The service runs one `sign_ins_setup`, `sign_ins_unlock` or `sign_ins_rekey` at a time.",
   "The protections. The service opens the store only in a process where both protections of the design's section 5.5 hold: the process is not dumpable (`prctl(PR_SET_DUMPABLE, 0)` at its start), and the protection of board ab-v16.96 holds (hold SIGUSR1 at start; disable the inspector signal). When one does not hold, `sign_ins_setup` and `sign_ins_unlock` get `the service's memory is not protected (<reason>)`, with the reason `dumpable` (the call failed) or `signal` (the protection of board ab-v16.96 does not hold); `dumpable` comes first when both fail. `status` gives the same reason (the status, below).",
-  "`key` is the content of `key.json`: `{\"v\":1,\"public\":\"<base64url>\",\"kdf\":{\"name\":\"scrypt\",\"n\":<N>,\"r\":8,\"p\":1,\"salt\":\"<base64url>\"},\"wrapped\":{\"iv\":\"<base64url>\",\"ct\":\"<base64url>\",\"tag\":\"<base64url>\"}}`. `sign_ins_setup` makes it with N = 131072 (2^17) and a new salt of 16 bytes, and wraps the private half with AES-256-GCM under the scrypt key (`maxmem` 256 MiB). The service takes the KDF values of a `key` only within these bounds: `name` `scrypt`, N a power of two from 32768 (2^15) to 262144 (2^18), r 8, p 1, and a salt of 16 bytes. Outside them, `sign_ins_unlock` and `sign_ins_rekey` get `the store's key file is not valid`, and no derivation runs. A `key` with no string `public`, or with no object `wrapped` of the strings `iv`, `ct` and `tag`, gets the same text. Such a `key` still counts as a key: the state is `locked`, and `sign_ins_setup` gets `the store is set up already`.",
+  "`key` is the content of `key.json`: `{\"v\":1,\"public\":\"<base64url>\",\"kdf\":{\"name\":\"scrypt\",\"n\":<N>,\"r\":8,\"p\":1,\"salt\":\"<base64url>\"},\"wrapped\":{\"iv\":\"<base64url>\",\"ct\":\"<base64url>\",\"tag\":\"<base64url>\"}}`. `sign_ins_setup` makes it with N = 131072 (2^17) and a new salt of 16 bytes, and wraps the private half with AES-256-GCM under the scrypt key (`maxmem` 257 MiB: scrypt needs 128 times r times (N + 2) bytes and more, so N = 2^18 does not derive under 256 MiB). The service takes the KDF values of a `key` only within these bounds: `name` `scrypt`, N a power of two from 32768 (2^15) to 262144 (2^18), r 8, p 1, and a salt of 16 bytes. Outside them, `sign_ins_unlock` and `sign_ins_rekey` get `the store's key file is not valid`, and no derivation runs. A `key` with no string `public`, or with no object `wrapped` of the strings `iv`, `ct` and `tag`, gets the same text. Such a `key` still counts as a key: the state is `locked`, and `sign_ins_setup` gets `the store is set up already`.",
   "The record. A record file is `{\"v\":1,\"id\",\"gen\",\"name\",\"origin\",\"path\",\"send_to\",\"repos\",\"by\",\"approved\",\"state\",\"added\",\"changed\",\"sealed\"}`. The seal binds its plain fields `v`, `id`, `gen`, `name`, `origin`, `path`, `send_to`, `repos`, `by` and `approved` as its additional data. With the answer Q2 b, `repos` is `null` in the file, not absent as the design's section 5.3 says: so each field of the additional data is in the file, and the service reads the additional data from the file alone. `state`, `added` and `changed` are the daemon's, for the Browser pane: they are outside the seal, and no decision of the service reads them. `sealed` is `{\"epk\",\"iv\",\"ct\",\"tag\"}` in base64url: an ephemeral X25519 key, the shared secret with the store's public half, HKDF-SHA256 to a 32-byte key, and AES-256-GCM over `{\"username\":<text>,\"password\":<text>,\"totp\":null}`.",
   "The rules of `record`. A `record` that breaks one gets `the stored sign-in is not valid (field <field>)`, which names the field, never a value. `id` is `c-` and 8 lowercase hex digits; the daemon makes it. `name` matches C11's scope pattern. `origin` is a URL origin as the WHATWG URL parser gives it: `https:`, or `http:` with a loopback host (`localhost`, a host that ends in `.localhost`, or `127.0.0.1`), for tests. `path` starts with `/` and holds no `?` and no `#`. `send_to` holds `origin`, and only origins by the rule of `origin`, each once.",
-  "Names and ids. A name is unique in the store among the approved records (`approved` `true`): an offer can have the name of a credential, and the operator gives it another name at the approval (the design, section 6.3). `sign_in_seal` with `kind: operator` and `sign_in_reseal` get `another stored sign-in has this name` when another `id` of the last `sign_ins` has that `name` and `approved` `true`. Two approved records of one name in a snapshot each break, so the sign-in act's check 2 finds neither (C11). An offer gets its own new id, and an offer never changes or replaces a credential (the design, section 6.3): an offer with an `id` that the last `sign_ins` holds gets `an offer needs a new id`.",
+  "Names and ids. A name is unique in the store among the approved records (`approved` `true`): an offer can have the name of a credential, and the operator gives it another name at the approval (the design, section 6.3). `sign_in_seal` with `kind: operator` and `sign_in_reseal` get `another stored sign-in has this name` when another `id` of the last `sign_ins` has that `name` and `approved` `true`. Two approved records of one name in a snapshot each break, so the sign-in act's check 2 finds neither (C11). An offer gets its own new id, and an offer never changes or replaces a credential (the design, section 6.3): an offer with an `id` that the last `sign_ins` holds, or that has a highest `gen` in the service (from a `sign_ins`, or from its own seal also since the last `sign_ins`), gets `an offer needs a new id`.",
   "The order of the checks. After the kind, the service checks a request of the stored sign-ins in this order: the rules of `record`; the snapshot; the state; the protections (`sign_ins_setup` and `sign_ins_unlock`); the pane's seal; then the op's own checks. The first check that fails gives its error. The op's own checks come in this order: for `sign_ins_setup` the new passphrase's length; for `sign_ins_unlock` the `key` (its form and its KDF bounds), then the passphrase; for `sign_ins_rekey` the new passphrase's length, the `key`, then the old passphrase; for `sign_in_seal` a removed id, an offer's id, then the name; for `sign_in_reseal` the id, the origin, whether the record opens, then the name.",
   "The snapshot and the state. Before the first `sign_ins` since the service's start, `sign_ins_setup`, `sign_ins_unlock`, `sign_ins_rekey`, `sign_in_seal`, `sign_in_reseal` and `sign_in_start_again` get `the stored sign-ins have no snapshot yet`. `sign_ins_setup` while the last `sign_ins` has a key, or while the store is open, gets `the store is set up already`. `sign_ins_unlock` while the store is open answers `{}` and changes nothing; while the last `sign_ins` has no key it gets `the store is not set up`. `sign_ins_rekey`, `sign_in_seal` and `sign_in_reseal` get `the store is not set up` in the state `none` and `the store is locked` in the state `locked`. `sign_ins_rekey` gets `the store is not set up` also while the last `sign_ins` has no key. `sign_ins_lock` answers `{}` in each state, and `sign_in_start_again` needs no state.",
   "The fields that the service seals. The service seals each record with `v` 1, `repos` `null` (the operator's answer Q2 b: a credential names no repos), and a `gen` one higher than the highest `gen` that it saw for that `id` (in a `sign_ins` or in its own seal), or 1 for an `id` that it never saw. `sign_in_seal` with `kind: operator` seals `by` `\"operator\"` and `approved` `true`. An agent's offer (`sign_in_seal` with `\"offer\":true`; the operator's answer Q3 b: an agent that holds a credential may offer it once, for the operator's approval) seals `by` `\"offer\"`, `approved` `false` and `send_to` `[<origin>]`, whatever the request holds. `sign_in_reseal` seals the values of the open record again with the fields of `record`, the record's own `by`, and `approved` `true`: a change, or the operator's approval of an offer. So only the operator's approval, in the seal, makes an offer usable (C11, the sign-in act, check 5). The answer's `record` holds the ten plain fields as the service sealed them, so the daemon writes a record that opens.",
   "The service seals only while the store is open, with the public half that it derives from its open private half, never with the `public` of a `key`. It keeps no copy of a value that it opens or seals.",
   "The op's own checks. `sign_in_seal` with the `id` of a removed credential gets `the stored sign-in was removed`. `sign_in_reseal` with an `id` that the last `sign_ins` does not hold gets `there is no stored sign-in with this id`; with another `origin` than the record's, `a change of the origin needs a new seal of the password`; and with a record that does not open (its tag, its shape, a `gen` lower than the highest that the service saw, or a removed id), `the stored sign-in cannot be opened`.",
-  "Start again. `sign_in_start_again` is the operator's \"Start again\" in the Browser pane (C11, the sign-in act's lockout guard). It clears the stop of the credential `credential` and its count of failed results in a row; the times of its acts in the last hour stay. It answers `{}`, also for a credential that is not stopped. A `credential` that the last `sign_ins` does not hold gets `there is no stored sign-in with this id`.",
+  "Start again. `sign_in_start_again` is the operator's \"Start again\" in the Browser pane (C11, the sign-in act's lockout guard). It clears the stop of the credential `credential` and its count of failed results in a row; the times of its acts in the last hour stay. It answers `{}`, also for a credential that is not stopped. A `credential` that the last `sign_ins` does not hold gets `there is no stored sign-in with this id`. A removed id is no credential: `stopped` in `status` never names it, and `sign_in_start_again` with it gets `there is no stored sign-in with this id`, also when a later `sign_ins` holds its file again. When an id becomes a removed id, the service drops its stop, its count and the times of its acts from its file.",
   "The snapshot. `sign_ins` replaces the service's last snapshot of the store: its key and its records. A record that breaks the record's shape, or that does not open at its use, breaks only itself. Each `id` of the last snapshot that a new `sign_ins` does not hold is a removed id from then on. A record that breaks its shape still holds its `id` (a string) for this rule, so a file that is bad for a short time removes nothing for good. The answer's `records` is the number of records in the request.",
-  "The service's own file. In the folder of `--state-folder`, `sign-ins-state.json` keeps the highest `gen` of each `id`, the removed ids, and for each credential the count of its failed results in a row, its stop and the times of its acts in the last hour (C11, the sign-in act). It holds ids and numbers only, no secret.",
+  "The service's own file. In the folder of `--state-folder`, `sign-ins-state.json` keeps the highest `gen` of each `id`, the removed ids, and for each credential the count of its failed results in a row, its stop and the times of its acts in the last hour (C11, the sign-in act). It holds ids and numbers only, no secret. A file that the service cannot read at its start (for example a damaged one) counts as no file, as on a new box (the design, section 5.6), and the service logs the error's kind. When a write fails, the service keeps its state in memory and logs the error's kind.",
   "The lines that hold a seal. Only the request lines of `sign_ins_setup`, `sign_ins_unlock`, `sign_ins_rekey` and `sign_in_seal` hold a pane's seal. Only the request line of `sign_ins` and the answers of `sign_in_seal` and `sign_in_reseal` hold a sealed record. Only the request line of `sign_ins` and the answers of `sign_ins_setup` and `sign_ins_rekey` hold a wrapped key. No line holds a plain passphrase, username or password.",
   "The events. `sign_ins` comes at each change of the state, with the state and the pane key's public half. `sign_in` comes from the sign-in act's method, `AgentBrowser.signIn` (C11), for each request. `act` is an id of 16 lowercase hex digits that the service makes at random for the request. An act sends a `start` (`phase` `start`) and an `end` (`phase` `end`) with its `act`. A request that a check before the act refuses (C11, checks 1 to 7) is no act: it sends one `end` with its own `act` and no `start`. `scope` is the caller's scope, `repo` its session's `repo` in the last `set_sessions` (or `null`), `id`, `name` and `origin` are the credential's (`null` for a refusal by check 1 or 2, which names no credential), and `at` is the time in UTC (ISO 8601). An `end` also has `result` (C11's result), `ms` (the time in milliseconds), `blocked` and `guarded` (the number of requests that the act's block and its guard stopped), and `stopped_now` (`true` when the act's result stopped the credential: C11's lockout guard).",
   "No host of a blocked request. No event, prompt or log line names the host of a request that the act's block or its guard stopped, because a host that the page chooses can carry the password. A block of the list rules (C4, C5) in an act tab or its popups makes no blocked-site prompt, no `prompt` event and no blocked report that names its host: the service counts it in the act's `blocked`.",
@@ -1254,16 +1265,20 @@ test("C12 states the stored sign-ins in its other parts: the field rules, the ev
   ]);
   sayAll(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), [
     "Its stored sign-ins (the feature `sign_ins`; the vectors' `state.sign_ins`). The fake opens no seal, makes no key and seals nothing, so it checks no binding and no seal's time on its own clock.",
-    "It follows the rules of the state, of the errors, of the names and ids and of the fields that the service seals (the stored sign-ins, above), and the rules of the form of `rid` and `at` and of a `rid` that it saw.",
+    "It follows the rules of the state, of the errors, of the names and ids and of the fields that the service seals (the stored sign-ins, above), and the rules of the form of `rid` and `at`, of an `at` that is no real time and of a `rid` that it saw.",
     "`sign_ins_setup` answers the vectors' `key`, and `sign_ins_rekey` their `rekeyed`. `sign_ins_unlock` opens the store, except with a seal whose `text` is the vectors' `wrong_passphrase`, which gets `the passphrase does not open the store` at once.",
-    "A seal whose `text` is the vectors' `short_passphrase` stands for a new passphrase of fewer than 16 characters (in `sign_ins_rekey`, with an old passphrase that does not open the store), and a seal whose `text` is the vectors' `stale_seal` stands for a seal more than 120 s from the service's clock.",
+    "A seal whose `text` is the vectors' `short_passphrase` or `short_rekey` stands for a new passphrase of fewer than 16 characters (`short_rekey` in `sign_ins_rekey`, with an old passphrase that does not open the store), and a seal whose `text` is the vectors' `stale_seal` stands for a seal more than 120 s from the service's clock.",
     "`sign_in_seal` and `sign_in_reseal` answer the fields that the service seals and the vectors' `sealed`. A record of a `sign_ins` does not open in the fake only for its `gen` (lower than the highest, or not a whole number of 1 or more) or its removed `id`.",
     "The fake runs no act, so its `status` gives `acts` 0 and `stopped` `[]`. With `--unprotected dumpable` or `--unprotected signal`, it answers as a process where that protection does not hold (the vectors' `unprotected`).",
     "Each change of the state sends a `sign_ins` event with the vectors' `pane_key`.",
   ]);
   assert.ok(!says(C12, "so it checks no passphrase's length, no seal's time and no binding"), "the fake's vectors show the passphrase's length and a seal's time (review-112)");
+  // Board ab-v16.97.2: the old sentences are gone.
+  assert.ok(!says(C12, "and the rules of the form of `rid` and `at` and of a `rid` that it saw.") && !says(C12, "(each on a new fake with `--unprotected`), and its") && !says(C12, "(`maxmem` 256 MiB)") && !says(C12, "an offer with an `id` that the last `sign_ins` holds gets"), "the old sentences of board ab-v16.97.2's changes");
   sayAll(part(C12, "The vectors."), [
-    "Its `state.sign_ins` holds the fake values of the stored sign-ins, its `unprotected` the cases of a protection that does not hold (each on a new fake with `--unprotected`), and its `signInScan` the canaries of the scan: no line of the vectors holds a canary in one of the five forms of the sign-in act's guard (C11), and only the lines that the stored sign-ins name hold a seal.",
+    "Its `state.sign_ins` holds the fake values of the stored sign-ins, its `unprotected` the cases of a protection that does not hold (each on a new fake with `--unprotected` and the case's `reason`; in the case where both protections fail the `reason` is `dumpable`, which comes first), with seals that the service refuses for their form, so the protections come before the pane's seal, and its `signInScan` the canaries of the scan: no line of the vectors holds a canary in one of the five forms of the sign-in act's guard (C11), and only the lines that the stored sign-ins name hold a seal.",
+    "Each pane's seal of its lines is a seal that agentwatch's `screen-seal.js` (`sealPayload`) made with fixed test keys, to the test pane key of `paneSeal`, whose private half is a test value; `paneSeal` also holds one seal with its binding, the binding's bytes, its test keys and its payload, for the tests of both sides.",
+    "The real service gives each line of the stored sign-ins its answer too, except the values that it makes from new random bytes (the `key` of `sign_ins_setup` and `sign_ins_rekey`, and the `sealed` of `sign_in_seal` and `sign_in_reseal`): the daemon writes the service's own answers, so a test sends them in the later `sign_ins` in place of the vectors' `key`, `rekeyed` and `sealed`.",
   ]);
   // The fake's hello has the feature (the vectors' hello of --fake).
   assert.ok(control.hellos.some((h: any) => h.line.commit === null && h.line.features.join() === "fake,mcp_token,sign_ins"), "the fake's hello has fake, mcp_token and sign_ins");
@@ -1280,10 +1295,10 @@ test("each op of the stored sign-ins has a vector with fake values and its answe
   // review-112: the passphrase's 16 characters (also before the old passphrase of a rekey), a seal more than 120 s old,
   // a rid and an at of the wrong form, a key with no public or no wrapped, the names and ids, and Start again.
   const S = control.state.sign_ins;
-  for (const op of ["sign_ins_setup", "sign_ins_rekey"]) assert.ok(has1((v) => v.req.op === op && v.req.sealed?.text === S.short_passphrase && v.res.error === "the passphrase has fewer than 16 characters"), `${op}: fewer than 16 characters`);
+  for (const [op, text] of [["sign_ins_setup", S.short_passphrase], ["sign_ins_rekey", S.short_rekey]]) assert.ok(has1((v) => v.req.op === op && v.req.sealed?.text === text && v.res.error === "the passphrase has fewer than 16 characters"), `${op}: fewer than 16 characters`);
   const stale = control.requests.find((v: any) => v.req.sealed?.text === S.stale_seal);
   assert.ok(stale && stale.res.error === "the sealed value cannot be opened", "a seal more than 120 s old");
-  assert.ok(control.requests.filter((v: any) => isObj(v.req.sealed) && AT.test(v.req.sealed.at) && v !== stale).every((v: any) => Date.parse(v.req.sealed.at) - Date.parse(stale.req.sealed.at) > 120_000), "the stale seal's at is more than 120 s before the others");
+  assert.ok(control.requests.filter((v: any) => isObj(v.req.sealed) && AT.test(v.req.sealed.at) && realTime(v.req.sealed.at) && v !== stale).every((v: any) => Date.parse(v.req.sealed.at) - Date.parse(stale.req.sealed.at) > 120_000), "the stale seal's at is more than 120 s before the others");
   assert.ok(has1((v) => isObj(v.req.sealed) && !RID.test(v.req.sealed.rid) && v.res.error === "the sealed value cannot be opened"), "a rid of the wrong form");
   assert.ok(has1((v) => isObj(v.req.sealed) && RID.test(v.req.sealed.rid) && !AT.test(v.req.sealed.at) && v.res.error === "the sealed value cannot be opened"), "an at of the wrong form");
   assert.ok(has1((v) => v.req.op === "sign_ins" && isObj(v.req.key) && !Object.hasOwn(v.req.key, "public")), "a key with no public");
@@ -1356,7 +1371,9 @@ test("the stored sign-ins' scan: no line of the vectors holds a canary in one of
   assert.equal(holdsCanary(JSON.stringify(lines), scan.canaries), false, "no line holds a canary");
   // The twin: a canary planted in an answer, in each of the five forms, is found.
   for (const c of scan.canaries) for (const f of FORMS(c)) assert.equal(holdsCanary(JSON.stringify({ ...lines, planted: { res: { data: { text: `x${f}x` } } } }), [c]), true, `the scan finds ${JSON.stringify(f)}`);
-  const all = [...control.requests, ...control.badRequests];
+  // Open point 7 of PR #112: the unprotected cases' lines too.
+  const all = [...control.requests, ...control.badRequests, ...control.unprotected.cases.flatMap((c: any) => c.requests)];
+  assert.ok(all.some((v) => /^u-/.test(v.req.id) && places(v.req, isPaneSeal).length > 0), "the scan reads the unprotected lines");
   for (const v of all) assert.deepEqual(sealBreaks(v), [], v.note);
   for (const { note, ev } of control.events) assert.deepEqual([...places(ev, isPaneSeal), ...places(ev, isSealedRecord), ...places(ev, isWrapped)], [], `${note}: no seal in an event`);
   // Each kind of seal is in the vectors where C12 names it, so the scan reads real lines.
@@ -1366,6 +1383,28 @@ test("the stored sign-ins' scan: no line of the vectors holds a canary in one of
   assert.notDeepEqual(sealBreaks({ req: { id: "t1", op: "sign_ins_lock", by: {}, sealed: seal }, res: { data: {} } }), [], "a pane's seal in a lock");
   assert.notDeepEqual(sealBreaks({ req: { id: "t2", op: "status", by: {} }, res: { data: { x: control.state.sign_ins.sealed } } }), [], "a sealed record in a status");
   assert.notDeepEqual(sealBreaks({ req: { id: "t3", op: "sign_in_seal", by: {}, sealed: seal }, res: { data: { key: control.state.sign_ins.key } } }), [], "a wrapped key in a seal's answer");
+});
+
+// Board ab-v16.97.2 (open point 1 of PR #112): the shared vector of a real seal of agentwatch's screen-seal.js.
+test("the vectors' paneSeal: the test pane key (its private half a test value, its public half the vectors' pane_key) and one seal of screen-seal.js with its binding, the binding's bytes of C12, its test keys and its payload", () => {
+  const P = control.paneSeal;
+  assert.ok(isObj(P) && P.note.startsWith("TEST keys and values only, never a real key or secret."), "named a test value");
+  const label = (l: string) => createHash("sha256").update(`test, not a key: ${l}`).digest("hex");
+  assert.equal(P.pane_secret_hex, label("the pane key of the stored sign-ins' vectors"), "the test pane key comes from its label");
+  assert.equal(P.pane_key, control.state.sign_ins.pane_key);
+  const v = P.vector;
+  assert.deepEqual(keysOf(v), ["ephemeral_secret_hex", "fields", "info_hex", "payload", "purpose", "sealed", "sender_public_b64", "sender_secret_hex"]);
+  assert.deepEqual([v.ephemeral_secret_hex, v.sender_secret_hex], [label("ephemeral paneSeal"), label("sender paneSeal")], "test keys from their labels");
+  assert.equal(v.purpose, "browser-sign-in");
+  assert.deepEqual(keysOf(v.fields), ["at", "name", "offer", "op", "origin", "path", "rid", "send_to"], "the binding of sign_in_seal (C12)");
+  assert.ok(Object.values(v.fields).every((x) => typeof x === "string" && /^[\x20-\x7e]*$/.test(x as string)), "printable ASCII text");
+  assert.equal(v.fields.send_to.split(" ").length, 2, "send_to: its origins joined with one space");
+  // C12's bytes: agentwatch-browser-sign-in-v1, one NUL byte, the fields as JSON with sorted keys and no spaces.
+  assert.equal(Buffer.from(v.info_hex, "hex").toString("latin1"), `agentwatch-browser-sign-in-v1\u0000{${keysOf(v.fields).map((n) => `${JSON.stringify(n)}:${JSON.stringify(v.fields[n])}`).join(",")}}`);
+  assert.match(v.sealed, /^aw1:[A-Za-z0-9_-]+$/);
+  assert.equal(Buffer.from(v.sealed.slice(4), "base64url").length, 32 + 32 + 256 + 16, "enc, the sender tag, the JSON padded to 256 bytes, the AEAD tag");
+  assert.equal(Buffer.from(v.sender_public_b64, "base64").length, 32);
+  assert.ok(/not-a-secret/.test(v.payload.password) && /[^\x00-\x7f]/.test(v.payload.password) && !holdsCanary(JSON.stringify(v), control.signInScan.canaries), "a test payload with UTF-8, and no canary");
 });
 
 // The results of the sign-in act: the codes of C11's table of what the agent sees.
@@ -1413,6 +1452,8 @@ test("the stored sign-ins' events: sign_in with its act id and phase, C11's resu
       if (refusals.includes(ev.result)) assert.ok(!start, `${ev.result}: a refusal by a check is no act, so its act id has no start`);
       else assert.ok(start && start.id === ev.id && start.scope === ev.scope, `${ev.result}: the end of the start with its act id`);
       if (!named) assert.ok(["remote", "not_ready", "no_such_name"].includes(ev.result), `${ev.result}: only checks 1 and 2 name no credential`);
+      // Open point 6 of PR #112: and an end of check 1 or 2 names none (R22 in both directions).
+      if (["remote", "not_ready", "no_such_name"].includes(ev.result)) assert.ok(!named, `${ev.result}: a refusal by check 1 or 2 names no credential`);
       // review-112b: check 7 refuses only after its wait of at most 60 s for the act before it.
       if (ev.result === "busy") assert.ok(ev.ms >= 60_000, "busy: the end comes after the wait of 60 s");
     }
@@ -1437,7 +1478,12 @@ test("the stored sign-ins' events: sign_in with its act id and phase, C11's resu
 // review-112 B5: the protections of the service's memory. Each case runs on a new fake with `--unprotected <reason>`.
 test("the cases of a protection that does not hold: sign_ins_setup and sign_ins_unlock get the error with its reason, and status gives the reason", () => {
   const cases = control.unprotected?.cases ?? [];
-  assert.deepEqual(cases.map((c: any) => c.reason).sort(), REASONS, "a case for each reason");
+  assert.deepEqual([...new Set(cases.map((c: any) => c.reason))].sort(), REASONS, "a case for each reason");
+  // Open point 5 of PR #112: a case where both fail, whose reason is the first (dumpable), and each refusal of a protection
+  // comes with a seal that the service refuses for its form (the protections come before the pane's seal).
+  for (const c of cases) assert.equal(c.reason, REASONS.find((r) => c.failing.includes(r)), `${c.note}: the reason is the first that fails`);
+  assert.ok(cases.some((c: any) => c.failing.length === 2 && c.reason === "dumpable"), "both fail: dumpable");
+  for (const c of cases) for (const v of c.requests) if (v.res.error === unprotectedError(c.reason)) assert.ok(!RID.test(v.req.sealed.rid) || !AT.test(v.req.sealed.at), `${v.req.id}: a seal of the wrong form`);
   const ops = new Set<string>();
   for (const c of cases) {
     const store = newStore(c.reason);

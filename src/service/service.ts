@@ -37,6 +37,8 @@ import { RECEIVER_ID } from "./package/pins.ts";
 import { senderData, type SenderData } from "./package/sender.ts";
 import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
+import { SignInsPart } from "./signins/part.ts";
+import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { realDisplayFs } from "./unit/display.ts";
 import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
@@ -50,11 +52,11 @@ export { serviceHello };
 
 /** The ops of stage 1a (C12, "The ops of stage 1a"). */
 export const STAGE_1A_OPS = ["config", "set_sessions", "session_ended", "status", "endpoint"] as const;
-/** Each op of C12 that no part of this service has yet, and the stage that adds it; until then it gets `unsupported`. */
-export const LATER_OPS: Readonly<Record<string, "1e1">> = {
-  // The stored sign-ins (C12, board ab-v16.97.1): stage 1e part 1 (board ab-v16.97.2) adds them, with the feature sign_ins.
-  sign_ins_setup: "1e1", sign_ins_unlock: "1e1", sign_ins_lock: "1e1", sign_ins_rekey: "1e1", sign_in_seal: "1e1", sign_in_reseal: "1e1", sign_in_start_again: "1e1", sign_ins: "1e1",
-};
+/**
+ * Each op of C12 that no part of this service has yet, and the stage that adds it; until then it gets `unsupported`. Stage
+ * 1e part 1 (board ab-v16.97.2) added the last ones, the stored sign-ins (signins/part.ts, with the feature sign_ins).
+ */
+export const LATER_OPS: Readonly<Record<string, string>> = {};
 /** The op of stage 1b part 2 (C12, "The ops of stage 1b part 2"): the sender package. */
 export const STAGE_1B2_OPS = ["sender"] as const;
 
@@ -251,6 +253,12 @@ export type ServiceOptions = {
    * agent-browser-mcp.socket, or --test's port on 127.0.0.1) and the test seams. Without it, no MCP port (C11: off by default).
    */
   mcp?: { listen: McpPartOptions["listen"] } & Partial<Omit<McpPartOptions, "listen" | "stateFolder" | "log">>;
+  /**
+   * The stored sign-ins (stage 1e part 1; C12, "The stored sign-ins"), with the lists (their state folder): the protections
+   * of the service's memory (the command's non-dumpable start, protect.ts) and the test seams. Without it, the eight ops
+   * get `unsupported` and the hello has no feature sign_ins (the Mac until stage 4).
+   */
+  signIns?: Omit<SignInStoreOptions, "stateFolder" | "log">;
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -326,7 +334,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, stateFolder: o.lists.stateFolder, log: o.log }) : null;
-  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart()];
+  // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
+  const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
+  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : [])];
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
   const unit = o.daemonUnit ?? "agentwatch.service";
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
