@@ -116,6 +116,11 @@ export class McpPort {
     socket.once("close", () => this.sockets.delete(socket));
     // The Mac: no TCP peer reader yet (stage 4), so the port fails closed.
     if ((this.o.platform ?? process.platform) === "darwin") { socket.destroy(); return; }
+    this.admit(socket, n);
+  }
+
+  /** Steps 1 and 2 on the paused socket: no byte of it is read before they pass. */
+  private admit(socket: Socket, n: number): void {
     let a: Admitted | Refusal;
     try {
       a = admitConnection({ reader: this.reader, snapshot: this.snapshot, client: `${socket.remoteAddress}:${socket.remotePort}`, service: `127.0.0.1:${this.port}`, uid: this.uid });
