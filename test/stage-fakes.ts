@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { ELEMENT_KIND, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, SAME_ELEMENT, Stage, TWO_FRAMES, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, ELEMENT_KIND, FIELD_HIT, FIELD_STATE, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, SAME_ELEMENT, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -58,6 +58,7 @@ export function topBox(v: any, id: string): Box | null {
   return { x: n.box.x + f.box.x + d, y: n.box.y + f.box.y + d, width: n.box.width, height: n.box.height };
 }
 const within = (p: { x: number; y: number }, b: Box) => p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
+const textual = (n: any) => (n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text")) || n.tag === "textarea" || n.contenteditable === true;
 
 /**
  * One tab of a vector, as the model gives it to the stage: its fake Chrome answers the stage's events and reads and the
@@ -89,15 +90,35 @@ export class FakeTab implements StagePage {
   private held: (() => void)[] = [];
   private errorsUsed = new Set<string>();
   private eventsDone = new Set<number>();
+  /**
+   * The page's fields (board ab-t30.10): the focused node, and each text field's value and selection, changed by the key
+   * events, the texts, the clicks and Playwright's scripts (fill's select-all, focusNode's caret reset) as Chrome would.
+   * A node's `mask: "digits"`: a key handler of the page that drops each typed key that is not a digit (an input mask:
+   * the named exception); `value`: its text (else `text` letters).
+   */
+  focusedId: string | null;
+  readonly fields = new Map<string, { value: string; s: number; e: number }>();
+  /** The modifier keys down in the page (by the key events). */
+  private mods = new Set<string>();
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
     this.v = v; this.clock = clock; this.id = o.id ?? 7;
     this.person = o.person ?? drawPerson(paramsFor(v.platform === "mac" ? "darwin" : "linux"), seededRandom(v.seed));
     this.modelPoint = v.page.last ? { ...v.page.last, x11: false } : null;
+    this.focusedId = v.page.focused ?? null;
+    for (const [id, n] of Object.entries<any>(v.page.nodes)) if (textual(n)) {
+      const value = typeof n.value === "string" ? n.value : "abcdefghij".repeat(10).slice(0, n.text ?? 0);
+      const c = n.caret ?? [0, 0];
+      this.fields.set(id, { value, s: c[0], e: c[1] });
+    }
   }
+  /** The value of a field (the tests). */
+  valueOf(id: string): string | undefined { return this.fields.get(id)?.value; }
 
   // ---- StagePage
   send(child: string | undefined, method: string, params: Record<string, unknown>): Promise<any> {
     const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, read: !method.startsWith("Input.") };
+    // A text that the stage sends as the client sent it (the typing rule refused it): the pass of that call.
+    if (method === "Input.insertText") { const c = this.v.in.find((x: any) => x.method === method && x.params.text === params.text); if (c) s.pass = c.id; }
     this.sent.push(s);
     return this.chrome(s);
   }
@@ -115,6 +136,11 @@ export class FakeTab implements StagePage {
     const h = await this.hook(s);
     if (h !== undefined) return h;
     if (fn === ELEMENT_KIND) return this.elementAt(args[0], args[1]);
+    if (fn === FOCUSED_FIELD) {
+      const n = this.focusedId ? this.v.page.nodes[this.focusedId] : null;
+      if (n?.frame && this.v.page.frames[n.frame]?.origin === "cross") return { frame: true };
+      return this.focusRead(this.focusedId);
+    }
     if (fn === SAME_ELEMENT) { const a = this.elementAt(args[0], args[1]), b = this.elementAt(args[2], args[3]); return !!a && a.id === b?.id; }
     throw new Error(`no fake for ${fn.slice(0, 40)}`);
   }
@@ -123,6 +149,9 @@ export class FakeTab implements StagePage {
   /** A client's call in the tab's gate: the stage's step for a call that it takes, else the call as it is. */
   queue(child: string | undefined, method: string, params: any, answer: (body: Body) => void): void {
     const e = this.stage.arrive(this, child, method, params, answer);
+    // As the model: a call that the stage does not take waits for the end of the tab's key run.
+    const endRun = e ? null : this.stage.other(this);
+    if (endRun) this.gate = this.gate.then(endRun);
     this.gate = this.gate.then(() => (e ? this.stage.step(this, e) : this.pass(child, method, params, answer)));
   }
   point() { return this.modelPoint; }
@@ -134,6 +163,52 @@ export class FakeTab implements StagePage {
     this.dialogOpen = false; this.dialogSeen = false;
     for (const r of this.held.splice(0)) r();
     this.stage.event(this, undefined, "Page.frameNavigated", { frame: { id: "main", url } });
+  }
+
+  /** The typing rule's read of a focused node (FOCUSED_FIELD's value). */
+  private focusRead(id: string | null): any {
+    const n = id ? this.v.page.nodes[id] : null;
+    if (!n) return null;
+    const typing = (n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text")) || n.tag === "textarea", fl = this.fields.get(id!);
+    return { tag: n.tag, type: n.tag === "input" ? n.type ?? "text" : undefined, editable: !!n.contenteditable, typing, value: typing && fl ? fl.value : null, s: typing && fl && n.type !== "email" && n.type !== "number" ? fl.s : null, e: typing && fl && n.type !== "email" && n.type !== "number" ? fl.e : null };
+  }
+  /** Chrome's input into the page's fields: a press on a field focuses it (the caret at its left end, else its end); keys and texts edit the focused field. */
+  private input(s: Sent): void {
+    const p = s.params, V = this.v;
+    if (s.method === "Input.dispatchMouseEvent" && p.type === "mousePressed") {
+      const top = (id: string) => topBox(V, id)!;
+      const hit = Object.entries<any>(V.page.nodes).filter(([id]) => within(p, top(id))).sort(([a], [b]) => top(a).width * top(a).height - top(b).width * top(b).height)[0];
+      if (hit && this.fields.has(hit[0])) {
+        this.focusedId = hit[0];
+        const fl = this.fields.get(hit[0])!, at = p.x - top(hit[0]).x <= 6 ? 0 : fl.value.length;
+        fl.s = fl.e = at;
+      } else if (hit) this.focusedId = null;
+      return;
+    }
+    const fl = this.focusedId ? this.fields.get(this.focusedId) : undefined, node = this.focusedId ? V.page.nodes[this.focusedId] : null;
+    const put = (t: string) => { if (!fl) return; fl.value = fl.value.slice(0, fl.s) + t + fl.value.slice(fl.e); fl.s = fl.e = fl.s + t.length; };
+    if (s.method === "Input.insertText") return put(String(p.text));
+    if (s.method !== "Input.dispatchKeyEvent") return;
+    if (["Shift", "Control", "Alt", "Meta"].includes(p.key)) { if (p.type === "keyUp") this.mods.delete(p.key); else this.mods.add(p.key); return; }
+    if (p.type === "keyUp" || !fl) return;
+    const ctl = this.mods.has("Control") || this.mods.has("Meta");
+    if (p.text && !ctl) { if (node?.mask === "digits" && !/^[0-9]$/.test(p.text)) return; return put(String(p.text)); }
+    if (p.key === "Delete" || p.key === "Backspace") { if (fl.s !== fl.e) put(""); else if (p.key === "Delete") { fl.value = fl.value.slice(0, fl.s) + fl.value.slice(fl.s + 1); } else if (fl.s > 0) { fl.value = fl.value.slice(0, fl.s - 1) + fl.value.slice(fl.s); fl.s = fl.e = fl.s - 1; } return; }
+    if (p.key === "Home" || (p.key === "ArrowUp" && ctl) || (p.key === "ArrowLeft" && this.mods.has("Meta"))) { fl.s = fl.e = 0; return; }
+    if (p.key === "End" || (p.key === "ArrowDown" && ctl) || (p.key === "ArrowRight" && this.mods.has("Meta"))) { fl.s = fl.e = fl.value.length; return; }
+    if (p.key === "ArrowRight") { if (this.mods.has("Shift")) fl.e = Math.min(fl.value.length, fl.e + 1); else { fl.s = fl.e = Math.min(fl.value.length, Math.max(fl.s, fl.e) + (fl.s === fl.e ? 1 : 0)); } return; }
+    if (p.key === "a" && ctl) { fl.s = 0; fl.e = fl.value.length; }
+  }
+  /** Playwright's script of a passed utility call: fill selects the field's text and focuses it; focusNode focuses the node (with its caret reset). */
+  private script(s: Sent): void {
+    const u = utilityCall(s.method, s.params);
+    if (!u || (u.name !== "fill" && u.name !== "focus")) return;
+    const args = (u.args[0] ?? []) as any[], id = args[1]?.handle, n = id ? this.v.page.nodes[id] : null, fl = id ? this.fields.get(id) : undefined;
+    if (!n) return;
+    if (u.name === "fill") { if (fl) { this.focusedId = id; fl.s = 0; fl.e = fl.value.length; } return; }
+    const was = this.focusedId === id;
+    this.focusedId = id;
+    if (args[2] === true && !was && n.tag === "input" && fl) fl.s = fl.e = 0;
   }
 
   /** The element of the top page at a point: the smallest node box that holds it (a frame's element is the frame). */
@@ -167,6 +242,7 @@ export class FakeTab implements StagePage {
     if (this.closed) throw Object.assign(new Error("No target with given id found"), { code: -32602 });
     if (s.method.startsWith("Input.") && (this.dialogOpen || this.dialogSeen)) { s.dropped = true; s.answered = this.clock.now(); return {}; }
     if (s.method.startsWith("Input.")) {
+      this.input(s);
       const k = this.outIndexOf(s);
       if (k >= 0) {
         this.eventsDone.add(k);
@@ -194,7 +270,7 @@ export class FakeTab implements StagePage {
       return {};
     }
     s.answered = this.clock.now();
-    if (s.pass !== undefined) return ch.results?.[s.pass] ?? {};
+    if (s.pass !== undefined) { this.script(s); return ch.results?.[s.pass] ?? {}; }
     const p = s.params as any;
     if (s.method === "Page.getLayoutMetrics") return { cssLayoutViewport: { clientWidth: V.page.viewport.width, clientHeight: V.page.viewport.height, pageX: 0, pageY: 0 } };
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === NODE_GEO) {
@@ -217,6 +293,32 @@ export class FakeTab implements StagePage {
       return { model: { content: [x0, y0, x1, y0, x1, y1, x0, y1] } };
     }
     if (s.method === "Runtime.callFunctionOn" && [OBSTACLE_FIND, OBSTACLE_BOTH, OBSTACLE_AGAIN, TWO_FRAMES].includes(p.functionDeclaration)) return { result: { type: "object", subtype: "null", value: null } };
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_STATE) {
+      const n = V.page.nodes[p.objectId];
+      if (!n) throw new Error("Could not find object with given id");
+      const top = topBox(V, p.objectId)!, f = n.frame ? V.page.frames[n.frame] : null, cross = f?.origin === "cross";
+      const b = cross ? n.box : top, ox = cross ? 0 : top.x - n.box.x, oy = cross ? 0 : top.y - n.box.y, fl = this.fields.get(p.objectId);
+      const kind = n.tag === "textarea" ? "textarea" : n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text") ? "input" : n.contenteditable ? "editable" : "other";
+      const active = this.focusedId === p.objectId;
+      return { result: { type: "object", value: { kind, active, focused: active && !n.windowAway, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, ox, oy, top: !cross, flat: true,
+        box: { x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height } } } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_HIT) {
+      const n = V.page.nodes[p.objectId], [x, y] = [p.arguments[0].value, p.arguments[1].value];
+      // The element at the point of the field's own document: the smallest node of its frame there (a node with `covers` lies over it).
+      const hits = Object.entries<any>(V.page.nodes).filter(([, m]) => (m.frame ?? null) === (n.frame ?? null) && within({ x, y }, m.box)).sort(([, a], [, b]) => a.box.width * a.box.height - b.box.width * b.box.height);
+      return { result: { type: "boolean", value: hits[0]?.[0] === p.objectId } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FOCUSED_IN) {
+      const n = V.page.nodes[p.objectId], fo = this.focusedId ? V.page.nodes[this.focusedId] : null;
+      if (!n || !fo || (fo.frame ?? null) !== (n.frame ?? null)) return { result: { type: "object", value: { away: true } } };
+      return { result: { type: "object", value: this.focusRead(this.focusedId) } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === CARET_SET) {
+      const fl = this.fields.get(p.objectId);
+      if (fl) { fl.s = p.arguments[0].value; fl.e = p.arguments[1].value; }
+      return { result: { type: "boolean", value: true } };
+    }
     if (s.method === "Runtime.releaseObject") return {};
     return {};
   }
@@ -252,7 +354,9 @@ export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => 
   const byTime = new Map<number, any[]>();
   for (const c of v.in) if (c.at !== undefined) byTime.set(c.at, [...(byTime.get(c.at) ?? []), c]);
   for (const [at, cs] of byTime) clock.timer(at, () => { for (const c of cs) later(c); });
-  await clock.run(() => answers.length === v.in.length && clock.t > 0 || answers.length === v.in.length && v.in.length === 0, o.maxMs ?? 120_000);
+  // Every call answered, and no planned event left (an early-answered release goes after its answer).
+  const planned = () => stage.state(tab.id)?.planned ?? 0;
+  await clock.run(() => (answers.length === v.in.length && clock.t > 0 || answers.length === v.in.length && v.in.length === 0) && planned() === 0, o.maxMs ?? 120_000);
   await idle();
   return { clock, tab, stage, answers, arrived, logs };
 }

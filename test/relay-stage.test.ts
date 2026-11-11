@@ -16,18 +16,19 @@ import {
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { seededRandom } from "../src/human/random.ts";
+import { charKey, SHIFT } from "../src/human/keys.ts";
 import { FakeClock, FakeTab, runVector, topBox, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
 const F = V.firstValues, K = V.constants;
 const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === id));
 
-/** The vectors of the pointer part (this task), and those of the later parts (boards ab-t30.10 to ab-t30.12). */
+/** The vectors of the pointer part (board ab-t30.9), of the keys and the text (board ab-t30.10), and those of the later parts (boards ab-t30.11 and ab-t30.12). */
 const POINTER = ["click", "dblclick", "dblclick-button", "triple-click", "right-click", "click-delay", "click-modifiers", "hover-modifiers", "click-position",
   "click-trial", "move-steps", "hover", "move", "move-same-point", "down-up", "mouse-click", "check", "frame-click", "frame-hover", "tap", "rule-gate",
   "rule-dialog-at-press", "rule-event-error"];
+const KEYS = ["type", "press-sequentially", "type-delay", "press-chord", "fill", "fill-line-feed", "fill-long", "clear", "insert-text", "focus-field", "focus-button"];
 const LATER: Record<string, string[]> = {
-  "ab-t30.10 (keys and text)": ["type", "press-sequentially", "type-delay", "press-chord", "fill", "fill-line-feed", "fill-long", "clear", "insert-text", "focus-field", "focus-button"],
   "ab-t30.11 (scroll and wheel)": ["wheel", "wheel-residual", "wheel-mac", "scroll-into-view"],
   "ab-t30.12 (the script calls)": ["mouse-drag", "fill-date", "select-option", "set-files-paths", "set-files-payloads", "drag-to", "drop", "blur", "select-text", "dispatch-event"],
 };
@@ -57,6 +58,27 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
       assert.equal(s.child === "child", o.session === "child", `${at}: its session`);
       items[k] = { first: s.t, last: s.t };
       i++;
+    } else if (o.typing !== undefined) {
+      // Typed keys: a keyDown with its text and a keyUp for each character, a Shift rawKeyDown before each shifted one and
+      // its keyUp after that character's, each hold in holdMs.
+      let j = i;
+      while (j < sent.length && sent[j].pass === undefined && sent[j].method === "Input.dispatchKeyEvent") j++;
+      const run = sent.slice(i, j), downs = run.filter((x) => x.params.type === "keyDown");
+      assert.equal(downs.map((x) => x.params.text).join(""), o.typing, `${at}: the text as typed keys`);
+      for (const d of downs) {
+        const shifted = !!(charKey(d.params.text)!.modifiers & SHIFT), q = run.indexOf(d);
+        const up = run.slice(q + 1).find((x) => x.params.type === "keyUp" && x.params.code === d.params.code)!;
+        assert.ok(up && up.t - d.t >= o.holdMs[0] && up.t - d.t <= o.holdMs[1], `${at}: the hold of ${d.params.text}: ${up ? up.t - d.t : "no keyUp"} ms`);
+        assert.equal(!!(d.params.modifiers & SHIFT), shifted, `${at}: ${d.params.text} with modifiers ${d.params.modifiers}`);
+        if (shifted) {
+          const sd = run.slice(0, q).reverse().find((x) => x.params.key === "Shift");
+          const su = run.slice(run.indexOf(up) + 1).find((x) => x.params.key === "Shift" && x.params.type === "keyUp");
+          assert.ok(sd?.params.type === "rawKeyDown" && su, `${at}: a Shift press before ${d.params.text} and its release after ${d.params.text}'s`);
+        }
+      }
+      assert.deepEqual([...new Set(downs.filter((d) => charKey(d.params.text)!.modifiers & SHIFT).map((d) => d.params.text))], o.shift, `${at}: the shifted characters`);
+      items[k] = { first: run[0].t, last: run[run.length - 1].t };
+      i = j;
     } else if (o.path || o.line) {
       // The run ends at another event, or at the next item's first event when that item is a run of its own from a later call.
       const next = v.out[k + 1], nextAt = next && (next.path || next.line) && String(next.from).startsWith("in:") ? arrived.get(Number(next.from.slice(3)))! : Infinity;
@@ -113,7 +135,8 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
     const got = answers.find((a) => a.id === want.id)!;
     if (want.after === "none") {
       if (want.result) assert.deepEqual(got.body.result, want.result, `${w} answer ${want.id}: the stage's own result`);
-    } else assert.ok(got.t >= items[Number(want.after.slice(4))].last, `${w} answer ${want.id}: after ${want.after}`);
+    } else if (want.mayBeEarly) assert.ok(items[Number(want.after.slice(4))], `${w} answer ${want.id}: its event ${want.after} went (before or after the answer: the early answer)`);
+    else assert.ok(got.t >= items[Number(want.after.slice(4))].last, `${w} answer ${want.id}: after ${want.after}`);
     if (want.error === "chrome") assert.deepEqual(got.body.error, { code: v.chrome.errors[want.after].code, message: v.chrome.errors[want.after].message }, `${w} answer ${want.id}: Chrome's error`);
     else if (want.error === "the same") assert.deepEqual(got.body.error, errorOf(v.answers.find((x: any) => x.error === "chrome").id), `${w} answer ${want.id}: the same error`);
     else assert.ok(!got.body.error, `${w} answer ${want.id}: no error (${JSON.stringify(got.body.error)})`);
@@ -123,13 +146,13 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
 
 // ================================================================ the vectors of the pointer rows
 
-test("the vectors: each one is this part's or a later part's, and this part runs every vector of the pointer rows", () => {
+test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows and of the key and text rows", () => {
   const all = V.vectors.map((x: any) => x.id).sort();
-  assert.deepEqual([...POINTER, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
-  for (const id of POINTER) assert.ok(V.vectors.some((x: any) => x.id === id), id);
+  assert.deepEqual([...POINTER, ...KEYS, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
+  for (const id of [...POINTER, ...KEYS]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
 });
 
-for (const id of POINTER) {
+for (const id of [...POINTER, ...KEYS]) {
   test(`vector ${id}: the stage's events, their times and fields, and the answers (5 seeds)`, async () => {
     const v = vec(id);
     for (const seed of [v.seed, v.seed + 101, v.seed + 202, v.seed + 303, v.seed + 404]) check(v, await runVector(v, { seed }), seed);

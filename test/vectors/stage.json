@@ -3206,7 +3206,7 @@
     {"id": 1, "after": "out:1"},
     {"id": 2, "after": "out:2", "mayBeEarly": true},
     {"id": 3, "after": "out:4"},
-    {"id": 4, "after": "out:5"}
+    {"id": 4, "after": "out:5", "mayBeEarly": true}
    ]
   },
   {
@@ -3889,7 +3889,7 @@
      "fields": {"key": "Delete", "modifiers": 0}
     }
    ],
-   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2"}]
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2", "mayBeEarly": true}]
   },
   {
    "id": "fill-date",

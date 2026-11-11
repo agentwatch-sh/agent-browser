@@ -251,6 +251,9 @@ export class KeyStream {
     return this.shiftUntil() + this.shiftAfter;
   }
 
+  /** Whether the stream holds a Shift of its own (a caller's planned release waits for it). */
+  get ownShift(): boolean { const m = this.mods.get(SHIFT); return !!m && !m.client; }
+
   /** The release of the stream's own Shift at or after `at`, with no end of the run (the run's next key keeps its interval). */
   idle(at: number): KeyEv[] { return this.releaseShift(at); }
 
