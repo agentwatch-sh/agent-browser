@@ -67,7 +67,7 @@ export function mcpEntry(): NonNullable<typeof entry> {
  * One MCP server object: `answer` gets each answer of the server to a client request; `context` gives the default
  * context of the session's browser connection (the ticket's), and runs only at the first tool that needs the browser.
  */
-export async function openMcpServer(o: { list: AllowList; folder: string; context: () => Promise<unknown>; answer: (m: Message) => void }): Promise<McpServerSession> {
+export async function openMcpServer(o: { list: AllowList; folder: string; context: () => Promise<unknown>; answer: (m: Message) => void; trace?: (request: Message, reply: Message) => void }): Promise<McpServerSession> {
   const server = await mcpEntry().createConnection(mcpConfig(o.list, o.folder), o.context);
   const roots = [{ uri: pathToFileURL(o.folder).href, name: "agent-browser" }];
   const t: Transport = {
@@ -77,6 +77,7 @@ export async function openMcpServer(o: { list: AllowList; folder: string; contex
         // A request of the server to the client: answered here, after the server has its handler for the answer.
         if (m.id !== undefined) {
           const reply: Message = m.method === "roots/list" ? { jsonrpc: "2.0", id: m.id, result: { roots } } : { jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "Method not found" } };
+          o.trace?.(m, reply);
           setImmediate(() => t.onmessage?.(reply));
         }
         return; // a notification: no stream

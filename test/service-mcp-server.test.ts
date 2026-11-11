@@ -208,9 +208,11 @@ test("under Node's permission model with reads only (no write, no network, no ch
 test("the MCP's request of the client's roots is answered with the scope's folder; a client's own capabilities never reach it", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-roots-"));
   const got: Message[] = [];
+  const traced: [Message, Message][] = [];
   try {
-    const s = await openMcpServer({ list: LIST, folder: `${dir}/`, context: async () => { throw new Error("no browser"); }, answer: (m) => got.push(m) });
-    s.deliver(INIT);
+    const s = await openMcpServer({ list: LIST, folder: `${dir}/`, context: async () => { throw new Error("no browser"); }, answer: (m) => got.push(m), trace: (q, a) => traced.push([q, a]) });
+    // A client that names no roots of its own: the server still sees the roots capability, and asks for them.
+    s.deliver({ ...INIT, params: { ...INIT.params, capabilities: { sampling: {}, elicitation: {} } } });
     await until(() => got.find((m) => m.id === 1));
     s.deliver({ jsonrpc: "2.0", method: "notifications/initialized" });
     // A file outside the folder: the MCP's own guardrail refuses it with the folder as its root (the transport refuses first in the service).
@@ -218,6 +220,10 @@ test("the MCP's request of the client's roots is answered with the scope's folde
     const a = await until(() => got.find((m) => m.id === 7), "the answer", 20_000);
     assert.equal((a.result as any).isError, true);
     assert.ok(!got.some((m) => typeof m.method === "string"), "no request of the server went to the client");
+    const roots = traced.filter(([q]) => q.method === "roots/list");
+    assert.equal(roots.length, 1, "the server asked for the roots once, at its first tool");
+    assert.deepEqual((roots[0][1].result as any).roots, [{ uri: `file://${dir}/`, name: "agent-browser" }], "the scope's folder is the MCP's root");
+    assert.deepEqual(traced.filter(([q]) => q.method !== "roots/list"), [], "no other request of the server (no sampling, no elicitation)");
     await s.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -650,4 +656,43 @@ test("the log rule: the MCP path's log holds no token, fingerprint, tool argumen
     assert.ok(out.includes(CANARY), "the output stream holds what the worker wrote (the twin)");
     assert.ok(!log2.join("\n").includes(CANARY), "the service's log does not");
   } finally { await w.stop(); rmSync(dir2, { recursive: true, force: true }); }
+});
+
+test("the worker's environment is its own: no variable of the service's environment (DEBUG, PLAYWRIGHT_*, a test variable) reaches it", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-env-"));
+  process.env.AB_TEST_PARENT_ONLY = "a test value";
+  const w = new ScopeWorker("t-env", { list: LIST, folder: `${dir}/`, ticketUrl: () => null, ended: () => {}, log: () => {}, heapMb: 32, entry: new URL("./fixtures/mcp-heap-worker.ts", import.meta.url) });
+  try {
+    const keys = await new Promise<string[]>((resolve) => { w.worker.on("message", (m: any) => { if (m.t === "env") resolve(m.keys); }); w.worker.postMessage({ t: "env" }); });
+    assert.ok(Object.keys(process.env).length > keys.length);
+    assert.deepEqual(keys.filter((k) => k === "AB_TEST_PARENT_ONLY" || k === "DEBUG" || k.startsWith("PLAYWRIGHT") || k === "NODE_OPTIONS" || k === "HOME"), []);
+    assert.deepEqual(keys.sort(), ["LANG", "PATH"]);
+  } finally { delete process.env.AB_TEST_PARENT_ONLY; await w.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the worker's standard output and error never reach the service's own (the journal): a service process whose worker writes a canary prints none", { timeout: 60_000 }, async () => {
+  const { execFile } = await import("node:child_process");
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-stdout-"));
+  const script = `
+    const { ScopeWorker } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/workers.ts"))});
+    const { readAllowList } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/allow-list.ts"))});
+    const w = new ScopeWorker("t-out", { list: readAllowList(), folder: process.argv[1], ticketUrl: () => null, ended: () => {}, log: (l) => console.error(l), heapMb: 32, entry: new URL(${JSON.stringify(new URL("./fixtures/mcp-heap-worker.ts", import.meta.url).href)}) });
+    await w.open("s1");
+    await new Promise((r) => setTimeout(r, 500));
+    await w.stop();
+    console.log("DONE");`;
+  try {
+    const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => execFile(process.execPath, ["--input-type=module", "-e", script, `${dir}/`], { cwd: ROOT, timeout: 50_000 }, (e, stdout, stderr) => (e ? reject(e) : resolve({ stdout, stderr }))));
+    assert.match(stdout, /DONE/);
+    assert.ok(!stdout.includes(CANARY) && !stderr.includes(CANARY), "no canary on the service's own output");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("step 8 of the MCP path reads the model: the number of sites of the scope's list, or null for a scope that the line does not name or gives no list", { timeout: 30_000 }, async () => {
+  const h = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }) } as any);
+  try {
+    await h.ready({ t: "allowlist", lists: { a: ["a.example", "b.example"], e: [] }, scopes: { "web-1": "a", "web-2": "e", "web-3": null }, default: null });
+    const m = h.relay.model as any;
+    assert.deepEqual(["web-1", "web-2", "web-3", "web-4"].map((s) => m.sitesOf(s)), [2, 0, null, null]);
+  } finally { await h.close(); }
 });

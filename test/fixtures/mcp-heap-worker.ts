@@ -18,6 +18,8 @@ port.on("message", (m: any) => {
 // The log test: at each open the worker writes the canary of the token design's section 12 (a made-up test token) to its
 // standard output and error, which the service reads and drops.
 port.on("message", (m: any) => {
+  // The environment test: the names of the worker's own environment.
+  if (m.t === "env") { port.postMessage({ t: "env", keys: Object.keys(process.env) }); return; }
   if (m.t !== "open") return;
   console.log(`worker stdout: abt1_${"C".repeat(43)}`);
   console.error(`worker stderr: abt1_${"C".repeat(43)}`);
