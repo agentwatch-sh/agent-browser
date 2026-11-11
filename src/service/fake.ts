@@ -8,7 +8,7 @@
 // of the service. Each line on its standard input that is an event of C12's table, with exactly its fields, goes to
 // each connection past the hellos.
 //
-// The connection tokens (C12, the token design; board ab-v16.94.5): the fake's hello has the feature mcp_token, it takes
+// The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
 // each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
 // has a fingerprint (never the fingerprint). It serves no MCP.
 

@@ -8,8 +8,8 @@
 // Each later stage adds a part with its ops (part.ts): stage 1c (board ab-v16.94.4) the lists, the scopes, the prompts
 // and the sign-ins (stage1c.ts); stage 1b part 1 (board ab-v16.94.3) the Chrome unit and its owner rule with the ops
 // start and stop (unit/part.ts); stage 1b part 2 (board ab-v16.94.9) the native link (link/), the agent package
-// (package/) and the model in this process, the X pointer, and the op sender. The connection tokens (the token
-// design; board ab-v16.94.5, part 1): the door's shape step takes set_sessions' mcp_token (control.ts), the service keeps
+// (package/) and the model in this process, the X pointer, and the op sender. The connection tokens (board
+// ab-v16.94.5, part 1; the token design, board ab-v16.94.10): the door's shape step takes set_sessions' mcp_token (control.ts), the service keeps
 // each session's fingerprint in memory only, and status says whether a session has one; the hello gets the feature
 // mcp_token with the token check of the MCP path (stage 1d).
 

@@ -93,7 +93,8 @@ export function fieldFits(f: string, v: unknown): boolean {
 /**
  * C12's rules of a whole snapshot (the token design): one fingerprint at most once in `sessions` and `remote` together,
  * one scope at most once in `sessions` and one remote scope at most once in `remote`, and no fingerprint on an item whose
- * `lifetime_id` is null. Only for a request whose fields passed fieldFits.
+ * `lifetime_id` is null. The daemon sends no item for a launch name that two live sessions have, so a snapshot with two
+ * items of one scope is a bad request. Only for a request whose fields passed fieldFits.
  */
 export function snapshotFits(req: Record<string, unknown>): boolean {
   const sessions = req.sessions as Record<string, unknown>[], remote = req.remote as Record<string, unknown>[];

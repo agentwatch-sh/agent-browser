@@ -245,13 +245,13 @@ test("the stage 1a status: state off, the agent's text and the operator's text a
   } finally { await d.close(); }
 });
 
-// ------------------------------------------------------------------ the connection tokens (the token design, board ab-v16.94.5)
+// ------------------------------------------------------------------ the connection tokens (board ab-v16.94.5; the token design, board ab-v16.94.10)
 
-test("a refused set_sessions (each bad line of mcp_token) gets the fixed bad request, which echoes no field of the line, and the service and the fake keep their old snapshot", async () => {
+test("a refused set_sessions (each bad line of mcp_token, b22 to b32) gets the fixed bad request, which echoes no field of the line, and the service and the fake keep their old snapshot", async () => {
   const strs = (x: unknown): string[] => typeof x === "string" ? [x] : Array.isArray(x) ? x.flatMap(strs) : x && typeof x === "object" ? Object.values(x).flatMap(strs) : [];
   const r3 = control.requests.find((v: any) => v.req.id === "r3").req;
-  const bad = control.badRequests.filter((v: any) => v.req.op === "set_sessions" && /^b(2[2-9]|3[01])$/.test(v.req.id));
-  assert.equal(bad.length, 10, "the bad lines b22 to b31");
+  const bad = control.badRequests.filter((v: any) => v.req.op === "set_sessions" && /^b(2[2-9]|3[0-2])$/.test(v.req.id));
+  assert.equal(bad.length, 11, "the bad lines b22 to b32");
   const own = { kind: "daemon", user: "ann", via: "daemon" };
   const want = r3.sessions.map((s: any) => [s.scope, s.mcp_token !== null]);
   for (const make of [stage1a, () => new FakeService({ agentDoor: AGENT_DOOR })]) {

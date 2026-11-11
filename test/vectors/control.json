@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (the token design) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b31 break each rule of mcp_token; testTokens are made-up test values in a token's form, with their fingerprints.",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints.",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -827,6 +827,80 @@
    "res": {
     "t": "res",
     "id": "r13",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "set_sessions while two live sessions have the launch name web-5 (live: the daemon's live sessions): the daemon sends no item for web-5, so neither of them gets a list or a token; each other live session has its item (review-113 B1)",
+   "live": [
+    {
+     "scope": "shell-2",
+     "lifetime_id": null
+    },
+    {
+     "scope": "tool-4",
+     "lifetime_id": "lt-4d5e"
+    },
+    {
+     "scope": "web-5",
+     "lifetime_id": "lt-5e6f"
+    },
+    {
+     "scope": "web-5",
+     "lifetime_id": "lt-6f70"
+    }
+   ],
+   "req": {
+    "t": "req",
+    "id": "r14",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "shell-2",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3200,
+        "start": 6100
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null,
+      "mcp_token": null
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
+     }
+    ],
+    "remote": [],
+    "box": {
+     "hosts": [
+      "box.example"
+     ],
+     "cookie_names": [
+      "box_login"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r14",
     "ok": true,
     "data": {}
    }
@@ -1708,6 +1782,37 @@
    "res": {
     "t": "res",
     "id": "b31",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has no mcp_token (stage 5's field; each item carries it, or null): a bad request (review-113)",
+   "req": {
+    "t": "req",
+    "id": "b32",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "taylor/web-9",
+      "box": "taylor",
+      "list": "mac-grant"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b32",
     "ok": false,
     "error": "bad request"
    }

@@ -86,10 +86,10 @@ const FIELD_RULES: FieldRule[] = [
     (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string") && (s.lifetime_id === null || typeof s.lifetime_id === "string"))
       : f === "remote" ? Array.isArray(v) && v.every((x: any) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string")
       : f === "box" ? isObj(v) && strings(v.hosts) && strings(v.cookie_names) : null],
-  // The token design (board ab-v16.94.5): the fingerprint of each session's connection token, never the token.
+  // The token design (board ab-v16.94.10; this stage, board ab-v16.94.5): the fingerprint of each session's connection token, never the token.
   ["`mcp_token` (of an item of `sessions` or of `remote`) is `null` or 64 lowercase hex digits: the fingerprint of the session's connection token, the lowercase hex SHA-256 of the token's ASCII bytes (the connection tokens, below). It is never the token itself.",
     (f, v) => (f === "sessions" || f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || fingerprintOrNull(x.mcp_token)) : null)],
-  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5). An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
+  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5): the daemon sends no item for a launch name that two live sessions have, so neither of them gets a list or a token. An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
     () => null, (req, fields) => !fields.includes("sessions") || snapshotFits(req)],
   ["`enabled` and `control` are booleans; `chrome_bin` is a string or `null`; `chrome_args` is a list of strings.",
     (f, v) => (f === "enabled" || f === "control" ? typeof v === "boolean" : f === "chrome_bin" ? v === null || typeof v === "string" : f === "chrome_args" ? strings(v) : null)],
@@ -573,7 +573,8 @@ test("C12 states the part of stage 1c: the files, a session's repo, the object, 
     "The service sends `set_scopes` with `default` `null` and `operator` `\"*\"` (C4). It keeps C4's rules 1 and 2 of the tabs of a session that ended: no object before the first complete `set_sessions`, the file of ended scopes and the restart gate. An ok in time is an ok within 10 s on the same link. Only then does the model get the allowlist line, with each session's roots. With no ok in time, the service sends its current object again every 10 s.",
     "At `session_ended` the service writes the file of ended scopes first, then sends `end_scope` to the model (not for a scope that another live session holds), then sends the object without the scope.",
     "The list copy of a scope is `<state>/session-lists/<scope>/allowlist.json`, `{\"allow\":[<host>...]}`: the hosts of the scope's list, for agent-browser's CLI.",
-    "At the same times it removes each copy that it wrote whose scope the object no longer names (also a name that two live sessions share) or names with no list, `unread-repo` or a list with no file, so the CLI refuses that session and never reads an old list's hosts.",
+    "At the same times it removes each copy that it wrote whose scope the object no longer names (also a launch name that two live sessions have: the daemon sends no item for it, by the field rules) or names with no list, `unread-repo` or a list with no file, so the CLI refuses that session and never reads an old list's hosts.",
+    "A session's `list` in the status is the list that the current object gives its scope, or `null` while the object gives none (a launch that the restart gate holds, an ended name). A launch name that two live sessions have has no session in the status: the daemon sends no item for it (the field rules), so neither session gets a list.",
     "`launch_check`'s refusal is today's text: \"A session named <scope> ended a moment ago, and the agent browser could not record it (<error>). Choose another name, or wait until the agent browser confirms its lists.\" The vectors' `r6` gives it with the error `the file of ended scopes cannot be written: ENOSPC`, and the fake answers so.",
     "Each entry of `refused` has the host rules' reason, for example `paste the host only` (the vectors' `r7`).",
     "`list_set` changes nothing and answers an error for the list `unread-repo` (`the list unread-repo is always empty, so it takes no entry`), for a list file that it cannot read (`the list file of <list> cannot be read, so the service does not change it`), and for a write that fails (`the list file of <list> cannot be written: <kind>`).",
@@ -586,6 +587,7 @@ test("C12 states the part of stage 1c: the files, a session's repo, the object, 
     "An answer can come after the answers of later requests: an `import` answers when the receiver answers, and the service answers the other requests of the connection in that time. The daemon matches each answer by its `id`. When the daemon ends its side of the connection, it still gets the answers that the service owes it; then the service ends its side.",
     "No log line holds an entry of a `list_set`, a refused entry, a lifetime id, a cookie, a storage value or a payload.",
   ]);
+  for (const old of ["(also a name that two live sessions share)", "while the object gives none (a launch name that two live sessions have,"]) assert.ok(!says(C12, old), `C12: no ${old} (review-113 B1)`);
   // The texts that the part names are the code's (one text on both sides).
   const r7 = control.requests.find((v: any) => v.req.id === "r7");
   assert.deepEqual(r7.res.data.refused, [{ entry: "https://bad/x", reason: "paste the host only" }], "r7: the host rules' reason");
@@ -672,7 +674,7 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
     "Each line on its standard input that is an event of the event table, with exactly its fields, goes to each connection that has sent its hello. The fake drops each other line. So a test sends the events that it needs.",
     "After its socket listens, the fake prints one line on its standard output, `{\"t\":\"listening\"}`, so that a test waits for that line.",
   ]);
-  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b31` break each rule of `mcp_token`, each with the fixed `bad request` answer. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
+  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b32` break each rule of `mcp_token`, each with the fixed `bad request` answer. `r14` is the daemon's snapshot while two live sessions have one launch name: it has no item for that name. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
   assert.ok(!says(C12, "Its hello has `\"commit\":null` and the feature `fake`."), "the fake's old hello sentence is gone");
   assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads. Its `badLines` are lines as bytes (in hex) that close the connection: a byte order mark, a CR, and bytes that are not UTF-8."));
   // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
@@ -696,17 +698,18 @@ test("C12 states the recipients' lifetime ids (B4): the run that the block stopp
   assert.ok(!/MCP port/.test(C12), "no MCP port in C12 (B3)");
 });
 
-// ---- The connection tokens (the token design, board ab-v16.94.5, build task 1): C12's part, the field and its vectors ----
+// ---- The connection tokens (board ab-v16.94.5, build task 1 of the token design, board ab-v16.94.10): C12's part, the field and its vectors ----
 
-const TOKEN_HEADING = "The connection tokens (from stage 1d; the token design, board ab-v16.94.5).";
+const TOKEN_HEADING = "The connection tokens (from stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10).";
 // The part's lead paragraph and its bullets, in order: the part holds exactly these.
 const TOKEN_PART: string[] = [
-  `**${TOKEN_HEADING}** The token design is \`docs/superpowers/specs/2026-11-10-mcp-connection-tokens-design.md\` (board ab-v16.94.10), with the operator's answers of 2026-11-10. agentwatch's daemon mints a connection token for each session that it launches while the session's repo's list has a site, and it writes the token into the session's MCP entry. The service never gets a token: \`set_sessions\` carries only each token's fingerprint, in the session's own item (\`mcp_token\`). C11 states the token check of the MCP path (its admission, step 7).`,
+  `**${TOKEN_HEADING}** The token design is \`docs/superpowers/specs/2026-11-10-mcp-connection-tokens-design.md\`, with the operator's answers of 2026-11-10. agentwatch's daemon mints a connection token for each session that it launches while the rules of the token design's section 9.1 hold (agentwatch launches the session with a lifetime id and the switch on; the session's repo's list has a site; the service's hello has the feature \`mcp_token\`; the \`LISTEN\` line of the MCP path's TCP port has the user's uid; the client takes the entry's form). It writes the token into the session's MCP entry only after the service took the token's fingerprint (rule 6). The service never gets a token: \`set_sessions\` carries only each token's fingerprint, in the session's own item (\`mcp_token\`). C11 states the token check of the MCP path (its admission, step 7).`,
   "No new op and no provenance change: `set_sessions` stays `kind: daemon`.",
   "The daemon sends `mcp_token` in each item of `sessions`, to every service: the fingerprint of the session's token, or `null` for a session that has no token. An item with no `mcp_token` gets `bad request` (the field rules). The daemon writes no MCP entry for a service whose hello has no feature `mcp_token`, and it then sends `null` for each session.",
   "The service keeps the fingerprints of the last `set_sessions` in memory only, never on disk, and it drops a session's fingerprint with the session. Its log and its `status` name a scope and say whether the session has a token, never a fingerprint.",
   "The `bad request` answer to `set_sessions` never echoes the snapshot or any field of it: no scope, no lifetime id and no fingerprint.",
-  "When a `set_sessions` that drops a session or a remote fingerprint fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to 60 s, and at each reconnect. A `bad request` on such a snapshot is a fault: the daemon's health line is red.",
+  "Before a launch with the entry, the daemon waits up to 5 s for the answer to the `set_sessions` that carries the session's fingerprint. At a failure (`bad request`, or no answer in 5 s) it writes no entry file, it launches the session without the entry, and its next snapshot carries `\"mcp_token\":null` for that session.",
+  "When a `set_sessions` that drops a session or a remote fingerprint fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to 60 s, and at each reconnect. A `bad request` on such a snapshot is a fault: the daemon's health line is red. \"Drops\" compares with the last snapshot that the service took, so the daemon sends again until the service takes a snapshot without that session or that fingerprint. Each resend is the current snapshot, so it also carries each later change. The daemon may send every failed snapshot again in the same way, and the service takes each one as it takes any `set_sessions`.",
   "Each item of `remote` carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token). `remote` stays empty until stage 5.",
   "The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. Before stage 1d the service takes the field by the field rules and gives it in `status`, and it serves no MCP.",
 ];
@@ -769,6 +772,15 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   by("a fingerprint with the lifetime id null", (v) => v.req.sessions.some((s: any) => s.lifetime_id === null && FINGERPRINT.test(s.mcp_token ?? "")));
   by("one fingerprint in a session and in a remote item", (v) => v.req.sessions.some((s: any) => v.req.remote.some((x: any) => x.mcp_token === s.mcp_token && s.mcp_token !== null)));
   by("one remote scope in two remote items", (v) => v.req.remote.length === 2 && v.req.remote[0].scope === v.req.remote[1].scope && v.req.remote[0].mcp_token !== v.req.remote[1].mcp_token);
+  by("a remote item with no mcp_token (review-113)", (v) => v.req.remote.length > 0 && v.req.remote.some((x: any) => !Object.hasOwn(x, "mcp_token")) && v.req.sessions.length === 0);
+  // review-113 B1: the daemon sends no item for a launch name that two live sessions have (r14 and its live sessions).
+  const shared = good.find((v: any) => Array.isArray(v.live));
+  assert.ok(shared, "a set_sessions vector with the daemon's live sessions (r14)");
+  const names = shared.live.map((s: any) => s.scope);
+  assert.ok(names.some((n: string) => names.indexOf(n) !== names.lastIndexOf(n)), "two live sessions with one launch name");
+  assert.deepEqual(shared.req.sessions.map((s: any) => s.scope), names.filter((n: string) => names.indexOf(n) === names.lastIndexOf(n)), "an item for each launch name of one live session only");
+  for (const s of shared.req.sessions) assert.equal(s.lifetime_id, shared.live.find((x: any) => x.scope === s.scope).lifetime_id, `${s.scope}: its lifetime id`);
+  assert.deepEqual(shared.res, { t: "res", id: shared.req.id, ok: true, data: {} });
   // The bad request answer echoes no field of the refused snapshot (14.1: the scan of the answer), and the scan reads its text (its twin).
   for (const v of bad) assert.deepEqual(echoes(v.res, lineFields(v.req)), [], `${v.note}: no field of the line in the answer`);
   const planted = bad.map((v: any) => ({ ...v.res, error: `bad request: ${lineFields(v.req)[0]}` }));
@@ -778,7 +790,7 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   assert.deepEqual(withToken.map((v: any) => v.req?.id), ["b24"], "only b24 carries a token, and its answer does not");
   assert.ok(!/abt1_/.test(JSON.stringify(control.state)) && !/abt1_/.test(JSON.stringify(control.hellos)), "no token in the state or the hellos");
   assert.ok(/abt1_/.test(JSON.stringify({ ...control.events[0], ev: { ...control.events[0].ev, chrome_version: token("web-1") } })), "the token scan finds a planted token (its twin)");
-  assert.ok(bad.length >= 10 && bad.every((v: any) => /^b(2[2-9]|3[01])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18 and b22 to b31");
+  assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18 and b22 to b32");
   assert.equal(setSessionsLines().length, good.length + bad.length);
 });
 

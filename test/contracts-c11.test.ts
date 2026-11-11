@@ -1049,6 +1049,7 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     "5. A path that is not `/mcp` or `/mcp/<scope>` with a scope that matches the scope pattern: 404 `Not found. Connect an MCP client to /mcp/<scope>.`",
     "6. A path whose scope is not the connection's scope: the session's 403.",
     "7. The token (the token design). A request has an `Authorization: Bearer <token>` header when it has exactly one `Authorization` header, and that header's value is `Bearer` (in any case), one space and a token of one character or more.",
+    "The token is every character after that one space: after two spaces the token starts with a space, and text after the token is part of the token, so each is a token that the service does not know. A tab in place of the space is not this form.",
     "The service hashes the token with SHA-256 and compares the digest with the session's `mcp_token` in constant time. The first of these three cases that holds gives its answer:",
     "no `Authorization: Bearer <token>` header: 401 `The agent browser needs this session's connection token. agentwatch adds it to the sessions that it starts while the repo's list has a site.`;",
     "a session whose `mcp_token` is `null`: 401 `This session has no connection token. agentwatch adds one when it starts a session while the repo's list has a site: restart the session.`;",
@@ -1119,7 +1120,7 @@ test("C11 keeps no sentence of the stdio shim as the local MCP path, and no rule
   assert.ok(C11.indexOf("**The scope's session (the peer check; board ab-v16.50).**") < C11.indexOf("**The MCP path (from stage 1d;"), "the order of the parts");
 });
 
-// ---- The MCP path's admission with the token step (the token design, board ab-v16.94.5, build task 1) ----
+// ---- The MCP path's admission with the token step (board ab-v16.94.5, build task 1 of the token design, board ab-v16.94.10) ----
 // The vectors mcpChecks and mcpCloses of test/vectors/endpoint.json, with the reference of C11's admission of the MCP path:
 // steps 1 and 2 once for each connection (the uid by the full tuple, the walk of each holder), then steps 3 to 8 and the
 // transport for each request. The walk is the scope's session's (worldOf, walk, rootsThatCount above), with the roots of the
@@ -1203,6 +1204,8 @@ function mcpRun(c: any): { answer: string; pid?: number | null }[] {
 
 test("the MCP path's vectors: the test tokens and the snapshots follow the token design and C12's field rules", () => {
   assert.ok(endpoint.mcpChecks && endpoint.mcpCloses && endpoint.mcpSnapshots && endpoint.mcpTokens && endpoint.mcpAnswers && endpoint.mcpSessionIds, "test/vectors/endpoint.json has the MCP path's vectors");
+  // review-113 N1: the token design is board ab-v16.94.10; this stage is board ab-v16.94.5.
+  for (const t of [endpoint.mcpNote, endpoint.contract]) assert.ok(says(t, "the token design, board ab-v16.94.10") && !says(t, "the token design, board ab-v16.94.5") && !says(t, "(the token design)"), "the vectors name the token design's board");
   assert.ok(Number.isInteger(MCP_PORT) && MCP_UID === 1001, "the service's port and uid (procsNote: the uid 1001)");
   for (const [name, t] of Object.entries<any>(endpoint.mcpTokens)) {
     assert.match(t.token, /^abt1_[A-Za-z0-9_-]{43}$/, name);
@@ -1292,6 +1295,10 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("the earlier run's token while its snapshot holds", (x) => x.r.answer === "pass" && bearer(x) === T.leadRun1.token);
   has("a second Authorization header with the right token", (x) => x.r.answer === "needsToken" && x.h("authorization").length === 2 && x.h("authorization").every((v: string) => v === `Bearer ${T.leadRun2.token}`));
   has("another scheme", (x) => x.r.answer === "needsToken" && /^Basic /.test(x.h("authorization")[0] ?? ""));
+  // review-113 B3: the token is every character after the one space.
+  has("two spaces after Bearer: a token that starts with a space", (x) => x.r.answer === "unknownToken" && x.h("authorization")[0] === `Bearer  ${T.leadRun2.token}`);
+  has("a tab after Bearer: not the header form", (x) => x.r.answer === "needsToken" && x.h("authorization")[0] === `Bearer\t${T.leadRun2.token}`);
+  has("text after the session's own token: part of the token", (x) => x.r.answer === "unknownToken" && (x.h("authorization")[0] ?? "").startsWith(`Bearer ${T.leadRun2.token} `));
   has("a token in the query, no header", (x) => x.r.answer === "needsToken" && x.r.path.includes(`?access_token=${T.leadRun2.token}`) && x.h("authorization").length === 0);
   has("a token in the path", (x) => x.r.answer === "session" && x.r.path === `/mcp/${T.leadRun2.token}`);
   has("a bearer of another length", (x) => x.r.answer === "unknownToken" && bearer(x)?.length !== T.leadRun2.token.length);
@@ -1357,6 +1364,10 @@ test("the service design states the changes of the token design's section 13: th
     "**The check of each list before the merge.**",
     "| The remote token's mint and the session's entry on taylor, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |",
     "the remote token check, the answer size limit,",
+    "It checks the link, the seal and the grant (the operator's consent), and lists each remote session in its `set_sessions` as",
+    "A local scope always needs a local walk; the carrier never gets a local scope.",
+    "(\"the answer is larger than the limit for a remote session; ask for a smaller part, for example one element's snapshot or a viewport screenshot\")",
+    "cross-box by direct HTTPS with the session's remote token, the gateway's address check and the serving service's fingerprint check (section 9, the token design's answer D c).",
     // Sections 11 and 12.
     "each session's token lives only in its 0600 entry file under agentwatch's tokens folder and in its client's memory; the service holds only its SHA-256 |",
     "the entry files are 0600 in 0700 folders |",
@@ -1386,6 +1397,10 @@ test("the service design states the changes of the token design's section 13: th
     "a per-session MCP configuration; no secret.",
     "for Codex a `-c` override for each launch (the daemon lead's change D19)",
     "No secret is in the URL or in the configuration.",
+    "cross-box through the link and a new kernel-checked daemon socket",
+    "the answer is larger than the link's limit",
+    "applies the Mac rules (below), and lists each remote session",
+    "the daemon never gets a local scope",
   ]) assert.ok(!says(D, old), `the service design: no ${old}`);
   // The operator's words of the token design's section 2, quoted as they are.
   for (const q of [

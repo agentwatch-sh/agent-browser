@@ -866,8 +866,8 @@ works on taylor's own MCP port. No browser logic runs on taylor for this path.
 - A rate limit for each remote session (first values: 10 requests a second, 4 at once). Above it, the gateway
   answers with a clear refusal and drops nothing silently.
 
-**The Mac's daemon.** It checks the link, the seal and the grant, applies the Mac rules (below), and lists
-each remote session in its `set_sessions` as `{"scope":"taylor/<session>","box":"taylor","list":<the
+**The Mac's daemon.** It checks the link, the seal and the grant (the operator's consent), and lists each remote
+session in its `set_sessions` as `{"scope":"taylor/<session>","box":"taylor","list":<the
 grant's list>,"mcp_token":"<64 hex>"}`. Each admitted request goes, unread, to the Mac service's agent door for that
 scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).
 
@@ -890,10 +890,9 @@ scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).
 - It checks each remote request's token: the SHA-256 of the request's bearer must equal that remote item's
   `mcp_token`, with the texts of C11's token step (the token design, section 11).
 - A size limit for each MCP answer (first value 16 MiB). An inline screenshot or a large snapshot can be
-  large. Above the limit, the Mac service sends a clear refusal ("the answer is larger than the link's
-  limit; ask for a smaller part, for example one element's snapshot or a viewport screenshot"), not a cut
-  answer.
-- A local scope always needs a local walk; the daemon never gets a local scope.
+  large. Above the limit, the Mac service sends a clear refusal ("the answer is larger than the limit for a remote
+  session; ask for a smaller part, for example one element's snapshot or a viewport screenshot"), not a cut answer.
+- A local scope always needs a local walk; the carrier never gets a local scope.
 - The remote scope gets the grant's list, never a local repo's list.
 - It refuses every tool argument that the allow list marks as a path (section 8.2). Examples are the
   paths of `browser_file_upload` and the `filename` arguments of the snapshot, screenshot and network
@@ -991,7 +990,7 @@ section 11).
 | --- | --- |
 | C1. Per user, never root; the gateway reads no user file | One service per OS user; the gateway passes requests to the user's daemon, which passes them to the user's service. The sender ID comes from the service through the daemon, not from a file. |
 | C2. Operator-only acts only through a control door, provenance from the credential | Section 7.1: only the daemon process itself on the control door (R1); `by.kind: operator` only from the gateway's password-login field (R7); no such op on the agent door or in the MCP. Start and stop keep today's rule until the operator answers Q5. |
-| C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check. The operator chose loopback TCP for the MCP (Q1 b, section 19), and the daemon lead turned C3 into five conditions for it, which section 19 records as rules: the uid check first, then the walk, before any request byte; any `Origin` refused and the `Host` checked; the port held while the service is down, and the Mac closed until its reader exists; a per-session MCP configuration in a 0600 file under agentwatch's tokens folder; the session's own token in the `Authorization` header only, checked against its fingerprint for each request. The MCP's own ticket is bound to the service's pid and never leaves the process; cross-box through the link and a new kernel-checked daemon socket. |
+| C3. The scope binding stays kernel-checked; no open TCP port, no bearer secret | The agent door is a Unix socket with the peer check. The operator chose loopback TCP for the MCP (Q1 b, section 19), and the daemon lead turned C3 into five conditions for it, which section 19 records as rules: the uid check first, then the walk, before any request byte; any `Origin` refused and the `Host` checked; the port held while the service is down, and the Mac closed until its reader exists; a per-session MCP configuration in a 0600 file under agentwatch's tokens folder; the session's own token in the `Authorization` header only, checked against its fingerprint for each request. The MCP's own ticket is bound to the service's pid and never leaves the process; cross-box by direct HTTPS with the session's remote token, the gateway's address check and the serving service's fingerprint check (section 9, the token design's answer D c). |
 | C4. Fail closed; the daemon sees the stop | Section 11; the `stopped` event, and the last stop in `status` for a daemon that was down. |
 | C5. Chrome survives restarts; the service has its own lifetime and adopts a running Chrome | Sections 5.2, 7.3 and 13.2: one owner of the Chrome unit, named by the state of the service's unit (`KillMode=process`, so a stop or crash of the service keeps Chrome); a daemon restart and a service restart keep Chrome in both modes (tested in stage 2). |
 | C6. Secrets | Section 11. |
