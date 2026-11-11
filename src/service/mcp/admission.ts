@@ -29,8 +29,11 @@ export const WWW_AUTHENTICATE = 'Bearer realm="agent-browser"';
 
 /** A refusal: its step, its status and its text (a 401 also gets WWW_AUTHENTICATE). */
 export type Refusal = { readonly step: number; readonly status: number; readonly body: string };
-/** An admitted connection: its scope (the walk's), the roots that admitted its holders, and the pid of a later session's 403. */
-export type Admitted = { readonly scope: string; readonly roots: readonly Root[]; readonly pid: number };
+/**
+ * An admitted connection: its scope (the walk's), the roots that admitted its holders, those of them that admitted a
+ * holder by their cgroup only (the walk met no root), and the pid of a later session's 403.
+ */
+export type Admitted = { readonly scope: string; readonly roots: readonly Root[]; readonly byCgroup: readonly Root[]; readonly pid: number };
 
 /** One item of set_sessions as the MCP path keeps it: the session's scope, its roots and its fingerprint (C12; in memory only). */
 export type McpItem = { readonly scope: string; readonly roots: readonly Root[]; readonly mcp_token: string | null };
@@ -86,7 +89,7 @@ export function admitConnection(o: { reader: McpReader; snapshot: McpSnapshot; c
   const holders = o.reader.holders(line.inode);
   if (holders.length === 0) return peer403(2);
   const walker = walkReader(o.reader);
-  const refused: number[] = [], scopes = new Set<string>(), roots: Root[] = [];
+  const refused: number[] = [], scopes = new Set<string>(), roots: Root[] = [], byCgroup: Root[] = [];
   for (const pid of holders) {
     // A holder is read at the scan: its start time then bounds the window of a reused pid (the stat form).
     const p = o.reader.proc(pid);
@@ -94,13 +97,14 @@ export function admitConnection(o: { reader: McpReader; snapshot: McpSnapshot; c
     if (got === null) { refused.push(pid); continue; }
     scopes.add(got.scope);
     if (!roots.some((r) => r.pid === got.root.pid && r.start === got.root.start)) roots.push(got.root);
+    if (got.byCgroup && !byCgroup.some((r) => r.pid === got.root.pid && r.start === got.root.start)) byCgroup.push(got.root);
   }
   const lowest = Math.min(...holders);
   if (refused.length) return session403(2, Math.min(...refused));
   if (scopes.size !== 1) return session403(2, lowest);
   const again = clientLine(o.reader.tcp(), o.client, o.service);
   if (again === null || !sameLine(again, line)) return session403(2, lowest);
-  return { scope: [...scopes][0], roots, pid: lowest };
+  return { scope: [...scopes][0], roots, byCgroup, pid: lowest };
 }
 
 /** A request as the admission reads it: the method, the raw request target, and the raw header lines (name, value, ...). */

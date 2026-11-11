@@ -5,8 +5,9 @@ allow list. It is a part of C11 (`docs/contracts/C11.md`, the MCP inside the ser
 `docs/superpowers/specs/2026-11-09-self-contained-agent-browser-design.md`, section 8.2, and the operator's
 answer Q4 of 2026-11-10 (the standard Playwright MCP, pinned, under the allow list; the design's section 19).
 Stage 1d (board ab-v16.94.5) writes the first list for the pinned version of `@playwright/mcp`, and its test.
-Stage 1d's first list holds the 24 tools of M3's part C (the self-contained design, section 8.2), and no
-`browser_run_code_unsafe`. Stage 0 adds no package. The vectors of the format: `test/vectors/mcp-allow-list.json`.
+Stage 1d's first list, `src/service/mcp/allow-list.json`, is for `@playwright/mcp` 0.0.83: it holds the 24 tools of
+that version's `tools/list` other than `browser_run_code_unsafe`, as M3's part C did for 0.0.85 (the self-contained
+design, section 8.2). Stage 0 adds no package. The vectors of the format: `test/vectors/mcp-allow-list.json`.
 The stored sign-ins design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, board
 ab-v16.95, section 10) adds the service's own tools, `service_tools`; their MCP build is board ab-v16.97.5, with stage
 1d.
@@ -48,10 +49,16 @@ adds it to the list.
 
 - `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a
   request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.
+- In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each
+  other property and its entry in `required`.
 - `tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call
   reaches the MCP's code, with the JSON-RPC error `-32601` and the message `Not available in the agent browser: <tool>`.
 - `tools/call` with an argument key that the tool's `keys` does not name: the service refuses it before the
   call reaches the MCP's code, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the argument <key> of <tool>`.
+- `tools/call` whose `arguments` is not a JSON object: the service refuses it before the call reaches the MCP's code,
+  with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the arguments of <tool> must be a JSON object`.
+- Until stage 1e (board ab-v16.97.5) serves them, the service's own tools are in no `tools/list`, and a `tools/call` of
+  one gets the `-32601` answer of a tool that `tools` does not name.
 - An argument whose key is in the tool's `paths`: the service refuses it when the path is outside the scope's
   folder, `<state>/mcp/<scope>/`, after `realpath` (C11), with the JSON-RPC error `-32602` and the message
   `Not available in the agent browser: <key> must name a file in the session's folder <folder>`.
@@ -70,7 +77,14 @@ CDP connection (the design, section 18), so the test needs no Chrome. It fails w
   and each bump of the pin needs a new review of the list;
 - each key of `keys` is a property of its tool's `schema`, and each key of `paths` is a key of `keys`;
 - each string property whose schema speaks of a file or a path (its name or its description) is in `paths`, or
-  is left out of `keys`;
+  is left out of `keys`; a schema speaks of a file or a path when its name or its description holds `file`, `path`,
+  `folder` or `directory`, in any case, also inside a word (so `browser_take_screenshot`'s `type`, whose description
+  names the file name's extension, is left out of `keys` in the first list); the test reads each string inside a key's
+  schema too, in `anyOf`, `oneOf`, `allOf`, `items`, nested `properties`, `additionalProperties` and `propertyNames`,
+  with the names and descriptions on its way, and a key whose schema has a shape that the test cannot read (no `type`,
+  a `$ref`, or a keyword that the test does not know) fails the test;
+- each key that a tool's `schema` requires is in its `keys`;
+- no tool's `keys` names `_meta` (the package reads `arguments._meta` to change the base of relative file names);
 - `browser_run_code_unsafe` is in `refused`;
 - no name of `service_tools` is a tool of the pinned version's `tools/list`;
 - `service_tools` is exactly the value that this file gives;

@@ -459,8 +459,8 @@ The rules of the recommended form:
 ### 6.4 At the service's restart, and at the daemon's
 
 - **The service's restart.** The service starts with no sessions. Until the daemon's first `set_sessions`, no root
-  counts, so each MCP connection gets the session's 403 of step 2: C11's order holds, and the 403's text says to
-  connect again in a few seconds. The daemon reconnects and sends the snapshot with the fingerprints from its memory.
+  counts, so each MCP connection with a holder gets the session's 403 of step 2: C11's order holds, and the 403's text
+  says to connect again in a few seconds. The daemon reconnects and sends the snapshot with the fingerprints from its memory.
   - Claude Code: documented, not proven: it tries a dropped remote server again, and its header is static, so
     the same token works.
   - Codex: its header is static too. The service no longer knows the old MCP session id. Whether Codex then
