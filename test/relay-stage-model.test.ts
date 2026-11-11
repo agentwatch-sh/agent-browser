@@ -11,6 +11,7 @@ import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
 import { STAGE_TEST_ENV } from "../src/relay/stage.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
+import { seededRandom } from "../src/human/random.ts";
 
 /** A page of the connection's own (a window of its own), with auto-attach on. */
 async function page(h: Harness, c: CDPConnection) {
@@ -434,25 +435,33 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
   }
 });
 
-test("with the stage on (board ab-t30.10): keyboard.type('Hi') through the model gets a Shift press and H with modifiers 8; a Runtime.evaluate after it waits in the tab's gate until every keyUp went (the model asks the stage before each call that it does not take)", async () => {
-  const h = await harness({ stage: true });
-  try {
-    await h.ready();
-    const c = await h.connect();
-    const p = await page(h, c);
-    const from = h.fake.requests.length;
-    const kd = (ch: string, code: string, kc: number) => ({ type: "keyDown", modifiers: 0, windowsVirtualKeyCode: kc, code, commands: [], key: ch, text: ch, unmodifiedText: ch, autoRepeat: false, location: 0, isKeypad: false });
-    const ku = (ch: string, code: string, kc: number) => ({ type: "keyUp", modifiers: 0, key: ch, windowsVirtualKeyCode: kc, code, location: 0, isKeypad: false });
-    for (const [ch, code, kc] of [["H", "KeyH", 72], ["i", "KeyI", 73]] as const) {
-      await c.send("Input.dispatchKeyEvent", kd(ch, code, kc), p.sessionId);
-      await c.send("Input.dispatchKeyEvent", ku(ch, code, kc), p.sessionId);
-    }
-    await c.send("Runtime.evaluate", { expression: "2" }, p.sessionId);
-    const sent = cmds(h, from).filter((x) => x.method === "Input.dispatchKeyEvent" || (x.method === "Runtime.evaluate" && x.params.expression === "2"));
-    assert.deepEqual(sent.map((x) => x.params.type ?? "evaluate").slice(-1), ["evaluate"], "the evaluate after every key event");
-    const keys = sent.filter((x) => x.method === "Input.dispatchKeyEvent");
-    assert.deepEqual(keys.map((x) => [x.params.type, x.params.key, x.params.modifiers]),
-      [["rawKeyDown", "Shift", 8], ["keyDown", "H", 8], ["keyUp", "H", 8], ["keyUp", "Shift", 0], ["keyDown", "i", 0], ["keyUp", "i", 0]]);
-    assert.ok(keys.every((x) => typeof x.params.timestamp === "number"), "each key event has the stage's timestamp");
-  } finally { await h.close(); }
+test("with the stage on (board ab-t30.10): keyboard.type('Hi') through the model gets a Shift press and H with modifiers 8; when the last keyUp is answered early, a Runtime.evaluate after it waits in the tab's gate until that keyUp went (the model asks the stage before each call that it does not take)", async () => {
+  const kd = (ch: string, code: string, kc: number) => ({ type: "keyDown", modifiers: 0, windowsVirtualKeyCode: kc, code, commands: [], key: ch, text: ch, unmodifiedText: ch, autoRepeat: false, location: 0, isKeypad: false });
+  const ku = (ch: string, code: string, kc: number) => ({ type: "keyUp", modifiers: 0, key: ch, windowsVirtualKeyCode: kc, code, location: 0, isKeypad: false });
+  let early = 0;
+  // Seeded runs (the model's random): the early answer of the last keyUp depends on the draws.
+  for (let seed = 1; seed <= 12 && early === 0; seed++) {
+    const h = await harness({ stage: true, random: seededRandom(seed) });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const p = await page(h, c);
+      const from = h.fake.requests.length;
+      for (const [ch, code, kc] of [["H", "KeyH", 72], ["i", "KeyI", 73]] as const) {
+        await c.send("Input.dispatchKeyEvent", kd(ch, code, kc), p.sessionId);
+        await c.send("Input.dispatchKeyEvent", ku(ch, code, kc), p.sessionId);
+      }
+      // At the answer of i's keyUp: has its keyUp gone? (no: an early answer)
+      const lastUpGone = cmds(h, from).some((x) => x.method === "Input.dispatchKeyEvent" && x.params.type === "keyUp" && x.params.key === "i");
+      await c.send("Runtime.evaluate", { expression: "2" }, p.sessionId);
+      const sent = cmds(h, from).filter((x) => x.method === "Input.dispatchKeyEvent" || (x.method === "Runtime.evaluate" && x.params.expression === "2"));
+      const keys = sent.filter((x) => x.method === "Input.dispatchKeyEvent");
+      assert.deepEqual(keys.map((x) => [x.params.type, x.params.key, x.params.modifiers]),
+        [["rawKeyDown", "Shift", 8], ["keyDown", "H", 8], ["keyUp", "H", 8], ["keyUp", "Shift", 0], ["keyDown", "i", 0], ["keyUp", "i", 0]]);
+      assert.ok(keys.every((x) => typeof x.params.timestamp === "number"), "each key event has the stage's timestamp");
+      assert.equal(sent.at(-1)!.params.expression, "2", `seed ${seed}: the evaluate after every key event`);
+      if (!lastUpGone) early++;
+    } finally { await h.close(); }
+  }
+  assert.ok(early > 0, "a seed whose last keyUp is answered early");
 });

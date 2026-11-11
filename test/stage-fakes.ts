@@ -144,7 +144,9 @@ export class FakeTab implements StagePage {
     if (fn === SAME_ELEMENT) { const a = this.elementAt(args[0], args[1]), b = this.elementAt(args[2], args[3]); return !!a && a.id === b?.id; }
     throw new Error(`no fake for ${fn.slice(0, 40)}`);
   }
-  async activate(): Promise<void> { this.activations.push(this.clock.now()); }
+  /** The activation brings the tab's window forward: a document whose window did not have the focus has it then. */
+  windowFocus = false;
+  async activate(): Promise<void> { this.activations.push(this.clock.now()); this.windowFocus = true; }
   inGate(fn: () => Promise<void>): void { this.gate = this.gate.then(fn).catch(() => {}); }
   /** A client's call in the tab's gate: the stage's step for a call that it takes, else the call as it is. */
   queue(child: string | undefined, method: string, params: any, answer: (body: Body) => void): void {
@@ -300,7 +302,8 @@ export class FakeTab implements StagePage {
       const b = cross ? n.box : top, ox = cross ? 0 : top.x - n.box.x, oy = cross ? 0 : top.y - n.box.y, fl = this.fields.get(p.objectId);
       const kind = n.tag === "textarea" ? "textarea" : n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text") ? "input" : n.contenteditable ? "editable" : "other";
       const active = this.focusedId === p.objectId;
-      return { result: { type: "object", value: { kind, active, focused: active && !n.windowAway, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, ox, oy, top: !cross, flat: true,
+      const hasFocus = !n.windowAway || (this.windowFocus && !n.windowStaysAway);
+      return { result: { type: "object", value: { kind, active, focused: active && hasFocus, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, ox, oy, top: !cross, flat: true,
         box: { x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height } } } };
     }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_HIT) {

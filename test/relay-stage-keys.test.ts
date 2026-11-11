@@ -511,14 +511,17 @@ test("the model's gate (the stage's other()): a call that the stage does not tak
   assert.ok(checked > 0, `the last release answered early in ${checked} seeds`);
 });
 
-test("the focus test: before fill, a field that is the active element of its document needs no click (fill's script selects its text); before Playwright's focus call, the window's focus counts too (Playwright's _activelyFocused), read after the activation", async () => {
+test("the focus test: before fill, a field that is the active element of its document needs no click (fill's script selects its text), and no activation; before Playwright's focus call, the window's focus counts too (Playwright's _activelyFocused), read after the activation", async () => {
+  // The field is the active element of its document; its window does not have the focus until the activation.
   const page = { nodes: { n: INPUT({ text: 3, windowAway: true }) }, focused: "n" };
   const f = await runVector(own([fillCall("n", "abc")], page));
-  assert.equal(mouseEvents(f.tab).length, 0, "fill: no click");
-  assert.equal(f.stage.counts.fieldFocused, 1);
+  assert.deepEqual([mouseEvents(f.tab).length, f.tab.activations.length, f.stage.counts.fieldFocused], [0, 0, 1], "fill: no click, no activation");
   const p = await runVector(own([focusCall("n", true)], page));
-  assert.ok(pressOf(p.tab), "Playwright's focus call: a click (the document has the focus, the window does not)");
-  assert.ok(p.tab.activations[0] <= mouseEvents(p.tab)[0].t, "the activation before the read and the click");
+  assert.deepEqual([mouseEvents(p.tab).length, p.tab.activations.length, p.stage.counts.fieldFocused], [0, 1, 1], "Playwright's focus call: the activation, then the field has the focus: no click");
+  // A window that the activation does not bring forward: Playwright's focusNode would reset the caret; a person clicks.
+  const q = await runVector(own([focusCall("n", true)], { nodes: { n: INPUT({ text: 3, windowAway: true, windowStaysAway: true }) }, focused: "n" }));
+  assert.ok(pressOf(q.tab), "a click");
+  assert.ok(q.tab.activations[0] <= mouseEvents(q.tab)[0].t, "the activation before the read and the click");
 });
 
 /** keyboard.type('hello') whose third key opens an alert in a keydown handler (the client answers it after `answerMs`, or never). */

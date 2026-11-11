@@ -363,8 +363,7 @@ export class KeyStream {
       // is the one that is down (a Shift of the stream's own that the client took keeps its side).
       const t = Math.max(at, this.lastRelease + draw(this.random, this.K.chord.releaseGapMs));
       this.mods.delete(bit);
-      // A planned keyUp after this release no longer carries the bit (review-111b: also a Shift that the client took).
-      this.dropBit(bit, t);
+      // No planned keyUp comes after this release (lastRelease is the latest planned release; review-111b), so none keeps the bit.
       if (bit === SHIFT) this.shiftHeldUntil = -Infinity;
       this.lastRelease = t;
       return { events: [this.ev(t, "keyUp", { key: m.key, code: m.code, keyCode: m.keyCode }, this.modsAt(t) & ~bit, false, m.location)], early: false };

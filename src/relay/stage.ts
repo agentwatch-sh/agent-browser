@@ -1348,7 +1348,7 @@ export class Stage {
       items = r.events.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
       early = r.early;
     } else if (p.type === "char") {
-      items = [{ ev: { t: queued, type: "char" as KeyEv["type"], key: String(p.key ?? ""), code: String(p.code ?? ""), keyCode: Number(p.windowsVirtualKeyCode ?? 0), location: 0, modifiers: this.clientBits(st), own: false }, client: p, e }];
+      items = [{ ev: { t: now, type: "char" as KeyEv["type"], key: String(p.key ?? ""), code: String(p.code ?? ""), keyCode: Number(p.windowsVirtualKeyCode ?? 0), location: 0, modifiers: this.clientBits(st), own: false }, client: p, e }];
     } else {
       const evs = s.next(keyOf(p, this.clientBits(st)), now);
       // A press of a Shift that is down already (the stream's own, which the client now holds): no event.
@@ -1535,15 +1535,13 @@ export class Stage {
     // Playwright's focus call starts an action (C11, the window comes forward for input): the lock and the activation first.
     let a = !fill ? await this.begin(page, st) : null;
     if (a?.over) return pass();
-    const f = await this.fieldRead(page, st, e.child, node, fill);
-    if (!f) { why("fieldNoRead"); return pass(); }
-    // fill's own script selects the text: the field needs only the focus of its document; Playwright's focusNode reads the window's too.
-    if (f.kind === "other" || (fill ? f.active : f.focused)) { why(f.kind === "other" ? "fieldNotText" : "fieldFocused"); return pass(); }
+    const g = await this.fieldRead(page, st, e.child, node, fill);
+    if (!g) { why("fieldNoRead"); return pass(); }
+    // fill's own script selects the text: the field needs only the focus of its document. Playwright's focusNode reads the
+    // window's focus too, after the activation above (so a field of a window that comes forward has it).
+    if (g.kind === "other" || (fill ? g.active : g.focused)) { why(g.kind === "other" ? "fieldNotText" : "fieldFocused"); return pass(); }
     a ??= await this.begin(page, st);
     if (a.over) return pass();
-    // The read again after the activation: the window's focus can be the field's now (Playwright's focusNode then resets nothing).
-    const g = fill ? f : await this.fieldRead(page, st, e.child, node, fill);
-    if (!g || g.focused) { why(g ? "fieldFocused" : "fieldNoRead"); return pass(); }
     const at = await this.clickPoint(page, st, e.child, node, g, fill);
     if (!at) return pass();
     // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
