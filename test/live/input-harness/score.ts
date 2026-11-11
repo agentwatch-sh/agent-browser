@@ -39,6 +39,10 @@ export const BARS = {
   activationJumpPx: 1,
   /** K2 per letter pair: a pair is tested when the source and the reference each have this many values of it (two samples of 5: a KS bound of 0.86). */
   minPairValues: 5,
+  /** K1 per key (board ab-t30.4): a key is tested when the source has this many holds of it (one sample of 5 against a model: a KS bound of 0.56). */
+  minKeyValues: 5,
+  /** K4: the share of Shift presses on the other hand's side (design 10.2's first value, about 70%): information. */
+  shiftOtherHandShare: 0.7,
   /** R13: the modifier goes down this long before the press and up this long after the release (design 10.2's Shift: 45 to 95 ms before, 15 to 60 ms after). */
   modifierLeadMinMs: 45, modifierLagMinMs: 15,
   /** R13: a double click's gap from the first release to the second press (design 10.1's first value). */
@@ -256,6 +260,19 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     const K = steps.filter((s) => s.kind === "type" && s.keys).map((s) => s.keys!);
     const rk = ref.keys, chars = sum(steps.filter((s) => s.text).map((s) => s.text!.chars));
     rows.push(distRow("K1", "key holds (ms)", K.flatMap((k) => k.holds), rk.holdMs));
+    {
+      // K1 per key (design 13.3, review-97's list on ab-t30.4): KS for each key with BARS.minKeyValues holds or more, against the
+      // key's own reference (part B) when the reference has one, else against the reference of all holds.
+      const measure = "key holds per key", bar = `KS for each key with ${BARS.minKeyValues} values or more (its own reference, else all holds')`;
+      const src: Record<string, number[]> = {};
+      for (const k of K) for (const [c, v] of Object.entries(k.holdsByKey ?? {})) (src[c] ??= []).push(...v);
+      const own = rk.holdByKeyMs ?? {};
+      const tested = Object.entries(src).filter(([, v]) => v.length >= BARS.minKeyValues)
+        .map(([c, v]) => [c, compareDist(v, Object.hasOwn(own, c) ? own[c] : rk.holdMs)] as const).filter(([, c]) => c.pass !== null);
+      const passed = tested.filter(([, c]) => c.pass).length, worst = tested.filter(([, c]) => !c.pass).map(([c]) => JSON.stringify(c));
+      rows.push(!tested.length ? noData("K1", measure, bar, `no key with ${BARS.minKeyValues} values`)
+        : row("K1", measure, bar, `${passed} of ${tested.length} keys pass${worst.length ? ` (not: ${worst.slice(0, 4).join(", ")})` : ""}`, yes(passed === tested.length), tested.length));
+    }
     rows.push(distRow("K2", "press to press (all pairs, ms)", K.flatMap((k) => k.downToDown), rk.downToDownMs));
     {
       // K2 per letter pair (design 13.3): KS for each pair of the reference with BARS.minPairValues values or more in both.
@@ -275,6 +292,15 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     rows.push(!pairs || !ob ? noData("K3", "overlap share", bandText(ob)) : row("K3", "overlap share", bandText(ob), f2(sum(K.map((k) => k.overlaps)) / pairs), yes(inBand(sum(K.map((k) => k.overlaps)) / pairs, ob)), pairs));
     const shifted = sum(K.map((k) => k.shiftedChars)), withShift = sum(K.map((k) => k.shiftedWithShiftDown));
     rows.push(shifted ? row("K4", "shifted characters with a Shift keydown", "1", `${withShift} of ${shifted}`, yes(withShift === shifted), shifted) : noData("K4", "shifted characters with a Shift keydown", "1", "no shifted character"));
+    // K4's Shift (review-97's list on ab-t30.4): its location (1 left, 2 right: never CDP's default 0), its keyup after the
+    // keyup of each shifted character that it holds, and its side against the hand of its first character (information).
+    const downs = sum(K.map((k) => k.shiftDowns ?? 0)), located = sum(K.map((k) => (k.shiftLocations ?? []).filter((l) => l === 1 || l === 2).length));
+    rows.push(downs ? row("K4", "Shift keydowns with a location of 1 or 2", "1", `${located} of ${downs}`, yes(located === downs), downs) : noData("K4", "Shift keydowns with a location of 1 or 2", "1", "no Shift keydown"));
+    const after = sum(K.map((k) => k.shiftUpAfter ?? 0)), ma = "shifted characters whose Shift goes up after their keyup";
+    rows.push(withShift ? row("K4", ma, "1", `${after} of ${withShift}`, yes(after === withShift), withShift) : noData("K4", ma, "1", "no shifted character with a Shift keydown"));
+    const sided = sum(K.map((k) => k.shiftSided ?? 0)), other = sum(K.map((k) => k.shiftOtherHand ?? 0)), mo = "Shift on the other hand's side (share)";
+    const barO = `about ${f2(BARS.shiftOtherHandShare)} (design 10.2; information)`;
+    rows.push(sided ? row("K4", mo, barO, `${f2(other / sided)} (${other} of ${sided})`, "not scored", sided) : noData("K4", mo, barO, "no Shift keydown with a location before a shifted character"));
     const bs = sum(K.map((k) => k.backspaces));
     rows.push(K.length && chars ? row("K5", "Backspace per 100 characters", "not in the first build", f2((bs / chars) * 100), "not scored", chars) : noData("K5", "Backspace per 100 characters", "not in the first build"));
     const nl = sum(K.map((k) => k.numLockOn));

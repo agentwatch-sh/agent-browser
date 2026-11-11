@@ -29,6 +29,8 @@
 //   keys     holdMs, downToDownMs, wordEndExtraMs, overlapShare   (K1 to K3)
 //            downToDownByPairMs (optional): { "th": Dist, "he": Dist, ... }: press to press for each letter pair (K2 per
 //            letter pair); each name is two characters of the US layout's printable set (space to tilde), in lower case
+//            holdByKeyMs (optional): { "e": Dist, " ": Dist, ... }: the hold of each key (K1 per key; board ab-t30.4); each
+//            name is one character of that set, in lower case
 //   wheel    notchPx (a number: 120 on X11), gapMs   (P7)
 
 import type { StepMeasures } from "./measures.ts";
@@ -45,7 +47,7 @@ export type Reference = {
     pauseMs: Dist; pressMs: Dist; boxEntryEdgePx: Dist; boxMovesInside: Dist; boxEntryToPressMs: Dist;
     samplesEach?: Dist; predictedEach?: Dist; sampleGapsMs?: Dist; boxStraightness?: Dist;
   };
-  keys: { holdMs: Dist; downToDownMs: Dist; wordEndExtraMs: Dist; overlapShare: Dist; downToDownByPairMs?: Record<string, Dist> };
+  keys: { holdMs: Dist; downToDownMs: Dist; wordEndExtraMs: Dist; overlapShare: Dist; downToDownByPairMs?: Record<string, Dist>; holdByKeyMs?: Record<string, Dist> };
   wheel: { notchPx: number; gapMs: Dist };
 };
 
@@ -67,15 +69,15 @@ export const LITERATURE: { pointer: Pick<Reference["pointer"], "pauseMs" | "pres
   wheel: { notchPx: 120, gapMs: { range: [35, 90] } },
 };
 
-const D = "dist", N = "number", PAIRS = "pairs";
+const D = "dist", N = "number", PAIRS = "pairs", KEYS = "keys";
 /** Fields that a file may leave out. */
-const OPTIONAL = new Set(["keys.downToDownByPairMs", "pointer.samplesEach", "pointer.predictedEach", "pointer.sampleGapsMs", "pointer.boxStraightness"]);
-const PAIR = /^[\x20-\x7e]{2}$/;
+const OPTIONAL = new Set(["keys.downToDownByPairMs", "keys.holdByKeyMs", "pointer.samplesEach", "pointer.predictedEach", "pointer.sampleGapsMs", "pointer.boxStraightness"]);
+const PAIR = /^[\x20-\x7e]{2}$/, KEY = /^[\x20-\x7e]$/;
 const SCHEMA: Record<string, Record<string, string>> = {
   pointer: { samplesPerMove: D, predictedPerMove: D, handlerLagMs: D, wholeMsShare: N, straightness: D, maxDeviationPx: D, peakPxPerMs: D, meanPxPerMs: D,
     fittsRatio: D, speedPeaks: D, pauseMs: D, pressMs: D, boxEntryEdgePx: D, boxMovesInside: D, boxEntryToPressMs: D,
     samplesEach: D, predictedEach: D, sampleGapsMs: D, boxStraightness: D },
-  keys: { holdMs: D, downToDownMs: D, wordEndExtraMs: D, overlapShare: D, downToDownByPairMs: PAIRS },
+  keys: { holdMs: D, downToDownMs: D, wordEndExtraMs: D, overlapShare: D, downToDownByPairMs: PAIRS, holdByKeyMs: KEYS },
   wheel: { notchPx: N, gapMs: D },
 };
 
@@ -110,6 +112,16 @@ function checkPairs(v: unknown, path: string): void {
   }
 }
 
+function checkKeys(v: unknown, path: string): void {
+  if (!isObj(v)) refuse(path, "not an object of keys");
+  const keys = Object.keys(v);
+  if (!keys.length) refuse(path, "no keys");
+  for (const k of keys) {
+    if (!KEY.test(k)) refuse(`${path}.${k}`, "not a key (one character from space to tilde)");
+    checkDist(v[k], `${path}.${k}`);
+  }
+}
+
 /** The reference of a file's JSON, or an error that names the first wrong field. Every name is checked as an own name (Object.hasOwn), so the names that every object inherits (constructor, toString, __proto__) are refused. */
 export function checkReference(raw: unknown): Reference {
   if (!isObj(raw)) refuse("the file", "not a JSON object");
@@ -126,6 +138,7 @@ export function checkReference(raw: unknown): Reference {
       if (!Object.hasOwn(o, k)) { if (OPTIONAL.has(`${part}.${k}`)) continue; refuse(`${part}.${k}`, "missing"); }
       if (kind === N) { if (!isNum(o[k])) refuse(`${part}.${k}`, "not a number"); }
       else if (kind === PAIRS) checkPairs(o[k], `${part}.${k}`);
+      else if (kind === KEYS) checkKeys(o[k], `${part}.${k}`);
       else checkDist(o[k], `${part}.${k}`);
     }
   }

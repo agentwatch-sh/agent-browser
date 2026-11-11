@@ -277,6 +277,8 @@ const between = (random: () => number, a: number, b: number) => a + (b - a) * ra
 const press = (holdMs: number, pauseMs = 150) => [`sleep ${(pauseMs / 1000).toFixed(3)}`, "mousedown 1", `sleep ${(holdMs / 1000).toFixed(3)}`, "mouseup 1"];
 const script = (lines: string[]) => xdo(["-"], lines.join("\n") + "\n");
 const TEXT = "Hello World, OK!";
+/** A longer text for the keys' rows (board ab-t30.4): K1 per key needs 5 holds of a key, K3 more pairs than TEXT has. */
+const TEXT_LONG = "Sorry, the three of them are at the theatre then.";
 /**
  * The rate of the harness's XTEST: xdotool's `sleep 0.008` and its move take about 8.33 ms together (the sample gaps are 8
  * and 9 ms, about 2 to 1), so the reference is a device of about 120 Hz. The source human-same-120 plays XTEST's paths at
@@ -571,6 +573,7 @@ const SCENARIOS: Record<string, () => Promise<Record<string, unknown>>> = {
         await step("agent-browser", "click", "click #b", () => commands.click(o, { tab: "rec", target: "#b" }), { width: widthOf("b") });
       }
       await step("agent-browser", "type", `type --into #f '${TEXT}'`, () => commands.type(o, { tab: "rec", text: TEXT, into: "#f" }), { width: widthOf("f") });
+      await step("agent-browser", "type", `type --into #ta '${TEXT_LONG}'`, () => commands.type(o, { tab: "rec", text: TEXT_LONG, into: "#ta" }), { width: widthOf("ta"), limitMs: 40_000 });
       await step("agent-browser", "far", "click #far (the wheel brings it into view)", () => commands.click(o, { tab: "rec", target: "#far" }), { width: 40, limitMs: 30_000 });
       return {};
     } finally {

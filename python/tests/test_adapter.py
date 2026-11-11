@@ -334,7 +334,7 @@ class OptionArgvTest(unittest.TestCase):
         self.assertNotIn("--input-timing", self.argv(input_timing=None))
 
     def test_input_commands_wait_for_the_lock_and_the_text(self) -> None:
-        """A 1000-character type and a wait for the input lock fit in the call's timeout (about 0.12 s a character on Linux).
+        """A 1000-character type and a wait for the input lock fit in the call's timeout (KEY_MS, 0.35 s a character on Linux).
         text, outline and eval wait for the lock inside the call's timeout, with the lock's own error (review-52 note 5)."""
         timeouts: Dict[str, float] = {}
         timings: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -366,7 +366,7 @@ class OptionArgvTest(unittest.TestCase):
             # another agent's input. That wait is part of the call's timeout, as Tab.waitFor's is: a read that hangs for
             # another reason fails at the timeout, and a long wait for the lock fails with the lock's own error.
             reads()
-        self.assertGreaterEqual(timeouts["type"], 120 + 600 + 1000 * 0.15)
+        self.assertGreaterEqual(timeouts["type"], 120 + 600 + 1000 * 0.35)
         self.assertGreaterEqual(timeouts["click"], 120 + 600)
         self.assertIsNone(timings["click"], "no --input-timing for an input command by default")
         for read in ("text", "outline", "eval"):

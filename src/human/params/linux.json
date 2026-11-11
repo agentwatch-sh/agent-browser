@@ -20,12 +20,26 @@
   "spread": { "sdShare": 0.125, "maxShare": 0.25 }
  },
  "wheel": { "notchPx": 120, "gapMs": { "uniform": [35, 90] } },
+ "keys": {
+  "holdMs": { "lognormal": [113.6, 0.2047], "min": 50, "max": 250 },
+  "baseMs": { "lognormal": [125, 0.75], "min": 40, "max": 1500 },
+  "pairMs": { "twoHands": 0, "sameHand": 120, "sameFinger": 200, "sameKey": 120 },
+  "pauseMs": { "space": { "uniform": [20, 120] }, "mark": { "uniform": [80, 250] }, "line": { "uniform": [200, 600] } },
+  "drift": { "min": 0.85, "max": 1.15, "keep": 0.8, "sd": 0.05 },
+  "shift": { "beforeMs": { "uniform": [45, 95] }, "afterMs": { "uniform": [15, 60] }, "otherHandShare": 0.7 },
+  "chord": { "beforeMs": { "uniform": [40, 120] }, "releaseGapMs": { "uniform": [20, 80] } },
+  "afterReleaseMs": { "uniform": [5, 30] },
+  "fastMs": { "uniform": [100, 120] },
+  "runSlowMs": 12000,
+  "typeMaxMs": 10000
+ },
  "population": {
   "speed": { "lognormal": [1, 0.1], "min": 0.8, "max": 1.25 },
   "pause": { "lognormal": [1, 0.12], "min": 0.75, "max": 1.35 },
   "hold": { "lognormal": [1, 0.1], "min": 0.8, "max": 1.25 },
   "overshootShare": { "uniform": [0.2, 0.4] },
-  "side": { "uniform": [0.3, 0.7] }
+  "side": { "uniform": [0.3, 0.7] },
+  "keySpeed": { "lognormal": [1, 0.1], "min": 0.8, "max": 1.25 }
  },
  "sources": {
   "device.rateMs": "125 Hz, the rate of the research's X input; [7]: mice report typically at 100 Hz; part B measures the operator's device",
@@ -43,6 +57,17 @@
   "press.doubleGapMs": "90 to 150 ms from the first release to the second press (not measured; part B)",
   "press.spread": "an offset from the target's middle, a normal with a standard deviation of 1/8 of its smaller side, at most 1/4 of it",
   "wheel": "a notch of 120 px (X11); gaps of 35 to 90 ms (design 8.2, first value)",
-  "population": "each scope's person: factors drawn once from these spreads (design 10.4; first values until part B sets the population)"
+  "population": "each scope's person: factors drawn once from these spreads (design 10.4; first values until part B sets the population)",
+  "population.keySpeed": "a factor on the time from one key press to the next, drawn once for the scope (design 10.2 and 10.4: an average typist's mean is 239 ms, a fast one's about 120 ms [19]); the spread of the pointer's speed",
+  "keys.holdMs": "a lognormal per key, mean 116 ms, SD 24 ms [19] (median 116 / sqrt(1 + cv^2) = 113.6, sigma sqrt(ln(1 + cv^2)) = 0.2047), from 50 to 250 ms (C11 keyHoldMs)",
+  "keys.baseMs": "the base part of the time from one press to the next (design 10.2), times the person's key speed and the drift: fitted with keys.pairMs on English text (test/human-keys.test.ts, its corpus) until the share of rollover (the harness's K3 measure) reached about 25% for an average typist [19]: a share of 0.246 with a mean of 222 ms and an SD of 151 ms (the literature: 239 and 112 [19]; a lognormal with that mean and SD puts 8% of the intervals below the mean hold, so it cannot give 25% of rollover); key speed 0.8: 0.33, 1.25: 0.17",
+  "keys.pairMs": "the letter pair's part (ms, times the key speed and the drift; never below 0, so a release that is not answered early is never passed): two hands (or the space's thumb) 0, one hand 120, one finger 200, one key twice 120; the fit of keys.baseMs; part B gives each pair's own values",
+  "keys.pauseMs": "more time after a space (20 to 120 ms), a mark .,;:!? (80 to 250 ms) and Enter, a line's end (200 to 600 ms) (design 10.2, first values; the research's K2: longer at word and line ends [19], [20])",
+  "keys.drift": "the speed in a session: a factor from 0.85 to 1.15 that drifts from word to word, a random walk of its log that keeps 0.8 of its last value with a normal step of SD 0.05 (design 10.2, first value)",
+  "keys.shift": "a Shift rawKeyDown 45 to 95 ms before a shifted character, its release 15 to 60 ms after the release of the last key that it holds (C11 shiftBeforeMs, shiftAfterMs); the Shift of the other hand's side in 70% of cases (design 10.2, first values)",
+  "keys.chord": "in a chord, each modifier 40 to 120 ms before the key, the releases 20 to 80 ms apart in reverse order (C11 chordBeforeMs, chordReleaseGapMs)",
+  "keys.afterReleaseMs": "a key that waits for a release (the same key again, a key after the release of Shift or of a chord's modifier) goes 5 to 30 ms after it (first value)",
+  "keys.fastMs": "the fast end of the person's spread, 100 to 120 ms a key, with no pair part and no pause (C11 fastKeyMs; design 7.2)",
+  "keys.runSlowMs": "a key run at the person's speed for 12 s, then at the fast end (C11 STAGE_RUN_SLOW_MS; the answer Q2 a); keys.typeMaxMs: the typing rule's 10 s (C11 STAGE_TYPE_MAX_MS)"
  }
 }
