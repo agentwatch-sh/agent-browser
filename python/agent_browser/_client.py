@@ -435,7 +435,8 @@ class AgentBrowser:
         """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
 
         The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
-        about 0.12 s (a person's typing), and another input command can hold the lock for up to `lockWaitMs`.
+        about 0.2 to 0.3 s for the first 12 s of a run, then about 0.12 s (a person's typing), and another input command
+        can hold the lock for up to `lockWaitMs`.
         """
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
                          stdin=text, extra_timeout=self._input_wait(len(text)))

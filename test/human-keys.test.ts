@@ -77,9 +77,11 @@ test("keys: one person for each scope also types as one: the key speed is drawn 
   assert.ok(new Set(people.map((p) => p.keySpeed.toFixed(6))).size > 290, "the people differ");
   assert.ok(Math.abs(median(people.map((p) => p.keySpeed)) - 1) < 0.03);
   assert.equal(MID.keySpeed, 1);
-  // The pointer's values of a person stay as they were (the key speed is drawn after them).
-  const r1 = seededRandom(9), r2 = seededRandom(9), p1 = drawPerson(LINUX, r1), p2 = drawPerson(LINUX, r2);
-  assert.deepEqual(p1, p2);
+  // The pointer's values of a person stay as they were on main before the key model (the key speed is drawn after them;
+  // review-111 note 9: the values are pinned, so a draw before them turns this red).
+  const pointerOf = (p: Person) => ({ speed: p.speed, pause: p.pause, hold: p.hold, overshootShare: p.overshootShare, side: p.side, tremorPx: p.tremorPx, tremorHz: p.tremorHz });
+  assert.deepEqual(pointerOf(drawPerson(LINUX, seededRandom(9))), { speed: 0.9213847532682187, pause: 1.1307971319325292, hold: 0.9019155780868358, overshootShare: 0.36433434346690774, side: 0.5895217602141201, tremorPx: 0.919975449121557, tremorHz: 9.05087373405695 });
+  assert.deepEqual(pointerOf(personFor("s-a", 41, LINUX)), { speed: 0.933470560354481, pause: 1.1371460302353742, hold: 1.0922771343404636, overshootShare: 0.26115590590052307, side: 0.558064485155046, tremorPx: 1.1329974404303356, tremorHz: 8.295758288353682 });
 });
 
 // ================================================================ the rules of design 10.2
@@ -406,4 +408,50 @@ test("keys: the stream fits C11's key vectors (test/vectors/stage.json): type ('
       });
     }
   }
+});
+
+test("keys: no event shows a modifier that is up: a key that rolls over into the stream's Shift or Control press loses the bit when that modifier goes up first (review-111 B1)", () => {
+  const BITS: [string, number][] = [["Alt", 1], ["Control", CONTROL], ["Meta", 4], ["Shift", SHIFT]];
+  const firstBad = (events: KeyEv[]): string | null => {
+    const held = new Map<string, number>();
+    for (const e of [...events].sort((a, b) => a.t - b.t)) {
+      if (BITS.some(([k]) => k === e.key)) { held.set(e.key, (held.get(e.key) ?? 0) + (e.type === "keyUp" ? -1 : 1)); continue; }
+      for (const [k, b] of BITS) if (e.modifiers & b && !(held.get(k) ?? 0)) return `${e.type} ${e.key} at ${e.t} shows ${k} up`;
+    }
+    return null;
+  };
+  // The keys as planText plays them: each press when the answer before it came, an early release answered at once.
+  const play = (keys: Key[], s: KeyStream): KeyEv[] => {
+    const out: KeyEv[] = [];
+    let at = 0;
+    for (const k of keys) {
+      const p = s.next(k, at);
+      out.push(...p);
+      at = Math.max(...p.map((e) => e.t));
+      const r = s.release(k, at);
+      out.push(...r.events);
+      if (!r.early) at = Math.max(...r.events.map((e) => e.t));
+    }
+    return [...out, ...s.end(at)];
+  };
+  // Short intervals make the rollover into the modifier's press likely (with the first values it is rare, not impossible).
+  // A case that needs the rule: a key's release planned after the modifier's press and after the modifier's release.
+  const after = (events: KeyEv[], mod: string) => {
+    const up = events.find((e) => e.key === mod && e.type === "keyUp"), down = events.find((e) => e.key === mod && e.type === "rawKeyDown");
+    return !!up && !!down && events.some((e) => e.key === "a" && e.type === "keyUp" && e.t > up.t);
+  };
+  let shiftCases = 0, controlCases = 0;
+  for (let seed = 1; seed <= 4000; seed++) {
+    for (const text of ["aJ", "camelCase YouTube"]) {
+      const events = planText(text, MID, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 40] }).events;
+      assert.equal(firstBad(events), null, `"${text}", seed ${seed}`);
+      if (text === "aJ" && after(events, "Shift")) shiftCases++;
+    }
+  }
+  for (let seed = 1; seed <= 40000; seed++) {
+    const events = play([charKey("a")!, parseKey("Control+Home")], new KeyStream(MID, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 25] }));
+    assert.equal(firstBad(events), null, `a, Control+Home, seed ${seed}`);
+    if (after(events, "Control")) controlCases++;
+  }
+  assert.ok(shiftCases > 0 && controlCases > 0, `the cases that need the rule happen (${shiftCases} Shift, ${controlCases} Control)`);
 });

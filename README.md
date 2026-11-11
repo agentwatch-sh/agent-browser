@@ -427,7 +427,8 @@ person's input**) and `log` (progress lines; default standard error).
   - **The cost.** Input: a click took 1.20 to 1.33 s with an activation and a path of some hundred
     pixels (the research's estimate, with fixed paths of 0.3 s: 0.5 to 0.9 s; the path here takes 300 to
     1000 ms by Fitts's law, as `record`'s cursor), `type --into` with 5 characters 1.25 to 1.30 s, a click
-    below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s. The lock: two
+    below the fold 1.34 to 1.44 s (with the wheel), and each further character about 0.12 s (measured before the
+keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s of a run). The lock: two
     agents that type at once took 39 to 57% longer than one agent alone (3 runs after review-47; before it:
     46 to 56%; the research: 28 to 55%). Windows: in the research's check, 8 probe pages as 8 windows used 608 to 775 MB
     (PSS) and 5.3 to 6.8 CPU-seconds in 10 s, against 355 to 404 MB and 1.0 to 2.4 CPU-seconds as 8
@@ -1879,8 +1880,9 @@ Each argument from `state_dir` to `input_timing` is the CLI flag of the same nam
 a mapping that goes as the JSON of `--input-timing`). `node`,
 `package_dir`, `timeout` and `env` tell the adapter how to run the CLI. `timeout` (120 s) is the limit of
 each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
-input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.2 s for each
-character of the text (in agent mode on Linux a person's typing takes about 0.12 s a character), so a long
+input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.35 s for each
+character of the text (in agent mode on Linux a person's typing takes about 0.2 to 0.3 s a character for the
+first 12 s of a run, then about 0.12 s), so a long
 text and a wait for another agent's input fit. `text`, `outline` and `eval` wait for the input lock inside
 their `timeout`, as the Node client's `Tab.waitFor` does (review-52): a read of a hidden window page brings
 its tab in front inside the lock (**One window per agent page**), and that wait may take all of the timeout

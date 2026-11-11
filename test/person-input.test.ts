@@ -2,7 +2,7 @@
 // steps 4 to 6): on Linux each input command (click, click --text, Tab.clickAt, hover, type, press, setFiles) brings
 // its page's window forward when the page has no focus (Page.bringToFront), holds the input lock of the state folder
 // across processes, and sends a person's input: a pointer path from the real pointer, a press of 70 to 90 ms with force
-// 0.5, one key-event pair per character, a click on a field in place of el.focus() that leaves the caret where
+// 0.5, a person's keys per character (the keyboard model, ab-t30.4), a click on a field in place of el.focus() that leaves the caret where
 // `type --into` put it, wheel events in place of scrollIntoView, and a click that opens the file chooser before
 // setFiles. Against the fake Chrome (fake-chrome.ts: windows, the X pointer's event at an activation, a scrolling page,
 // the caret, the file chooser). An explicit `open --tab`, the Mac and personal mode keep today's input.

@@ -35,7 +35,7 @@
 // caller sends the event objects that it got.
 
 import type { Person } from "./person.ts";
-import { chance, draw, normal, uniform, type Random } from "./random.ts";
+import { chance, draw, normal, type Random } from "./random.ts";
 
 export const ALT = 1, CONTROL = 2, META = 4, SHIFT = 8;
 
@@ -216,6 +216,14 @@ export class KeyStream {
     return this.clampInterval(baseMs(this.person, this.random) * this.drift_ + (prev ? pauseAfter(prev, this.person, this.random) : 0));
   }
 
+  /**
+   * A stream's own modifier goes up at `t`: a planned keyUp after it (a key that rolled over into the modifier's press and
+   * gained its bit) no longer carries the bit, so no event shows a modifier that is up (review-111 B1).
+   */
+  private dropBit(bit: number, t: number): void {
+    for (const e of this.releases) if (e.t > t) e.modifiers &= ~bit;
+  }
+
   /** The release of Shift, when the stream holds it: 15 to 60 ms after the last key that it holds. */
   private releaseShift(at: number): KeyEv[] {
     const m = this.mods.get(SHIFT);
@@ -224,6 +232,7 @@ export class KeyStream {
     for (const d of this.down.values()) if (d.shift) until = Math.max(until, d.release?.t ?? d.press + d.hold);
     const t = Math.max(at, until + draw(this.random, this.K.shift.afterMs));
     this.mods.delete(SHIFT);
+    this.dropBit(SHIFT, t);
     this.shiftHeldUntil = -Infinity;
     this.notBefore = Math.max(this.notBefore, t + draw(this.random, this.K.afterReleaseMs));
     return [this.ev(t, "keyUp", m, this.modsAt(t) & ~SHIFT, true, m.location)];
@@ -314,6 +323,7 @@ export class KeyStream {
         const m = this.mods.get(b)!;
         u += draw(this.random, this.K.chord.releaseGapMs);
         this.mods.delete(b);
+        this.dropBit(b, u);
         events.push(this.ev(u, "keyUp", m, this.modsAt(u) & ~b, true, m.location));
       }
       this.lastRelease = u;
