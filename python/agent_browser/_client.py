@@ -43,9 +43,10 @@ LAUNCH_WAIT = 600.0
 RECORD_WAIT = 1800.0 + 900.0
 
 #: In agent mode on Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
-#: default), and it types one character each 90 to 150 ms (inputTiming.keyMs), each key down 20 to 50 ms (holdMs).
+#: default), and it types at a person's pace: about 0.2 to 0.3 s a character for the first 12 s of a run, then 0.1 to
+#: 0.12 s (a capital adds its Shift key). KEY_MS, 0.35 s a character, is the slow end of the first part with a margin.
 LOCK_WAIT_MS = 600_000.0
-KEY_MS = 150.0 + 50.0
+KEY_MS = 350.0
 
 #: A read (text, outline, eval) waits for the input lock inside its own timeout (review-52 note 5), as the library's
 #: Tab.waitFor does: it keeps this many seconds of the timeout for its own work, and at least half of the timeout, and the
@@ -393,8 +394,9 @@ class AgentBrowser:
 
     def _input_wait(self, chars: int = 0) -> float:
         """The time an input command may add to `timeout`: the input lock's wait, and the typing of `chars` characters
-        at the slowest pace of the input timing (in agent mode on Linux a person's typing takes about 0.12 s a character)."""
-        key = self._timing("keyMs", 150.0, 1) + self._timing("holdMs", 50.0, 1)
+        at the slowest pace of the input timing (in agent mode on Linux a person's typing takes about 0.2 to 0.3 s a
+        character for the first 12 s of a run, then about 0.12 s)."""
+        key = self._timing("keyMs", 300.0, 1) + self._timing("holdMs", 50.0, 1)
         return self._timing("lockWaitMs", LOCK_WAIT_MS) / 1000.0 + chars * (key if self.input_timing else KEY_MS) / 1000.0
 
     def _read_lock_wait_ms(self) -> int:
@@ -433,7 +435,8 @@ class AgentBrowser:
         """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
 
         The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
-        about 0.12 s (a person's typing), and another input command can hold the lock for up to `lockWaitMs`.
+        about 0.2 to 0.3 s for the first 12 s of a run, then about 0.12 s (a person's typing), and another input command
+        can hold the lock for up to `lockWaitMs`.
         """
         return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
                          stdin=text, extra_timeout=self._input_wait(len(text)))

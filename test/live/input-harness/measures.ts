@@ -24,6 +24,8 @@ export const TEXT_LIMIT = 40;
 export const MODIFIER_KEYS: ReadonlySet<string> = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 const CLICK_MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta"]);
 const SHIFTED = /^[A-Z~!@#$%^&*()_+{}|:"<>?]$/;
+/** The characters of the left hand's keys on the US layout (touch typing); every other printable character but the space is the right hand's. */
+const LEFT_HAND = new Set("`12345qwertasdfgzxcvb~!@#$%QWERTASDFGZXCVB");
 const WORD_END = new Set([" ", ".", ",", ";", ":", "!", "?", "Enter"]);
 /** A press or a Tab key this long before a focusin explains it. */
 const FOCUS_CAUSE_MS = 1500;
@@ -43,9 +45,17 @@ export type PointerMeasures = {
   path: PathMeasures | null; pauseMs: number | null; pressMs: number | null; focusInPress: boolean | null;
   doubleClickGapMs: number | null; modifierLeadMs: number | null; modifierLagMs: number | null; heldMoves: number | null;
 };
-/** `pairs`: the press-to-press times of each letter pair (two keys with a character each, in lower case; K2 per letter pair). */
+/**
+ * `pairs`: the press-to-press times of each letter pair (two keys with a character each, in lower case; K2 per letter pair).
+ * `holdsByKey`: the holds of each key with a character, by the character in lower case (K1 per key; board ab-t30.4).
+ * K4's Shift (board ab-t30.4): `shiftDowns` and `shiftLocations` (each Shift keydown's location: 1 left, 2 right, 0 none);
+ * `shiftUpAfter`: the shifted characters with a Shift down whose Shift goes up after their own keyup; `shiftSided`: the
+ * Shift keydowns with a location whose first character is a shifted one, and `shiftOtherHand`: those on the side of the
+ * other hand (a left Shift for a key of the right hand, a right Shift for one of the left hand).
+ */
 export type KeyMeasures = { keys: number; holds: number[]; downToDown: number[]; wordEndExtraMs: number | null; overlaps: number; overlapShare: number | null;
-  shiftedChars: number; shiftedWithShiftDown: number; numLockOn: number; backspaces: number; pairs: Record<string, number[]> };
+  shiftedChars: number; shiftedWithShiftDown: number; numLockOn: number; backspaces: number; pairs: Record<string, number[]>;
+  holdsByKey: Record<string, number[]>; shiftDowns: number; shiftLocations: number[]; shiftUpAfter: number; shiftSided: number; shiftOtherHand: number };
 export type TextMeasures = { inputs: number; chars: number; keyChars: number; keyEventsPerChar: number | null; textsWithNoKeys: number; longTextsWithNoKeys: number };
 /** `deltaModes`: null for an event with no deltaMode (never read as mode 0). */
 export type WheelMeasures = { events: number; absDeltaY: number[]; ratios: number[]; deltaModes: (number | null)[]; gapsMs: number[]; scrolls: number; scrollsWithNoWheelOrKey: number };
@@ -142,7 +152,7 @@ export function keyMeasures(recs: readonly Rec[]): KeyMeasures | null {
   const kd = recs.filter((r) => r.e === "keydown" && !r.r).sort(byTime), ku = recs.filter((r) => r.e === "keyup").sort(byTime);
   if (!kd.length) return null;
   const isChar = (r: Rec) => !MODIFIER_KEYS.has(r.k);
-  const holds: number[] = [], down = new Map<string, Rec>();
+  const holds: number[] = [], down = new Map<string, Rec>(), holdsByKey: Record<string, number[]> = {};
   let overlaps = 0;
   for (const r of [...kd, ...ku].sort(byTime)) {
     if (r.e === "keydown") {
@@ -150,7 +160,13 @@ export function keyMeasures(recs: readonly Rec[]): KeyMeasures | null {
       down.set(r.c, r);
     } else {
       const d = down.get(r.c);
-      if (d) { if (isChar(d)) holds.push(r.t - d.t); down.delete(r.c); }
+      if (d) {
+        if (isChar(d)) {
+          holds.push(r.t - d.t);
+          if (typeof d.k === "string" && d.k.length === 1) (holdsByKey[d.k.toLowerCase()] ??= []).push(r.t - d.t);
+        }
+        down.delete(r.c);
+      }
     }
   }
   const chars = kd.filter(isChar), dd: number[] = [], wordEnd: number[] = [], other: number[] = [], pairs: Record<string, number[]> = {};
@@ -162,11 +178,25 @@ export function keyMeasures(recs: readonly Rec[]): KeyMeasures | null {
   }
   const we = median(wordEnd), ot = median(other);
   const shifted = kd.filter((r) => SHIFTED.test(r.k));
+  // K4: the Shift keydown that holds a key (the last one before it with no Shift keyup between), and the keyup of a keydown.
+  const shiftOf = (r: Rec) => kd.filter((s) => s.k === "Shift" && s.t <= r.t && !ku.some((u) => u.k === "Shift" && u.t > s.t && u.t < r.t)).at(-1);
+  const upOf = (r: Rec) => ku.find((u) => u.c === r.c && u.t >= r.t);
+  const held = shifted.map((r) => [r, shiftOf(r)] as const).filter(([, s]) => s !== undefined);
+  const shifts = kd.filter((r) => r.k === "Shift"), loc = (r: Rec) => (r.l === 1 || r.l === 2 ? r.l : 0);
+  let sided = 0, otherHand = 0;
+  for (const s of shifts) {
+    const first = chars.find((r) => r.t >= s.t && shiftOf(r) === s);
+    if (!first || !SHIFTED.test(first.k) || !loc(s)) continue;
+    sided++;
+    if ((LEFT_HAND.has(first.k) ? 2 : 1) === loc(s)) otherHand++;
+  }
   return {
     keys: chars.length, holds, downToDown: dd, wordEndExtraMs: we !== null && ot !== null ? we - ot : null, overlaps, overlapShare: chars.length > 1 ? overlaps / (chars.length - 1) : null,
-    shiftedChars: shifted.length,
-    shiftedWithShiftDown: shifted.filter((r) => kd.some((s) => s.k === "Shift" && s.t <= r.t && !ku.some((u) => u.k === "Shift" && u.t > s.t && u.t < r.t))).length,
+    shiftedChars: shifted.length, shiftedWithShiftDown: held.length,
     numLockOn: kd.filter((r) => r.nl === 1).length, backspaces: kd.filter((r) => r.k === "Backspace").length, pairs,
+    holdsByKey, shiftDowns: shifts.length, shiftLocations: shifts.map(loc),
+    shiftUpAfter: held.filter(([r, s]) => { const up = upOf(r), sup = ku.find((u) => u.k === "Shift" && u.t > s!.t); return !!up && !!sup && sup.t > up.t; }).length,
+    shiftSided: sided, shiftOtherHand: otherHand,
   };
 }
 

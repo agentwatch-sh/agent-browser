@@ -802,3 +802,57 @@ test("P6's load to the first move: the first trusted pointer move after the top 
   assert.equal(rowOf(rows, "P6", /load to the first move/).value, "2000");
   assert.equal(verdict(scoreSource([stepM()], checkReference(FIXTURE)), "P6", /load to the first move/), "no data");
 });
+
+// ================================================================ K1 per key and K4's Shift (board ab-t30.4: review-97's list)
+
+test("K1 per key and K4's Shift: each key's holds; each Shift keydown's location, its release after the shifted characters, its side against the character's hand", () => {
+  // "Hi OK": H under the left Shift (H is a key of the right hand: the other hand's side), the Shift up after H's keyup;
+  // O and K under one right Shift (O is a key of the right hand: the same side), its keyup before K's keyup.
+  const k = keyMeasures([key("keydown", 0, "Shift", { c: "ShiftLeft", l: 1 }), key("keydown", 60, "H", { m: 8 }), key("keyup", 170, "H", { m: 8 }), key("keyup", 200, "Shift", { c: "ShiftLeft", l: 1 }),
+    key("keydown", 300, "i"), key("keyup", 410, "i"), key("keydown", 500, " ", { c: "Space" }), key("keyup", 590, " ", { c: "Space" }),
+    key("keydown", 700, "Shift", { c: "ShiftRight", l: 2 }), key("keydown", 760, "O", { m: 8 }), key("keyup", 860, "O", { m: 8 }), key("keydown", 900, "K", { m: 8 }),
+    key("keyup", 950, "Shift", { c: "ShiftRight", l: 2 }), key("keyup", 1000, "K"), key("keydown", 1100, "h"), key("keyup", 1190, "h")])!;
+  assert.deepEqual(k.holdsByKey, { h: [110, 90], i: [110], " ": [90], o: [100], k: [100] });
+  assert.deepEqual([k.shiftDowns, k.shiftLocations, k.shiftedWithShiftDown, k.shiftUpAfter], [2, [1, 2], 3, 2]);
+  assert.deepEqual([k.shiftSided, k.shiftOtherHand], [2, 1], "one Shift press on the other hand's side of its first character, one on the same side");
+  const side = (code: string, l: number) => keyMeasures([key("keydown", 0, "Shift", { c: code, l }), key("keydown", 60, "A", { m: 8 }), key("keyup", 150, "A", { m: 8 }), key("keyup", 180, "Shift", { c: code, l })])!;
+  assert.deepEqual([side("ShiftRight", 2).shiftOtherHand, side("ShiftLeft", 1).shiftOtherHand], [1, 0], "A is a key of the left hand: the right Shift is the other hand's");
+  const none = keyMeasures([key("keydown", 0, "Shift", { c: "ShiftLeft" }), key("keydown", 60, "a", { m: 8 }), key("keyup", 100, "a"), key("keyup", 120, "Shift", { c: "ShiftLeft" })])!;
+  assert.deepEqual([none.shiftDowns, none.shiftLocations, none.shiftSided], [1, [0], 0], "a Shift keydown with no location (CDP's default) is location 0");
+});
+
+test("K1 per key: KS for each key with 5 values or more against its own reference, else against all holds' reference", () => {
+  const like = Z12.slice(3, 8).map((z) => 116 + 24 * z), short = [30, 31, 32, 33, 34];
+  const typing = (holdsByKey: Record<string, number[]>, ref = checkReference(FIXTURE)) => scoreSource([stepM({ kind: "type", pointer: null, keys: keysM({ holdsByKey }), text: textM() })], ref);
+  assert.equal(verdict(typing({ e: like, t: like.map((v) => v + 2), x: [1] }), "K1", /per key/), "pass");
+  const one = typing({ e: like, t: short });
+  assert.equal(verdict(one, "K1", /per key/), "fail");
+  assert.match(rowOf(one, "K1", /per key/).value, /1 of 2 keys pass \(not: "t"\)/);
+  assert.equal(verdict(typing({ e: like.slice(0, 4) }), "K1", /per key/), "no data", "4 values: too few");
+  assert.equal(verdict(typing({ t: short }, refWith((r) => { r.keys.holdByKeyMs = { t: short.map((v) => v + 1) }; })), "K1", /per key/), "pass", "the key's own reference");
+  assert.equal(verdict(one, "K1", /^key holds \(ms\)/), "pass", "the pooled row stays");
+});
+
+test("K4: Shift keydowns with a location of 1 or 2, and shifted characters whose Shift goes up after their keyup (bars: every one); the share on the other hand's side (information)", () => {
+  const typing = (k: Partial<KeyMeasures>) => scoreSource([stepM({ kind: "type", pointer: null, keys: keysM(k), text: textM() })], checkReference(FIXTURE));
+  const person = typing({ shiftDowns: 3, shiftLocations: [1, 2, 1], shiftUpAfter: 4, shiftSided: 3, shiftOtherHand: 2 });
+  assert.deepEqual([verdict(person, "K4", /location/), verdict(person, "K4", /goes up after/), verdict(person, "K4", /other hand/)], ["pass", "pass", "not scored"]);
+  assert.match(rowOf(person, "K4", /other hand/).value, /^0\.67 \(2 of 3\)/);
+  const cdp = typing({ shiftDowns: 2, shiftLocations: [0, 1], shiftUpAfter: 3, shiftSided: 1, shiftOtherHand: 1 });
+  assert.deepEqual([verdict(cdp, "K4", /location/), verdict(cdp, "K4", /goes up after/)], ["fail", "fail"]);
+  assert.equal(rowOf(cdp, "K4", /location/).value, "1 of 2");
+  const no = typing({ shiftedChars: 0, shiftedWithShiftDown: 0, shiftDowns: 0, shiftLocations: [], shiftUpAfter: 0, shiftSided: 0, shiftOtherHand: 0 });
+  assert.deepEqual([verdict(no, "K4", /location/), verdict(no, "K4", /goes up after/), verdict(no, "K4", /other hand/)], ["no data", "no data", "no data"]);
+  assert.equal(verdict(person, "K4", /Shift keydown$/), "pass", "the row of a Shift keydown before each shifted character stays");
+});
+
+test("the reference file: holds per key (optional): one character for each key, a distribution for each value", () => {
+  const ok = refWith((r) => { r.keys.holdByKeyMs = { e: [100, 110, 120, 130, 140], " ": { normal: [110, 20] } }; });
+  assert.deepEqual(Object.keys(ok.keys.holdByKeyMs!), ["e", " "]);
+  const bad = (keys: unknown, want: RegExp) => assert.throws(() => refWith((r) => { r.keys.holdByKeyMs = keys; }), want);
+  bad({ ee: [100] }, /reference: keys\.holdByKeyMs\.ee: not a key/);
+  bad({ e: "x" }, /reference: keys\.holdByKeyMs\.e: /);
+  bad({ e: [] }, /reference: keys\.holdByKeyMs\.e: no values/);
+  bad(JSON.parse('{"__proto__": [1, 2]}'), /reference: keys\.holdByKeyMs\.__proto__: not a key/);
+  bad({}, /reference: keys\.holdByKeyMs: no keys/);
+});
