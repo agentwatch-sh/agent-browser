@@ -92,6 +92,8 @@ export class McpPort {
     this.uid = o.uid ?? process.getuid!();
     // No Host header is the Host's 403 of step 4, not Node's own 400.
     this.http = createHttp({ requireHostHeader: false }, (req, res) => this.request(req, res));
+    // The connection's own header timeout governs an idle keep-alive connection too (C11: 10 s), not Node's 5 s.
+    this.http.keepAliveTimeout = 0;
     // Expect: steps 3 to 8 come before any 100 or 417 answer (Node would answer them first).
     this.http.on("checkContinue", (req: IncomingMessage, res: ServerResponse) => this.request(req, res, "continue"));
     this.http.on("checkExpectation", (req: IncomingMessage, res: ServerResponse) => this.request(req, res, "expectation"));

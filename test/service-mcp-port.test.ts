@@ -835,6 +835,7 @@ test("review-114 note 10: an admitted connection that sends nothing, a header th
   };
   const p = await onePort({ handler, headersMs: 300, idleMs: 300 });
   try {
+    assert.equal((p.port as any).http.keepAliveTimeout, 0, "Node's own keep-alive timeout (5 s) is off: the header time governs an idle connection");
     const t0 = Date.now();
     const silent = await p.open();
     await silent.closes();
