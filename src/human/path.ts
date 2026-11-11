@@ -206,6 +206,32 @@ export function planPath(from: Pt, to: Pt, width: number, person: Person, random
 /** A shape with no overshoot and no corrections: the main sub-movement alone ends on the target. */
 export const withoutOvershoot = (shape: Shape): Shape => ({ ...shape, overshoot: false, ends: [], backMs: 0 });
 
+/**
+ * A short move (C11, the pointer: a `mouseMoved` at most `short.maxPx` (50 px) from the page's last point, such as a step
+ * of `mouse.move` with `steps`): samples of the client's line from `from` to `to` at the device's rate, at a speed drawn
+ * from `short.speed` (0.5 to 1.5 px/ms), with a jitter across the line of at most `short.jitterPx` (0 to 1 px) that fades
+ * to 0 at both ends; whole px on a whole-px device, no sample that does not move, and the last one is `to` itself.
+ * Empty for a move of less than 1 px.
+ */
+export function planLine(from: Pt, to: Pt, person: Person, random: Random, opts: { rateMs?: number } = {}): { samples: Sample[]; ms: number } {
+  const dev = person.params.device, S = person.params.path.short, rate = opts.rateMs ?? dev.rateMs;
+  const fit = (p: Pt): Pt => (dev.wholePx ? { x: Math.round(p.x), y: Math.round(p.y) } : { x: p.x, y: p.y });
+  const a = fit(from), b = fit(to), D = Math.hypot(b.x - a.x, b.y - a.y);
+  if (D < 1 && (a.x === b.x && a.y === b.y)) return { samples: [], ms: 0 };
+  const speed = draw(random, S.speed), ms = D / speed, jitter = draw(random, S.jitterPx), phase = uniform(random, 0, 2 * Math.PI);
+  const ux = D > 0 ? (b.x - a.x) / D : 1, uy = D > 0 ? (b.y - a.y) / D : 0;
+  const n = Math.max(1, Math.ceil(ms / rate)), out: Sample[] = [];
+  let last = a;
+  for (let i = 1; i <= n; i++) {
+    const u = i / n, j = i === n ? 0 : jitter * Math.sin(Math.PI * u) * Math.sin(phase + 2 * Math.PI * u);
+    const p = i === n ? b : fit({ x: a.x + (b.x - a.x) * u - uy * j, y: a.y + (b.y - a.y) * u + ux * j });
+    if (p.x === last.x && p.y === last.y) continue;
+    out.push({ x: p.x, y: p.y, t: i * rate });
+    last = p;
+  }
+  return { samples: out, ms: out.length ? out[out.length - 1].t : 0 };
+}
+
 /** A start point when the page has none: a random point of the viewport's middle (30% to 70% on each axis). */
 export function startPoint(width: number, height: number, random: Random, middle: readonly [number, number] = [0.3, 0.7]): Pt {
   return { x: width * uniform(random, middle[0], middle[1]), y: height * uniform(random, middle[0], middle[1]) };

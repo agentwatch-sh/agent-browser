@@ -47,7 +47,17 @@ export type PlayerOptions = {
   latencyPerEvent?: boolean;
 };
 
-export type MovesResult = { sent: number; stopped: boolean };
+/**
+ * `stopped`: a move was due while maxInFlight waited, or `stop` said so, or `until` ended the wait for the answers; then
+ * the player sent no more (the caller sends its own last event). `ended`: the caller's `stop` or `until` ended it.
+ */
+export type MovesResult = { sent: number; stopped: boolean; ended?: boolean };
+/**
+ * The input stage's options of one path (C11 "The input stage"): `latency`, the plan's own input latency; `inFlight`,
+ * the moves of the tab without an answer, shared by its paths (STAGE_MOVES_IN_FLIGHT is a bound for each tab); `stop`,
+ * checked before each send (the plan ended); `until`, which ends the wait for the next move's time and for the answers.
+ */
+export type MovesOptions = { latency?: number; inFlight?: { n: number }; stop?: () => boolean; until?: Promise<unknown> };
 
 export class CdpPlayer {
   private readonly clock: Clock;
@@ -68,10 +78,10 @@ export class CdpPlayer {
   }
   private latency(): number { return uniform(this.o.random, this.o.latencyMs[0], this.o.latencyMs[1]); }
 
-  /** One event, with its timestamp, after the `before` check; its answer awaited. */
-  async event(method: string, params: Record<string, unknown>): Promise<unknown> {
+  /** One event, with its timestamp (a plan's latency when given), after the `before` check; its answer awaited. */
+  async event(method: string, params: Record<string, unknown>, latency?: number): Promise<unknown> {
     this.o.before?.();
-    return this.send(method, { ...params, timestamp: this.timestamp() });
+    return this.send(method, { ...params, timestamp: this.timestamp(latency) });
   }
 
   /**
@@ -79,26 +89,32 @@ export class CdpPlayer {
    * awaited before the next; then the answers of all of them. `stopped`: a move was due while maxInFlight waited, and
    * the player sent no more (the caller sends its own last event).
    */
-  async moves(samples: readonly Sample[], extra: Record<string, unknown> = {}): Promise<MovesResult> {
+  async moves(samples: readonly Sample[], extra: Record<string, unknown> = {}, o: MovesOptions = {}): Promise<MovesResult> {
     const t0 = this.clock.now(), scale = this.o.scale ?? 1, gap = this.o.minGapMs ?? 0, pending: Promise<void>[] = [];
-    let inFlight = 0, sent = 0, stopped = false, last = -Infinity, failed: { e: unknown } | undefined;
-    const lat = this.o.latencyPerEvent ? undefined : this.latency();
+    const flight = o.inFlight ?? { n: 0 };
+    let sent = 0, stopped = false, ended = false, last = -Infinity, failed: { e: unknown } | undefined;
+    const lat = this.o.latencyPerEvent ? undefined : o.latency ?? this.latency();
     const settle = () => Promise.all(pending);
     for (const s of samples) {
       const due = Math.max(t0 + s.t * scale, last + gap), wait = due - this.clock.now();
-      if (wait > 0) await this.clock.sleep(wait);
+      if (wait > 0) await (o.until ? Promise.race([this.clock.sleep(wait), o.until]) : this.clock.sleep(wait));
       if (failed) break;
-      if (inFlight >= this.o.maxInFlight) { stopped = true; break; }
+      if (o.stop?.()) { stopped = true; ended = true; break; }
+      if (flight.n >= this.o.maxInFlight) { stopped = true; break; }
       try { this.o.before?.(); } catch (e) { await settle(); throw e; }
       const p = this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s.x, y: s.y, button: "none", buttons: 0, ...extra, timestamp: this.timestamp(lat ?? this.latency()) });
-      inFlight++;
+      flight.n++;
       sent++;
-      pending.push(p.then(() => { inFlight--; }, (e) => { inFlight--; failed ??= { e }; }));
+      pending.push(p.then(() => { flight.n--; }, (e) => { flight.n--; failed ??= { e }; }));
       last = this.clock.now();
     }
     // A stopped path does not wait for answers that a page with an open dialog never gives (each one has its handler).
-    if (stopped) return { sent, stopped };
-    await settle();
+    if (stopped) return { sent, stopped, ...(ended ? { ended } : {}) };
+    // The caller's end (a dialog, a limit) also ends the wait for the answers.
+    if (o.until) {
+      const done = await Promise.race([settle().then(() => true), o.until.then(() => false)]);
+      if (!done) return { sent, stopped: true, ended: true };
+    } else await settle();
     if (failed) throw failed.e;
     return { sent, stopped };
   }
