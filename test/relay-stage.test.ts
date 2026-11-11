@@ -559,4 +559,57 @@ test("the stage never answers a call before its events: each answer of an input 
   }
 });
 
+test("the spread point is decided with the path: a locator click whose press comes later (a click with delay) and a click in a frame press at the client's point", async () => {
+  // click({ delay }): Playwright awaits the move before it sends the press, so the stage plans the path with no press in view.
+  const v = vec("click");
+  v.in[5].after = 5; v.in[6].after = 6; v.in[6].waitMs = 300;
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const r = await runVector(v, { seed });
+    const press = events(r.tab).find((s) => s.params.type === "mousePressed")!;
+    assert.deepEqual([press.params.x, press.params.y], [100, 240], `seed ${seed}: the client's point`);
+  }
+  // A button in a cross-origin frame: the setup's hit point is in the frame's own points.
+  const f = vec("frame-click");
+  f.page.nodes["8.5.10"].tag = "button";
+  f.in[0].params.arguments[5].value.a[2].o[1].v.o = [{ k: "x", v: 22 }, { k: "y", v: 32 }];
+  for (const seed of [1, 2, 3]) {
+    const r = await runVector(f, { seed });
+    const press = events(r.tab).find((s) => s.params.type === "mousePressed")!;
+    assert.deepEqual([press.params.x, press.params.y], [324, 134], "the client's point in the top page");
+  }
+});
+
+test("a press away from the page's last point (a client that sent no move there) gets a path there first, then the pause", async () => {
+  const r = await runVector(own([{ at: 0, ...mouse("mousePressed", 500, 300) }, { at: 0, ...mouse("mouseReleased", 500, 300) }]));
+  const ev = events(r.tab), ms = moves(r.tab), press = ev.find((s) => s.params.type === "mousePressed")!;
+  assert.ok(ms.length > 10, "a path first");
+  assert.deepEqual([ms.at(-1)!.params.x, ms.at(-1)!.params.y], [500, 300]);
+  assert.ok(press.t - ms.at(-1)!.t >= F.pauseMs[0] && press.t - ms.at(-1)!.t <= F.pauseMs[1], "then the pause");
+});
+
+test("a hover's action holds the lock from its first sample to its last: another tab's action waits for Playwright's move; with no move in 1 s the rest goes and the lock is free", async () => {
+  const hov = vec("hover");
+  // Tab A hovers (its move comes 500 ms after the setup's answer); tab B moves at 10 ms.
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(9), platform: "linux", clock, stamp: clock.stamp });
+  const A = new FakeTab(hov, clock, { id: 1 }), B = new FakeTab(own([]), clock, { id: 2 });
+  A.stage = stage; B.stage = stage;
+  let gateA: Promise<void> = Promise.resolve(), gateB: Promise<void> = Promise.resolve();
+  const answers: string[] = [];
+  const sendA = (c: any) => { const e = stage.arrive(A, undefined, c.method, c.params, () => { answers.push(`A${c.id}`); if (c.id === 1) clock.timer(500, () => sendA(hov.in[1])); if (c.id === 2) sendA(hov.in[2]); });
+    gateA = gateA.then(() => (e ? stage.step(A, e) : A.pass(undefined, c.method, c.params, () => answers.push(`A${c.id}`)))); };
+  clock.timer(0, () => sendA(hov.in[0]));
+  clock.timer(10, () => { const m = mouse("mouseMoved", 500, 400); const e = stage.arrive(B, undefined, m.method, m.params, () => answers.push("B1"))!; gateB = gateB.then(() => stage.step(B, e)); });
+  await clock.run(() => answers.length === 4);
+  const lastA = moves(A).at(-1)!, firstB = moves(B)[0];
+  assert.ok(firstB.t >= lastA.t, `B's first move (${firstB.t}) after A's last (${lastA.t})`);
+  // No move: the rest goes after HOVER_WAIT_MS, and the lock is free.
+  const v = vec("hover");
+  v.in = v.in.filter((c: any) => c.id === 1);
+  const r = await runVector(v);
+  await r.clock.advance(1500);
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+  assert.equal(r.stage.counts.hoverRestsDropped, 1);
+});
+
 void Stage; void idle; void ({} as Body);

@@ -57,6 +57,8 @@ export const RECOVERY_EXIT_PX = 15;
 export const AROUND_MARGIN_PX = 10;
 /** At most this many recoveries in one action (the setups of one node with no setup of another node between them). */
 export const RECOVERIES_MAX = 2;
+/** A hover's action ends at Playwright's move: with no pointer input of the tab this long after the setup's answer, the rest goes and the lock is free. */
+export const HOVER_WAIT_MS = 1000;
 /** The default width of a target for Fitts's law when the stage knows no target (a plain mouse.move): input.ts's moveTo. */
 const DEFAULT_WIDTH = 24;
 
@@ -240,6 +242,8 @@ class TabState {
   plain = false;
   avoid: Rect | null = null;
   rest: { to: Pt; from: Pt; samples: Sample[] } | null = null;
+  /** The end of a kept rest (HOVER_WAIT_MS after the setup's answer). */
+  restTimer: (() => void) | null = null;
   spread: { client: Pt; point: Pt } | null = null;
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
@@ -436,13 +440,27 @@ export class Stage {
     const a = st.action;
     if (!a) return;
     if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.finish(page, st, a.ended !== "limit" && !a.failed); return; }
-    if (!st.buttons.size && !st.keys.size && !st.pending.some((x) => x.kind !== "setup")) this.close(st);
+    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st);
   }
+
+  /** The hover's rest is kept for Playwright's move: with none in HOVER_WAIT_MS, it goes, and an action with nothing else frees the lock. */
+  private keepRest(page: StagePage, st: TabState): void {
+    st.restTimer?.();
+    st.restTimer = this.clock.timer(HOVER_WAIT_MS, () => {
+      st.restTimer = null;
+      if (!st.rest) return;
+      st.rest = null;
+      this.count("hoverRestsDropped");
+      if (!st.running) this.afterStep(page, st);
+    });
+  }
+  private dropRest(st: TabState): void { st.rest = null; st.restTimer?.(); st.restTimer = null; }
 
   private close(st: TabState): void {
     const a = st.action;
     if (!a) return;
     st.action = null;
+    this.dropRest(st);
     a.watchdog?.(); a.limit?.();
     a.release();
   }
@@ -460,7 +478,7 @@ export class Stage {
     this.count(why === "dialog" ? "dialogEnds" : why === "wait" ? "waitEnds" : "limitEnds");
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
     for (const x of st.pending) if (x.kind !== "setup") x.ended = true;
-    st.rest = null;
+    this.dropRest(st);
     if (!st.running && !st.pending.some((x) => x.ended)) this.finish(page, st, why !== "limit");
   }
 
@@ -498,7 +516,7 @@ export class Stage {
     if (a) { a.failed = true; a.fire(); }
     this.count("eventErrors");
     for (const x of st.pending) if (x.kind !== "setup") x.failedWith = body;
-    st.rest = null; st.spread = null;
+    this.dropRest(st); st.spread = null;
     this.releaseHeld(page, st);
     e.answer({ error: body });
     this.close(st);
@@ -696,7 +714,7 @@ export class Stage {
     let from = this.from(page, st);
     // The hover's last leg: the samples of its path from the first one inside the target, at Playwright's move.
     const rest = st.rest;
-    st.rest = null;
+    this.dropRest(st);
     let samples: Sample[] | null = null;
     if (rest && near(rest.to, to, 1.5) && same(from, rest.from)) { samples = rest.samples; this.count("hoverLastLegs"); }
     if (!samples) {
@@ -760,6 +778,7 @@ export class Stage {
    */
   private async pressStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params, client = this.fit(p);
+    this.dropRest(st);
     if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
@@ -791,6 +810,7 @@ export class Stage {
   /** mouseReleased: at the later of its arrival and the press's send plus the hold, at the press's point. */
   private async releaseStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params, client = this.fit(p);
+    this.dropRest(st);
     // A release of a button that the stage released at the end of a plan: no event (a button that is up cannot go up).
     if (st.released.delete(p.button) && !st.buttons.has(p.button)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
     if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
@@ -850,7 +870,7 @@ export class Stage {
     const hit = opts?.hitPoint && typeof opts.hitPoint.x === "number" && typeof opts.hitPoint.y === "number" ? { x: opts.hitPoint.x, y: opts.hitPoint.y } : null;
     if (!st.recov || st.recov.node !== node) { st.recov = { node, n: 0 }; st.plain = false; }
     st.setup = { node, child: e.child, action, hit, trial, used: false };
-    st.spread = null; st.rest = null;
+    st.spread = null; this.dropRest(st);
     const live = !st.action?.over;
     if (live && !trial && hit && node) {
       if (st.miss) {
@@ -870,6 +890,8 @@ export class Stage {
       const r = body?.result?.result;
       if (r?.type === "string") { st.miss = true; this.count("setupMisses"); }
       else if (typeof r?.objectId === "string") st.handles.add(r.objectId);
+      // A kept rest waits for Playwright's move from the setup's answer on (a miss: Playwright sends no move).
+      if (st.rest) { if (r?.type === "string") { this.dropRest(st); if (!st.running) this.afterStep(page, st); } else this.keepRest(page, st); }
       e.answer(body);
     });
   }
