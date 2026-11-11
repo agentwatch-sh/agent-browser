@@ -530,7 +530,7 @@ export class Model {
   }
 
   private reset(): void {
-    for (const tab of this.tabs.values()) this.endHold(tab);
+    for (const tab of this.tabs.values()) { this.endHold(tab); this.stageDrop(tab.id); }
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
@@ -739,7 +739,6 @@ export class Model {
     if (!args.every((a) => typeof a === "number" && Number.isFinite(a))) throw new Error("a read of the stage takes numbers only");
     const id = await this.relayWorld(tab);
     if (id === null) throw new Error("no world");
-    tab.worldEvents = new Set([...tab.worldEvents, id]);
     const r = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Runtime.evaluate", { expression: `(${fn})(${args.join(", ")})`, contextId: id, returnByValue: true, disableBreaks: true }]);
     return r?.result?.value;
   }
