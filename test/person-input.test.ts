@@ -282,6 +282,9 @@ test("the keys of type with the default timing: the keyboard model's holds (50 t
     const up = ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!;
     assert.ok(up.t - d.t >= 45 && up.t - d.t <= 270, `the hold of ${d.params.key}: ${up.t - d.t} ms`);
   }
+  // The model's holds (mean 116 ms, SD 24 ms): the mean of four is above 80 ms (today's 20 to 50 ms gave about 35).
+  const holds = downs.map((d) => ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!.t - d.t);
+  assert.ok(holds.reduce((a, b) => a + b, 0) / holds.length > 80, `the mean hold: ${holds.join(", ")} ms`);
   for (let i = 1; i < downs.length; i++) assert.ok(downs[i].t - downs[i - 1].t >= 15, `gap ${downs[i].t - downs[i - 1].t} ms`);
   for (const x of ev) {
     // The fake's receive time (x.t) adds the delivery to the 3 to 5 ms of the latency: on a loaded box (load average 6) up to

@@ -815,6 +815,8 @@ test("K1 per key and K4's Shift: each key's holds; each Shift keydown's location
   assert.deepEqual(k.holdsByKey, { h: [110, 90], i: [110], " ": [90], o: [100], k: [100] });
   assert.deepEqual([k.shiftDowns, k.shiftLocations, k.shiftedWithShiftDown, k.shiftUpAfter], [2, [1, 2], 3, 2]);
   assert.deepEqual([k.shiftSided, k.shiftOtherHand], [2, 1], "one Shift press on the other hand's side of its first character, one on the same side");
+  const side = (code: string, l: number) => keyMeasures([key("keydown", 0, "Shift", { c: code, l }), key("keydown", 60, "A", { m: 8 }), key("keyup", 150, "A", { m: 8 }), key("keyup", 180, "Shift", { c: code, l })])!;
+  assert.deepEqual([side("ShiftRight", 2).shiftOtherHand, side("ShiftLeft", 1).shiftOtherHand], [1, 0], "A is a key of the left hand: the right Shift is the other hand's");
   const none = keyMeasures([key("keydown", 0, "Shift", { c: "ShiftLeft" }), key("keydown", 60, "a", { m: 8 }), key("keyup", 100, "a"), key("keyup", 120, "Shift", { c: "ShiftLeft" })])!;
   assert.deepEqual([none.shiftDowns, none.shiftLocations, none.shiftSided], [1, [0], 0], "a Shift keydown with no location (CDP's default) is location 0");
 });

@@ -217,6 +217,13 @@ test("keys rule the early answer: a release is answered early only when the next
   assert.deepEqual([late.early, late.events[0].t], [false, p.t + 300], "a release at the later of its arrival and its planned hold");
   const b = s.next(k("b"), p.t + 300)[0];
   assert.ok(b.t >= p.t + 300, "a press at the later of its arrival and its planned time");
+  // A key that comes long after its planned time (a client that waits 5 s) goes at its arrival, never before it.
+  for (let seed = 0; seed < 20; seed++) {
+    const w = new KeyStream(MID, seededRandom(seed)), x = w.next(k("j"), 0)[0];
+    w.release(k("j"), x.t);
+    const y = w.next(k("f"), x.t + 5000).at(-1)!;
+    assert.ok(y.t >= x.t + 5000, `a press at its arrival when that comes after its planned time: ${y.t - x.t} ms (seed ${seed})`);
+  }
 });
 
 test("keys rule Shift: a Shift rawKeyDown 45 to 95 ms before a shifted character (modifiers 8 on it), its release 15 to 60 ms after the last held key's release; a run of capitals keeps Shift down; a key with no Shift waits for that release", () => {
@@ -301,6 +308,14 @@ test("keys rule no corrections: the plan types exactly its text, with no Backspa
       assert.ok(!down.has(e.code), `${e.key} goes down twice (seed ${seed})`);
       down.add(e.code);
     }
+  }
+  // One key twice when the next press is planned inside the first's hold (holds of 200 ms, 10 to 12 ms from one press to the
+  // next: the first release is answered early): the second press waits for the first release, 5 to 30 ms after it.
+  for (let seed = 0; seed < 20; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed), { holdMs: [200, 210], keyMs: [10, 12] });
+    const a = s.next(k("l"), 0)[0], r = s.release(k("l"), a.t), b = s.next(k("l"), a.t)[0];
+    assert.ok(r.early, "the first release is answered early");
+    assert.ok(b.t - r.events[0].t >= 5 - 1e-9 && b.t - r.events[0].t <= 30 + 1e-9, `the second l ${b.t - r.events[0].t} ms after the first's release (seed ${seed})`);
   }
 });
 
