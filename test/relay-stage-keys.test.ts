@@ -510,3 +510,13 @@ test("the model's gate (the stage's other()): a call that the stage does not tak
   }
   assert.ok(checked > 0, `the last release answered early in ${checked} seeds`);
 });
+
+test("the focus test: before fill, a field that is the active element of its document needs no click (fill's script selects its text); before Playwright's focus call, the window's focus counts too (Playwright's _activelyFocused), read after the activation", async () => {
+  const page = { nodes: { n: INPUT({ text: 3, windowAway: true }) }, focused: "n" };
+  const f = await runVector(own([fillCall("n", "abc")], page));
+  assert.equal(mouseEvents(f.tab).length, 0, "fill: no click");
+  assert.equal(f.stage.counts.fieldFocused, 1);
+  const p = await runVector(own([focusCall("n", true)], page));
+  assert.ok(pressOf(p.tab), "Playwright's focus call: a click (the document has the focus, the window does not)");
+  assert.ok(p.tab.activations[0] <= mouseEvents(p.tab)[0].t, "the activation before the read and the click");
+});
