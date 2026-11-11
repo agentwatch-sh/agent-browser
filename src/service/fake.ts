@@ -8,6 +8,12 @@
 // of the service. Each line on its standard input that is an event of C12's table, with exactly its fields, goes to
 // each connection past the hellos.
 //
+// Its stored sign-ins (the feature sign_ins; C12, "The stored sign-ins" and the fake's part; board ab-v16.97.1): it opens
+// no seal, makes no key and seals nothing. It answers the vectors' fake values, and it follows each rule that needs no
+// key: the rules of `record`, the order of the checks, the snapshot, the state, the form and the `rid` of a pane's seal,
+// the key's form and its KDF bounds, the names and ids, the fields that the service seals, the generation, the removed
+// ids and "Start again". The vectors' scripted seal texts stand for a wrong passphrase, a short one and a stale seal.
+// With `unprotected` (`--unprotected`), it answers as a process where that protection does not hold (review-112 B5).
 // The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
 // each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
 // has a fingerprint (never the fingerprint). It serves no MCP.
@@ -17,7 +23,7 @@ import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
-import { covers } from "../relay/scopes.ts";
+import { covers, SCOPE } from "../relay/scopes.ts";
 import { EntryError, hostOrNull, normalizeHost } from "./lists/hosts.ts";
 import { refusedRule } from "./admission.ts";
 import { agentDoorUrl } from "./agent-door.ts";
@@ -52,15 +58,176 @@ export const FAKE_STATE = {
     id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.2.0",
     package: { name: "agentwatch-sender-0.2.0.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
   },
+  /**
+   * The stored sign-ins' fake values: the pane key's public half, the key.json of a set-up and of a rekey, the sealed part
+   * of each seal, and the seal texts that the fake takes as a wrong passphrase, as a new passphrase of fewer than 16
+   * characters (in a rekey, with an old one that does not open the store), and as a seal more than 120 s old.
+   */
+  sign_ins: {"pane_key":"cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=","key":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"XtlD_scc1BSqO7QI6IJgPg"},"wrapped":{"iv":"B4obup7UgkQF8GYX","ct":"ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6","tag":"jk4pUJmfRHDzXStJGojQwA"}},"rekeyed":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"0_XWx6Xj1oofUDswBrKe5g"},"wrapped":{"iv":"a3IUxpg3ws4tUVUs","ct":"2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU","tag":"hNF_MZqahErAHIr8y361MQ"}},"sealed":{"epk":"ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk","iv":"Thcyq0pYkHTUDuOs","ct":"eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3","tag":"JMg6-BFlhxw7HHdyxOgcnQ"},"wrong_passphrase":"aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA","short_passphrase":"aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg","stale_seal":"aw1:a2jCo0nw6AU1LWE5RQK2nzAESR8SKExc8ENZuhmNxO0UNjqzO6vkolcg3p3Jxsx1oIZh4EuudXcj2zIwrYPBDupDFA-dUtjm4D9pCJfAKpJdoNetmyX0ry7fw8BuaKRAGe5Rzj-yVkUpIdu081H9QYmOFt_JW1zvVW9ws8-RW_i33vDY4kvC_MXt0KiZ_QDB_7ZSwGVyOefB_f3rf3qpc2PdzY9mlelxs0Aj2gSI03TRRGaGoXO2baF6yPiVFUajLT_y5oowFTWYhTlx5s2E5Of5OLsdjy-dxo2c4tgIPbdel44X-qAu15xFsGN3XEEcdFeYqXx7HaSXQnlsHUmtMb7SqSMIqYJm_GOXgIxQyqEwxpMN44sHZeWtSjA5jjfNr0kXrgfBiVyIOx9879pimw"},
 };
-/** The fake's features (C12, the hello): the fake, and the connection tokens' field (the token design). */
-export const FAKE_FEATURES = ["fake", "mcp_token"] as const;
+/** The fake's features (C12, the hello): the fake, the connection tokens' field (the token design), and the
+ * stored sign-ins' ops (C12). */
+export const FAKE_FEATURES = ["fake", "mcp_token", "sign_ins"] as const;
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
 // The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
 const launchRefusal = (scope: string) => `A session named ${scope} ended a moment ago, and the agent browser could not record it (the file of ended scopes cannot be written: ENOSPC). Choose another name, or wait until the agent browser confirms its lists.`;
 
 const copy = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+
+// ---- The stored sign-ins of the fake (C12, "The stored sign-ins") ----
+type StoreState = "none" | "locked" | "open";
+type SnapRecord = { id: string; gen: unknown; name: unknown; origin: string; by: string; approved: unknown };
+/** The reasons of a protection of the service's memory that does not hold (C12, the protections), in their order. */
+export const UNPROTECTED = ["dumpable", "signal"] as const;
+export type Unprotected = (typeof UNPROTECTED)[number];
+/** The form of a pane's seal's `rid` and `at` (C12, the pane's seal). */
+const RID = /^[A-Za-z0-9_-]{22,64}$/, AT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{3})?Z$/;
+type RecordFields = { id: string; name: string; origin: string; path: string; send_to: string[] };
+const RID_MS = 120_000;
+const loopback = (h: string) => h === "localhost" || h.endsWith(".localhost") || h === "127.0.0.1";
+/** `origin`: a URL origin as the WHATWG URL parser gives it, `https:`, or `http:` with a loopback host (for tests). */
+function originFits(o: string): boolean {
+  if (!URL.canParse(o)) return false;
+  const u = new URL(o);
+  return u.origin === o && (u.protocol === "https:" || (u.protocol === "http:" && loopback(u.hostname)));
+}
+/** The first field of `record` that breaks its rule (C12's order), or null. */
+function recordBreaks(r: RecordFields): string | null {
+  if (!/^c-[0-9a-f]{8}$/.test(r.id)) return "id";
+  if (!SCOPE.test(r.name)) return "name";
+  if (!originFits(r.origin)) return "origin";
+  if (!/^\/[^?#]*$/.test(r.path)) return "path";
+  if (!r.send_to.includes(r.origin) || !r.send_to.every(originFits) || new Set(r.send_to).size !== r.send_to.length) return "send_to";
+  return null;
+}
+/**
+ * A key.json that the service takes: a string `public`, an object `wrapped` of the strings iv, ct and tag, and the KDF
+ * bounds (scrypt, N a power of two from 2^15 to 2^18, r 8, p 1, a salt of 16 bytes).
+ */
+function keyFits(key: Record<string, any>): boolean {
+  const k = key.kdf, w = key.wrapped;
+  return typeof key.public === "string" && isObj(w) && ["iv", "ct", "tag"].every((x) => typeof w[x] === "string")
+    && isObj(k) && k.name === "scrypt" && Number.isSafeInteger(k.n) && k.n >= 2 ** 15 && k.n <= 2 ** 18 && (k.n & (k.n - 1)) === 0 && k.r === 8 && k.p === 1
+    && typeof k.salt === "string" && /^[A-Za-z0-9_-]+$/.test(k.salt) && Buffer.from(k.salt, "base64url").length === 16;
+}
+
+/** The fake's store: no key and no seal, only the rules of C12 that need none. */
+class FakeStore {
+  private snap: { key: Record<string, any> | null; records: SnapRecord[] } | null = null;
+  private open = false;
+  private openPublic: string | null = null;
+  private readonly highest = new Map<string, number>();
+  private readonly removed = new Set<string>();
+  /** Each `rid` of a pane's seal that the fake opened, and when (C12: a rid seen in the last 120 s does not open). */
+  private readonly rids = new Map<string, number>();
+  private readonly now: () => Date;
+  private readonly unprotected: Unprotected | null;
+  constructor(now: () => Date, unprotected: Unprotected | null) { this.now = now; this.unprotected = unprotected; }
+
+  state(): StoreState { return this.open ? "open" : this.snap && this.snap.key !== null ? "locked" : "none"; }
+  /** C12's status key: the fake runs no act, so no act and no stopped credential. */
+  status() { return { state: this.state(), records: this.snap?.records.length ?? 0, acts: 0, pane_key: FAKE_STATE.sign_ins.pane_key, stopped: [] as string[], unprotected: this.unprotected }; }
+
+  /** The pane's seal: the form of `rid` and `at`, a `rid` seen in the last 120 s, and the vectors' stale seal. */
+  private seal(sealed: { text: string; rid: string; at: string }): boolean {
+    if (!RID.test(sealed.rid) || !AT.test(sealed.at)) return false;
+    const t = this.now().getTime();
+    for (const [rid, at] of this.rids) if (t - at > RID_MS) this.rids.delete(rid);
+    if (this.rids.has(sealed.rid)) return false;
+    this.rids.set(sealed.rid, t);
+    return sealed.text !== FAKE_STATE.sign_ins.stale_seal;
+  }
+
+  /** Another approved record of the last snapshot has this name (C12, names and ids). */
+  private nameTaken(id: string, name: string): boolean {
+    return (this.snap?.records ?? []).some((x) => x.id !== id && x.name === name && x.approved === true);
+  }
+
+  private sealed(r: RecordFields, by: "operator" | "offer", approved: boolean): Answer {
+    const gen = (this.highest.get(r.id) ?? 0) + 1;
+    this.highest.set(r.id, gen);
+    const send_to = by === "offer" && !approved ? [r.origin] : [...r.send_to];
+    return { data: { record: { v: 1, id: r.id, gen, name: r.name, origin: r.origin, path: r.path, send_to, repos: null, by, approved }, sealed: copy(FAKE_STATE.sign_ins.sealed) } };
+  }
+
+  /** An op of the stored sign-ins after the door's checks (the op, the shape and the kind). */
+  handle(req: Req): Answer {
+    const err = (error: string): Answer => ({ error });
+    const record = req.record as RecordFields | undefined;
+    if (record) { const f = recordBreaks(record); if (f) return err(`the stored sign-in is not valid (field ${f})`); }
+    if (req.op === "sign_ins_lock") { this.open = false; return { data: {} }; }
+    if (req.op === "sign_ins") {
+      const records = req.records as SnapRecord[];
+      const key = req.key as Record<string, any> | null;
+      const ids = new Set(records.map((r) => r.id));
+      for (const r of this.snap?.records ?? []) if (!ids.has(r.id)) this.removed.add(r.id);
+      for (const r of records) if (typeof r.gen === "number" && Number.isSafeInteger(r.gen) && r.gen >= 1 && r.gen > (this.highest.get(r.id) ?? 0)) this.highest.set(r.id, r.gen);
+      if (key === null || key.public !== this.openPublic) this.open = false;
+      this.snap = { key, records: copy(records) };
+      return { data: { records: records.length } };
+    }
+    if (!this.snap) return err("the stored sign-ins have no snapshot yet");
+    const state = this.state();
+    const sealed = req.sealed as { text: string; rid: string; at: string } | undefined;
+    const S = FAKE_STATE.sign_ins;
+    const unprotected = this.unprotected === null ? null : err(`the service's memory is not protected (${this.unprotected})`);
+    switch (req.op) {
+      case "sign_ins_setup":
+        if (this.snap.key !== null || this.open) return err("the store is set up already");
+        if (unprotected) return unprotected;
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        if (sealed!.text === S.short_passphrase) return err("the passphrase has fewer than 16 characters");
+        this.open = true; this.openPublic = S.key.public;
+        return { data: { key: copy(S.key) } };
+      case "sign_ins_unlock":
+        if (this.open) return { data: {} };
+        if (this.snap.key === null) return err("the store is not set up");
+        if (unprotected) return unprotected;
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        if (!keyFits(this.snap.key)) return err("the store's key file is not valid");
+        if (sealed!.text === S.wrong_passphrase) return err("the passphrase does not open the store");
+        this.open = true; this.openPublic = this.snap.key.public;
+        return { data: {} };
+      case "sign_ins_rekey":
+        if (state === "none" || this.snap.key === null) return err("the store is not set up");
+        if (state === "locked") return err("the store is locked");
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        // The new passphrase's length comes before the old passphrase (and before the key).
+        if (sealed!.text === S.short_passphrase) return err("the passphrase has fewer than 16 characters");
+        if (!keyFits(this.snap.key)) return err("the store's key file is not valid");
+        if (sealed!.text === S.wrong_passphrase) return err("the passphrase does not open the store");
+        return { data: { key: copy(S.rekeyed) } };
+      case "sign_in_seal": {
+        if (state === "none") return err("the store is not set up");
+        if (state === "locked") return err("the store is locked");
+        if (!this.seal(sealed!)) return err("the sealed value cannot be opened");
+        const offer = req.offer === true;
+        if (this.removed.has(record!.id)) return err("the stored sign-in was removed");
+        // An offer gets its own new id; it never changes or replaces a credential (C12, names and ids).
+        if (offer && this.snap.records.some((x) => x.id === record!.id)) return err("an offer needs a new id");
+        if (!offer && this.nameTaken(record!.id, record!.name)) return err("another stored sign-in has this name");
+        return offer ? this.sealed(record!, "offer", false) : this.sealed(record!, "operator", true);
+      }
+      case "sign_in_reseal": {
+        if (state === "none") return err("the store is not set up");
+        if (state === "locked") return err("the store is locked");
+        const old = this.snap.records.find((x) => x.id === record!.id);
+        if (!old) return err("there is no stored sign-in with this id");
+        if (old.origin !== record!.origin) return err("a change of the origin needs a new seal of the password");
+        const gen = old.gen;
+        if (typeof gen !== "number" || !Number.isSafeInteger(gen) || gen < 1 || gen < (this.highest.get(old.id) ?? 0) || this.removed.has(old.id)) return err("the stored sign-in cannot be opened");
+        if (this.nameTaken(record!.id, record!.name)) return err("another stored sign-in has this name");
+        return this.sealed(record!, old.by === "offer" ? "offer" : "operator", true);
+      }
+      case "sign_in_start_again":
+        // The operator's "Start again" (review-112 B4): it needs no state; the fake runs no act, so no credential stops.
+        if (!this.snap.records.some((x) => x.id === req.credential)) return err("there is no stored sign-in with this id");
+        return { data: {} };
+    }
+    return err(ERR.unsupported);
+  }
+}
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const len = (x: unknown) => (Array.isArray(x) ? x.length : 0);
 const keys = (x: unknown) => (isObj(x) ? Object.keys(x).length : 0);
@@ -91,10 +258,13 @@ export class FakeService implements Handler {
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
+  private readonly store: FakeStore;
 
-  constructor(o: { agentDoor?: string; now?: () => Date }) {
+  constructor(o: { agentDoor?: string; now?: () => Date; unprotected?: Unprotected }) {
+    if (o.unprotected !== undefined && !UNPROTECTED.includes(o.unprotected)) throw new Error("the fake's unprotected is dumpable or signal");
     this.agentDoor = o.agentDoor ?? FAKE_STATE.agent_door;
     this.now = o.now ?? (() => new Date());
+    this.store = new FakeStore(this.now, o.unprotected ?? null);
     this.hello = serviceHello(packageInfo().version, null, FAKE_FEATURES);
   }
 
@@ -135,6 +305,7 @@ export class FakeService implements Handler {
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo), mcp_token: s.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
+      sign_ins: this.store.status(),
     };
   }
 
@@ -185,6 +356,13 @@ export class FakeService implements Handler {
         if (!this.sessions.some((s) => s.scope === req.scope)) return { error: ERR.noSession };
         return { data: { url: agentDoorUrl(this.agentDoor, req.scope as string) } };
       case "sender": return { data: copy(FAKE_STATE.sender) };
+      case "sign_ins_setup": case "sign_ins_unlock": case "sign_ins_lock": case "sign_ins_rekey": case "sign_in_seal": case "sign_in_reseal": case "sign_in_start_again": case "sign_ins": {
+        const before = this.store.state();
+        const a = this.store.handle(req);
+        const after = this.store.state();
+        if (after !== before) this.emit({ t: "ev", ev: "sign_ins", state: after, pane_key: FAKE_STATE.sign_ins.pane_key });
+        return a;
+      }
       default: return { error: ERR.unsupported };
     }
   }
@@ -220,7 +398,7 @@ function realOf(p: string): string {
  * again after (by device and inode). `input`: its standard input, whose event lines go to each connection past the
  * hellos. `refuse`: each connection gets FAKE_REFUSED.
  */
-export async function startFake(o: { controlDoor: string; agentDoor?: string; refuse?: boolean; input?: Readable; log: (line: string) => void; refusedFolders?: string[] }): Promise<{ door: ControlDoor; stop: () => Promise<void> }> {
+export async function startFake(o: { controlDoor: string; agentDoor?: string; refuse?: boolean; unprotected?: Unprotected; input?: Readable; log: (line: string) => void; refusedFolders?: string[] }): Promise<{ door: ControlDoor; stop: () => Promise<void> }> {
   const folders = o.refusedFolders ?? serviceRunFolders();
   const dir = dirname(resolve(o.controlDoor));
   const refuse = () => { throw new Error(`the fake never takes the place of the service: ${dir} is a run folder of the service; give --control-door a path in another folder`); };
@@ -232,7 +410,7 @@ export async function startFake(o: { controlDoor: string; agentDoor?: string; re
     if ((ft && ft.dev === st.dev && ft.ino === st.ino) || realOf(f) === realpathSync(dir)) refuse();
   }
   const door = await ControlDoor.open({
-    path: o.controlDoor, handler: new FakeService({ agentDoor: o.agentDoor }), log: o.log,
+    path: o.controlDoor, handler: new FakeService({ agentDoor: o.agentDoor, unprotected: o.unprotected }), log: o.log,
     admit: o.refuse ? async () => ({ ok: false, reason: FAKE_REFUSED }) : async () => ({ ok: true }),
   });
   const lines = o.input ? createInterface({ input: o.input, crlfDelay: Infinity }) : null;
