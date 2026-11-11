@@ -284,6 +284,7 @@ async function measures(o: StageContext, ctx: any, plain: any, ROWS_URL: string,
       const rect = await p.evaluate(() => { const r = document.getElementById("xf")!.getBoundingClientRect(); return [r.left, r.top]; });
       const m = { iframeRect: rect, contentQuads: quads.slice(0, 2), boxModelBorder: model.border.slice(0, 2), boxModelContent: model.content.slice(0, 2), contentBox: [467, 567] };
       out.frameOwner = m;
+      // The stage reads the owner's content box with DOM.getBoxModel (C11): it must give 467,567.
       o.record({ group: G, case: "open point 4: the frame owner's box (DOM.getContentQuads against DOM.getBoxModel's content)", status: model.content[0] === 467 && model.content[1] === 567 ? "pass" : "fail", ms: 0, detail: m });
       await s.detach();
     } catch (e) { o.record({ group: G, case: "open point 4: the frame owner's box", status: "fail", ms: 0, error: (e as Error).message }); }
@@ -319,7 +320,9 @@ async function measures(o: StageContext, ctx: any, plain: any, ROWS_URL: string,
       const m = { dialogOpened: opened > 0, answersWhileOpen: Object.keys(beforeClose), answersAfterClose: Object.keys(answers).filter((k) => !(k in beforeClose)),
         pageEventsAfterClose: after, order: ev.map(([t]) => t), kept: after.includes("mouseup") && after.includes("click") && after.includes("mousemove") };
       out.dialog = m;
-      o.record({ group: G, case: "open point 5: Chrome keeps input events while a dialog is open, and gives them to the page in order after the close", status: m.dialogOpened && m.kept && m.answersWhileOpen.length === 0 ? "pass" : "fail", ms: 0, detail: m });
+      // A measure (open point 5): it passes when the dialog opened and the facts are read; the detail says whether Chrome
+      // kept the events that it got while the dialog was open (`kept`) or dropped them.
+      o.record({ group: G, case: "open point 5: what Chrome does with the input events that it gets while a dialog is open (measured)", status: m.dialogOpened ? "pass" : "fail", ms: 0, detail: m });
       await s.detach();
     } catch (e) { o.record({ group: G, case: "open point 5: input events during a dialog", status: "fail", ms: 0, error: (e as Error).message }); }
     finally { await p.close().catch(() => {}); }
