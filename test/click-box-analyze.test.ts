@@ -137,6 +137,15 @@ test("analyze: the wheel's trains compare deltaY with deltaY and deltaX with del
   assert.deepEqual(w.wheelDeltaRatio, [-3]);
 });
 
+test("analyze: a deltaX that turns on an event with deltaY 0 does not end a train that has a deltaY already (review-117b)", () => {
+  // deltaY 5 with deltaX 1; deltaY 0 with deltaX -1; deltaY 4, 8 ms apart: one scroll, so one train.
+  const recs: Rec[] = [task("begin", 990, { task: "4-scroll" }), task("trial", 1000, { task: "4-scroll", n: 0, leg: "down" })];
+  const w = (t: number, dy: number, dx: number) => ev("wheel", t, { dx, dy, dz: 0, dm: 0, wdx: -3 * dx, wdy: -3 * dy, bs: 0, m: 0 });
+  recs.push(w(1100, 5, 1), w(1108, 0, -1), w(1116, 4, 0), task("end", 2000, { task: "4-scroll" }));
+  const trains = analyze(recording(recs)).numbers.scenarios["person-trackpad"].wheelTrains.trains;
+  assert.deepEqual(trains.map((t: any) => t.events), [3]);
+});
+
 test("analyze: a recording with no wheel event has no wheel trains", () => {
   assert.equal(analyze(recording(dragRecording())).numbers.scenarios["person-trackpad"].wheelTrains, undefined);
 });
