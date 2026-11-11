@@ -1,5 +1,6 @@
 // The analysis of the input probe (probe.ts) and of a person's recording (recorder.html, "Save JSON") for board task
-// ab-t30.1 (docs/research/2026-11-09-click-box-input-signals.md). Not part of `npm test`.
+// ab-t30.1 (docs/research/2026-11-09-click-box-input-signals.md). `npm test` runs it on small recordings and on the
+// committed results (test/click-box-analyze.test.ts).
 //
 //   node analyze.ts RESULTS.json [--summary OUT.json] [--traces OUT.json]
 //
@@ -7,6 +8,9 @@
 // markdown table per scenario and writes the metrics of each step (--summary) and the CDP calls of each step (--traces).
 // --numbers writes the step metrics only, with no state record (user agent, platform, screen, window), no notes, no
 // change values and no focus targets: the form to commit for a person's recording (part B), never --summary.
+// Part B (ab-t30.7) added two measures that change no earlier output: a drag outside every task step is a step of its
+// own ("drag #k", after the tasks' steps), with the drag events' measures (dragEvents); and each scenario with wheel
+// events gets its wheel trains (wheelTrains, beside its steps).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -18,6 +22,10 @@ type R = Record<string, any> & { e: string; f?: string; t: number };
 type Mark = { name: string; t0: number; t1: number; ok: boolean; error?: string; note?: unknown };
 type Trace = { t: number; d: ">" | "<" | "e"; id?: number; m?: string; s?: string; p?: any; err?: string };
 type Scenario = { notes?: unknown; error?: string; marks: Mark[]; recs: R[]; trace: Trace[] };
+/** A step's records: from 50 ms before its start to 650 ms after its end. */
+const WINDOW_BEFORE_MS = 50, WINDOW_AFTER_MS = 650;
+/** A wheel train ends at a gap above this (or at a change of direction). */
+const WHEEL_TRAIN_GAP_MS = 100;
 
 const raw = JSON.parse(readFileSync(positionals[0], "utf8"));
 let scenarios: Record<string, Scenario>;
@@ -35,6 +43,15 @@ else {
     const next = tm.slice(i + 1).find((x) => x.what === "trial" || x.what === "end" || x.what === "begin");
     marks.push({ name: `${m.task ?? tm.slice(0, i).reverse().find((x) => x.what === "begin")?.task}${m.n !== undefined ? ` #${m.n}${m.leg ? ` ${m.leg}` : ""}` : ""}`, t0: m.t, t1: next ? next.t : m.t + 60_000, ok: true });
   }
+  // A drag outside every task step (the recorder has no task for drags) is a step of its own, after the tasks' steps: from
+  // the last press in its frame at most 10 s before its dragstart (else the dragstart) to its dragend.
+  const inStep = (t: number) => marks.some((m) => t >= m.t0 - WINDOW_BEFORE_MS && t <= m.t1 + WINDOW_AFTER_MS);
+  const sorted = [...recs].filter((r) => typeof r.t === "number").sort((a, b) => a.t - b.t);
+  sorted.filter((r) => r.e === "dragstart" && !inStep(r.t)).forEach((ds, k) => {
+    const press = sorted.filter((r) => r.e === "pointerdown" && r.f === ds.f && r.t <= ds.t && ds.t - r.t <= 10_000).at(-1);
+    const end = sorted.find((r) => r.e === "dragend" && r.f === ds.f && r.t >= ds.t);
+    marks.push({ name: `drag #${k}`, t0: press ? press.t : ds.t, t1: end ? end.t : ds.t + 60_000, ok: true });
+  });
   scenarios = { [`person-${raw.device || "device"}`]: { marks, recs: recs.concat((raw.frames ?? []).length ? [{ f: "top", e: "frames", t: 0, list: raw.frames }] : []), trace: [] } };
   meta = { saved: raw.saved, device: raw.device };
 }
@@ -193,11 +210,71 @@ function metrics(list: R[]) {
   }
   const drags = list.filter((r) => /^drag|^drop$/.test(r.e));
   if (drags.length) out.drag = drags.map((r) => r.e).join(" ");
+  // ---- drag events (R8; part B): Chromium sends no pointer event after dragstart, only drag (to the dragged element) and
+  // dragover (to the element under the pointer). Their button state (a real drag's have buttons 1), the press's moves
+  // with the button down, the times from the press, the gaps between drag events and how many repeat the point before.
+  const dg = by("drag"), dov = by("dragover");
+  if (dg.length || dov.length) {
+    const ds = by("dragstart")[0], de = ds ? by("dragend").find((r) => r.t >= ds.t) : undefined;
+    const press = ds ? downs.filter((r) => r.f === ds.f && r.t <= ds.t).at(-1) : undefined;
+    const cancel = press ? by("pointercancel").find((r) => r.t >= press.t) : undefined;
+    const held = (r: R) => ((r.bs ?? 0) & 1) === 1;
+    const dgg: number[] = [];
+    let same = 0;
+    for (let i = 1; i < dg.length; i++) { dgg.push(dg[i].t - dg[i - 1].t); if (dg[i].x === dg[i - 1].x && dg[i].y === dg[i - 1].y) same++; }
+    out.dragEvents = { drag: dg.length, dragover: dov.length, dragButton1: dg.filter(held).length, dragoverButton1: dov.filter(held).length,
+      dragstarts: by("dragstart").length, dragends: by("dragend").length, drops: by("drop").length, pointercancel: by("pointercancel").length,
+      pressToDragstartMs: ds && press ? r1(ds.t - press.t) : null, dragstartLagMs: ds && typeof ds.h === "number" ? r1(ds.h - ds.t) : null,
+      pointercancelMs: press && cancel ? r1(cancel.t - press.t) : null,
+      firstDragMs: press && dg[0] ? r1(dg[0].t - press.t) : null, dragMs: ds && de ? r1(de.t - ds.t) : null,
+      movesHeld: press ? moves.filter((r) => r.t > press.t && held(r)).length : null,
+      gapMs: { median: r1(median(dgg)), range: range(dgg) }, lagMs: r1(median(dg.map((r) => r.h - r.t))), samePointShare: dgg.length ? r2(same / dgg.length) : null };
+  }
   const ch = by("change");
   if (ch.length) out.change = ch.map((r) => `${r.tg}=${r.v}`);
   const touches = list.filter((r) => r.e.startsWith("touch"));
   if (touches.length) out.touch = touches.length;
   return out;
+}
+
+/**
+ * The wheel's trains (P7: wheel events per scroll; part B): a train ends at a gap above WHEEL_TRAIN_GAP_MS or at a change
+ * of direction, each axis against itself: the sign of a deltaY against the train's last deltaY that is not 0; in a train
+ * with no deltaY yet (a sideways scroll), the sign of an event's deltaX (with deltaY 0) against the train's last deltaX
+ * that is not 0. A sideways drift that turns in a vertical scroll (a trackpad gives one) does not end it. For each train: the step that holds its start, its events,
+ * its time, its pixels (px: the sum of |deltaY|; pxX: the sum of |deltaX|), and on its events with a deltaY that is not
+ * 0: the peak |deltaY| and the events before the peak, its tail (the last run of events whose |deltaY| does not rise: a
+ * trackpad's momentum ends a scroll so) with that run's events and time, and its last |deltaY|; its median gap. Also, of
+ * all the wheel events: the |deltaY| distribution (deltaY not 0), the count and the |deltaX| distribution of the events
+ * with a deltaX that is not 0, and the wheelDelta / delta ratios.
+ */
+function wheelTrains(wheels: R[], stepOf: (t: number) => string | null) {
+  const dy = (r: R) => (r.dy || 0) as number, dx = (r: R) => (r.dx || 0) as number;
+  const lastSign = (t: R[], d: (r: R) => number) => { const r = [...t].reverse().find((x) => d(x)); return r ? Math.sign(d(r)) : 0; };
+  const turnsOn = (t: R[], w: R, d: (r: R) => number) => d(w) !== 0 && lastSign(t, d) !== 0 && Math.sign(d(w)) !== lastSign(t, d);
+  const turns = (t: R[], w: R) => turnsOn(t, w, dy) || (dy(w) === 0 && !t.some((x) => dy(x) !== 0) && turnsOn(t, w, dx));
+  const trains: R[][] = [];
+  for (const w of wheels) {
+    const cur = trains.at(-1), last = cur?.at(-1);
+    if (!cur || !last || w.t - last.t > WHEEL_TRAIN_GAP_MS || turns(cur, w)) trains.push([w]);
+    else cur.push(w);
+  }
+  const dist = (a: number[]) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), q = (p: number) => s[Math.min(s.length - 1, Math.floor(p * (s.length - 1) + 0.5))];
+    return { p10: r2(q(0.1)), median: r2(median(s)), p90: r2(q(0.9)), range: range(s) }; };
+  const ys = wheels.filter((w) => dy(w) !== 0), xs = wheels.filter((w) => dx(w) !== 0);
+  const ratios = wheels.map((w) => (w.dy && typeof w.wdy === "number" ? w.wdy / w.dy : w.dx && typeof w.wdx === "number" ? w.wdx / w.dx : null)).filter((v) => v !== null);
+  return { splitMs: WHEEL_TRAIN_GAP_MS, absDeltaYPx: dist(ys.map((w) => Math.abs(dy(w)))), deltaXEvents: xs.length, absDeltaXPx: dist(xs.map((w) => Math.abs(dx(w)))),
+    wheelDeltaRatio: uniq(ratios.map((v) => r2(v))).slice(0, 4),
+    trains: trains.map((t) => {
+      const yt = t.filter((w) => dy(w) !== 0), a = yt.map((w) => Math.abs(dy(w))), peak = a.length ? Math.max(...a) : null;
+      let k = a.length - 1;
+      while (k > 0 && a[k] <= a[k - 1]) k--;
+      const g: number[] = [];
+      for (let i = 1; i < t.length; i++) g.push(t[i].t - t[i - 1].t);
+      return { step: stepOf(t[0].t), events: t.length, ms: r1(t.at(-1)!.t - t[0].t), px: r1(a.reduce((x, y) => x + y, 0)), pxX: r1(t.reduce((x, w) => x + Math.abs(dx(w)), 0)),
+        peakPx: peak, toPeak: peak === null ? null : a.indexOf(peak), tailEvents: a.length ? a.length - k : 0, tailMs: a.length ? r1(yt.at(-1)!.t - yt[k].t) : null,
+        lastPx: a.length ? a.at(-1)! : null, gapMs: r1(median(g)) };
+    }) };
 }
 
 /** The CDP calls of one step (the client's requests, in order), with each call's answer time. */
@@ -221,18 +298,21 @@ for (const [name, sc] of Object.entries(scenarios)) {
   const states = recs.filter((r) => r.e === "state");
   const st = { top: states.find((r) => r.f === "top") ?? null, box: states.find((r) => r.f === "box") ?? null };
   const steps = sc.marks.map((m) => {
-    const list = recs.filter((r) => typeof r.t === "number" && r.t >= m.t0 - 50 && r.t <= m.t1 + 650).sort((a, b) => a.t - b.t);
+    const list = recs.filter((r) => typeof r.t === "number" && r.t >= m.t0 - WINDOW_BEFORE_MS && r.t <= m.t1 + WINDOW_AFTER_MS).sort((a, b) => a.t - b.t);
     const calls = traceOf(sc.trace ?? [], m);
     return { name: m.name, ok: m.ok, error: m.error, ms: r1(m.t1 - m.t0), note: m.note, metrics: metrics(list), cdp: calls.length ? callLine(calls) : undefined, calls };
   });
   const frameTimes = sc.recs.filter((r) => r.e === "frames").flatMap((r) => r.list as number[]).sort((a, b) => a - b);
   const fg: number[] = [];
   for (let i = 1; i < frameTimes.length; i++) fg.push(frameTimes[i] - frameTimes[i - 1]);
+  const wheels = recs.filter((r) => r.e === "wheel" && typeof r.t === "number").sort((a, b) => a.t - b.t);
+  const stepOf = (t: number) => (sc.marks.find((m) => t >= m.t0 && t <= m.t1) ?? sc.marks.find((m) => t >= m.t0 - WINDOW_BEFORE_MS && t <= m.t1 + WINDOW_AFTER_MS))?.name ?? null;
   (summary.scenarios as Record<string, unknown>)[name] = {
     notes: sc.notes, error: sc.error, frameGapMs: r2(median(fg)),
     state: st, kbdmap: recs.filter((r) => r.e === "kbdmap").map((r) => ({ f: r.f, ok: r.ok, err: r.err, KeyQ: r.KeyQ })),
     io: uniq(recs.filter((r) => r.e === "io").map((r) => ({ hit: r.hit, vis: r.vis, rb: r.rb, err: r.err }))),
     steps: steps.map(({ calls, ...s }) => s),
+    ...(wheels.length ? { wheelTrains: wheelTrains(wheels, stepOf) } : {}),
   };
   traces[name] = steps.filter((s) => s.calls.length).map((s) => ({ name: s.name, calls: s.calls.map((c) => [c.dt, c.ms, c.m, c.s, c.p]) }));
   // ---- the printed table ----
@@ -255,12 +335,12 @@ if (values.summary) writeFileSync(values.summary, JSON.stringify(summary, null, 
 if (values.traces) writeFileSync(values.traces, JSON.stringify(traces, null, 1) + "\n");
 if (values.numbers) {
   const numbers: Record<string, unknown> = { scenarios: {} };
-  for (const [name, sc] of Object.entries(summary.scenarios as Record<string, { frameGapMs: unknown; steps: { name: string; ok: boolean; ms: unknown; metrics: Record<string, any> }[] }>)) {
+  for (const [name, sc] of Object.entries(summary.scenarios as Record<string, { frameGapMs: unknown; wheelTrains?: unknown; steps: { name: string; ok: boolean; ms: unknown; metrics: Record<string, any> }[] }>)) {
     (numbers.scenarios as Record<string, unknown>)[name] = { frameGapMs: sc.frameGapMs, steps: sc.steps.map((s) => {
       const { change, drag, focus, ...m } = s.metrics;
       if (m.pointer) { const { order, down, ...p } = m.pointer; m.pointer = { ...p, ...(down ? { down: { ...down, target: undefined, at: undefined } } : {}) }; }
       return { name: s.name, ok: s.ok, ms: s.ms, metrics: { ...m, ...(focus ? { focusWithNoPress: focus.withNoPress } : {}) } };
-    }) };
+    }), ...(sc.wheelTrains ? { wheelTrains: sc.wheelTrains } : {}) };
   }
   writeFileSync(values.numbers, JSON.stringify(numbers, null, 1) + "\n");
 }
