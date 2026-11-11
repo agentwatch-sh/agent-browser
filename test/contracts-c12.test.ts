@@ -732,7 +732,7 @@ test("C12 states the part of stage 1c: the files, a session's repo, the object, 
 test("C12 states the ops of stage 1b part 2 (board ab-v16.94.9): sender and its data, extension_version, the agent package, the native link, the receiver port, the model and the watch; the values are the code's", async () => {
   const P = part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9).");
   sayAll(P, [
-    "Stage 1b part 2 adds the native link, the agent package and the model to the service (the design, sections 5.1, 5.3 and 5.4), and the op `sender`: the service no longer answers it `unsupported`. Now no op of the requests' table gets `unsupported` from the service. The stage adds no feature name, as the part of stage 1a says.",
+    "Stage 1b part 2 adds the native link, the agent package and the model to the service (the design, sections 5.1, 5.3 and 5.4), and the op `sender`: the service no longer answers it `unsupported`. Now no op of stages 1a to 1d gets `unsupported` from the service; only the ops of the stored sign-ins do, until stage 1e part 1 (the stored sign-ins, below). The stage adds no feature name, as the part of stage 1a says.",
     "`id` is the sender's ID, `bpfkgknpndlpkcffmaaelkfcbpackiip`. `version` is the version in the manifest of that commit's `operator/` folder (`0.2.0`), not the receiver's version. `package` is a zip of that folder: its `name` is `agentwatch-sender-<version>.zip`, its `sha256` is the SHA-256 of the zip's bytes, and `base64` holds the bytes.",
     "When the service cannot read the folder, `sender` answers the error `the sender package cannot be read: <kind>`. The fake gives the vectors' empty zip.",
     "`extension_version` (in `status` and in the `ready` event) is the receiver's version from the hello of the link's current connection.",
@@ -744,6 +744,8 @@ test("C12 states the ops of stage 1b part 2 (board ab-v16.94.9): sender and its 
     "one request of channel `main` at a time, a bridge channel that never waits behind an import, parts of at most 700,000 bytes, the joins of result parts, `MAX_BYTES_IN_FLIGHT`, the waits and the deadline answers.",
     "`daemon.pointerAt`, `daemon.movePointer` and `daemon.blocked` are calls inside the service, with C10's checks. The X pointer is the Chrome unit's own Xvfb.",
   ]);
+  // The stored sign-ins (board ab-v16.97.1): their seven ops get `unsupported` until stage 1e part 1, so the old sentence is gone.
+  assert.ok(!says(C12, "Now no op of the requests' table gets `unsupported` from the service."), "the stored sign-ins' ops stay unsupported until stage 1e");
   // The values that the part names are the code's.
   const { SENDER_ID, RECEIVER_ID, CHROME_EXTENSION_COMMIT, NATIVE_HOST_NAME } = await import("../src/service/package/pins.ts");
   const { senderData } = await import("../src/service/package/sender.ts");
