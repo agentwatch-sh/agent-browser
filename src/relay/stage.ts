@@ -792,7 +792,8 @@ export class Stage {
    * go gets the same error.
    */
   private fail(page: StagePage, st: TabState, e: Entry, err: unknown): void {
-    const body = this.stopPlan(page, st, e.method, err);
+    // A plan that an error of an event stopped already (a key event that no call waited for): its error, once.
+    const body = st.action?.failed && st.action.failBody ? st.action.failBody : this.stopPlan(page, st, e.method, err);
     e.answer({ error: body });
     this.freeTail(st);
     this.close(st, page.id);
