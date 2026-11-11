@@ -12,7 +12,7 @@ import { paramsFor } from "../src/human/person.ts";
 import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
   STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_RUN_SLOW_MS, STAGE_SCROLL_ROUNDS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
-  TWO_FRAMES, utilityCall,
+  TWO_FRAMES, utilityCall, KEPT_MAX,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { seededRandom } from "../src/human/random.ts";
@@ -893,4 +893,183 @@ test("review N6 and N12: the dialog vector's note says that the plan's own event
       assert.ok(quoted.length > 0 && quoted.every((q) => C11.includes(q)), `${k}: its source quotes C11's text: ${src}`);
     }
   }
+});
+
+
+// ================================================================ review-116b (the narrow re-check) and the daemon lead's point
+
+/**
+ * Two tabs of one stage: A's click (its move, press and release in one tick) opens an alert at the fifth move of its path
+ * (a mouseover handler); `atDrop` runs at 300 ms, before the close; B's click comes at 400 ms.
+ */
+async function droppedRun(atDrop: (A: FakeTab, stage: Stage) => void, o: { maxMs?: number } = {}) {
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
+  const A = new FakeTab(own([]), clock, { id: 1 }), B = new FakeTab(own([]), clock, { id: 2 });
+  A.stage = stage; B.stage = stage;
+  dialogAtFifthMove(A);
+  const answers: { tab: string; type: string; t: number; body: any }[] = [];
+  const click = (t: FakeTab, x: number, y: number, tag: string) => {
+    for (const c of [mouse("mouseMoved", x, y), mouse("mousePressed", x, y), mouse("mouseReleased", x, y)]) t.queue(undefined, c.method, c.params, (body) => answers.push({ tab: tag, type: c.params.type, t: clock.now(), body }));
+  };
+  clock.timer(0, () => click(A, 300, 200, "A"));
+  clock.timer(300, () => atDrop(A, stage));
+  clock.timer(400, () => click(B, 700, 500, "B"));
+  await clock.run(() => answers.filter((a) => a.tab === "B").length === 3, o.maxMs ?? 60_000);
+  let gateOpen = false;
+  void A.gate.then(() => { gateOpen = true; });
+  await clock.advance(100);
+  return { A, B, stage, clock, answers, gateOpen };
+}
+
+test("review-116b R1 case 1 (the tab's end): a click whose path opens an alert, the tab dropped before the close: each ended call goes to Chrome and gets its error for the closed tab, A's gate opens, the lock is free, and the next tab's input goes", async () => {
+  const r = await droppedRun((A, stage) => { A.closed = true; stage.drop(A.id); });
+  const a = r.answers.filter((x) => x.tab === "A");
+  assert.equal(a.length, 3, `each of A's calls ends: ${JSON.stringify(a)}`);
+  assert.ok(a.every((x) => x.body.error && /No target/.test(x.body.error.message)), "Chrome's error for a closed target");
+  assert.ok(events(r.B).length > 3, "B's click goes");
+  assert.ok(r.gateOpen, "A's gate opens");
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
+test("review-116b R1 case 1 and the daemon lead's point (a session's end): the tab dropped before the close: the stage sends no held event and nothing goes back; A's gate opens, the lock is free, and the next tab's input goes", async () => {
+  let dropAt = -1;
+  const r = await droppedRun((A, stage) => { dropAt = A.clock.now(); stage.drop(A.id, "session"); });
+  assert.equal(r.answers.filter((x) => x.tab === "A").length, 0, "nothing goes back to a session that ended");
+  assert.equal(events(r.A).filter((s) => s.t >= dropAt).length, 0, "no held move, press or release (the plan holds no button: its press never went)");
+  assert.ok(events(r.B).length > 3, "B's click goes");
+  assert.ok(r.gateOpen, "A's gate opens");
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
+test("the daemon lead's point (a session's end with a button down): a press opened confirm(); the session ends before the close: the stage sends only the release of the held button, with the clickCount of its press, at the drop; nothing goes back; the lock is free; the gate opens", async () => {
+  const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700, { clickCount: 2 }) }, { at: 0, ...mouse("mouseReleased", 900, 700, { clickCount: 2 }) }]);
+  let gateOpen = false;
+  const r = await runVector(v, { maxMs: 2_000, tab: (t) => { t.clock.timer(500, () => { t.stage.drop(t.id, "session"); void t.gate.then(() => { gateOpen = true; }); }); } });
+  const after = events(r.tab).filter((s) => s.t >= 500);
+  assert.deepEqual(after.map((s) => [s.params.type, s.params.clickCount, s.t]), [["mouseReleased", 2, 500]], "only the release of the held button, at the drop");
+  assert.equal(r.answers.filter((a) => a.id === 2).length, 0, "the held release call gets nothing back");
+  assert.ok(gateOpen, "the gate opens");
+  assert.equal(r.stage.lock.held, 0);
+});
+
+/**
+ * A's alert on the path, closed at 250 ms; between A's ended move and A's ended press, a call of A's that passes and that
+ * Chrome answers after 40 s (a focus call of the activation chain, say) holds A's gate while A's ended events hold the
+ * lock that they took again. B's move and press (no release: B's action holds the lock to its own limit) come at 400 ms.
+ */
+async function heldTail(at?: { ms: number; fn: (A: FakeTab, stage: Stage) => void }) {
+  const clock = new FakeClock();
+  const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
+  const A = new FakeTab(own([]), clock, { id: 1 }), B = new FakeTab(own([]), clock, { id: 2 });
+  A.stage = stage; B.stage = stage;
+  dialogAtFifthMove(A);
+  const h = A.hook;
+  A.hook = (s) => (s.method === "Runtime.evaluate" ? A.clock.sleep(40_000).then(() => ({ result: {} })) : h(s));
+  const answers: string[] = [];
+  const q = (t: FakeTab, c: any, tag: string) => t.queue(undefined, c.method, c.params, () => answers.push(tag));
+  clock.timer(0, () => {
+    q(A, mouse("mouseMoved", 300, 200), "A move");
+    A.gate = A.gate.then(() => new Promise<void>((res) => { void A.pass(undefined, "Runtime.evaluate", { expression: "1" }, () => { answers.push("A evaluate"); res(); }); }));
+    q(A, mouse("mousePressed", 300, 200), "A press");
+    q(A, mouse("mouseReleased", 300, 200), "A release");
+  });
+  clock.timer(250, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => answers.push("A dialog")); });
+  clock.timer(400, () => { q(B, mouse("mouseMoved", 700, 500), "B move"); q(B, mouse("mousePressed", 700, 500), "B press"); });
+  if (at) clock.timer(at.ms, () => at.fn(A, stage));
+  await clock.run(() => answers.length === 7, 120_000);
+  return { A, B, stage, clock, answers };
+}
+
+test("review-116b R1: a lock that ended events take again has the limit STAGE_ACTION_MAX_MS: at the limit the lock is free (the next tab's input goes) and the remaining ended calls go with no lock", async () => {
+  const { A, B, stage, answers } = await heldTail();
+  const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, eb = events(B);
+  assert.ok(eb[0].t >= close + STAGE_ACTION_MAX_MS && eb[0].t <= close + STAGE_ACTION_MAX_MS + 50, `B's first event at ${eb[0].t}: at the limit of A's taken lock (the close at ${close})`);
+  const bPress = eb.find((s) => s.params.type === "mousePressed")!, aPress = events(A).find((s) => s.params.type === "mousePressed")!;
+  assert.ok(aPress.t >= 40_000 && aPress.t < bPress.t + STAGE_ACTION_MAX_MS, `A's ended press at ${aPress.t}: after the evaluate, with no lock (B's action holds the lock until ${bPress.t + STAGE_ACTION_MAX_MS})`);
+  assert.deepEqual(answers.slice(-2), ["A press", "A release"]);
+  await A.clock.advance(STAGE_ACTION_MAX_MS);
+  assert.equal(stage.lock.held, 0, "the lock is free");
+});
+
+test("review-116b R1: drop() frees the tab's taken lock at once: the next tab's input goes at the drop, not at the lock's limit", async () => {
+  const { B, stage } = await heldTail({ ms: 1000, fn: (A, st) => { A.closed = true; st.drop(A.id); } });
+  const eb = events(B);
+  assert.ok(eb[0].t >= 1000 && eb[0].t <= 1050, `B's first event at ${eb[0].t}: at the drop (1000)`);
+  await B.clock.advance(STAGE_ACTION_MAX_MS * 2);
+  assert.equal(stage.lock.held, 0, "the lock is free");
+});
+
+test("the daemon lead's point: a dialog at a press, and a navigation of the main frame closes it: no press reaches the new page, the stage's release goes with the press's clickCount, the held release gets the error that the context is gone, and the gate opens", async () => {
+  const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700, { clickCount: 2 }) }, { at: 0, ...mouse("mouseReleased", 900, 700, { clickCount: 2 }) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }]);
+  const r = await runVector(v, { maxMs: 10_000, tab: (t) => { t.clock.timer(500, () => t.navigate()); } });
+  const after = events(r.tab).filter((s) => s.t >= 500);
+  assert.equal(after.filter((s) => s.params.type === "mousePressed").length, 0, "no press reaches the new page");
+  assert.deepEqual(after.map((s) => [s.params.type, s.params.clickCount]), [["mouseReleased", 2]], "the stage's own release of the held button, and no other event");
+  const rel = r.answers.find((a) => a.id === 2)!;
+  assert.ok(rel.body.error && /context/i.test(rel.body.error.message), `the held release gets the error that the context is gone: ${JSON.stringify(rel.body)}`);
+  assert.ok(r.answers.some((a) => a.id === 3), "the gate opens: the later call goes");
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("the daemon lead's point: a navigation of the main frame ends the wait for a close of an alert on the path: the held move, press and release get the error that the context is gone, and no event goes", async () => {
+  const v = own([{ at: 0, ...mouse("mouseMoved", 300, 200) }, { at: 0, ...mouse("mousePressed", 300, 200) }, { at: 0, ...mouse("mouseReleased", 300, 200) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }]);
+  const r = await runVector(v, { maxMs: 10_000, tab: (t) => { dialogAtFifthMove(t); t.clock.timer(500, () => t.navigate()); } });
+  assert.equal(events(r.tab).filter((s) => s.t >= 500).length, 0, "no event after the navigation");
+  for (const id of [1, 2, 3]) {
+    const a = r.answers.find((x) => x.id === id)!;
+    assert.ok(a.body.error && /context/i.test(a.body.error.message), `call ${id}: ${JSON.stringify(a.body)}`);
+  }
+  assert.ok(r.answers.some((a) => a.id === 4), "the gate opens");
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review-116b note B: the recovery count is per node: a miss of one node gives a setup of another node no recovery", async () => {
+  const m = menuRun({ always: true });
+  const calls = [{ at: 0, ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }) }, { after: 1, ...setupCall("7.3.11", "mouse", { x: 640, y: 380 }) }];
+  m.v.page.nodes["7.3.11"] = { tag: "button", box: { x: 600, y: 360, width: 80, height: 40 }, focused: false };
+  m.v.in = calls.map((c, i) => ({ id: i + 1, ...c }));
+  const r = await runVector(m.v, { tab: (t) => { t.hook = m.hook(t); } });
+  assert.equal(r.stage.counts.setupMisses, 2);
+  assert.equal(r.stage.counts.recoveries ?? 0, 0, "no recovery: the miss was of another node");
+  assert.ok(!r.tab.sent.some((s) => s.params?.functionDeclaration === OBSTACLE_FIND), "no read at the hit point");
+});
+
+test("review-116b note E and N8: a recovery's move out that Chrome refuses stops the plan (C11, an error of an event): the setup goes as the client sent it, no new action starts (no hover path), and the lock is free", async () => {
+  for (const action of ["hover", "mouse"]) {
+    const m = menuRun({ always: true });
+    m.v.in = [{ id: 1, at: 0, ...setupCall("7.3.10", action, { x: 640, y: 320 }) }, { id: 2, after: 1, ...setupCall("7.3.10", action, { x: 640, y: 320 }) }];
+    let both = false, refusedAt = -1;
+    const r = await runVector(m.v, { tab: (t) => {
+      const h = m.hook(t);
+      t.hook = (s) => {
+        if (s.params?.functionDeclaration === OBSTACLE_BOTH) both = true;
+        if (both && refusedAt < 0 && s.method === "Input.dispatchMouseEvent") { refusedAt = s.t; return Promise.reject(Object.assign(new Error("Internal error"), { code: -32000 })); }
+        return h(s);
+      };
+    } });
+    assert.ok(refusedAt >= 0, `${action}: the recovery's move out went`);
+    assert.equal(r.stage.counts.recoveries, 1);
+    assert.equal(events(r.tab).filter((s) => s.t >= refusedAt).length, 1, `${action}: no event after the refused one`);
+    assert.equal(r.tab.activations.filter((t) => t >= refusedAt).length, 0, `${action}: no new action (its activation) after the refused move`);
+    assert.equal(r.stage.counts.hoverPathsBeforeSetup ?? 0, action === "hover" ? 1 : 0, `${action}: no hover path for the setup of the refused recovery`);
+    assert.ok(r.tab.sent.some((s) => s.pass === 2), `${action}: the setup goes as the client sent it`);
+    assert.equal(r.answers.length, 2);
+    assert.equal(r.stage.counts.eventErrors, 1);
+    assert.equal(r.stage.lock.held, 0, `${action}: the lock is free`);
+  }
+});
+
+test("review-116b N7: the handles that the setups returned are bounded too (KEPT_MAX); the latest stays", async () => {
+  const n = KEPT_MAX + 6;
+  const v = own(Array.from({ length: n }, (_, i) => ({ ...(i === 0 ? { at: 0 } : { after: i }), ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }) })), { nodes: { "7.3.10": { tag: "button", box: { x: 600, y: 300, width: 80, height: 40 }, focused: false } } });
+  const r = await runVector(v, { hook: (s) => (s.pass !== undefined ? { result: { type: "object", objectId: `h-${s.pass}` } } : undefined) });
+  assert.equal(r.answers.length, n);
+  assert.equal(r.stage.state(r.tab.id)!.handles, KEPT_MAX, `${r.stage.state(r.tab.id)!.handles} handles kept`);
+  // The stop of a handle that the bound dropped is not watched; the stop of the latest setup is: its miss marks the node.
+  const stop = (h: string) => { const p = structuredClone(vec("click").in[7].params); p.arguments[7] = { objectId: h }; return p; };
+  r.stage.saw(r.tab, undefined, "Runtime.callFunctionOn", stop("h-1"), { result: { type: "string", value: "error:notconnected" } });
+  assert.equal(r.stage.state(r.tab.id)!.miss, false, "the oldest handle is gone");
+  r.stage.saw(r.tab, undefined, "Runtime.callFunctionOn", stop(`h-${n}`), { result: { type: "string", value: "error:notconnected" } });
+  assert.equal(r.stage.state(r.tab.id)!.miss, true);
 });

@@ -27,7 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { Stage, stageOn, type Body, type StageClock, type StagePage } from "./stage.ts";
+import { Stage, stageOn, type Body, type DropWhy, type StageClock, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
@@ -539,7 +539,8 @@ export class Model {
   }
 
   private reset(): void {
-    for (const tab of this.tabs.values()) { this.endHold(tab); this.stageDrop(tab.id); }
+    // The link ended: every connection closed before this (a session's end for the stage).
+    for (const tab of this.tabs.values()) { this.endHold(tab); this.stageDrop(tab.id, "session"); }
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
@@ -1000,17 +1001,21 @@ export class Model {
     for (const done of tab.released.splice(0)) done();
   }
 
-  /** The tab carries no debugger now: its hold ends, a client's device-metrics override is gone, and the relay's world needs making again. */
-  private detached(tab: Tab): void {
+  /**
+   * The tab carries no debugger now: its hold ends, a client's device-metrics override is gone, and the relay's world
+   * needs making again. `why` for the stage: "session" when the model detaches it (the client's last session of the tab
+   * or its connection ended, or a C10 timeout ended the client's sessions), "tab" when Chrome detached it.
+   */
+  private detached(tab: Tab, why: DropWhy = "session"): void {
     this.endHold(tab);
     tab.metrics = false;
-    this.stageDrop(tab.id);
+    this.stageDrop(tab.id, why);
   }
 
-  /** The stage forgets a tab that is gone or detached: its action ends and the input lock is free. */
-  private stageDrop(tabId: number): void {
+  /** The stage forgets a tab that is gone or detached: its action ends and the input lock is free (C11, dialogs: the end of the wait for a close). */
+  private stageDrop(tabId: number, why: DropWhy): void {
     if (!this.stage) return;
-    this.stage.drop(tabId);
+    this.stage.drop(tabId, why);
     this.stagePages.delete(tabId);
   }
 
@@ -1654,7 +1659,7 @@ export class Model {
         if (!tab) return;
         this.log(`relay: Chrome detached tab ${tab.id}`);
         tab.attached = false; tab.held = false;
-        this.detached(tab);
+        this.detached(tab, "tab");
         this.dropSessions(tab);
         tab.owner = null;
         return;
@@ -1823,7 +1828,7 @@ export class Model {
   private removed(tabId: number): void {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
-    this.stageDrop(tabId);
+    this.stageDrop(tabId, "tab");
     // Its point goes, its hold ends, and the front page is unknown when it was this page (C11).
     this.endHold(tab);
     if (tab.targetId) this.points.delete(tab.targetId);

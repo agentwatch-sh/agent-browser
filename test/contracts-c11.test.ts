@@ -1538,6 +1538,8 @@ const STAGE_ITEMS: string[] = [
   // Review-116, B3 (before: "at the limit the stage sends the rest of the action at once, with no person's timing, and logs it.").
   "A hold has the limit `STAGE_ACTION_MAX_MS = 25000`: at the limit the plan ends (dialogs, below), so the lock is free at once, the rest of the action goes with no person's timing, and the stage logs it.",
   "At this limit the stage sends no release of its own: the client still holds its button or key, and its own release goes later.",
+  // Review-116b R1: the lock that an ended plan's events take again has a limit.
+  "The lock that an ended plan's events take again (dialogs, below) has the same limit: at the limit it is free, and the plan's remaining ended calls go with no lock and no activation.",
   "The answers.",
   "A held answer.",
   "The stage answers a client call only after it has sent the events of that call and Chrome has answered them:",
@@ -1560,7 +1562,8 @@ const STAGE_ITEMS: string[] = [
   "First it sends the release of each button and key that the plan holds.",
   "The client call of the refused event gets Chrome's error, and each other client call of the plan whose events did not go gets the same error.",
   // Review-116, N8.
-  "A sample that the stage sends before a hit-target setup (the hover's samples outside the target, the recovery's move out) belongs to no client call that has come: at its error the plan stops in the same way, and the setup goes as the client sent it.",
+  // Review-116b note E. Old: "... and the setup goes as the client sent it."
+  "A sample that the stage sends before a hit-target setup (the hover's samples outside the target, the recovery's move out) belongs to no client call that has come: at its error the plan stops in the same way, and the setup goes as the client sent it, with no path of the stage's before it (no hover path).",
   "Shift and rollover.",
   "A key with no Shift that follows a shifted key waits for the planned release of that key and for the release of Shift.",
   "The stage never sends a release before its planned hold has passed.",
@@ -1589,11 +1592,33 @@ const STAGE_ITEMS: string[] = [
   "So the stage holds the events of an ended plan until the close, and the page gets what Playwright's own input gives it.",
   "The stage never goes on with a plan after its dialog closes, and the tab's later calls wait in its gate behind those events, so no event of a plan goes after a later client call.",
   // Review-116, B1 and B3: one rule for every end of a plan; N1 and the daemon lead's point: the end of the wait.
-  "Every end of a plan (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`) follows these steps; only at a dialog do steps 3 and 4 wait for the close.",
-  "The end of the wait for a close: `Page.javascriptDialogClosed`; Chrome's answer to the client's `Page.handleJavaScriptDialog`; the client's `Page.disable` (no `Page.javascriptDialogClosed` can come after it); a navigation of the tab's main frame (`Page.frameNavigated` with no parent); `Inspector.targetCrashed`; and the end of the tab in the model (its target ends, the tab closes, Chrome detaches it, or the client's session or connection ends).",
-  "Then the stage sends the held events, and each held client call gets Chrome's answer, or Chrome's error for a closed target; then the gate opens.",
+  // Review-116b note A. Old: "...; only at a dialog do steps 3 and 4 wait for the close."
+  "Every end of a plan (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`) follows these steps; only at a dialog do steps 3 and 4 wait for the close, and at `STAGE_ACTION_MAX_MS` step 4 sends no release of its own (the input lock, above).",
+  // Review-116b R1 and the daemon lead's point on sentence 6. Old: "The end of the wait for a close: ...; a navigation of the
+  // tab's main frame (...); `Inspector.targetCrashed`; and the end of the tab in the model (its target ends, the tab closes,
+  // Chrome detaches it, or the client's session or connection ends)." "Then the stage sends the held events, and each held
+  // client call gets Chrome's answer, or Chrome's error for a closed target; then the gate opens."
+  "The end of the wait for a close: `Page.javascriptDialogClosed`; Chrome's answer to the client's `Page.handleJavaScriptDialog`; the client's `Page.disable` (no `Page.javascriptDialogClosed` can come after it); `Inspector.targetCrashed`; a navigation of the tab's main frame (`Page.frameNavigated` with no parent); and the end of the tab in the model (a drop).",
+  "At the first four the steps above go on: the stage sends the held events, and each held client call gets Chrome's answer, or Chrome's error.",
+  "At the others:",
+  "A navigation of the main frame.",
+  "The stage sends no held move, press or key press, so none reaches the new document.",
+  "Each held client call gets the error that the context is gone.",
+  "Step 4 sends only the release of each button and key that the plan holds, with the `clickCount` of its press, so nothing stays down.",
+  "Then the lock is free, and the gate opens.",
+  "The end of the client's session or connection (also a C10 timeout's detach, which ends the client's sessions of the tab, and the end of the relay's link, which closes every connection).",
+  "The stage sends no held event, and nothing goes back to the client.",
+  "It sends only the release of each button and key that the plan holds, with the `clickCount` of its press, at once, before the model detaches the tab.",
+  "The lock is free at once, and the gate opens.",
+  "The tab's end (its target ends, the tab closes, or Chrome detaches it).",
+  "The lock is free at once.",
+  "Each held client call goes to Chrome as the client sent it, with no lock, and gets Chrome's answer, or Chrome's error for a closed target.",
+  "Then the stage sends the release of each button and key that the plan holds, and the gate opens.",
+  "A drop ends the plan also when no dialog is open.",
+  "Each held call of a dropped tab ends on the tab's old state, also when its step runs after the drop, so no lock stays with a dropped tab.",
   "Each client call of an ended plan gets Chrome's own answer to its event when that answer comes, or Chrome's error.",
-  "The stage gives no answer of its own.",
+  // Old: "The stage gives no answer of its own."
+  "The stage gives no answer of its own, except the error at a navigation of the main frame (above).",
   "Each read of the stage waits at most `GEOMETRY_WAIT_MS` (200 ms).",
   "At the limit the read fails open: the stage sends the client's call as it is, and counts it.",
   "Each wait for an answer of the stage's own event has the limit `STAGE_EVENT_WAIT_MS = 2000`, counted from the oldest event of the plan that has no answer.",
@@ -1806,9 +1831,11 @@ const STAGE_ITEMS: string[] = [
   "The hit-target check and its misses.",
   "The miss watch.",
   "The stage reads the answer of each hit-target setup (a string is a miss of Playwright's first check) and of each stop (`\"done\"`, or a miss at the first event).",
-  "A miss marks the tab.",
+  // Review-116b note B. Old: "A miss marks the tab."
+  "A miss marks the tab with the node of its setup.",
   "The recovery at the next setup.",
-  "Before the stage sends the next setup of a marked tab, it reads the element at the hit point, in Playwright's utility world on the node of the setup.",
+  // Old: "Before the stage sends the next setup of a marked tab, it reads ..."
+  "Before the stage sends the next setup of a marked tab, when that setup is of the marked node, it reads the element at the hit point, in Playwright's utility world on the node of the setup.",
   "When that element is not the target or inside it, the stage takes its highest ancestor that does not hold the target (for example the root of a menu, which holds the trigger and the panel).",
   "It moves the pointer out of both boxes, on the side away from the target, to a point 15 px outside.",
   "It waits two frames, and it reads the box of the ancestor again.",

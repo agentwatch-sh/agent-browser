@@ -204,8 +204,18 @@ export type Entry = {
   ended?: boolean;
   /** Its plan failed: the client gets this error, with no event. */
   failedWith?: { code: number; message: string };
+  /** The tab's state when the call arrived: its step runs on that state, also after the model dropped the tab. */
+  readonly st: TabState;
 };
-type EndWhy = "dialog" | "wait" | "limit";
+type EndWhy = "dialog" | "wait" | "limit" | "drop";
+/**
+ * How the model dropped a tab (C11, dialogs: the end of the wait for a close). "tab": its target ended, it closed, or
+ * Chrome detached it. "session": the client's session or connection ended (also a C10 timeout's detach, which ends the
+ * client's sessions of the tab, and the end of the relay's link, which closes every connection).
+ */
+export type DropWhy = "tab" | "session";
+/** The error of a held call at a navigation of the main frame (C11, dialogs: the held events never reach the new document). */
+export const CONTEXT_GONE = { code: -32000, message: "Execution context was destroyed: the page navigated while a dialog was open, and the input stage sent none of the held input" };
 /** A translated action: the lock, the plan's latency and its end. */
 class Action {
   ended: EndWhy | null = null;
@@ -246,13 +256,24 @@ class TabState {
   /** The lock that an ended plan's events took again (C11: every end of a plan frees the lock; its later events take it again). */
   tail: (() => void) | null = null;
   tailActive = false;
+  /** The limit of that lock (STAGE_ACTION_MAX_MS); after it the plan's remaining ended calls go with no lock. */
+  tailLimit: (() => void) | null = null;
+  tailOver = false;
+  /** The model dropped the tab (C11, dialogs: the end of the wait for a close). */
+  gone: DropWhy | null = null;
+  /** A navigation of the main frame ended the wait for a close: each held call gets this error, with no event. */
+  heldGone: { code: number; message: string } | null = null;
+  /** The host of the tab's last call (the releases at a drop). */
+  page: StagePage | null = null;
   setup: Setup | null = null;
-  /** The handles that the tab's hit-target setups returned (the stop recognizer's first handle). */
-  readonly handles = new Set<string>();
+  /** The handles that the tab's hit-target setups returned (the stop recognizer's first handle), each with its node; at most KEPT_MAX. */
+  readonly handles = new Map<string, string | undefined>();
   /** The answers of the client's own DOM.getContentQuads, by the node's objectId (condition 2 of the press point). */
   readonly quads = new Map<string, Box>();
   miss = false;
   missAt = -Infinity;
+  /** The node of the last miss: a miss marks its node (C11, the recoveries). */
+  missNode: string | undefined = undefined;
   recov: { node: string | undefined; n: number; limited?: boolean } | null = null;
   /** After the limit of recoveries: the rest of the action goes as Playwright sends it. */
   plain = false;
@@ -331,6 +352,7 @@ export class Stage {
   private st(page: StagePage): TabState {
     let s = this.tabs.get(page.id);
     if (!s) this.tabs.set(page.id, (s = new TabState()));
+    s.page = page;
     return s;
   }
   /** What the stage keeps of a tab (the tests; no client sees it). */
@@ -344,14 +366,14 @@ export class Stage {
   private fit(p: { x: number; y: number }): Pt { return this.linux() ? { x: Math.round(p.x), y: Math.round(p.y) } : { x: p.x, y: p.y }; }
 
   private player(page: StagePage, st: TabState): CdpPlayer {
-    let pl = this.players.get(page.id);
+    let pl = st.gone ? undefined : this.players.get(page.id);
     if (!pl) {
       const dev = page.person.params.device;
       pl = new CdpPlayer((method, params) => this.sendEvent(page, st, undefined, method, params), {
         clock: this.clock, stamp: this.o.stamp ?? (this.linux() ? linuxStamp : macStamp), latencyMs: dev.latencyMs, wholeMs: this.linux() && dev.wholeMsTimestamps,
         random: this.o.random, maxInFlight: dev.movesInFlight,
       });
-      this.players.set(page.id, pl);
+      if (!st.gone) this.players.set(page.id, pl);
     }
     return pl;
   }
@@ -370,18 +392,20 @@ export class Stage {
     else if (!child && method === "Input.insertText") kind = "text";
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))?.name === "hit-target check") kind = "setup";
     if (!kind) return null;
-    const e: Entry = { child, method, params: params ?? {}, answer, kind, util };
-    this.st(page).pending.push(e);
+    const st = this.st(page);
+    const e: Entry = { child, method, params: params ?? {}, answer, kind, util, st };
+    st.pending.push(e);
     return e;
   }
 
   /** The step of a taken call, in the tab's gate: it ends when the call's events have gone and Chrome answered them (or the plan ended). */
   async step(page: StagePage, e: Entry): Promise<void> {
-    const st = this.st(page);
+    const st = e.st;
     const i = st.pending.indexOf(e);
     if (i >= 0) st.pending.splice(i, 1);
     st.running = true;
     try {
+      if (st.gone) return await this.goneStep(page, st, e);
       if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
       if (e.kind === "setup") return await this.setupStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
@@ -419,7 +443,7 @@ export class Stage {
       // The stop ends its attempt: the plain mode after the recoveries' limit covers that attempt only.
       st.plain = false;
       const v = result?.result?.value;
-      if (v !== undefined && v !== "done") { st.miss = true; st.missAt = this.clock.now(); this.count("stopMisses"); }
+      if (v !== undefined && v !== "done") { st.miss = true; st.missAt = this.clock.now(); st.missNode = st.handles.get(u.handles[0]); this.count("stopMisses"); }
     }
   }
 
@@ -434,6 +458,13 @@ export class Stage {
     // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (no Closed event can
     // come then), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
     const mainNav = method === "Page.frameNavigated" && !child && !params?.frame?.parentId;
+    // A navigation of the main frame while an ended plan waits for a close: no held move, press or key press reaches the
+    // new document. Each held call gets the error that the context is gone; only the releases of what the plan holds go.
+    if (mainNav && st.dialog && st.action?.over && !st.gone) {
+      st.heldGone = CONTEXT_GONE;
+      for (const x of st.pending) if (x.ended) x.failedWith = CONTEXT_GONE;
+      this.count("navigationDrops");
+    }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
     if (mainNav) { st.quads.clear(); st.handles.clear(); }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
@@ -442,14 +473,36 @@ export class Stage {
     if (method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") st.frames.delete(params.sessionId);
   }
 
-  /** The tab is gone or detached: its action ends and the lock is free. */
-  drop(id: number): void {
+  /**
+   * The model dropped the tab (C11, dialogs: the end of the wait for a close): its plan ends, the wait for a close ends,
+   * and the lock that the tab holds is free at once (also the lock that its ended events took again). The tab's calls
+   * that have not gone run on its old state: at the tab's end each goes to Chrome as the client sent it, with no lock, and
+   * gets Chrome's answer or error; at a session's end none goes and nothing goes back, and only the release of each
+   * button and key that the plan holds goes, now (before the model's detach), so nothing stays down.
+   */
+  drop(id: number, why: DropWhy = "tab"): void {
     const st = this.tabs.get(id);
-    st?.dialog?.close();
-    if (st) st.dialog = null;
-    if (st?.action) this.close(st, id);
     this.tabs.delete(id);
+    if (!st) { this.players.delete(id); return; }
+    st.gone = why;
+    this.count(why === "session" ? "sessionDrops" : "tabDrops");
+    st.dialog?.close();
+    st.dialog = null;
+    const a = st.action;
+    if (a && !a.over) { a.ended = "drop"; a.fire(); }
+    this.dropRest(st); st.spread = null;
+    const releases = why === "session" || (!st.running && !st.pending.length);
+    if (releases && st.page) this.releaseHeld(st.page, st);
     this.players.delete(id);
+    this.freeTail(st);
+    this.close(st, id);
+  }
+
+  /** A call of a dropped tab: at a session's end nothing goes and nothing goes back; at the tab's end it goes to Chrome as the client sent it, with no lock. */
+  private async goneStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    if (st.gone === "session") return;
+    if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
+    await page.pass(e.child, e.method, e.params, e.answer);
   }
 
   // ---------------------------------------------------------------- the action, the lock and the end of a plan
@@ -458,6 +511,8 @@ export class Stage {
   private async begin(page: StagePage, st: TabState): Promise<Action> {
     if (st.action && !st.action.over) return st.action;
     const release = await this.lock.acquire();
+    // The model dropped the tab while its step waited for the lock: an ended plan, with the lock free.
+    if (st.gone) { release(); const a = new Action(() => {}, 0, this.clock.now()); a.ended = "drop"; return a; }
     const dev = page.person.params.device;
     const a = new Action(release, uniform(this.o.random, dev.latencyMs[0], dev.latencyMs[1]), this.clock.now());
     st.action = a;
@@ -472,8 +527,13 @@ export class Stage {
 
   /** At the end of a step: a live action with nothing held and no input waiting frees the lock; an ended one, once its client calls have gone. */
   private async afterStep(page: StagePage, st: TabState): Promise<void> {
+    // A dropped tab: after its last call, at the tab's end, the release of each button and key that its plan holds.
+    if (st.gone) {
+      if (!st.running && !st.pending.length) { if (st.gone === "tab" && st.page) this.releaseHeld(st.page, st); this.freeTail(st); }
+      return;
+    }
     const a = st.action;
-    // No action (the tab was dropped, or the plan failed): an ended event's lock goes with its last ended call.
+    // No action (the plan failed): an ended event's lock goes with its last ended call.
     if (!a) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.freeTail(st); return; }
     if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); return; }
     if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
@@ -496,6 +556,7 @@ export class Stage {
     const a = st.action;
     if (!a) return;
     st.action = null;
+    st.heldGone = null;
     st.plain = false; // the end of the stage's action ends a plain attempt (the recoveries' limit)
     if (this.o.trace && id !== undefined) this.o.log(`relay: the input stage: tab ${id}: an action of ${a.events} events in ${Math.round(this.clock.now() - a.started)} ms${a.ended ? ` (ended: ${a.ended})` : a.failed ? " (failed)" : ""}`);
     this.dropRest(st);
@@ -542,21 +603,46 @@ export class Stage {
 
   /** The lock again for an ended plan's events (the order of arrival), and the activation before its first press or key press. */
   private async retake(page: StagePage, st: TabState, activate: boolean): Promise<void> {
-    if (!st.tail) st.tail = await this.lock.acquire();
+    // A dropped tab, or a taken lock past its limit: the remaining ended calls go with no lock (and no activation).
+    if (st.gone || st.tailOver) return;
+    if (!st.tail) {
+      const release = await this.lock.acquire();
+      if (st.gone || st.tailOver) { release(); return; }
+      st.tail = release;
+      // The taken lock has the limit STAGE_ACTION_MAX_MS (C11, the input lock): then it is free, and the rest goes with no lock.
+      st.tailLimit = this.clock.timer(STAGE_ACTION_MAX_MS, () => {
+        st.tailLimit = null;
+        this.o.log(`relay: the input stage: the ended events of tab ${page.id} held the input lock ${STAGE_ACTION_MAX_MS} ms; the rest goes with no lock`);
+        this.count("tailLimits");
+        st.tailOver = true;
+        const t = st.tail; st.tail = null; st.tailActive = false; t?.();
+      });
+    }
     if (activate && !st.tailActive) {
       st.tailActive = true;
       try { await page.activate(); } catch (err) { this.o.log(`relay: the input stage: the activation of tab ${page.id} failed: ${(err as Error).message}`); }
     }
   }
-  private freeTail(st: TabState): void { const t = st.tail; st.tail = null; st.tailActive = false; t?.(); }
+  private freeTail(st: TabState): void { const t = st.tail; st.tail = null; st.tailActive = false; st.tailLimit?.(); st.tailLimit = null; st.tailOver = false; t?.(); }
 
   /**
    * A client's event of an ended plan: after the dialog's close (when the stage knows of a dialog), with the lock taken
    * again and the activation before a press or a key press; its timestamp from the send. The send's answer comes later.
    */
-  private async endedSend(page: StagePage, st: TabState, e: Entry, params: Record<string, unknown>): Promise<{ sent: Promise<any> }> {
+  private async endedSend(page: StagePage, st: TabState, e: Entry, params: Record<string, unknown>): Promise<{ sent: Promise<any> } | null> {
+    // null: no event (a session's end: nothing goes back; a navigation: the call has its error).
+    const held = (): { sent: Promise<any> } | null | undefined => {
+      if (st.gone === "session") return null;
+      if (st.heldGone) { e.answer({ error: st.heldGone }); return null; }
+      if (st.gone) return { sent: page.send(undefined, e.method, params) };
+      return undefined;
+    };
     await this.dialogGone(st);
+    let h = held();
+    if (h !== undefined) return h;
     await this.retake(page, st, startsAction(e.method, params));
+    h = held();
+    if (h !== undefined) return h;
     if (e.kind !== "text") params.timestamp = this.stamp(page, st);
     return { sent: this.sendEvent(page, st, undefined, e.method, params) };
   }
@@ -774,7 +860,9 @@ export class Stage {
       const pt = pr && same(pr.client, this.fit(p)) ? pr.point : this.fit(p);
       params.x = pt.x; params.y = pt.y;
     }
-    const { sent } = await this.endedSend(page, st, e, params);
+    const r = await this.endedSend(page, st, e, params);
+    if (!r) return;
+    const { sent } = r;
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(p.code); else st.keys.set(p.code, { at: this.clock.now(), params: p }); }
@@ -826,7 +914,7 @@ export class Stage {
     if (r.stopped) {
       // The bound or the end of the plan: the client's own move (its point), with Chrome's own answer.
       st.spread = null;
-      if (a.over) { const { sent } = await this.endedSend(page, st, e, { ...p, x: to.x, y: to.y }); this.answerWith(page, e, sent); return; }
+      if (a.over) { const r = await this.endedSend(page, st, e, { ...p, x: to.x, y: to.y }); if (r) this.answerWith(page, e, r.sent); return; }
       const params = { ...p, x: to.x, y: to.y, timestamp: this.stamp(page, st) };
       const pr = this.sendEvent(page, st, undefined, e.method, params);
       const s = await this.settle(a, pr);
@@ -894,7 +982,9 @@ export class Stage {
     const mods = [...st.keys.values()].filter((k) => MODIFIER_KEYS.has(k.params.key)).map((k) => k.at);
     if (mods.length) await this.until(a, Math.max(...mods) + draw(this.o.random, P.params.keys.chord.beforeMs));
     if (a.over) {
-      const { sent } = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y, force: force(P) });
+      const r = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y, force: force(P) });
+      if (!r) return;
+      const { sent } = r;
       st.buttons.set(p.button, p.clickCount ?? 1);
       st.press = { at: this.clock.now(), hold: 0, client, point, button: p.button };
       this.answerWith(page, e, sent);
@@ -925,7 +1015,9 @@ export class Stage {
     const point = pr0 && same(pr0.client, client) ? pr0.point : client;
     if (pr0) await this.until(a, pr0.at + pr0.hold);
     if (a.over) {
-      const { sent } = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y });
+      const r = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y });
+      if (!r) return;
+      const { sent } = r;
       st.buttons.delete(p.button); st.releasedAt = this.clock.now(); st.press = null; st.spread = null;
       this.answerWith(page, e, sent);
       return;
@@ -952,8 +1044,8 @@ export class Stage {
     if (p.type === "keyUp" && st.released.delete(`key:${p.code}`) && !st.keys.has(p.code)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    const down = st.keys.get(p.code);
     if (p.type === "keyUp") {
-      const down = st.keys.get(p.code);
       if (down && MODIFIER_KEYS.has(p.key) && st.releasedAt >= down.at) await this.until(a, st.releasedAt + modifierAfterMs(page.person, this.o.random));
       else if (!MODIFIER_KEYS.has(p.key)) this.count("plainKeys");
       st.keys.delete(p.code);
@@ -961,7 +1053,13 @@ export class Stage {
       st.keys.set(p.code, { at: this.clock.now(), params: p });
       if (!MODIFIER_KEYS.has(p.key)) this.count("plainKeys");
     }
-    if (a.over) { const { sent } = await this.endedSend(page, st, e, { ...p }); this.answerWith(page, e, sent); return; }
+    if (a.over) {
+      const r = await this.endedSend(page, st, e, { ...p });
+      // No event went: the key is as it was (a held key stays held for its release; a key that did not go is not down).
+      if (!r) { if (p.type === "keyUp") { if (down) st.keys.set(p.code, down); } else if (down) st.keys.set(p.code, down); else st.keys.delete(p.code); return; }
+      this.answerWith(page, e, r.sent);
+      return;
+    }
     const pr = this.sendEvent(page, st, undefined, e.method, { ...p, timestamp: this.stamp(page, st) });
     if (a.over) { this.answerWith(page, e, pr); return; }
     const r = await this.settle(a, pr);
@@ -982,7 +1080,7 @@ export class Stage {
     const hit = opts?.hitPoint && typeof opts.hitPoint.x === "number" && typeof opts.hitPoint.y === "number" ? { x: opts.hitPoint.x, y: opts.hitPoint.y } : null;
     // A miss marks the tab for the next setup of its node within RETRY_MARK_MS; one action's recoveries are the setups of
     // one node that each follow such a miss. A setup with no such miss starts a new count.
-    const marked = st.miss && this.clock.now() - st.missAt <= RETRY_MARK_MS;
+    const marked = st.miss && this.clock.now() - st.missAt <= RETRY_MARK_MS && st.missNode === node;
     st.miss = false;
     if (!st.recov || st.recov.node !== node || !marked) st.recov = { node, n: 0 };
     // The plain mode covers one attempt: from this setup to its own miss, its stop's answer, or the end of the stage's action.
@@ -990,6 +1088,7 @@ export class Stage {
     st.setup = { node, child: e.child, action, hit, trial, used: false };
     st.spread = null; this.dropRest(st);
     const live = !st.action?.over;
+    let stopped = false;
     if (live && !trial && hit && node) {
       if (marked) {
         if (st.recov.n >= RECOVERIES_MAX) {
@@ -998,18 +1097,22 @@ export class Stage {
           st.plain = true;
         } else {
           st.recov.n++;
-          await this.recover(page, st, e, node, hit);
+          // A refused move of the recovery stops the plan (C11, an error of an event): no hover path, no new action.
+          stopped = !(await this.recover(page, st, e, node, hit));
         }
       }
-      if (action === "hover" && !st.plain) await this.hoverBefore(page, st, e, node, hit);
+      if (action === "hover" && !st.plain && !stopped) await this.hoverBefore(page, st, e, node, hit);
     }
     this.count("setups");
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a setup of ${action || "?"}${trial ? " (trial)" : ""}, ${st.recov.n} recoveries of its node${st.plain ? ", plain" : ""}`);
     await page.pass(e.child, e.method, e.params, (body: any) => {
       const r = body?.result?.result;
       // A miss of the setup ends its attempt (Playwright sends no input for it), so its plain mode ends too.
-      if (r?.type === "string") { st.miss = true; st.missAt = this.clock.now(); st.plain = false; this.count("setupMisses"); }
-      else if (typeof r?.objectId === "string") st.handles.add(r.objectId);
+      if (r?.type === "string") { st.miss = true; st.missAt = this.clock.now(); st.missNode = node; st.plain = false; this.count("setupMisses"); }
+      else if (typeof r?.objectId === "string") {
+        st.handles.delete(r.objectId); st.handles.set(r.objectId, node);
+        while (st.handles.size > KEPT_MAX) st.handles.delete(st.handles.keys().next().value!);
+      }
       // A kept rest waits for Playwright's move from the setup's answer on (a miss: Playwright sends no move).
       if (st.rest) { if (r?.type === "string") { this.dropRest(st); if (!st.running) void this.afterStep(page, st); } else this.keepRest(page, st); }
       e.answer(body);
@@ -1085,22 +1188,22 @@ export class Stage {
    * it; its highest ancestor that does not hold the target; a path out of both boxes, on the side away from the target, to
    * a point 15 px outside; two frames; the ancestor's box again, which the next path goes around.
    */
-  private async recover(page: StagePage, st: TabState, e: Entry, node: string, hit: Pt): Promise<void> {
+  private async recover(page: StagePage, st: TabState, e: Entry, node: string, hit: Pt): Promise<boolean> {
     const found = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: OBSTACLE_FIND, arguments: [{ value: hit.x }, { value: hit.y }], returnByValue: false }));
     const handle = found === TIMEOUT ? undefined : (found as any)?.result?.objectId;
-    if (typeof handle !== "string") return;
+    if (typeof handle !== "string") return true;
     try {
       const geo = await this.nodeGeo(page, st, e.child, node);
-      if (!geo && e.child) return;
+      if (!geo && e.child) return true;
       const ox = geo?.ox ?? 0, oy = geo?.oy ?? 0;
       const both = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: handle, functionDeclaration: OBSTACLE_BOTH, returnByValue: true }));
       const b = both === TIMEOUT ? null : (both as any)?.result?.value as Rect | null;
-      if (!b) return;
+      if (!b) return true;
       const box = { x0: b.x0 + ox, y0: b.y0 + oy, x1: b.x1 + ox, y1: b.y1 + oy }, H = { x: hit.x + ox, y: hit.y + oy };
       this.count("recoveries");
       this.o.log(`relay: the input stage: a recovery in tab ${page.id} after a miss of the hit-target check`);
       const a = await this.begin(page, st);
-      if (a.over) return;
+      if (a.over) return true;
       const at = this.from(page, st) ?? { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 };
       const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
       const v = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
@@ -1110,13 +1213,14 @@ export class Stage {
         .sort((p, q) => Math.hypot(q.x - H.x, q.y - H.y) - Math.hypot(p.x - H.x, p.y - H.y));
       if (exits[0] && !same(at, exits[0])) {
         const r = await this.play(page, st, a, this.plan(page, st, at, exits[0], DEFAULT_WIDTH), { modifiers: 0 });
-        if (r.error !== undefined) { this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); this.freeTail(st); this.close(st, page.id); return; }
-        if (r.stopped) return;
+        if (r.error !== undefined) { this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); this.freeTail(st); this.close(st, page.id); return false; }
+        if (r.stopped) return true;
       }
       await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: handle, functionDeclaration: TWO_FRAMES, awaitPromise: true, returnByValue: true }));
       const again = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: handle, functionDeclaration: OBSTACLE_AGAIN, returnByValue: true }));
       const k = again === TIMEOUT ? null : (again as any)?.result?.value as Rect | null;
       if (k) st.avoid = { x0: k.x0 + ox, y0: k.y0 + oy, x1: k.x1 + ox, y1: k.y1 + oy };
+      return true;
     } finally {
       void page.send(e.child, "Runtime.releaseObject", { objectId: handle }).catch(() => {});
     }

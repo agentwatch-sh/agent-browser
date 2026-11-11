@@ -126,6 +126,15 @@ export class FakeTab implements StagePage {
     this.gate = this.gate.then(() => (e ? this.stage.step(this, e) : this.pass(child, method, params, answer)));
   }
   point() { return this.modelPoint; }
+  /**
+   * A navigation of the main frame (a test's own): the old document's dialog is gone, Chrome answers the input events
+   * that it kept, and the stage gets Page.frameNavigated with no parent.
+   */
+  navigate(url = "http://a.localhost/next"): void {
+    this.dialogOpen = false; this.dialogSeen = false;
+    for (const r of this.held.splice(0)) r();
+    this.stage.event(this, undefined, "Page.frameNavigated", { frame: { id: "main", url } });
+  }
 
   /** The element of the top page at a point: the smallest node box that holds it (a frame's element is the frame). */
   elementAt(x: number, y: number): any {
