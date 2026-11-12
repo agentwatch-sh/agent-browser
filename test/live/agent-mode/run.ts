@@ -419,6 +419,14 @@ try {
     if (stageParts.includes("pointer")) await stageCases(stageContext);
     if (stageParts.includes("keys")) await stageKeyCases(stageContext);
     if (stageParts.includes("scroll")) await stageScrollCases(stageContext);
+    // Board ab-t30.18: over the whole run, the stage's focus clicks, the fields with a widget sign (no click), and the new
+    // elements that covered the area near a field after a focus click (what the signs miss), from the stage's trace lines.
+    const lines = relayLines.map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
+    const covers = lines.map((l) => /^a focus click: (\d+) new covering elements?$/.exec(l)).filter((m) => m).map((m) => Number(m![1]));
+    const widgets: Record<string, number> = {};
+    for (const l of lines) { const m = /^no focus click \(focusWidget: (\w+)\)$/.exec(l); if (m) widgets[m[1]] = (widgets[m[1]] ?? 0) + 1; }
+    record({ group: "stage", case: "the new covering elements after the focus clicks of the run (a count)", status: "pass", ms: 0,
+      detail: { parts: stageParts, focusClicks: lines.filter((l) => /^a focus click \((input|textarea|editable)\)$/.test(l)).length, focusWidget: widgets, clicksCovering: covers.length, newCovers: covers.reduce((a, b) => a + b, 0) } });
   }
   if (CASES.includes("scopes") && EXTERNAL) skip("scopes", "the group scopes (two scopes with two lists, the end of a scope, the sweep)",
     "external endpoint: the real daemon makes the lists (agentwatch's test browser has one: a.localhost), and the run can send no set_scopes or allowlist line");
