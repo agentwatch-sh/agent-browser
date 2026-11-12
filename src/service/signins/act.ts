@@ -96,15 +96,11 @@ export interface ActStore {
   actStarted(id: string): void;
   actEnded(id: string, result: string): boolean;
 }
-/** The X level: the screen's size, and the moves of the act window and of an act popup's window to the right of the screen. */
+/** The X level: the screen's size, and the move of the act window and of an act popup's window to the right of the screen. */
 export interface ActScreen {
   size(): { width: number; height: number } | null;
-  /** Move each X window whose name holds `marker`; the number moved. */
+  /** Move each X window whose name holds `marker` (a title of the act's own); the number moved. */
   moveOff(marker: string): Promise<number>;
-  /** Move each X window that was not there at `known` and has these bounds; the number moved. */
-  movePopup(bounds: { left: number; top: number; width: number; height: number }): Promise<number>;
-  /** The X windows now (the popups' move leaves them alone). */
-  snapshot(): Promise<void>;
 }
 /** Stage 1c's import path (stage1c.ts, moveSignIn): the C2 check, the box's rule and the receiver's import. */
 export interface ActMove { move(payload: Record<string, unknown>): Promise<boolean> }
@@ -144,6 +140,10 @@ type Run = {
   window: number | null; tab: number | null; world: number | null; frame: string | null;
   blocked: number; guarded: number; guardedIds: Set<string>;
   sockets: Map<string, string>; navAt: number | null; loads: number; lost: boolean; popupFailed: boolean; watching: boolean; watchCtx: number | null;
+  /** The act's tabs (the act tab and each act popup), the act popups' windows (their place confirmed outside the screen or not). */
+  actTabs: Set<number>; popups: Map<number, { window: number | null; outside: boolean }>;
+  /** An act popup opened before the act's last key (the act ends `popup`), and the last key went. */
+  popupEarly: boolean; lastKey: boolean;
   last: Pt | null; viewport: { width: number; height: number };
 };
 
@@ -200,35 +200,47 @@ export class SignInAct {
     // Check 3: the list covers each host of send_to.
     const offList = hostsOf(record.send_to).find((h) => !coveredBy(entries, h));
     if (offList !== undefined) refuse("not_allowed", ACT_TEXT.not_allowed.replace("<host>", offList), record);
-    // Check 4: the store is open. Check 5: the record opens.
-    if (this.o.store.state() !== "open") refuse("locked", ACT_TEXT.locked, record);
-    const opened = this.o.store.openForUse(found!.file);
-    if ("refused" in opened) refuse(opened.refused, ACT_TEXT[opened.refused], record);
-    const values = opened as { username: Buffer; password: Buffer };
-    try {
+    // Checks 4 to 6, then check 7's wait; a request that waited is checked again at its turn (checks 4 to 6), and the
+    // record's values open only then (review-124 B1, N2): an act before it can have stopped the credential, used the
+    // hour's last act, or the operator can have locked the store meanwhile.
+    const checks = (): void => {
+      // Check 4: the store is open. Check 5: the record opens (its values go to zeros at once here).
+      if (this.o.store.state() !== "open") refuse("locked", ACT_TEXT.locked, record);
+      const probe = this.o.store.openForUse(found!.file);
+      if ("refused" in probe) refuse(probe.refused, ACT_TEXT[probe.refused], record);
+      const pv = probe as { username: Buffer; password: Buffer };
+      pv.username.fill(0); pv.password.fill(0);
       // Check 6: not stopped, and fewer than 6 acts in the last hour.
       const limit = this.o.store.limit(record.id);
       if (limit) refuse(limit, ACT_TEXT[limit], record);
-      // Check 7: no other act runs; this one waits at most 60 s.
-      const release = await this.turn();
-      if (!release) refuse("busy", ACT_TEXT.busy, record);
-      try {
-        // The act starts: it counts for the hour, the status's acts, and the lockout guard.
-        this.o.store.actStarted(record.id);
-        this.o.emit({ t: "ev", ev: "sign_in", phase: "start", act, scope: c.scope, repo, id: record.id, name: record.name, origin: record.origin, at: this.at() });
-        const run: Run = { scope: c.scope, record, values, password: values.password.toString("utf8"), window: null, tab: null, world: null, frame: null,
-          blocked: 0, guarded: 0, guardedIds: new Set(), sockets: new Map(), navAt: null, loads: 0, lost: false, popupFailed: false, watching: false, watchCtx: null, last: null, viewport: { width: 1280, height: 800 } };
-        let result: ActResult;
-        try { result = await this.run(run); }
-        catch { result = this.o.model.notReady() !== null ? "not_ready" : "lost"; }
-        const stoppedNow = this.o.store.actEnded(record.id, result);
-        this.end({ act, scope: c.scope, repo, record, result, ms: Math.round(performance.now() - t0), blocked: run.blocked, guarded: run.guarded, stoppedNow, started: true });
-        if (result === "signed_in") return { signedIn: true, name: record.name, origin: record.origin };
-        throw new ActRefusal(result, result === "not_ready" ? this.o.model.notReady() ?? ACT_TEXT.lost : ACT_TEXT[result as keyof typeof ACT_TEXT]);
-      } finally { release!(); }
+    };
+    checks();
+    // Check 7: no other act runs; this one waits at most 60 s.
+    const release = await this.turn();
+    if (!release) refuse("busy", ACT_TEXT.busy, record);
+    let values: { username: Buffer; password: Buffer } | null = null;
+    try {
+      checks();
+      const opened = this.o.store.openForUse(found!.file);
+      if ("refused" in opened) refuse(opened.refused, ACT_TEXT[opened.refused], record);
+      values = opened as { username: Buffer; password: Buffer };
+      // The act starts: it counts for the hour, the status's acts, and the lockout guard.
+      this.o.store.actStarted(record.id);
+      this.o.emit({ t: "ev", ev: "sign_in", phase: "start", act, scope: c.scope, repo, id: record.id, name: record.name, origin: record.origin, at: this.at() });
+      const run: Run = { scope: c.scope, record, values, password: values.password.toString("utf8"), window: null, tab: null, world: null, frame: null,
+        blocked: 0, guarded: 0, guardedIds: new Set(), sockets: new Map(), navAt: null, loads: 0, lost: false, popupFailed: false, watching: false, watchCtx: null, last: null, viewport: { width: 1280, height: 800 },
+        actTabs: new Set(), popups: new Map(), popupEarly: false, lastKey: false };
+      let result: ActResult;
+      try { result = await this.run(run); }
+      catch { result = this.o.model.notReady() !== null ? "not_ready" : "lost"; }
+      const stoppedNow = this.o.store.actEnded(record.id, result);
+      this.end({ act, scope: c.scope, repo, record, result, ms: Math.round(performance.now() - t0), blocked: run.blocked, guarded: run.guarded, stoppedNow, started: true });
+      if (result === "signed_in") return { signedIn: true, name: record.name, origin: record.origin };
+      throw new ActRefusal(result, result === "not_ready" ? this.o.model.notReady() ?? ACT_TEXT.lost : ACT_TEXT[result as keyof typeof ACT_TEXT]);
     } finally {
+      release!();
       // The clean end's last step: the buffers of the values are zeros (a copy in a JavaScript string stays until the next collection).
-      values.username.fill(0); values.password.fill(0);
+      if (values) { values.username.fill(0); values.password.fill(0); }
     }
   }
 
@@ -283,7 +295,7 @@ export class SignInAct {
 
   private send(r: Run, method: string, params: Record<string, unknown> = {}): Promise<any> {
     if (r.lost) return Promise.reject(new Error("the act tab is gone"));
-    return this.o.model.call("debugger.sendCommand", [{ tabId: r.tab }, method, params], { wait: this.limits.cdpMs });
+    return this.sendTo(r.tab!, method, params);
   }
 
   /** An evaluation in the act's own isolated world of the current document, made again at each call (a navigation drops it). */
@@ -312,7 +324,6 @@ export class SignInAct {
     if (!this.o.receiver.features().has(ACT_FEATURE)) return "no_window";
     const screen = this.o.screen.size();
     if (!screen) return "window";
-    await this.o.screen.snapshot().catch(() => {});
     // The act window: incognito, the mark act, the caller's scope, at about:blank, with no focus (C10).
     let w: any;
     try { w = await m.call("windows.create", [{ url: "about:blank", focused: false, incognito: true }, r.scope, "act"]); }
@@ -326,6 +337,7 @@ export class SignInAct {
     if (!Number.isInteger(w?.id) || !Number.isInteger(tab) || w.incognito !== true) return "no_window";
     r.window = w.id; r.tab = tab;
     m.hide(tab);
+    r.actTabs.add(tab);
     // The service's own session on the act tab, inside its process.
     await m.call("debugger.attach", [tab]);
     await this.send(r, "Page.enable");
@@ -394,6 +406,7 @@ export class SignInAct {
       if (user) return user;
       const typed = await this.fill(r, p.password, r.password, true);
       if (typed) return typed;
+      r.lastKey = true;
       // The submit as a person does it: the form's visible submit button, else Enter in the password field.
       const box = p.form !== null ? await this.evaluate<Box | null>(r, call(SUBMIT_BOX, p.form)) : null;
       r.navAt = null;
@@ -420,7 +433,7 @@ export class SignInAct {
   }
 
   private openConnection(r: Run): ActResult | null {
-    return openOutside(r.sockets.values(), r.record.send_to).length ? "open_connection" : r.popupFailed ? "window" : null;
+    return openOutside(r.sockets.values(), r.record.send_to).length ? "open_connection" : r.popupEarly ? "popup" : r.popupFailed ? "window" : null;
   }
 
   /** The page's load after a navigation of the main frame, in the outcome's time. */
@@ -459,6 +472,8 @@ export class SignInAct {
     const person = this.o.model.person(r.scope), random = this.o.model.random;
     const check = async (): Promise<ActResult | null> => {
       if (r.lost) return "lost";
+      // An act popup before the last key ends the act: no key goes after the service learns of it (review-124 B2, B3).
+      if (r.popupEarly) return "popup";
       if (r.popupFailed) return "window";
       if (password && r.watching) {
         const hit = await this.watchEval<boolean | null>(r, call(WATCH_HIT));
@@ -544,10 +559,12 @@ export class SignInAct {
       await this.send(r, "Page.resetNavigationHistory").catch(() => {});
       await this.send(r, "Fetch.disable").catch(() => {});
     }
-    try {
-      await this.ask("act_end", {});
-    } catch (e) {
-      this.o.log(`sign-in: act_end failed (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"}); the next act window or the receiver's start ends the act`);
+    // act_end, once more after 500 ms when it fails (review-124 N3); then the next act window or the receiver's start ends the act.
+    for (let tryNo = 1; tryNo <= 2; tryNo++) {
+      try { await this.ask("act_end", {}); break; } catch (e) {
+        if (tryNo === 1) { await sleep(500); continue; }
+        this.o.log(`sign-in: act_end failed twice (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"}); the next act window or the receiver's start ends the act`);
+      }
     }
     return result;
   }
@@ -569,43 +586,59 @@ export class SignInAct {
   private onEvent(r: Run, ev: Record<string, any>): void {
     switch (ev.ev) {
       case "debugger.onEvent": {
-        if (ev.source?.tabId !== r.tab || ev.source?.sessionId) return;
-        this.onCdp(r, String(ev.method), ev.params ?? {});
+        const tab = ev.source?.tabId;
+        if (ev.source?.sessionId || !(tab === r.tab || r.popups.has(tab))) return;
+        this.onCdp(r, tab, String(ev.method), ev.params ?? {});
         return;
       }
       case "debugger.onDetach": if (ev.source?.tabId === r.tab) r.lost = true; return;
-      case "tabs.onRemoved": if (ev.tabId === r.tab) r.lost = true; return;
-      case "tabs.onReplaced": if (ev.removedTabId === r.tab) r.lost = true; return;
+      case "tabs.onRemoved": if (ev.tabId === r.tab) r.lost = true; r.popups.delete(ev.tabId); r.actTabs.delete(ev.tabId); return;
+      case "tabs.onReplaced":
+        if (ev.removedTabId === r.tab) r.lost = true;
+        // The added tab of an act popup is an act popup (C10).
+        else if (r.popups.has(ev.removedTabId)) this.onPopup(r, ev.addedTabId, null);
+        return;
+      case "webNavigation.onCreatedNavigationTarget":
+        // A popup of a tab of the act (C10: the receiver's own rule for an act popup).
+        if (r.actTabs.has(ev.details?.sourceTabId)) this.onPopup(r, ev.details?.tabId, null);
+        return;
       case "tabs.onCreated": {
-        // A popup of the act in a window of its own: it moves outside the screen too (windows.update refuses an act popup's window).
+        // An incognito tab whose opener is a tab of the act. Another incognito tab (the operator's private window) is no
+        // act popup: the act moves nothing of it (review-124 B4).
         const t = ev.tab;
-        if (r.window === null || t?.incognito !== true || !Number.isInteger(t.windowId) || t.windowId === r.window) return;
-        void this.movePopup(r, t.windowId);
+        if (t?.incognito === true && Number.isInteger(t.openerTabId) && r.actTabs.has(t.openerTabId)) this.onPopup(r, t.id, Number.isInteger(t.windowId) ? t.windowId : null);
         return;
       }
       case "bridge.tooLarge": {
         // A paused request too large for the link: the guard cannot read it, so it fails (never continued unread).
-        if (ev.tabId === r.tab && ev.of === "debugger.onEvent" && ev.method === "Fetch.requestPaused" && typeof ev.requestId === "string") {
+        const tab = ev.tabId;
+        if ((tab === r.tab || r.popups.has(tab)) && ev.of === "debugger.onEvent" && ev.method === "Fetch.requestPaused" && typeof ev.requestId === "string") {
           r.guarded++;
-          void this.send(r, "Fetch.failRequest", { requestId: ev.requestId, errorReason: "BlockedByClient" }).catch(() => {});
+          void this.sendTo(tab, "Fetch.failRequest", { requestId: ev.requestId, errorReason: "BlockedByClient" }).catch(() => {});
         }
         return;
       }
     }
   }
 
-  private onCdp(r: Run, method: string, p: any): void {
+  private sendTo(tabId: number, method: string, params: Record<string, unknown> = {}): Promise<any> {
+    return this.o.model.call("debugger.sendCommand", [{ tabId }, method, params], { wait: this.limits.cdpMs });
+  }
+
+  private onCdp(r: Run, tab: number, method: string, p: any): void {
+    const own = tab === r.tab;
     switch (method) {
-      case "Page.frameNavigated": if (!p.frame?.parentId) r.navAt = performance.now(); return;
-      case "Page.navigatedWithinDocument": if (p.frameId === r.frame) r.navAt = performance.now(); return;
-      case "Page.loadEventFired": r.loads++; return;
-      case "Network.webSocketCreated": if (typeof p.requestId === "string" && typeof p.url === "string") r.sockets.set(`ws ${p.requestId}`, p.url); return;
-      case "Network.webSocketClosed": r.sockets.delete(`ws ${p.requestId}`); return;
-      case "Network.webTransportCreated": if (typeof p.transportId === "string" && typeof p.url === "string") r.sockets.set(`wt ${p.transportId}`, p.url); return;
-      case "Network.webTransportClosed": r.sockets.delete(`wt ${p.transportId}`); return;
+      case "Page.frameNavigated": if (own && !p.frame?.parentId) r.navAt = performance.now(); return;
+      case "Page.navigatedWithinDocument": if (own && p.frameId === r.frame) r.navAt = performance.now(); return;
+      case "Page.loadEventFired": if (own) r.loads++; return;
+      case "Network.webSocketCreated": if (own && typeof p.requestId === "string" && typeof p.url === "string") r.sockets.set(`ws ${p.requestId}`, p.url); return;
+      case "Network.webSocketClosed": if (own) r.sockets.delete(`ws ${p.requestId}`); return;
+      case "Network.webTransportCreated": if (own && typeof p.transportId === "string" && typeof p.url === "string") r.sockets.set(`wt ${p.transportId}`, p.url); return;
+      case "Network.webTransportClosed": if (own) r.sockets.delete(`wt ${p.transportId}`); return;
       case "Network.loadingFailed":
-        // The block's stops (and the list rules' in the act tab): a request that Chrome blocked for an extension and that the guard did not fail.
-        if (/ERR_BLOCKED_BY_CLIENT/.test(String(p.errorText)) && !r.guardedIds.has(String(p.requestId))) r.blocked++;
+        // The block's stops and the list rules' (in the act tab and in each act popup that the act's session holds): a
+        // request that Chrome blocked for an extension and that the guard did not fail (review-124 N9).
+        if (/ERR_BLOCKED_BY_CLIENT/.test(String(p.errorText)) && !r.guardedIds.has(`${tab} ${p.requestId}`)) r.blocked++;
         return;
       case "Fetch.requestPaused": {
         const id = p.requestId;
@@ -613,25 +646,69 @@ export class SignInAct {
         const decision = guardDecision(p.request ?? { url: "" }, r.record.send_to, r.password);
         if (decision === "fail") {
           r.guarded++;
-          if (typeof p.networkId === "string") r.guardedIds.add(p.networkId);
-          void this.send(r, "Fetch.failRequest", { requestId: id, errorReason: "BlockedByClient" }).catch(() => {});
-        } else void this.send(r, "Fetch.continueRequest", { requestId: id }).catch(() => {});
+          if (typeof p.networkId === "string") r.guardedIds.add(`${tab} ${p.networkId}`);
+          void this.sendTo(tab, "Fetch.failRequest", { requestId: id, errorReason: "BlockedByClient" }).catch(() => {});
+        } else void this.sendTo(tab, "Fetch.continueRequest", { requestId: id }).catch(() => {});
         return;
       }
     }
   }
 
-  /** An act popup's window: moved outside the screen at the X level and read back within 2 s, else the act ends (`window`). */
-  private async movePopup(r: Run, windowId: number): Promise<void> {
+  /**
+   * An act popup (review-124 B2 to B4): the act's own session on it with the guard (Fetch for every URL at the request
+   * stage, as in the act tab) and Network (its blocked requests count); before the act's last key it ends the act
+   * (`popup`), so no key goes after the service learns of it; in a window of its own, its X window moves outside the
+   * screen by a title marker of its own, and a window whose place is not outside within 2 s ends the act (`window`).
+   */
+  private onPopup(r: Run, tabId: unknown, windowId: number | null): void {
+    if (!Number.isInteger(tabId) || r.popups.has(tabId as number) || tabId === r.tab) {
+      if (Number.isInteger(tabId) && windowId !== null && r.popups.get(tabId as number)?.window === null) this.popupWindow(r, tabId as number, windowId);
+      return;
+    }
+    const id = tabId as number;
+    this.o.model.hide(id);
+    r.actTabs.add(id);
+    r.popups.set(id, { window: null, outside: false });
+    if (!r.lastKey) r.popupEarly = true;
+    void (async () => {
+      try {
+        await this.o.model.call("debugger.attach", [id]);
+        await this.sendTo(id, "Network.enable");
+        await this.sendTo(id, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+      } catch { /* a popup that closed, or one that the receiver refuses: the rules still hold for it */ }
+    })();
+    if (windowId !== null) this.popupWindow(r, id, windowId);
+    else void this.o.model.call("tabs.get", [id]).then((t: any) => { if (Number.isInteger(t?.windowId)) this.popupWindow(r, id, t.windowId); }, () => {});
+  }
+
+  private popupWindow(r: Run, tabId: number, windowId: number): void {
+    const p = r.popups.get(tabId);
+    if (!p) return;
+    p.window = windowId;
+    if (windowId === r.window) { p.outside = true; return; }
+    void this.movePopup(r, tabId, windowId);
+  }
+
+  /** An act popup's window: its own title marker, the X move by it, and the place read back within 2 s, else the act ends (`window`). */
+  private async movePopup(r: Run, tabId: number, windowId: number): Promise<void> {
     const screen = this.o.screen.size();
+    const marker = `aw-act-${randomBytes(8).toString("hex")}`;
     const end = performance.now() + this.limits.popupMs;
-    while (performance.now() < end) {
+    while (performance.now() < end && r.popups.has(tabId)) {
       const w = await this.o.model.call("windows.get", [windowId]).catch(() => null);
-      if (!w) return; // it closed
-      if (screen && outsideScreen(w, screen)) return;
-      if (Number.isFinite(w.left) && Number.isFinite(w.top) && Number.isFinite(w.width) && Number.isFinite(w.height)) await this.o.screen.movePopup({ left: w.left, top: w.top, width: w.width, height: w.height }).catch(() => 0);
+      if (!w) { r.popups.delete(tabId); return; } // it closed
+      if (screen && outsideScreen(w, screen)) { const p = r.popups.get(tabId); if (p) p.outside = true; return; }
+      // The marker in the popup's current document (a new document of the popup takes it again at the next turn).
+      const tree = await this.sendTo(tabId, "Page.getFrameTree").catch(() => null);
+      const frame = tree?.frameTree?.frame?.id;
+      if (frame) {
+        const world = await this.sendTo(tabId, "Page.createIsolatedWorld", { frameId: frame, worldName: `aw-act-${randomBytes(4).toString("hex")}`, grantUniversalAccess: false }).catch(() => null);
+        if (Number.isInteger(world?.executionContextId)) await this.sendTo(tabId, "Runtime.evaluate", { expression: call(MARK_TITLE, marker), contextId: world.executionContextId, returnByValue: true }).catch(() => null);
+        await this.o.screen.moveOff(marker).catch(() => 0);
+      }
       await sleep(100);
     }
-    r.popupFailed = true;
+    if (r.popups.has(tabId)) r.popupFailed = true;
   }
+
 }

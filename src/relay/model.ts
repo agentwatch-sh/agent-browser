@@ -163,9 +163,12 @@ export class Conn {
   discover = false;
   download: { behavior: string; path?: string; events: boolean } | null = null;
   grants: { type: string; pattern: string }[] = [];
-  /** How the connection was admitted (C11, the sign-in act's check 1): the agent door's walk and an MCP ticket of a local admission are local. */
+  /**
+   * How the connection was admitted (C11, the sign-in act's check 1): the endpoint says local for the agent door's walk and
+   * for an MCP ticket of a local admission. With no word it is remote, so a new path into the model fails closed (review-124 N1).
+   */
   readonly admission: "local" | "remote";
-  constructor(id: number, scope: string, socket: Socket, root: Root | null = null, admission: "local" | "remote" = "local") {
+  constructor(id: number, scope: string, socket: Socket, root: Root | null = null, admission: "local" | "remote" = "remote") {
     this.id = id; this.scope = scope; this.socket = socket; this.root = root; this.admission = admission;
   }
   send(msg: object): void { this.socket.send(JSON.stringify(msg)); }
@@ -615,7 +618,7 @@ export class Model {
 
   // ------------------------------------------------------------------ connections
 
-  open(scope: string, socket: Socket, root: Root | null = null, admission: "local" | "remote" = "local"): Conn {
+  open(scope: string, socket: Socket, root: Root | null = null, admission: "local" | "remote" = "remote"): Conn {
     const c = new Conn(this.nextConn++, scope, socket, root, admission);
     this.conns.add(c);
     // The receiver attaches and holds each new tab while a connection is open: popups wait for their owner.

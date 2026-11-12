@@ -26,6 +26,7 @@ export const ACT_TEXT = {
   type_watch: "The page showed the password field as text, so the agent browser ended the sign-in.",
   rules: "The agent browser could not hold the sign-in's rules.",
   window: "The agent browser could not move the sign-in window off the screen.",
+  popup: "The sign-in page opened another window, so the agent browser ended the sign-in.",
   not_accepted: "The site did not accept the stored sign-in.",
   second_factor: "The site asks for a second factor. The agent browser cannot answer it: ask the operator.",
   off_list: "The site went to a host on no list after the sign-in.",
