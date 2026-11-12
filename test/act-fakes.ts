@@ -56,6 +56,33 @@ export class ActWorld {
   current: FakePage | null = null;
   /** Where a submit goes (the URL of the next page), or null: no navigation (a sign-in by fetch that fails). */
   submitTo: string | null = `${ORIGIN}/home`;
+  /** The act window's marker, and the popups: their tabs, their windows (the bounds and the marker of the page) and the calls on them. */
+  actMarker: string | null = null;
+  movesPopups = true;
+  readonly popupTabs = new Map<number, { windowId: number }>();
+  readonly popupWindows = new Map<number, { bounds: { left: number; top: number; width: number; height: number }; marker: string | null }>();
+  readonly popupCalls: { tab: number; method: string }[] = [];
+  /** A popup of the act tab in a window of its own (C10: an incognito tab whose opener is the act tab), and its webNavigation event. */
+  openPopup(tab = 41, windowId = 40, o: { opener?: number | null; bounds?: { left: number; top: number; width: number; height: number } } = {}): void {
+    this.popupTabs.set(tab, { windowId });
+    this.popupWindows.set(windowId, { bounds: o.bounds ?? { left: 10, top: 10, width: 400, height: 300 }, marker: null });
+    const opener = o.opener === undefined ? 31 : o.opener;
+    this.emit({ t: "ev", ch: "bridge", ev: "tabs.onCreated", tab: { id: tab, windowId, incognito: true, ...(opener !== null ? { openerTabId: opener } : {}), url: "" }, attached: false, held: false });
+  }
+  private popupCmd(tab: number, method: string, params: any): any {
+    this.popupCalls.push({ tab, method });
+    const t = this.popupTabs.get(tab);
+    if (!t) throw new Error("not attached");
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: `F${tab}` } } };
+    if (method === "Page.createIsolatedWorld") return { executionContextId: this.ctx++ };
+    if (method === "Runtime.evaluate") {
+      const m = /\/\*aw-act:mark\*\/.*\)\("(aw-act-[0-9a-f]+)"\)$/s.exec(String(params.expression));
+      const w = this.popupWindows.get(t.windowId);
+      if (m && w) w.marker = m[1];
+      return { result: { type: "boolean", value: true } };
+    }
+    return {};
+  }
   /** The wait (C10) of each debugger.sendCommand of the act. */
   readonly waits: number[] = [];
   /** A server that never answers: Page.navigate gets no answer and no page loads. */
@@ -150,11 +177,18 @@ export class ActWorld {
       await new Promise((r) => setImmediate(r));
       switch (op) {
         case "windows.create": { this.rec("windows.create", args); const a = this.windowCreate(args); if (a?.error) throw new Error(a.error); return a; }
-        case "windows.get": this.rec("windows.get", args[0]); return { id: args[0], incognito: true, ...this.bounds };
+        case "windows.get": {
+          this.rec("windows.get", args[0]);
+          if (args[0] === 30) return { id: 30, incognito: true, ...this.bounds };
+          const pw = this.popupWindows.get(args[0]);
+          if (!pw) throw new Error(`No window with id: ${args[0]}.`);
+          return { id: args[0], ...pw.bounds };
+        }
+        case "tabs.get": { const t = this.popupTabs.get(args[0]); if (!t) throw new Error(`No tab with id: ${args[0]}.`); return { id: args[0], windowId: t.windowId, incognito: true }; }
         case "debugger.attach": this.rec("attach", args[0]); return { already: false };
         case "debugger.sendCommand": {
           const [target, method, params] = args;
-          if (target.tabId !== 31) throw new Error("not attached");
+          if (target.tabId !== 31) return this.popupCmd(target.tabId, method, params ?? {});
           return this.page(method, params ?? {});
         }
       }
@@ -180,9 +214,15 @@ export class ActWorld {
 
   readonly screen: ActScreen = {
     size: () => ({ width: 1280, height: 800 }),
-    snapshot: async () => {},
-    moveOff: async (marker) => { this.rec("moveOff", marker); if (this.movesOff) { this.bounds = { ...this.bounds, left: 1480 }; this.outside = true; } return this.movesOff ? 1 : 0; },
-    movePopup: async () => 0,
+    moveOff: async (marker) => {
+      this.rec("moveOff", marker);
+      // A popup's window: only the X window whose page holds this marker moves (the marker that its page took).
+      for (const [id, w] of this.popupWindows) if (w.marker === marker) { if (!this.movesPopups) return 0; w.bounds = { ...w.bounds, left: 1480 }; this.rec("popupMoved", id); return 1; }
+      if (this.actMarker === null) this.actMarker = marker;
+      if (marker !== this.actMarker) return 0;
+      if (this.movesOff) { this.bounds = { ...this.bounds, left: 1480 }; this.outside = true; }
+      return this.movesOff ? 1 : 0;
+    },
   };
 
   act(o: Partial<SignInActOptions> = {}): SignInAct {
@@ -227,7 +267,21 @@ export class FakeStore implements ActStore {
     this.zeroed.push(v.username, v.password);
     return v;
   }
-  limit(id: string) { return this.limits.get(id) ?? null; }
+  /** The lockout guard and the hour's limit as the store keeps them (store.ts): 3 failed results in a row stop; 6 acts in the hour. */
+  fails = new Map<string, number>();
+  limit(id: string) {
+    if (this.limits.has(id)) return this.limits.get(id)!;
+    return this.started.filter((x) => x === id).length >= this.hourLimit ? "hour_limit" : null;
+  }
+  hourLimit = 6;
   actStarted(id: string) { this.started.push(id); }
-  actEnded(id: string, result: string) { this.ended.push([id, result]); return false; }
+  actEnded(id: string, result: string) {
+    this.ended.push([id, result]);
+    if (result === "signed_in") { this.fails.set(id, 0); return false; }
+    if (!["not_accepted", "timeout", "second_factor"].includes(result)) return false;
+    const n = (this.fails.get(id) ?? 0) + 1;
+    this.fails.set(id, n);
+    if (n >= 3 && this.limits.get(id) !== "stopped") { this.limits.set(id, "stopped"); return true; }
+    return false;
+  }
 }

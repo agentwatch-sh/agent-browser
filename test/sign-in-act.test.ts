@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { ActRefusal } from "../src/service/signins/act.ts";
 import { ACT_TEXT, passwordForms } from "../src/service/signins/act-rules.ts";
 import { ActWorld, CANARIES, field, homePage, loginPage, ORIGIN, PASS_INSERT, PASS_KEYS, USER } from "./act-fakes.ts";
+import { until } from "./fake-bridge.ts";
 
 const LOCAL = { scope: "web-1", admission: "local" as const };
 const refusal = (text: string) => (e: unknown) => e instanceof ActRefusal && e.message === `Not signed in: ${text}`;
@@ -332,12 +333,106 @@ test("a two-step sign-in: the username, the submit, the next page's password fie
   await assert.rejects(two.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.timeout), "no password field on the next page in the time");
 });
 
-test("an act popup's window that stays on the screen ends the act `window`", async () => {
+test("review-124 B2 and B3: an act popup that opens before the last key ends the act `popup` with no key after the service learns of it; the act's own session and guard on the popup; its X window moves by its own marker; act_end follows", async () => {
   const w = new ActWorld();
-  w.onInput = (m) => { if (m === "Input.insertText") w.emit({ t: "ev", ch: "bridge", ev: "tabs.onCreated", tab: { id: 41, windowId: 40, incognito: true, openerTabId: 31 } }); };
-  const call = w.model.call;
-  w.model.call = async (op, args = []) => (op === "windows.get" && args[0] === 40 ? { id: 40, left: 10, top: 10, width: 400, height: 300 } : call(op, args));
-  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.window));
+  let keysAfter = 0, opened = false;
+  w.onInput = (m, p) => {
+    if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && !opened) { opened = true; w.openPopup(41, 40); return; }
+    if (opened && (m === "Input.insertText" || (m === "Input.dispatchKeyEvent" && p.type !== "keyUp"))) keysAfter++;
+  };
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.popup));
+  assert.equal(keysAfter, 0, "no key after the popup at the first click");
+  assert.ok(w.hidden.has(41), "the popup is hidden from clients");
+  const on41 = w.popupCalls.filter((c) => c.tab === 41).map((c) => c.method);
+  for (const m of ["Network.enable", "Fetch.enable"]) assert.ok(on41.includes(m), `the popup's ${m}`);
+  assert.ok(w.log.some((r) => r.what === "attach" && r.detail === 41), "the act's own session on the popup");
+  await until(() => w.log.some((r) => r.what === "popupMoved" && r.detail === 40), "the popup's X window moves by its marker");
+  assert.ok(w.first("act_end") > 0);
+  assert.equal(ends(w)[0].result, "popup");
+});
+
+test("review-124 B2 and B3: a popup after the last key (at the submit): the act goes on, the guard covers the popup's requests that its session sees, its blocked requests count (N9); a popup's window that stays on the screen ends the act `window`", async () => {
+  const w = new ActWorld();
+  const b64u = Buffer.from(PASS_INSERT).toString("base64url");
+  w.onInput = (m, p) => {
+    if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && w.popupTabs.size === 0) {
+      w.openPopup(41, 40);
+      setTimeout(() => {
+        w.emit({ t: "ev", ch: "bridge", ev: "debugger.onEvent", source: { tabId: 41 }, method: "Fetch.requestPaused", params: { requestId: "p1", networkId: "pn1", request: { url: `http://tracker.localhost:8081/p?d=${b64u}`, method: "GET" } } });
+        w.emit({ t: "ev", ch: "bridge", ev: "debugger.onEvent", source: { tabId: 41 }, method: "Network.loadingFailed", params: { requestId: "pn9", errorText: "net::ERR_BLOCKED_BY_CLIENT" } });
+      }, 5);
+    }
+  };
+  assert.equal((await w.act().signIn(LOCAL, { name: "staging" })).signedIn, true);
+  await until(() => w.popupCalls.some((c) => c.tab === 41 && c.method === "Fetch.failRequest"), "the guard fails the popup's request");
+  const e = ends(w)[0];
+  assert.ok(e.guarded >= 1 && e.blocked >= 1, `the popup's requests count: ${e.guarded} guarded, ${e.blocked} blocked`);
+  const stay = new ActWorld();
+  stay.movesPopups = false;
+  stay.submitTo = null;
+  stay.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && stay.popupTabs.size === 0) stay.openPopup(41, 40); };
+  await assert.rejects(stay.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.window));
+});
+
+test("review-124 B4: an incognito tab whose opener is no tab of the act (the operator's private window) is no act popup: no attach, no move; a client's window with the same bounds as an act popup's never moves (the move is by the popup's own marker)", async () => {
+  const w = new ActWorld();
+  w.popupWindows.set(60, { bounds: { left: 10, top: 10, width: 400, height: 300 }, marker: null }); // a client's window, the popup's bounds
+  w.onInput = (m, p) => {
+    if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && w.popupTabs.size === 0) w.openPopup(51, 50, { opener: null });
+    if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && !w.popupTabs.has(41)) w.openPopup(41, 40);
+  };
+  assert.equal((await w.act().signIn(LOCAL, { name: "staging" })).signedIn, true, "the operator's private window does not end the act");
+  await until(() => w.log.some((r) => r.what === "popupMoved" && r.detail === 40), "the act popup's window moves");
+  assert.ok(!w.log.some((r) => r.what === "attach" && r.detail === 51), "no attach of the operator's tab");
+  assert.ok(!w.hidden.has(51), "the act takes no tab that is not its own (the model hides it by its incognito flag)");
+  assert.ok(!w.log.some((r) => r.what === "popupMoved" && (r.detail === 50 || r.detail === 60)), "neither the operator's window nor the client's window moved");
+  assert.equal(w.popupWindows.get(60)!.bounds.left, 10);
+  assert.equal(w.popupWindows.get(50)!.bounds.left, 10);
+});
+
+test("review-124 B1 and N2: requests that wait in check 7's queue are checked again at their turn: act 1 stops the credential, and the requests behind it are refused `stopped` with no act; the same for the hour's limit and for a lock during the wait; their values open only at the turn", async () => {
+  // The lockout guard: 2 failed results in a row before; act 1 is not accepted (the third), so it stops the credential.
+  const w = new ActWorld();
+  w.store.fails.set("c-0000000a", 2);
+  w.submitTo = `${ORIGIN}/login?e=1`;
+  w.pages.set(`${ORIGIN}/login?e=1`, loginPage({ href: `${ORIGIN}/login?e=1` }));
+  let held = -1;
+  w.onInput = () => { if (held < 0) held = w.store.zeroed.filter((b) => b.some((x) => x !== 0)).length; };
+  const act = w.act({ limits: { busyMs: 10_000, outcomeMs: 1500, settleMs: 40, receiverMs: 300, queueMs: 200, popupMs: 300 } });
+  const all = await Promise.allSettled([act.signIn(LOCAL, { name: "staging" }), act.signIn(LOCAL, { name: "staging" }), act.signIn(LOCAL, { name: "staging" })]);
+  assert.deepEqual(all.map((x) => x.status === "rejected" ? (x.reason as ActRefusal).result : "ok"), ["not_accepted", "stopped", "stopped"]);
+  assert.deepEqual(w.store.started, ["c-0000000a"], "one act");
+  assert.equal(w.events.filter((e) => e.phase === "start").length, 1);
+  assert.equal(held, 2, "while act 1 typed, only its two buffers held values: the waiting requests' values were not open");
+  // The hour's limit: one act left in the hour; the requests behind it are refused `hour_limit`.
+  const h = new ActWorld();
+  h.store.hourLimit = 1;
+  const ha = h.act({ limits: { busyMs: 10_000, outcomeMs: 1500, settleMs: 40, receiverMs: 300, queueMs: 200, popupMs: 300 } });
+  const hr = await Promise.allSettled([ha.signIn(LOCAL, { name: "staging" }), ha.signIn(LOCAL, { name: "staging" }), ha.signIn(LOCAL, { name: "staging" })]);
+  assert.deepEqual(hr.map((x) => x.status === "rejected" ? (x.reason as ActRefusal).result : "ok"), ["ok", "hour_limit", "hour_limit"]);
+  // A lock during the wait: the request behind gets `locked`.
+  const l = new ActWorld();
+  l.onInput = () => { l.store.st = "locked"; };
+  const la = l.act({ limits: { busyMs: 10_000, outcomeMs: 1500, settleMs: 40, receiverMs: 300, queueMs: 200, popupMs: 300 } });
+  const lr = await Promise.allSettled([la.signIn(LOCAL, { name: "staging" }), la.signIn(LOCAL, { name: "staging" })]);
+  assert.equal(lr[1].status === "rejected" ? (lr[1].reason as ActRefusal).result : "ok", "locked");
+  assert.deepEqual(l.store.started, ["c-0000000a"]);
+  for (const b of [...w.store.zeroed, ...l.store.zeroed]) assert.ok(b.every((x) => x === 0), "every buffer is zeros at the end");
+});
+
+test("review-124 N3: a failed act_end is sent once more after 500 ms; two failures are logged", async () => {
+  const w = new ActWorld();
+  const orig = w.receiver.request;
+  let ends2 = 0;
+  w.receiver.request = async (op, body, ms) => { if (op === "act_end" && ++ends2 === 1) throw new Error("act not closed"); return orig(op, body, ms); };
+  await w.act().signIn(LOCAL, { name: "staging" });
+  assert.equal(w.log.filter((r) => r.what === "act_end").length, 1, "the second act_end reached the receiver");
+  assert.equal(ends2, 2);
+  const x = new ActWorld();
+  const xo = x.receiver.request;
+  x.receiver.request = async (op, body, ms) => { if (op === "act_end") throw new Error("act not closed"); return xo(op, body, ms); };
+  await x.act().signIn(LOCAL, { name: "staging" }).catch(() => {});
+  assert.ok(x.logs.some((l) => /act_end failed twice/.test(l)));
 });
 
 test("a lost act tab (its session detached) ends the act `lost`; a link that went down ends it with the readiness's text", async () => {

@@ -13,7 +13,7 @@ import { SignInStore } from "../src/service/signins/store.ts";
 import { Stage1c } from "../src/service/stage1c.ts";
 import { ReceiverError, type ReceiverPort } from "../src/service/receiver.ts";
 import { LinkReceiverPort } from "../src/service/link/link.ts";
-import { geometryOf, OFF_SCREEN_GAP, xScreen } from "../src/service/signins/screen.ts";
+import { OFF_SCREEN_GAP, xScreen } from "../src/service/signins/screen.ts";
 import { eventFits } from "../src/service/control.ts";
 import { main } from "../src/cli.ts";
 import { harness, lineOf } from "./fake-bridge.ts";
@@ -98,29 +98,21 @@ test("the receiver's shared act vector (chrome-extension eda8df0): the act's win
   assert.ok(actV.features.includes("act"));
 });
 
-test("the X move: the act window by its title marker to the right of the screen; a popup's window by its bounds among the new windows; only DISPLAY and XAUTHORITY; no xdotool or no Xvfb moves nothing", async () => {
+test("the X move: an X window by its title marker only (the act window's and each act popup's own), to the right of the screen; only DISPLAY and XAUTHORITY; no xdotool or no Xvfb moves nothing", async () => {
   const calls: string[][] = [];
-  const geo: Record<string, string> = { "11": "Window 11\n  Position: 0,0 (screen: 0)\n  Geometry: 1280x800", "22": "Window 22\n  Position: 10,10 (screen: 0)\n  Geometry: 400x300", "33": "Window 33\n  Position: 10,10 (screen: 0)\n  Geometry: 400x300" };
-  let visible = ["11", "33"];
   const run = () => async (args: string[]) => {
     calls.push(args);
-    if (args[0] === "search" && args.includes("--onlyvisible")) return { code: 0, out: visible.join("\n") + "\n" };
-    if (args[0] === "search") return { code: 0, out: "22\n" };
-    if (args[0] === "getwindowgeometry") return { code: 0, out: geo[args[1]] };
+    if (args[0] === "search") return { code: 0, out: args.includes("aw-act-0123456789abcdef") ? "22\n" : "" };
     return { code: 0, out: "" };
   };
   const d = { display: ":171", xauth: "/x/auth", size: { width: 1280, height: 800 } };
   const s = xScreen({ display: () => d, xdotool: "/usr/bin/xdotool", run });
-  await s.snapshot();
   assert.equal(await s.moveOff("aw-act-0123456789abcdef"), 1);
-  assert.deepEqual(calls.find((c) => c[0] === "windowmove"), ["windowmove", "22", String(1280 + OFF_SCREEN_GAP), "0"]);
-  assert.equal(await s.moveOff("not a marker; rm -rf"), 0, "only a marker of 16 hex digits");
-  visible = ["11", "22", "33", "44"];
-  geo["44"] = "Window 44\n  Position: 10,10 (screen: 0)\n  Geometry: 400x300";
+  assert.deepEqual(calls, [["search", "--name", "aw-act-0123456789abcdef"], ["windowmove", "22", String(1280 + OFF_SCREEN_GAP), "0"]], "a search by the marker, and the move of what it found: nothing else");
   calls.length = 0;
-  assert.equal(await s.movePopup({ left: 10, top: 10, width: 400, height: 300 }), 1, "33 was there before the act; 22 is the act window");
-  assert.deepEqual(calls.filter((c) => c[0] === "windowmove"), [["windowmove", "44", "1480", "0"]]);
-  assert.deepEqual(geometryOf(geo["44"]), { left: 10, top: 10, width: 400, height: 300 });
+  assert.equal(await s.moveOff("aw-act-fedcba9876543210"), 0, "a marker that no window holds moves nothing");
+  assert.equal(await s.moveOff("not a marker; rm -rf"), 0, "only a marker of 16 hex digits");
+  assert.ok(!calls.some((c) => c[0] === "windowmove"));
   assert.equal(await xScreen({ display: () => null, xdotool: "/usr/bin/xdotool", run }).moveOff("aw-act-0123456789abcdef"), 0);
   assert.equal(await xScreen({ display: () => d, xdotool: null }).moveOff("aw-act-0123456789abcdef"), 0);
 });

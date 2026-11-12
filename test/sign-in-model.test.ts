@@ -75,7 +75,11 @@ test("check 1's admission: the act gets the connection's scope and admission (th
     await client(h, "s1").ask("AgentBrowser.signIn", { name: "staging", scope: "s9" });
     await client(h, "s2", "remote").ask("AgentBrowser.signIns", { scope: "s1" });
     await client(h, "s3", "remote").ask("AgentBrowser.signIn", { name: "staging", admission: "local" });
-    assert.deepEqual(act.calls.map((c) => [c[0], c[1]]), [["signIn", { scope: "s1", admission: "local" }], ["signIns", { scope: "s2", admission: "remote" }], ["signIn", { scope: "s3", admission: "remote" }]]);
+    // review-124 N1: a connection that no door names local is remote (the model's default fails closed).
+    const conn = h.relay.model.open("s4", { send: () => {}, close: () => {} });
+    await h.relay.model.onMessage(conn, { id: 1, method: "AgentBrowser.signIn", params: { name: "staging" } });
+    assert.deepEqual(act.calls.at(-1)?.[1], { scope: "s4", admission: "remote" }, "no admission: remote");
+    assert.deepEqual(act.calls.slice(0, 3).map((c) => [c[0], c[1]]), [["signIn", { scope: "s1", admission: "local" }], ["signIns", { scope: "s2", admission: "remote" }], ["signIn", { scope: "s3", admission: "remote" }]]);
   } finally { await h.close(); }
 });
 
