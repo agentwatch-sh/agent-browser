@@ -83,7 +83,9 @@ The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), 
 `parity/probe.ts` on Linux, `service-unit/check.ts` (board ab-v16.94.3: the service that it starts with `--test`
 starts Xvfb and Chrome, and the check gives each of their pids to `track()` and signals only those pids), and
 `service-link/check.ts` (board ab-v16.94.9: the same, with the native link, the real agent package and the host shim,
-whose pid it tracks too; `--display 174`, and `--chrome-extension <checkout>` to compare the CRX with `git show`).
+whose pid it tracks too; `--display 174`, and `--chrome-extension <checkout>` to compare the CRX with `git show`), and
+`service-use/check.ts` (board ab-v16.94.11: the same service, with no start op: a first use starts Chrome, the grace
+time of the stop by use stops it, and a new use starts it again; `--display 171`).
 
 No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
