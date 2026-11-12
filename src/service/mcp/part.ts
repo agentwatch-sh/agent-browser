@@ -34,6 +34,8 @@ export type McpPartOptions = {
   transport?: Partial<Pick<McpTransportOptions, "worker" | "perScope" | "perService">>;
   /** Tests only: the open waits for this (the order of the service's start). */
   openGate?: Promise<void>;
+  /** Tests only: the open waits for this after the port opens, before the service opens its other doors (a request then). */
+  afterOpen?: (part: McpPart) => Promise<void>;
 };
 
 export class McpPart implements ServicePart {
@@ -65,7 +67,8 @@ export class McpPart implements ServicePart {
       });
       const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });
       this.transport = transport; this.port = port;
-      if (this.last) port.setSessions(this.last);
+      if (this.last) this.setSessions(this.last);
+      if (this.o.afterOpen) await this.o.afterOpen(this);
     } catch (e) {
       this.failed = true;
       this.o.log(`mcp: the MCP port cannot open, so the service serves no MCP: ${(e as Error).message}`);
@@ -92,12 +95,17 @@ export class McpPart implements ServicePart {
   setSessions(req: Req): void {
     this.last = req;
     this.port?.setSessions(req);
+    // The folder of each scope that the snapshot does not name goes (C11; review-115 note 3).
+    const named = new Set([...(req.sessions as { scope: string }[]), ...((req.remote ?? []) as { scope: string }[])].map((s) => s.scope));
+    if (this.port) void this.transport?.keepScopes(named);
   }
 
   sessionEnded(scope: string): void {
     // A snapshot kept for the open drops the scope too (C12: the service drops a session's fingerprint with the session).
     if (this.last) this.last = { ...this.last, sessions: (this.last.sessions as { scope: string }[]).filter((s) => s.scope !== scope) };
     this.port?.sessionEnded(scope);
+    // The scope's folder goes with its files once its worker stopped (C11; review-115 note 3).
+    if (this.port) void this.transport?.dropScope(scope, "its session ended");
   }
 
   stop(): void { void this.close(); }

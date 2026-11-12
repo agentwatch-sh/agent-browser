@@ -507,7 +507,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
   sayAll(C12, [
     "Applies agentwatch's `browser.*` config keys, as data. The daemon sends it at each connect and at each change. `chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` makes the endpoint and the MCP path answer their 503 (C11, from stage 3); `enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below).",
     "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4).",
-    "Ends the scope: closes its tabs (`end_scope`, the receiver's sweep), drops its roots, closes its MCP connections and ends its MCP sessions (C11), removes its list copy, and records the ended scope.",
+    "Ends the scope: closes its tabs (`end_scope`, the receiver's sweep), drops its roots, closes its MCP connections, ends its MCP sessions and, after its answer, once the scope's MCP workers have stopped, removes its MCP folder with its files (C11), removes its list copy, and records the ended scope.",
     "Today's `launch_refusal`.",
     "`data`: `{\"refusal\":\"<text>\"}` while an ended scope of that name is held in memory only, else `{\"refusal\":null}`. The daemon asks before each launch. If the service does not answer in 2 s, the daemon refuses only a name that ended since its own start, with a text that says to try again.",
     "Adds the entries of `add` to one list and removes those of `remove`, as the gateway's list route does today: it never replaces the whole list, so an allow between the daemon's read and its `list_set` stays.",
@@ -1152,7 +1152,7 @@ test("the allow list's format: the master file, why, the file's fields, what the
     "The MCP answers `initialize` and `tools/list` with no CDP connection (the design, section 18), so the test needs no Chrome. It fails when any of these is false:",
     "each `schema` equals that tool's input schema in the pinned version, so any change of a tool fails the test, and each bump of the pin needs a new review of the list;",
     "each key of `keys` is a property of its tool's `schema`, and each key of `paths` is a key of `keys`;",
-    "each string property whose schema speaks of a file or a path (its name or its description) is in `paths`, or is left out of `keys`;",
+    "each string property whose schema speaks of a file or a path (its name or its description) is in `paths`, or is left out of `keys`, with no exception for a string whose values an `enum` or a `const` fixes, with the `type` `string` or with no `type`;",
     "`capabilities` names none of `core-install`, `storage`, `devtools`, `testing` and `config`.",
   ]) assert.ok(says(ALLOW, s), `the allow list's format says: ${s}`);
   // The file's example shape in the text is the vector's list shape.

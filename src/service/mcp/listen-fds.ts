@@ -24,9 +24,13 @@ const F_GETFD = 1, F_SETFD = 2, FD_CLOEXEC = 1;
 export function listenFd(env: Record<string, string | undefined>, pid: number, name = MCP_SOCKET_UNIT): { fd: number; count: number } | { none: string; count?: number } {
   const c = listenCount(env, pid);
   if ("none" in c) return c;
-  const count = c.count;
-  const names = (env.LISTEN_FDNAMES ?? "").split(":");
-  if (env.LISTEN_FDNAMES === undefined || names.length !== count) return { none: "LISTEN_FDNAMES does not name each fd", count };
+  return namedFd(env.LISTEN_FDNAMES, c.count, name);
+}
+
+/** The fd of `name` among `count` passed fds, by LISTEN_FDNAMES (`names`): one name for each fd, and `name` exactly once. */
+function namedFd(fdNames: string | undefined, count: number, name: string): { fd: number; count: number } | { none: string; count: number } {
+  const names = (fdNames ?? "").split(":");
+  if (fdNames === undefined || names.length !== count) return { none: "LISTEN_FDNAMES does not name each fd", count };
   const at = names.indexOf(name);
   if (at < 0 || names.lastIndexOf(name) !== at) return { none: `systemd passed no socket named ${name}`, count };
   return { fd: LISTEN_FDS_START + at, count };
@@ -55,10 +59,11 @@ export const LISTEN_VARS = ["LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"] as con
 
 /**
  * Mark the passed fds close-on-exec when LISTEN_PID and LISTEN_FDS are this process's, and remove the three variables in
- * every path (sd_listen_fds with unset_environment). The count of the fds, or why there is none; a failed fcntl throws
- * after it tried each fd and removed the variables.
+ * every path (sd_listen_fds with unset_environment). The count of the fds and LISTEN_FDNAMES, which it reads only after
+ * the marks (C11; review-115b's note), or why there is none; a failed fcntl throws after it tried each fd and removed the
+ * variables.
  */
-export async function markListenFds(env: Record<string, string | undefined>, o: { pid?: number; fcntl?: Fcntl } = {}): Promise<{ count: number } | { none: string }> {
+export async function markListenFds(env: Record<string, string | undefined>, o: { pid?: number; fcntl?: Fcntl } = {}): Promise<{ count: number; names: string | undefined } | { none: string }> {
   try {
     const c = listenCount(env, o.pid ?? process.pid);
     if ("none" in c) return c;
@@ -69,7 +74,8 @@ export async function markListenFds(env: Record<string, string | undefined>, o: 
       if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) failed ??= fd;
     }
     if (failed !== null) throw new Error(`the MCP port's socket: fd ${failed} cannot be marked close-on-exec`);
-    return c;
+    // The names only now, after the marks, and before the finally removes them.
+    return { count: c.count, names: env.LISTEN_FDNAMES };
   } finally {
     for (const k of LISTEN_VARS) delete env[k];
   }
@@ -82,11 +88,10 @@ export async function markListenFds(env: Record<string, string | undefined>, o: 
  * no MCP port (fail closed: the socket unit keeps the port, and a connection waits with no answer).
  */
 export async function takeMcpSocket(env: Record<string, string | undefined> = process.env, o: { pid?: number; fcntl?: Fcntl } = {}): Promise<number> {
-  const pid = o.pid ?? process.pid;
-  // The names are read before markListenFds removes them.
-  const named = listenFd({ ...env }, pid);
+  // The marks first, then the names (markListenFds reads LISTEN_FDNAMES after its marks): C11, as sd_listen_fds does.
   const c = await markListenFds(env, o);
   if ("none" in c) throw new Error(`the MCP port's socket: ${c.none}`);
+  const named = namedFd(c.names, c.count, MCP_SOCKET_UNIT);
   if ("none" in named) throw new Error(`the MCP port's socket: ${named.none}`);
   return named.fd;
 }

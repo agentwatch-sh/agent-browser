@@ -121,8 +121,10 @@ export function fileString(name: string, schema: unknown, way = ""): boolean | "
   const types = s.type === undefined ? [] : Array.isArray(s.type) ? s.type : [s.type];
   if (!types.every((t) => typeof t === "string" && PRIMITIVE.has(t))) return "unreadable";
   if (types.length === 0 && s.anyOf === undefined && s.oneOf === undefined && s.allOf === undefined && s.enum === undefined && s.const === undefined) return "unreadable";
-  // A string that a list of fixed values gives (enum, const) names no path.
-  if (types.includes("string") && s.enum === undefined && s.const === undefined && speaksOfPath("", { description: text })) found = true;
+  // A string whose values an enum or a const fixes is no exception (review-115b P1): the format's rule holds for each
+  // string that speaks of a file or a path, also an enum or a const of strings with no type (review-121 note 8).
+  const untypedString = types.length === 0 && ((Array.isArray(s.enum) && s.enum.some((v) => typeof v === "string")) || typeof s.const === "string");
+  if ((types.includes("string") || untypedString) && speaksOfPath("", { description: text })) found = true;
   if (types.includes("array") && s.items !== undefined && !sub("", s.items)) return "unreadable";
   if (s.properties !== undefined) {
     if (s.properties === null || typeof s.properties !== "object") return "unreadable";

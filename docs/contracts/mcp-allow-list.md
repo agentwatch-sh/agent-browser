@@ -77,12 +77,14 @@ CDP connection (the design, section 18), so the test needs no Chrome. It fails w
   and each bump of the pin needs a new review of the list;
 - each key of `keys` is a property of its tool's `schema`, and each key of `paths` is a key of `keys`;
 - each string property whose schema speaks of a file or a path (its name or its description) is in `paths`, or
-  is left out of `keys`; a schema speaks of a file or a path when its name or its description holds `file`, `path`,
-  `folder` or `directory`, in any case, also inside a word (so `browser_take_screenshot`'s `type`, whose description
-  names the file name's extension, is left out of `keys` in the first list); the test reads each string inside a key's
-  schema too, in `anyOf`, `oneOf`, `allOf`, `items`, nested `properties`, `additionalProperties` and `propertyNames`,
-  with the names and descriptions on its way, and a key whose schema has a shape that the test cannot read (no `type`,
-  a `$ref`, or a keyword that the test does not know) fails the test;
+  is left out of `keys`, with no exception for a string whose values an `enum` or a `const` fixes, with the `type`
+  `string` or with no `type`; a schema speaks of a file or a path when its name or its description holds `file`, `path`,
+  `folder` or `directory`, in any case, also inside a word (so `browser_take_screenshot`'s `type`, an `enum` string
+  whose description names the file name's extension, is left out of `keys` in the first list); the test reads each
+  string inside a key's schema too, in `anyOf`, `oneOf`, `allOf`, `items`, nested `properties`, `additionalProperties`
+  and `propertyNames`, with the names and descriptions on its way, and a key whose schema has a shape that the test
+  cannot read (no `type` and no `anyOf`, `oneOf`, `allOf`, `enum` or `const`, a `$ref`, or a keyword that the test does
+  not know) fails the test;
 - each key that a tool's `schema` requires is in its `keys`;
 - no tool's `keys` names `_meta` (the package reads `arguments._meta` to change the base of relative file names);
 - `browser_run_code_unsafe` is in `refused`;

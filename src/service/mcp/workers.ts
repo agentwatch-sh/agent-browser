@@ -109,6 +109,16 @@ export class ScopeWorker {
   /** A client notification of a session (no answer). */
   notify(sid: string, msg: Message): void { this.post({ t: "msg", sid, msg }); }
 
+  /**
+   * Drop the wait of a request that was cancelled (review-115b P2): the MCP never answers a cancelled request, so its
+   * promise gets null now, and an answer that still came would find no wait.
+   */
+  drop(sid: string, id: unknown): void {
+    const key = `${sid} ${JSON.stringify(id ?? null)}`;
+    const w = this.waits.get(key);
+    if (w) { this.waits.delete(key); w.resolve(null); }
+  }
+
   /** End one session's server object; the requests that wait for it get null. */
   close(sid: string): void {
     for (const [key, w] of [...this.waits]) if (key.startsWith(`${sid} `)) { this.waits.delete(key); w.resolve(null); }
@@ -136,10 +146,13 @@ export class ScopeWorker {
     }
   }
 
-  /** Stop the worker (its last session ended, or the service stops). */
-  async stop(): Promise<void> {
-    this.stopping = true;
-    if (!this.gone) await this.worker.terminate();
-    this.end("error");
+  /** Stop the worker (its last session ended, or the service stops); each call gets the same stop. */
+  private stopped: Promise<void> | undefined;
+  stop(): Promise<void> {
+    return this.stopped ??= (async () => {
+      this.stopping = true;
+      if (!this.gone) await this.worker.terminate();
+      this.end("error");
+    })();
   }
 }
