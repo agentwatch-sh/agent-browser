@@ -30,6 +30,10 @@ test("the five forms: plain, URL-encoded (component and form body), JSON-escaped
   assert.equal(holdsPassword("", PASS), false);
   // A URL that Chrome percent-encoded: the decoded text holds it.
   assert.ok(holdsPassword(`https://t.example/?q=${encodeURIComponent(PASS).replace(/%2F/g, "%2f")}`, PASS));
+  // A value whose base64 holds + and /: its base64url form differs, and each one is found.
+  const odd = "Test>?Pass~~";
+  assert.notEqual(Buffer.from(odd).toString("base64url"), Buffer.from(odd).toString("base64").replace(/=+$/, ""));
+  for (const f of [Buffer.from(odd).toString("base64url"), Buffer.from(odd).toString("base64")]) assert.ok(holdsPassword(`https://t.example/i.gif?d=${f}&x=1`, odd), f);
   // A part of the value is no hit (the design's limit: the guard finds the whole value).
   assert.equal(holdsPassword(PASS.slice(0, 8), PASS), false);
 });

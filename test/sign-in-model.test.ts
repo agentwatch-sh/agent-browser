@@ -74,7 +74,8 @@ test("check 1's admission: the act gets the connection's scope and admission (th
     h.relay.model.setSignIns(act);
     await client(h, "s1").ask("AgentBrowser.signIn", { name: "staging", scope: "s9" });
     await client(h, "s2", "remote").ask("AgentBrowser.signIns", { scope: "s1" });
-    assert.deepEqual(act.calls.map((c) => [c[0], c[1]]), [["signIn", { scope: "s1", admission: "local" }], ["signIns", { scope: "s2", admission: "remote" }]]);
+    await client(h, "s3", "remote").ask("AgentBrowser.signIn", { name: "staging", admission: "local" });
+    assert.deepEqual(act.calls.map((c) => [c[0], c[1]]), [["signIn", { scope: "s1", admission: "local" }], ["signIns", { scope: "s2", admission: "remote" }], ["signIn", { scope: "s3", admission: "remote" }]]);
   } finally { await h.close(); }
 });
 
