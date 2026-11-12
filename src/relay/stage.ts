@@ -446,8 +446,6 @@ class TabState {
   ks: KeyStream | null = null;
   runOpen = false;
   runPlain = false;
-  /** review-123: the releases of the rest after STAGE_ACTION_MAX_MS that the stage answered when they went, until Chrome answers them. */
-  readonly plainUps = new Set<{ p: Promise<any>; done: boolean }>();
   kq: KeyItem[] = [];
   kTimer: (() => void) | null = null;
   runTimer: (() => void) | null = null;
@@ -2040,7 +2038,7 @@ export class Stage {
   private async keyStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params;
     if (p.type === "keyUp" && (st.released.delete(`key:${p.code}`) || st.released.delete(`mod:${p.key}`)) && !st.keys.has(p.code)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
-    if (st.runPlain) { this.count("plainKeys"); return this.plainKeyStep(page, st, e); }
+    if (st.runPlain) { this.count("plainKeys"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
     st.runOpen = true;
@@ -2078,63 +2076,6 @@ export class Stage {
     const r = await this.settle(a, mine.sent!);
     if ("ended" in r) { this.answerWith(page, e, mine.sent!); return; }
     if (!r.ok) { if (p.type !== "keyUp") st.keys.delete(p.code); return this.fail(page, st, e, r.error); }
-    e.answer({ result: r.value ?? {} });
-  }
-
-  /**
-   * The rest of a key run after STAGE_ACTION_MAX_MS (C11, the early answer of a key release and the time of a key run;
-   * review-123, the bound): each key event goes at once, as the client sent it, with the stage's timestamp. A keyUp is
-   * answered when it has gone, with no wait for Chrome's answer (the early answer of a key release), so a character waits
-   * for one answer of Chrome (its keyDown) in place of two; an error of such a release stops the plan as the error of an
-   * early-answered release does, and the next call of the plan gets it. Every other key event keeps Chrome's own answer.
-   * Chrome answers at once, and drops, an input event that it gets while a dialog is open, and it answers the event that
-   * opened the dialog only after the close: so a key press whose answer comes while a release before it has none was
-   * dropped (a dialog that the release opened), and it goes again after that release's answer, as an event of the plan
-   * or (when the plan ended at the dialog) as the client's event of an ended plan, with Chrome's answer of the second send.
-   */
-  private async plainKeyStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
-    const p = e.params;
-    const before = [...st.plainUps].filter((u) => !u.done);
-    const a = await this.begin(page, st);
-    if (a.over) return this.endedEvent(page, st, e);
-    const params: Record<string, unknown> = { ...p, ...this.downKey(st, e), timestamp: this.stamp(page, st) };
-    st.runOpen = true;
-    if (p.type === "keyUp") {
-      st.keys.delete(String(params.code));
-      const pr = this.sendEvent(page, st, undefined, e.method, params);
-      const up = { p: pr, done: false };
-      st.plainUps.add(up);
-      pr.then(() => { up.done = true; st.plainUps.delete(up); }, (err) => { up.done = true; st.plainUps.delete(up); this.keyError(page, st, err); });
-      this.count("plainEarlyReleases");
-      e.answer({ result: {} });
-      return;
-    }
-    if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params });
-    const pr = this.sendEvent(page, st, undefined, e.method, params);
-    let dropped = false;
-    const checked = pr.then(() => { dropped = before.some((u) => !u.done); }, () => {});
-    const r = await this.settle(a, pr);
-    // At an end of the plan the press's answer can still be out: whether it was dropped shows when it comes, while a release before it has none.
-    if ("ended" in r && before.some((u) => !u.done)) await checked;
-    if (dropped) {
-      // The press did not reach the page: it goes again after the release's answer (the dialog's close).
-      this.count("plainKeysAgain");
-      if (p.type !== "char") st.keys.delete(String(p.code));
-      await Promise.all(before.map((u) => u.p.then(() => {}, () => {})));
-      if (st.action === a && !a.over) {
-        params.timestamp = this.stamp(page, st);
-        if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params });
-        const again = this.sendEvent(page, st, undefined, e.method, params);
-        const r2 = await this.settle(a, again);
-        if ("ended" in r2) { this.answerWith(page, e, again); return; }
-        if (!r2.ok) { st.keys.delete(String(p.code)); return this.fail(page, st, e, r2.error); }
-        e.answer({ result: r2.value ?? {} });
-        return;
-      }
-      return this.endedEvent(page, st, e);
-    }
-    if ("ended" in r) { this.answerWith(page, e, pr); return; }
-    if (!r.ok) { if (p.type !== "char") st.keys.delete(String(p.code)); return this.fail(page, st, e, r.error); }
     e.answer({ result: r.value ?? {} });
   }
 

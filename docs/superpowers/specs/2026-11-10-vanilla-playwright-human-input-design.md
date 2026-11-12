@@ -551,8 +551,11 @@ The stage's limits, so that a translated action ends inside the defaults:
   rest of the run goes at Playwright's own speed, with no person's timing, and the harness counts it. With
   an average typist's speed, about 50 characters go at the person's speed and about 170 in all inside the
   25 s. So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a
-  `pressSequentially` or a `type` of more than about 1,400 characters (measured live by board ab-t30.18,
-  review-123; fewer on a busy box) ends with that timeout, and the rest of its text does not go.
+  `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 842 to 921
+  characters went within 30 s; fewer on a busy box) ends with that timeout, and the rest of its text does not
+  go. This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu
+  (2026-11-12): "can we do a simulated copy/paste for long text input? and we use a person typing for short
+  input only?" Then a long text goes as a person's paste, and this rule of a key run and its bound go away.
 - `STAGE_ACTION_MAX_MS` ends any lock hold in the same way (section 4.4).
 - **A whole test of `@playwright/test`.** Its default test timeout is 30 s for the whole test, and the
   stage's time adds up over the test's actions (review-96, B8). With M3 and M5's times, 15 to 20 translated
@@ -1178,6 +1181,10 @@ these answers:
   pass until the probe is done.
 - **Q4: a.** No idle moves. The harness measures P6 against part B and reports it; a change needs a new
   decision of the operator (build task 9).
+- **Board item ab-8fu: a paste for a long text.** The operator answered on 2026-11-12 (confirmed): "can we do a
+  simulated copy/paste for long text input? and we use a person typing for short input only?" Board task
+  ab-t30.19 builds it (a long text as a person's paste, a person's typing for a short text only); until then the
+  rule of Q2 a holds.
 
 The questions below stay as the operator read them.
 
@@ -1205,9 +1212,9 @@ The questions below stay as the operator read them.
   longer text goes as one `input` event with no keys (as a paste with no paste event). `pressSequentially`
   goes to the fast end after 12 s; after 25 s (about 170 characters) the rest goes at Playwright's own
   speed. No client action reaches its timeout.
-  (A note of board ab-t30.18, review-123, not the operator's words: measured live, a `pressSequentially` of
-  more than about 1,400 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy
-  box.)
+  (A note of board ab-t30.18, not the operator's words: measured, a `pressSequentially` of more than about
+  850 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box; board task
+  ab-t30.19 builds the operator's later answer on board item ab-8fu, section 15.)
 - b. Always type every character. A `fill` of 500 characters takes about 1 to 2 minutes: with the default
   30 s timeout it fails, so clients must set longer timeouts. The page always sees keys.
 - c. Insert every text of more than 20 characters as one text. Fast; a page sees text with no keys more

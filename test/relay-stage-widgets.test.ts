@@ -300,44 +300,31 @@ test("review-123 note 7: a COVER_BEFORE that answers after its limit: the stage 
 const FOCUSED = { nodes: { f: INPUT({ focused: true }) }, focused: "f" };
 const LONG = "the quick brown fox jumps over the lazy dog ".repeat(8).slice(0, 300);
 
-test("review-123 the long pressSequentially bound: after STAGE_ACTION_MAX_MS each keyUp is answered when it has gone, before Chrome's answer (the early answer of a key release); each keyDown keeps Chrome's own answer; a character of the rest waits for one answer of Chrome", async () => {
+test("review-123b: after STAGE_ACTION_MAX_MS each key event of the rest goes at once as the client sent it and keeps Chrome's own answer (no early answer of the rest: the lead removed the bound's smaller option), so a character waits for two answers of Chrome", async () => {
   let clock: any;
   const r = await runVector(own(typeCalls(LONG), FOCUSED), { maxMs: 200_000, tab: (t) => { clock = t.clock; }, hook: (s) => (s.method === "Input.dispatchKeyEvent" && clock.now() >= STAGE_ACTION_MAX_MS ? new Promise((res) => clock.timer(3, () => res(undefined))) : undefined) });
   assert.equal(r.tab.valueOf("f"), LONG, "the whole text, each character once");
   // The rest after the limit (in the fake, the keys of the rest come at the client's speed: Chrome answers in 3 ms).
   const late = r.answers.filter((a) => (r.arrived.get(a.id) ?? 0) >= STAGE_ACTION_MAX_MS);
-  const typeOf = (id: number) => (r as any).tab.v.in.find((c: any) => c.id === id).params.type;
-  const ups = late.filter((a) => typeOf(a.id) === "keyUp"), downs = late.filter((a) => typeOf(a.id) === "keyDown");
-  assert.ok(ups.length > 20 && downs.length > 20, `${ups.length} releases and ${downs.length} presses after the limit`);
-  assert.ok(ups.every((a) => a.t - r.arrived.get(a.id)! < 1), "each release answered when it has gone, before Chrome's answer (3 ms)");
-  assert.ok(downs.every((a) => a.t - r.arrived.get(a.id)! >= 3), "each press with Chrome's own answer");
+  assert.ok(late.length > 40, `${late.length} key calls after the limit`);
+  assert.ok(late.every((a) => a.t - r.arrived.get(a.id)! >= 3), "each key call of the rest with Chrome's own answer");
   const ev = r.tab.sent.filter((s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.t >= STAGE_ACTION_MAX_MS);
   const per = (ev.at(-1)!.t - ev[0].t) / (ev.length - 1);
-  assert.ok(per <= 3.5, `${per.toFixed(2)} ms a character after the limit (one answer of Chrome)`);
-  assert.ok((r.stage.counts.plainEarlyReleases ?? 0) > 20);
+  assert.ok(per >= 6, `${per.toFixed(2)} ms a character after the limit (two answers of Chrome)`);
+  assert.ok(!("plainEarlyReleases" in r.stage.counts) && !("plainKeysAgain" in r.stage.counts));
 });
 
-test("review-123 the long pressSequentially bound: a keyUp of the rest that opens a dialog: the next keyDown, which Chrome drops while the dialog is open, goes again after the close; the page gets each character once, in order", async () => {
-  let opened = false;
-  const v = own([...typeCalls(LONG), { afterEvent: "Page.javascriptDialogOpening", waitMs: 50, method: "Page.handleJavaScriptDialog", params: { accept: true } }], FOCUSED);
-  const r = await runVector(v, { maxMs: 200_000, tab: (t) => {
-    t.dialogNoticeMs = 5;
-    t.opensDialog = (s) => { if (opened || s.method !== "Input.dispatchKeyEvent" || s.params.type !== "keyUp" || s.params.key !== "x" || t.clock.now() < STAGE_ACTION_MAX_MS) return false; opened = true; return true; };
-  } });
-  assert.ok(opened, "a dialog at a keyUp of the rest");
-  assert.equal(r.tab.valueOf("f"), LONG, "each character once, in order");
-  assert.equal(r.stage.counts.plainKeysAgain, 1, "the dropped press went again");
-  assert.ok(r.tab.sent.some((s) => s.dropped && s.params?.type === "keyDown"), "Chrome dropped the press that came during the dialog");
-});
-
-test("review-123: the design states the bound next to its texts (section 6.3, and a note next to the operator's record of Q2 a)", () => {
+test("review-123b: the design states round 0's bound as the state until board task ab-t30.19 (section 6.3, a note next to the operator's record of Q2 a), and section 15 records the operator's answer on board item ab-8fu", () => {
   const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const AB8FU = "\"can we do a simulated copy/paste for long text input? and we use a person typing for short input only?\"";
   for (const t of [
-    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about 1,400 characters (measured live by board ab-t30.18, review-123; fewer on a busy box) ends with that timeout, and the rest of its text does not go.",
-    "(A note of board ab-t30.18, review-123, not the operator's words: measured live, a `pressSequentially` of more than about 1,400 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box.)",
+    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 842 to 921 characters went within 30 s; fewer on a busy box) ends with that timeout, and the rest of its text does not go.",
+    `This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu (2026-11-12): ${AB8FU} Then a long text goes as a person's paste, and this rule of a key run and its bound go away.`,
     "speed. No client action reaches its timeout.",
-  ]) assert.ok(D.includes(t), `the design says: ${t}`);
-  assert.ok(!D.includes("So no client action reaches the 30 s timeout because of the stage (Q2)."), "the old sentence of section 6.3 is gone");
+    "(A note of board ab-t30.18, not the operator's words: measured, a `pressSequentially` of more than about 850 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box; board task ab-t30.19 builds the operator's later answer on board item ab-8fu, section 15.)",
+    `- **Board item ab-8fu: a paste for a long text.** The operator answered on 2026-11-12 (confirmed): ${AB8FU} Board task ab-t30.19 builds it (a long text as a person's paste, a person's typing for a short text only); until then the rule of Q2 a holds.`,
+  ]) assert.ok(D.includes(t.replace(/\s+/g, " ")), `the design says: ${t}`);
+  for (const old of ["So no client action reaches the 30 s timeout because of the stage (Q2).", "about 1,400 characters"]) assert.ok(!D.includes(old), `the design no longer says: ${old}`);
 });
 
 // ================================================================ the page-side texts (node:vm, a small DOM model)
