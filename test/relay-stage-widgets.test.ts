@@ -349,7 +349,8 @@ test("COVER_BEFORE and COVER_AFTER, as the page runs them: the area near the fie
   assert.deepEqual([xs.length, xs[0], xs.at(-1), ys.length, ys[0], ys.at(-1)], [9, 60, 440, 25, 0, 330]);
   assert.equal(await after(), 0, "nothing new");
   // A panel under the field, with cells: one element (the panel, the highest new ancestor).
-  const panel = new El("div", {}, { x: 100, y: 92, w: 280, h: 200 }), cell = new El("td", {}, { x: 110, y: 100, w: 40, h: 30 });
+  // The cell lies under grid points (x 107.5 to 297.5, y 110 and 123.75): with no climb to its highest new ancestor it would count twice.
+  const panel = new El("div", {}, { x: 100, y: 92, w: 280, h: 200 }), cell = new El("td", {}, { x: 100, y: 100, w: 200, h: 30 });
   doc.body.append(panel); panel.append(cell);
   before(); shown.push(panel, cell);
   assert.equal(await after(), 1, "the panel once");
