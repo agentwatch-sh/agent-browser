@@ -1,24 +1,27 @@
-// The input stage: the pointer part (board ab-t30.9; the input design,
-// docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, sections 4 to 6, and build task 5 of its
-// section 14; contract C11 "The input stage (board ab-t30.6)", the master, with test/vectors/stage.json). A client writes
-// plain Playwright, and the stage turns its pointer input into a person's input: a path from the page's last point at a
+// The input stage (boards ab-t30.9, the pointer part, and ab-t30.10, the keys and the text; the input design,
+// docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, sections 4 to 7, and build tasks 5 and 6 of
+// its section 14; contract C11 "The input stage (board ab-t30.6)", the master, with test/vectors/stage.json). A client
+// writes plain Playwright, and the stage turns its input into a person's input: a path from the page's last point at a
 // device's rate, a pause, a press of a person's length, a person's gap between the presses of a double click, the hover's
 // path around Playwright's hit-target check, the frame mapping, the recovery after a miss of that check, and the spread of
-// the press point. It keeps what each call asks for (the point, the button, the click count, the modifiers).
+// the press point; keys with a person's holds, gaps and rollover, a real Shift key for a capital or a symbol, chords, the
+// typed keys of a fill where the typing rule allows them, and a click on a text field in place of Playwright's script
+// focus. It keeps what each call asks for (the point, the button, the click count, the modifiers, the keys, the text).
 //
 // The stage is a module of the model (model.ts), between the tab's gate and the bridge: the model gives it each call that
-// it takes (arrive), runs the call's step in the tab's gate (step), and gives it the answers of the calls that pass (saw)
-// and Chrome's events (event). The stage sends its events and reads through its host (StagePage), so the input harness
-// can run it on a pipe of its own. It uses the generator of src/human/ (no second generator) with the scope's person.
+// it takes (arrive), runs the call's step in the tab's gate (step), gives it the answers of the calls that pass (saw) and
+// Chrome's events (event), and asks it before each other call of the tab (other: a call that is not a key ends the tab's
+// key run, and it waits until the run's planned releases have gone). The stage sends its events and reads through its
+// host (StagePage), so the input harness can run it on a pipe of its own. It uses the generator of src/human/ (no second
+// generator) with the scope's person.
 //
 // The build switch (C11, the build switch): the stage stays off in the default path until board tasks ab-t30.9 to
 // ab-t30.12 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
 // relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
 //
-// Not in this part (C11 names them; their board tasks build them): the keys and the text (ab-t30.10: in this part a key
-// that is no modifier of a click, and an Input.insertText, go as the client sent them, in the lock), the scroll and the
-// wheel (ab-t30.11: a wheel event goes as it is, DOM.scrollIntoViewIfNeeded is not taken), and the calls that only a
-// script makes (ab-t30.12: a move with a button down, the drag, the focus click).
+// Not in these parts (C11 names them; their board tasks build them): the scroll and the wheel (ab-t30.11: a wheel event
+// goes as it is, DOM.scrollIntoViewIfNeeded is not taken; the focus click of a field out of view waits for its notches),
+// and the calls that only a script makes (ab-t30.12: a move with a button down, the drag, select text, the file chooser).
 //
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
@@ -26,6 +29,7 @@ import { CdpPlayer, systemClock, linuxStamp, macStamp, type Clock } from "../hum
 import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
+import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv } from "../human/keys.ts";
 import { draw, uniform, type Random } from "../human/random.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
 import { PLAYWRIGHT_FOCUS, startsAction } from "./policy.ts";
@@ -65,6 +69,12 @@ export const KEPT_MAX = 64;
 export const HOVER_WAIT_MS = 1000;
 /** The default width of a target for Fitts's law when the stage knows no target (a plain mouse.move): input.ts's moveTo. */
 const DEFAULT_WIDTH = 24;
+/** A key run ends 1 s after its last key when no key is held (C11, the input lock: a key run). */
+export const RUN_IDLE_MS = 1000;
+/** The focus click's caret (C11, the focus click): a caret in the middle of a text up to this long is set with the arrow keys, a longer one by a script. */
+export const CARET_KEYS_MAX = 64;
+/** The text types of an input (C11, the typing rule 1 and the focus click; Playwright's kInputTypesToTypeInto). */
+export const TEXT_TYPES = ["text", "search", "email", "url", "tel", "password", "number"];
 
 // ------------------------------------------------------------------ Playwright's utility calls and the recognizers
 
@@ -141,6 +151,31 @@ export const OBSTACLE_BOTH = "function () { const a = this[0].getBoundingClientR
 export const TWO_FRAMES = "function () { return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))); }";
 /** The obstacle's box again (the second read): the panel has closed, so it is the trigger's box. */
 export const OBSTACLE_AGAIN = "function () { const a = this[0].getBoundingClientRect(); return { x0: a.left, y0: a.top, x1: a.right, y1: a.bottom }; }";
+/** The focused element of a document (its shadow roots and its same-origin frames followed), as the typing rule reads it: a cross-origin frame stops the read. */
+const FOCUS_BODY = (doc: string) => `const TT = ${JSON.stringify(TEXT_TYPES)}; let el = ${doc}.activeElement; for (let i = 0; el && i < 16; i++) { if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; } if (el.localName === 'iframe' || el.localName === 'frame') { let d = null; try { d = el.contentDocument; } catch (x) {} if (!d) return { frame: true }; el = d.activeElement; continue; } break; } if (!el || el.localName === 'body' || el.localName === 'html') return null; globalThis.__agentBrowserStageField = el; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined, typing = (tag === 'input' && TT.includes(type)) || tag === 'textarea'; let s = null, e = null; if (typing) { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } return { tag, type, editable: !!el.isContentEditable, typing, value: typing ? String(el.value) : null, s, e };`;
+/** The typing rule's read of the focused element (C11, the typing rule 1), in the stage's own isolated world on the top page; it marks that element (a global of the world, which no page script sees) for FIELD_STILL. */
+export const FOCUSED_FIELD = `() => { ${FOCUS_BODY("document")} }`;
+/** The same read in a cross-origin frame, on a node's handle of that frame (Playwright's utility world): `away` when that frame's document does not have the focus. */
+export const FOCUSED_IN = `function () { if (!this.ownerDocument.hasFocus()) return { away: true }; ${FOCUS_BODY("this.ownerDocument")} }`;
+/** The deep focused element of a document (its shadow roots and its same-origin frames followed), or null; a cross-origin frame stops it. */
+const DEEP_ACTIVE = (doc: string) => `let a = ${doc}.activeElement; for (let i = 0; a && i < 16; i++) { if (a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue; } if (a.localName === 'iframe' || a.localName === 'frame') { let d = null; try { d = a.contentDocument; } catch (x) {} if (!d) { a = null; break; } a = d.activeElement; continue; } break; }`;
+/** review-119 P1: the field that the last focus read marked still has the focus (sentence 13's test: the deep active element, and its document has the focus). */
+export const FIELD_STILL = `() => { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("document")} return a === el && el.ownerDocument.hasFocus(); }`;
+/** The same in a cross-origin frame, on a node's handle of that frame (Playwright's utility world). */
+export const FIELD_STILL_IN = `function () { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("this.ownerDocument")} return a === el && el.ownerDocument.hasFocus(); }`;
+/** Playwright's retarget for fill (follow-label): the control of a label, the field itself otherwise (playwright-core 1.65.0, injected retarget). */
+const RETARGET = "let el = this.nodeType === 1 ? this : this.parentElement; if (!el) return null; if (follow) { if (!el.matches('input, textarea, select') && !el.isContentEditable) el = el.closest('button, [role=button], [role=checkbox], [role=radio]') || el; if (!el.matches('a, input, textarea, button, select, option, optgroup, [role=link], [role=button], [role=checkbox], [role=radio]') && !el.isContentEditable) { const l = el.closest('label'); if (l && l.control) el = l.control; } }";
+/**
+ * The focus click's read of the field (C11, the focus click), in Playwright's utility world on the node's own handle: its
+ * kind, whether it has the focus (Playwright's _activelyFocused), the length of its text, its caret, and its box with the
+ * sum of its same-origin frames (as NODE_GEO).
+ */
+export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled, readOnly: !!el.readOnly, active, focused, len, s, e, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
+/** The focus click's hit test (C11, the focus click), on the node's handle: the element at the point of the field's own document is the field or inside it. */
+export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.getRootNode(), h = (typeof r.elementFromPoint === 'function' ? r : el.ownerDocument).elementFromPoint(x, y); if (!h || !(h === el || el.contains(h))) return false; let w = el.ownerDocument.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, b = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); x += b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += b.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); const fr = fe.getRootNode(), fh = (typeof fr.elementFromPoint === 'function' ? fr : fe.ownerDocument).elementFromPoint(x, y); if (fh !== fe) return false; w = w.parent; } return true; }`;
+/** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
+export const CARET_SET = `function (s, e, follow) { ${RETARGET} el.setSelectionRange(s, e); return true; }`;
+
 /** Condition 3 of the press point, in the stage's own isolated world: the element at the client's point. */
 export const ELEMENT_KIND = "(x, y) => { const el = document.elementFromPoint(x, y); if (!el) return null; return { tag: el.localName, type: el.getAttribute('type') ?? undefined, role: el.getAttribute('role') ?? undefined, href: el.localName === 'a' && el.hasAttribute('href'), usemap: el.localName === 'img' && el.hasAttribute('usemap'), editable: el.isContentEditable }; }";
 /** Condition 4 of the press point, in the stage's own isolated world: the element at the spread point is the one at the client's point. */
@@ -195,7 +230,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup";
+type Kind = "mouse" | "key" | "text" | "setup" | "field";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -220,6 +255,10 @@ export const CONTEXT_GONE = { code: -32000, message: "Execution context was dest
 class Action {
   ended: EndWhy | null = null;
   failed = false;
+  /** The error of the plan's refused event, for the client calls of the plan that come later. */
+  failBody: { code: number; message: string } | undefined;
+  /** The time of the plan's end (a key whose answer came after it, while a dialog was open, did not reach the page). */
+  endedAt = Infinity;
   readonly endSignal: Promise<void>;
   private fireEnd!: () => void;
   readonly unanswered = new Set<{ t: number }>();
@@ -237,6 +276,12 @@ class Action {
   get over(): boolean { return this.ended !== null || this.failed; }
 }
 type Setup = { node: string | undefined; child: string | undefined; action: string; hit: Pt | null; trial: boolean; used: boolean };
+/**
+ * A planned key event of the run: the stream's event, and for a client's own key its params and its call (`e`; null when
+ * the call was answered early). `typed`: a key of a typed text or of the stage's own keys (no client call asked for it
+ * alone). `sent`: Chrome's answer, once it went.
+ */
+type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any>; answeredAt?: number };
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
 class TabState {
   readonly pending: Entry[] = [];
@@ -246,9 +291,28 @@ class TabState {
   lastMoveAt = -Infinity;
   releasedAt = -Infinity;
   press: Press | null = null;
-  /** The buttons that the stage's events hold down, each with the clickCount of its press, and the keys (by their code). */
+  /** The buttons that the stage's events hold down, each with the clickCount of its press, and the keys (by their code; `own`: a key of the stage's own, its Shift or a chord's modifier; `merged`: a Shift of the stage's own that a client's press of Shift took). */
   readonly buttons = new Map<string, number>();
-  readonly keys = new Map<string, { at: number; params: any }>();
+  readonly keys = new Map<string, { at: number; params: any; own?: boolean; merged?: boolean }>();
+  /**
+   * The key run (C11, the input lock and the keys): the tab's key stream (the scope's person; it lives with the tab, so the
+   * drift of the person's speed goes on from run to run), whether a run is open, the planned key events that have not
+   * gone (an early-answered release, the Shift's release), the timer of the next one, and the run's end 1 s after its
+   * last key. `runPlain`: after STAGE_ACTION_MAX_MS the rest of the run goes as the client sends it.
+   */
+  ks: KeyStream | null = null;
+  runOpen = false;
+  runPlain = false;
+  kq: KeyItem[] = [];
+  kTimer: (() => void) | null = null;
+  runTimer: (() => void) | null = null;
+  /** The field of the tab's last focus or fill recognizer, and the last node of each child session (the typing rule's reads in a cross-origin frame). */
+  field: { child: string | undefined; node: string; follow: boolean } | null = null;
+  /** The next Input.insertText is fill's (its script selected the field's text): the value check wants the text alone. */
+  fillNext = false;
+  /** A typed text's plan that runs: a navigation of the main frame stops it (review-119 N3). */
+  typing: { navigated: boolean } | null = null;
+  readonly childNodes = new Map<string, string>();
   /** The buttons and keys ("key:<code>") that the stage released at the end of a plan: the client's own release gets no event. */
   readonly released = new Set<string>();
   action: Action | null = null;
@@ -307,6 +371,31 @@ export class InputLock {
 }
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+const MODIFIER_BIT: Record<string, number> = { Alt: ALT, Control: CONTROL, Meta: META, Shift: SHIFT };
+/**
+ * The key of a client's key event for the stream: what it types, and the modifiers that it needs: Shift for a shifted
+ * character of the US layout that comes with no Shift (Playwright's capital or symbol), the client's own Shift, and the
+ * client's Control, Alt or Meta when the client holds that key (`held`; a bit that the client sets with no key down goes
+ * on the event as it is, with no press of the stage's own).
+ */
+export function keyOf(p: any, held: number): Key {
+  const text = typeof p?.text === "string" && p.text !== "" ? p.text : undefined;
+  const shift = (text !== undefined ? charKey(text)?.modifiers ?? 0 : 0) & SHIFT;
+  const mods = Number(p?.modifiers ?? 0);
+  return {
+    key: String(p?.key ?? ""), code: String(p?.code ?? ""), keyCode: Number(p?.windowsVirtualKeyCode ?? p?.nativeVirtualKeyCode ?? 0),
+    ...(text !== undefined ? { text } : {}), modifiers: shift | (mods & SHIFT) | (mods & held & (ALT | CONTROL | META)),
+    ...(p?.type === "keyDown" || p?.type === "rawKeyDown" ? { type: p.type } : {}),
+  };
+}
+/** The typing rule's read of the focused element (FOCUSED_FIELD, FOCUSED_IN). */
+type FocusRead = { tag: string; type?: string; editable: boolean; typing: boolean; value: string | null; s: number | null; e: number | null };
+/** Where that read ran: null for the top page (the stage's own world), else a node of a cross-origin frame's session. */
+type FocusVia = { child: string; node: string } | null;
+/** The focus click's read of a field (FIELD_STATE), with its box and offset in the top page's points; lox, loy: the same-origin sum alone. */
+type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: string; disabled: boolean; readOnly: boolean; active: boolean; focused: boolean; len: number; s: number | null; e: number | null; box: Rect; ox: number; oy: number; lox: number; loy: number;
+  /** The cross-origin levels above the field, innermost first: the parent's session, the owner's node, its content box in the parent's points. */
+  levels: { parent: string | undefined; owner: number; r: Rect }[] };
 const TIMEOUT = Symbol("timeout");
 const same = (a: Pt | null | undefined, b: Pt | null | undefined) => !!a && !!b && a.x === b.x && a.y === b.y;
 const near = (a: Pt, b: Pt, d: number) => Math.hypot(a.x - b.x, a.y - b.y) <= d;
@@ -359,7 +448,7 @@ export class Stage {
   state(id: number) {
     const s = this.tabs.get(id);
     return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
-      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog } : null;
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
   /** A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. */
@@ -383,14 +472,18 @@ export class Stage {
   /**
    * A client's call arrives (before the tab's gate): the entry of a call that the stage takes, or null. On the tab's own
    * session the stage takes Input.dispatchMouseEvent, Input.dispatchKeyEvent and Input.insertText, and on every session
-   * the hit-target setup (the other recognizers of C11's table belong to the later parts, and pass).
+   * the hit-target setup and the focus and fill recognizers (the other recognizers of C11's table belong to the later
+   * parts, and pass).
    */
   arrive(page: StagePage, child: string | undefined, method: string, params: any, answer: (body: Body) => void): Entry | null {
     let kind: Kind | null = null, util: Utility | null = null;
     if (!child && method === "Input.dispatchMouseEvent") kind = "mouse";
     else if (!child && method === "Input.dispatchKeyEvent") kind = "key";
     else if (!child && method === "Input.insertText") kind = "text";
-    else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))?.name === "hit-target check") kind = "setup";
+    else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
+      if (util.name === "hit-target check") kind = "setup";
+      else if (util.name === "focus" || util.name === "fill") kind = "field";
+    }
     if (!kind) return null;
     const st = this.st(page);
     const e: Entry = { child, method, params: params ?? {}, answer, kind, util, st };
@@ -404,10 +497,20 @@ export class Stage {
     const i = st.pending.indexOf(e);
     if (i >= 0) st.pending.splice(i, 1);
     st.running = true;
+    this.stopKeyTimer(st);
     try {
       if (st.gone) return await this.goneStep(page, st, e);
       if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
+      // A call that is not a key ends the tab's key run (C11, the input lock): the run's planned releases go first, and an
+      // action that holds nothing then ends (the next action takes the lock and runs the activation again).
+      if (e.kind !== "key" && e.kind !== "text" && st.runOpen) {
+        await this.endRun(page, st);
+        if (st.action && !st.action.over && !st.buttons.size && !st.keys.size && !st.rest) this.close(st, page.id);
+      }
+      // fill's text is the next Input.insertText only when no other call comes between.
+      if (e.kind !== "text" && e.kind !== "field") st.fillNext = false;
       if (e.kind === "setup") return await this.setupStep(page, st, e);
+      if (e.kind === "field") return await this.fieldStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
       if (e.kind === "mouse") {
         const t = e.params.type;
@@ -418,8 +521,7 @@ export class Stage {
         return await this.plainStep(page, st, e);
       }
       if (e.kind === "key") return await this.keyStep(page, st, e);
-      this.count("plainText");
-      return await this.plainStep(page, st, e);
+      return await this.textStep(page, st, e);
     } catch (err) {
       this.o.log(`relay: the input stage: a step of tab ${page.id} failed: ${(err as Error).message}`);
       if (!st.action?.failed) e.answer({ error: page.error(e.method, err) });
@@ -466,7 +568,7 @@ export class Stage {
       this.count("navigationDrops");
     }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
-    if (mainNav) { st.quads.clear(); st.handles.clear(); }
+    if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
@@ -486,6 +588,7 @@ export class Stage {
     if (!st) { this.players.delete(id); return; }
     st.gone = why;
     this.count(why === "session" ? "sessionDrops" : "tabDrops");
+    this.stopKeyTimer(st); st.kq = [];
     st.dialog?.close();
     st.dialog = null;
     const a = st.action;
@@ -539,6 +642,8 @@ export class Stage {
     // No action (the plan failed): an ended event's lock goes with its last ended call.
     if (!a) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.freeTail(st); return; }
     if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); return; }
+    // A key run stays open (C11, the input lock): its planned events, the stream's Shift, then 1 s after its last key.
+    if (st.runOpen) { this.kick(page, st); return; }
     if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
   }
 
@@ -561,6 +666,9 @@ export class Stage {
     st.action = null;
     st.heldGone = null;
     st.plain = false; // the end of the stage's action ends a plain attempt (the recoveries' limit)
+    // The action's end ends its key run; after STAGE_ACTION_MAX_MS the plain run goes on until its own end.
+    this.stopKeyTimer(st); st.kq = [];
+    if (!st.runPlain) st.runOpen = false;
     if (this.o.trace && id !== undefined) this.o.log(`relay: the input stage: tab ${id}: an action of ${a.events} events in ${Math.round(this.clock.now() - a.started)} ms${a.ended ? ` (ended: ${a.ended})` : a.failed ? " (failed)" : ""}`);
     this.dropRest(st);
     a.watchdog?.(); a.limit?.();
@@ -576,11 +684,18 @@ export class Stage {
     const a = st.action;
     if (!a || a.over) return;
     a.ended = why;
+    a.endedAt = this.clock.now();
     a.fire();
     this.count(why === "dialog" ? "dialogEnds" : why === "wait" ? "waitEnds" : "limitEnds");
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
-    for (const x of st.pending) if (x.kind !== "setup") x.ended = true;
+    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field") x.ended = true;
     this.dropRest(st);
+    // The key run: at a dialog and at STAGE_EVENT_WAIT_MS its planned events are dropped (the end's releases cover the keys
+    // that the plan holds); at STAGE_ACTION_MAX_MS its planned releases go at the end, and the rest of the run goes as the
+    // client sends it. The stream starts again (it learns the keys that are down).
+    this.stopKeyTimer(st);
+    if (why === "limit") { if (st.runOpen) st.runPlain = true; } else st.kq = [];
+    st.ks = null;
     // Every end of a plan frees the lock at once. The plan's client events that go later (at a dialog: after its close)
     // take the lock again, in the order of arrival, with the activation before an ended press or key press.
     a.release();
@@ -595,7 +710,13 @@ export class Stage {
    */
   private async finish(page: StagePage, st: TabState, a: Action): Promise<void> {
     if (st.action !== a) { this.freeTail(st); return; }
-    if (a.ended !== "limit" && !a.failed && (st.buttons.size || st.keys.size)) {
+    if (a.ended === "limit" && !a.failed && (st.kq.length || [...st.keys.values()].some((k) => k.own))) {
+      // At STAGE_ACTION_MAX_MS: the planned releases (an early-answered one, the stream's Shift) at once, and the release of
+      // each key of the stage's own that is down; the client's own keys stay down until its own keyUp.
+      await this.retake(page, st, false);
+      for (const it of st.kq.splice(0)) if (it.ev.type === "keyUp" && st.keys.has(it.ev.code)) this.sendKey(page, st, { ...it, e: null });
+      for (const [code, k] of [...st.keys]) if (k.own) this.sendKey(page, st, { ev: { t: 0, type: "keyUp", key: k.params.key, code, keyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0, modifiers: 0, own: true }, typed: {} });
+    } else if (a.ended !== "limit" && !a.failed && (st.buttons.size || st.keys.size)) {
       await this.dialogGone(st);
       await this.retake(page, st, false);
       this.releaseHeld(page, st);
@@ -668,9 +789,12 @@ export class Stage {
       const p = k.params;
       void this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", { type: "keyUp", key: p.key, code: p.code, windowsVirtualKeyCode: p.windowsVirtualKeyCode, location: p.location ?? 0, modifiers: 0, timestamp: this.stamp(page, st) }).catch(() => {});
       st.released.add(`key:${code}`);
+      // A client's modifier that merged into the stage's own of the other side: the client's later release has its own code (review-119b R2).
+      if (k.merged) st.released.add(`mod:${p.key}`);
     }
     st.keys.clear();
     st.press = null;
+    st.kq = []; st.ks = null;
   }
 
   /**
@@ -679,7 +803,8 @@ export class Stage {
    * go gets the same error.
    */
   private fail(page: StagePage, st: TabState, e: Entry, err: unknown): void {
-    const body = this.stopPlan(page, st, e.method, err);
+    // A plan that an error of an event stopped already (a key event that no call waited for): its error, once.
+    const body = st.action?.failed && st.action.failBody ? st.action.failBody : this.stopPlan(page, st, e.method, err);
     e.answer({ error: body });
     this.freeTail(st);
     this.close(st, page.id);
@@ -696,7 +821,8 @@ export class Stage {
     const a = st.action;
     if (a) { a.failed = true; a.fire(); }
     this.count("eventErrors");
-    for (const x of st.pending) if (x.kind !== "setup") x.failedWith = body;
+    this.stopKeyTimer(st);
+    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field") x.failedWith = body;
     this.dropRest(st); st.spread = null;
     this.releaseHeld(page, st);
     return body;
@@ -743,6 +869,14 @@ export class Stage {
       if (this.clock.now() - o >= STAGE_EVENT_WAIT_MS) this.end(page, st, "wait");
       else this.arm(page, st, a);
     });
+  }
+
+  /** A promise's end within `ms` on the stage's clock: true when it settled first (its answer or its error), false at the bound. */
+  private async within(p: Promise<unknown>, ms: number): Promise<boolean> {
+    let cancel = () => {};
+    const r = await Promise.race([p.then(() => true, () => true), new Promise<boolean>((res) => { cancel = this.clock.timer(ms, () => res(false)); })]);
+    cancel();
+    return r;
   }
 
   /** Wait until `t` on the stage's clock, or until the plan ends. */
@@ -855,9 +989,21 @@ export class Stage {
 
   // ---------------------------------------------------------------- the steps
 
+  /**
+   * The key of a client's modifier release that is down (review-119b R2): a client's Shift that merged into the stage's
+   * own Shift of the other side is that Shift, so its release goes with that key's code, as keyParams sends it on the
+   * planned path, also after STAGE_ACTION_MAX_MS and at an ended plan.
+   */
+  private downKey(st: TabState, e: Entry): Record<string, unknown> {
+    const p = e.params;
+    if (e.kind !== "key" || p.type !== "keyUp" || st.keys.has(p.code) || !MODIFIER_KEYS.has(p.key)) return {};
+    for (const [code, k] of st.keys) if (k.merged && k.params.key === p.key) return { key: k.params.key, code, windowsVirtualKeyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0 };
+    return {};
+  }
+
   /** An event of an ended plan: the client's own event at once (C11, dialogs), and Chrome's own answer when it comes. */
   private async endedEvent(page: StagePage, st: TabState, e: Entry): Promise<void> {
-    const p = e.params, params: Record<string, unknown> = { ...p };
+    const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse") {
       const pr = p.type === "mouseReleased" && st.press?.button === p.button ? st.press : null;
       const pt = pr && same(pr.client, this.fit(p)) ? pr.point : this.fit(p);
@@ -868,7 +1014,7 @@ export class Stage {
     const { sent } = r;
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
-    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(p.code); else st.keys.set(p.code, { at: this.clock.now(), params: p }); }
+    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params: p }); }
     this.answerWith(page, e, sent);
   }
 
@@ -876,11 +1022,13 @@ export class Stage {
   private async plainStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
-    const p = e.params, params: Record<string, unknown> = { ...p };
+    const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse" && typeof p.x === "number" && typeof p.y === "number") { const q = this.fit(p); params.x = q.x; params.y = q.y; }
     if (e.kind !== "text") params.timestamp = this.stamp(page, st);
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") st.buttons.delete(p.button);
+    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params }); }
+    if (e.kind === "key" || e.kind === "text") st.runOpen = true;
     const pr = this.sendEvent(page, st, undefined, e.method, params);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
@@ -982,7 +1130,7 @@ export class Stage {
     if ((p.clickCount ?? 1) >= 2 && st.releasedAt > -Infinity) await this.until(a, st.releasedAt + doubleClickGapMs(P, this.o.random));
     else if (st.lastWasMove) await this.until(a, st.lastMoveAt + pauseMs(P, this.o.random));
     // A press with no path after the client's modifier press (the pointer was there already): a chord's time after it.
-    const mods = [...st.keys.values()].filter((k) => MODIFIER_KEYS.has(k.params.key)).map((k) => k.at);
+    const mods = [...st.keys.values()].filter((k) => !k.own && MODIFIER_KEYS.has(k.params.key)).map((k) => k.at);
     if (mods.length) await this.until(a, Math.max(...mods) + draw(this.o.random, P.params.keys.chord.beforeMs));
     if (a.over) {
       const r = await this.endedSend(page, st, e, { ...p, x: point.x, y: point.y, force: force(P) });
@@ -1037,38 +1185,610 @@ export class Stage {
     e.answer({ result: r.value ?? {} });
   }
 
+  // ---------------------------------------------------------------- the keys and the text (board ab-t30.10)
+
+  /** The bits of the modifier keys that the client holds down (by the stage's events). */
+  private clientBits(st: TabState): number {
+    let m = 0;
+    for (const k of st.keys.values()) if (!k.own) m |= MODIFIER_BIT[k.params.key] ?? 0;
+    return m;
+  }
+  /** Whether the client holds a key down (a modifier or not): the run and the lock stay until its keyUp (C11, the input lock). */
+  private clientKeysHeld(st: TabState): boolean { for (const k of st.keys.values()) if (!k.own) return true; return false; }
+
+  /** The tab's key stream; a new one learns the keys that the stage's events hold down (an earlier run's, or a click's modifier). */
+  private stream(page: StagePage, st: TabState): KeyStream {
+    if (st.ks) return st.ks;
+    const s = new KeyStream(page.person, this.o.random);
+    // The modifiers first, so that a held key with text needs no press of the stream's own; the events are dropped (the keys are down already).
+    const held = [...st.keys.values()].filter((k) => !k.own).sort((a, b) => Number(!MODIFIER_KEYS.has(a.params.key)) - Number(!MODIFIER_KEYS.has(b.params.key)));
+    for (const k of held) s.next({ ...keyOf(k.params, 0), modifiers: 0 }, Math.min(this.clock.now(), k.at));
+    return (st.ks = s);
+  }
+
+  private stopKeyTimer(st: TabState): void { st.kTimer?.(); st.kTimer = null; st.runTimer?.(); st.runTimer = null; }
+  /** Planned key events into the run's queue, in the order of their times (a press can come before an earlier planned release: rollover). */
+  private enqueue(st: TabState, items: KeyItem[]): void {
+    for (const it of items) {
+      let i = st.kq.length;
+      while (i > 0 && st.kq[i - 1].ev.t > it.ev.t) i--;
+      st.kq.splice(i, 0, it);
+    }
+  }
+
   /**
-   * A key (this part: the modifier of a click). Playwright presses a click's modifier after the hit-target setup and waits
-   * for its answer before the move, so its press goes as it comes; its release goes 60 to 200 ms after the mouse release
-   * (C11 modifierAfterMs), else as it comes. Every other key goes as the client sent it (the keys: board ab-t30.10).
+   * After a step of the tab (no step runs now): the next planned key event at its time; with none, the stream's own Shift
+   * at its planned release when the client holds no key; else the run's end RUN_IDLE_MS after its last key. A key that the
+   * client holds keeps the run and the lock until its keyUp, within STAGE_ACTION_MAX_MS (C11, the input lock).
+   */
+  private kick(page: StagePage, st: TabState): void {
+    this.stopKeyTimer(st);
+    const a = st.action;
+    if (st.running || st.gone || !st.runOpen) return;
+    if (!a || a.over) { st.runTimer = this.clock.timer(RUN_IDLE_MS, () => { st.runTimer = null; this.idleEnd(page, st); }); return; }
+    const now = this.clock.now();
+    if (st.kq.length) {
+      st.kTimer = this.clock.timer(st.kq[0].ev.t - now, () => {
+        st.kTimer = null;
+        if (st.running || st.action !== a || a.over) return;
+        this.drain(page, st, this.clock.now());
+        this.kick(page, st);
+      });
+      return;
+    }
+    // The stage's own Shift goes up at its planned time once no key that it holds is down, also while the client holds
+    // another key (review-119 N1); a key that the client holds keeps the run open after it.
+    const up = st.runPlain || !st.ks || st.ks.shiftHoldsDown ? null : st.ks.plannedShiftUp();
+    if (up !== null) {
+      st.kTimer = this.clock.timer(up - now, () => {
+        st.kTimer = null;
+        if (st.running || st.action !== a || a.over || !st.ks) return;
+        this.enqueue(st, st.ks.idle(this.clock.now()).map((ev) => ({ ev, typed: {} })));
+        this.drain(page, st, this.clock.now());
+        this.kick(page, st);
+      });
+      return;
+    }
+    if (this.clientKeysHeld(st)) return;
+    st.runTimer = this.clock.timer(RUN_IDLE_MS, () => { st.runTimer = null; this.idleEnd(page, st); });
+  }
+
+  /** RUN_IDLE_MS after the run's last key (C11, the input lock): the run ends; an action that holds nothing frees the lock. */
+  private idleEnd(page: StagePage, st: TabState): void {
+    if (st.running || st.gone || !st.runOpen) return;
+    const a = st.action;
+    if (a && !a.over && st.ks && !st.runPlain) { this.enqueue(st, st.ks.end(this.clock.now()).map((ev) => ({ ev, typed: {} }))); this.drain(page, st, Infinity); }
+    else st.ks?.end(this.clock.now());
+    st.runOpen = false;
+    if (st.runPlain) { st.runPlain = false; st.ks = null; }
+    if (a && !a.over && !st.buttons.size && !st.keys.size && !st.rest && !st.pending.length) this.close(st, page.id);
+  }
+
+  /**
+   * The end of the tab's key run (C11, the input lock: a key run ends at the tab's next call that is not a key): its
+   * planned releases at their times, then the release of the stream's own Shift. The call that is not a key waits for it.
+   */
+  private async endRun(page: StagePage, st: TabState): Promise<void> {
+    this.stopKeyTimer(st);
+    const a = st.action;
+    if (a && !a.over && st.ks && !st.runPlain) {
+      this.enqueue(st, st.ks.end(Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t))).map((ev) => ({ ev, typed: {} })));
+      if (st.kq.length) await this.playKeys(page, st, a, st.kq[st.kq.length - 1]);
+    } else st.ks?.end(this.clock.now());
+    st.runOpen = false;
+    if (st.runPlain) { st.runPlain = false; st.ks = null; }
+  }
+
+  /**
+   * A call of the tab that the stage does not take (C11, the input lock: a key run ends at the tab's next call that is not
+   * a key; the answers: every later call of the tab that is not a key press waits until an early-answered release has
+   * gone): null when the tab has no key run, else the step that ends the run, which the model puts in the tab's gate
+   * before the call.
+   */
+  other(page: StagePage): (() => Promise<void>) | null {
+    const st = this.tabs.get(page.id);
+    if (!st || st.gone || (!st.runOpen && !st.pending.some((x) => x.kind === "key" || x.kind === "text"))) return null;
+    return async () => {
+      if (!st.runOpen || st.gone || st.running) return;
+      st.running = true;
+      this.stopKeyTimer(st);
+      try { await this.endRun(page, st); } catch (err) { this.o.log(`relay: the input stage: the end of a key run of tab ${page.id} failed: ${(err as Error).message}`); }
+      finally { st.running = false; await this.afterStep(page, st); }
+    };
+  }
+
+  /** The planned key events that are due by `upTo`, at once (a timer of the run, while no step runs). */
+  private drain(page: StagePage, st: TabState, upTo: number): void {
+    while (st.kq.length && st.kq[0].ev.t <= upTo && !st.action?.failed) this.sendKey(page, st, st.kq.shift()!);
+  }
+
+  /**
+   * The planned key events in the order of their times, each at its time, up to and including `target`. False when the
+   * plan ended or failed before `target` went (the end of the plan takes the queue).
+   */
+  private async playKeys(page: StagePage, st: TabState, a: Action, target: KeyItem, stop?: () => boolean): Promise<boolean> {
+    while (st.kq.length) {
+      const it = st.kq[0];
+      await this.until(a, it.ev.t);
+      if (a.over || st.kq[0] !== it || stop?.()) return false;
+      st.kq.shift();
+      this.sendKey(page, st, it);
+      if (it === target) return true;
+    }
+    return !!target.sent;
+  }
+
+  /** One key event to Chrome, with the stage's timestamp: the keys that the stage holds down are kept for the releases at an end of a plan. */
+  private sendKey(page: StagePage, st: TabState, it: KeyItem): Promise<any> {
+    const ev = it.ev, params = this.keyParams(page, st, it);
+    const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params);
+    it.sent = p;
+    p.then(() => { it.answeredAt = this.clock.now(); }, () => {});
+    if (ev.type === "keyUp") st.keys.delete(ev.code);
+    else if (!ev.repeat && (ev.type as string) !== "char") st.keys.set(ev.code, { at: this.clock.now(), params, own: !it.client });
+    // An error of an event that no step waits for (an early-answered release, the stream's own Shift, a typed key): the
+    // plan stops (C11, an error of an event); the next call of the plan gets the error.
+    if (!it.e) p.catch((err) => this.keyError(page, st, err));
+    return p;
+  }
+
+  /** An error of a key event that no client call waits for: the plan stops as at any error of an event. */
+  private keyError(page: StagePage, st: TabState, err: unknown): void {
+    const a = st.action;
+    if (!a || a.over || st.gone) return;
+    a.failBody = this.stopPlan(page, st, "Input.dispatchKeyEvent", err);
+    if (!st.running) { this.freeTail(st); this.close(st, page.id); }
+  }
+
+  /** CDP's fields of a planned key event: the client's own params (with the modifiers down at its time), or a key of the stage's own. */
+  private keyParams(page: StagePage, st: TabState, it: KeyItem): Record<string, unknown> {
+    const ev = it.ev, timestamp = this.stamp(page, st);
+    if (it.client) {
+      const p = it.client;
+      // The key that goes up is the one that is down (a Shift of the stream's own that the client took keeps its side).
+      const which = ev.code !== p.code ? { key: ev.key, code: ev.code, windowsVirtualKeyCode: ev.keyCode, location: ev.location } : {};
+      return { ...p, ...which, modifiers: ev.modifiers | (Number(p.modifiers ?? 0) & (ALT | CONTROL | META)), ...(ev.repeat ? { autoRepeat: true } : {}), timestamp };
+    }
+    const down = ev.type !== "keyUp";
+    return {
+      type: ev.type, modifiers: ev.modifiers, windowsVirtualKeyCode: ev.keyCode, code: ev.code, key: ev.key,
+      ...(down ? { commands: it.typed?.commands ?? [] } : {}), ...(down && ev.text ? { text: ev.text, unmodifiedText: ev.text } : {}), ...(down ? { autoRepeat: false } : {}),
+      location: ev.location, isKeypad: false, timestamp,
+    };
+  }
+
+  /**
+   * A key (C11, the keys and the text: a key run): a person's timing from the tab's key stream. A press goes at the later
+   * of its arrival and its planned time, with a Shift press of the stream's own before a shifted character that comes with
+   * no Shift (Playwright's capital or symbol) and the chord's times after a client's modifiers; its answer comes after its
+   * keyDown. A release goes at the later of its arrival, the end of the key's planned hold and every planned release
+   * before it; it is answered before it goes (the early answer) when the plan says that the next key can overlap. A click's
+   * modifier goes up 60 to 200 ms after the mouse release. A `char` goes right after its key's press.
    */
   private async keyStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params;
-    if (p.type === "keyUp" && st.released.delete(`key:${p.code}`) && !st.keys.has(p.code)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
+    if (p.type === "keyUp" && (st.released.delete(`key:${p.code}`) || st.released.delete(`mod:${p.key}`)) && !st.keys.has(p.code)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
+    if (st.runPlain) { this.count("plainKeys"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
-    const down = st.keys.get(p.code);
+    st.runOpen = true;
+    const s = this.stream(page, st), now = this.clock.now(), queued = Math.max(now, ...st.kq.map((x) => x.ev.t));
+    let items: KeyItem[], early = false;
     if (p.type === "keyUp") {
-      if (down && MODIFIER_KEYS.has(p.key) && st.releasedAt >= down.at) await this.until(a, st.releasedAt + modifierAfterMs(page.person, this.o.random));
-      else if (!MODIFIER_KEYS.has(p.key)) this.count("plainKeys");
-      st.keys.delete(p.code);
+      let at = queued;
+      const down = st.keys.get(p.code);
+      if (down && MODIFIER_KEYS.has(p.key) && st.releasedAt >= down.at) at = Math.max(at, st.releasedAt + modifierAfterMs(page.person, this.o.random));
+      const r = s.release(keyOf(p, this.clientBits(st)), at);
+      items = r.events.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
+      early = r.early;
+    } else if (p.type === "char") {
+      items = [{ ev: { t: now, type: "char" as KeyEv["type"], key: String(p.key ?? ""), code: String(p.code ?? ""), keyCode: Number(p.windowsVirtualKeyCode ?? 0), location: 0, modifiers: this.clientBits(st), own: false }, client: p, e }];
     } else {
-      st.keys.set(p.code, { at: this.clock.now(), params: p });
-      if (!MODIFIER_KEYS.has(p.key)) this.count("plainKeys");
+      const evs = s.next(keyOf(p, this.clientBits(st)), now);
+      // A press of a Shift that is down already (the stream's own, which the client now holds): no event, and the key is the
+      // client's now: the stage sends no release of its own for it (review-119 N2, P2).
+      if (!evs.length) {
+        for (const k of st.keys.values()) if (k.own && k.params.key === p.key) { k.own = false; k.merged = true; }
+        this.count("keysDownAlready"); e.answer({ result: {} }); return;
+      }
+      items = evs.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
     }
-    if (a.over) {
-      const r = await this.endedSend(page, st, e, { ...p });
-      // No event went: the key is as it was (a held key stays held for its release; a key that did not go is not down).
-      if (!r) { if (p.type === "keyUp") { if (down) st.keys.set(p.code, down); } else if (down) st.keys.set(p.code, down); else st.keys.delete(p.code); return; }
-      this.answerWith(page, e, r.sent);
+    this.enqueue(st, items);
+    const mine = items.find((x) => x.e === e)!;
+    if (early) {
+      // The early answer (C11, the answers): the release goes at its planned time, after the next key's press can come.
+      mine.e = null;
+      this.count("earlyReleases");
+      e.answer({ result: {} });
       return;
     }
-    const pr = this.sendEvent(page, st, undefined, e.method, { ...p, timestamp: this.stamp(page, st) });
-    if (a.over) { this.answerWith(page, e, pr); return; }
-    const r = await this.settle(a, pr);
-    if ("ended" in r) { this.answerWith(page, e, pr); return; }
+    if (!(await this.playKeys(page, st, a, mine))) return this.keyNotSent(page, st, a, e, items);
+    const r = await this.settle(a, mine.sent!);
+    if ("ended" in r) { this.answerWith(page, e, mine.sent!); return; }
     if (!r.ok) { if (p.type !== "keyUp") st.keys.delete(p.code); return this.fail(page, st, e, r.error); }
     e.answer({ result: r.value ?? {} });
+  }
+
+  /** The plan ended or failed before a key step's own event went: its events that did not go leave the queue; the call gets the plan's error, or goes as an event of an ended plan. */
+  private keyNotSent(page: StagePage, st: TabState, a: Action, e: Entry, items: KeyItem[]): Promise<void> | void {
+    st.kq = st.kq.filter((x) => !items.includes(x));
+    if (a.failed) { e.answer({ error: a.failBody ?? { code: -32000, message: "the input stage stopped the plan at an error of an event" } }); return; }
+    return this.endedEvent(page, st, e);
+  }
+
+  /** The keys of the stage's own (the focus click's caret), as a person types them: false when the plan ended or failed. */
+  private async ownKeys(page: StagePage, st: TabState, a: Action, keys: Key[]): Promise<boolean> {
+    const s = this.stream(page, st), mac = !this.linux();
+    st.runOpen = true;
+    for (const k of keys) {
+      const commands = mac ? macCommands(k) : undefined;
+      const press = s.next(k, Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t))).map((ev) => ({ ev, typed: ev.own ? {} : { commands } }));
+      this.enqueue(st, press);
+      if (!(await this.playKeys(page, st, a, press[press.length - 1]))) return false;
+      const r = s.release(k, this.clock.now());
+      const up = r.events.map((ev) => ({ ev, typed: {} }));
+      this.enqueue(st, up);
+      if (!r.early && !(await this.playKeys(page, st, a, up[up.length - 1]))) return false;
+    }
+    await this.endRun(page, st);
+    return !a.over;
+  }
+
+  /**
+   * The typing rule (C11, the keys and the text): typed keys in place of an Input.insertText only when the text is not
+   * empty, each character has a key on the US layout (no line feed, no tab), the client holds no modifier key (a held
+   * Shift or Control would change the typed keys), the plan fits in STAGE_TYPE_MAX_MS at the person's speed or at the fast
+   * end, and the focused element is an input of a text type or a textarea.
+   */
+  private async typingRule(page: StagePage, st: TabState, text: string): Promise<{ typed: true; plan: ReturnType<typeof typingPace> & {}; before: FocusRead; via: FocusVia } | { typed: false; why: string }> {
+    if (!text) return { typed: false, why: "empty" };
+    if ([...text].some((ch) => !charKey(ch))) return { typed: false, why: /[\n\t]/.test(text) ? "lineFeedOrTab" : "noUsKey" };
+    if (this.clientKeysHeld(st)) return { typed: false, why: "keyHeld" };
+    const plan = typingPace(text, page.person, this.o.random, STAGE_TYPE_MAX_MS);
+    if (!plan) return { typed: false, why: "tooLong" };
+    const f = await this.focused(page, st);
+    if (!f) return { typed: false, why: "readFails" };
+    if (!f.read.typing) return { typed: false, why: f.read.editable ? "contenteditable" : "notTextField" };
+    return { typed: true, plan, before: f.read, via: f.via };
+  }
+
+  /**
+   * The typing rule's read of the focused element: in the stage's own isolated world on the top page; when the focus is
+   * in a cross-origin frame, on that frame's own session, on a node of it that the client's calls named (Playwright's
+   * utility world on that handle). Null when no read gives it.
+   */
+  private async focused(page: StagePage, st: TabState, via?: FocusVia): Promise<{ read: FocusRead; via: FocusVia } | null> {
+    if (via === undefined) {
+      const top = await this.read(page.ownRead(FOCUSED_FIELD, []));
+      if (top === TIMEOUT) return null;
+      if (!top || !(top as any).frame) return top ? { read: top as FocusRead, via: null } : null;
+    }
+    const nodes: [string, string][] = via ? [[via.child, via.node]] : [];
+    if (!via) {
+      if (st.field?.child) nodes.push([st.field.child, st.field.node]);
+      for (const [c, n] of [...st.childNodes].reverse()) if (!nodes.some(([x, y]) => x === c && y === n)) nodes.push([c, n]);
+    }
+    for (const [child, node] of nodes.slice(0, 4)) {
+      const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FOCUSED_IN, returnByValue: true }));
+      const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+      if (v && !v.away && !v.frame) return { read: v as FocusRead, via: { child, node } };
+    }
+    return null;
+  }
+
+  /**
+   * Input.insertText (C11, the keys and the text): typed keys when the typing rule allows them, else the text as it is,
+   * after one person's time from one press to the next. The stream's own Shift goes up first. Typed keys follow the plan
+   * of the typing rule's pace at its own times (so the plan's time is the time that the rule checked); the call is
+   * answered after the plan's last event. After the last key the stage reads the field's value: when it is not the text
+   * in place of the selection, it logs and counts it, and it does not repair the field (the named exception).
+   */
+  private async textStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const text = typeof e.params.text === "string" ? e.params.text : "";
+    if (st.runPlain) { this.count("plainKeys"); return this.plainStep(page, st, e); }
+    const a = await this.begin(page, st);
+    if (a.over) return this.endedEvent(page, st, e);
+    st.runOpen = true;
+    const s = this.stream(page, st), fill = st.fillNext;
+    st.fillNext = false;
+    const rule = await this.typingRule(page, st, text);
+    if (a.over) return this.endedEvent(page, st, e);
+    const ins = s.insert(Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t)));
+    const pre = ins.events.map((ev) => ({ ev, typed: {} }));
+    this.enqueue(st, pre);
+    // Every planned event of the run goes first: an early-answered release, the stream's own Shift (review-119 B1).
+    if (st.kq.length && !(await this.playKeys(page, st, a, st.kq[st.kq.length - 1]))) return this.keyNotSent(page, st, a, e, pre);
+    if (!rule.typed) {
+      // The text as it is (C11, the cases of no change: a text that the typing rule refuses).
+      this.count("textAsIs"); this.count(`textAsIs:${rule.why}`);
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a text as it is (${rule.why})`);
+      await this.until(a, ins.t);
+      if (a.over) return this.endedEvent(page, st, e);
+      const pr = this.sendEvent(page, st, undefined, e.method, { ...e.params });
+      s.after(this.clock.now());
+      const r = await this.settle(a, pr);
+      if ("ended" in r) { this.answerWith(page, e, pr); return; }
+      if (!r.ok) return this.fail(page, st, e, r.error);
+      e.answer({ result: r.value ?? {} });
+      return;
+    }
+    this.count("typedTexts");
+    if (rule.plan.pace === "fast") this.count("typedTextsFast");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: typed keys (${rule.plan.pace === "fast" ? "the fast end" : "the person's speed"}, ${Math.round(rule.plan.plan.ms)} ms)`);
+    const t0 = ins.t, mac = !this.linux();
+    const items: KeyItem[] = rule.plan.plan.events.map((ev) => ({ ev: { ...ev, t: ev.t + t0 }, typed: { commands: mac && !ev.own ? [] : undefined } }));
+    this.enqueue(st, items);
+    const last = items[items.length - 1], typing = (st.typing = { navigated: false });
+    const played = await this.playKeys(page, st, a, last, () => typing.navigated);
+    if (st.typing === typing) st.typing = null;
+    if (!played) return this.typedEnded(page, st, a, e, text, items, typing.navigated, rule.via);
+    s.after(Math.max(...items.filter((x) => x.ev.type !== "keyUp").map((x) => x.ev.t)));
+    // The answer after Chrome answered the plan's events (they went at their times, none awaited before the next).
+    const r = await this.settle(a, Promise.all(items.map((x) => x.sent!)));
+    if ("ended" in r) { this.answerWith(page, e, Promise.all(items.map((x) => x.sent!)).then(() => ({}))); return; }
+    if (!r.ok) return this.fail(page, st, e, r.error);
+    // The named exception (C11, the typing rule): the field's value after the last key, against the text in place of the selection.
+    const want = fill ? text : typeof rule.before.s === "number" && typeof rule.before.e === "number" && rule.before.value !== null
+      ? rule.before.value.slice(0, rule.before.s) + text + rule.before.value.slice(rule.before.e) : null;
+    if (want !== null) {
+      const after = await this.focused(page, st, rule.via ?? undefined);
+      if (after && after.read.value !== null && after.read.value !== want) {
+        this.count("typedValueDiffers");
+        this.o.log(`relay: the input stage: tab ${page.id}: the value of a field after its typed keys is not the text in place of its selection (a key handler of the page: C11's named exception); the stage does not repair it`);
+      }
+    }
+    e.answer({ result: {} });
+  }
+
+  /**
+   * The end of a typed text's plan before its last event (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS, a navigation
+   * of the main frame; C11, the keys and the text). A character is typed when its keyDown reached the page. At a dialog
+   * Chrome drops each input event that it gets while the dialog is open, so a keyDown sent after the first event that has
+   * no answer at the end did not (review-119 N4). At STAGE_EVENT_WAIT_MS and at the limit Chrome queues the events of a
+   * busy page and gives them later: the stage waits for Chrome's answers of the sent events, and each sent keyDown is
+   * typed (review-119b R3); the wait has a bound of one more STAGE_EVENT_WAIT_MS, and at its end no character of the rest
+   * goes and the call gets an error (the daemon lead's point). After the dialog's close, with the lock taken again in the order of arrival (as the pointer
+   * part's ended events) and the activation (review-119b O1), the stage releases each key of the plan that is down, then
+   * sends the characters that were not typed as one Input.insertText when the field still has the focus (sentence 13's
+   * test; review-119 P1), whose answer is Chrome's. Else (or at a navigation) no character goes, and the call gets an
+   * error that names the end and the count, after Chrome's answers of the plan's events (review-119b O2), or after
+   * STAGE_EVENT_WAIT_MS when they do not come. With every
+   * character typed, the call gets its answer after Chrome's answers of its events (review-119 B2 a).
+   */
+  private async typedEnded(page: StagePage, st: TabState, a: Action, e: Entry, text: string, items: KeyItem[], navigated = false, via: FocusVia = null): Promise<void> {
+    st.kq = st.kq.filter((x) => !items.includes(x));
+    if (a.failed) { e.answer({ error: a.failBody ?? { code: -32000, message: "the input stage stopped the plan at an error of an event" } }); return; }
+    this.count("typedTextsEnded");
+    const end = a.over ? a.endedAt : this.clock.now();
+    const sent = items.filter((x) => x.sent).map((x) => x.sent!.catch(() => {}));
+    const why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
+    // Each sent keyDown is typed, except at a dialog: Chrome drops each input event that it gets while a dialog is open (N4).
+    // At STAGE_EVENT_WAIT_MS and at the limit (a busy page) Chrome queues the input events and gives them to the page later:
+    // the stage first waits for their answers (review-119b R3), with the lock free, for at most one more
+    // STAGE_EVENT_WAIT_MS (the daemon lead's point). A page that does not answer in that time (a key handler that never
+    // returns): no character of the rest goes, because an unanswered key can still reach the page later; the call gets an
+    // error with the count of the characters whose keyDown has no answer; the end's releases go in finish, as at any end of
+    // a plan (Chrome gives them to the page when it answers again), or at a session's end in drop.
+    const queued = !navigated && (a.ended === "wait" || a.ended === "limit");
+    if (queued && !(await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS))) {
+      if (st.gone === "session") return;
+      this.count("typedTextsUnanswered");
+      const n = [...text].length - items.filter((x) => !x.ev.own && x.ev.type !== "keyUp" && x.answeredAt !== undefined).length;
+      e.answer({ error: { code: -32000, message: `The input stage ended a typed text at ${why}, and ${n} characters may not have gone: the page did not answer.` } });
+      return;
+    }
+    const held = a.ended === "dialog" ? items.findIndex((x) => x.sent && !(x.answeredAt !== undefined && x.answeredAt <= end)) : -1;
+    const typed = items.filter((x, i) => !x.ev.own && x.ev.type !== "keyUp" && x.sent && (held < 0 || i <= held)).length;
+    const rest = [...text].slice(typed).join("");
+    if (a.over) await this.dialogGone(st);
+    if (st.gone === "session") return;
+    // The activation before the focus read (review-119b O1): another tab's action may have taken the window's focus.
+    if (a.over) await this.retake(page, st, rest.length > 0 && !navigated);
+    // The release of each key of the plan that is down (the stage's own: no client call asked for it alone).
+    const codes = new Set(items.filter((x) => x.ev.type === "keyUp" && !x.sent).map((x) => x.ev.code));
+    for (const code of codes) {
+      const k = st.keys.get(code);
+      if (k?.own) sent.push(this.sendKey(page, st, { ev: { t: 0, type: "keyUp", key: k.params.key, code, keyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0, modifiers: 0, own: true }, typed: {} }).catch(() => {}));
+    }
+    if (st.heldGone) { e.answer({ error: st.heldGone }); return; }
+    if (!rest) { this.answerWith(page, e, Promise.all(sent).then(() => ({}))); return; }
+    const still = !navigated && !st.gone && (await this.stillFocused(page, via));
+    if (!still) {
+      this.count("typedTextsCut");
+      // The error after Chrome's answers of the plan's events and of its releases (review-119b O2), or after
+      // STAGE_EVENT_WAIT_MS when they do not come (the daemon lead's point).
+      await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS);
+      e.answer({ error: { code: -32000, message: `The input stage ended a typed text at ${why}, and ${[...rest].length} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
+      return;
+    }
+    const r = await this.endedSend(page, st, e, { ...e.params, text: rest });
+    if (r) this.answerWith(page, e, r.sent);
+  }
+
+  /** The field that the typing rule's read marked still has the focus (sentence 13's test), on the page or on its frame's node. */
+  private async stillFocused(page: StagePage, via: FocusVia): Promise<boolean> {
+    if (!via) return (await this.read(page.ownRead(FIELD_STILL, []))) === true;
+    const r = await this.read(page.send(via.child, "Runtime.callFunctionOn", { objectId: via.node, functionDeclaration: FIELD_STILL_IN, returnByValue: true }));
+    return r !== TIMEOUT && (r as any)?.result?.value === true;
+  }
+
+  /**
+   * The focus and fill recognizers (C11, the focus click): before Playwright's script focus of a text field (focusNode for
+   * pressSequentially, press, type and focus; fill's own selectText), the stage clicks the field as a person does, unless it
+   * has the focus. The stage reads the field in Playwright's utility world on the node's handle; only a text field gets the
+   * click; the point is where the script focus puts the caret; a field with no box, out of view, or covered at the point
+   * (the stage's own hit test) gets no click, and the stage counts it. After the click, when the caret is not where the
+   * script focus would put it, the stage moves it with keys. Then the utility call goes as the client sent it.
+   */
+  private async fieldStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const u = e.util!, args = (Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[];
+    const node = (args[1] as Handle | undefined)?.handle, fill = u.name === "fill", reset = !fill && args[2] === true;
+    if (node) { st.field = { child: e.child, node, follow: fill }; if (e.child) { st.childNodes.delete(e.child); st.childNodes.set(e.child, node); while (st.childNodes.size > KEPT_MAX) st.childNodes.delete(st.childNodes.keys().next().value!); } }
+    st.fillNext = fill;
+    const why = (k: string) => this.noClick(page, k);
+    const pass = () => page.pass(e.child, e.method, e.params, e.answer);
+    if (!node || st.action?.over) { why("fieldNoRead"); return pass(); }
+    // Playwright's focus call starts an action (C11, the window comes forward for input): the lock and the activation first.
+    let a = !fill ? await this.begin(page, st) : null;
+    if (a?.over) return pass();
+    // Playwright's focus call and the keys after it are one action also when it gets no click (review-119b: C11's one action).
+    const g = await this.fieldRead(page, st, e.child, node, fill);
+    if (!g) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+    if (g.kind === "other") { why("fieldNotText"); return this.keepAction(st, a, pass); }
+    // A disabled or read-only field gets no click: Playwright's fill refuses it, and a script focus of a disabled field does
+    // nothing (review-119 N6).
+    if (g.disabled || g.readOnly) { why(g.disabled ? "fieldDisabled" : "fieldReadOnly"); return this.keepAction(st, a, pass); }
+    // An email or a number input with text: its caret cannot be read or set, and Playwright's script focus leaves it where
+    // the field's own selection is; a click would move it (review-119 B4). fill selects the text, so it gets the click.
+    if (!fill && g.kind === "input" && (g.type === "email" || g.type === "number") && g.len > 0) { why("focusNoCaret"); return this.keepAction(st, a, pass); }
+    // The field has the focus (sentence 13's test, after the activation for Playwright's focus call). Before fill, a field
+    // that fails it gets the lock and the activation, and the read again (review-119 N5).
+    let f = g;
+    if (f.focused) { why("fieldFocused"); return this.keepAction(st, a, pass); }
+    if (!a) {
+      a = await this.begin(page, st);
+      if (a.over) return pass();
+      const h = await this.fieldRead(page, st, e.child, node, fill);
+      if (!h) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+      if (h.focused) { why("fieldFocused"); return this.keepAction(st, a, pass); }
+      f = h;
+    }
+    if (a.over) return pass();
+    const at = await this.clickPoint(page, st, e.child, node, f, fill);
+    if (!at) return this.keepAction(st, a, pass);
+    // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
+    const want = f.kind === "input" && reset ? { s: 0, e: 0 } : typeof f.s === "number" && typeof f.e === "number" ? { s: f.s, e: f.e } : null;
+    this.count("focusClicks");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click (${f.kind})`);
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass();
+    if (!fill && want && (f.kind === "input" || f.kind === "textarea")) {
+      const h = await this.fieldRead(page, st, e.child, node, fill);
+      if (!h || !h.active) why("focusClickMissed");
+      else if (h.s !== want.s || h.e !== want.e) { if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: the caret moves`); await this.caret(page, st, a, e.child, node, f, want); }
+    }
+    return this.keepAction(st, a, pass);
+  }
+
+  /**
+   * After the focus or fill call's step (review-119 B7): its action stays open for the key run that follows (Playwright's
+   * keys or its insertText), as one action with one limit (STAGE_ACTION_MAX_MS from the focus call) and one activation.
+   */
+  private keepAction(st: TabState, a: Action | null, pass: () => Promise<void>): Promise<void> {
+    if (a && !a.over && st.action === a) st.runOpen = true;
+    return pass();
+  }
+
+  /** No focus click (or a click that missed): the count, and with the trace a log line of its reason (never a point). */
+  private noClick(page: StagePage, k: string): void { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: no focus click (${k})`); }
+
+  /** The focus click's read of the field (FIELD_STATE), with its box in the top page's points (the frame mapping), or null. */
+  private async fieldRead(page: StagePage, st: TabState, child: string | undefined, node: string, follow: boolean): Promise<FieldRead | null> {
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_STATE, arguments: [{ value: follow }], returnByValue: true }));
+    const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+    if (!v || typeof v.kind !== "string" || !v.box) return null;
+    const m = await this.mapped(page, st, child, v);
+    if (!m) { this.count("frameMapFails"); return null; }
+    return { ...v, box: m.box, ox: m.ox, oy: m.oy, lox: v.ox, loy: v.oy, levels: m.levels };
+  }
+
+  /**
+   * The point of the focus click (C11, the focus click): 2 to 5 px from the left edge of an input or a textarea with text,
+   * and of a contenteditable; 25% to 75% across an empty input or textarea; 35% to 65% down an input, 6 to 12 px from the
+   * top of a textarea or a contenteditable; whole px inside the box on Linux. Null (no click, counted) when the field has no
+   * box, is out of the viewport, or another element covers it at the point.
+   */
+  private async clickPoint(page: StagePage, st: TabState, child: string | undefined, node: string, f: FieldRead, follow: boolean): Promise<Pt | null> {
+    const b = f.box, w = b.x1 - b.x0, h = b.y1 - b.y0;
+    if (!(w >= 1 && h >= 1)) { this.noClick(page, "focusNoBox"); return null; }
+    const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
+    const v = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
+    const R = this.o.random, editable = f.kind === "editable", text = f.len > 0 || editable;
+    const [xa, xb] = text ? [b.x0 + 2, b.x0 + 5] : [b.x0 + 0.25 * w, b.x0 + 0.75 * w];
+    const [ya, yb] = f.kind === "input" ? [b.y0 + 0.35 * h, b.y0 + 0.65 * h] : [b.y0 + 6, b.y0 + 12];
+    const pick = (lo: number, hi: number, min: number, max: number) => {
+      const x = uniform(R, Math.max(min, lo), Math.max(min, Math.min(max, hi)));
+      if (!this.linux()) return x;
+      const r = Math.round(x), l = Math.ceil(Math.max(min, lo)), u = Math.floor(Math.min(max, hi));
+      return l <= u ? Math.min(u, Math.max(l, r)) : r;
+    };
+    const p = { x: pick(xa, xb, b.x0, b.x1 - 1), y: pick(ya, yb, b.y0, b.y1 - 1) };
+    // A field out of view (C11: notches first, then the click): the notches are board ab-t30.11's; until then no click.
+    if (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight)) { this.noClick(page, "focusOutOfView"); return null; }
+    // The stage's own hit test (review-119 B3): the field's own document at the field's own point (the top page's point less
+    // the offset of the field's document), and each same-origin frame above it (FIELD_HIT); then at each cross-origin level
+    // the node at the mapped point of the parent's session is the frame's owner (DOM.getNodeForLocation). That command reads
+    // a point of the parent's document (Chromium's InspectorDOMAgent: DocumentToFrame; measured, review-119b R4), so the
+    // point gets the parent document's scroll: its layout viewport's offset (Page.getLayoutMetrics on that session).
+    const hit = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: p.x - f.ox }, { value: p.y - f.oy }, { value: follow }], returnByValue: true }));
+    if (hit === TIMEOUT || (hit as any)?.result?.value !== true) { this.noClick(page, "focusCovered"); return null; }
+    for (let i = 0; i < f.levels.length; i++) {
+      const L = f.levels[i];
+      let px = p.x, py = p.y;
+      for (const up of f.levels.slice(i + 1)) { px -= up.r.x0; py -= up.r.y0; }
+      const sm = L.parent === undefined ? lm : await this.read(page.send(L.parent, "Page.getLayoutMetrics", {}));
+      const sc = sm === TIMEOUT ? null : (sm as any)?.cssLayoutViewport;
+      if (typeof sc?.pageX !== "number" || typeof sc?.pageY !== "number") {
+        if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the hit test of a cross-origin frame level: no scroll read`);
+        this.noClick(page, "focusCovered"); return null;
+      }
+      const at = await this.read(page.send(L.parent, "DOM.getNodeForLocation", { x: Math.round(px + sc.pageX), y: Math.round(py + sc.pageY), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false }));
+      const owner = at !== TIMEOUT && (at as any)?.backendNodeId === L.owner;
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the hit test of a cross-origin frame level: ${owner ? "the frame's owner" : at === TIMEOUT ? "no answer" : "another node"}`);
+      if (!owner) { this.noClick(page, "focusCovered"); return null; }
+    }
+    return p;
+  }
+
+  /** A click of the stage's own (the focus click): a path to the point, a pause, a press of a person's hold, the release. False when the plan ended or failed. */
+  private async ownClick(page: StagePage, st: TabState, a: Action, to: Pt, width: number): Promise<boolean> {
+    const P = page.person, R = this.o.random;
+    let from = this.from(page, st);
+    from ??= await this.startOf(page);
+    if (from && !same(from, to)) {
+      const r = await this.play(page, st, a, this.plan(page, st, from, to, width), { modifiers: 0 });
+      if (r.error !== undefined) { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); return false; }
+      if (r.stopped || a.over) return false;
+    }
+    if (st.lastWasMove) await this.until(a, st.lastMoveAt + pauseMs(P, R));
+    if (a.over) return false;
+    const mods = this.clientBits(st), at = this.clock.now();
+    const press = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: to.x, y: to.y, button: "left", buttons: 1, clickCount: 1, modifiers: mods, force: force(P), timestamp: this.stamp(page, st) });
+    st.buttons.set("left", 1);
+    st.press = { at, hold: holdMs(P, R), client: to, point: to, button: "left" };
+    const r1 = await this.settle(a, press);
+    if ("ended" in r1) return false;
+    if (!r1.ok) { st.buttons.delete("left"); st.press = null; a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", r1.error); return false; }
+    await this.until(a, at + st.press.hold);
+    if (a.over) return false;
+    const release = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1, modifiers: mods, timestamp: this.stamp(page, st) });
+    st.buttons.delete("left"); st.releasedAt = this.clock.now(); st.press = null;
+    const r2 = await this.settle(a, release);
+    if ("ended" in r2) return false;
+    if (!r2.ok) { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", r2.error); return false; }
+    return true;
+  }
+
+  /**
+   * The caret after the focus click (C11, the focus click): at the start, Home (an input) or Control+Home (a textarea); at
+   * the end, End or Control+End; in the middle of a text up to CARET_KEYS_MAX characters, the start and then ArrowRight
+   * and Shift+ArrowRight; else the field's own setSelectionRange in Playwright's utility world (a script effect, counted).
+   * On the Mac the keys carry the Mac's editing commands.
+   */
+  private async caret(page: StagePage, st: TabState, a: Action, child: string | undefined, node: string, f: FieldRead, want: { s: number; e: number }): Promise<void> {
+    const ta = f.kind === "textarea", mac = !this.linux();
+    const K = (key: string, code: string, keyCode: number, modifiers = 0): Key => ({ key, code, keyCode, modifiers });
+    const start = mac ? K(ta ? "ArrowUp" : "ArrowLeft", ta ? "ArrowUp" : "ArrowLeft", ta ? 38 : 37, META) : K("Home", "Home", 36, ta ? CONTROL : 0);
+    const end = mac ? K(ta ? "ArrowDown" : "ArrowRight", ta ? "ArrowDown" : "ArrowRight", ta ? 40 : 39, META) : K("End", "End", 35, ta ? CONTROL : 0);
+    const right = K("ArrowRight", "ArrowRight", 39), sel = K("ArrowRight", "ArrowRight", 39, SHIFT);
+    let keys: Key[] | null;
+    if (want.s === 0 && want.e === 0) keys = [start];
+    else if (want.s === f.len && want.e === f.len) keys = [end];
+    else if (want.e <= CARET_KEYS_MAX) keys = [start, ...Array(want.s).fill(right), ...Array(want.e - want.s).fill(sel)];
+    else keys = null;
+    if (keys) { this.count("caretKeys"); await this.ownKeys(page, st, a, keys); return; }
+    this.count("caretScript");
+    this.o.log(`relay: the input stage: tab ${page.id}: the caret of a field is set by a script (setSelectionRange), to where the script focus would put it`);
+    await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: CARET_SET, arguments: [{ value: want.s }, { value: want.e }, { value: false }], returnByValue: true }));
   }
 
   /**
@@ -1130,9 +1850,14 @@ export class Stage {
    */
   private async nodeGeo(page: StagePage, st: TabState, child: string | undefined, node: string): Promise<{ ox: number; oy: number; box: Rect } | null> {
     const g = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: NODE_GEO, returnByValue: true }));
-    const v = g === TIMEOUT ? null : (g as any)?.result?.value;
+    return this.mapped(page, st, child, g === TIMEOUT ? null : (g as any)?.result?.value);
+  }
+
+  /** The cross-origin levels of a same-origin read (NODE_GEO's, FIELD_STATE's): the node's box and offset in the top page's points, or null. */
+  private async mapped(page: StagePage, st: TabState, child: string | undefined, v: any): Promise<{ ox: number; oy: number; box: Rect; levels: { parent: string | undefined; owner: number; r: Rect }[] } | null> {
     if (!v || typeof v.ox !== "number" || !v.box || v.flat === false) return null;
     let ox = v.ox, oy = v.oy, s = child;
+    const levels: { parent: string | undefined; owner: number; r: Rect }[] = [];
     if (!s && !v.top) return null;
     for (let level = 0; s && level < 8; level++) {
       let f = st.frames.get(s);
@@ -1151,11 +1876,12 @@ export class Stage {
       const r = box === TIMEOUT ? null : quadRect((box as any)?.model?.content);
       if (!r) return null;
       ox += r.x0; oy += r.y0;
+      levels.push({ parent: f.parent, owner: backendNodeId, r });
       s = f.parent;
     }
     if (s) return null;
     const b = v.box as Rect;
-    return { ox, oy, box: { x0: b.x0 - v.ox + ox, y0: b.y0 - v.oy + oy, x1: b.x1 - v.ox + ox, y1: b.y1 - v.oy + oy } };
+    return { ox, oy, box: { x0: b.x0 - v.ox + ox, y0: b.y0 - v.oy + oy, x1: b.x1 - v.ox + ox, y1: b.y1 - v.oy + oy }, levels };
   }
 
   /**

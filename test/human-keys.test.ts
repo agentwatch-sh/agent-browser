@@ -455,3 +455,139 @@ test("keys: no event shows a modifier that is up: a key that rolls over into the
   }
   assert.ok(shiftCases > 0 && controlCases > 0, `the cases that need the rule happen (${shiftCases} Shift, ${controlCases} Control)`);
 });
+
+// ---- Board ab-t30.10 (the input stage's keys, the first caller that reaches these cases of KeyStream) ----
+
+/** Each event's modifiers match the modifier keys down at its time: none shows a modifier that is up, none hides one that is down. */
+function modifiersMatch(events: readonly KeyEv[]): string | null {
+  const BITS: [string, number][] = [["Alt", 1], ["Control", CONTROL], ["Meta", 4], ["Shift", SHIFT]];
+  const held = new Map<string, number>();
+  for (const e of [...events].sort((a, b) => a.t - b.t)) {
+    const b = BITS.find(([k]) => k === e.key)?.[1];
+    if (b !== undefined) { held.set(e.key, (held.get(e.key) ?? 0) + (e.type === "keyUp" ? -1 : e.repeat ? 0 : 1)); continue; }
+    let down = 0;
+    for (const [k, bit] of BITS) if ((held.get(k) ?? 0) > 0) down |= bit;
+    if (e.modifiers !== down) return `${e.type} ${e.key} at ${e.t.toFixed(1)}: modifiers ${e.modifiers}, down ${down}`;
+  }
+  return null;
+}
+
+test("keys (review-111b): the release of a client's modifier waits for the latest planned release, also when a key rolls over into a chord, and a planned keyUp after it loses its bit", () => {
+  const SHIFTK: Key = { key: "Shift", code: "ShiftLeft", keyCode: 16, modifiers: SHIFT };
+  let cases = 0;
+  for (let seed = 1; seed <= 3000; seed++) {
+    // The client holds Shift; A (with an early release); Control+Home (the stream's own chord); then the client's Shift release.
+    // A person with a wide spread of holds (the first values' spread makes the case rare: a long hold of A, a short one of Home).
+    const WIDE = { ...MID, params: { ...MID.params, keys: { ...MID.params.keys, holdMs: { lognormal: [113.6, 0.6] as [number, number], min: 50, max: 250 } } } };
+    const s = new KeyStream(WIDE, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 30] });
+    const A: Key = { key: "A", code: "KeyA", keyCode: 65, text: "A", modifiers: SHIFT }, home = parseKey("Control+Home");
+    const ev: KeyEv[] = [...s.next(SHIFTK, 0)];
+    const pa = s.next(A, 1); ev.push(...pa);
+    const ra = s.release(A, pa.at(-1)!.t); ev.push(...ra.events);
+    const at = ra.early ? pa.at(-1)!.t + 1 : ra.events.at(-1)!.t;
+    const ph = s.next({ ...home, modifiers: home.modifiers | SHIFT }, at); ev.push(...ph);
+    const rh = s.release(home, ph.at(-1)!.t); ev.push(...rh.events);
+    const chordEnd = rh.events.at(-1)!.t, aUp = ra.events[0].t;
+    const rs = s.release(SHIFTK, chordEnd); ev.push(...rs.events);
+    if (aUp > chordEnd) cases++;
+    assert.ok(rs.events[0].t > aUp, `seed ${seed}: the client's Shift goes up after A's keyUp (${rs.events[0].t.toFixed(1)} after ${aUp.toFixed(1)})`);
+    assert.equal(modifiersMatch(ev), null, `seed ${seed}`);
+  }
+  assert.ok(cases > 0, `the case of review-111b happens (A's keyUp after the chord's last release): ${cases}`);
+});
+
+test("keys (review-111b): a client's modifier press adds its bit to a keyUp planned after it; a Shift of the stream's own that the client takes keeps its side, and its release drops the bit", () => {
+  // a's release is answered early (planned in the future); the client presses Control before it: a's keyUp shows Control.
+  let early = 0;
+  for (let seed = 1; seed <= 400; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed), { holdMs: [200, 220], keyMs: [20, 25] });
+    const pa = s.next(k("a"), 0), ra = s.release(k("a"), pa[0].t);
+    if (!ra.early) continue;
+    early++;
+    const pc = s.next({ key: "Control", code: "ControlLeft", keyCode: 17, modifiers: CONTROL }, pa[0].t + 1);
+    assert.ok(pc[0].t < ra.events[0].t, "the Control press comes before a's planned release");
+    assert.equal(ra.events[0].modifiers, CONTROL, `seed ${seed}: a's keyUp has Control down at its time`);
+    const rc = s.release({ key: "Control", code: "ControlLeft", keyCode: 17, modifiers: CONTROL }, pc[0].t + 1);
+    assert.ok(rc.events[0].t > ra.events[0].t, "the client's Control release waits for a's planned release");
+    assert.equal(modifiersMatch([...pa, ...ra.events, ...pc, ...rc.events]), null, `seed ${seed}`);
+  }
+  assert.ok(early > 50, `${early} early releases`);
+  // The stream's own Shift (for B) that the client then presses: no second press; the client's release is that Shift's keyUp.
+  for (let seed = 1; seed <= 200; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed));
+    const pb = s.next(k("B"), 0), own = pb.find((e) => e.key === "Shift")!;
+    const rb = s.release(k("B"), pb.at(-1)!.t);
+    const ps = s.next({ key: "Shift", code: "ShiftLeft", keyCode: 16, modifiers: SHIFT }, rb.events.at(-1)!.t);
+    assert.deepEqual(ps, [], "Shift is down already: no event");
+    assert.equal(s.plannedShiftUp(), null, "the client holds it now: the stream plans no release of its own");
+    const pc = s.next(k("C"), rb.events.at(-1)!.t + 1), rc = s.release(k("C"), pc.at(-1)!.t);
+    assert.ok(!pc.some((e) => e.key === "Shift"), "C needs no Shift press: the client's Shift is down");
+    const rs = s.release({ key: "Shift", code: "ShiftLeft", keyCode: 16, modifiers: SHIFT }, rc.events.at(-1)!.t);
+    assert.deepEqual([rs.events[0].code, rs.events[0].location], [own.code, own.location], "the Shift that goes up is the one that is down");
+    assert.equal(modifiersMatch([...pb, ...rb.events, ...pc, ...rc.events, ...rs.events]), null, `seed ${seed}`);
+  }
+});
+
+test("keys (review-111 point 2): a press of a key that is down already is a keyboard's auto-repeat: no new hold, no lost release", () => {
+  for (let seed = 1; seed <= 100; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed));
+    const p1 = s.next(k("a"), 0), p2 = s.next(k("a"), p1[0].t + 500), p3 = s.next(k("a"), p1[0].t + 533);
+    assert.deepEqual([p2.length, p2[0].repeat, p2[0].t, p3[0].repeat, p3[0].t], [1, true, p1[0].t + 500, true, p1[0].t + 533]);
+    const r = s.release(k("a"), p1[0].t + 600);
+    assert.deepEqual([r.events.length, r.events[0].type, r.events[0].t], [1, "keyUp", p1[0].t + 600], "one release, of the first press, at its arrival");
+    const ctl = { key: "Control", code: "ControlLeft", keyCode: 17, modifiers: CONTROL };
+    const c1 = s.next(ctl, 1000), c2 = s.next(ctl, 1400);
+    assert.deepEqual([c2.length, c2[0].repeat, c2[0].type, c2[0].modifiers], [1, true, "rawKeyDown", CONTROL], "a held modifier repeats too");
+    assert.equal(s.release(ctl, 1500).events.length, 1);
+    void c1;
+  }
+});
+
+test("keys (review-111 point 3): a client's chord of two modifiers: the second 20 to 80 ms after the first, and the key 40 to 120 ms after each", () => {
+  const ctl: Key = { key: "Control", code: "ControlLeft", keyCode: 17, modifiers: CONTROL }, sh: Key = { key: "Shift", code: "ShiftLeft", keyCode: 16, modifiers: SHIFT };
+  for (let seed = 1; seed <= 300; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed));
+    const c = s.next(ctl, 0), h = s.next(sh, 1), left = s.next({ key: "ArrowLeft", code: "ArrowLeft", keyCode: 37, modifiers: CONTROL | SHIFT }, h[0].t + 1);
+    const gap = h[0].t - c[0].t, k1 = left[0].t - c[0].t, k2 = left[0].t - h[0].t;
+    assert.ok(gap >= 20 && gap <= 80, `the second modifier ${gap} ms after the first`);
+    assert.ok(k1 >= 40 && k1 <= 120 + 1e-9 && k2 >= 40 - 1e-9 && k2 <= 120, `the key ${k1} and ${k2} ms after the modifiers`);
+    assert.deepEqual([left.length, left[0].modifiers], [1, CONTROL | SHIFT], "no press of the stream's own: the client holds both");
+    // A modifier pressed long before (a held Shift for a selection) does not hold the key back.
+    const s2 = new KeyStream(MID, seededRandom(seed)), held = s2.next(sh, 0), r1 = s2.next({ key: "ArrowRight", code: "ArrowRight", keyCode: 39, modifiers: SHIFT }, 5000);
+    assert.ok(r1[0].t >= 5000 && r1[0].t < 5000 + 1e-9, "the key at its arrival"); void held;
+  }
+});
+
+test("keys (board ab-t30.10): the stream's own Shift goes up at its planned time with no next key (idle), with the time that plannedShiftUp named; after() starts the next key's interval at a text's end", () => {
+  for (let seed = 1; seed <= 200; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed));
+    const p = s.next(k("H"), 0), r = s.release(k("H"), p.at(-1)!.t);
+    const at = s.plannedShiftUp()!;
+    const up = r.events.at(-1)!.t;
+    assert.ok(at - up >= 15 - 1e-9 && at - up <= 60 + 1e-9, `Shift up ${at - up} ms after H's release`);
+    assert.equal(s.plannedShiftUp(), at, "the same time when asked again");
+    const ev = s.idle(at);
+    assert.deepEqual(ev.map((e) => [e.type, e.key, e.t, e.modifiers]), [["keyUp", "Shift", at, 0]]);
+    assert.equal(s.plannedShiftUp(), null);
+    // The next capital presses Shift again; an earlier next capital keeps it (the run of capitals).
+    const s2 = new KeyStream(MID, seededRandom(seed)), q = s2.next(k("H"), 0), q2 = s2.release(k("H"), q.at(-1)!.t);
+    const planned = s2.plannedShiftUp()!, i = s2.next(k("I"), q2.events.at(-1)!.t + 1);
+    assert.ok(!i.some((e) => e.key === "Shift") && planned > q2.events.at(-1)!.t, "I comes before the planned Shift release: Shift stays down");
+    const s3 = new KeyStream(MID, seededRandom(seed)), x = s3.next(k("a"), 0);
+    s3.release(k("a"), x[0].t);
+    s3.after(x[0].t + 2000);
+    const y = s3.next(k("b"), x[0].t + 2000)[0];
+    assert.ok(y.t >= x[0].t + 2000 && y.t < x[0].t + 2000 + 1600, "the next key's interval counts from the text's end");
+  }
+});
+
+test("keys (review-119 N9): a client's chord of three modifiers: all of them within 80 ms of the first, so the key comes 40 to 120 ms after each", () => {
+  const ctl: Key = { key: "Control", code: "ControlLeft", keyCode: 17, modifiers: CONTROL }, sh: Key = { key: "Shift", code: "ShiftLeft", keyCode: 16, modifiers: SHIFT }, alt: Key = { key: "Alt", code: "AltLeft", keyCode: 18, modifiers: 1 };
+  for (let seed = 1; seed <= 400; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed));
+    const c = s.next(ctl, 0), h = s.next(sh, 1), a = s.next(alt, h[0].t);
+    const k = s.next({ key: "ArrowLeft", code: "ArrowLeft", keyCode: 37, modifiers: CONTROL | SHIFT | 1 }, a[0].t + 1)[0];
+    assert.ok(a[0].t - c[0].t <= 80 + 1e-9, `seed ${seed}: the third modifier ${a[0].t - c[0].t} ms after the first`);
+    for (const m of [c[0], h[0], a[0]]) assert.ok(k.t - m.t >= 40 - 1e-9 && k.t - m.t <= 120 + 1e-9, `seed ${seed}: the key ${k.t - m.t} ms after ${m.key}`);
+  }
+});

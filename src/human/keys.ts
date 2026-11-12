@@ -26,6 +26,10 @@
 // - A chord (a key that needs Control, Alt or Meta, as Hands' Control+Home): each modifier 40 to 120 ms before the key,
 //   the releases 20 to 80 ms apart in reverse order after the key's. A client's own modifier key (Playwright's
 //   keyboard.down('Control')) goes as it comes, the key 40 to 120 ms after it, and its release 20 to 80 ms after the key's.
+//   A client's second modifier of one chord (Control+Shift+A) comes 20 to 80 ms after the first, and the key then comes 40
+//   to 120 ms after each of them (board ab-t30.10, review-111 point 3).
+// - A press of a key that is down already (a client's second keyDown with no keyUp between) is a keyboard's auto-repeat:
+//   it goes as it comes, with no new hold and no release of the first press (review-111 point 2).
 // - No corrections (K5: a later build). NumLock and CapsLock are off: the stream never sends a lock key.
 // - The run's time: the person's speed for the first `runSlowMs` (C11's STAGE_RUN_SLOW_MS, 12 s) of a run, then the fast
 //   end of the person's spread (100 to 120 ms a key, with no pair part and no pause).
@@ -35,7 +39,7 @@
 // caller sends the event objects that it got.
 
 import type { Person } from "./person.ts";
-import { chance, draw, normal, type Random } from "./random.ts";
+import { boundsOf, chance, draw, normal, type Random } from "./random.ts";
 
 export const ALT = 1, CONTROL = 2, META = 4, SHIFT = 8;
 
@@ -54,6 +58,8 @@ export type KeyEv = {
   /** The modifiers down at the event (CDP's `modifiers`: 1 Alt, 2 Control, 4 Meta, 8 Shift). */
   modifiers: number;
   own: boolean;
+  /** A press of a key that is down already: a keyboard's auto-repeat (no new hold, no release of the first press). */
+  repeat?: boolean;
 };
 
 export type Pace = "person" | "fast";
@@ -114,6 +120,31 @@ export function pairClass(a: Key, b: Key): PairClass {
   const fa = FINGERS[a.code], fb = FINGERS[b.code];
   if (fa?.[0] === "thumb" || fb?.[0] === "thumb" || (fa && fb && fa[0] !== fb[0])) return "twoHands";
   return fa && fb && fa[1] === fb[1] ? "sameFinger" : "sameHand";
+}
+
+// ---------------------------------------------------------------- the Mac's editing commands (moved here from src/record.ts)
+
+/**
+ * macOS: Chrome runs editing keys and shortcuts in a text field (Backspace, the arrows, Cmd-A, Cmd-C) through editing
+ * commands that the OS key event carries. A CDP key event has none, so we name them, as a real Mac keyboard would. A page
+ * that handles the key itself (preventDefault) still does. (src/record.ts re-exports macCommands.)
+ */
+const MAC_COMMANDS: Record<string, string[]> = {
+  Backspace: ["deleteBackward"], Delete: ["deleteForward"], ArrowUp: ["moveUp"], ArrowDown: ["moveDown"], ArrowLeft: ["moveLeft"], ArrowRight: ["moveRight"],
+  "Shift+ArrowUp": ["moveUpAndModifySelection"], "Shift+ArrowDown": ["moveDownAndModifySelection"],
+  "Shift+ArrowLeft": ["moveLeftAndModifySelection"], "Shift+ArrowRight": ["moveRightAndModifySelection"],
+  Home: ["scrollToBeginningOfDocument"], End: ["scrollToEndOfDocument"], PageUp: ["scrollPageUp"], PageDown: ["scrollPageDown"],
+  "Meta+KeyA": ["selectAll"], "Meta+KeyZ": ["undo"], "Shift+Meta+KeyZ": ["redo"],
+  "Alt+Backspace": ["deleteWordBackward"], "Meta+Backspace": ["deleteToBeginningOfLine"],
+  "Meta+ArrowLeft": ["moveToLeftEndOfLine"], "Meta+ArrowRight": ["moveToRightEndOfLine"], "Alt+ArrowLeft": ["moveWordLeft"], "Alt+ArrowRight": ["moveWordRight"],
+  // The start and the end of a textarea (board ab-t30.10: the input stage's caret keys).
+  "Meta+ArrowUp": ["moveToBeginningOfDocument"], "Meta+ArrowDown": ["moveToEndOfDocument"],
+};
+
+/** The Mac's editing commands of a key with its modifiers (none for a key that has none). */
+export function macCommands(k: { code: string; modifiers: number }): string[] {
+  const prefix = ([[SHIFT, "Shift"], [CONTROL, "Control"], [ALT, "Alt"], [META, "Meta"]] as const).filter(([bit]) => k.modifiers & bit).map(([, n]) => `${n}+`).join("");
+  return MAC_COMMANDS[prefix + k.code] ?? [];
 }
 
 // ---------------------------------------------------------------- the draws (design 10.2)
@@ -180,6 +211,8 @@ export class KeyStream {
   private lastRelease = -Infinity;
   /** The planned releases of the keys (not sent yet, as far as the stream knows): a later modifier press can come before them. */
   private releases: KeyEv[] = [];
+  /** The drawn time from the last key that the stream's Shift holds to the Shift's release (plannedShiftUp draws it first). */
+  private shiftAfter: number | undefined;
 
   constructor(person: Person, random: Random, o: StreamOptions = {}) {
     this.person = person;
@@ -224,13 +257,47 @@ export class KeyStream {
     for (const e of this.releases) if (e.t > t) e.modifiers &= ~bit;
   }
 
+  /** The latest planned release of a key that the stream's Shift holds. */
+  private shiftUntil(): number {
+    let until = this.shiftHeldUntil;
+    for (const d of this.down.values()) if (d.shift) until = Math.max(until, d.release?.t ?? d.press + d.hold);
+    return until;
+  }
+
+  /**
+   * When the stream's own Shift goes up if no key comes before: 15 to 60 ms after the last key that it holds (drawn once,
+   * and the release then takes the same time); null when the stream holds no Shift of its own. A caller that gets no next
+   * key by then calls idle() (board ab-t30.10: the stage's key run, where the next key's call can come late).
+   */
+  plannedShiftUp(): number | null {
+    const m = this.mods.get(SHIFT);
+    if (!m || m.client) return null;
+    this.shiftAfter ??= draw(this.random, this.K.shift.afterMs);
+    return this.shiftUntil() + this.shiftAfter;
+  }
+
+  /** Whether the stream holds a Shift of its own (a caller's planned release waits for it). */
+  get ownShift(): boolean { const m = this.mods.get(SHIFT); return !!m && !m.client; }
+  /** Whether a key that the stream's own Shift holds is still down (its release has not come): the Shift waits for it. */
+  get shiftHoldsDown(): boolean { for (const d of this.down.values()) if (d.shift) return true; return false; }
+
+  /** The release of the stream's own Shift at or after `at`, with no end of the run (the run's next key keeps its interval). */
+  idle(at: number): KeyEv[] { return this.releaseShift(at); }
+
+  /** A text that the caller sent (typed or inserted) ended at `t`: the run's next key counts its interval from there. */
+  after(t: number): void {
+    this.last = { t, key: undefined };
+    this.base = undefined;
+    this.runStart ??= t;
+  }
+
   /** The release of Shift, when the stream holds it: 15 to 60 ms after the last key that it holds. */
   private releaseShift(at: number): KeyEv[] {
     const m = this.mods.get(SHIFT);
     if (!m || m.client) return [];
-    let until = this.shiftHeldUntil;
-    for (const d of this.down.values()) if (d.shift) until = Math.max(until, d.release?.t ?? d.press + d.hold);
-    const t = Math.max(at, until + draw(this.random, this.K.shift.afterMs));
+    const after = this.shiftAfter ?? draw(this.random, this.K.shift.afterMs);
+    this.shiftAfter = undefined;
+    const t = Math.max(at, this.shiftUntil() + after);
     this.mods.delete(SHIFT);
     this.dropBit(SHIFT, t);
     this.shiftHeldUntil = -Infinity;
@@ -242,13 +309,29 @@ export class KeyStream {
   next(k: Key, at: number): KeyEv[] {
     const bit = MODIFIER_OF[k.key];
     if (bit) {
-      // A client's own modifier key: it goes as it comes (a Shift of the stream's own becomes the client's).
+      // A client's own modifier key: it goes as it comes (a Shift of the stream's own becomes the client's: it is down
+      // already, so no event; its release is then the client's).
       const own = this.mods.get(bit);
-      if (own && !own.client) { own.client = true; return []; }
-      const t = Math.max(at, this.notBefore);
+      if (own && !own.client) { own.client = true; this.shiftAfter = undefined; return []; }
+      // A press of a modifier that the client holds already: a keyboard's auto-repeat.
+      if (own) return [{ ...this.ev(Math.max(at, own.press), "rawKeyDown", { key: own.key, code: own.code, keyCode: own.keyCode }, this.modsAt(at) | bit, false, own.location), repeat: true }];
+      let t = Math.max(at, this.notBefore);
+      // A client's later modifier of one chord (no key pressed since the first): 20 to 80 ms after the one before, while all
+      // of them stay within 80 ms of the first, so that the key can come 40 to 120 ms after each (review-111 point 3, review-119 N9).
+      const chord = [...this.mods.values()].filter((m) => m.client && (!this.last || this.last.t < m.press)).sort((a, b) => a.press - b.press);
+      if (chord.length) {
+        const [g0, g1] = boundsOf(this.K.chord.releaseGapMs), [b0, b1] = boundsOf(this.K.chord.beforeMs);
+        const first = chord[0].press, prev = chord[chord.length - 1].press, room = Math.max(0, b1 - b0 - (prev - first));
+        t = Math.max(t, prev + draw(this.random, this.K.chord.releaseGapMs, [Math.min(g0, room), Math.min(g1, room)]));
+      }
       this.mods.set(bit, { bit, key: k.key, code: k.code, keyCode: k.keyCode, location: locationOf(k.code), press: t, client: true });
+      // A key whose release is planned after this press gains the modifier at its release (review-111b).
+      for (const e of this.releases) if (e.t > t) e.modifiers |= bit;
       return [this.ev(t, "rawKeyDown", k, this.modsAt(t) | bit, false, locationOf(k.code))];
     }
+    // A press of a key that is down already: a keyboard's auto-repeat, with no new hold (review-111 point 2).
+    const held = this.down.get(k.code);
+    if (held) return [{ ...this.ev(Math.max(at, held.press), k.type ?? (k.text ? "keyDown" : "rawKeyDown"), k, this.modsAt(Math.max(at, held.press)), false), repeat: true }];
     const out: KeyEv[] = [];
     // A key that does not need the stream's Shift waits for its release.
     if (!(k.modifiers & SHIFT)) out.push(...this.releaseShift(at));
@@ -260,8 +343,8 @@ export class KeyStream {
     }
     t = Math.max(t, this.notBefore);
     // The same key again: after its own release (a key cannot go down twice).
-    const same = this.down.get(k.code), sameUp = this.releases.filter((e) => e.code === k.code).at(-1);
-    if (same || (sameUp && sameUp.t + 1 > t)) t = Math.max(t, (same ? same.press + same.hold : sameUp!.t) + draw(this.random, this.K.afterReleaseMs));
+    const sameUp = this.releases.filter((e) => e.code === k.code).at(-1);
+    if (sameUp && sameUp.t + 1 > t) t = Math.max(t, sameUp.t + draw(this.random, this.K.afterReleaseMs));
     // The modifiers that the key needs and that nobody holds: Shift by its rule, Control, Alt and Meta as a chord.
     const chord: number[] = [];
     for (const b of [...CHORD_BITS, SHIFT]) {
@@ -284,8 +367,14 @@ export class KeyStream {
       for (const e of this.releases) if (e.t > t) e.modifiers |= b;
       t += before;
     }
-    // A key after a client's own modifier: 40 to 120 ms after it (a chord of the client's).
-    for (const m of this.mods.values()) if (m.client && k.modifiers & m.bit) t = Math.max(t, m.press + draw(this.random, this.K.chord.beforeMs));
+    // A key after a client's own modifiers: 40 to 120 ms after each of them (a chord of the client's). With two modifiers
+    // of one chord (20 to 80 ms apart), the key's range is from 40 ms after the last to 120 ms after the first.
+    const cm = [...this.mods.values()].filter((m) => m.client && k.modifiers & m.bit);
+    if (cm.length) {
+      const [b0, b1] = boundsOf(this.K.chord.beforeMs), last = Math.max(...cm.map((m) => m.press));
+      const first = Math.min(...cm.filter((m) => last - m.press <= b1 - b0).map((m) => m.press));
+      t = Math.max(t, last + draw(this.random, this.K.chord.beforeMs, [b0, Math.min(b1, first + b1 - last)]));
+    }
     const hold = keyHoldMs(this.person, this.random, this.o.holdMs);
     const type = k.type ?? (k.text ? "keyDown" : "rawKeyDown");
     out.push(this.ev(t, type, k, this.modsAt(t), false));
@@ -302,11 +391,14 @@ export class KeyStream {
     if (bit) {
       const m = this.mods.get(bit);
       if (!m) return { events: [this.ev(at, "keyUp", k, this.modsAt(at), false, locationOf(k.code))], early: false };
-      // A client's modifier: 20 to 80 ms after the release of the key that it held, in reverse order.
+      // A client's modifier: 20 to 80 ms after the release of the key that it held, in reverse order. The key that goes up
+      // is the one that is down (a Shift of the stream's own that the client took keeps its side).
       const t = Math.max(at, this.lastRelease + draw(this.random, this.K.chord.releaseGapMs));
       this.mods.delete(bit);
+      // No planned keyUp comes after this release (lastRelease is the latest planned release; review-111b), so none keeps the bit.
+      if (bit === SHIFT) this.shiftHeldUntil = -Infinity;
       this.lastRelease = t;
-      return { events: [this.ev(t, "keyUp", k, this.modsAt(t) & ~bit, false, m.location)], early: false };
+      return { events: [this.ev(t, "keyUp", { key: m.key, code: m.code, keyCode: m.keyCode }, this.modsAt(t) & ~bit, false, m.location)], early: false };
     }
     const d = this.down.get(k.code);
     if (!d) return { events: [this.ev(at, "keyUp", k, this.modsAt(at), false)], early: false };
@@ -326,7 +418,8 @@ export class KeyStream {
         this.dropBit(b, u);
         events.push(this.ev(u, "keyUp", m, this.modsAt(u) & ~b, true, m.location));
       }
-      this.lastRelease = u;
+      // The latest release, not the chord's last: a key that rolled over into the chord goes up later (review-111b).
+      this.lastRelease = Math.max(this.lastRelease, u);
       this.notBefore = Math.max(this.notBefore, u + draw(this.random, this.K.afterReleaseMs));
       return { events, early: false };
     }

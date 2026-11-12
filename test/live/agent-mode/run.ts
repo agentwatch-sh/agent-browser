@@ -38,7 +38,8 @@
 // probe's site; default 8781, which the cases need; 0 only for the spawn tests of `npm test`: a free port, and no
 // check), CASES (default all:
 // playwright,marks,switch,create,concurrency,mcp,agent-browser,windows,scopes,link-up; peer only alone; stage only alone: the input
-// stage's live rows, stage-live.ts, with the relay's stage on and STAGE_REFERENCE for its harness rows) runs some groups only. The agent
+// stage's live rows, stage-live.ts and stage-keys-live.ts, with the relay's stage on, STAGE_REFERENCE for its harness rows,
+// STAGE_PERSON for the key rows against the person, and STAGE_PARTS, default pointer,keys) runs some groups only. The agent
 // package must be chrome-extension main c99bebb (0.3.1) or later: the per-scope receiver (parts 1a and 1b: set_scopes,
 // the tab-to-scope map, bridge.tabScope and bridge.tabScopes, the removal queue and its window rule, the retry of a
 // popup). It uses port 8781 (the probe's site), a free port of its own for the popup site of the group `scopes`, and
@@ -103,6 +104,7 @@ import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from ".
 import { runFolderEnd } from "./run-folder.ts";
 import { pointerCases } from "./pointer-live.ts";
 import { stageCases } from "./stage-live.ts";
+import { stageKeyCases } from "./stage-keys-live.ts";
 import { STAGE_TEST_ENV } from "../../../src/relay/stage.ts";
 import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
 
@@ -406,8 +408,14 @@ try {
   if (CASES.includes("pointer") && (EXTERNAL || process.env.POINTER_DAEMON === "old")) skip("pointer", "the group pointer (the pointer design's live check)",
     EXTERNAL ? "external endpoint: the run needs the stand-in daemon's played paths and its own Xvfb" : "POINTER_DAEMON=old: a daemon with no pointer ops");
   else if (CASES.includes("pointer")) await pointerCases({ daemon: daemon!, url, run: RUN, relayBin: RELAY_BIN, pw, WebSocket: WS, record, relayLines, display: `:${DISPLAY_N}`, xauth: XAUTH, tracked });
-  if (STAGE) await stageCases({ url, run: RUN, chromium: CHROMIUM, display: `:${DISPLAY_N}`, xauth: XAUTH, record, relayLines, profileDir: (name) => makePart(join(RUN, name)),
-    pws: [{ version: "1.64.1", pw }, ...STAGE_PLAYWRIGHT.map((v) => ({ version: v, pw: createRequire(join(RUN, `pw-${v}`, "package.json"))("playwright-core") }))] });
+  // STAGE_PARTS (default pointer,keys): the stage's parts whose live rows run (board ab-t30.10 adds the keys and the text).
+  if (STAGE) {
+    const stageParts = (process.env.STAGE_PARTS ?? "pointer,keys").split(",");
+    const stageContext = { url, run: RUN, chromium: CHROMIUM, display: `:${DISPLAY_N}`, xauth: XAUTH, record, relayLines, profileDir: (name: string) => makePart(join(RUN, name)),
+      pws: [{ version: "1.64.1", pw }, ...STAGE_PLAYWRIGHT.map((v) => ({ version: v, pw: createRequire(join(RUN, `pw-${v}`, "package.json"))("playwright-core") }))] };
+    if (stageParts.includes("pointer")) await stageCases(stageContext);
+    if (stageParts.includes("keys")) await stageKeyCases(stageContext);
+  }
   if (CASES.includes("scopes") && EXTERNAL) skip("scopes", "the group scopes (two scopes with two lists, the end of a scope, the sweep)",
     "external endpoint: the real daemon makes the lists (agentwatch's test browser has one: a.localhost), and the run can send no set_scopes or allowlist line");
   else if (CASES.includes("scopes")) await scopeCases(pw, WS);
