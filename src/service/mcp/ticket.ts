@@ -27,6 +27,12 @@ export class Tickets {
     return t;
   }
 
+  /** True while `ticket` is a live ticket of `scope`; it stays live (the service's check before a start at a use: board ab-v16.94.11). */
+  alive(ticket: string, scope: string): boolean {
+    const v = this.live.get(ticket);
+    return v !== undefined && v.scope === scope && v.until > this.now();
+  }
+
   /**
    * The agent door's check of a connection that carries a ticket: true when the peer is the service's own pid and the
    * ticket is live and of `scope`. Each ticket is gone after its first check, whatever its result.

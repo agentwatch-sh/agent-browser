@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
+import { sessionRefusal } from "../src/relay/peer.ts";
 import { ControlDoor } from "../src/service/control.ts";
 import { MCP_TEXT, type McpReadiness } from "../src/service/mcp/admission.ts";
 import { McpPort, type McpHandler } from "../src/service/mcp/port.ts";
@@ -22,7 +23,7 @@ import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import * as Part from "../src/service/unit/part.ts";
 import type { ReceiverPort } from "../src/service/receiver.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
-import { harness, lineOf, raw, until } from "./fake-bridge.ts";
+import { FakeReceiver, harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
@@ -30,6 +31,7 @@ const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
 const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: "ann", via: "config" }, enabled: true, control: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] };
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 const MIN = 60_000;
+const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 // The part's names by a namespace (so each test fails on its own where a name is missing).
 const { STATE_TEXTS, UnitPart } = Part;
 const P = Part as Record<string, any>;
@@ -42,7 +44,7 @@ const GOOGLE = { ...CONFIG, chrome_bin: null };
 
 type Use = { now: string[]; lastRequest: number | null };
 type Rig = { w: World; part: Part.UnitPart; tools: FakeTools; door: ControlDoor; logs: string[]; owns: { yes: boolean }; use: Use; c: DaemonClient; close: () => Promise<void> };
-async function rig(o: { before?: (w: World, tools: FakeTools) => void } = {}): Promise<Rig> {
+async function rig(o: { before?: (w: World, tools: FakeTools) => void; watchLimitMs?: number; useWaitMs?: number; sleep?: (w: World, ms: number) => Promise<void> } = {}): Promise<Rig> {
   const w = new World();
   const tools = new FakeTools();
   o.before?.(w, tools);
@@ -54,11 +56,11 @@ async function rig(o: { before?: (w: World, tools: FakeTools) => void } = {}): P
     paths: w.paths, procs: w.procs, tools, log: (l) => logs.push(l),
     owner: new Owner(async () => (owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }), (l) => logs.push(l)),
     endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => handler.sessionsComplete,
-    unit: { ...w.deps(tools, { displays: { first: 173, last: 175 } }) },
+    unit: { ...w.deps(tools, { displays: { first: 173, last: 175 }, ...(o.sleep ? { sleep: (ms: number) => o.sleep!(w, ms) } : {}) }) },
     clock: () => w.now, wall: () => Date.UTC(2026, 10, 11, 12, 0, 0) + w.now - 1_000_000,
-    superviseMs: 10, watchMs: 5, watchLimitMs: 100 * 3_600_000, firstCheckMs: 100 * 3_600_000,
+    superviseMs: 10, watchMs: 5, watchLimitMs: o.watchLimitMs ?? 100 * 3_600_000, firstCheckMs: 100 * 3_600_000,
     use: { now: () => [...use.now], quietFor: () => (use.lastRequest === null ? Infinity : w.now - use.lastRequest) },
-    usePollMs: 2,
+    usePollMs: 2, useWaitMs: o.useWaitMs,
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
   const dir = mkdtempSync(join(tmpdir(), "ab-use-"));
@@ -233,6 +235,7 @@ test("a request during the stop by use waits for the stop's end, then starts Chr
     await sleep(20);
     assert.equal(r.w.named("chromium")[0].pid, first.pid, "the request waits while the stop runs");
     assert.deepEqual(r.part.usedBy(), ["waiting"]);
+    assert.equal(r.part.state(), "starting", "the state reads starting while a request waits for the stop's end (review-120 note 6)");
     go();
     assert.equal(await woke, null);
     assert.equal(r.part.idleStopping, false);
@@ -333,8 +336,7 @@ test("a start that fails at the first use: the request gets the start's error wi
     await sleep(20);
     assert.equal(events(r.c, "stopped").length, 1, "one stopped event for the run of failures");
     await config(r);
-    r.w.now += USE_RETRY_MS;
-    assert.equal(await r.part.wake(running(r)), null, "a start that works");
+    assert.equal(await r.part.wake(running(r)), null, "a start that works (a changed config cleared the hold-off)");
     assert.ok(!(await status(r.c)).operator_text.includes("The last start at an agent's use failed"));
     await req(r.c, "stop", TOKEN);
     await config(r, { chrome_bin: "/usr/bin/nochromium" });
@@ -367,22 +369,49 @@ test("a stop by use is no crash: after it the supervisor starts nothing, the fai
   } finally { await r.close(); }
 });
 
-test("after a fail-closed stop a use starts Chrome again (the operator's texts name no start on the Browser page)", async () => {
-  const r = await rig();
+test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 s: in the hold-off a request gets that moment's answer at once and the state stays failed closed; a run of fail-closed stops after starts at a use sends its stopped once, until a Chrome stays up past the watch", async () => {
+  const r = await rig({ watchLimitMs: 60_000 });
   try {
     await config(r);
-    (r.part.watch as any).d.limitMs = 60_000;
+    const spawns = () => r.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length;
+    const closed = () => events(r.c).filter((l) => l.ev === "stopped" && l.reason === "receiver_missing").length;
     await r.part.wake(running(r));
-    r.use.now = ["client"];
     await ticks(); // the watch's first check sees this Chrome
     r.w.now += 61_000;
     await r.c.next((l) => l.ev === "stopped" && l.reason === "receiver_missing");
-    const s = await status(r.c);
-    assert.equal(s.state, "failed closed");
-    assert.match(s.operator_text, /The next use by an agent starts it again\./);
-    assert.doesNotMatch(s.operator_text, /Browser page/);
+    const s1 = await status(r.c);
+    assert.equal(s1.state, "failed closed");
+    assert.match(s1.operator_text, /The next use by an agent starts it again\./);
+    assert.doesNotMatch(s1.operator_text, /Browser page/);
+    assert.equal(Part.FAIL_HOLD_MS, 60_000);
+    // The hold-off: the request goes on at once (its caller gives that moment's 503), with no start and no wait.
+    r.w.now += 59_000;
     assert.equal(await r.part.wake(running(r)), null);
-    assert.equal(r.part.unit.running(), true);
+    assert.deepEqual([spawns(), r.part.state(), r.part.usedBy().length], [1, "failed closed", 0], "no start in the hold-off");
+    // After the hold-off, one start; its fail-closed stop is the run's second: last_stop only, no second event.
+    r.w.now += 1000;
+    await r.part.wake(running(r));
+    assert.equal(spawns(), 2);
+    const at1 = s1.last_stop.at;
+    await ticks();
+    r.w.now += 61_000;
+    await until(() => !r.part.unit.running(), "the second fail-closed stop");
+    await sleep(30);
+    assert.equal(closed(), 1, "one stopped for the run");
+    const s2 = await status(r.c);
+    assert.deepEqual([s2.state, s2.last_stop.reason], ["failed closed", "receiver_missing"]);
+    assert.notEqual(s2.last_stop.at, at1, "last_stop carries the later stop");
+    // A Chrome that stays up past the watch ends the run: the next fail-closed stop sends its stopped again.
+    r.w.now += 60_000;
+    await r.part.wake(running(r));
+    (r.part.watch as any).d.limitMs = 10 * 60_000;
+    await ticks();
+    r.w.now += 61_000;
+    await ticks();
+    (r.part.watch as any).d.limitMs = 60_000;
+    r.w.now += 1000;
+    await until(() => closed() === 2, "the stopped of a new run");
+    assert.equal(r.part.unit.running(), false);
   } finally { await r.close(); }
 });
 
@@ -392,7 +421,7 @@ test("the endpoint: an upgrade that finds the link down waits for the service's 
   const calls: string[] = [];
   let answer: string | null = null;
   let up: (() => Promise<void>) | null = null;
-  const h = await harness({ use: { stopping: () => false, wake: async (scope) => { calls.push(scope); if (answer === null) await up!(); return answer; } } });
+  const h = await harness({ use: { stopping: () => false, wake: async (scope) => { calls.push(scope); if (answer === null) await up!(); return answer === null ? null : [503, answer]; } } });
   up = () => h.ready();
   try {
     const c = await h.connect("s1");
@@ -491,7 +520,7 @@ async function mcpPort(readiness: () => McpReadiness, wake: (scope: string) => P
     s.destroy();
     return { status: Number(buf.split(" ")[1]), body: buf.slice(buf.indexOf("\r\n\r\n") + 4) };
   };
-  return { port, seen, ask };
+  return { port, seen, ask, reader: r };
 }
 
 test("the MCP path: a request that step 8 refuses for a link that is down waits for the start at a use, then steps 3 to 8 run again and the handler answers; a failed start's text is the 503 of step 8", async () => {
@@ -533,7 +562,7 @@ test("a send needs the browser: each import calls the start at a use before its 
     request: async () => ({ cookies_set: 1, errors: [] }), allowlist() {}, endScope() {},
   };
   let woke = 0;
-  const s = new Stage1c({ listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), receiver: port, log: () => {}, wake: () => { woke++; setTimeout(() => { up = true; events!.up(); }, 20); } });
+  const s = new Stage1c({ listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), receiver: port, log: () => {}, wake: async () => { woke++; setTimeout(() => { up = true; events!.up(); }, 20); return null; } });
   try {
     s.setSessions({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [], remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any);
     const payload = { v: 1, domain: "example.com", url: "https://www.example.com/", origin: "https://www.example.com", cookies: [], storage: { local: {}, session: {}, idb: [], caches: [] } };
@@ -565,7 +594,6 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
   });
   const shims: Socket[] = [];
   try {
-    const { FakeReceiver } = await import("./fake-bridge.ts");
     const DAEMON_CFG = { kind: "daemon", user: "ann", via: "config" };
     await s.state.handle({ ...CONFIG, by: DAEMON_CFG } as any);
     await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [{ scope: "web-1", repo: "owner/repo", roots: [{ pid: process.pid, start: myStart() }], cgroup: null, lifetime_id: null, mcp_token: null }], remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any);
@@ -606,11 +634,15 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
     assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/);
     assert.ok(logs.includes("unit: an agent uses the agent browser; starting Chrome"));
     assert.ok(part.usedBy().includes("client"), "an open client connection of the agent door");
-    // A bridge request that runs: the fake receiver holds its answer.
-    fr.op = (q) => (q.op === "tabs.query" ? new Promise(() => {}) : undefined);
+    // A client's message that runs: the fake receiver holds the answer of its bridge call. The model's own bridge calls
+    // are no use (review-120 B2).
     const model = (s.agent as any).relay.model;
     void model.bridge.call("tabs.query", [{}]).catch(() => {});
-    await until(() => part.usedBy().includes("request"), "the request");
+    await sleep(50);
+    assert.ok(!part.usedBy().includes("request"), "a bridge call of the model's own is no use");
+    fr.op = (q) => (q.op === "tabs.create" || q.op === "windows.create" ? new Promise(() => {}) : undefined);
+    void cdp.send("Target.createTarget", { url: "about:blank" }).catch(() => {});
+    await until(() => part.usedBy().includes("request"), "the client's request");
     // A send that runs.
     const payload = { v: 1, domain: "example.com", url: "https://www.example.com/", origin: "https://www.example.com", cookies: [], storage: { local: {}, session: {}, idb: [], caches: [] } };
     const sending = s.state.handle({ t: "req", id: "i", op: "import", by: { kind: "operator", user: "ann", via: "send" }, payload } as any);
@@ -628,7 +660,7 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
   } finally { for (const x of shims) x.destroy(); await s.stop(); }
 });
 
-test("the service with its MCP path: an MCP session is a use; the MCP path has the start at a use; its readiness counts a stop by use that runs as a link that is down", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
+test("the service with its MCP path: an MCP tool call that runs is a use, an open MCP session is none; the MCP path has the start at a use; its readiness counts a stop by use that runs as a link that is down", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
   const w = new World();
   const dir = mkdtempSync(join(tmpdir(), "ab-use-mcp-"));
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
@@ -649,9 +681,391 @@ test("the service with its MCP path: an MCP session is a use; the MCP path has t
     assert.equal(readiness("web-1").notReady, NOT_READY.link, "a stop by use that runs");
     (s.part as any).idleStop = null;
     assert.equal(typeof port.o.wake, "function", "the MCP path has the start at a use");
-    // An MCP session (the transport's count) is a use.
+    // An open MCP session is no use; a tool call that runs is (the daemon lead's P1).
     assert.deepEqual(s.part!.usedBy(), []);
-    (s.mcp!.mcpTransport as any).size = () => 1;
-    assert.deepEqual(s.part!.usedBy(), ["mcp"], "an MCP session");
+    const tr = s.mcp!.mcpTransport as any;
+    tr.size = () => 1;
+    assert.deepEqual(s.part!.usedBy(), [], "an open MCP session is no use");
+    tr.activity = () => ({ calls: 1, quietFor: 0 });
+    assert.deepEqual(s.part!.usedBy(), ["mcp"], "a tool call that runs");
   } finally { await s.stop(); }
+});
+
+// ------------------------------------------------------------------ review-120: the rig of the real service with its link
+
+/** A shim on the link socket for the fake Chrome, with a fresh fake receiver behind it (its bridge), that answers channel main. */
+function shimOn(path: string, o: { holdImport?: boolean } = {}) {
+  const fr = new FakeReceiver();
+  const s = connect(path);
+  const main: any[] = [];
+  s.on("error", () => {});
+  let buf = "";
+  const open = new Map<string, Buffer[]>();
+  s.on("data", (d) => {
+    buf += d;
+    for (let i; (i = buf.indexOf("\n")) >= 0;) {
+      const p = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+      const key = `${p.ch ?? "main"} ${p.id}`;
+      const parts = open.get(key) ?? []; parts.push(Buffer.from(p.b64, "base64")); open.set(key, parts);
+      if (parts.length < p.n) continue;
+      open.delete(key);
+      const q = JSON.parse(Buffer.concat(parts).toString("utf8"));
+      if (p.ch === "bridge") { fr.output.write(`${JSON.stringify(q)}\n`); continue; }
+      main.push(q);
+      if (q.op === "set_scopes") s.write(`${JSON.stringify({ t: "res", id: q.id, ok: true, data: { rules: 1, closed: 0, refused: 0 } })}\n`);
+      else if (q.op === "import") setTimeout(() => s.write(`${JSON.stringify({ t: "res", id: q.id, ok: true, data: { cookies_set: 0, errors: [] } })}\n`), o.holdImport ? 300 : 0);
+    }
+  });
+  fr.input.on("data", (d) => { if (!s.destroyed) s.write(d); });
+  s.once("connect", () => s.write(`${JSON.stringify(HELLO)}\n`));
+  return { s, fr, main };
+}
+
+type Svc = Awaited<ReturnType<typeof startService>> & { w: World; dir: string; logs: string[]; shims: ReturnType<typeof shimOn>[]; url: (scope: string) => string; sessions: (items: any[]) => Promise<void> };
+/**
+ * The real service on the fake world, with its link (a fake peer check of the shim), and a host of the fake Chrome: each
+ * fake Chrome that starts gets a shim on the link, which ends with it. `lists`: the list files of the test.
+ */
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean }): Promise<Svc> {
+  const w = new World();
+  const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
+  mkdirSync(join(dir, "lists"));
+  for (const [name, allow] of Object.entries(o.lists)) writeFileSync(join(dir, "lists", `${name}.json`), JSON.stringify({ allow, repo: name.replace(".", "/") }));
+  const tools = new FakeTools();
+  const logs: string[] = [];
+  const s = await startService({
+    agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: (l) => logs.push(l), mainPid: async () => null,
+    lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
+    unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
+    link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true, pid: 4242 }) },
+    ...(o.mcp ? { mcp: { listen: { port: 0 } } } : {}),
+  });
+  const shims: ReturnType<typeof shimOn>[] = [];
+  let pid = 0;
+  const host = setInterval(() => {
+    const c = w.named("chromium")[0];
+    if (c && c.pid !== pid) { pid = c.pid; shims.at(-1)?.s.destroy(); shims.push(shimOn(join(dir, "link.sock"))); }
+    else if (!c && pid !== 0) { pid = 0; shims.at(-1)?.s.destroy(); }
+  }, 5);
+  t.after(async () => { clearInterval(host); for (const x of shims) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
+  await s.state.handle({ ...CONFIG, by: { kind: "daemon", user: "ann", via: "config" } } as any);
+  const sessions = async (items: any[]) => { await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any); };
+  return Object.assign(s, { w, dir, logs, shims, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
+}
+const me = () => [{ pid: process.pid, start: myStart() }];
+const session = (scope: string, repo: string, roots: { pid: number; start: number }[], extra: object = {}) => ({ scope, repo, roots, cgroup: null, lifetime_id: null, mcp_token: null, ...extra });
+const starts = (x: Svc) => x.logs.filter((l) => l === "unit: an agent uses the agent browser; starting Chrome").length;
+
+test("B1: while Chrome is off, the service's own checks come at once with no start and no wait: a process of web-1 at web-2's path gets the session's 403, a scope that the object does not name or gives no list the no-list 503; their retries never start Chrome nor count as a use; only an upgrade that passes every check but the link starts it", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  const part = x.part!;
+  // web-1 is this process's session; web-2's session is another one (a root that is gone).
+  await x.sessions([session("web-1", "owner/repo", me()), session("web-2", "owner/repo", [{ pid: 999_999, start: 1 }])]);
+  const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+  const view = s1c.useView.bind(s1c);
+  for (let i = 0; i < 5; i++) {
+    const at = Date.now();
+    const other = await raw(x.url("web-2"));
+    assert.deepEqual([other.status, other.body], [403, sessionRefusal(process.pid)], "the session's 403 at once");
+    // A scope that the object does not name (a launch that the restart gate holds), and a scope that it gives no list.
+    for (const v of [{ named: false, list: null, sites: 0 }, { named: true, list: null, sites: 0 }]) {
+      s1c.useView = (scope: string) => (scope === "web-1" ? v : view(scope));
+      const nolist = await raw(x.url("web-1"));
+      assert.deepEqual([nolist.status, nolist.body], [503, NOT_READY.noList], `the no-list 503 at once (${JSON.stringify(v)})`);
+    }
+    s1c.useView = view;
+    assert.ok(Date.now() - at < 2000, "no wait");
+    assert.deepEqual(part.usedBy(), [], "a refused client is never held");
+  }
+  assert.deepEqual([x.w.named("chromium").length, starts(x)], [0, 0], "no start");
+  // An upgrade that passes every check but the link starts Chrome and waits.
+  const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+  assert.equal(starts(x), 1);
+  assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/);
+  await cdp.close();
+  // Chrome runs: a refused client's retries (the model's own 403) are no use, so the stop by use comes.
+  (part as any).idleMinutes = 0.02; // 1.2 s
+  const end = Date.now() + 8000;
+  while (part.unit.running() && Date.now() < end) {
+    const r = await raw(x.url("web-2"));
+    assert.equal(r.status, 403);
+    await sleep(50);
+  }
+  assert.equal(part.unit.running(), false, "the retries of a refused client did not keep Chrome up");
+  assert.equal((x.state.status() as any).last_stop.reason, "idle");
+});
+
+test("B1 on the MCP path: a session whose list has no site gets the no-list 503 at step 8 at once, with no start", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const tok = control.testTokens[0];
+  const x = await svc(t, { lists: {}, mcp: true });
+  await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
+  const url = `http://127.0.0.1:${x.mcp!.mcpPort!.port}/mcp/web-1`;
+  for (let i = 0; i < 3; i++) {
+    const at = Date.now();
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok.token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }), signal: AbortSignal.timeout(30_000) });
+    assert.deepEqual([r.status, await r.text()], [503, NOT_READY.noList]);
+    assert.ok(Date.now() - at < 2000, "at once");
+  }
+  assert.deepEqual([x.w.named("chromium").length, starts(x), x.part!.usedBy().length], [0, 0, 0]);
+});
+
+test("B2: the quiet time counts only the agents' traffic: after the client leaves, a set_sessions change (a new set_scopes, its confirm, a new allowlist line and the model's content-settings calls) does not reset it", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  const part = x.part!;
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+  await cdp.send("Browser.getVersion");
+  await cdp.close();
+  await until(() => part.usedBy().length === 0, "the client to leave");
+  const left = performance.now();
+  await sleep(200);
+  const shim = x.shims.at(-1)!;
+  const pushes = shim.main.filter((q) => q.op === "set_scopes").length;
+  const settings = () => shim.fr.requests.filter((q) => q.op.startsWith("contentSettings.")).length;
+  const before = settings();
+  await x.sessions([session("web-1", "owner/repo", me()), session("web-2", "owner/repo", [{ pid: 999_999, start: 1 }])]);
+  await until(() => shim.main.filter((q) => q.op === "set_scopes").length > pushes && settings() > before, "the new push, its line and the model's content-settings calls");
+  await sleep(50);
+  const quiet = (part as any).o.use.quietFor();
+  assert.ok(quiet >= performance.now() - left - 30 && quiet >= 200, `the quiet time goes on from the client's leave (${Math.round(quiet)} ms)`);
+  assert.deepEqual(part.usedBy(), []);
+});
+
+test("P1: an MCP session stays open over a stop by use and is no use by being open; its next tool call waits at step 8 for the start at a use, the MCP's browser connects again with a new ticket, and the call gets its answer", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const tok = control.testTokens[0];
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true });
+  const part = x.part!;
+  await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
+  let minted = 0;
+  const mint = x.mcp!.tickets.mint.bind(x.mcp!.tickets);
+  x.mcp!.tickets.mint = (scope: string) => { minted++; return mint(scope); };
+  const url = `http://127.0.0.1:${x.mcp!.mcpPort!.port}/mcp/web-1`;
+  const post = async (body: object, sid?: string) => {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${tok.token}`, ...(sid ? { "Mcp-Session-Id": sid } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
+    const text = await r.text();
+    return { status: r.status, sid: r.headers.get("mcp-session-id"), body: text ? JSON.parse(text) : null, text };
+  };
+  const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } });
+  assert.equal(init.status, 200, init.text);
+  assert.equal(starts(x), 1, "the initialize waited for the start at a use");
+  const sid = init.sid!;
+  await post({ jsonrpc: "2.0", method: "notifications/initialized" }, sid);
+  const call = (id: number) => post({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, sid);
+  const a = await call(2);
+  assert.ok(a.status === 200 && a.body.result, a.text);
+  assert.equal(minted, 1, "the MCP's browser connected with a ticket");
+  const pid1 = x.w.named("chromium")[0].pid;
+  await until(() => part.usedBy().length === 0, "no use while the MCP session is open and no call runs", 5000);
+  // The stop by use: the open MCP session and the MCP's own open connection do not hold it.
+  (part as any).idleMinutes = 0.02; // 1.2 s
+  await until(() => !part.unit.running(), "the stop by use", 15_000);
+  assert.equal((x.state.status() as any).last_stop.reason, "idle");
+  assert.equal(x.mcp!.mcpTransport!.size("web-1"), 1, "the MCP session stays open");
+  (part as any).idleMinutes = 10;
+  // The next tool call: step 8 waits for the start at a use; the MCP connects again with a new ticket.
+  const b = await call(3);
+  assert.ok(b.status === 200 && b.body.result, b.text);
+  assert.equal(starts(x), 2, "the tool call started Chrome again");
+  assert.notEqual(x.w.named("chromium")[0].pid, pid1, "a new Chrome");
+  assert.equal(minted, 2, "a new ticket for the new connection");
+  await until(() => (x.agent as any).relay.model.connectionCount === 1, "the MCP's own connection to the new Chrome");
+});
+
+test("P1: the MCP's own ticket connection counts only by its messages, an agent's open connection counts by being open", { timeout: 30_000 }, async () => {
+  const { Tickets } = await import("../src/service/mcp/ticket.ts");
+  const { PeerGate } = await import("../src/relay/peer.ts");
+  const reader = { form: "stat", peer: () => ({ pid: process.pid, uid: 1001, pidfd: null, start: 77 }), proc: (p: number) => (p === process.pid ? { ppid: 1, start: 77, state: "S" } : null), cgroup: () => null, poll: () => 0, fdinfoPid: () => null, close: () => {} };
+  const tickets = new Tickets();
+  const h = await harness({ peerCheck: new PeerGate({ reader: reader as any, uid: 1001 }), tickets } as any);
+  try {
+    await h.ready({ t: "allowlist", lists: { a: ["a.example"] }, scopes: { "web-1": "a" }, default: null });
+    const own = await CDPConnection.connect(`${h.url("web-1")}?ticket=${tickets.mint("web-1")}`);
+    assert.deepEqual([h.relay.traffic().agents, h.relay.traffic().busy], [0, 0], "the MCP's own connection is no agent's");
+    assert.equal(h.relay.traffic().quietFor, Infinity);
+    await own.send("Browser.getVersion");
+    assert.ok(h.relay.traffic().quietFor < 1000, "its message counts");
+    await own.close();
+  } finally { await h.close(); }
+  const h2 = await harness();
+  try {
+    await h2.ready();
+    const c = await h2.connect("s1");
+    assert.equal(h2.relay.traffic().agents, 1, "an agent's open connection");
+    await c.close();
+    await until(() => h2.relay.traffic().agents === 0, "the close");
+  } finally { await h2.close(); }
+});
+
+// ------------------------------------------------------------------ review-120 B3: a client that leaves while it waits
+
+test("B3: a client that resets while its upgrade waits does not crash or stop the service: no connection opens for it, and the next client connects", { timeout: 30_000 }, async () => {
+  let release!: (r: [number, string] | null) => void;
+  const calls: string[] = [];
+  const h = await harness({ use: { stopping: () => false, wake: (scope) => { calls.push(scope); return new Promise((r) => { release = r; }); } } });
+  try {
+    for (const answer of ["503", "101"] as const) {
+      const s = connect(h.socket);
+      s.on("error", () => {});
+      await new Promise((r) => s.once("connect", r));
+      s.write("GET /devtools/browser/s1 HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+      await until(() => calls.length > 0, "the wait");
+      s.destroy();
+      await sleep(30);
+      if (answer === "101") await h.ready();
+      release(null);
+      await until(() => h.relay.model.connectionCount === 0, `${answer}: no connection for the client that left`, 2000);
+      calls.length = 0;
+    }
+    const c = await h.connect("s1");
+    assert.match((await c.send("Browser.getVersion")).product, /Chrome/, "the relay goes on");
+    await c.close();
+    // An upgrade that still waits when the relay stops: its socket closes, and the stop ends.
+    h.fake.line({ t: "link", up: false });
+    await until(() => h.relay.model.notReady() !== null, "the link to drop");
+    const late = connect(h.socket);
+    late.on("error", () => {});
+    const gone = new Promise((r) => late.once("close", r));
+    await new Promise((r) => late.once("connect", r));
+    late.write("GET /devtools/browser/s1 HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+    await until(() => calls.length > 0, "the late wait");
+    const closing = h.close();
+    assert.equal(await Promise.race([closing.then(() => "closed"), sleep(5000).then(() => "hangs")]), "closed", "the stop does not wait for the upgrade");
+    await gone;
+    return;
+  } finally { await h.close(); }
+});
+
+test("B3: a client that leaves while its MCP request waits at step 8 does not crash or stop the port: its request never reaches the handler, and the next request gets its answer", { timeout: 30_000 }, async () => {
+  let ready: McpReadiness = { controlOff: false, notReady: NOT_READY.link, sites: null };
+  let release!: (r: string | null) => void;
+  let waits = 0;
+  const p = await mcpPort(() => ready, () => { waits++; return new Promise((r) => { release = r; }); });
+  try {
+    // The port's fake reader takes this connection as md-lead's (the vectors' world).
+    p.reader.pending.push([3102]);
+    const s = connect({ host: "127.0.0.1", port: p.port.port });
+    s.on("error", () => {});
+    await new Promise((r) => s.once("connect", r));
+    s.write(`POST /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}`);
+    await until(() => waits === 1, "the wait at step 8");
+    s.resetAndDestroy();
+    await sleep(30);
+    ready = { controlOff: false, notReady: null, sites: 2 };
+    release(null);
+    await sleep(100);
+    assert.deepEqual(p.seen, [], "the request of the client that left never reached the handler");
+    assert.deepEqual(await p.ask(), { status: 200, body: OK }, "the port goes on");
+  } finally { await p.port.stop(); }
+});
+
+// ------------------------------------------------------------------ review-120 notes 1, 3, 4, 5, 6 and 11
+
+test("note 1: the limit of a request's wait covers the whole wait: the end of a stop by use, and the start", async () => {
+  const r = await rig({ useWaitMs: 40 });
+  try {
+    await config(r);
+    await r.part.wake(running(r));
+    // A stop by use that holds: the request goes on after its limit, while the stop still runs.
+    const stop = r.part.unit.stop.bind(r.part.unit);
+    let go!: () => void;
+    const held = new Promise<void>((x) => { go = x; });
+    r.part.unit.stop = async () => { await held; return stop(); };
+    r.w.now += 10 * MIN;
+    await until(() => r.part.idleStopping, "the stop by use to run");
+    const at = Date.now();
+    assert.equal(await r.part.wake(running(r)), null);
+    assert.ok(Date.now() - at < 1000 && r.part.idleStopping, "it went on while the stop runs");
+    assert.deepEqual(r.part.usedBy(), []);
+    go();
+    await until(() => !r.part.idleStopping, "the stop's end");
+    // A start that holds (its owner check waits): the request goes on after its limit, and the start goes on.
+    let pass!: () => void;
+    const gate = new Promise<void>((x) => { pass = x; });
+    const check = (r.part as any).o.owner.check.bind((r.part as any).o.owner);
+    (r.part as any).o.owner.check = async (what: string) => { if (what === "a start") await gate; return check(what); };
+    const at2 = Date.now();
+    assert.equal(await r.part.wake(running(r)), null);
+    assert.ok(Date.now() - at2 < 1000 && !r.part.unit.running(), "it went on while the start waits");
+    pass();
+    await until(() => r.part.unit.running(), "the start goes on and ends");
+  } finally { await r.close(); }
+});
+
+test("note 3: a daemon stop during the install wait of a start at a use is the daemon's stop: no start_failed, no last start's failure, no hold-off", async () => {
+  // The install's polls of 500 ms (virtual) take 5 ms of real time, so the stop comes during the wait.
+  const r = await rig({ before: (_w, tools) => { tools.versions = []; }, sleep: async (w, ms) => { if (ms === 500) await sleep(5); w.now += ms; await new Promise((x) => setImmediate(x)); } });
+  try {
+    await config(r, { chrome_bin: null });
+    const woke = r.part.wake(running(r));
+    await until(() => r.tools.pending !== null, "the install");
+    await req(r.c, "stop", TOKEN);
+    r.tools.pending!.resolve();
+    assert.equal(await woke, null, "the request gets that moment's answer");
+    await sleep(30);
+    assert.equal(events(r.c, "stopped").length, 0, "no start_failed");
+    const s = await status(r.c);
+    assert.ok(!s.operator_text.includes("The last start at an agent's use failed"), s.operator_text);
+    assert.ok(r.logs.includes("unit: a stop came during the start at an agent's use; it stays stopped"));
+    assert.equal(await r.part.wake(running(r)), null);
+    assert.equal(r.part.unit.running(), true, "no hold-off: the next use starts Chrome");
+  } finally { await r.close(); }
+});
+
+test("note 4: an import gives a start that failed at its use the send's error at once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-use-send2-"));
+  const port: ReceiverPort = { attach: () => {}, isUp: () => false, request: async () => ({}), allowlist() {}, endScope() {} };
+  const s = new Stage1c({ listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), receiver: port, log: () => {}, wake: async () => "The agent browser could not get ready: Xvfb not found on PATH." });
+  try {
+    s.setSessions({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [], remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any);
+    const payload = { v: 1, domain: "example.com", url: "https://www.example.com/", origin: "https://www.example.com", cookies: [], storage: { local: {}, session: {}, idb: [], caches: [] } };
+    const at = Date.now();
+    const a = await s.ops.import({ t: "req", id: "i", op: "import", by: { kind: "operator", user: "ann", via: "send" }, payload } as any);
+    assert.deepEqual(a, { error: "The sign-in for example.com was not sent: the agent browser could not get ready: Xvfb not found on PATH." });
+    assert.ok(Date.now() - at < 2000, "at once, with no wait for the receiver");
+  } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("note 5: after a crash the supervisor's backoff stays for a use: the request waits for the supervisor's start, and its restart does not reset the grace time", async () => {
+  const r = await rig();
+  try {
+    await config(r);
+    await r.part.wake(running(r));
+    const first = r.w.named("chromium")[0];
+    r.w.now += 9 * MIN;
+    r.w.end(first.pid); // a crash: the record still wants Chrome
+    await until(() => r.part.state() === "starting" || !r.part.unit.running(), "the crash");
+    const woke = r.part.wake(running(r));
+    assert.equal(await woke, null);
+    const second = r.w.named("chromium");
+    assert.equal(second.length, 1);
+    assert.ok(r.w.logs.some((l) => /is gone; starting it again in 1 s/.test(l)), "the supervisor's backoff");
+    assert.equal(r.logs.filter((l) => l === "unit: an agent uses the agent browser; starting Chrome").length, 1, "the use started no Chrome of its own");
+    assert.equal(r.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length, 2);
+  } finally { await r.close(); }
+  const r2 = await rig();
+  try {
+    await config(r2);
+    await r2.part.wake(running(r2));
+    r2.w.now += 9 * MIN;
+    const first = r2.w.named("chromium")[0];
+    r2.w.end(first.pid);
+    await r2.c.next((l) => l.ev === "ready" && l.chrome_pid !== first.pid, 10_000);
+    r2.w.now += MIN;
+    await r2.c.next((l) => l.ev === "stopped" && l.reason === "idle", 5000);
+  } finally { await r2.close(); }
+});
+
+test("note 11: a config that changed clears the hold-off of a failed start; the same config does not", async () => {
+  const r = await rig();
+  try {
+    await config(r, { chrome_bin: "/usr/bin/nochromium" });
+    const text = useFailed("Chromium not found: /usr/bin/nochromium");
+    assert.equal(await r.part.wake(running(r)), text);
+    await config(r, { chrome_bin: "/usr/bin/nochromium" });
+    assert.equal(await r.part.wake(running(r)), text, "the same config: still the hold-off");
+    assert.equal(r.logs.filter((l) => l === "unit: an agent uses the agent browser; starting Chrome").length, 1);
+    await config(r);
+    assert.equal(await r.part.wake(running(r)), null, "a changed config: a new start at once");
+    assert.equal(r.part.unit.running(), true);
+  } finally { await r.close(); }
 });

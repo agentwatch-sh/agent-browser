@@ -77,9 +77,10 @@ export type Stage1cOptions = {
   writeEnded?: (path: string, value: unknown) => void;
   /**
    * The start at a use (board ab-v16.94.11): an import needs the browser, so each one calls it before its wait for the
-   * receiver (the service starts Chrome when it does not run).
+   * receiver (the service starts Chrome when it does not run). Its answer is null, or the text of a start that failed,
+   * which the import answers at once.
    */
-  wake?: () => void;
+  wake?: () => Promise<string | null>;
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
@@ -116,11 +117,11 @@ export class Stage1c implements ServicePart {
   private imports: Promise<unknown> = Promise.resolve();
   private readonly upWaiters = new Set<() => void>();
   /** The start at a use of a send (board ab-v16.94.11). */
-  private readonly startAtUse: () => void;
+  private readonly startAtUse: () => Promise<string | null>;
 
   constructor(o: Stage1cOptions) {
     this.log = o.log;
-    this.startAtUse = o.wake ?? (() => {});
+    this.startAtUse = o.wake ?? (async () => null);
     this.clock = o.clock ?? REAL_CLOCK;
     this.receiver = o.receiver ?? NO_RECEIVER;
     this.files = new ListFiles(o.listsFolder);
@@ -441,8 +442,10 @@ export class Stage1c implements ServicePart {
     }
     const { state, dropped } = checked;
     const run = async (): Promise<Answer> => {
-      // A send needs the browser: a use, which starts Chrome when it does not run (board ab-v16.94.11).
-      try { this.startAtUse(); } catch {}
+      // A send needs the browser: a use, which starts Chrome when it does not run (board ab-v16.94.11); a start that
+      // failed gives the send its error at once.
+      const failed = await this.startAtUse().catch(() => null);
+      if (failed !== null) return { error: sendText(state.domain, failed).text };
       if (!(await this.waitUp(RECEIVER_WAIT_MS))) return { error: sendText(state.domain, this.stopped ? NOT_CONNECTED_TEXT : RECEIVER_MISSING_TEXT).text };
       let counts: Record<string, unknown>;
       try { counts = await this.receiver.request("import", { state }, IMPORT_WAIT_MS); }
@@ -460,6 +463,19 @@ export class Stage1c implements ServicePart {
     const p = this.imports.then(run, run);
     this.imports = p.catch(() => {});
     return p;
+  }
+
+  /**
+   * What the start at a use (board ab-v16.94.11) checks while Chrome is down, from the current object (the one that the
+   * receiver gets next): whether it names the scope, the scope's list (or null), and that list's number of sites.
+   */
+  useView(scope: string): { named: boolean; list: string | null; sites: number } {
+    const t = this.book.ticket();
+    if (t === null || !Object.hasOwn(t.body.scopes, scope)) return { named: false, list: null, sites: 0 };
+    // A list that the object names but does not hold is no list (C11, step 7).
+    const named = own(t.body.scopes, scope) ?? null;
+    const list = named !== null && Object.hasOwn(t.body.lists, named) ? named : null;
+    return { named: true, list, sites: list === null ? 0 : t.body.lists[list].length };
   }
 
   // ------------------------------------------------------------------ status

@@ -12,7 +12,7 @@
 
 import { resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { startRelay, type Relay, type RelayTickets, type RelayTransport, type RelayUse } from "../relay/endpoint.ts";
+import { startRelay, type Relay, type RelayTickets, type RelayTraffic, type RelayTransport, type RelayUse } from "../relay/endpoint.ts";
 import { selfTest, type PeerGate } from "../relay/peer.ts";
 
 export type EndpointState = { form: string } | { form: null; reason: string };
@@ -25,6 +25,8 @@ export type AgentDoor = {
   state(): EndpointState;
   /** The client connections that are open now. */
   clients(): number;
+  /** The agents' traffic (board ab-v16.94.11): the agents' open connections, the client messages that run, the quiet time. */
+  traffic(): RelayTraffic;
   stop(): Promise<void>;
 };
 
@@ -58,6 +60,7 @@ export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (
     url: (scope) => agentDoorUrl(o.address, scope),
     state: () => endpointState(o.gate),
     clients: () => relay.model.connectionCount,
+    traffic: () => relay.traffic(),
     stop: () => stopping ??= (async () => { await relay.stop(); input.end(); })(),
   };
 }

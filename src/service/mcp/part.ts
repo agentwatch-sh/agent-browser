@@ -72,8 +72,8 @@ export class McpPart implements ServicePart {
     }
   }
 
-  /** The MCP sessions that are open now: each is a use of the browser (board ab-v16.94.11). */
-  sessions(): number { return this.transport?.size() ?? 0; }
+  /** The MCP's use of the browser (board ab-v16.94.11): its tool calls that run, and the ms since the last one; an open MCP session is no use. */
+  activity(): { calls: number; quietFor: number } { return this.transport?.activity() ?? { calls: 0, quietFor: Infinity }; }
 
   /** The port while it runs (the tests). */
   get mcpPort(): McpPort | null { return this.port; }

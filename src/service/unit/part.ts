@@ -44,7 +44,7 @@ import type { UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
 import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, SUPERVISE_MS, type UnitDeps, type UnitEvent } from "./unit.ts";
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
-import { FailClosedWatch, monotonicMs, NO_LINK, type LinkPort, type WatchStop } from "./watch.ts";
+import { FailClosedWatch, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
 export const WATCH_MS = 1000;
 /** The ops of stage 1b part 1 (C12, "The ops of stage 1b part 1"). */
@@ -72,6 +72,8 @@ export const IDLE_STOP_MAX_MINUTES = 1440;
 export const USE_WAIT_MS = 60_000;
 /** After a start at a use failed, the requests of this time get its error at once, with no new start. */
 export const USE_RETRY_MS = 10_000;
+/** After a fail-closed stop, a use starts Chrome again at most once in this time (the watch's 60 s or more). */
+export const FAIL_HOLD_MS = 60_000;
 const USE_POLL_MS = 100;
 /** The text of a request whose start at a use failed: the start's error text is the reason (I2: it names no command). */
 export const useFailed = (reason: string) => `The agent browser could not get ready: ${reason.replace(/[.\s]+$/, "")}.`;
@@ -158,6 +160,16 @@ export class UnitPart implements ServicePart {
   private useFailTold = false;
   /** The stop by use while it runs: a request that comes waits for its end. */
   private idleStop: Promise<void> | null = null;
+  /** A start at a use runs (the `ready` of its Chrome marks that Chrome as started by a use). */
+  private startingByUse = false;
+  /** The running Chrome was started by a use, and since when it runs (the monotonic clock). */
+  private chromeByUse = false;
+  private readyAt: number | null = null;
+  /** The time of the last fail-closed stop, and whether a run of fail-closed stops after starts at a use goes on. */
+  private failClosedAt: number | null = null;
+  private failRun = false;
+  /** The keys of the last config, as JSON: a change clears the hold-off of a failed start (review-120 note 11). */
+  private lastConfig = "";
 
   constructor(o: UnitPartOptions) {
     this.o = o;
@@ -189,6 +201,8 @@ export class UnitPart implements ServicePart {
   // ------------------------------------------------------------------ the status and the events
 
   state(): State {
+    // A request that waits for the end of a stop by use starts Chrome next (review-120 note 6).
+    if (this.idleStop !== null && this.waiters > 0) return "starting";
     if (this.unit.running()) return "ready";
     if (this.unit.starting || this.useStart !== null || this.pendingStart || (this.unit.wanted && this.unit.config?.enabled !== false)) return "starting";
     if (this.lastStop && FAIL_CLOSED.has(this.lastStop.reason)) return "failed closed";
@@ -216,9 +230,11 @@ export class UnitPart implements ServicePart {
   private ready(): void {
     // A start that succeeded (or an adoption): no start waits for a config any more (review-106 B1).
     this.pendingStart = false;
-    // Each start counts as a use: the grace time of the stop by use counts from it (board ab-v16.94.11).
-    this.lastUse = this.clock();
-    if (this.unit.running()) { this.useFail = null; this.useFailTold = false; }
+    if (this.unit.running()) {
+      this.useFail = null; this.useFailTold = false;
+      this.chromeByUse = this.startingByUse;
+      this.readyAt = this.clock();
+    }
     const f = this.unit.chromeFacts();
     const id = this.unit.chromeId();
     if (!f || !id) return;
@@ -248,10 +264,10 @@ export class UnitPart implements ServicePart {
     this.emit(ev);
   }
 
-  private stopped(reason: string, by: By | null): void {
+  private stopped(reason: string, by: By | null, quiet = false): void {
     this.lastStop = { reason, at: new Date(this.wall()).toISOString().replace(/\.\d{3}Z$/, "Z"), by };
     this.lastChrome = "";
-    this.emit(by ? { t: "ev", ev: "stopped", reason, by: { ...by } } : { t: "ev", ev: "stopped", reason });
+    if (!quiet) this.emit(by ? { t: "ev", ev: "stopped", reason, by: { ...by } } : { t: "ev", ev: "stopped", reason });
   }
 
   private onUnitEvent = (e: UnitEvent) => {
@@ -271,6 +287,9 @@ export class UnitPart implements ServicePart {
     try {
       this.pendingStart = false;
       await this.unit.start();
+      // The grace time of the stop by use counts from a start op and a start at a use, never from a restart of the
+      // service's own (the supervisor's, a move's): review-120 note 5.
+      this.lastUse = this.clock();
       if (!wasRunning && this.unit.running()) this.ready();
       return { data: {} };
     } catch (e) {
@@ -302,7 +321,12 @@ export class UnitPart implements ServicePart {
     if (p) { this.mover.revert(p, "no receiver confirmed the lists in 60 s"); return true; }
     this.beforeStop();
     await this.unit.stop();
-    this.stopped(reason, null);
+    // A run of fail-closed stops of Chromes that a use started sends its `stopped` once, until a Chrome stays up past the
+    // watch (the daemon lead's P2): the later stops of the run set last_stop only.
+    const quiet = this.chromeByUse && this.failRun;
+    if (this.chromeByUse) this.failRun = true;
+    this.failClosedAt = this.clock();
+    this.stopped(reason, null, quiet);
     return true;
   }
 
@@ -341,21 +365,33 @@ export class UnitPart implements ServicePart {
   async wake(ready: () => boolean): Promise<string | null> {
     const cfg = this.unit.config;
     if (this.closed || !cfg || !cfg.enabled) return null;
+    // After a fail-closed stop, a use starts Chrome again at most once in FAIL_HOLD_MS: until then the request gets that
+    // moment's answer at once, and the state stays failed closed (the daemon lead's P2).
+    if (!this.unit.running() && this.failClosedAt !== null && this.lastStop !== null && FAIL_CLOSED.has(this.lastStop.reason) && this.clock() - this.failClosedAt < FAIL_HOLD_MS) return null;
     this.waiters++;
     this.lastUse = this.clock();
+    // The limit covers the whole wait: the end of a stop by use, the start and the caller's check (review-120 note 1).
     const end = this.clock() + (this.o.useWaitMs ?? USE_WAIT_MS);
     const isReady = () => { try { return ready(); } catch { return false; } };
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const pause = (ms: number) => new Promise<void>((r) => { const t = setTimeout(() => { timers.delete(t); r(); }, Math.max(0, ms)); timers.add(t); });
+    const LATE = Symbol("late");
+    const inTime = <T>(p: Promise<T>): Promise<T | typeof LATE> => Promise.race([p, pause(end - this.clock()).then(() => LATE)]);
     try {
-      if (this.idleStop) await this.idleStop;
-      if (!this.unit.running() && !isReady()) {
-        const failed = await this.startAtUse();
+      if (this.idleStop && (await inTime(this.idleStop)) === LATE) return null;
+      // A Chrome that crashed (the record still wants it): the supervisor starts it again after its backoff, and the
+      // request waits for that start (review-120 note 5). Else a Chrome that does not run starts now.
+      if (!this.unit.running() && !isReady() && !this.unit.wanted) {
+        const failed = await inTime(this.startAtUse());
+        if (failed === LATE) return null;
         if (failed !== null) return failed;
       }
-      while (!this.closed && !isReady() && this.unit.running() && this.clock() < end) {
-        await new Promise((r) => setTimeout(r, this.o.usePollMs ?? USE_POLL_MS));
+      while (!this.closed && !isReady() && (this.unit.running() || this.unit.wanted) && this.clock() < end) {
+        await pause(this.o.usePollMs ?? USE_POLL_MS);
       }
       return null;
     } finally {
+      for (const t of timers) clearTimeout(t);
       this.waiters--;
       this.lastUse = this.clock();
     }
@@ -366,11 +402,17 @@ export class UnitPart implements ServicePart {
     if (this.useStart) return this.useStart;
     const f = this.useFail;
     if (f && this.clock() - f.at < USE_RETRY_MS) return Promise.resolve(useFailed(f.text));
+    const stops = this.unit.stopCount;
     const p = (async (): Promise<string | null> => {
       this.o.log("unit: an agent uses the agent browser; starting Chrome");
-      const a = await this.startBrowser(null);
+      this.startingByUse = true;
+      let a: Answer;
+      try { a = await this.startBrowser(null); } finally { this.startingByUse = false; }
       if (!("error" in a)) return null;
       if (a.error === NOT_OWNER) return useFailed(a.error);
+      // A stop (the daemon's own, or browser.enabled false) that came during the start, also during its wait for the
+      // install, ended it: that is the stop's, not a failed start (review-120 note 3). The request gets that moment's answer.
+      if (this.unit.stopCount !== stops) { this.o.log("unit: a stop came during the start at an agent's use; it stays stopped"); return null; }
       this.useFail = { at: this.clock(), text: a.error };
       this.o.log(`unit: the start at an agent's use failed: ${a.error.slice(0, 300)}`);
       // One `stopped` event for a run of failed starts at a use, as the supervisor's report (C12: start_failed).
@@ -421,6 +463,9 @@ export class UnitPart implements ServicePart {
     const minutes = idleStopMinutes(keys.idle_stop_minutes);
     if (minutes === null && keys.idle_stop_minutes != null) this.o.log(`unit: config's idle_stop_minutes is not a whole number from 1 to ${IDLE_STOP_MAX_MINUTES}; the grace time is ${IDLE_STOP_DEFAULT_MINUTES} min`);
     this.idleMinutes = minutes ?? IDLE_STOP_DEFAULT_MINUTES;
+    // A config that changed clears the hold-off of a failed start at a use (review-120 note 11).
+    const json = JSON.stringify(keys);
+    if (json !== this.lastConfig) { this.lastConfig = json; this.useFail = null; }
     if (!cfg.enabled) {
       // browser.enabled false stops the browser (no event: turning it off is not a fault).
       this.pendingStart = false;
@@ -507,6 +552,8 @@ export class UnitPart implements ServicePart {
       const link = this.o.link ?? NO_LINK;
       this.mover.tick(this.unit.running() && link.ready() && link.confirmed());
       this.chromeChanged();
+      // A Chrome that stays up past the watch's limit ends a run of fail-closed stops (the daemon lead's P2).
+      if (this.failRun && this.unit.running() && this.readyAt !== null && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS)) this.failRun = false;
       await this.idleCheck();
     });
     this.loop(this.o.checkEveryMs ?? CHECK_EVERY_MS, this.o.firstCheckMs ?? FIRST_CHECK_MS, async () => {

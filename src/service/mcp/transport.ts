@@ -18,6 +18,8 @@
 //   format's JSON-RPC error; only `initialize`, `ping`, `tools/list` and `tools/call` reach the MCP, and of the
 //   notifications only `notifications/initialized` and `notifications/cancelled`.
 // - endSessions (C11's close at a change, C12's session_ended, the lead's OP4) ends the scope's MCP sessions.
+// - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
+//   `activity()` gives the tool calls that run and the time since the last one came or ended.
 //
 // The log rule (C11, C12): a line names a session's number, a scope, a method and a result; never an argument, a
 // payload, a page's content, a session id, a header, a token or a fingerprint.
@@ -106,8 +108,16 @@ export class McpTransport implements McpHandler {
   private readonly workers = new Map<string, ScopeWorker>();
   private count = 0;
   private stopped = false;
+  /** The tool calls that run now, and the time (performance.now) of the last one's start or end (board ab-v16.94.11). */
+  private calls = 0;
+  private lastCall: number | null = null;
 
   constructor(o: McpTransportOptions) { this.o = o; }
+
+  /** The MCP's use of the browser: the tool calls that run, and the ms since the last one came or ended (Infinity before one). */
+  activity(): { calls: number; quietFor: number } {
+    return { calls: this.calls, quietFor: this.lastCall === null ? Infinity : performance.now() - this.lastCall };
+  }
 
   /** The MCP sessions (of `scope`, or of every scope). */
   size(scope?: string): number { return scope === undefined ? this.sessions.size : [...this.sessions.values()].filter((s) => s.scope === scope).length; }
@@ -191,8 +201,13 @@ export class McpTransport implements McpHandler {
     const gone = () => { if (!res.writableEnded) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: forward.id, reason: "the client closed its connection" } }); };
     res.once("close", gone);
     let got: Message | null;
+    const call = forward.method === "tools/call";
+    if (call) { this.calls++; this.lastCall = performance.now(); }
     try { got = await s.worker.request(s.id, forward); }
-    finally { s.waiting.delete(key); res.off("close", gone); }
+    finally {
+      s.waiting.delete(key); res.off("close", gone);
+      if (call) { this.calls--; this.lastCall = performance.now(); }
+    }
     if (got === null) { send(res, this.endOf(s), forward.id); return; }
     answer(res, 200, forward.method === "tools/list" ? this.filtered(got) : got);
   }

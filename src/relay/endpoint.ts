@@ -13,7 +13,7 @@ import { WebSocketServer } from "ws";
 import { socketAlive } from "../proxy.ts";
 import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
-import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck } from "./peer.ts";
+import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck, type Peer } from "./peer.ts";
 import { SCOPE, type Root } from "./scopes.ts";
 import { ticketOf } from "../service/mcp/ticket.ts";
 
@@ -42,12 +42,19 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
   tickets?: RelayTickets;
   /**
    * The service's start at a use (board ab-v16.94.11): an upgrade that step 4 refuses because the link is down or the
-   * allowlist is not confirmed yet waits for `wake(scope)` (the service starts Chrome when it does not run), then the checks
-   * run again. While `stopping()` (the service stops Chrome for lack of use), step 4 counts the link as down.
+   * allowlist is not confirmed yet goes to `wake(scope, peer, ticket)`. The service first runs the checks that it can make
+   * while Chrome is down (steps 5 to 7 from its own snapshot) and gives their answer at once; only an upgrade that would
+   * pass every check but the link waits while the service starts Chrome; then the checks run again. While `stopping()`
+   * (the service stops Chrome for lack of use), step 4 counts the link as down.
    */
   use?: RelayUse };
-/** The service's start at a use: see RelayOptions.use. `wake` answers null (check again) or the client's 503 text. */
-export type RelayUse = { stopping(): boolean; wake(scope: string): Promise<string | null> };
+/**
+ * The service's start at a use: see RelayOptions.use. `wake` answers null (check again) or the answer to give at once
+ * (the service's 403 or 503: the checks it made, or a start that failed).
+ */
+export type RelayUse = { stopping(): boolean; wake(scope: string, peer: Peer | null, ticket: string | null): Promise<[number, string] | null> };
+/** The agents' traffic on the endpoint (board ab-v16.94.11): see Relay.traffic. */
+export type RelayTraffic = { agents: number; busy: number; quietFor: number };
 /** The texts of step 4 for which an upgrade waits for the service's start at a use. */
 const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist]);
 /** The ticket check of the service's MCP connections (src/service/mcp/ticket.ts). */
@@ -57,7 +64,13 @@ export type RelayTransport = {
   send(line: string, msg: BridgeRequest): void;
   bind(to: { answer(msg: { id?: unknown; ok?: unknown; data?: unknown; error?: unknown }): void; daemon(msg: unknown): void }): void;
 };
-export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null };
+/**
+ * `traffic()` (board ab-v16.94.11): `agents`, the open connections that the walk admitted (an MCP's own ticket connection
+ * is none); `busy`, the client messages that the model handles now (of every connection); `quietFor`, the ms since the
+ * last client message came or ended (Infinity before one). Nothing of the model's own (its bridge calls, a tab's events)
+ * counts.
+ */
+export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic };
 
 /**
  * The answer to a request that gets no connection, or the request's scope (and with the peer check the root that
@@ -69,7 +82,7 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
  * the service's own pid passes step 6 only with a live ticket of its scope (C11, the MCP inside the service), and no
  * root admits it; each ticket in a request is gone after this check.
  */
-function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse): { scope: string; root: Root | null } | [number, string] | [number, string, string] {
+function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse): { scope: string; root: Root | null; own?: true } | [number, string] | [number, string, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
   const m = /^\/devtools\/browser\/([^/]*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
   if (req.method !== "GET" || !m || !SCOPE.test(m[1])) return [404, NOT_FOUND];
@@ -92,7 +105,7 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, ticket
     const ticketOk = ticket !== null && tickets.take(ticket, scope, peer.pid);
     if (peer.pid === tickets.pid) {
       if (!ticketOk) return [403, sessionRefusal(peer.pid)];
-      return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null };
+      return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null, own: true };
     }
   }
   const root = gate.check(scope, peer);
@@ -123,19 +136,27 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // The peer read, at each accept, before the relay reads the request (C11, step 3).
   if (gate) http.on("connection", (socket) => gate.accept(socket));
   let ended = false;
+  // The agents' traffic (board ab-v16.94.11): see Relay.traffic.
+  let agents = 0, busy = 0, lastMessage: number | null = null;
+  const now = () => performance.now();
+  /** The upgrades that wait for the service's start at a use: the relay's stop ends them. */
+  const waiting = new Set<{ destroy(): void }>();
   http.on("upgrade", (req, socket, head) => {
     const a = admit(req, model, gate, o.tickets, o.use);
-    // The service's start at a use (board ab-v16.94.11): the upgrade waits, then the checks run again.
+    // The service's start at a use (board ab-v16.94.11): the service's own checks answer at once; an upgrade that passes
+    // them waits, then the checks run again.
     if (o.use && Array.isArray(a) && a.length === 3 && WAKES.has(a[1])) {
       const again = () => admit(req, model, gate, o.tickets, o.use);
       // Node's server takes its error handler off an upgraded socket: a client's reset during the wait must not throw.
       socket.on("error", () => {});
-      void o.use.wake(a[2]).then((why) => upgrade(why === null ? again() : [503, why]), () => upgrade(again()));
+      waiting.add(socket);
+      void o.use.wake(a[2], gate?.peerOf(req.socket) ?? null, ticketOf(req.url ?? "")).then((r) => upgrade(r ?? again()), () => upgrade(again()));
       return;
     }
     upgrade(a);
     function upgrade(a: ReturnType<typeof admit>): void {
       // The check runs once, at the upgrade: the peer's pidfd closes now, in every path.
+      waiting.delete(socket);
       gate?.release(socket);
       if (ended || socket.destroyed) { socket.destroy(); return; }
       if (Array.isArray(a)) {
@@ -145,10 +166,16 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
         const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root);
+        // An agent's connection counts by being open; an MCP's own ticket connection counts only by its messages.
+        const agent = !a.own;
+        if (agent) agents++;
+        ws.once("close", () => { if (agent) agents--; });
         ws.on("message", (data) => {
           let msg: unknown;
           try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
-          void model.onMessage(conn, msg);
+          busy++;
+          lastMessage = now();
+          void model.onMessage(conn, msg).finally(() => { busy--; lastMessage = now(); });
         });
         // A message above MAX_REQUEST: ws closes the connection with 1009 and reports it here.
         ws.on("error", (e) => o.log(`relay: connection ${conn.id}: ${e.message}`));
@@ -164,9 +191,13 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   chmodSync(o.socket, 0o600);
   const inode = statSync(o.socket).ino;
 
+  const traffic = (): RelayTraffic => ({ agents, busy, quietFor: lastMessage === null ? Infinity : now() - lastMessage });
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
     ended = true;
+    // An upgrade that waits gets no answer: its socket closes, so the server's close does not wait for it.
+    for (const w of waiting) w.destroy();
+    waiting.clear();
     model.stop();
     await new Promise<void>((r) => { wss.close(() => r()); });
     http.closeAllConnections();
@@ -182,7 +213,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"}; the bridge in this process)`);
     let ended!: () => void;
     const closed = new Promise<void>((resolve) => { ended = resolve; });
-    return { model, closed, stop: () => stop().then(() => ended()), peer: gate };
+    return { model, closed, stop: () => stop().then(() => ended()), peer: gate, traffic };
   }
   const lines = createInterface({ input: o.input, crlfDelay: Infinity });
   lines.on("line", (line) => {
@@ -194,5 +225,5 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   });
   const closed = new Promise<void>((resolve) => { lines.once("close", () => { void stop().then(resolve); }); });
   o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"})`);
-  return { model, closed, stop, peer: gate };
+  return { model, closed, stop, peer: gate, traffic };
 }

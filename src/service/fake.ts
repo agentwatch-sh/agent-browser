@@ -19,7 +19,7 @@
 // has a fingerprint (never the fingerprint). It serves no MCP.
 // The start and the stop by use (C12; board ab-v16.94.11): its config takes idle_stop_minutes by the service's rule and
 // its status gives it; it runs no start and no stop by use (no agent door listens): a test sends `stopped` with the reason
-// `idle` on its standard input.
+// `idle` on its standard input, which sets its state to off and its last_stop.
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -313,6 +313,17 @@ export class FakeService implements Handler {
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
   has(): boolean { return true; }
 
+  /**
+   * An event that a test sends on the fake's standard input, before it goes out (C12, the fake): a `stopped` with the
+   * reason `idle` is a stop by use, so the state is `off` and `last_stop` carries it, with no `by` (review-120 note 7).
+   */
+  observe(ev: Record<string, unknown>): void {
+    if (ev.ev === "stopped" && ev.reason === "idle") {
+      this.state = "off";
+      this.lastStop = { reason: "idle", at: this.now().toISOString(), by: null };
+    }
+  }
+
   /** The state of the last `sign_ins` event: the store starts in `none`, and each change of the state sends one. */
   private told: "none" | "locked" | "open" = "none";
   private tell(): void {
@@ -467,15 +478,16 @@ export async function startFake(o: { controlDoor: string; agentDoor?: string; re
     const ft = statSync(f, { throwIfNoEntry: false });
     if ((ft && ft.dev === st.dev && ft.ino === st.ino) || realOf(f) === realpathSync(dir)) refuse();
   }
+  const service = new FakeService({ agentDoor: o.agentDoor, unprotected: o.unprotected });
   const door = await ControlDoor.open({
-    path: o.controlDoor, handler: new FakeService({ agentDoor: o.agentDoor, unprotected: o.unprotected }), log: o.log,
+    path: o.controlDoor, handler: service, log: o.log,
     admit: o.refuse ? async () => ({ ok: false, reason: FAKE_REFUSED }) : async () => ({ ok: true }),
   });
   const lines = o.input ? createInterface({ input: o.input, crlfDelay: Infinity }) : null;
   lines?.on("line", (line) => {
     let ev: unknown;
     try { ev = JSON.parse(line); } catch { ev = null; }
-    if (eventFits(ev)) door.emit(ev as Record<string, unknown>);
+    if (eventFits(ev)) { service.observe(ev as Record<string, unknown>); door.emit(ev as Record<string, unknown>); }
     else o.log("fake: dropped a line of its standard input that is not an event of C12");
   });
   o.log(`fake: ready on ${o.controlDoor} (agent-browser service --fake; no Chrome)`);
