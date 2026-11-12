@@ -115,7 +115,7 @@ test("a move waits for the idle hour from the service's start and for the client
     clients = true;
     mover.tick(true);
     assert.equal(mover.moving, false, "a client holds the move back");
-    assert.equal(mover.updateState(), "waiting");
+    assert.equal(mover.updateState(), "pending", "a newer copy waits (board ab-v16.94.11: pending until the next stop by use)");
     clients = false;
     mover.tick(true);
     assert.equal(mover.moving, true);

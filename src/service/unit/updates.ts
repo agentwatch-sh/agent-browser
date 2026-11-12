@@ -213,6 +213,8 @@ export class ChromeMover {
   moving = false;
   private reverting = false;
   lastMoveFailed = false;
+  /** A move or its way back runs (it stops and starts Chrome itself: no stop by use then). */
+  get working(): boolean { return this.moving || this.reverting; }
 
   constructor(o: { unit: ChromeUnit; updater: ChromeUpdater; activity: Activity; clock: () => number; wall?: () => number; mayAct: (what: string) => Promise<boolean>; log: (line: string) => void; onChange?: () => void; onStarted?: () => void }) {
     this.unit = o.unit; this.updater = o.updater; this.activity = o.activity; this.clock = o.clock; this.wall = o.wall ?? Date.now;
@@ -225,13 +227,17 @@ export class ChromeMover {
     return f && f.kind === KIND_GOOGLE && f.version ? f.version : null;
   }
 
-  /** The update state of C12's status and chrome event: null with no Google Chrome, else current, waiting, moving or failed. */
+  /**
+   * The update state of C12's status and chrome event: null with no Google Chrome, else current, pending, moving or failed.
+   * `pending` (board ab-v16.94.11): a newer copy waits for the next stop by use, after which the next start runs it (the
+   * move of the idle hour stays the floor).
+   */
   updateState(): string | null {
     const running = this.runningGoogle();
     if (running === null) return null;
     if (this.moving || this.reverting || this.probation) return "moving";
     const ready = this.updater.readyVersion();
-    if (ready && newer(ready, running)) return "waiting";
+    if (ready && newer(ready, running)) return "pending";
     if (this.lastMoveFailed) return "failed";
     return "current";
   }

@@ -64,8 +64,8 @@
     "operator_text": "The agent browser is ready."
    },
    "off": {
-    "agent_text": "The agent browser is not running.",
-    "operator_text": "The agent browser is not running. A start on the Browser page starts it."
+    "agent_text": "The agent browser is not running; it gets ready when an agent uses it.",
+    "operator_text": "The agent browser is not running. It starts at the next use by an agent."
    }
   },
   "chrome": {
@@ -248,7 +248,7 @@
  ],
  "requests": [
   {
-   "note": "config: agentwatch's browser.* keys as data, at each connect and each change",
+   "note": "config: agentwatch's browser.* keys as data, at each connect and each change (idle_stop_minutes: the grace time of the stop by use, board ab-v16.94.11)",
    "req": {
     "t": "req",
     "id": "r1",
@@ -261,7 +261,8 @@
     "enabled": true,
     "control": true,
     "chrome_bin": null,
-    "chrome_args": []
+    "chrome_args": [],
+    "idle_stop_minutes": 10
    },
    "res": {
     "t": "res",
@@ -376,7 +377,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store)",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -485,7 +486,8 @@
       "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
       "stopped": [],
       "unprotected": null
-     }
+     },
+     "idle_stop_minutes": 10
     }
    }
   },
@@ -829,7 +831,7 @@
    }
   },
   {
-   "note": "a start with the API token (an agent's endpoint wait, or agentwatch browser start in a terminal): today's rule",
+   "note": "a start with the API token: the daemon's own needs and tests (board ab-v16.94.11: a use starts Chrome by itself)",
    "req": {
     "t": "req",
     "id": "r11",
@@ -867,7 +869,7 @@
    }
   },
   {
-   "note": "a stop with the API token: today's rule, until the answer Q5 (ab-6ng)",
+   "note": "a stop with the API token: the daemon's own needs and tests (board ab-v16.94.11: Chrome stops by itself when no agent uses it)",
    "req": {
     "t": "req",
     "id": "r13",
@@ -5018,12 +5020,29 @@
    }
   },
   {
+   "note": "a stop by use: no agent used the browser for the grace time (board ab-v16.94.11); no fault, no fail-closed alert",
+   "ev": {
+    "t": "ev",
+    "ev": "stopped",
+    "reason": "idle"
+   }
+  },
+  {
    "note": "chrome",
    "ev": {
     "t": "ev",
     "ev": "chrome",
     "version": "157.0.7000.1-1",
     "update": "current"
+   }
+  },
+  {
+   "note": "chrome: a newer copy waits for the next stop by use (board ab-v16.94.11)",
+   "ev": {
+    "t": "ev",
+    "ev": "chrome",
+    "version": "157.0.7000.1-1",
+    "update": "pending"
    }
   },
   {
