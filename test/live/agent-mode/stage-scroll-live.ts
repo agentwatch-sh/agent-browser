@@ -279,8 +279,10 @@ async function harnessScroll(o: StageContext, ctx: any, port: number, recs: Rec[
     await page.goto(REC);
     for (let end = Date.now() + 15_000; Date.now() < end && !lastOf("layout"); ) await sleep(100);
     await step("idle", "idle 1 s", () => sleep(1000));
-    await page.mouse.move(600, 600);
     for (let i = 0; i < 2; i++) {
+      // The pointer over the page's content before each round's wheel calls (after a round's clicks it is on #b, with the
+      // recorder's fields and its frame within one notch below: the call's column would send each call as one event).
+      await page.mouse.move(600, 600);
       await step("wheel", "mouse.wheel(0, 600)", async () => { await page.mouse.wheel(0, 600); await sleep(500); });
       await step("wheel", "mouse.wheel(0, -600)", async () => { await page.mouse.wheel(0, -600); await sleep(500); });
       await step("wheel", "mouse.wheel(0, 360)", async () => { await page.mouse.wheel(0, 360); await sleep(500); });
