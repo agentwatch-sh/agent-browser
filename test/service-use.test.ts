@@ -710,7 +710,7 @@ test("the service with its MCP path: an MCP tool call that runs is a use, an ope
 // ------------------------------------------------------------------ review-120: the rig of the real service with its link
 
 /** A shim on the link socket for the fake Chrome, with a fresh fake receiver behind it (its bridge), that answers channel main. */
-function shimOn(path: string, o: { holdImport?: boolean } = {}) {
+function shimOn(path: string, o: { holdImport?: boolean; laterConfirmMs?: number } = {}) {
   const fr = new FakeReceiver();
   const s = connect(path);
   const main: any[] = [];
@@ -728,7 +728,11 @@ function shimOn(path: string, o: { holdImport?: boolean } = {}) {
       const q = JSON.parse(Buffer.concat(parts).toString("utf8"));
       if (p.ch === "bridge") { fr.output.write(`${JSON.stringify(q)}\n`); continue; }
       main.push(q);
-      if (q.op === "set_scopes") s.write(`${JSON.stringify({ t: "res", id: q.id, ok: true, data: { rules: 1, closed: 0, refused: 0 } })}\n`);
+      if (q.op === "set_scopes") {
+        // `laterConfirmMs`: each confirm after the first comes this much later.
+        const ok = () => { if (!s.destroyed) s.write(`${JSON.stringify({ t: "res", id: q.id, ok: true, data: { rules: 1, closed: 0, refused: 0 } })}\n`); };
+        if (o.laterConfirmMs && main.filter((x) => x.op === "set_scopes").length > 1) setTimeout(ok, o.laterConfirmMs); else ok();
+      }
       else if (q.op === "import") setTimeout(() => s.write(`${JSON.stringify({ t: "res", id: q.id, ok: true, data: { cookies_set: 0, errors: [] } })}\n`), o.holdImport ? 300 : 0);
     }
   });
@@ -742,7 +746,7 @@ type Svc = Awaited<ReturnType<typeof startService>> & { w: World; dir: string; l
  * The real service on the fake world, with its link (a fake peer check of the shim), and a host of the fake Chrome: each
  * fake Chrome that starts gets a shim on the link, which ends with it. `lists`: the list files of the test.
  */
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean }): Promise<Svc> {
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number } }): Promise<Svc> {
   const w = new World();
   const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
   mkdirSync(join(dir, "lists"));
@@ -760,7 +764,7 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { l
   let pid = 0;
   const host = setInterval(() => {
     const c = w.named("chromium")[0];
-    if (c && c.pid !== pid) { pid = c.pid; shims.at(-1)?.s.destroy(); shims.push(shimOn(join(dir, "link.sock"))); }
+    if (c && c.pid !== pid) { pid = c.pid; shims.at(-1)?.s.destroy(); shims.push(shimOn(join(dir, "link.sock"), o.shim)); }
     else if (!c && pid !== 0) { pid = 0; shims.at(-1)?.s.destroy(); }
   }, 5);
   t.after(async () => { clearInterval(host); for (const x of shims) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
@@ -830,7 +834,8 @@ test("B1 on the MCP path: a session whose list has no site gets the no-list 503 
 });
 
 test("F1: a launch after the service's start while Chrome is off starts Chrome on the agent door; the client connects after the push and its confirm name its scope", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
-  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  // The confirm of the push that names the launch comes 300 ms after it: the wait must last until the line names it.
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, shim: { laterConfirmMs: 300 } });
   await x.sessions([]); // the first complete read: no session
   await x.sessions([session("web-1", "owner/repo", me())]); // a launch after it: the restart gate keeps it out of the object
   const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
