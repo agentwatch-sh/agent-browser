@@ -13,8 +13,10 @@
 //   3. the client leaves; after the grace time with no use the service stops Chrome and Xvfb (stopped idle, last_stop
 //      idle, state off); the profile stays on disk; a new client that comes as the stop begins waits, and Chrome starts
 //      again for it (review-120 note 9);
-//   4. the MCP path (--test-mcp-port 0): an MCP session's tool call opens the local page; the session stays open, and
-//      the stop by use comes; the next tool call starts Chrome again, the MCP connects again, and the page loads;
+//   4. the client leaves; the stop by use: state off, last_stop idle, the display free, and no restart after it; the MCP
+//      path (--test-mcp-port 0) while Chrome is off: initialize, its notification and tools/list start nothing; a tool
+//      call starts Chrome and opens the local page; the session stays open, and the stop by use comes; the next tool call
+//      starts Chrome again, the MCP connects again, and the page loads; a DELETE while Chrome is off starts nothing;
 //   5. a failed start at a use: with a chrome_bin that is not there, the client gets the 503 with the reason and
 //      stopped start_failed goes out; a changed config ends the hold-off, and the next use starts Chrome;
 //   6. stop, then the service's stop removes its sockets.
@@ -117,6 +119,10 @@ async function startService(): Promise<Door> {
   d.send({ t: "hello", v: 1, side: "daemon", version: "live", features: [] });
   const cfg = await config(d);
   if (!cfg.ok) throw new Error(`config: ${JSON.stringify(cfg)}`);
+  // The first complete set_sessions names no session; the session launches after it, so the restart gate keeps its scope
+  // out of the object until a push and its confirm (review-120b F1).
+  const s0 = await req(d, "set_sessions", DAEMON, { sessions: [], remote: [], box: { hosts: ["box.localhost"], cookie_names: [] } });
+  if (!s0.ok) throw new Error(`set_sessions: ${JSON.stringify(s0)}`);
   const ss = await req(d, "set_sessions", DAEMON, { sessions: [SESSION], remote: [], box: { hosts: ["box.localhost"], cookie_names: [] } });
   if (!ss.ok) throw new Error(`set_sessions: ${JSON.stringify(ss)}`);
   return d;
@@ -183,6 +189,7 @@ try {
   const x1 = recordXvfb();
   track(x1, "xvfb");
   check("the first use started Chrome and Xvfb; the client's upgrade waited, then connected; ready came with Chrome's pid", !!proc(p1) && !!x1 && !!proc(x1) && /unit: an agent uses the agent browser; starting Chrome/.test(serviceErr), `pid ${p1}, xvfb ${x1}, the connect took ${u1.ms} ms`);
+  check("the first use is a launch after the service's start: the client connected after a push that left its scope out, its confirm, and a push that named it", /lists: the receiver took the lists of 0 scopes[\s\S]*lists: the receiver took the lists of 1 scopes/.test(serviceErr));
   check("status: ready with that pid while the client is connected", (await req(d, "status", DAEMON)).data.chrome_pid === p1);
   await sleep(GRACE_MIN * 60_000 + 5000);
   check("a client that stays connected past the grace time holds Chrome: no stop", !!proc(p1) && !d.lines.some((l) => l.t === "ev" && l.ev === "stopped") && (await req(d, "status", DAEMON)).data.chrome_pid === p1, `${GRACE_MIN * 60 + 5} s connected`);
@@ -209,7 +216,16 @@ try {
   check("the client that came during the stop waited and got a new Chrome: a new pid and a new ready", p2 !== p1 && !!proc(p2) && /unit: an agent uses the agent browser; starting Chrome[\s\S]*unit: no agent used[\s\S]*unit: an agent uses the agent browser; starting Chrome/.test(serviceErr), `the client came ${stoppedAt - begun} ms before the stopped event; the connect took ${u2.ms} ms; pid ${p2}`);
   await u2.cdp.close();
 
-  // 4. The MCP path: a tool call, the stop by use with the session open, then a tool call that starts Chrome again.
+  // 4. The stop by use: state off, last_stop idle, the display free, and no restart and no event after it.
+  const st2 = await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "idle" && d.lines.indexOf(l) > d.lines.indexOf(st), GRACE_MIN * 60_000 + 30_000);
+  await until("Chrome and Xvfb end", () => !proc(p2) && !(x2 && proc(x2)), 15_000);
+  const s4 = (await req(d, "status", DAEMON)).data;
+  check("after the stop by use: state off, last_stop idle with no by, the display is free", s4.state === "off" && s4.last_stop?.reason === "idle" && s4.last_stop?.by === null && !existsSync(`/tmp/.X11-unix/X${display}`) && !!st2, JSON.stringify(s4.last_stop));
+  const evs4 = d.lines.filter((l) => l.t === "ev").length;
+  await sleep(10_000);
+  check("no restart and no event after the stop by use (the supervisor and the watch: no crash)", d.lines.filter((l) => l.t === "ev").length === evs4 && !existsSync(`/tmp/.X11-unix/X${display}`));
+
+  // The MCP path while Chrome is off: what needs no browser starts nothing; a tool call starts Chrome.
   const mcpAddress = (await req(d, "status", DAEMON)).data.mcp.address as string;
   const mcpUrl = `http://${mcpAddress}/mcp/live-1`;
   const mcp = async (body: object, sid?: string) => {
@@ -217,29 +233,45 @@ try {
     const text = await r.text();
     return { status: r.status, sid: r.headers.get("mcp-session-id"), text };
   };
+  const starts = () => (serviceErr.match(/unit: an agent uses the agent browser; starting Chrome/g) ?? []).length;
+  const starts4 = starts();
   const init = await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "live", version: "0" } } });
   check("the MCP path: initialize opens an MCP session", init.status === 200 && !!init.sid, init.text.slice(0, 200));
   const sid = init.sid!;
   await mcp({ jsonrpc: "2.0", method: "notifications/initialized" }, sid);
+  const tl = await mcp({ jsonrpc: "2.0", id: 9, method: "tools/list" }, sid);
+  await sleep(2000);
+  check("initialize, its notification and tools/list need no browser: Chrome stays off", tl.status === 200 && tl.text.includes("browser_navigate") && starts() === starts4 && !existsSync(`/tmp/.X11-unix/X${display}`) && (await req(d, "status", DAEMON)).data.state === "off");
   const nav = (id: number) => mcp({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_navigate", arguments: { url: `http://app.localhost:${port}/` } } }, sid);
+  const markA = d.lines.length;
   const n1 = await nav(2);
-  check("the MCP's tool call opens the local page", n1.status === 200 && n1.text.includes("page of app.localhost"), n1.text.slice(0, 160));
+  const readyA = await d.next((l) => l.t === "ev" && l.ev === "ready" && d.lines.indexOf(l) >= markA);
+  const pA = readyA.chrome_pid as number;
+  track(pA, "chrome");
+  track(recordXvfb(), "xvfb");
+  check("a tool call starts Chrome and opens the local page", n1.status === 200 && n1.text.includes("page of app.localhost") && starts() === starts4 + 1, n1.text.slice(0, 160));
   const callEnd = Date.now();
-  const st4 = await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "idle" && d.lines.indexOf(l) > d.lines.indexOf(st), GRACE_MIN * 60_000 + 30_000);
-  check("with the MCP session open and no call, the stop by use comes", st4.reason === "idle" && !proc(p2), `${Math.round((Date.now() - callEnd) / 1000)} s after the last tool call`);
+  const st4 = await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "idle" && d.lines.indexOf(l) > d.lines.indexOf(st2), GRACE_MIN * 60_000 + 30_000);
+  check("with the MCP session open and no call, the stop by use comes", st4.reason === "idle", `${Math.round((Date.now() - callEnd) / 1000)} s after the last tool call`);
+  await until("Chrome ends", () => !proc(pA), 15_000);
   const mark3 = d.lines.length;
   const n2 = await nav(3);
   const ready3 = await d.next((l) => l.t === "ev" && l.ev === "ready" && d.lines.indexOf(l) >= mark3);
   const p3 = ready3.chrome_pid as number;
   track(p3, "chrome");
   track(recordXvfb(), "xvfb");
-  check("the next tool call of the open MCP session starts Chrome again, the MCP connects again, and the page loads", n2.status === 200 && n2.text.includes("page of app.localhost") && !!proc(p3) && p3 !== p2, `pid ${p3}; ${n2.text.slice(0, 120)}`);
+  check("the next tool call of the open MCP session starts Chrome again, the MCP connects again, and the page loads", n2.status === 200 && n2.text.includes("page of app.localhost") && !!proc(p3) && p3 !== pA, `pid ${p3}; ${n2.text.slice(0, 120)}`);
 
   // 5. A failed start at a use, then a changed config ends the hold-off.
   const b5 = await req(d, "stop", TOKEN, {}, 30_000);
   await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "stop");
   await until("Chrome and Xvfb end", () => !proc(p3), 15_000);
   check("stop: Chrome and Xvfb end", b5.ok === true);
+  const startsDel = starts();
+  const del = await fetch(mcpUrl, { method: "DELETE", headers: { Authorization: `Bearer ${TOKEN_MCP}`, "Mcp-Session-Id": sid }, signal: AbortSignal.timeout(30_000) });
+  await del.text();
+  await sleep(2000);
+  check("the MCP session's DELETE while Chrome is off starts nothing", del.status === 200 && starts() === startsDel && !existsSync(`/tmp/.X11-unix/X${display}`));
   await config(d, "/nonexistent/chromium");
   const bad = await CDPConnection.connect(url, 30_000).then(() => "connected", (e: Error) => e.message);
   const sf = await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "start_failed", 10_000);
