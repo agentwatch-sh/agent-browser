@@ -27,7 +27,7 @@
 // payload, a page's content, a session id, a header, a token or a fingerprint.
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { checkCall, filterTools, realFolder, type AllowList } from "./allow-list.ts";
@@ -151,12 +151,13 @@ export const scopeFolder = (state: string, scope: string) => `${join(state, "mcp
 /**
  * Remove a scope's folder with its files (C11; review-115 note 3): only when `<state>/mcp` is a real folder of the
  * service's user, never through a link (a link in the scope's place goes as a link: `rm` reads it with lstat). True
- * when the folder is gone.
+ * when it removed a folder (or a link) of that name.
  */
 export function removeScopeFolder(state: string, scope: string): boolean {
   if (!SCOPE.test(scope)) return false;
   const mcp = join(state, "mcp");
   if (!realFolder(mcp)) return false;
+  try { lstatSync(join(mcp, scope)); } catch { return false; } // no folder (and no link) of that name
   try { rmSync(join(mcp, scope), { recursive: true, force: true }); return true; } catch { return false; }
 }
 

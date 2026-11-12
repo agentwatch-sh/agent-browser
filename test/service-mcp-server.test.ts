@@ -1120,6 +1120,8 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
     assert.equal(t.size("web-1"), 0);
     assert.equal(t.workerOf("web-1"), undefined);
     assert.ok(log.includes("mcp: the folder of scope web-1 is emptied (its session ended)"), log.join("\n"));
+    await x.dropScope!("web-7", "a test");
+    assert.ok(!log.some((l) => l.includes("web-7")), "no log line for a scope with no folder");
     await init(h.url("web-1"));
     assert.deepEqual(readdirSync(folder), [], "a later session of the same name: an empty folder");
     await init(h.url("web-2"));
