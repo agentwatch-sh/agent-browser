@@ -46,6 +46,8 @@ export const ACT_LIMITS = {
   settleMs: 1_000,
   /** C4: the act's caller waits this long for act_rules, act_cookies and act_end, from the send. */
   receiverMs: 10_000,
+  /** The act's own bound of a request of channel main: its wait from the send, and an import that it may wait behind (C4: at most 115 s). */
+  queueMs: 120_000,
   /** A popup's window must be outside the screen in this time. */
   popupMs: 2_000,
 } as const;
@@ -245,7 +247,9 @@ export class SignInAct {
 
   /** The end of a request: the `end` event (a refusal's end within the rate of refusal ends) and the one log line. */
   private end(e: { act: string; scope: string; repo: string | null; record: RecordFields | null; result: ActResult; ms: number; blocked: number; guarded: number; stoppedNow: boolean; started: boolean }): void {
-    const cred = e.result === "remote" || e.result === "not_ready" || e.result === "no_such_name" ? null : e.record;
+    // A refusal by check 1 or 2 names no credential; an act that started names its credential at its end too (a link
+    // that went down during it ends it `not_ready`, with the credential of its start).
+    const cred = !e.started && (e.result === "remote" || e.result === "not_ready" || e.result === "no_such_name") ? null : e.record;
     const ev: Record<string, unknown> = { t: "ev", ev: "sign_in", phase: "end", act: e.act, scope: e.scope, repo: e.repo, id: cred?.id ?? null, name: cred?.name ?? null,
       origin: cred?.origin ?? null, at: this.at(), result: e.result, ms: e.ms, blocked: e.blocked, guarded: e.guarded, stopped_now: e.stoppedNow };
     let sent = true;
@@ -361,7 +365,8 @@ export class SignInAct {
       const first = await this.inputs(r, async () => {
         const open = this.openConnection(r);
         if (open) return open;
-        await this.fill(r, step, r.values.username.toString("utf8"), false);
+        const typed = await this.fill(r, step, r.values.username.toString("utf8"), false);
+        if (typed) return typed;
         await this.pressEnter(r);
         return null;
       });
@@ -382,7 +387,8 @@ export class SignInAct {
       // Form rule 6 at the first key: no open WebSocket or WebTransport to a host outside send_to.
       const open = this.openConnection(r);
       if (open) return open;
-      if (p.user) await this.fill(r, p.user, r.values.username.toString("utf8"), false);
+      const user = p.user ? await this.fill(r, p.user, r.values.username.toString("utf8"), false) : null;
+      if (user) return user;
       const typed = await this.fill(r, p.password, r.password, true);
       if (typed) return typed;
       // The submit as a person does it: the form's visible submit button, else Enter in the password field.
@@ -395,10 +401,13 @@ export class SignInAct {
     return this.outcome(r);
   }
 
-  /** One request of C4's channel main for the act: the act's own timer of 10 s from the send too (a late answer is a failure). */
+  /**
+   * One request of C4's channel main for the act. The link waits 10 s from the send (a late answer is a failure); the act's
+   * own bound adds the time that a request may wait behind an import of channel main, so a link that never answers ends it.
+   */
   private ask(op: "act_rules" | "act_cookies" | "act_end", body: Record<string, unknown>): Promise<Record<string, unknown>> {
     let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), this.limits.receiverMs + 50); });
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), this.limits.receiverMs + this.limits.queueMs); });
     return Promise.race([this.o.receiver.request(op, body, this.limits.receiverMs), late]).finally(() => clearTimeout(timer));
   }
 

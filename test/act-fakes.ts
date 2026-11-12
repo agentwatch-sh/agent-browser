@@ -185,7 +185,7 @@ export class ActWorld {
       model: this.model, receiver: this.receiver, store: this.store, screen: this.screen,
       move: { move: async (payload) => { this.moved.push(payload); this.rec("move"); return this.moveOk; } },
       emit: (ev) => this.events.push(ev), log: (l) => this.logs.push(l), repoOf: () => "owner/repo",
-      limits: { busyMs: 400, outcomeMs: 1500, settleMs: 40, receiverMs: 300, popupMs: 300 }, ...o,
+      limits: { busyMs: 400, outcomeMs: 1500, settleMs: 40, receiverMs: 300, queueMs: 200, popupMs: 300 }, ...o,
     });
   }
 

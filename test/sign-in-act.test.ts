@@ -340,7 +340,7 @@ test("a lost act tab (its session detached) ends the act `lost`; a link that wen
   d.submitTo = null;
   d.onInput = (m) => { if (m === "Input.insertText") setTimeout(() => { d.notReady = "The agent browser is not ready: its extension is not connected."; d.emit({ t: "ev", ch: "bridge", ev: "debugger.onDetach", source: { tabId: 31 }, reason: "target_closed" }); }, 10); };
   await assert.rejects(d.act().signIn(LOCAL, { name: "staging" }), refusal("The agent browser is not ready: its extension is not connected."));
-  assert.equal(ends(d)[0].result, "not_ready");
+  assert.deepEqual([ends(d)[0].result, ends(d)[0].id, ends(d)[0].act], ["not_ready", "c-0000000a", d.events[0].act], "an act that started names its credential at its end");
 });
 
 test("the rate of the refusal ends: 12 refusals of one scope at once send 10 ends; each still gets its answer and its log line; another scope's go", async () => {
