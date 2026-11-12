@@ -201,7 +201,7 @@ try {
   await until("Chrome and Xvfb end", () => !proc(p1) && !proc(x1!), 15_000);
   check("Chrome and Xvfb of the stop are gone; the profile stays on disk", !proc(p1) && !proc(x1!) && existsSync(join(state, "profile", "Default")));
   const u2 = await during;
-  const ready2 = await d.next((l) => l.t === "ev" && l.ev === "ready" && l.chrome_pid !== p1);
+  const ready2 = await d.next((l) => l.t === "ev" && l.ev === "ready" && d.lines.indexOf(l) > d.lines.indexOf(ready1));
   const p2 = ready2.chrome_pid as number;
   track(p2, "chrome");
   const x2 = recordXvfb();
@@ -227,12 +227,13 @@ try {
   const callEnd = Date.now();
   const st4 = await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "idle" && d.lines.indexOf(l) > d.lines.indexOf(st), GRACE_MIN * 60_000 + 30_000);
   check("with the MCP session open and no call, the stop by use comes", st4.reason === "idle" && !proc(p2), `${Math.round((Date.now() - callEnd) / 1000)} s after the last tool call`);
+  const mark3 = d.lines.length;
   const n2 = await nav(3);
-  const ready3 = await d.next((l) => l.t === "ev" && l.ev === "ready" && l.chrome_pid !== p2);
+  const ready3 = await d.next((l) => l.t === "ev" && l.ev === "ready" && d.lines.indexOf(l) >= mark3);
   const p3 = ready3.chrome_pid as number;
   track(p3, "chrome");
   track(recordXvfb(), "xvfb");
-  check("the next tool call of the open MCP session starts Chrome again, the MCP connects again, and the page loads", n2.status === 200 && n2.text.includes("page of app.localhost") && !!proc(p3), `pid ${p3}`);
+  check("the next tool call of the open MCP session starts Chrome again, the MCP connects again, and the page loads", n2.status === 200 && n2.text.includes("page of app.localhost") && !!proc(p3) && p3 !== p2, `pid ${p3}; ${n2.text.slice(0, 120)}`);
 
   // 5. A failed start at a use, then a changed config ends the hold-off.
   const b5 = await req(d, "stop", TOKEN, {}, 30_000);
@@ -244,8 +245,9 @@ try {
   const sf = await d.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "start_failed", 10_000);
   check("a failed start at a use: the client gets the 503 with the reason, and stopped start_failed goes out", /HTTP 503: The agent browser could not get ready: Chromium not found: \/nonexistent\/chromium\./.test(bad) && !!sf, bad.slice(0, 200));
   await config(d);
+  const mark5 = d.lines.length;
   const u5 = await use(url, port, "the use after the changed config");
-  const ready5 = await d.next((l) => l.t === "ev" && l.ev === "ready" && l.chrome_pid !== p3);
+  const ready5 = await d.next((l) => l.t === "ev" && l.ev === "ready" && d.lines.indexOf(l) >= mark5);
   track(ready5.chrome_pid, "chrome");
   track(recordXvfb(), "xvfb");
   check("a changed config ends the hold-off: the next use starts Chrome at once", !!proc(ready5.chrome_pid), `the connect took ${u5.ms} ms`);
