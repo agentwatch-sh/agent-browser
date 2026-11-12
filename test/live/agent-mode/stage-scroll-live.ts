@@ -134,7 +134,9 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
  */
 type Row = { name: string; v?: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; within?: Record<string, number>; trace?: RegExp;
   /** A bar of the row's own on the stage's state (Playwright's own input differs by design), in place of the same state. */
-  bar?: (stage: any) => boolean };
+  bar?: (stage: any) => boolean;
+  /** A line that the stage's trace must not hold (a recovery after a scroll into view that did not bring the element into view). */
+  untraced?: RegExp };
 const click = (sel: string) => (p: any) => p.locator(sel).click();
 const ROWS: Row[] = [
   { name: "mouse.wheel(0, 600)", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 600), fields: ["scrollY", "scrollX"], trace: /^a wheel call: 5 notches/ },
@@ -169,7 +171,7 @@ const ROWS: Row[] = [
   { name: "a canvas with a wheel handler inside an open shadow root across the page: a click below the fold (review-122 B1)", v: "shadow", act: click("#far"), fields: ["clicks", "across"] },
   { name: "a focused number input as the click's target below the fold, the pointer below the page's middle (review-122 note 3)", v: "fnum", before: async (p) => { await p.locator("#fnum").fill("5"); await p.evaluate(() => scrollTo(0, 0)); await p.mouse.move(640, 560); }, act: click("#fnum"), fields: ["fnumValue"], trace: /^a scroll into view: \d+ notches/ },
   { name: "dragTo() from a card to a zone below the fold: the zone's scroll while the button is down (review-122 B3)", v: "drag", act: (p) => p.locator("#card").dragTo(p.locator("#zone")), fields: ["drag"], trace: /^a scroll into view as the client sent it \(held\)/ },
-  { name: "a button in a shadow root's scroller around a slot (the flat tree): locator('#sbtn').click() (review-122 note 5)", v: "slot", act: click("#sbtn"), fields: ["clicks", "scrollY"], within: { scrollY: 120 }, trace: /^a scroll into view: \d+ notches/ },
+  { name: "a button in a shadow root's scroller around a slot (the flat tree): locator('#sbtn').click() (review-122 note 5)", v: "slot", act: click("#sbtn"), fields: ["clicks", "scrollY"], within: { scrollY: 120 }, trace: /^a scroll into view: \d+ notches/, untraced: /[1-9] recoveries of its node/ },
   { name: "a button under a fixed header of the page's scroll-padding: locator('#far').click() (review-122 note 4)", v: "pad", before: (p) => p.evaluate(() => scrollTo(0, 2340)), act: click("#far"), fields: ["clicks", "farTop"], within: { farTop: 120 }, trace: /^a scroll into view: \d+ notches/ },
 ];
 
@@ -240,7 +242,7 @@ export async function stageScrollCases(o: StageContext): Promise<void> {
           const q = await run(pp).finally(() => pp.close().catch(() => {}));
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
           const same = agree(row, s.state, q.state);
-          const traced = !row.trace || trace.some((l) => row.trace!.test(l));
+          const traced = (!row.trace || trace.some((l) => row.trace!.test(l))) && !(row.untraced && trace.some((l) => row.untraced!.test(l)));
           const met = row.bar ? row.bar(s.state) : same;
           const ok = s.ok && q.ok && met && traced;
           const pick = (st: any) => Object.fromEntries(row.fields.map((f) => [f, st[f]]));
