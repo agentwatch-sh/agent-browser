@@ -503,6 +503,24 @@ test("the fake follows the start and the stop by use where C12 says it does (boa
   } finally { await d.close(); }
 });
 
+test("review-120 note 7: a stopped idle on the fake's standard input sets its state to off and its last_stop to idle with no by, as the service's", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-fake-idle-"));
+  const input = new PassThrough();
+  const fake = await startFake({ controlDoor: join(dir, "control.sock"), input, log: () => {} });
+  try {
+    const { c } = await hello(join(dir, "control.sock"));
+    const own = { kind: "daemon", user: "ann", via: "daemon" };
+    c.send({ t: "req", id: "s0", op: "status", by: own });
+    assert.equal((await c.answer("s0")).data.state, "ready");
+    input.write(JSON.stringify({ t: "ev", ev: "stopped", reason: "idle" }) + "\n");
+    await c.next((l) => l.t === "ev" && l.ev === "stopped" && l.reason === "idle");
+    c.send({ t: "req", id: "s1", op: "status", by: own });
+    const s = (await c.answer("s1")).data;
+    assert.deepEqual([s.state, s.chrome_pid, s.agent_text, s.last_stop.reason, s.last_stop.by], ["off", null, control.state.texts.off.agent_text, "idle", null]);
+    c.end();
+  } finally { await fake.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the fake sends each event line of its standard input to each connection past the hellos, and drops each other line without logging it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-fake-"));
   const input = new PassThrough();
