@@ -99,6 +99,8 @@ document.getElementById('after').addEventListener('click', () => __k.after++);
 document.getElementById('after2').addEventListener('click', () => __k.after2++);
 document.getElementById('after3').addEventListener('click', () => __k.after3++);
 document.getElementById('after4').addEventListener('click', () => __k.after4++);
+// The bound row (board ab-t30.18): the time of each keydown in the text area, for the time of a character after STAGE_ACTION_MAX_MS.
+window.__kt = []; document.getElementById('ta').addEventListener('keydown', () => __kt.push(performance.now()));
 </script></body></html>`;
 }
 const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margin:0}input{position:absolute;left:20px;top:30px;width:200px;height:30px;font:16px monospace}</style></head><body><input id=fi>`
@@ -247,7 +249,10 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
             if (row.before) await row.before(p);
             const r = await timed(() => row.act(p));
             await sleep(500);
-            return { ...r, state: await stateOf(p) };
+            // The bound row: the keys of the text area, and those that came less than 40 ms after the key before (the rest at
+            // Playwright's own speed after STAGE_ACTION_MAX_MS: the fast end is 100 to 120 ms a key), with their time.
+            const keys = row.measure === "bound" ? await p.evaluate(() => { const kt = (window as any).__kt as number[]; let n = 0, ms = 0, first = -1; for (let i = 1; i < kt.length; i++) { const g = kt[i] - kt[i - 1]; if (g < 40) { n++; ms += g; if (first < 0) first = i; } } return { keys: kt.length, plainKeys: n, plainMs: Math.round(ms), firstPlain: first, firstPlainAtMs: first > 0 ? Math.round(kt[first] - kt[0]) : null }; }) : undefined;
+            return { ...r, state: await stateOf(p), ...(keys ? { keys } : {}) };
           };
           const lines0 = stageLines().length;
           const sp = await ctx.newPage();
@@ -260,7 +265,7 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           const traced = (!row.trace || fieldLines.some((l) => row.trace!.test(l))) && (!row.fieldDown || s.state.frameDowns[row.fieldDown] === 1);
           // A measure reports; it passes when its facts are read (with a trace, when the stage's line is there).
           const ok = row.measure ? traced : s.ok && q.ok && same && traced;
-          const bound = row.measure === "bound" ? { typed: String(s.state.values.ta ?? "").length, of: 1000 } : {};
+          const bound = row.measure === "bound" ? { typed: String(s.state.values.ta ?? "").length, of: 1000, keys: (s as any).keys, ownKeys: (q as any).keys } : {};
           const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}), ...bound }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same, ...(row.trace ? { traced, frameDowns: s.state.frameDowns } : {}),
             shiftDowns: [s.state.shiftDowns, q.state.shiftDowns], fieldLines, ...(same ? {} : { stageState: compared(row, s.state), ownState: compared(row, q.state) }) };
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail });
