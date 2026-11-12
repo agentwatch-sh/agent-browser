@@ -16,7 +16,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { charKey } from "../src/human/keys.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
-import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, STAGE_GROUP, WIDGET_LISTENERS } from "../src/relay/stage.ts";
+import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, STAGE_GROUP } from "../src/relay/stage.ts";
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -67,7 +67,7 @@ test("ab-pf8 case 1: a field with a widget sign gets no focus click: Playwright'
     ["autocomplete", { widget: "autocomplete" }],
     ["list", { widget: "list" }],
     ["comboboxAround", { widget: "comboboxAround" }],
-    ...WIDGET_LISTENERS.map((type): [string, object] => [`listener (${type})`, { listeners: [type] }]),
+    ...["mousedown", "mouseup", "click", "pointerdown", "pointerup"].map((type): [string, object] => [`listener (${type})`, { listeners: [type] }]),
   ];
   for (const [name, facts] of signs) for (const [call, calls, value] of CALLS) {
     const sign = name.startsWith("listener") ? "listener" : name;

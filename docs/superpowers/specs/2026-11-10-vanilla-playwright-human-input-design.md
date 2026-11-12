@@ -437,7 +437,8 @@ field. The stage does the same, by the rules of `src/input.ts` `focusField`:
 - **A click that opens a widget.** A field whose click (not its focus) opens a picker or a list can cover
   the next target, where Playwright's script focus opens nothing. The recovery of section 6.6 moves the
   pointer off a covering element, but a picker that stays open until Escape or an outside click is an open
-  point (section 16, open point 1).
+  point (section 16, open point 1). The operator's answer (board item ab-pf8, 2026-11-12): such a field gets no click,
+  by its signs (C11, the focus click; board ab-t30.18).
 
 
 ## 6. Playwright's own checks
@@ -600,7 +601,8 @@ where Playwright uses a script. So the stage can open an overlay that Playwright
 5. **A limit.** At most two recoveries in one action. After them, the stage sends the rest of the action's
    input as Playwright sends it, with only the timestamps and the rate of section 4.6, and the harness
    counts it.
-6. **A widget that a click opens** and that stays open (a date picker, a list): open point 1 (section 16).
+6. **A widget that a click opens** and that stays open (a date picker, a list): open point 1 (section 16), answered:
+   no focus click on such a field (board item ab-pf8).
 
 ## 7. `fill` and `insertText`
 
@@ -1251,10 +1253,16 @@ questions.
    live tests, whether the next action passes; if not, the options are: send Escape after a focus click that
    opened a new element over the page (an input of its own), click an empty part of the page (a click with
    its own effects), or use Playwright's script focus for such fields (the signal stays).
+   **Answered** (board item ab-pf8, the operator, 2026-11-12: "Focus such fields without a click"): a field with a
+   widget sign gets no focus click, and Playwright's script focus goes as the client sent it, as with Playwright's own
+   input; after each focus click the stage counts the new elements that cover the area near the field (count only).
+   Built by board ab-t30.18; C11, the focus click, names the signs.
 2. **The named exception of section 7.2** (review-96, B4). A page's key handler can make the value differ
    from Playwright's `fill`. Build task 6 must report the tag input and the input mask of the live tests;
    if the operator wants "the same result" always, `fill` goes as one `insertText` (Q2 c's effect for every
    length).
+   **Answered** (board item ab-pf8, the operator, 2026-11-12: "Keep typing, as a person does"): the typed keys stay
+   (Q2 a), with the named exception and its value check; no change.
 3. **Predicted points** (section 9.1; review-96, N1). CDP gives more predicted points than XTEST
    (2.3 to 2.7 against 1.80 to 2.11 here). Build task 2 (ab-t30.3) must reach the bar of section 9.1, or the
    lead brings the numbers and the two options to the operator.
