@@ -39,7 +39,17 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * from the service's own pid (`pid`) is admitted only with a live one-time ticket of its scope in the query, in place
    * of the walk (C11, the MCP inside the service); a ticket from any other pid admits nothing.
    */
-  tickets?: RelayTickets };
+  tickets?: RelayTickets;
+  /**
+   * The service's start at a use (board ab-v16.94.11): an upgrade that step 4 refuses because the link is down or the
+   * allowlist is not confirmed yet waits for `wake(scope)` (the service starts Chrome when it does not run), then the checks
+   * run again. While `stopping()` (the service stops Chrome for lack of use), step 4 counts the link as down.
+   */
+  use?: RelayUse };
+/** The service's start at a use: see RelayOptions.use. `wake` answers null (check again) or the client's 503 text. */
+export type RelayUse = { stopping(): boolean; wake(scope: string): Promise<string | null> };
+/** The texts of step 4 for which an upgrade waits for the service's start at a use. */
+const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist]);
 /** The ticket check of the service's MCP connections (src/service/mcp/ticket.ts). */
 export type RelayTickets = { readonly pid: number; take(ticket: string, scope: string, peerPid: number): boolean };
 /** The calls between the model and the service's carrier: the same messages as the stdio lines of C10, as objects. */
@@ -59,20 +69,23 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
  * the service's own pid passes step 6 only with a live ticket of its scope (C11, the MCP inside the service), and no
  * root admits it; each ticket in a request is gone after this check.
  */
-function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets): { scope: string; root: Root | null } | [number, string] {
+function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse): { scope: string; root: Root | null } | [number, string] | [number, string, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
   const m = /^\/devtools\/browser\/([^/]*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
   if (req.method !== "GET" || !m || !SCOPE.test(m[1])) return [404, NOT_FOUND];
   const scope = m[1];
+  // Step 4, with the scope for the service's start at a use (a stop by use that runs counts as a link that is down).
+  const notReady = () => model.notReady() ?? (use?.stopping() ? NOT_READY.link : null);
   if (!gate) {
-    const why = model.refuse(scope);
-    return why ? [503, why] : { scope, root: null };
+    const why = notReady();
+    if (why) return [503, why, scope];
+    return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null };
   }
   if (gate.failed !== null) return [503, NOT_READY.cannotRead];
   const peer = gate.peerOf(req.socket);
   if (!peer) return [403, PEER_UNREAD];
-  const why = model.notReady();
-  if (why) return [503, why];
+  const why = notReady();
+  if (why) return [503, why, scope];
   if (!model.named(scope)) return [503, NOT_READY.noList];
   if (tickets) {
     const ticket = ticketOf(req.url ?? "");
@@ -101,7 +114,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
 
   const http = createServer((req, res) => {
     // Only the WebSocket upgrade gets a connection.
-    const a = admit(req, model, gate, o.tickets);
+    const a = admit(req, model, gate, o.tickets, o.use);
     const [status, body] = Array.isArray(a) ? a : [404, NOT_FOUND];
     res.writeHead(status, { "Content-Type": "text/plain" }).end(body);
   });
@@ -109,26 +122,39 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload });
   // The peer read, at each accept, before the relay reads the request (C11, step 3).
   if (gate) http.on("connection", (socket) => gate.accept(socket));
+  let ended = false;
   http.on("upgrade", (req, socket, head) => {
-    const a = admit(req, model, gate, o.tickets);
-    // The check runs once, at the upgrade: the peer's pidfd closes now, in every path.
-    gate?.release(socket);
-    if (Array.isArray(a)) {
-      const [status, body] = a;
-      socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    const a = admit(req, model, gate, o.tickets, o.use);
+    // The service's start at a use (board ab-v16.94.11): the upgrade waits, then the checks run again.
+    if (o.use && Array.isArray(a) && a.length === 3 && WAKES.has(a[1])) {
+      const again = () => admit(req, model, gate, o.tickets, o.use);
+      // Node's server takes its error handler off an upgraded socket: a client's reset during the wait must not throw.
+      socket.on("error", () => {});
+      void o.use.wake(a[2]).then((why) => upgrade(why === null ? again() : [503, why]), () => upgrade(again()));
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root);
-      ws.on("message", (data) => {
-        let msg: unknown;
-        try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
-        void model.onMessage(conn, msg);
+    upgrade(a);
+    function upgrade(a: ReturnType<typeof admit>): void {
+      // The check runs once, at the upgrade: the peer's pidfd closes now, in every path.
+      gate?.release(socket);
+      if (ended || socket.destroyed) { socket.destroy(); return; }
+      if (Array.isArray(a)) {
+        const [status, body] = a;
+        socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root);
+        ws.on("message", (data) => {
+          let msg: unknown;
+          try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
+          void model.onMessage(conn, msg);
+        });
+        // A message above MAX_REQUEST: ws closes the connection with 1009 and reports it here.
+        ws.on("error", (e) => o.log(`relay: connection ${conn.id}: ${e.message}`));
+        ws.on("close", () => { void model.close(conn); });
       });
-      // A message above MAX_REQUEST: ws closes the connection with 1009 and reports it here.
-      ws.on("error", (e) => o.log(`relay: connection ${conn.id}: ${e.message}`));
-      ws.on("close", () => { void model.close(conn); });
-    });
+    }
   });
 
   // The socket is created private: no moment exists in which another user could connect to it.
@@ -140,6 +166,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
 
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
+    ended = true;
     model.stop();
     await new Promise<void>((r) => { wss.close(() => r()); });
     http.closeAllConnections();

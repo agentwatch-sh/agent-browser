@@ -170,6 +170,9 @@ export class Stage1a implements Handler {
 
   endpointState(): EndpointState { return this.agentDoor.state(); }
 
+  /** A scope of a session of the last set_sessions (none that ended since): only such a scope's use starts Chrome (board ab-v16.94.11). */
+  liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope); }
+
   status(): Record<string, unknown> {
     const data: Record<string, unknown> = {
       state: "off", ...STAGE_1A_TEXTS,
@@ -318,6 +321,20 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       inFlight: () => carrier.inFlight(), idleFor: () => carrier.idleFor(), importing: () => link.importing(), sinceSend: () => link.sinceSend(),
       clients: () => (agent?.clients() ?? 0) > 0 || carrier.clients(),
     } : { clients: () => (agent?.clients() ?? 0) > 0 },
+    // The use signal of the start and the stop by use (board ab-v16.94.11): the agent door's open client connections (the
+    // endpoint's CDP clients, the MCP's own among them), a bridge request that runs, a send that runs, an MCP session; and
+    // the time since the last request or send.
+    use: {
+      now: () => {
+        const n: string[] = [];
+        if ((agent?.clients() ?? 0) > 0) n.push("client");
+        if (carrier && carrier.inFlight() > 0) n.push("request");
+        if (link?.importing()) n.push("send");
+        if ((mcp?.sessions() ?? 0) > 0) n.push("mcp");
+        return n;
+      },
+      quietFor: () => Math.min(carrier?.idleFor() ?? Infinity, link?.sinceSend() ?? Infinity),
+    },
     ...(link ? {
       link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady() },
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
@@ -331,7 +348,11 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       ...o.unit.part?.unit,
     },
   }) : null;
-  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log });
+  // The start at a use (board ab-v16.94.11): only a scope of a live session, and only while agent control is on.
+  const model = () => (agent as (AgentDoor & { relay?: { model: { notReady(): string | null; sitesOf(scope: string): number | null } } }) | null)?.relay?.model ?? null;
+  const modelReady = () => { const m = model(); return m !== null && m.notReady() === null; };
+  const wakeAt = (scope: string): Promise<string | null> => (part && state.liveScope(scope) && state.config?.control !== false ? part.wake(modelReady) : Promise.resolve(null));
+  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => { void part!.wake(() => port.isUp()); } } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
@@ -343,13 +364,14 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // before the first hello (C12). Its MCP connects back to the agent door with a ticket; until the agent door opens, step
   // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
   if (mcp) {
-    const model = () => (agent as (AgentDoor & { relay?: { model: { notReady(): string | null; sitesOf(scope: string): number | null } } }) | null)?.relay?.model ?? null;
     await mcp.open({
       url: (scope) => agentDoorUrl(o.agentDoor, scope),
       readiness: (scope) => {
         const m = model();
-        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
+        // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
+        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() ?? (part?.idleStopping ? NOT_READY.link : null) : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
       },
+      ...(part ? { wake: wakeAt } : {}),
     });
   }
   // The control door opens next, before the agent door and before any Chrome start (the design's build note 8).
@@ -373,7 +395,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
       await link.start();
     }
-    agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets });
+    agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
+      ...(part ? { use: { stopping: () => part!.idleStopping, wake: wakeAt } } : {}) });
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;
   // C10: the carrier's deadlines, each second.

@@ -31,6 +31,10 @@ import { PEER_UNREAD } from "../../relay/peer.ts";
 import type { Root } from "../../relay/scopes.ts";
 import { admitConnection, admitRequest, McpSnapshot, WWW_AUTHENTICATE, type Admitted, type McpItem, type McpReadiness, type Refusal } from "./admission.ts";
 import { procReader, walkReader, type McpReader } from "./proc.ts";
+import { NOT_READY } from "../../relay/model.ts";
+
+/** The texts of step 8 for which a request waits for the service's start at a use (board ab-v16.94.11). */
+const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist]);
 
 /** The MCP handler behind the admission (part 2b: the Streamable HTTP transport and the Playwright MCP). */
 export interface McpHandler {
@@ -55,6 +59,12 @@ export type McpPortOptions = {
   handler: McpHandler;
   /** What step 8 reads of the service, for the connection's scope. */
   readiness: (scope: string) => McpReadiness;
+  /**
+   * The service's start at a use (board ab-v16.94.11): a request that step 8 refuses because the link is down or the
+   * allowlist is not confirmed yet waits for `wake(scope)`, then steps 3 to 8 run again. `wake` answers null (check
+   * again) or the 503 text of a start that failed.
+   */
+  wake?: (scope: string) => Promise<string | null>;
   log: (line: string) => void;
   /** Tests only: the fake reader of the vectors (default: /proc), the platform, the service's uid, the compare of step 7. */
   reader?: McpReader;
@@ -208,10 +218,26 @@ export class McpPort {
       else conn.socket.destroy();
       this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request failed (500)`);
     };
+    const check = (): Refusal | null => admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
     let r;
-    try {
-      r = admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
-    } catch { fail(); return; }
+    try { r = check(); } catch { fail(); return; }
+    // The service's start at a use (board ab-v16.94.11): the request waits with no body timeout, then steps 3 to 8 run
+    // again; a start that failed gives its 503 at step 8.
+    const wake = this.o.wake;
+    if (r !== null && r.step === 8 && r.status === 503 && WAKES.has(r.body) && wake) {
+      conn.socket.setTimeout(0);
+      void wake(conn.scope).then((why) => (why === null ? check() : { step: 8, status: 503, body: why }), () => check()).then((again) => {
+        if (conn.socket.destroyed || this.stopping) return;
+        if (conn.reading) conn.socket.setTimeout(this.o.idleMs ?? MCP_IDLE_MS);
+        this.decide(again, req, res, expect, conn, fail);
+      }, fail);
+      return;
+    }
+    this.decide(r, req, res, expect, conn, fail);
+  }
+
+  /** The answer of steps 3 to 8: the handler, the 100 or 417 of an expectation, or the refusal. */
+  private decide(r: Refusal | null, req: IncomingMessage, res: ServerResponse, expect: "continue" | "expectation" | null, conn: Conn, fail: () => void): void {
     if (r === null) {
       if (expect === "expectation") {
         // Steps 3 to 8 passed; an expectation that the service does not know gets the 417, and the connection closes.

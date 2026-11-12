@@ -75,6 +75,11 @@ export type Stage1cOptions = {
   wall?: () => number;
   /** Tests only: the writer of the file of ended scopes (a disk that fails). */
   writeEnded?: (path: string, value: unknown) => void;
+  /**
+   * The start at a use (board ab-v16.94.11): an import needs the browser, so each one calls it before its wait for the
+   * receiver (the service starts Chrome when it does not run).
+   */
+  wake?: () => void;
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
@@ -110,9 +115,12 @@ export class Stage1c implements ServicePart {
   // The import.
   private imports: Promise<unknown> = Promise.resolve();
   private readonly upWaiters = new Set<() => void>();
+  /** The start at a use of a send (board ab-v16.94.11). */
+  private readonly startAtUse: () => void;
 
   constructor(o: Stage1cOptions) {
     this.log = o.log;
+    this.startAtUse = o.wake ?? (() => {});
     this.clock = o.clock ?? REAL_CLOCK;
     this.receiver = o.receiver ?? NO_RECEIVER;
     this.files = new ListFiles(o.listsFolder);
@@ -433,6 +441,8 @@ export class Stage1c implements ServicePart {
     }
     const { state, dropped } = checked;
     const run = async (): Promise<Answer> => {
+      // A send needs the browser: a use, which starts Chrome when it does not run (board ab-v16.94.11).
+      try { this.startAtUse(); } catch {}
       if (!(await this.waitUp(RECEIVER_WAIT_MS))) return { error: sendText(state.domain, this.stopped ? NOT_CONNECTED_TEXT : RECEIVER_MISSING_TEXT).text };
       let counts: Record<string, unknown>;
       try { counts = await this.receiver.request("import", { state }, IMPORT_WAIT_MS); }
