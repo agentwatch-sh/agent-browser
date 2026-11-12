@@ -318,7 +318,7 @@ test("review-123b: the design states round 0's bound as the state until board ta
   const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   const AB8FU = "\"can we do a simulated copy/paste for long text input? and we use a person typing for short input only?\"";
   for (const t of [
-    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 842 to 921 characters went within 30 s; fewer on a busy box) ends with that timeout, and the rest of its text does not go.",
+    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 820 to 921 characters went within 30 s, and on a busy box once only 598) ends with that timeout, and the rest of its text does not go.",
     `This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu (2026-11-12): ${AB8FU} Then a long text goes as a person's paste, and this rule of a key run and its bound go away.`,
     "speed. No client action reaches its timeout.",
     "(A note of board ab-t30.18, not the operator's words: measured, a `pressSequentially` of more than about 850 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box; board task ab-t30.19 builds the operator's later answer on board item ab-8fu, section 15.)",

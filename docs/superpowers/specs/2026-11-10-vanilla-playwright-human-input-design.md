@@ -545,17 +545,18 @@ The stage's limits, so that a translated action ends inside the defaults:
   activation's worst case does not end an MCP action that a person's input would finish.
 - `fill` and `insertText`: typed keys only when the plan fits in `STAGE_TYPE_MAX_MS` (first value 10 s);
   the stage first moves the plan to the fast end of the person's spread when that makes it fit (section 7).
-- A key run of `pressSequentially` or `type`: the stage does not know the run's length in advance. It types
-  at the person's speed for the first `STAGE_RUN_SLOW_MS` (first value 12 s) of the run, then at the fast
-  end of the person's spread (about 100 to 120 ms a key). At `STAGE_ACTION_MAX_MS` (first value 25 s) the
-  rest of the run goes at Playwright's own speed, with no person's timing, and the harness counts it. With
-  an average typist's speed, about 50 characters go at the person's speed and about 170 in all inside the
-  25 s. So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a
-  `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 842 to 921
-  characters went within 30 s; fewer on a busy box) ends with that timeout, and the rest of its text does not
-  go. This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu
-  (2026-11-12): "can we do a simulated copy/paste for long text input? and we use a person typing for short
-  input only?" Then a long text goes as a person's paste, and this rule of a key run and its bound go away.
+- A key run of `pressSequentially` or `type`: the stage does not know the run's length in advance. It types at
+  the person's speed for the first `STAGE_RUN_SLOW_MS` (first value 12 s) of the run, then at the fast end of
+  the person's spread (about 100 to 120 ms a key). At `STAGE_ACTION_MAX_MS` (first value 25 s) the rest of the
+  run goes at Playwright's own speed, with no person's timing, and the harness counts it. With an average
+  typist's speed, about 50 characters go at the person's speed and about 170 in all inside the 25 s. So a
+  client action reaches Playwright's 30 s timeout because of the stage only above a bound: a
+  `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 820 to 921
+  characters went within 30 s, and on a busy box once only 598) ends with that timeout, and the rest of its
+  text does not go. This is the state until board task ab-t30.19, which builds the operator's answer on board
+  item ab-8fu (2026-11-12): "can we do a simulated copy/paste for long text input? and we use a person typing
+  for short input only?" Then a long text goes as a person's paste, and this rule of a key run and its bound
+  go away.
 - `STAGE_ACTION_MAX_MS` ends any lock hold in the same way (section 4.4).
 - **A whole test of `@playwright/test`.** Its default test timeout is 30 s for the whole test, and the
   stage's time adds up over the test's actions (review-96, B8). With M3 and M5's times, 15 to 20 translated
