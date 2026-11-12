@@ -809,6 +809,22 @@ test("B1 on the MCP path: a session whose list has no site gets the no-list 503 
   assert.deepEqual([x.w.named("chromium").length, starts(x), x.part!.usedBy().length], [0, 0, 0]);
 });
 
+test("B1: the service's own pid (an MCP's browser) passes the check before a start at a use only with a live ticket of its scope", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const tok = control.testTokens[0];
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true });
+  await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
+  // This test runs in the service's process: its own CDP client is the service's own pid.
+  const bare = await raw(x.url("web-1"));
+  assert.deepEqual([bare.status, bare.body], [403, sessionRefusal(process.pid)], "no ticket: the session's 403 at once");
+  const other = await raw(`${x.url("web-1")}?ticket=${x.mcp!.tickets.mint("web-2")}`);
+  assert.deepEqual([other.status, other.body], [403, sessionRefusal(process.pid)], "a ticket of another scope: the session's 403 at once");
+  assert.deepEqual([x.w.named("chromium").length, starts(x)], [0, 0], "no start");
+  const cdp = await CDPConnection.connect(`${x.url("web-1")}?ticket=${x.mcp!.tickets.mint("web-1")}`, 30_000);
+  assert.equal(starts(x), 1, "a live ticket of the scope starts Chrome and waits");
+  assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/);
+  await cdp.close();
+});
+
 test("B2: the quiet time counts only the agents' traffic: after the client leaves, a set_sessions change (a new set_scopes, its confirm, a new allowlist line and the model's content-settings calls) does not reset it", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
   const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
   const part = x.part!;
@@ -854,6 +870,8 @@ test("P1: an MCP session stays open over a stop by use and is no use by being op
   const a = await call(2);
   assert.ok(a.status === 200 && a.body.result, a.text);
   assert.equal(minted, 1, "the MCP's browser connected with a ticket");
+  const act = x.mcp!.activity();
+  assert.ok(act.calls === 0 && act.quietFor < 10_000, "the tool call counted as a use while it ran, and its end starts the quiet time");
   const pid1 = x.w.named("chromium")[0].pid;
   await until(() => part.usedBy().length === 0, "no use while the MCP session is open and no call runs", 5000);
   // The stop by use: the open MCP session and the MCP's own open connection do not hold it.
