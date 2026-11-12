@@ -28,6 +28,8 @@ export const FROM_PAGE = "A web page cannot connect to the agent browser.";
 export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate;
   /** The input stage's build switch (stage.ts): the tests' option; with none, the switch (off) or the live rows' variable. */
   stage?: boolean;
+  /** The model's random source (the tests: a seeded one, so that the stage's draws are the same in each run). */
+  random?: () => number;
   /**
    * The service's in-process bridge (stage 1b part 2 of the self-contained agent browser, board ab-v16.94.9): with it the
    * relay's model sends its requests to `transport.send` and takes the answers and the daemon's lines from the handlers
@@ -122,7 +124,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
   const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null,
-    onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}) });
+    onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}) });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
   const http = createServer((req, res) => {

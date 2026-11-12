@@ -31,7 +31,7 @@ import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, s
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
 import { seededRandom } from "./human/random.ts";
-import { charKey } from "./human/keys.ts";
+import { charKey, macCommands } from "./human/keys.ts";
 import type { Hands } from "./input.ts";
 
 // ---------- the step script ----------
@@ -243,21 +243,6 @@ export function parseKey(spec: string): KeyEvent {
 }
 
 /**
- * macOS: Chrome runs editing keys and shortcuts in a text field (Backspace, the arrows, Cmd-A, Cmd-C)
- * through editing commands that the OS key event carries. A CDP key event has none, so we name them,
- * as a real Mac keyboard would. A page that handles the key itself (preventDefault) still does.
- */
-const MAC_COMMANDS: Record<string, string[]> = {
-  Backspace: ["deleteBackward"], Delete: ["deleteForward"], ArrowUp: ["moveUp"], ArrowDown: ["moveDown"], ArrowLeft: ["moveLeft"], ArrowRight: ["moveRight"],
-  "Shift+ArrowUp": ["moveUpAndModifySelection"], "Shift+ArrowDown": ["moveDownAndModifySelection"],
-  "Shift+ArrowLeft": ["moveLeftAndModifySelection"], "Shift+ArrowRight": ["moveRightAndModifySelection"],
-  Home: ["scrollToBeginningOfDocument"], End: ["scrollToEndOfDocument"], PageUp: ["scrollPageUp"], PageDown: ["scrollPageDown"],
-  "Meta+KeyA": ["selectAll"], "Meta+KeyZ": ["undo"], "Shift+Meta+KeyZ": ["redo"],
-  "Alt+Backspace": ["deleteWordBackward"], "Meta+Backspace": ["deleteToBeginningOfLine"],
-  "Meta+ArrowLeft": ["moveToLeftEndOfLine"], "Meta+ArrowRight": ["moveToRightEndOfLine"], "Alt+ArrowLeft": ["moveWordLeft"], "Alt+ArrowRight": ["moveWordRight"],
-};
-
-/**
  * Copy, cut and paste: their chords use the machine's shared clipboard, which belongs to the person at
  * the machine. A recording never reads or writes it. Control/Meta + C, X, V everywhere; on Windows and
  * Linux also Shift+Delete (cut) and Control/Shift+Insert (copy, paste).
@@ -277,10 +262,8 @@ export function isContextMenuChord(k: KeyEvent): boolean {
   return k.code === "F10" && k.modifiers === SHIFT;
 }
 
-export function macCommands(k: KeyEvent): string[] {
-  const prefix = [[SHIFT, "Shift"], [2, "Control"], [1, "Alt"], [4, "Meta"]].filter(([bit]) => k.modifiers & (bit as number)).map(([, n]) => `${n}+`).join("");
-  return MAC_COMMANDS[prefix + k.code] ?? [];
-}
+/** macOS's editing commands of a key: src/human/keys.ts holds the table (the input stage uses it too). */
+export { macCommands } from "./human/keys.ts";
 
 // ---------- ffmpeg ----------
 

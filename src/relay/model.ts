@@ -681,6 +681,10 @@ export class Model {
         this.behind(tab, before.then(() => this.stage!.step(page, entry)).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`)));
         return;
       }
+      // A call that the stage does not take ends the tab's key run (C11, the input lock), and waits in the tab's gate until
+      // the run's planned releases have gone (the answers: the early answer of a key release).
+      const endRun = this.stage.other(page);
+      if (endRun) this.behind(tab, (tab.gate ?? Promise.resolve()).then(endRun).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`)));
     }
     // A client's Page.close goes to Chrome as any page call: the receiver runs it in its removal queue, with its window
     // rule, so it never closes the browser's last window (C10, C11; board ab-v16.41). On a child session (a frame or a

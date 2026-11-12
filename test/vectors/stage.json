@@ -3064,7 +3064,7 @@
   {
    "id": "type",
    "row": "`keyboard.type(text)`, `pressSequentially(text)`, the old `type()`",
-   "note": "keyboard.type('Hi') into the focused field: Playwright sends each key's keyDown and keyUp and waits for each answer; its capital H has modifiers 0. The stage sends a Shift press 45 to 95 ms before H (with modifiers 8), the Shift release 15 to 60 ms after H's release, and i only after both. The answer of H's keyUp can come early (before the release goes) when the plan says that the next key can overlap; the seed decides, so both orders fit the vector.",
+   "note": "keyboard.type('Hi') into the focused field: Playwright sends each key's keyDown and keyUp and waits for each answer; its capital H has modifiers 0. The stage sends a Shift press 45 to 95 ms before H (with modifiers 8), the Shift release 15 to 60 ms after H's release, and i only after both. The answer of each keyUp can come early (before the release goes) when the plan says that the next key can overlap (the stage does not know that i is the last key); the seed decides, so both orders fit the vector.",
    "platform": "linux",
    "seed": 35,
    "clock": 0,
@@ -3206,7 +3206,7 @@
     {"id": 1, "after": "out:1"},
     {"id": 2, "after": "out:2", "mayBeEarly": true},
     {"id": 3, "after": "out:4"},
-    {"id": 4, "after": "out:5"}
+    {"id": 4, "after": "out:5", "mayBeEarly": true}
    ]
   },
   {
@@ -3784,7 +3784,7 @@
   {
    "id": "clear",
    "row": "`fill(text)`, `clear()`",
-   "note": "clear() on a focused input: Playwright's script selects the text, then the Delete key; the stage gives it a person's hold.",
+   "note": "clear() on a focused input: Playwright's script selects the text, then the Delete key; the stage gives it a person's hold. The answer of the keyUp can come early, as for any key of a run.",
    "platform": "linux",
    "seed": 42,
    "clock": 0,
@@ -3889,7 +3889,7 @@
      "fields": {"key": "Delete", "modifiers": 0}
     }
    ],
-   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2"}]
+   "answers": [{"id": 1, "after": "out:0"}, {"id": 2, "after": "out:1"}, {"id": 3, "after": "out:2", "mayBeEarly": true}]
   },
   {
    "id": "fill-date",

@@ -11,7 +11,8 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
-import { findFfmpeg, fittsMs, parseKey, parseSize, parseSteps, planMove, planRecording, pngPixels, pointAt, samePixels, seededRandom } from "../src/record.ts";
+import { findFfmpeg, fittsMs, parseKey, parseSize, parseSteps, planMove, planRecording, pngPixels, pointAt, samePixels, seededRandom, sendKey, typeChar } from "../src/record.ts";
+import type { Tab } from "../src/browser.ts";
 import { FakeChrome, rgbaPng, type FakePage } from "./fake-chrome.ts";
 import { cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -417,4 +418,21 @@ test("shot --size/--scale lays the page out at that size for the shot only; a fa
   r = await run(["shot", "sized", png, "--size", "640"]);
   assert.equal(r.json.error.code, "usage");
   await run(["close", "sized"]);
+});
+
+test("sendKey and typeChar on the Mac (review-119b R1): a key's editing commands from macCommands (its table in src/human/keys.ts), with the key's modifiers", async () => {
+  const sent: any[] = [];
+  const tab = { send: async (method: string, params: any) => { sent.push({ method, ...params }); return {}; } } as unknown as Tab;
+  const was = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...was, value: "darwin" });
+  try {
+    await sendKey(tab, parseKey("Meta+ArrowRight")); // a record's press step
+    await sendKey(tab, parseKey("Backspace"));
+    await typeChar(tab, "\n"); // agent-browser type with no Hands: Enter has no command
+  } finally { Object.defineProperty(process, "platform", was); }
+  assert.deepEqual(sent.map((s) => [s.type, s.key, s.modifiers, s.commands]), [
+    ["rawKeyDown", "ArrowRight", 4, ["moveToRightEndOfLine"]], ["keyUp", "ArrowRight", 4, undefined],
+    ["rawKeyDown", "Backspace", 0, ["deleteBackward"]], ["keyUp", "Backspace", 0, undefined],
+    ["keyDown", "Enter", 0, undefined], ["keyUp", "Enter", 0, undefined],
+  ]);
 });

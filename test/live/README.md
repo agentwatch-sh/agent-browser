@@ -142,6 +142,18 @@ recorder page's records through the stage (the rows R1, R2 and R9 to R13) agains
 of `input-harness/run.ts --only source`. It writes `stage-live.json`, `stage-harness-results.json` and
 `stage-harness-report.txt` in the run folder.
 
+The keys and the text (board ab-t30.10, `stage-keys-live.ts`) are a part of the same group. `STAGE_PARTS=keys` runs
+this part alone (the default is `pointer,keys`), and `STAGE_KEY_ROWS=<a regular expression>` only its rows whose names
+match (with no harness rows). Its page on `a.localhost` holds the fields of the key and text rows
+(an input, a textarea, a number and an email input, a contenteditable, a form, a field whose `keydown` opens an alert, a
+field whose `blur` opens an alert, and a field in a cross-origin frame on `b.localhost`) and the widgets of the input
+design's open points 1 and 2 (a date picker and a combobox that open at a click, a tag input and an input mask). Each
+row passes when the action passes through the stage with Playwright's default timeout and the page's state is the same
+as with Playwright's own input; the widgets' rows are measures. The harness rows R3, R4 and K1 to K4 score the
+recorder's keys through the stage against `STAGE_REFERENCE`, and against `STAGE_PERSON` when it names a reference of
+the operator's published numbers (a report, not a bar, until board ab-t30.13 fits the parameters). It writes
+`stage-keys-live.json`, `stage-keys-harness-results.json` and `stage-keys-harness-report.txt` in the run folder.
+
 ## Input harness
 
 `input-harness/run.ts` (board ab-t30.2) scores agent input against a reference input, gap by gap, by the
