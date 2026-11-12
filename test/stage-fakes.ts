@@ -109,6 +109,8 @@ export class FakeTab implements StagePage {
    */
   readonly opened = new Set<string>();
   coverSeen: { field: string; area: { x0: number; y0: number; x1: number; y1: number }; seen: Set<string> } | null = null;
+  /** The object group of each main world's handle of DOM.resolveNode (review-123 B1: the listeners' handlers come only with a group). */
+  private readonly groups = new Map<string, string | null>();
   /** Whether a node is there (a panel only after its press). */
   present(id: string): boolean { const n = this.v.page.nodes[id]; return !!n && (!n.opensAt || this.opened.has(id)); }
   /**
@@ -656,12 +658,24 @@ export class FakeTab implements StagePage {
       return { result: { type: "object", subtype: "node", objectId: `field:${p.objectId}` } };
     }
     if (s.method === "DOM.describeNode" && String(p.objectId).startsWith("field:")) return { node: { nodeId: 0, backendNodeId: 500 + Object.keys(V.page.nodes).indexOf(String(p.objectId).slice(6)), nodeType: 1, nodeName: "INPUT" } };
-    if (s.method === "DOM.resolveNode" && p.backendNodeId >= 500 && p.backendNodeId < 900) return { object: { type: "object", subtype: "node", objectId: `mainfield:${Object.keys(V.page.nodes)[p.backendNodeId - 500]}` } };
+    // review-123 B1: Chrome gives each listener's handler (with its text as the description) only when the handle has an
+    // object group; a listener's `handler` fact is that text (else a handler with a body), `noHandler` gives none.
+    if (s.method === "DOM.resolveNode" && p.backendNodeId >= 500 && p.backendNodeId < 900) {
+      const objectId = `mainfield:${Object.keys(V.page.nodes)[p.backendNodeId - 500]}`;
+      this.groups.set(objectId, typeof p.objectGroup === "string" ? p.objectGroup : null);
+      return { object: { type: "object", subtype: "node", objectId } };
+    }
     if (s.method === "DOMDebugger.getEventListeners" && String(p.objectId).startsWith("mainfield:")) {
-      const id = String(p.objectId).slice(10), n = V.page.nodes[id], b = 500 + Object.keys(V.page.nodes).indexOf(id);
+      const id = String(p.objectId).slice(10), n = V.page.nodes[id], b = 500 + Object.keys(V.page.nodes).indexOf(id), group = this.groups.get(String(p.objectId));
       if (p.pierce === true) return { listeners: [] };
-      const of = (l: any, backendNodeId: number) => { const x = typeof l === "string" ? { type: l } : l; return x.world === "utility" ? [] : [{ type: x.type, useCapture: false, passive: false, once: false, scriptId: "9", lineNumber: 0, columnNumber: 0, backendNodeId }]; };
-      return { listeners: [...(n.listeners ?? []).flatMap((l: any) => of(l, b)), ...(n.childListeners ?? []).flatMap((l: any) => of(l, 880))] };
+      const of = (l: any, backendNodeId: number) => {
+        const x = typeof l === "string" ? { type: l } : l;
+        if (x.world === "utility") return [];
+        const handler = group && !x.noHandler ? { handler: { type: "function", className: "Function", description: x.handler ?? "() => { count++; }", objectId: `fn:${backendNodeId}` } } : {};
+        return [{ type: x.type, useCapture: false, passive: false, once: false, scriptId: "9", lineNumber: 0, columnNumber: 0, backendNodeId, ...handler }];
+      };
+      // A reply that holds listeners of other nodes too (a child of the field, an element around it): each has its own backendNodeId.
+      return { listeners: [...(n.listeners ?? []).flatMap((l: any) => of(l, b)), ...(n.childListeners ?? []).flatMap((l: any) => of(l, 880)), ...(n.aroundListeners ?? []).flatMap((l: any) => of(l, 890))] };
     }
     // The scroller of WHEEL_ROOT in the page's main world: DOM.describeNode gives its backendNodeId (1000 + the reader's
     // index), DOM.resolveNode its main world's handle. DOMDebugger.getEventListeners reports the page's listeners only on a

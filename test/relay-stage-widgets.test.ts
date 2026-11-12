@@ -16,7 +16,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { charKey } from "../src/human/keys.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
-import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, STAGE_GROUP } from "../src/relay/stage.ts";
+import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, STAGE_ACTION_MAX_MS, STAGE_GROUP } from "../src/relay/stage.ts";
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -43,6 +43,7 @@ function own(calls: any[], page: Partial<any> = {}, extra: Partial<any> = {}) {
     in: ins, out: [], answers: [], ...extra };
 }
 const INPUT = (o: object = {}) => ({ tag: "input", type: "text", box: { x: 200, y: 300, width: 300, height: 30 }, text: 0, focused: false, ...o });
+const TEXTAREA = (o: object = {}) => ({ tag: "textarea", box: { x: 200, y: 300, width: 400, height: 90 }, text: 0, focused: false, ...o });
 const mouseEvents = (t: FakeTab) => t.sent.filter((s) => s.method === "Input.dispatchMouseEvent" && s.pass === undefined);
 const keyEvents = (t: FakeTab) => t.sent.filter((s) => s.method === "Input.dispatchKeyEvent" && s.pass === undefined);
 const inputEvents = (t: FakeTab) => t.sent.filter((s) => s.method.startsWith("Input.") && s.pass === undefined);
@@ -101,8 +102,9 @@ test("ab-pf8 case 1: no sign, the focus click as before: a listener of another e
     assert.equal(r.stage.counts.focusWidget, undefined, `${name}, ${call}: no focusWidget`);
     assert.equal(r.tab.valueOf("n"), value, `${name}, ${call}`);
   }
-  // A listener on an element around the field (a delegated listener, as a page's framework puts it on its root) is not the field's.
-  const wrap = await runVector(own([fillCall("n", "x"), insert("x")], { nodes: { n: INPUT(), wrap: { tag: "div", box: { x: 0, y: 0, width: 1280, height: 720 }, listeners: ["click"] } } }));
+  // review-123 note 5: a click listener of an element around the field (a delegated listener, as a page's framework puts it
+  // on its root), also when the reply holds it with its own backendNodeId, is not the field's.
+  const wrap = await runVector(own([fillCall("n", "x"), insert("x")], { nodes: { n: INPUT({ aroundListeners: ["click"] }), wrap: { tag: "div", box: { x: 0, y: 0, width: 1280, height: 720 }, listeners: ["click"] } } }));
   assert.ok(pressOf(wrap.tab) && wrap.stage.counts.focusWidget === undefined, "a listener of an element around the field: the click");
 });
 
@@ -243,6 +245,101 @@ test("ab-pf8 case 1: a cover read that fails changes nothing: the click and the 
   assert.ok(!ended.tab.sent.some((s) => fnOf(s) === COVER_AFTER));
 });
 
+// ================================================================ review-123 (the fix round)
+
+test("review-123 B1: the listener sign only on an input: a textarea or a contenteditable with a click listener keeps its focus click, with no read of its listeners (an editor puts a click listener on its own root), and the cover count sees a panel that its click opens", async () => {
+  const cases: [string, any][] = [
+    ["a textarea", TEXTAREA({ listeners: ["click"] })],
+    ["a contenteditable", { tag: "div", contenteditable: true, box: { x: 200, y: 300, width: 400, height: 90 }, text: 5, focused: false, listeners: ["click"] }],
+  ];
+  for (const [name, node] of cases) {
+    const r = await runVector(own([fillCall("n", "x"), insert("x")], { nodes: { n: node, panel: PANEL({ box: { x: 200, y: 392, width: 280, height: 150 } }) } }));
+    assert.ok(pressOf(r.tab), `${name}: the focus click`);
+    assert.equal(r.stage.counts.focusWidget, undefined, `${name}: no sign`);
+    assert.ok(!r.tab.sent.some((s) => s.method === "DOMDebugger.getEventListeners"), `${name}: no read of the listeners`);
+    assert.equal(r.stage.counts.focusNewCovers, 1, `${name}: the cover count sees the panel`);
+  }
+  const input = await runVector(own([fillCall("n", "x"), insert("x")], { nodes: { n: INPUT({ listeners: ["click"] }) } }));
+  assert.equal(input.stage.counts["focusWidget:listener"], 1, "an input with the same listener: the sign");
+});
+
+test("review-123 B1: an empty click handler is no sign (a framework's no-op on an element whose click its root handles); a handler with a body is; a listener whose handler the reply does not give is a sign (the stage cannot tell)", async () => {
+  const empty = ["function noop() {}", "function(){}", "function () { }", "() => {}", "async () => {}", "e => {}", "function noop$1() {}", "(e) => {\n}"];
+  for (const h of empty) {
+    const r = await runVector(own([fillCall("n", "x"), insert("x")], { nodes: { n: INPUT({ listeners: [{ type: "click", handler: h }] }) } }));
+    assert.ok(pressOf(r.tab) && r.stage.counts.focusWidget === undefined, `${JSON.stringify(h)}: no sign, the click`);
+  }
+  const full: any[][] = [[{ type: "click", handler: "() => __k.cc++" }], [{ type: "click", handler: "function onclick(event) {\nopen()\n}" }], [{ type: "click", handler: "function () { [native code] }" }],
+    [{ type: "click", handler: "e => { e.stopPropagation(); }" }], [{ type: "click", noHandler: true }], [{ type: "click", handler: "() => {}" }, { type: "click", handler: "() => open()" }]];
+  for (const listeners of full) {
+    const r = await runVector(own([fillCall("n", "x"), insert("x")], { nodes: { n: INPUT({ listeners }) } }));
+    assert.ok(!pressOf(r.tab) && r.stage.counts["focusWidget:listener"] === 1, `${JSON.stringify(listeners)}: the sign, no click`);
+  }
+});
+
+test("review-123 note 6: the read of the listeners has one deadline, GEOMETRY_WAIT_MS for its four steps in all: four steps of 120 ms each give no click, and the utility call goes at the deadline", async () => {
+  const steps = (s: Sent) => fnOf(s) === FIELD_ELEMENT || ["DOM.describeNode", "DOM.resolveNode", "DOMDebugger.getEventListeners"].includes(s.method);
+  let clock: any;
+  const r = await runVector(own([fillCall("n", "abc"), insert("abc")], { nodes: { n: INPUT() } }), { tab: (t) => { clock = t.clock; }, hook: (s) => (steps(s) ? new Promise((res) => clock.timer(120, () => res(undefined))) : undefined) });
+  assert.equal(mouseEvents(r.tab).length, 0, "no click");
+  assert.equal(r.stage.counts.fieldNoRead, 1);
+  const first = r.tab.sent.find(steps)!, pass = r.tab.sent.find((s) => s.pass === 1)!;
+  assert.ok(pass.t - first.t >= GEOMETRY_WAIT_MS && pass.t - first.t <= GEOMETRY_WAIT_MS + 5, `the call at ${pass.t - first.t} ms after the read's start`);
+});
+
+test("review-123 note 7: a COVER_BEFORE that answers after its limit: the stage clears the kept read when it answers (COVER_CLEAR), and the click and the text go", async () => {
+  let clock: any;
+  const r = await runVector(own([fillCall("n", "abc"), insert("abc")], { nodes: { n: INPUT() } }), { tab: (t) => { clock = t.clock; }, hook: (s) => (fnOf(s) === COVER_BEFORE ? new Promise((res) => clock.timer(300, () => res(undefined))) : undefined) });
+  const before = r.tab.sent.find((s) => fnOf(s) === COVER_BEFORE)!, clear = r.tab.sent.find((s) => fnOf(s) === COVER_CLEAR);
+  assert.ok(clear && clear.t >= before.t + 300, "COVER_CLEAR after the late answer");
+  assert.ok(!r.tab.sent.some((s) => fnOf(s) === COVER_AFTER), "no second read");
+  assert.ok(pressOf(r.tab));
+  assert.equal(r.tab.valueOf("n"), "abc");
+});
+
+const FOCUSED = { nodes: { f: INPUT({ focused: true }) }, focused: "f" };
+const LONG = "the quick brown fox jumps over the lazy dog ".repeat(8).slice(0, 300);
+
+test("review-123 the long pressSequentially bound: after STAGE_ACTION_MAX_MS each keyUp is answered when it has gone, before Chrome's answer (the early answer of a key release); each keyDown keeps Chrome's own answer; a character of the rest waits for one answer of Chrome", async () => {
+  let clock: any;
+  const r = await runVector(own(typeCalls(LONG), FOCUSED), { maxMs: 200_000, tab: (t) => { clock = t.clock; }, hook: (s) => (s.method === "Input.dispatchKeyEvent" && clock.now() >= STAGE_ACTION_MAX_MS ? new Promise((res) => clock.timer(3, () => res(undefined))) : undefined) });
+  assert.equal(r.tab.valueOf("f"), LONG, "the whole text, each character once");
+  // The rest after the limit (in the fake, the keys of the rest come at the client's speed: Chrome answers in 3 ms).
+  const late = r.answers.filter((a) => (r.arrived.get(a.id) ?? 0) >= STAGE_ACTION_MAX_MS);
+  const typeOf = (id: number) => (r as any).tab.v.in.find((c: any) => c.id === id).params.type;
+  const ups = late.filter((a) => typeOf(a.id) === "keyUp"), downs = late.filter((a) => typeOf(a.id) === "keyDown");
+  assert.ok(ups.length > 20 && downs.length > 20, `${ups.length} releases and ${downs.length} presses after the limit`);
+  assert.ok(ups.every((a) => a.t - r.arrived.get(a.id)! < 1), "each release answered when it has gone, before Chrome's answer (3 ms)");
+  assert.ok(downs.every((a) => a.t - r.arrived.get(a.id)! >= 3), "each press with Chrome's own answer");
+  const ev = r.tab.sent.filter((s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.t >= STAGE_ACTION_MAX_MS);
+  const per = (ev.at(-1)!.t - ev[0].t) / (ev.length - 1);
+  assert.ok(per <= 3.5, `${per.toFixed(2)} ms a character after the limit (one answer of Chrome)`);
+  assert.ok((r.stage.counts.plainEarlyReleases ?? 0) > 20);
+});
+
+test("review-123 the long pressSequentially bound: a keyUp of the rest that opens a dialog: the next keyDown, which Chrome drops while the dialog is open, goes again after the close; the page gets each character once, in order", async () => {
+  let opened = false;
+  const v = own([...typeCalls(LONG), { afterEvent: "Page.javascriptDialogOpening", waitMs: 50, method: "Page.handleJavaScriptDialog", params: { accept: true } }], FOCUSED);
+  const r = await runVector(v, { maxMs: 200_000, tab: (t) => {
+    t.dialogNoticeMs = 5;
+    t.opensDialog = (s) => { if (opened || s.method !== "Input.dispatchKeyEvent" || s.params.type !== "keyUp" || s.params.key !== "x" || t.clock.now() < STAGE_ACTION_MAX_MS) return false; opened = true; return true; };
+  } });
+  assert.ok(opened, "a dialog at a keyUp of the rest");
+  assert.equal(r.tab.valueOf("f"), LONG, "each character once, in order");
+  assert.equal(r.stage.counts.plainKeysAgain, 1, "the dropped press went again");
+  assert.ok(r.tab.sent.some((s) => s.dropped && s.params?.type === "keyDown"), "Chrome dropped the press that came during the dialog");
+});
+
+test("review-123: the design states the bound next to its texts (section 6.3, and a note next to the operator's record of Q2 a)", () => {
+  const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  for (const t of [
+    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about BOUND characters (measured live by board ab-t30.18, review-123; fewer on a busy box) ends with that timeout, and the rest of its text does not go.",
+    "(A note of board ab-t30.18, review-123, not the operator's words: measured live, a `pressSequentially` of more than about BOUND characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box.)",
+    "speed. No client action reaches its timeout.",
+  ]) assert.ok(D.includes(t), `the design says: ${t}`);
+  assert.ok(!D.includes("So no client action reaches the 30 s timeout because of the stage (Q2)."), "the old sentence of section 6.3 is gone");
+});
+
 // ================================================================ the page-side texts (node:vm, a small DOM model)
 
 type Box = { x: number; y: number; w: number; h: number };
@@ -359,6 +456,11 @@ test("COVER_BEFORE and COVER_AFTER, as the page runs them: the area near the fie
   before();
   (ctx as any).requestAnimationFrame(() => shown.push(panel));
   assert.equal(await after(), 1, "the panel of the next frame");
+  // review-123 note 5: a panel that the page draws at its second frame: the read waits two frames, not one.
+  shown.length = 0;
+  before();
+  (ctx as any).requestAnimationFrame(() => (ctx as any).requestAnimationFrame(() => shown.push(panel)));
+  assert.equal(await after(), 1, "the panel of the second frame");
   // Two new elements: a panel and a hint above the field.
   shown.length = 0;
   const hint = new El("div", {}, { x: 100, y: 20, w: 120, h: 30 });
@@ -374,6 +476,13 @@ test("COVER_BEFORE and COVER_AFTER, as the page runs them: the area near the fie
   shown.length = 0;
   before(); shown.push(inner);
   assert.equal(await after(), 0, "the field's own content");
+  // review-123 note 5: a new element around the field (a framework that wraps the field at the focus) is not new.
+  const outer = new El("div", {}, { x: 90, y: 50, w: 330, h: 50 });
+  doc.body.append(outer); outer.append(field);
+  shown.length = 0;
+  before(); shown.push(outer);
+  assert.equal(await after(), 0, "an element around the field");
+  doc.body.append(field);
   // A panel far from the field (400 px below) is at no point of the area.
   const far = new El("div", {}, { x: 100, y: 500, w: 280, h: 100 });
   doc.body.append(far);
