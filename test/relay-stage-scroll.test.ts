@@ -441,3 +441,13 @@ test("a field out of view inside a frame's own scroller (review-119 N14): notche
     assert.equal(r.tab.valueOf("n"), "Card", `${origin}: the text`);
   }
 });
+
+test("the focus click's point outside the visible part of the field's nearest scroller (a field in view by the middle rule, its left end clipped by its list): no click, counted; the utility call goes", async () => {
+  const page = { nodes: { n: { tag: "input", type: "text", scroller: "list", box: { x: 50, y: 200, width: 400, height: 30 }, text: 3, focused: false } },
+    scrollers: { list: { box: { x: 100, y: 100, width: 400, height: 300 }, height: 900, width: 400, scrollY: 0 } } };
+  const r = await runVector(own([fillCall("n", "ab"), insert("ab")], page));
+  assert.equal(pressOf(r.tab), undefined, "no click");
+  assert.equal(notchesOf(r.tab).length, 0, "in view: no notch");
+  assert.equal(r.stage.counts.focusOutOfView, 1);
+  assert.ok(passOf(r.tab, 1), "the utility call goes");
+});
