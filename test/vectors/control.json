@@ -1,5 +1,5 @@
 {
- "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints. The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s53 run in their order after r14 (s53 after s17) with the fake values of state.sign_ins (the fake opens no seal), the bad requests b33 to b52 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected), and signInScan holds the canaries of the scan.",
+ "contract": "C12, the control door: docs/contracts/C12.md (board ab-v16.94.1). One JSON object per line on the service's control.sock. The daemon sends the requests (req); the service sends the answers (res) and the events (ev). Each request carries its provenance (by). The service and the daemon test against the same lines. The service's state for these lines, and the fake's state at its start (agent-browser service --fake): state. Its open prompts are p1 (host login.example, list owner-repo) and p2 (host cdn.example, list owner-repo); its list owner-repo holds a.example and old.example. The reads q1 to q5 give the keys of the data of status, lists_get, prompts_get, endpoint and sender (stage 1a, board ab-v16.94.2). Since board ab-v16.94.5 (stage 1d; the token design, board ab-v16.94.10) each item of set_sessions carries mcp_token, the fingerprint of the session's connection token or null; the bad lines b22 to b32 break each rule of mcp_token; r14 is the daemon's snapshot while two live sessions have one launch name (live: the daemon's live sessions); testTokens are made-up test values in a token's form, with their fingerprints. The stored sign-ins (board ab-v16.97.1, the part \"The stored sign-ins\" of C12): the requests s1 to s57 run in their order after r14 (s53 after s17, s54 after s10, s55 after s13, s56 after s36, s57 after s38, s58 and s59 after s51) with the fake values of state.sign_ins (the fake opens no seal), the bad requests b33 to b53 refuse a kind, a shape or a rule of record, unprotected holds the cases of a protection that does not hold (each on a new fake with --unprotected and its reason; failing names each protection that does not hold), and signInScan holds the canaries of the scan. Board ab-v16.97.2: each pane's seal is a real seal of agentwatch's screen-seal.js to the test pane key of paneSeal (test/vectors/sign-in-seals.mjs writes them), and paneSeal holds one shared seal with its binding, its bytes, its test keys and its payload; the real service answers these lines too, with its own key and sealed parts in the later sign_ins (C12, the vectors). busy holds the case of a full queue (lines in one write: C12, the vectors).",
  "constants": {
   "CONTROL_MAX_LINE": 33619968
  },
@@ -93,7 +93,7 @@
    }
   },
   "sign_ins": {
-   "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+   "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
    "key": {
     "v": 1,
     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
@@ -132,9 +132,10 @@
     "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
     "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
    },
-   "wrong_passphrase": "aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA",
-   "short_passphrase": "aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg",
-   "stale_seal": "aw1:a2jCo0nw6AU1LWE5RQK2nzAESR8SKExc8ENZuhmNxO0UNjqzO6vkolcg3p3Jxsx1oIZh4EuudXcj2zIwrYPBDupDFA-dUtjm4D9pCJfAKpJdoNetmyX0ry7fw8BuaKRAGe5Rzj-yVkUpIdu081H9QYmOFt_JW1zvVW9ws8-RW_i33vDY4kvC_MXt0KiZ_QDB_7ZSwGVyOefB_f3rf3qpc2PdzY9mlelxs0Aj2gSI03TRRGaGoXO2baF6yPiVFUajLT_y5oowFTWYhTlx5s2E5Of5OLsdjy-dxo2c4tgIPbdel44X-qAu15xFsGN3XEEcdFeYqXx7HaSXQnlsHUmtMb7SqSMIqYJm_GOXgIxQyqEwxpMN44sHZeWtSjA5jjfNr0kXrgfBiVyIOx9879pimw"
+   "wrong_passphrase": "aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju",
+   "short_passphrase": "aw1:UergxM4WIU2ShOnAxGRQUgBEkY4VOaAR-9tQS5cBxgh7shVHu8xjA4tZa7ZyrCgMjZM4Rv0LXpPgc6_YSw2fkid6K1orrAQRpxZKUtTqFU7j8zd7haGhrH1XmiPCTMepeyTKwaGfcpUVARt-8DkSpAAkh9bB-svX3B9Jsbp7FTUaRmG6nnD-Itz9e2_N4hTc6WRMZq23DbTvBVT1jpgq7rqwJj0dObIybsDj60qswLho41Nn3IGwRbfNedlxA-_a-P1S5ya80dkrc3ecWAVUytm-6PC5CPv5okggBXb5k3wg9z0GKbMd6YJSYRBHQmUd3rCtgT9hwBBCv_rE_zs2VKOQYostkU5Zv8aFu-zwW7YGb-GBMRHcyLz0OGalch74OEbS6o1BEbS3Dgv_4r3-0G-M2ZB0ZxBPjOl6wHTeG3OEWl89XcO7tr38d0n2mv58",
+   "stale_seal": "aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiacVzH_3MDH-PJ2TEPfGc-IHAxgu0EOeBmQN5D2ji7Gfop49jIJ_CnWBIZBqn1id6z6zbjfX3GeAnH20UFLY1GsvUL1EyC8QNEF411LfFXKEYKQg_TDycq9dAw3Z4CYCHV5cfOwpPNpdkW87LLjAoBAjOmX8hESXX55czpySzcecOyDjzPFMzKhUyXuLq6NxRwJ_pvJARYF3814iF89L1VCcLwOgP6tqm9i9tPxtulaggUfI_ypop5NHBPz5zKW-JdMAr-4YwopaaEihq6-gHiFEnFr-crD4fkMww-e7xXcks1rXdkTEOtKjf76AgiH6vH9aY2FyU7o3-ooNXpyROCz8QWKESANEmdSYkIepeSJBcYvYLyY7WcQNMH8hpDOvwfT4YKt9naF9JxOmQYuPs6j",
+   "short_rekey": "aw1:duL1W8qVl5Boe0jgmWN6d-mrDhzGhXPTLZUWTfyvTV-mc6dUM8F3CkmxCXQmTKjrxa-g5wHIvCCeCofN-YtGnUWqQGDZdtNG1yTRkzq_C5OvD99vWiOY6-l66W3wMct3BRuPq8CBiI0G2ucsrYOMn8-P0_1Hqx1WJfOmZv4IoBE6j74I_y0SgmwAcnpQZX0kPKldZeWesjjZQnO3BREYs5EemwRcEmGsrMBnJERM4r0K-hj0QVn3JSe_NpAZDjerDB4j_hhPbVdjwWanxnIcM-IMarNFpWC41_cgQb39dcChxEvjua5NJA35M8bMSm_KqZaSebwpTklPTT1JqyiAXgKWuK2iNFFjx7VSv0-3cs-3sgyw9DYkGrYO2LO29hFMs6vUqpsJGHkx9l8KdYFjXq5R8mliq4AXzdJQnq0yLQpiEwIe6nMPBqdTq0wSh5y8"
   }
  },
  "hellos": [
@@ -481,7 +482,7 @@
       "state": "none",
       "records": 0,
       "acts": 0,
-      "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+      "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
       "stopped": [],
       "unprotected": null
      }
@@ -980,8 +981,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:vU-U-NTIW1uybh0wn51WZBhoQ0vTiLjVIDomJvwPf6yS0AdPph7dVupmtlxxQBhbZfeKb-b0rbe7BRMR20UnIbU5oi5NWM3S9Sbvmd_oqDFdtv1cUVEo2q0XxjXYp05oYB9XWlRipPs_thO1i_UACMC9dyyu1mUl20XNP61i6qAK4_wa6Ny886NuAi4xW90fjrLRZ33mHK2p7kqxlwRUyFhh4XmEO8YrS-SzXiWzkmbM4A4CL1Ea3kethzEmifzdGmqkxXHMYcUm_ahJYiI4Ynx16l2xA6mpM_ifzo7qLpiLhWsMljKpaJcFdB8yupoS0KuJA94YmkVCCynb0-PFrE25mNvWqZ5CpCOgamtnXitYW3zaEFBY7boeUEkdkSgN_jpu80vBJNDr4gareXYu9Q",
-     "sender": "BzGev/D69RP3DQrv/pHO7cIaux5Dem+Kg84xLTET9oA=",
+     "text": "aw1:RoKzGj0-t8F17M_vCHGDnmdPfocAEsFtwCEtmA5sbBw4OOTj58Pl6puZN3X7Jo52p1ZsWT1F8D2_yDT46MH0DcpyTpPKvutsnxDGTlTBKY3UOpMKKoPUUeoHhThAnJP-adYtxluGiTngJ4leeHs4_Yu2ck7gEtOme_HvkQVxAKpfIMZGfI670uL7O-b-wKuFCnFUO2kLl763muWdJJ8BjsQrDOd9h9d4TPtmC5AflPlLO7kCTZPVHK5juyUsX7z-5Ea3khK7eCupvs1bCD-yFJ6feHIwyyjGukfeb5E0l8CtY-_2KgSCTWK0KBAo-nUrJ7GYqrppsOVeCZELWCmmQrf0Ti3a9-wsfPGoUfjjMh1Nx8meL7NKE5-ltVdtpsD-I5lgGIX_P-1A2JY9Usfz611FHBQe1INOuv0PWJrOhlMP23qAD8ZgV4ChXjM7FYS_",
+     "sender": "MM2nYnAqRS6XNVcC2zHa8x5HHMVKe3s76s+KGZYAthY=",
      "rid": "cb4XzFwBD8NAHd0-veMPhA",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1048,8 +1049,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:rl-rXPY_5raIS5gk8bqQJxIPPDLnqFDWS_engAmxmAkYlULbXNKnODQuf3Rp5zI-vFOZQFiphBmLHePQHhV7aKunCZ7YySUpnGCk0J60vU3oB9LDxaixlAxR8tdVEnNnEiibkiTjJAonObPeU6cztLKVV866i3KO9EjwPtRqZa7KmXA7gMvrWyEfjQYuLJvoVRhpZqyVjRBcMwuS52j20i9vEWidGE48hokXRpidXavEoYwRjDtOaR6FYqqfmDKTXVJ7shLj6-U8-97qreFLPjkIY5hsAmmQ0HfbkU4ec_vzxAfSqi0Ft7JSVmqLl0xKumRvjihZ9zyKsGVbRRakH-_05APoJNsxN9rou2wyypqL6nYde34Rv20N_bAPkoiNQgtNCuTw0GsMVLvJaq5C0g",
-     "sender": "VDQO6DO7//Du+sl16GJ8HFsiTwiRb+xm/HJHWCl3WZo=",
+     "text": "aw1:foPt2TcR89cglYmTw6Ky4jeYmDBZh5sM7Sx_j8k2YjB-DFgz843hJJhxiWizcFOQaf_efiyleKHC6zU5EnjbaCHMya86kDUbFvzXWxo6qZJkIAmbxxd74yXdqowgDTXtaUQ7lV4MeSghKt4mTYYs8otp2eThw3s3LxEXw8P9O-tx_a784R_dZPX6ENrsAdJzBQA-6TOUfGCDrClzQB6A0Ha81OKLjkc4dpgrFK7DLmcBL_ewTdKp2hsHuUha1PCoNsaIMnIJdLfvivijgv4bZYLi-c7QS3vX3iZU3NslFrO7LfTIEhcEx6KZOeogLntnO3XKkm8luTC1MoynDHocL3wSjPdEQ0amljWJNb8rCc6NalI9vXjBi8Ca4G-D7qkeRl9lbJJnxt2ddYLvkzrj-cG-oVwQXs7SuVw0ySiK_7PDZxxAE88ejCYiuqUKy06m",
+     "sender": "9ELJlxjnGqhGSnaNn9l+eDFPui8Za0ByTnmpE4AlpHo=",
      "rid": "dKUu1PAUNWEQWx6fzX09MA",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1073,8 +1074,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg",
-     "sender": "Vn6CqcsAMbc4+Us8lnbP6WbP2/lvFBxRnTvcH5szxvQ=",
+     "text": "aw1:UergxM4WIU2ShOnAxGRQUgBEkY4VOaAR-9tQS5cBxgh7shVHu8xjA4tZa7ZyrCgMjZM4Rv0LXpPgc6_YSw2fkid6K1orrAQRpxZKUtTqFU7j8zd7haGhrH1XmiPCTMepeyTKwaGfcpUVARt-8DkSpAAkh9bB-svX3B9Jsbp7FTUaRmG6nnD-Itz9e2_N4hTc6WRMZq23DbTvBVT1jpgq7rqwJj0dObIybsDj60qswLho41Nn3IGwRbfNedlxA-_a-P1S5ya80dkrc3ecWAVUytm-6PC5CPv5okggBXb5k3wg9z0GKbMd6YJSYRBHQmUd3rCtgT9hwBBCv_rE_zs2VKOQYostkU5Zv8aFu-zwW7YGb-GBMRHcyLz0OGalch74OEbS6o1BEbS3Dgv_4r3-0G-M2ZB0ZxBPjOl6wHTeG3OEWl89XcO7tr38d0n2mv58",
+     "sender": "yz1XRJkxXzi0q0BK9BZfBbDyxk8cVppB8YoUdW7qCV4=",
      "rid": "lZ4UQM1kyo1NCepMis--jw",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1098,8 +1099,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:G_VgpOKfDN4fhGeFmPJYM6R5e3Nu6dpQkKUhrb4Kff_-ib5ezjbMnKgcyB-ObqCR5Sh87AZipmb7i5m-Os0pZ9vxYAQxsqqoSkMAhyj2C5oaxOXi5iXIXK_1h-h6nQ91X_8X-DkWzMjgyXobJieOtW38zOXTX3ppdKevwx7d9Jb5_hob7lEY4dFHln5fYgGpfbHhl14d74UtAE-oQ6rT7h3opCcDxtjD9ixCdwdAGZGuypiIPZrFaQ4HSz0OhlN3yoyNEzfrwrlEM5p339VuS4fuXxzPSQsLzvmP_RQyaXOaYOxdK9ZRYQxo8NEDb6zQPQLyl3voJ09zEu-2jydbgCtjaxZvWvJDNxAaMZlyUksGPfS97zDFcsEO9CGWOxHuqZu5NBpAZWrQTZih4itdYw",
-     "sender": "RZgvd2To7GKhWIkriSXromCyCVxblY+01xC/UG2DoRw=",
+     "text": "aw1:R7fLoT9U67BoL2VRYMmNM36DOAjXPtetKWOzMOoJMjU3BQY08iOeEzKXxesgBbr0q5yW9EtCaFtQG8aao5MeX5Xz7QiW5xzLABt7-YI00tSuvE9cr_xMeuij7Kkg06K2Bk1VsPW5qeH34ZJLUpkmJJD32HgZLZiiwjaJGWxkFlMKoT-aO6Anb6VVVOzoP9i_RbQ3Rq196Z1F2gSPSsoS-WqCdyyirRylqNv1p-upf-BioGGrRZSr0OfvzxgUC5jVNRma9KJM8zSFGTOql_nI3f6jCX6oZqfvyeUyBJ19bhJW16NHTyAlv11OPH9UWdquUDKg01HqcKTmD7-FKLGevm449iQOB29PBa8CzaT3iKZAIq0PqhCwDvioEefQ_OmshyEK0lDqigsv7SwX99SZqZa-5PunJckct_BD9wDKwNDv2B5k_XEBzvXD1AGW0KK-",
+     "sender": "ATDJ1TMuPdALHzgMFKeDUcTJhcD1o45hyJkH9Xyti2U=",
      "rid": "SvZiotHMulGiTkxW3FyLkQ",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1140,8 +1141,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:zW9hCq8FWMSE7LoFcVhPy7xx-H3M5THI42pWszdgqVnlYMBtMkhhrNphqhfo9meXQM3gLsTSoFZsQ1SPTfOWcR7V61QFCMek9jZtKPgJYriKAh9Owu5B76itiDkxBAK8N0URv3ixauU3CBE5Yr_m4P1-ABT3q6auYI6M0_6fcEmfLIoeELwHZqjw6pqnfS0z3Uhoj9VkuYNJX3c_toxRM7UQvnsnyduau0DcEflrrw5D1gQLpN7B2Cxrkv0XSMmel0FKrl8aqf8fx5LqKMUzqlWxkV5i0jj25P_EyMqyJgg5yEFcOWUoTBW7NVTXwotOy03R48NxDA7ykvYpJXyd4BPfPchqNLamueet1RGYnMQaoVjb0o9c9iLtX1VErcHSSiwm5XDh0AYW6QyCZY5YxQ",
-     "sender": "AiuXM6GA2sPIcKKdRp4VmQ07EfoPcXE9YwvJ+3v1yqE=",
+     "text": "aw1:n7VEizgArMW5mJE_4pir8AEZrXN2nOVcj5oE8M-AchKos1CE4LHexPfOu2lbC9dwRunzg004YveEPOsZuuMKBxjwE5mJTA-bZnDDcIiL009kkrOEOhNlw4uhMUHGWENvTFpArcWEpffZpLtII8IYpSb7y2-biBDR7cSHyNk7qJzXwhLn3ffcySEpQ6Q5xmW8EvTrZKuoiDXlNPBMexj8-jITHLJNu0uI0lSqTI9wLGoz3EqPsNZKAIzXRtQe5u7fg9M7NX5O7BbrfqfWWYY4_E2QsRK27G23DrPOyTnerh1jX-g3eN-n6D3O8TBEOx77anpIRYETk4N_Wct92oIUjSLXyZTwkg6VHR2PFKBruxdirgQ0xeL7-ZtsC2NMe-pp60b9IgrMA_VDtZ5o_10uTxXtI_ZX9HsJs99hwwPMmtIaq0MzV9GJ0PWPY-7uggYe",
+     "sender": "drJdbku5lxR5xVou2m7Kx4YX8rFgxkrucZl9I2F8Vzc=",
      "rid": "UvZhduq2R6PEWITmMPijhg",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1165,8 +1166,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:Y-hDCIMHHcLNsYuAHAG4GL-E63xHcg4i69SFsmHnpbnz9pP20dLFen0TopsQU7tIkck1tXrN_miiargRN3ai8gpW9L-cq5KYlJ7RLziwNS-Tvd8a0cDX0u9H3DOheJECRXfUDBB1evwdacQGjRajlZUfOpcqNb4SURCEutgP8Ga-AHvdASX0OrXc6jMtuomSrQeCrU0EuZPP8Ec_AwXyDdE6NuJoWeZam9hjLpYfOoTUuYBXT0B7guogOKvuZSwlVbrZs98YpcpJFIE87WFZjZ22rMX--6wlTrvbwjIlYii2JJ2-xjmYH6v7Reyoq_bzWxGGXCncwFG1igYyBobZxB3c6caWynfU1KN0_tYaTpPpgtVqmu3qblyfaYY-1VL5_jtYmmqks8q8w7mlmUl0hQ",
-     "sender": "iWEb8+Z9sIKuQPe/U0Nch+DnhA8aeciI1iJoJCqVsfg=",
+     "text": "aw1:-Qelm6kBFrzVcim_my2GwsaoedKzvefQOhrE40TcNkX_c9_MCQKu2tlI9gppQhCCPFYZqFyguh-G-OMW1G7qrr4n2CwDbiFfCTFVzcMr7dEZTULZEqlVDhWTv-GMJYqgp7k6e4NWy-5o_D5UunqckbMyMQK6LpMmVQmJGa1CWWnHBGub3U6oyjwhTP-BG9QGEDguhVPej4r3I7clAmVieVRnCERSwmQYWt3a5H_bWGtjx_hsJNlF6vJVBJ8NnvRhq23zp4RE7qu2w_JZjGk0jf6qpRNFZCDrJIUxnAwaB-2s2MG7xMVafolMfnBByUYPVYraqv9hMPrFy5jL16xldUU8-wueTw179iyGRBjiVVgOXqbgjqUeTESNDh-mTN9W9IS0uhCZhjhAn-x7OPAgTVwrLKXoJvgRftlll-Ggl-gMMJqRhQ-qI-Ti5x2dtCeB",
+     "sender": "hbBEXhkkm1/Acl6Rlaxh9Wxn9QDALvK7kAXOuw6ANXI=",
      "rid": "2aAzDEA4ohpai0bU19Kbsg",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1238,8 +1239,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:31ja8Tn90wXh-8ibeja-qKvgz3PCu6s4ZRuDnD8lCH7EAtC9ZJ3HD8ZiBym6pLoVNOT9tKfeIv6xZxIiumKQxuRrR6dCySyjpP6uRltk2HL9Nzk9B8F6jxMFQCaNeL99pnWCHvhGcRJIfRv7JPy7VM88ngCX9wGqC7Ymlp3JN_WNSeikA8TyDuFAgJTRdGhY5Lf-8WoR5uLtEEBVTQuC9TIQWF8nI_gUJbnOzsxDa00aM-1riB8-RseYbkXTbIOCqk918B7s61ShkaXauCcDdN-Y4ifo6pK5QHfbKGvfywpy305NVgrxS7mFWAAOxRWUEA84C_f-ei555-hE3eMzhLhR2x4JR6lQaOpKNnwICvGAOGh1Gh0w_LoaxPJdOeHF1H-JvxQRUf49wo4T54eTGg",
-     "sender": "pqiINnz2snrGe/Hc2actKc7DQhFTVrY3MSUwXXmTv3g=",
+     "text": "aw1:gz60ys8MWu74Ox9MbY-JypW4D2btVFnCtD6rCuCJP3-KMLhI-CMXHvs9SEmmTY4gJyx8lPDKvXg6XUvMGkYDeLIdf8Kcubwi48eIiptjjod_zFVnNrEpInaO4_5VyaxPXR8-Q-o-18kE93FT3lYyKlqxcIpW9ODeEin_yMAeTNbcK37MkzlbxY_V0TR9mbo9wDjeZw8zSEx-irtGJQSwYx6rEDtk5Shhvph1dK1KZZTkg20brAft6jEG5viCY6AJ3teyerZ-eQ1q2m-nKScjfcwt28ms7RvRCi0USLJQVncwSRjcPX3dscsJOzp2VaqNiOYBaMiEkkyRBE_64T2-_NnVM0yRK49PclNwTSUGRDhGtP6ilU5rsOJO3m4xGBtfDXU1BUjeo-mI8qf-XZRKlxsBQ2E9E2W0rxjepPSj6IkjxNzEWS-ZkiIlcPAafEpr",
+     "sender": "levrWWmECHUKBiQQ/vK0qZsAV6K5gABG6zF3n0q8rCQ=",
      "rid": "_MCtSkbiAH963_HUbB-xiA",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1273,6 +1274,41 @@
    }
   },
   {
+   "note": "an offer with the id c-3f9a2b7c, which the service sealed in s10 and which no sign_ins holds yet: an offer needs an id that the service never saw (open point 10 of PR #112)",
+   "req": {
+    "t": "req",
+    "id": "s54",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "token",
+     "user": "ann",
+     "via": "cli"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging-offer",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": true,
+    "sealed": {
+     "text": "aw1:7pv7pOttxTGJkcwptiUmGLt5C2_wv8FOA-8WKLvZI36wPaNCo84kfbl9p2kGkjz2cCqsk5wW6d1BxT2vp18EC69Wcyul3fPKscSBiN57VjwV6gMo-XhWEULCGYy0P4ZWzFq8S4Wh-P1-S_7Q13HUJ4b6nrCvAQAJPOtxl1s1FcNNwI90jH7sxGx2dVSs-6NNti2A52W0rk-N9EPDqxkue4Ik5vCcZ34AhFaOM-K3FYiybrShp-soDiqKxDBBvdoO0ZgO6ggMxXv9xCmLIRJxkjS1WXcGD7lr2I_EF4krXS9SmjmJ4Ma8YUNYVxSrZofboNywlX-zdsre-aT4Us232Bqv8QCR47srr0vRwTlIwtEvhoqgySN4z4xDvoHvH6L0i0V4fIjGB_cWVGFgvb-2WD-uloHZm8KsWckdLvj2RZ1OzgIaq_7784iPDwKcVxOy",
+     "sender": "21TE6CBJDr+8WckDxymtomnjicrebGfPoBIqP4IVXho=",
+     "rid": "Yz5k0pQm8vWb3nRt6sHq2A",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s54",
+    "ok": false,
+    "error": "an offer needs a new id"
+   }
+  },
+  {
    "note": "sign_in_seal with a seal more than 120 s from the service's clock (the fake's stale_seal; its at is 150 s before the other seals')",
    "req": {
     "t": "req",
@@ -1294,8 +1330,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:a2jCo0nw6AU1LWE5RQK2nzAESR8SKExc8ENZuhmNxO0UNjqzO6vkolcg3p3Jxsx1oIZh4EuudXcj2zIwrYPBDupDFA-dUtjm4D9pCJfAKpJdoNetmyX0ry7fw8BuaKRAGe5Rzj-yVkUpIdu081H9QYmOFt_JW1zvVW9ws8-RW_i33vDY4kvC_MXt0KiZ_QDB_7ZSwGVyOefB_f3rf3qpc2PdzY9mlelxs0Aj2gSI03TRRGaGoXO2baF6yPiVFUajLT_y5oowFTWYhTlx5s2E5Of5OLsdjy-dxo2c4tgIPbdel44X-qAu15xFsGN3XEEcdFeYqXx7HaSXQnlsHUmtMb7SqSMIqYJm_GOXgIxQyqEwxpMN44sHZeWtSjA5jjfNr0kXrgfBiVyIOx9879pimw",
-     "sender": "csOO7Ozp/kAxpVpHNoPmpz2/kBCY5xdm+dNe2SLZOUE=",
+     "text": "aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiacVzH_3MDH-PJ2TEPfGc-IHAxgu0EOeBmQN5D2ji7Gfop49jIJ_CnWBIZBqn1id6z6zbjfX3GeAnH20UFLY1GsvUL1EyC8QNEF411LfFXKEYKQg_TDycq9dAw3Z4CYCHV5cfOwpPNpdkW87LLjAoBAjOmX8hESXX55czpySzcecOyDjzPFMzKhUyXuLq6NxRwJ_pvJARYF3814iF89L1VCcLwOgP6tqm9i9tPxtulaggUfI_ypop5NHBPz5zKW-JdMAr-4YwopaaEihq6-gHiFEnFr-crD4fkMww-e7xXcks1rXdkTEOtKjf76AgiH6vH9aY2FyU7o3-ooNXpyROCz8QWKESANEmdSYkIepeSJBcYvYLyY7WcQNMH8hpDOvwfT4YKt9naF9JxOmQYuPs6j",
+     "sender": "MDB0ZIpo0u10YlZntA9n+LHTo74aLWtn3oevkBxeUio=",
      "rid": "-CO8lMR3LuYz6nPB55hqgg",
      "at": "2026-11-10T19:57:30Z"
     }
@@ -1329,8 +1365,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:fuvrSrXOSyDZDNYxpiPx67KfjVN4m63vj2gpBT4Yg7pwYdfAnjoy5DlQItW37T76PJMNT29ax76SkMhRKSDsvSufXVnLaW0yx_NN8t6Uzdj2MaLYqh5G_lUCHJc6fj18q5F2gKNE7eC7izUPJ-ctfIf1v8B4vAgF75L8Moqjj722MjNGNy-J7jAi_yVvzNg4zx_7y7d0XmdwAOlWacWQff6Aswsi9Z23ZNCU7FLF0PacR0ryPWrg7huXc-A43KH0K-iWuQl7lQZQh2KDpVWa683CeiFN99czHVaOCnEoMqGz3xHoWVR30Kf-XOSLqt3AsbJkZ1h5ZsICbPmemMbev5YtO9s4DJ8OgNgjWEaDjeEJU4TTmXzqFsbpd854Z6RzWxPC6k74f19INj4VO1HB_w",
-     "sender": "1LOg7yDaoLDEFyv4wHjdnafcAuf8ayJZC1hIeHvSo/4=",
+     "text": "aw1:tllCxvnukJM_Ked4Iz1gdifm-EgrgFuen4ctszdtiD74tQWHzkq_8KHltHA5r15F27sfvDg1OdO_2Y0U4JmzkyJANXjvlSlrALHgVI6sZtfiYsCSKmbYNKRtABWC6UgQFY7roS6mPWLzbVT3WJSQSamiT8LPYGxpMj7DnOQVfC18EcTmknSQyFDg-8xS7HXh7eK1-p6wOksep4gqcjiq1bUdFTx_eNPH7LCocjrR7FJowYmToNuSkLaMBq1AaC4UcfQCwctg3AitAKhr2B8m0lDHfQypne5727D0MY1GD_ugoyPeHu5WoNwID83aZ_ze_HskkJsh7IbLl65P161AeIP8_dc7sCWCeZZaGbdo3HcKIVQ32cugS6mwTQuN_Q_M_QPT_rm0AoYZ77uA2makJ4NYhGvPOzyE1T5NEqPJrae0A5f0JTKCOd5YWCiWg9_-",
+     "sender": "ZjOL9HwqszK7TWV3rPG5S236Wokyr5qi0RgHaLCZtkQ=",
      "rid": "c2hvcnQ",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1364,8 +1400,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:VniIq3FsgLtAgZGM_bfCQ9JrVG8w41QLJbqc-D2XVCS5cr-faYTIylZAZA-1vtgY_e-GVUavzie6yRjGeTBH_Wqm-CHB-VAAPXnq-bypT6_ElcZUzXW9O3pky1ByVGxFQXqc5fQZdYkzee316V1BoRyQa5OQIpdh9OOpiBuWrI6om_quE8VQBjsnBknCWFUZb0BrElLsQzmkrc6699JF7oIdlqLekPpexvUc9rrOj5gTd-xvaJUTWtH_F94l3-YbfhRvJl4D2WIHDX5Nv-R3kNMiIa4Y-Vw9gWKx-ID7pBxzw3-uDpDjtrdB98uO3FC5QTjW5o_uNCFLIkMpRioGaYopK-jv_Q5MyCHvgqprFuPVu7Qqsa_U2ste03g3y6B5h8rl_zeSpSV6XKuCpojhjg",
-     "sender": "/QAvY3SAz6r3hZ29jcjZIiGEO9/EvPw6dtczWyuYsEY=",
+     "text": "aw1:ZP2BmsFnnwdpNN754clZIduWrV-5n4MHkMDgWPnBFEQ80rSKZMMfivhK30oEjjIvp3IePhsDsgYdHZ_i_sCHEQrIRtl6WjBaPBXKREmspL5fve-q0hi1icVvuwSqO6YLalxbA6DCkt5eSHDGuC5nfq6Uciu26XGyAS6j1iRGELvFO6n6tDEmdmbxaSVWf4VaXgEzQSz2BPosIwSf7iiNWFsYGyLz02xWSt6u4Y-51n9MDBfNUt5AtG04swwPzEaFsIYdDCcmLfG-zFC-IknXhbbak9X9B8T6Qpr9btuQK83tQZgIaqv_X2HcXAsCho3K85xDKZ3BaShAuPkXf86EWki1gpPPupmFQS9vjOmNkptY0y3jIFb6Gmv4eQdIKXDp9dqu6xIuLOWijJxefFhX2HrUGx8dAtN1bc80qI-pJHE9xYp_g_-Nsjc2i6W9h65c",
+     "sender": "i+SiKS6xgnmTtPfymsI1Dz2+oZCDGbieKNMogWj1/AQ=",
      "rid": "gQy0jXDisOHceRJbQrfe4A",
      "at": "2026-11-10 20:00:00"
     }
@@ -1373,6 +1409,41 @@
    "res": {
     "t": "res",
     "id": "s13",
+    "ok": false,
+    "error": "the sealed value cannot be opened"
+   }
+  },
+  {
+   "note": "sign_in_seal whose at has the form of C12 but is no real time (February 30): the sealed value cannot be opened (open point 8 of PR #112)",
+   "req": {
+    "t": "req",
+    "id": "s55",
+    "op": "sign_in_seal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-3f9a2b7c",
+     "name": "staging",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    },
+    "offer": false,
+    "sealed": {
+     "text": "aw1:cFZNAfZLR7sc_24K4qmJLKGtFc6TbNSdY7lUEQGtemVnHhtoZDCv1pIKiA7RIsIeAK3JUaLHz-h0eVcX6mdO739LAsvDVgdN1c4jyg8eUA7TLtpoyhPQbRx8IIMU_C5aB-blLEImhrSs2zdcw3G6ag_Uaye1M1EEAzh7Yx3SdeHqvFmH73AO557wm5DF5wwbhdwigMSVI6eioKCqoqG1bhk0DLpt8SVrIWklFmoxq_Brj0sF78rOY1ptxWlSMqwfQ8VC0gFl-EHmq_is7SXc-84bSnFre2D3Jeem4cp2z1yHk3VtaJZlTfbKw1fPDYOT9LsbFcNrxgJOlFRz_JRcx-gb7aX90zFl0lEwnqCoanWnLwW4MB-V_t_0XbATUQNVinKNKFfy5wN53A3PHf3hfA-A3ghBvCJGAJ0sqtCtRuDaGIsIw7RVPxseY9GUKu-w",
+     "sender": "jfpIjygGDWnBT5Vbz2/TAGdAzNK/fPPvmWsxZrxI8RA=",
+     "rid": "Fe30notAdayX9qL2mWv7cA",
+     "at": "2026-02-30T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s55",
     "ok": false,
     "error": "the sealed value cannot be opened"
    }
@@ -1405,8 +1476,8 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:dEQZqhxoVKqHe7YQnL_aBsICMIjAlX3LQqtzRYtu9z6T8Evu9C-iN_tr78KQr-zNb8GQlZDylVMOTT0nCUgoi-cTwN5K6zsXmwoW97pK24fYiSVcWMEI3s8qRWh31ICcALMxE9e19WEA4W1PjHXObk0mumjbzvBrc3G6Te8MomPh6Jp6l6xgwbrH3bZFRFtozK1KBfcY3Xsxu4NHIgiEdRg8plD-4DHGSZQ9DceYeUVUbSSQAqPGlz8H46eLEfqn13lXPMjJyY59Cfdpz-SfEeCUVaWcPgkgTsjkQUCgd7SPl6ZbJTJv5FsuBHQtmaA430z4pQ9j8UFkN8gmcHWP3Y5GJDMyQUlaGF6i6PiunmRN2Yz2sgIx4n8MhFpd12BaZinpdIYw5XZ0cNs-IAkGJA",
-     "sender": "Fl0zAw1u1tRhCY5DqG+GG46Rmuv0HtpHgUcnQwmmjpA=",
+     "text": "aw1:ZyWHkRx-Sm26ryam0KUqjJ5TaGI74nzTSH7-dNsS1jORKM9Wf7yYJTPNgktYhlzUu5DMGGE8w_543RJYwJSXlSugEhGCsoENbe3hsYPrPXGvn3wH20x7wLwrVqkUvcfsAM3lBqD_2mGscwNWyP7Sk-QpqE2GxZczUyK3572McTX1jf5Sb1YJvgtplW-bNXVKJszFyt9XHiNKE6EFCYnZKlH4dq4dptN7g_GDr1NT7Jim5yEH0ST9dAzNGBjWm4UZ7Vrv2yMdPVsCZnRLqRtPCZBOYMzfPnfModY1ljiaNBZR2sai4fL2cJZ7NQVv4Rpb0o6FykljxSKxFhmeJ-PgdsveADBVooV_p3QbzRPvc8yYok067gl1pVvkxEcl0E9BwusNM9IhtxZ3oDnGxHNZYqyxeNMZgMzxvkKE0-8TYQOagWCovu51bft03S2z3Jjx",
+     "sender": "IaF30zE/4hS68XkcnXxltqSzusyMbZAYn6LxFy/AMDw=",
      "rid": "-no645-RqdJ-mgRzveGQig",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1554,8 +1625,8 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:EICYRUntphmDYPo5NXqcHzlXFn33zzEtH_csL8QII5MtWu1HI5FfXoYgGAUTpRClgZ79WyQTokUACQkHveyS7Wj3jAnR51QFMB0gb82Zr2BJaNWLmhzR9egmOCuvHbhhSwTsLiTZYCbRvVk9wYrcPHTePRvrJs05fcWl7Sj-WnBe_lWCjfhOM-oTdNGqvRzlV5RFPpdMridc9MuM68Yv0Muift7ezWKzW9HF1jDsHfLgSzRp7wA9AHO2E2BLKThW6pi_oE_eRX-V5wTmL5Dn-EvTDlwHnm-gyoIX7XODYZTbfMi_vpaAeuUlwVjTv-b-SsvQdG3Pbq8-gvwXbbCJAM_wkXYnU8FMvInQ6hAcYsmzB_AH9wqU6iYsbUroLKoHUMaWWmEyY8mVHPzCJ_bW-Q",
-     "sender": "x8GIg9tBc96FvYh+dRHRpz0DRzwwuxOgUPpC9Oln/Ck=",
+     "text": "aw1:7Ua4ZmnmdUfAqV61HDw2XGjke64XTD_fWRVKrso78zrhAI-Yg90iWFdOPaWhAbwWUB8b7Tb68Gta3yxKpfpvQikh7OLq4A5Z-Z5Xludk4cvXk9FCtIRPy9Ys-9g38Z5Lb8w6v76JzTcIBsHj4eWIy-1Ao3mURUTpy-mPRBHHH9JfkambOagQgzY6NLnKphC6sAqujnLSDxA1_FD48KUxLcYAbCcNGQBwgl7uNVQ_Vz8aC3LNQRlbP0HGiXjlVdk1BRthPBe_F1YoVXQAAixgOeDELw7dtBvJpv1aMDloztU5Z7TODtDvDup6Vb2NrEXa4nZ29SJpEY7F-NIuuBELLr2siLNO0q7kwOYPm9dSugn1MdT3-wLyT0GsqcUKK7NuCsAUmHqkjdkPGL7HxZc5pU9UfDFjqh6vQro_7cp78xOfLgmOc8-7hm7n21tdjyd6",
+     "sender": "u3xb09fRBcUP9QpqQ4Gt2O61d3mvCrmuEV391MTcSDs=",
      "rid": "TP5F_MqnLo7hPWJpbRleFQ",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1666,8 +1737,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:pkq54WGFaH-VhLmmn4ZZ-4PGkCdt92rNIdcQfWiTgZ4UACx2bdQMygOVzLUfcFWDllBrySVWH70Mq_43XapTJwkpTKtHH2K3Rl6b3_WKtqf4niaMyLCAVLP85dH0E7Kr2h7X0nzbWYGWF_GCka9FsvHhJ_6HKv2-y9AKP69JDOko3iQ4Ubo-fu-ZrHtxo0JUVPn8cmHg2qsTt5wkTHWqveCDgfoPRA0eavmQWjMNaWevC_1e82t1knyxaP87lBk2-MIXVevcQPOr_yeEaQoqcBdQj_ZmsBGNuqrbbl5SOJuHwujcit7aibio3bbfop-jso3o8ZDCHha0ylO8PyUfu_zTSJb98_0d3JCV4HoIKiXZudOHKnCxdnSF_qYrR5QEuGKeBZgrF-iI1j1B-APr8A",
-     "sender": "TZX1e18zuL8r2SYJe/6K3k40Hi9R06tcFYAi2XOSCF0=",
+     "text": "aw1:IyUeMHCDr1IuEjILixShef-BwBeZTONVN4v-rP5s0yxhN8jKvbrIhMPAXdvDeR4FtTZJ7LRf1UkZwQIWxoRVlrQr2uK2pwK-bl-18xKVoal52y7iFXDwY5hmBW3mYhl-49HmO3F4wuQBO6zmC55sE_sg6IFKZ7a4Hi0o4K0eSyMWI1DHVvhbAZC9FTHgwEkan2Fl9hagyRK6HmtACKbJssV0CsrzdNYPnpkiUxM6PLFiOzEcoUoGwuwNm3M6Ln--sduFmTVLDppjATy_F4f4W6oAi5WQNQlDcsF38QmMoC4lRAf2dBayzjQOzAGCJBaIOhcTtRHz1LpX5PWg3BU23j4r1dlHL-ZWdP99hh_tljaEDWP7GIqKGgsKdUhYOTvken89k36fC59VtkwnGyY2Vl-NGoktskp86_5GUuFc9vIIaLcIk0sqxkH3LBrigAe7",
+     "sender": "J5Q6L7FpVUq0Kxpezr0KBtiECOsa3UziZ3tFcaSiSEA=",
      "rid": "pdbXTGKguCr3HRBY9EWcyg",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1806,8 +1877,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:89pqqcgB2EFiXv640S_o-GQaVIThRiD7ttAZPEBgE8NyO51bf2DllGqsRRKzdUrzWW5Xz058qzSx6FgUdqtHSvQHatUsgD8FGOVckVMTgegJ6ZnOZrn9crhxe_tf6_Voqj5WyIZG-hb2nT1cgGxzv7o7QrWzCD0JCahK1LaVj-ZUyD5-paJYv9yZ6gIzr_2NIp4RzDPJr_2OjY36ulcE6byoXBOlm0MrA1XbB3ihK09nbcGyGZ73UwUSryq101L2gyHBlXRthP0k_Xn2N7_z8KWiPEVmEFDSITbrOPt0oGD3VZWYPd82WXs9wxjZ47HGYdGe8Je5K0PIMCgnASdVJslLCDAZke7YT0ZvkaovMOtSr9e5iOG2HdFHbI7ZfwOE8lizyW55cI43HkhNMIWMdg",
-     "sender": "OREWVtP3O6DD8QWz4irVItyUePz+eXLBk1PjQS2CSCA=",
+     "text": "aw1:L5HE-2bORQ80cKCV-Ntvggb9TG_vc506n2FbpJ7aQzdpb8Dn9ajPpShIHmihw_vLuLmuAyRWAEsoahcDg5qigb1WgcJzbkZw2wF1vAWkfLRffjCugfCtSiZBKy2ZqJwVI5a05uCbgnFYGiTRy4d7KK4ITbyScJ1HFZ3qttIb3m0EaCr9u31ZrJDE4ze6BlWDH-hK3xQTv5pdleP5f6tBgErLdRRIO0JN0RwLage-xKzT7t3NV5NqnfUYNdQm9rXNcMGTpr8bJhBKceo4VYLYr6HyN1CqZBKYBeLV0jz8IyNDfiFyPA05A87SvrzkzoNyp1o9toIOkD21MvjqorslHpeA4MLYN0z33-OdDidyaRvmDFjkJsiKDIz4pxopVUu4wa9Ehqy8--3UFUvz_tZ8E-VihZFAOVrtEj6v4ZTc1SrqWOLiniFOGSrVomLeho2y",
+     "sender": "KElVBqhuwOrZUBReK9s6wLoERu+IX7piyuPSyD3Q+Hg=",
      "rid": "_MCtSkbiAH963_HUbB-xiA",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1900,8 +1971,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:FDCIew6OROg5WTiH8WWb3M5xfEsBYDGg30tNmWVptM1vXI49h8rkNAt_udm3nUR3NlJagVbhOGnE5cZpRfN9NUFah_K_MxBFkCGdaYCCDPdVQL-OneWZ58F9tOEM_nv5s2JnTjKJUjlOh025dITGdJz7b02GXSI3MzxW2rzXCz2sx9uJwEP9SQyQp4XvdEGVlQujWG0ubv6jBfbsy56alJ3oNMRcgL3iXVgtyrHTF_T0W-_C4n0nJ1Tv9LgegImJTK8U7ElhDGTAF3JbZD1YcsdC38UXgzC-rDPAnsa7CbYdt3VZu3pnGm_lPKKala-6wrGW9zJOn2M8iRfaz2NqNF1qx-LuPis2YoJYbBuSenOKfZFAacjsCoN7eM6UAiVUFTTtofEvMlfxWOUqcqVkxw",
-     "sender": "GF/nI3uI0uE+n+jkEz/nQ/d4sR/lC3tVP7gzdD74h8w=",
+     "text": "aw1:cG_M7K4c281_1jotWJqcUQP4jACNBNqVWZhq7YdxDR0XoM-E0H3I5r1D60x7JHSHn97Z4BwjhwzA66HgaIuUKXg5Qc2_nKh-9GyLnJMNOT_gtfP57DZUl1U3EsyWgfo0JuHl5K9gTo_-cxVpy5A07usBuF0sAIGZCZYjpxOQbE7FhmfZ6PD6_SKj0AjAQ1tzlq-CcnYH-F5U7YZhL01mwCmJL5iNGGN7ewk1-HJt_aV-g5eGG6W2YVlLIw9urYRZD0ij5pcZv_OxyGB84TLeUitpmLLK5acG2R2FlrHM0cao3aM0HzIOqTM5fP2TnrhncE3v6xswXIdHnQ1ogN_EJdOCQkUmcyyIi-3Z4Pg8KueG6pa2MkQlwU6wXdCoPCwkhlYEDfhz66eRNY1YtAmvuq9tabVCk4PNKz2eC37uOhzWfSaqJ-U8jk-bOxVaJpK-",
+     "sender": "snWWwbBG+fkUMh0xp9K+dWGrBHzdGPRwnLAcIHDMxV8=",
      "rid": "4hY1OwBebsLFgrw_ivWC9Q",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1945,8 +2016,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:pGtgeZRgmdvjzNp91_j2Rq09WDtReAOK10feP98eVqJKtzz6it9HeuL4HHJjqxSa1ZOL9j9O3H0tBznJo7Ihs_oaUxPmAuPCfVNRB-FjYP9pq7Dn4w136-v59byT7vKueJqv1saYN3_bGkMdL0nO4AlWk38ZEuPHu8OBzrPsFQQZDdG09Kd1cgnvE_Xas3s79ujqs1fKohwgdo7i-QMfyDlKYId66wiccVjOZTXD3hn6DRpSUIAMwO7mxCB5bY0eBY38HYMMwyVq6ta0OZElU92wr3hNWktbWe41WKxNuYrNUSM1e3197HqVgmr7O_SHGnun_YOpy2zoUj7Urze-JcRW7ppmWwK7XWKCbDtd5LL4hWaqTtOiWeX8J-QCWQnu14LW12giNSlO02WlHDX8fA",
-     "sender": "luKH9Hp4Q8530yt+y0mBb8VNHPk+m12l//Wm7yZV27c=",
+     "text": "aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju",
+     "sender": "oVUwk8z77oyfkItyqrSXuilz5armZzp+ZicR2Hw9Zzg=",
      "rid": "gWrHTL47w856uBML1f51lA",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1970,8 +2041,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:XanZlSGro-0dIiFxJ4XkX9yxda309ObUSKVYsIu37C9B9JK-p-OC77-TEP_0aeMmMq_sWYVuLxhy1g2tFNvtyrl_Wa3J0e20og9MdQqOcGHwkP102RXL9jzragwhr46BiIgtmjx9zPy2GmLjkjfksvke1RauJAmNVVqOLe4bQnBp7caoKsf2RjoRY4b2lJ-wxm1aGYFmT2JEJqgrPuka-dampZI-WZF4Kqq5R0rydFlKjynxDDz-s6BBb6SMjAK95hxuII0Y3Vpf_-Ev8pn9JIx-In2b2BL_FKmD4DM1vKL4D0IyZVp_gPGkUUAr1WGw9qkGUr8PRctsqoqZl2drTAMpzrdHYzMXoGNbqKfbc7GTVTugAiefTLQX-9xOS3PfZAMafQ_gojJostbvHxsMmg",
-     "sender": "cGuH6e6UPlFmDcBxd5dUEGvfvEINB2B4bsn38k21hz8=",
+     "text": "aw1:hv1HzRBiMnvVWVEiEtSzEcEnXXsiImRfsCXwS8JBslgm8pZwj1UudZHgA8d57Bp3F-JleE7Vkoofd5VxeoAFsr9rf90G-3BkychFL2FKCORIuBVY_EYCrNb-_M8BfaUkcyjVJaI6JNhQHNUkmEa4KCsTasLMyXlqvp40oxmNBZNIjzVx5ybA-PMiHthbWqULTCnz_Jh8Ua0ivSU5YO82wMPvMDKOolkNBwrs3L6h4VZowpTQYOOpQ5FafR1pKiBmb_fcwdfBHnOUnJ9SdW5hHcZRfRgbCiY-Nik1U3M2IFCoa0kTLAy5YUhSQZoXQeRLDBNIqjKp70n12UZkPkyB9OuoFmgI2GWZ9u72Yhtb3SrZjQAUBwghevK2aPuP-gE5-hw1MVweK_pIxg5Gd72T3Uk3cw9GFRlIBdozxyN03Sxmrp7RJVfwXc2o0H4anxXy",
+     "sender": "ICg+SvzyaTBGtS/w1fYO3P1hqLNEwtAxVMNtfj3nWXQ=",
      "rid": "lkDfaBcE8DgxP99mSSTgVw",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -1995,8 +2066,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:7-bTEqS5TDM-FPYT_pjXT5LW23hT-sCV2X-_5U0ek5L6WF2Ou6zCzWhROBKvmVsdohpftCSVIx-lI2aPFCqWQDhCumq3iZyzRVMHA3S3aAWZDVhjEU2_wr8gVJ4DM8LfCZLPvWrUabnj_HopAGpXzAx2niu1l5RlIG_NmG_dV68ejFj7nPPpiNHcPkbBieILHHC6SOfNqV4TskCAUMYCWYXoHo1wHqyBglzlcDKAIr7h94nbyZ_PxALz2lpLAAoKscFbBhO4wvKTKZ9XA1RoxE-T-AJRJnTsAgNiKfZjTOLKxL7ANx4OC2mB8PJS0ZBpyjFBspKjW5sIL6drbePMAkKZn1twQ3gX_nbG-mZrB8iWdMUEwy-KB0hrOemcL-dVgDrcd7K8mr3Wvj_0TGcvJg",
-     "sender": "4meB93Hn8ts5B1RlFsd2BgMDTpvouRNSGaCeKrcSlFg=",
+     "text": "aw1:duL1W8qVl5Boe0jgmWN6d-mrDhzGhXPTLZUWTfyvTV-mc6dUM8F3CkmxCXQmTKjrxa-g5wHIvCCeCofN-YtGnUWqQGDZdtNG1yTRkzq_C5OvD99vWiOY6-l66W3wMct3BRuPq8CBiI0G2ucsrYOMn8-P0_1Hqx1WJfOmZv4IoBE6j74I_y0SgmwAcnpQZX0kPKldZeWesjjZQnO3BREYs5EemwRcEmGsrMBnJERM4r0K-hj0QVn3JSe_NpAZDjerDB4j_hhPbVdjwWanxnIcM-IMarNFpWC41_cgQb39dcChxEvjua5NJA35M8bMSm_KqZaSebwpTklPTT1JqyiAXgKWuK2iNFFjx7VSv0-3cs-3sgyw9DYkGrYO2LO29hFMs6vUqpsJGHkx9l8KdYFjXq5R8mliq4AXzdJQnq0yLQpiEwIe6nMPBqdTq0wSh5y8",
+     "sender": "kK7D98G8nwHWs37D3ePcdZhUEqGy7V86ubHW+RnfFwE=",
      "rid": "66ev97Z-AkkJnSlxlTkDNw",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -2020,8 +2091,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:wwd84S3mx7tINSrEuNDcgrMAWYvoLaJewhXeGSfHOhPjFhYWu1ioW2pCdx6dcrdeKgDLOD-tPopsAy4evWwVmZf6MiybZ0c7-5Q-eZGoBkzVAlek5GDtOi7cNNqxpuVE2jFDR7KcbsNyVQU0FW_Rav2SK5Uf2Twl3jfcAQLXetKki3IZ_SwzH980uAWvTBTXXzwLaNQL_K0ih3rReoEQ2DuqfPXyjPriluEUScqMdOXI2VPJQc0Y0fspSMsyxDTu3_k5TeaQy7JXS-4wiDRMW8JwkeeabhBNpiR4ru8kxq9nBIcswByOtfE5Li3Oy1-g3EFNH1OVA51EPdephegjh_CrzucidAnBD_PrgFs7HVGxw-ITlb4Lx6CUTbFKBBZmIDpMjMMoK92NSMqirftg8Q",
-     "sender": "DIX8xIngw0T4LSknaRhSXKdY0LRidjbZdtZVtNOlnxs=",
+     "text": "aw1:nvPsW9BaAygMhL5T0eGbFVu6qZi9J-tegtkdbGc5EgUdJZxgx_563ucs0W0PYgReH3YIc2vmTVBxYm0bVU2kOJLrYk7O0Zgb2AGknTUZ19RW_9Qrppb87zRF_eCWPy32qQiDSh0GjTxbKU2qSvyfYMT5EPNL3IBUQfTm_PQ7KUfyYqg1xM9nYPs38nXRaTRviVhn8xwfQi64DHjDWLvuMcHZu-Lpjf4KQPiEcUKfoaxKVcKlqSJko1n4QOCacaoGj96K-TWxUGCYdASmJ-gNaSOwZrXyJ3PglWd6eX7TQPiyzodF68b40CbVkE8TW3G-bdqGmt_h5dUvqzRW3IAsrljZsNu4WuK6sBGRZadGo7JN6cwg0Orb1g8f73zTPgNHwRFfzrULbpRfsgMWw9glJwEShxHAyPAbZ7Mf3G7McykRuJr84JiYSM2eQ5-fBJ2u",
+     "sender": "qCpNmKZk2pBbJhdP/CrIJb47tGYx+3zXR5Zi0NUyF3M=",
      "rid": "AlMyAPxtYrCTEnev1YMq_g",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -2360,8 +2431,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:cv8lCkxc1WMQTMyNpP-W-fDqmdgDAbULqtHzs9or2gRzwg34udFuRygPpW3VSI11csXBX3jYWhsBLtLxxwgIxmLljzt7lPanz6h56X8FwXZ6FLoIPhubboZV5qPDBomKVJergkKBye72UHNWNcO0pPongPURZbuVTUqTHGayzX6LrJI01Y6cpC9Eq7MxDd63i7wVlg4ln9cVLhWcLo0QqzSSGLtaY3tf0uK9CndXn5oWVDjrwUlj7RmF3g0cG_umCcKVIDRfy4nVap1XtkZUiBotTAUKayxMykLVWUKqA1jccIL7G1MKsprfu-0CramnkDBSGJ3aeyap7GRl-Ir3mrRVZdxO-vGem1JRYf-5-zcfU4tWwx7G-Vom0V4jI0MfhV3vH2VZe5sCXvL-WgblZA",
-     "sender": "aaLNMSGRrK8m7tH6WMr4/EqYRgZna1huIyWmumvt8OI=",
+     "text": "aw1:CQudHVNC6OxN15ZLkkdqWKOG-TS60bhgoCA3xuCyunuCBoY6SACPjtTnxikZL8TOo7qWbU_kO-YAtsuFZ0z5Os6YW9dqHOULTqFvB77jgZilaThao90bKbYjKQJWYk0R_7sUT03b3XRnZANjb7WieMR-6gtFpDhUZ8YFSiX6aD0SSgl0t8FKgyoVLOHTJC340hYi5wp2YE6spqWmJObkaiMEYqvAuYQG-zR-zLJPBbFNtMoFjnuMc91TjCwCl0rl_bc0iQQ3RJr-yGnVA6i2qOC6L0FuRNK70l6jgXhJbXuc8ZzPPQ3QF4fRuCXhKGEq-7YdnNzZxqc9YsSJOHkG4pKhbLxjdCD58b12p5V3ADSfcUh1VLqJZS7y3iunYUq66wfxtnl_Q-piTbaxJBwi0rJx7dFitfa-dFJjzQOqMV2cYSfJp0BOump9ma7JVBc4",
+     "sender": "LE+WW8/AIHPUZWedW3qJvNAzqoW32Gw+Z5Z8cOHMsXw=",
      "rid": "nBEil5hlgtS4ydYnoDL--Q",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -2371,6 +2442,26 @@
     "id": "s36",
     "ok": false,
     "error": "the stored sign-in was removed"
+   }
+  },
+  {
+   "note": "sign_in_start_again with the removed id c-3f9a2b7c: a removed id is no credential (open point 9 of PR #112)",
+   "req": {
+    "t": "req",
+    "id": "s56",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-3f9a2b7c"
+   },
+   "res": {
+    "t": "res",
+    "id": "s56",
+    "ok": false,
+    "error": "there is no stored sign-in with this id"
    }
   },
   {
@@ -2496,6 +2587,26 @@
     "id": "s38",
     "ok": false,
     "error": "the stored sign-in cannot be opened"
+   }
+  },
+  {
+   "note": "sign_in_start_again with the removed id c-3f9a2b7c while the last sign_ins holds its file again (s37): still no credential (open point 9 of PR #112)",
+   "req": {
+    "t": "req",
+    "id": "s57",
+    "op": "sign_in_start_again",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "credential": "c-3f9a2b7c"
+   },
+   "res": {
+    "t": "res",
+    "id": "s57",
+    "ok": false,
+    "error": "there is no stored sign-in with this id"
    }
   },
   {
@@ -2807,8 +2918,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:1WZQxaD9T54tvzMfLY3xiqM4tqStoibywxxkYyJldhiRWgcx3EkEPAtOIUHV0zF7hKsAJQOyglhONoNTkk0nrMjodMqrcM0qO3MwMHmePRUdhZC7QinEBCdk_C_XsTk7QEUbtDkVg9DK74Ishk1e_1yU9XDebtWj6epRm6YQRHDaUnub-idCIAMDg2NRWeDKo3ZecmeKMH1sqEoy8EkxFTuUaPda8F-x9EIr0TF3yjvoLFM_h8DiWKAveEvA9TKlU_2DOgFNZWNnl7qHshKDxyI6CVZpIjOqGMdgVZTUHbHXWgWt1X5ymY9ngX2WsZB-y1Ytjp0iH1Xo9EoULIg-XiS5LXaPNUmEyho5EYCkOs55nBMg9huLi2QZ7VToCyGWtmWG50ThB2Vw_GOOI-c3Iw",
-     "sender": "tAJpXg5/Ygw1V1gAe6XqOPioXvsLOLrOKh+x0JDPcPk=",
+     "text": "aw1:ikz43EqjJHfMHFceSO2afk3eQOb0CqaTY1utia7iDh0Nc9TaHPAkBD5UdPPU7IaqsiVmmS9FAWZh4cdk-irMdeVC656R7UE4vlJlAhmWib9tDsyfTBzz1TEOu7KExJvKskCLmUaXkKpWG4_t6nAklTdb4HJKHH67R6MztGjGuSMPlFcU1PncROaqaAvLGf0runlMsdj_venDwkPrn2H3aREhDynOLGeNRHLwqlslSQE6N8xSI3S3BtRzU7ankXvEQuuGBWG6PXGA97PbC6VZO4HMREWl6Sjm2Bqe9NbdwG2R-97FbPtCO4H-h0sYWXows7PtWahh_CF7aP2CxbQl9yBZhl3YEpeQNgjreIKuwXSTEzAv6sXp-cGhPypy_e6EnaHHgBEteN_ZntdJH3do7WKotk6k6w0UU-fdk8pVtD3dW7LI-CJZJP3sRB8JMdXe",
+     "sender": "O9bDt7ycsitgPP6QD/BDrHFxK06JQAmOg24VVPRRixc=",
      "rid": "uDSkPpu-d3WxBcen7u1McQ",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -2916,8 +3027,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:2fW4yaaLicfzxowvioNregWR9kqZgRoCkHSnInCZdQVrf9zD99N2_CPv9ghGfG9CijyMmuw3Xc-bf7bv3NCRgrkqCcW_VoHB1m8XrzQy0VVsMdENMld8Iu226L4cc1nHKmrIggSC_JvXs4-COCa8UM70hEfT2n2lRzy4ZF25csBB9Ua2DOgDFIzkW-7Gh5LAzFXTjXTnJmiTRejOc1x4LlHX-G2SGB6uFjo-A-0roWDzupz_H2Fz92zfRDtNyKn6ri78ooZPXefTGoL5Vk5yOhsfORABZXPj6woXGKyYHSBsy5E1HjPUFKcUvdtXH4PDrTuCX4EC4V9uo0eKrns_3Hsmuj-KDwcuVnZYjCd-6DG6hEKvSbPv1Yt1QRNT5mKksCmDtVf3T3YpvOQj00E5nQ",
-     "sender": "z+2vedIBFI6OAlecy7+zQ0TXwuXliGGHfr/Uf3LEub0=",
+     "text": "aw1:bdb2Ri4cSOMemuxxNB6PEuvmoJowccnV4vQw9tSUfwZMCwdNmgW2ddRJz-y5Phn3isYAoUyYz8vtN7PIwpS6bT90Es4W_5EOFR_nwkhGoOLOqH0bD1kiCeUalt3d1WejcOfBXEomafIOH_xZjD2xSuFRl9IXyrpvzVJkVJi6Ox-C6bKoWF5eFAqI29nV-Cm4DKKISIsbQnw1rieTkJoGm5K0buTa-ofWxXncRWTFtQBS5NnGEJ3pu_raGduEdbj4bdwAKcwtYHbyr8sJN0UQb3ohLn7VLygSCmrRxasxfZD69labc9RGNcUelkDCEynnNjQmPt40uIAxixMmsrNu3GMSfMlcADxyS2dNBR8y69fxDPaThTa72vq6Nxq8DiFRxsCq7x0USklp3wBVE_lOuuqX_J5MTZMIb7KWRDuxB8Swe1TcgR8YYxqCX0x51rbJ",
+     "sender": "QrtTyoDe/CbyqMyb6zkSs4jJulukWdOvza3unDfkWRE=",
      "rid": "3mPQOYJBIGmcnBhWiI3JEw",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -3010,8 +3121,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:sAb9lCctwKga4qieqiYblC-1AV7HEn623fc4f-2CdKa0jzAAsDpAhGZ3n6_Gr_UIb8KtO2tiCTwcuDMmLJa7uSpwhCYgN2zDSNmhAQr3Z0qF8qc4nkNyPYhxRlJc60ZeFAnh2otYxiy0hw8G9QHdVCh0IH3Hz0PAtgOWSuDBFUwMdnQUoCGZ1eTxXUJhA6T5K7i3ZcpzyqKxVUsQpSov47uJP3QKr7YeUWCyGyE2Q974KGj28yIdILaTvjOoXFmW_dq8kxXuD90j2lC3HPRmmi4tUBaGGXuMapIyUOwczUm9WVnd03eMD6YcB2jSdzm-g0s5cxqCH4XQNV1WsfMxpiKXKZW_VBQ99eStYSYDIPDINzAK_CSKm5tm7EgG73s1Fp_b9U65bfXocqifzaQFiA",
-     "sender": "Pp4O9zwlCndGaaMJE+TDSN3UOwf1lJACHSAoE1Me3iU=",
+     "text": "aw1:MbbPrdPq5fH3bW85gyyii39Eu8PdZX8aJ1-xUaM_0m5gPnzv4Gl32-h1DYOxIPRJBYGE0n0hSc_WdLpd5OK1fTZai6czxLL9omHZqMahXoXqM9LhfcmF7IYnNk8tW9OGd2itssCE4f_mVAiTSxUbi4_8gsNoPG3F76D54WDu2i1kOysa-ptkjeblyn-GFYKjsJEk_1Ji7M4T7hGj9D7Ev8y67rkf0e8WgP1fZ6dIo6ARoW5SZ03A60ugXnw61Jr9NZm7iVYUqLkNScvTWl7tNCFaHG9U4VbjZgJunrOlIN1hDrqGnktaNOFVXDZ3XQnyaQlAGhuBbAvkUZ9_nVHOmIulQQby76B4b7sqrARYQU1FLs0IXMhSgU3TvtmptQ6elohzmWRqLmzajicgQXI0daka6xfRngmPdhf20UzV-ey3AGsGaZgumlwM_6a4kfvl",
+     "sender": "SlF/tAS6oJQkBFlxvQgYq/P0afkKWk5Ncos3cuj2pRU=",
      "rid": "q-J8euPcLXZksnfOGwfelw",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -3105,8 +3216,8 @@
      "via": "web"
     },
     "sealed": {
-     "text": "aw1:Y_ODa-gm9RMTaVb9IwSpd6dsA_peMIVIBQa_r1AShkDFwDaJ_L3MEynTmh0eyRP8-hRyELPkYbQcdIAxEUcn43-0RpDWVrT8jbOZd5CXJtcZuzGA5pTSWngGgKzn4OMO8uhHydQ-v6UVh4wQD-FJeJNPqyj1Dpa-I8QbDtYpVcx05Ej3TwRCGPzqYO4GXEEz9dbFy0zwsMw2a5e0Sk5kmbU397FZ-NgPVY6q9AmWA2UDto-pe1hsYTFCn_4Nxs7EED_x4ERi-FYe1rz2JBX8aXCzu-eqMj6tItjKQ9NySDsyttmcTT5sK98QJrUvFRT9iMy_pV6wDN3Bbbf283BNe_qCGzBQ8s2BXXvW4fh8jkeHRG3uLEtnuYsweZJschCvEYyNd4ba383gv5HPfTGNoA",
-     "sender": "yBST6/fY24C0agOFj2cQJrkJXzPFyADykpyBeAtWJjc=",
+     "text": "aw1:SXBGebd1xz8VG3CQmMHrPvqAhS64uc2i3hyoSM6aJzN8SpzHPK8uU_PSVcwQ8UcQbe6Sj3Q3JlXYV2wLLsPQ99ADbyVCouzk_8Un-ndLK-GAMi04u5Z30uunWLMbLdyKr8chKb7oe4gOa5zUQzkgiQUEQUxyb0lRKOESZn48gdPVoURPeIAxpIwYKr0V7Ntnk4M3ivPDlSHRNJEzwrIWyIGRuRFw4S3GB_GeUY8ZOpgICg4bwATsRhLj9JRxdY06ol91EBm0G_yl4KDCq-LiJldWm2qIR1ZOwWuMYSWdHKgBA6sEXnBYKjKAVfx40Lo1HzwGreT7e3APnx-FeGdHjHPQnwhWOEiEt7kDl5OLO-BJPbKga9BEmmMt0zbal6A99N-cWGo___d6ASsUR1X1n40UDK4zFsOIqM2LWJaqU-CW6U4VPOV8snNB99DPqYKW",
+     "sender": "fD8UvrdryPQMnJrJfJ5Jgj6J2TQtD2VQWaaXeyMXqC4=",
      "rid": "o2gUwebdzVtughhqUQJF5Q",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -3114,6 +3225,101 @@
    "res": {
     "t": "res",
     "id": "s51",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins with a key.json whose v is 2 (review-118 note 9)",
+   "req": {
+    "t": "req",
+    "id": "s58",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 2,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s58",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with that key: the store's key file is not valid, and no derivation runs (review-118 note 9)",
+   "req": {
+    "t": "req",
+    "id": "s59",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:eTE68GQSUeKnlAoW6WVocZPLGVMEttSnSOtoTpbsUDBcO8L2SBmZ0wRNbDTgJxxRy0qA6D6zUPWBuxHBe4D5kTMCNGoNkSpjoK2LwtW_INflfhJMHDfEGvU_wJDJYguY6vRtBzhWf8frb90UkJBsbvoNdg-spotVAHirRh5-Z5TYd7aE0BDjL8HwaV8V1HcqQM21JVB2VztHnsWtlcTW9r1WOE2lggtG0zVdhd9f3ROastwSv-gpOttkq_uDa5DvhLhEVbTc3QTmSJjuyBHC_tb--uTJarOOzWL4JqgxWxMZ_PqSYph9_-MlLGJrWl-XXaO-bnSmPXxPA2Uwq8sihRNwEtSLghLzqTfv4fAHnIW1HlpkWg4Fw3sSrNhlw1lvq-_U5_yu9O-ykqXARnSJrTj5KIqs8dg2YpF_KdVIl_fE4BTnb6Vt8v2cvdQTbGUl",
+     "sender": "sPlaPNSk6dZoGJqw4anXpRHqIWr/ZifN3vcmDN5YATg=",
+     "rid": "S2V5VjJub3RWYWxpZDU5eA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s59",
     "ok": false,
     "error": "the store's key file is not valid"
    }
@@ -4152,8 +4358,8 @@
      "via": "cli"
     },
     "sealed": {
-     "text": "aw1:vSrhfxoTPNZOoenyvYsoJeXONIRv-5BIBGoeSkUa4YAf0Mm3CZBYxDplrC2hr82DytEBWqmWp343xMXJp4RQ29JdMvpxrP4e22JqebzTog--kAQZaUQitBJ8GsIK2F8sc7fIL7Fl6Sa7-ea5GkmL7ZiqmqVCVrWwEMlqKPJDlNSgME3ZRSKlCG0ITRB4lLUloplDM26FqETcOvF-BdLIuczmTHJO1xexPD0nt9SN_pQoFmnwfqCAaA_HpyhuCrktEkHkPwSF7Z0LYPjZjAwcRQ_C59tZ7HPp9IvtzUFkThgyc0TFNGkUAshiPjULCxRbDJ4XEGgwgoJZKgBykQJM50R43gE9Y33sJoYr99pv-CDfMWO88NG0ewRXHKqmC52MvTo1zmmJAOgtFZevDCxJuw",
-     "sender": "qFO0HxyhbB+nyKFnqfbTdPs6LyyWBpdZIu0gN9xyX2E=",
+     "text": "aw1:l9ZnM7EQsdey94galW3AgQP0hS58LsWCW17zChxVKDMijLhn2HeR7XsL33SBaQhVMAjHUfMiw5SuACIyKbPpV54r58r737XOHEWnM-AODHrZDsl6v7SfSQuYIF1wz71byuar13Q16p_r0wpqZuL_4oOxzeuMf9dIFrWeavEzUpmpA7sR8HyRjVlmbQDAaLsZhuZk3oUwVHSMeTPdiH-80hLnq_J5yLLtL4KQoojPdly-hI0OwMNAf-va_EcHOqtyAaxmUQgxnnRxbAwcovFIPcSBU7JvNDu4y2NWzsKOSLJ5Zjx-txQZQ0krwYu_U6De2NoDFFaPytbO4SMgvHqYKtHpqRHMywoN-W7lfisQflWgfUZGo1ZDUk-02jmcQ-OBX5tIAV_fLEV3RL09LYu7qYOfqKmnzRF_U3Um-ehPb-EmtKTwHn6x3BcrVWl5SJg0",
+     "sender": "+1o926Te5y95uCs6WuadgpGS8Jt3g+1WA0QLvWr5KS0=",
      "rid": "Z80J8Uip01Vm1oddjo6H_g",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4177,8 +4383,8 @@
      "via": "daemon"
     },
     "sealed": {
-     "text": "aw1:8fpojodgJrmjpq3g62HkNcucZlosiWHwt4iyGsgxlIYNEqNOaFur91abxHB2B4UHZju3qoMO1yoKQnVARByl0eqGEPhhoWxWLv9b6QeGrlVElkt8WwO1G_tHuH4FW__WhbMmeC4knAgNmvQ4f9Ep0OWcF3VkJSFLt_cBL5I5tKI4-EQ884tnmoQN_51deaOcLGuD1Anfr730qtviw2ZcqVB847B8IMCfyzRd8lVoH92qyoSjBEG8u5t35dcGbBaiWIkfzdEVmuGJr631_AeFz-dHjXix0LGJR7DWtuTc_ER0MNfCSHAhlvOTZUyMU_qxWZDRAUOlwhPLCYuRlEoc6HmlGSL__3crE3SKtxlLMRCrb4I7Gyg8Km7hWie9h26EPRXvUW9pvNst0NNZNAzcAw",
-     "sender": "pRiCf8Db789/YFdIzziDTVycYUHZNNWUAgUm2bmO068=",
+     "text": "aw1:qTUIa9FZwuDZkTU_ziEdLAt-bWtmhHk_K9WxbcBRpwPQH_C8mnW1falksbtbRzGXjRlKUXs6d1-l3hZ2g_L-5cRC-4bw23x2YZTXFICBwk27YgGpN3D57N4dY4hJGiwFP24boRLvyW_dpA0XCnBl-PZyWVnfhpE07R0eQHniB3mnLl0DzqSc5GGvyKnUKlKAGKglVBeDqggL6cGVpqOgTDgM5jAQCJi3IzIjB3YddFEgCzFqO7pQMDDpbjCpsr3bD7QX70PnOyll-DG-FdeUQ2krFvbQ8krisr0QYisdFgxC5Ww2NhcSrI4EzAInZ1dBbDMa1Kj5GgqwnKJBcFfBFP3CgyV2M3uqXBAeUai2-1PEEAwMJE-4wBQYElpr6tSQ-rL-jBB979FkYSsL50Rq4FYEGLArAJFnF2pWUSOjBunUbuHEXBGlRZ6TWRT9JRxL",
+     "sender": "q+thqauQGS0K2fnW0Iht722ZNe6znRFu+zrcibH3+G8=",
      "rid": "JX6jNzioyXQ3_dcZSYZ3_w",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4202,8 +4408,8 @@
      "via": "cli"
     },
     "sealed": {
-     "text": "aw1:AFy_hWsk2NdGMUkwplMcDSnFGG4yimanysydJdNMdJ1mFCuQobUCw-EGcSfI9KCiIKRHU4HO3Vxl7pPaWyB9304f1PqELwrVgb9VE5M5pysNFoxC0276Yj5xN6YkHNNsn750vTk6-Ob73yiZOkxDCIkS6K4A1-Ova11qUY-LsL5-Yl-N4zje29nkU3soVyN5Tg4RpUhHBWBjS6Fo0GmBgXaA90KrIt0j1_HG5Rsr6C6F1yIv-GXw4c8hVESx0wSxi4akGHD_0fv9cvlgYB_6blFA8UCSA75xu8rFMDfmXkF_xRZgvMSczK26dBsouKkCXgkZUms1e5rlgeee9v-gP8deak7OpfaQo6KUKpWbqO-fWuqYQzcgp2l2AvK74DhRm_z2u607_v-Q2Sd1crlWtg",
-     "sender": "nYL6B17XFVu+D43ZTveSFbVoo83YyioG1eLWxZa0EN4=",
+     "text": "aw1:kBjooQ5aMtR-IAFtSIQDIewlNB_xaXtLCPaen95Lq0z4aZ5pxZn6idPDRoE513RBygCtB9DR9QnGLgarw7gf93oSN7HQgCU8oGXlwkm6P98vPVl4NEJG1cEhyMVoyByN1FygW8KthnGOAkSBWAH82WCqGp9OdtpUQWbuAddhRTwQoM_ykPD_wum0txV32lb_za3IM_5rEl6o1UrRNLnxaF15dG7q_qgQLSne5qMdOB3epwtxDGoISOi9F2gTRUhHDDKyWMwxMh_9O18s4EBsw8JFXdKVlMdaYb6yVCCZfRFX8pHIfmNEME_FByDWNX-sK6-casrwVdM8kpPOTuEhzuKFDHEvON2lnfQ9pDf1nkpzcbt-raxfH7_OzIl3r17Cs8rcIycxmZW8_jl-qKZqmRxkPgQ16Nl0g3qOCouv9CRKYJ5wTzcbBRRnsiq93chW",
+     "sender": "vPuhaWnB9xqHQhSBW8fTPXcqSIMv0E11h0AZ1lABXQU=",
      "rid": "GMG3TnjNa_TeQW3DjeNpGg",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4237,8 +4443,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:1rmZw_HMtwiW5LSki_G0JhrCP7dnzNJPOG9UPOoHCfZmBK0Kh1Sz2GacpfjrtJDRUvoZe2kMNcmdxY4SnMxrU7WcnaR0y58UbO-loD2H0zvkOddMlI5GmELhEOvHbzvb51XuSuSAQt5jWuYjG9eufvIw2fb4B0wf_DXdk0k2gHRb5dQW2s_Xw_W3fKJ46mN24TR8volS_jFEkzsDhHAijA9VObsDivIbJWHydDDmBS0kVcIyIhvCEwyinEb19ajRkMhYvR6oi2a5lj2sDw1gjIRNQR-84Xg3ItY6M5OX02iOMkxENb-TNaR3_cUlfinpKz-mBDGKm73QPlIOOToIdoqksJ9fLP0z_p2eCRA6wUCUInqXVAK2H7Ba05-FpK8qlNPzEz4wL4XShmiWEbqb7g",
-     "sender": "oA1xiLpNkqqTKqwGSibbMJIkhvbmCm1f7FOk/tfmmoM=",
+     "text": "aw1:bH_YTcUpSt36Pu0gj5EPCFufAnP6krydeBXd4q5WzHw20rC3fsdhSXUkdYCiwEB95veu8XMX6KusMmmJSYEwyPt43BCLXFpmIDYTzbN8RLgIQb7H3WXEb3bviZ2Qa8Q7jljJG0XBXUM8Z0bdpq8k1HEW3_08ZgjtujA1-5fLZBuffanh1QYl03eHYVdXjbMWNqF1ltbKmZEf3bokYlR-tmqcyc7SV9EqgA0ojXmGzSA8L5RRcL93k9DzXH4iugMWEJ2yQf5FhKpjTZkV4KqoeDYHsqnVasV1G8XGH98xWAN7wLIJbNd2X4JeZDVGPb4WPHh_55LtRCzP0IW4aNnHLZO02EycmDqQbGcqxX8pO3YxasaDTdebbV8W5X_UwM3nDiTMVmZegZsC3QEFGTjmjBPTiazVkHZ61CiPk7h7fTtTjqrQfvhjiGCevPr2608G",
+     "sender": "AFET9P+rSo1Gspy9ee0QmS8CBvHFtrXyuMTCg7musy8=",
      "rid": "WmT3ElJq5yfuR0CuhuMNQg",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4300,8 +4506,8 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:qMauW12NuW-8uqjOKRrF29u-AQENCmhkAghCsTUdcPlipHeXm0iVFrEUF9Oe6QnX3qmKEvCsIHcUseJy7_zs2hioQQAXAue1NQQEW48gm2-B_h-9u5032pYhz1X6D1ECW46m_8234NaGVs_OBkvdTpdjZ8ffFWKNNkx5OPWwK7J2RWgg3ZtLnMDEBH_7wSkeZOpddjOH8LTQ1z8A3rLBduciD3IvBFizOY0jnmRD_e00gV7WRVHhypd8a8UyGyg-nQm2ZYwtn2HG8u-zPy8sTwJX7GUe121SvrmYkxkH1TkLOt1khrAmoDb47lan5uCTCuDtXL47jWxJEihiuXjsSKmXJ4wTQIMNpgWnCGzXtqBbvvXadmfDkcVOFTsx4F1oAQHY6QdqYV5Nu511b7u9Cg",
-     "sender": "kRU7q8e0LqQQz9pgGUgt5ma1ifPwgILcOR4FQ/Acmuo=",
+     "text": "aw1:1Czc2chqpYXoGt-zDiZ6oRzRl3hPBpS78n2_FWfOsXr6bkSSiRXngt_4KFmyoeAo332J-IdPhoWVU2wL1rR3VETaZQ-12DzQlNls7YpvrCB0becKxLQF0SQEUJgDbxiYUlM05lN6RRtcIzX5w7gsnJViXJIuhS1ZgA5VncvtjTxdLHp0GrQTW-8ZkZxFKWYxz-UjwQC7DpcLSwvE3MncDeac-3l0SDKmn98azGURJnKD1SDaZc4v20jDr8VtkC2Ssr9Ji-7LwTQazU8alNSbDX3AKKiRgHdiEl8QZWUE-RvR2jgVh3XntyN3sZEyNojRtQQ7YvkXEaPa8GZBFM1M8AYhUAARDDL0_UhYRK_JTWGzbBs-XKfjNbml841Nz1bOYk0Hw2pdgaAD0NEBGRFXEEO3vC2KFSNSzBBtxY4YB2uxPFLoPDF8cJ1pKHlq4uBD",
+     "sender": "9Pt18GOtOcuK34Fm4rC5FKkIgksX8XVG2Tgdzv4NuxU=",
      "rid": "OL40Z99W2WHVv_z7RJvejQ",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4484,8 +4690,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:6i_XYS-daNeoxJTbgtZbyr5a5a8QQrTcQ5pFyjGOv38IrheJR2Pm2lM2022yWlOo53OwQDX0CULuNpbnbrGL-kvA-QA3brIhdSHVlILL-MgSzQkB0IG3aUWskmJlOqpvSqcJ9zpaEO4QMG9Fp4OjeOJvyXe5hgtjewMJxzh5ClIrryV6czD_t5DSgRebx7U7fJfEOSGXdd4T8RVtLn0sxVeUyFXi1ATRdB2-kIrWHDk3tNcDKo7_OeW_pqhZfzC6VbJpgTkWhOCExBMppZrH7rQ5L-nuXrDgpu4Ylq6Fot34ZRIBULBZ13uMLoPt1LGvEP3irs09ZRM575ZLN26E81IazL_os__hntwS9LmAs8GURIUB46DMnOvy0D23FaDqrSAUy-vQWP98avwjLYA4XA",
-     "sender": "sO5PwY+rs1HQ0L5fYcZHZ90V84PhxspLAy5dNubX4Tc=",
+     "text": "aw1:lNqKo_mTf-M5yXtoIWn8wMzxgw3GgAWP77Nuggsq-GZfOQ_dNLTbBUGCri7yFGibnURPgy5H2UBL_5wDGSvt7cK_q3fqAhP7-ttYyLd3OrcTAwtoqbtADHQmJhmSWHEZjKu0C3O0WTE8EUl-2EIh9hWd1Dbvg_IUWAHnU34Bs9b7PXnKc0FCWF_VMUR_oAbdqMdqutnLxlUciteLruAxx1VwMENGcJfFE0MwcOnnmY3oiTdgXcCVkUmTXI14nHENL0dvnt2LiSHzRFfIvx8sYnujzAm_ns925d8xkJ6LvwDT8NQGWHxp3QrONa2crhH1s5ZNcPma5P6B3eGMN3Ms1sgkRwaOnS-DQDqHG5TOp8jsDs2OckGTTStuxglXpyiVslZ41XbNLB92zHELg4MgjIOm2e7DVNntIIZEC_4lj2RVeUCZxQLuSHaQ_Bj01JG1",
+     "sender": "6IxDxzoYb7vs8roe3g1I+igZQFMedrAqbyPsiUeLqEQ=",
      "rid": "LhzPSnm_lfOqMc_vO52paA",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4519,8 +4725,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:We8zJJHUxbK_z-fLAkGpFefsNoYOoLDvDogbVSGJHnGZArkd2j1tTWo0GJ5OZwNWsOO8QKU7vGOLtsNP9K2aX4uGOmIsx_ybPaam9gxUtllMH_5cEXQntDakX9yaJHjlp5ks-WWQGavkZ4tp3Ut-eC-KEZZ8gUtVuKaeGLxJfNzI8ZuKdO_KTgV5ZvsbNbH31pHE67qgBQF8QMUN3q77DpwUfGW9fJBOAnCfi8ipAjUNsY1R8leQvjV1MspiAcy9PS8ChcfPZT-68lIuEt4uwVeAQ8vQovzm0DxqzDzMhmL_HfkEOlG8_FhXCDu0LlHfM2tIwIAjR8I0nqLnVRSOrpwlp4d3eKnKOIJp2WfyV277dErLw9w7vW4upIreyONLWzXDvMpkTo5K9s_2Hvs5Ag",
-     "sender": "rdfMe+FE5r4uiwZ9L2qGP44MZWuQ+V9/WldQVSUyzD0=",
+     "text": "aw1:KrlcNOrz8_o2UUR7_K-bqPXPsZYWuomHgGibgR90ejSaLATQJASBvawpdhhDue2L3Ya8ijUGQE1oLfvbXCdUUrh_zDEXV-TM26ohJW2Zdul4PXMu44WwcM8ramlNxc6ARYbQ0yqPJa47jbpVqD4vNSc7nTzNRG6ZI6GdQzpix8nEIVN_fFpmXza4XMMsRIbbZQ9td3ZCNn1IEEo9s1VniuDfJcwx1lgswJm1GA1wFdzPGuLG8KTWgrEEit-kE8nOPiRboa-TMlhw5Nh9dMFtu3GzTpWb-M71C666nNvBRF2f51-EFxAmdkiBbuEwwdmCbWVsFJilOFbOMk06N5DxZZDT1DhMjNE4AoA0Gf2FYGE9zX__0y-8GmpBRXNQFLs8HClA6YpTpaxS8HGjaGe7eKPXYL3Ad1GHZ-gb4eEJwxOX2j4nl-3hdnSoIcK6e_Ml",
+     "sender": "i3RoWkThUxsia8zDSgH8unoUuwv3Joa+vUsOU41cRyc=",
      "rid": "zYzg8Kw6Mu8WMyQ88wk4lw",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4582,8 +4788,8 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:-ZPjRbQ27j5AH3FVy1LlP1GasnToQGyvyJ7FFe2ESTlNo49eMywUna6yWTbFM6nNCCfUzDKVgMKnByEPROTySyPDdKL_GNdH1BV7kNfgkoe-49MZHR2ei-2vHIKlBsA0XS7TwfytgFgslmfUbP4ykRyD5TGkqwbsooby-HkFaZHEDnO4eDYa6fc6jRhE5gPbX7fqBbAWU2kRenp5KYpyRMQoKbJqmIOmaUwB4o-_uzRltI6nkanTNxtgDe8tXCIaKxQH-pcrNZSsACeYZVJ44pKD-_lcsVSjetW_rsLRIQBgsPRw5uSxXBpJEpTUtX7IJ0hmxCHJYkNQKZsu64eZoKrzCQAkIUWznLU5eti6l5PAg4IHkVzHaAE59RCMemjn6ygV26ZVZFljJ04nQ1rRFw",
-     "sender": "d2n4oO9BWtyk9XdzOWUIKCbXGr+p1FjIQhM0plqPcfE=",
+     "text": "aw1:-BkujVJDheHZHCt6Mg0Z300zZoDf102fccqClmSboisAS2BVXAYNTVQ7lIddp1_lUaX7GZvkPZUjUWW8x82vyEANOOrCwBwsbjwb7kdNbx5c4t9Q8dnr3f-ZNO7LTBZFn92VPBG5s2Pfyd2zETmjEpkb6VWq9iP85AjlBvgn_4Fku73RdjN7M45DGhgSiI29s4nVGoAxrmd-kC2SctX3-IBfmwg8P6VVCG4iw-KuV21iLrlwd59nOj9BRDDJwiykXglmyLEkozANOTtlrTOLZ5hOFyvCNQ35OzxSFBwbwyfNbwcobYOOhnk6FL6HtlwH8P9JF4my5W0U0YKmERgI2kh85h6sy_htK7ImZ99D7RlqvF7MX6j08mUS1IOlRSVCPw3BV6mDflAv1Jq2t-E53BeDKKo-CgJgro3oSvESkjfiOt5BOUcGZvu4aTKiuw1S",
+     "sender": "AdGE6BKqApRPpNoD+oumRzIXqK5I3B8nfsQffXjHzQs=",
      "rid": "9JDJxLJB3rGy4LOzMlqE_A",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4617,8 +4823,8 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:9TQGHNgdo2oUGxOOcqBZxzpGTcJw56Brph8h-tckAQYAA-L_I6AkqmgxV9LrLYyFycVjqreZpGpERa9Ck-og7nHNPcelXdwwkIM7cbs322B9SK87LX2Kzct_ds-j4t6cm-jB2g0aNTmz6M2oU9mVr58NjkuX8a6fH6sllLRtyeSlavLYP3Sj1_8tsXk2xBj48hkSoEnY6v-3TMi_dwhkB9eBLslwcb_qrFu-FkQBkJ1Na89nbcjz6aAVd9uya6HckvTSzcN2-dQ-M-ZcorxG1Q1fwOINblgWmIv9O16slO0sjHO1kVLu0HOYfOxMpriQV_eRVaOaA7L5nFjr4dP2tKDlmVjCQOdvVgNp8V6qU604oQm2VMXy1FeWThojidCBtcu3vO6oZ7WFjnrCjCMNKA",
-     "sender": "QUQXJ75vE9DyZhje9yATfLPRz3ilDfRpVNWMvB/S0KM=",
+     "text": "aw1:K9pMpyjoh-YxgGWD97Gk42wNV-OC3Bv7rlMzpeMJ-QhcC_KvOPZs40mIMNkjUW1D417E5pWDKtyMb6UCZQHbbMCU-HFKsws_rp9tXhz1hxNaouH5bZUQfvWi09Zh2cFwSyGVsFqlqRWvbl8OykHB6_8mQAd34xWLee06BTwqY4EpgyxQtA0qj7x3RlCNqUJQj9Vkb9SAGDUGd_oeuUNQH0DsyLvTwgg5YrP2ByGgzg6srQ4RpSOeKmMMPn4dvaHY2-2X5YFBR-Nx53Vr3j_mCvsRLNSfPPCckddt2yaxIkzkl2KlmDuwnMExXHm4Dg9ek6jDFp1EygAx4PpJZVuPWGh9GIufcFi1zWUe0GCggi_Ti-Ut309KWdO5Q9t0OsJ9fGwD-Q5PZi36i3uocdPge7P-yleDI90DLNvV3HKzf6p4sGOk26irEhsBZmcWqNbT",
+     "sender": "dzs92DRvyxSw1771YnU8ZuolqJjK+axZSuumSNGAJRk=",
      "rid": "r7AbGv2gE6sN4ubD0fZdww",
      "at": "2026-11-10T20:00:00Z"
     }
@@ -4687,6 +4893,34 @@
     "id": "b52",
     "ok": false,
     "error": "bad request"
+   }
+  },
+  {
+   "note": "sign_in_reseal whose path holds a character outside printable ASCII: the rule of path (review-118 note 8)",
+   "req": {
+    "t": "req",
+    "id": "b53",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/lögin",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b53",
+    "ok": false,
+    "error": "the stored sign-in is not valid (field path)"
    }
   }
  ],
@@ -4811,7 +5045,7 @@
     "t": "ev",
     "ev": "sign_ins",
     "state": "open",
-    "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A="
+    "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18="
    }
   },
   {
@@ -4991,7 +5225,10 @@
   "canaries": [
    "canary.user@staging.example.test",
    "Canary-Pass-5Qv!9-x",
-   "canary passphrase of the scan 2026"
+   "canary passphrase of the scan 2026",
+   "canary new passphrase of the scan 2026",
+   "wrong canary passphrase 2026",
+   "short canary"
   ]
  },
  "unprotected": {
@@ -5025,7 +5262,7 @@
       }
      },
      {
-      "note": "sign_ins_setup: the protection comes before the pane's seal",
+      "note": "sign_ins_setup with a seal whose rid has the wrong form: the protection comes before the pane's seal",
       "req": {
        "t": "req",
        "id": "u-dumpable-2",
@@ -5036,9 +5273,9 @@
         "via": "web"
        },
        "sealed": {
-        "text": "aw1:P3hL1HSbo9ANXERltwVFEVUvigbBNFp3GwLeHKMVYCzErRYdHUzDFAxv90laudQ9TVNdCZ4WJqHk_M9ua_bRvtWbstornCFvN5sXYI2V_nrot1AAdJ-Z6zeY9GvpfePi5U2jgW80xsZILZgsHW_vmn0Zhgv_7do375RWBu6M_UHL3fpZjwQ1NSaTYdP49yiLRbsXZu7MgDTZkIPicHXJNSei4gZq5TFGTm9dE32S2HNjRKOXP7l7PxGiXa-4JI5DjaGXVyvKifeItwrDlogl_00tTlcX4VsIcoeq5rBHFdTHkbqdLKZUHUuWFPOqs0DAIxco4iroQYHGDE2hUxFrgbbYm_o0eYqbqsmcPDkvtp7DCTS-wDzle__aq-kEUgPLksUvKDvlVUC3IJPw8BsqPw",
-        "sender": "JpBZZw2xc14cXPcHi2wC1sBaRhyw+fXnvWxeViA385k=",
-        "rid": "KsgOqlfL8CFuUWYiMCNHfQ",
+        "text": "aw1:GzFRUl8QIW7P8MFbOqPTn5YiuE172Ksf0GI-LDQQUmY_ALFphtcRPx3cMZCYV0UlHxYQbE8KzIUnMA3kjAkD0tFGEc9UkL3XCDiD_vmh8o-zs3IabI5AkuuxVqM2DZegXcMffg0ZLtv0qhl1dk2g95TsE3_OMEg7cfUzlpKYznXCmXcBevFMTO2BHXxRs-fRiiGL-np5T-vaQYywlA3nfG_2nzj64n6zFQxHlFd7TP1MLcrZSCAT0Qg755HdT8WdCGu5VeJBmApMBLNx7wojvWOUeD5Y23brK0E5fDcrgzm1UeR13zxRFJa4SboCGcBLWJ8glYlsU_eEM2AEFVM_1WsTKEoKJUoMgP0pkE6Ca4sixoNXL56OUMZvLUKubNEXid7DbFPPAjSJ7aAdLQ8StmFnGfyFWFMAMb9jJk1HZlzUck1S4Jn5yn2Vdzk3R1_4",
+        "sender": "j5w9/QPGtO1kBFuWYq/VSkK35zikc36WgUpLnc5xZic=",
+        "rid": "c2hvcnQ",
         "at": "2026-11-10T20:00:00Z"
        }
       },
@@ -5054,10 +5291,13 @@
      "state": "none",
      "records": 0,
      "acts": 0,
-     "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+     "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
      "stopped": [],
      "unprotected": "dumpable"
-    }
+    },
+    "failing": [
+     "dumpable"
+    ]
    },
    {
     "note": "the protection of board ab-v16.96 does not hold: sign_ins_unlock gets the error with the reason signal",
@@ -5102,7 +5342,7 @@
       }
      },
      {
-      "note": "sign_ins_unlock: the protection comes before the pane's seal",
+      "note": "sign_ins_unlock with a seal whose at has the wrong form: the protection comes before the pane's seal",
       "req": {
        "t": "req",
        "id": "u-signal-2",
@@ -5113,10 +5353,10 @@
         "via": "web"
        },
        "sealed": {
-        "text": "aw1:jkjaWCJF4viAo8gDlFb0G8GTDvSZhAh7cZtr3A2cNgboKZNMhR6LwOxsgjhlOwW74wBk6LBvMMOXte14o9TMEwTGOk4_eSoPsF4a_mwLT4ZOY1uFX4GbbiH9f-i3aGPHsn8HoQCHQDjHgvX7l70B5d2uIbmV55zvocMui8XmCSl2NSMnK5RA_G7ifjsaZU9S3ldgRt6wELvPt7kdM5GpgMJcwT0KTFPkGQDc9vedMwYuJ-qenPzPr2epbvzkIWDI4kF6Iie9uxI37wsFjFUsu3y58i8NTUTJiXLJf4yCpwyUBWfeIhCg0dP6vNd-_vi7PtIR-fWVLzulUUhPWXbqvcb3f3_bkPcGt1jrJERSSrStUfJR19dJA7i9QIVQphktPuj5cTfjVQQpAAYhndB30g",
-        "sender": "sQaOuY57iADsZ4I+2pXKEzQXAKsuPOn3lcAnSydH2fc=",
+        "text": "aw1:QsU7uTZnAf3vGts3_pISbFIbiiaSWE2dPYH7hr-30y0QG_NjNmdJ9wR5IgtcBeZnJAuq2CMvmeJqhPFgydv9uTn_be-wVUb66sCY9oo5j9dzH3FuN1524kIQGK6Zs1UJ6sijz8syklLNZVlKAG1XKhlLe5-i2VvabKsS2DasVykZoHZQMYtiF_hkTzRE3S1YZK6nP0kio_ogH518XS0RAmLoXAJmxf43xF5xgCLaV9AuH8TGRDWWwoG9K-A01C86NR1FHZhcYXn6MAIZ1aq0-amDGqDZP-3M6Y_BC_OBkJpr3RfPBmr-dIQ6NKSKEqb9TVRnUDIlFfww8wGI5EwNnkxIbL9H_TW0DKqeZhOhdb7p2ChbagfDO4lCCB0NexgGc_equ6mD1gr-FQV-8ZlgMTSLtazzz06MnL1bePfDH8d6Sj9S8mrRYz-7DTP7jyXZ",
+        "sender": "ItFhBolH/6qKnQWPxYqImDWZ8ng49kl0oObvxy79v0c=",
         "rid": "3nmIdzciHufVru_vEH-EiQ",
-        "at": "2026-11-10T20:00:00Z"
+        "at": "2026-11-10 20:00:00"
        }
       },
       "res": {
@@ -5138,8 +5378,8 @@
         "via": "web"
        },
        "sealed": {
-        "text": "aw1:wDqKZVqH0f2Hqxctpq9xZWQiNV_TZD_pQ4lvZscJ19HaY_1nHBXacc3RMGyM3KHN624G_rUN53S7Shz6pTMj3pcnfetLH6k6tGvpL6ZCDqPMQ9ue7n5xorvdiRcendL8VqoeXS-Wpu1mFU11OO2Y17cubPTew5DoseCUax_KfdF_MrhgB-JsCB_hdXOqPgoQKviG_2RgV2uQav2OrWMwo0U1wVGMaSMpzIiZHzTldCgqRl4p5niRzmL2OYkEex58polh2AtPstDOwje_cUSu5QKHoWfKO9LWF6oemb_qQNDrqprUM4TpK6Ku9CbQHIBsc1CTN_0rTjH1S9sW7qmYRnVF_VCyL3jyDStn9MjBo04QG6NspilptdSovUa-GBckOqEHLfgCJf1dLUFjfDfxCg",
-        "sender": "clyP+Oi5PAo7HJvhro10CRZPAbOXLbsJPw1VvZW0iWU=",
+        "text": "aw1:efVkYzmDlXkfJQzWuoM8oIYLE2iLdqFzlTzOBhFw1B4Mcyvu1IyEY7Yw22XBCZQJqmEt-fNAAJsoLVpnO_CIUrc8UCq_Kr7nWEZVvWuPeEtucUYml64mgxn_Vv5bPPCRyaml-piCNv5u_rNBZ6PAQNkfygzBWeMdSy5tH7vH45PCWgJukUKVg7YAtJKHfuk-F-z-XK6q4UhJU_1wh3Ez9N74bAs6uukvBbCPH_64LNkgA1yj-BBHUpBY7U9UFKeDI4FFG6ejVjrDLug9_f4SEGbjnnTPETDJRP7rQx1MRG4BqqF_jONoBbQ8siZRJQ2qsB_pKAZJEZrmEUG9umGkaSXJD82JqxV0CQWLbSM9WlL8ouGpEr5ju4HpWpHMhQ_5B936rBCSFIEetH5SEbfA-un9Lqk01wWtVHii3Wc7d-tzvXrwvbldzT3IDxEjlS-k",
+        "sender": "4C5nEmvFQRv1WzZtl88taAQEQeDnQbL08o5Y8WQBsSo=",
         "rid": "QzLbxL-nsr-f7PLmA9MuZA",
         "at": "2026-11-10T20:00:00Z"
        }
@@ -5156,11 +5396,342 @@
      "state": "locked",
      "records": 0,
      "acts": 0,
-     "pane_key": "cVrQRT3DOnPdlN6N+gi5ebA8kiQkgNKRTZnJBCQKb6A=",
+     "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
      "stopped": [],
      "unprotected": "signal"
+    },
+    "failing": [
+     "signal"
+    ]
+   },
+   {
+    "note": "both protections fail (the process is dumpable, and the protection of board ab-v16.96 does not hold): dumpable comes first, in the error and in status; the fake runs it with --unprotected dumpable",
+    "reason": "dumpable",
+    "requests": [
+     {
+      "note": "the first snapshot: no key.json",
+      "req": {
+       "t": "req",
+       "id": "u-both-1",
+       "op": "sign_ins",
+       "by": {
+        "kind": "daemon",
+        "user": "ann",
+        "via": "daemon"
+       },
+       "key": null,
+       "records": []
+      },
+      "res": {
+       "t": "res",
+       "id": "u-both-1",
+       "ok": true,
+       "data": {
+        "records": 0
+       }
+      }
+     },
+     {
+      "note": "sign_ins_setup with a seal whose rid has the wrong form: dumpable, the first reason, and no seal check",
+      "req": {
+       "t": "req",
+       "id": "u-both-2",
+       "op": "sign_ins_setup",
+       "by": {
+        "kind": "operator",
+        "user": "ann",
+        "via": "web"
+       },
+       "sealed": {
+        "text": "aw1:K7nOmc94rTtgMhR6U7DwpP8OsclBivB9F6SOjZq0VS0L0Sv2-U696WILQPaAD-weUQphtrU5bxd1O1QdKLrZ6E5sC2_1N6g9ZvPH9zShUFA3_s5trf-5t5ncKAuwmausHcdwOUTeV6STkzv0l5H3kIJxQIZyuwcfaQ02Vo2g1aDbQoam19C3byyfHeKi6DpHJYWWEVsk7RbWyGNfb77QYd60FBTy9otbU22aBJs8Us6M4s7ENmOwxK15ujJrxJFmMGrD_8jUekgRQsAwlsUjGbHtNWrrRKMpjdXbK59AL26hzULs076IQhUodbYlyrBbRbRNx5RFd9mxoQcBLca4IJT2kNUAVuu-Rufwqi9JEiaKj445bTghlp3fbr930UMeYCBw9uVvQ8RAHjkKJBprFNDjy5IIduG4sTwJnV-NxLw-nNU1N4vIAbf7Um5iP3R-",
+        "sender": "2I+1k/J/uORYpEC6MiIPBol6oQUHhySTB/V95bLrIB0=",
+        "rid": "Qm90aCBmYWls",
+        "at": "2026-11-10T20:00:00Z"
+       }
+      },
+      "res": {
+       "t": "res",
+       "id": "u-both-2",
+       "ok": false,
+       "error": "the service's memory is not protected (dumpable)"
+      }
+     }
+    ],
+    "sign_ins": {
+     "state": "none",
+     "records": 0,
+     "acts": 0,
+     "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+     "stopped": [],
+     "unprotected": "dumpable"
+    },
+    "failing": [
+     "dumpable",
+     "signal"
+    ]
+   }
+  ]
+ },
+ "paneSeal": {
+  "note": "TEST keys and values only, never a real key or secret. The test pane key: its private half is SHA-256 of \"test, not a key: the pane key of the stored sign-ins' vectors\", its public half is state.sign_ins.pane_key. Each pane's seal of the requests is a seal of agentwatch's screen-seal.js (sealPayload) to it, with the binding of its request and the test keys SHA-256 of \"test, not a key: ephemeral <request id>\" and \"test, not a key: sender <request id>\"; test/vectors/sign-in-seals.mjs writes them. vector is one seal with its binding, the binding's bytes, its test keys and its payload.",
+  "pane_secret_hex": "a98dd8875d2de081b1857d1b04fdff9d0d35de7ade93a2458b93fdcc9c507144",
+  "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+  "vector": {
+   "purpose": "browser-sign-in",
+   "fields": {
+    "op": "sign_in_seal",
+    "rid": "VGhlU2hhcmVkVmVjdG9yMQ",
+    "at": "2026-11-10T20:00:00Z",
+    "name": "staging",
+    "origin": "https://staging.example.com",
+    "path": "/login",
+    "send_to": "https://staging.example.com https://login.staging.example.com",
+    "offer": "false"
+   },
+   "info_hex": "6167656e7477617463682d62726f777365722d7369676e2d696e2d7631007b226174223a22323032362d31312d31305432303a30303a30305a222c226e616d65223a2273746167696e67222c226f66666572223a2266616c7365222c226f70223a227369676e5f696e5f7365616c222c226f726967696e223a2268747470733a2f2f73746167696e672e6578616d706c652e636f6d222c2270617468223a222f6c6f67696e222c22726964223a225647686c55326868636d566b566d566a644739794d51222c2273656e645f746f223a2268747470733a2f2f73746167696e672e6578616d706c652e636f6d2068747470733a2f2f6c6f67696e2e73746167696e672e6578616d706c652e636f6d227d",
+   "ephemeral_secret_hex": "612cbd5bf2df873b2ad0f29a105ebed742a10d6f84f8884f7c768ccd240d09aa",
+   "sender_secret_hex": "00f53dcecd5634f28142af95520f80ae0221c917e1b3ac8b1d287cdd320d538e",
+   "payload": {
+    "username": "fixture-user-not-a-secret@example.test",
+    "password": "pässwörd \"q\" \\ 😀-fixture-not-a-secret"
+   },
+   "sealed": "aw1:3jqR34UmfFZpyT6YjoXJ9HN8C4kP85i3_A5IqHWgzQWSFNNbgWBoubNsS01qsvC84ds5evIYqpHmGa6UfieGhvI-OTLG6DkRzhfjhH-gjR-GULkWgpucMReyNa8YMpH6hlOSCYYa-OZUkJ4NQki_z18ISXja9K0sYjrppSGLuhyc3SbVtzOFU_sKjbSnT6QxSgy9qik8jhxVZjU-nFTl_5HmDw1n_qCy9ZbCjsAjmzzLeAqDkj_2sVVcNCBQjOONzXOSxM4ckbbt5OsIkBKlPH2HPt0rXWh5imt9zDWWoePrS5YQSX8SpGs4lnUTh1ZvLSkVH0Izhd7bwAxEMyHxVDnbiUXrPkY1HcFjNkwGqVkNZxyIOGMZ77dQgAdC2MY0PTKBQnNR2r_hDyrJMyyDHLROukNRLGingId-UgcFrbzFY_FPaQmxIvYJYA6vTKNZ",
+   "sender_public_b64": "feblh0cy5XL4P1ZTJAcsoYwLN4pWQ1CYRdZfK81iRkY="
+  }
+ },
+ "busy": {
+  "note": "The bound of the queue of sign_ins_setup, sign_ins_unlock and sign_ins_rekey (C12, the passphrase; the daemon lead's condition of review-118b). On a new fake or service: the lines of first run in their order, each after its answer; then the lines of pipelined go in one write. busy-5 holds the vectors' wrong_passphrase (s28's seal), so it runs for 2 s; busy-6 and busy-7 wait behind it; busy-8 is one more, and it gets the busy text at once. order gives the ids in the order of their answers. The real service answers busy-2 with its own key, and a test sends that key in busy-3 in place of the vectors' key.",
+  "first": [
+   {
+    "note": "the first snapshot: no key.json",
+    "req": {
+     "t": "req",
+     "id": "busy-1",
+     "op": "sign_ins",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "key": null,
+     "records": []
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-1",
+     "ok": true,
+     "data": {
+      "records": 0
+     }
+    }
+   },
+   {
+    "note": "the set-up: the store is open",
+    "req": {
+     "t": "req",
+     "id": "busy-2",
+     "op": "sign_ins_setup",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:xPe2PjnEH2mSuA0_Ps8_gNNsSexq6WnglwrKl6ZYn2Hq4SCfOgyZ09ckBVn2gWIfwJxv0vx9XyHzFlwwYnQtvlPUjPWMm2Wco8srjDRoPXNk8jOgG23fwz_1m4jMf0oXGOrD1jPUqWbIXJST47QrnEtIAFk2RBi631xfFROOhwYIHQxn7tSAIiThT198kblzQexSCsVGssSDXurKe3t5-uYNVqLGwe5ZBYWnmkAi10hCmUNpFK5A1qIz7YF4tADK79VLiv_kU_m5kPGOdx4oa_-oQ3Xazzk2ePOyTsi3O4keu7LHhLWZDjAznzTSdNKkWuQPOQMlswgjFtDnxtJ25HFgxMybGK97pu3gjSM3vPsgUK5KCPuZUsiqHNMMF0qpxHwYCBBl_7NvqDIyeTWZYXJaNZUpxTKLI_nfdLEFzJWGVDOFuiivxLrPKCk4WcSv",
+      "sender": "GUVQ/7RklRhtGnjm2IZvV771xqcLcYxQ1rO/E7U1NiI=",
+      "rid": "QnVzeTJTZXRVcE9mVGhlUXVldWU",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-2",
+     "ok": true,
+     "data": {
+      "key": {
+       "v": 1,
+       "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+       "kdf": {
+        "name": "scrypt",
+        "n": 131072,
+        "r": 8,
+        "p": 1,
+        "salt": "XtlD_scc1BSqO7QI6IJgPg"
+       },
+       "wrapped": {
+        "iv": "B4obup7UgkQF8GYX",
+        "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+        "tag": "jk4pUJmfRHDzXStJGojQwA"
+       }
+      }
+     }
+    }
+   },
+   {
+    "note": "the snapshot with the key.json",
+    "req": {
+     "t": "req",
+     "id": "busy-3",
+     "op": "sign_ins",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "key": {
+      "v": 1,
+      "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+      "kdf": {
+       "name": "scrypt",
+       "n": 131072,
+       "r": 8,
+       "p": 1,
+       "salt": "XtlD_scc1BSqO7QI6IJgPg"
+      },
+      "wrapped": {
+       "iv": "B4obup7UgkQF8GYX",
+       "ct": "ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6",
+       "tag": "jk4pUJmfRHDzXStJGojQwA"
+      }
+     },
+     "records": []
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-3",
+     "ok": true,
+     "data": {
+      "records": 0
+     }
+    }
+   },
+   {
+    "note": "the lock",
+    "req": {
+     "t": "req",
+     "id": "busy-4",
+     "op": "sign_ins_lock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-4",
+     "ok": true,
+     "data": {}
     }
    }
+  ],
+  "pipelined": [
+   {
+    "note": "an unlock with the vectors' wrong passphrase: it runs, and it answers 2 s after its turn began",
+    "req": {
+     "t": "req",
+     "id": "busy-5",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju",
+      "sender": "oVUwk8z77oyfkItyqrSXuilz5armZzp+ZicR2Hw9Zzg=",
+      "rid": "gWrHTL47w856uBML1f51lA",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-5",
+     "ok": false,
+     "error": "the passphrase does not open the store"
+    }
+   },
+   {
+    "note": "an unlock that waits behind busy-5: it opens the store",
+    "req": {
+     "t": "req",
+     "id": "busy-6",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:PZUxxmCZU1l4ybLtFx334voj8A05AflybWnOhJo-2Rk5ExDXdNIAvpv36fTUMWjStvqWE5AjDCJXzra6yhHzZCfHm3tcs-g7cyRtCqIAXOGsZVtN3W4HG8E-ZizrZ22LDJm643eNlCcRtDSkJCDLiipTMovybeMOlZ4q1x_x27AqEwtvv8XNOAL88uA8zf_tACMU4AoFJAiJsv8HTFIe6mdj1KCHZOB_MPwgzcKG82AosEzWELyrDKcA2u1p5LoJ6pV5Rmy5BIg6_moZiekc24i5B6ci-XfAVdaOvIctn-ShPtZcf-u1LwpMDlmOHjIOUudDAUNWVOaW_CCBbAdapEFiZwd1joznUpE8QmBVQw-cTKcUoT21UDEcUZL49OTU3Y35FOFRzEK-F5XgXFhp11dKQzcocy8M5vtXeXLYTXfH4bZp1DpkErw2-yJ6aQlP",
+      "sender": "JmJQ8xJ9v7I6bz0OddxY8s3VOEIbd88QA/ydp1nzMjg=",
+      "rid": "QnVzeTZXYWl0c0ZpcnN0T2ZUd28",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-6",
+     "ok": true,
+     "data": {}
+    }
+   },
+   {
+    "note": "an unlock that waits behind busy-6: the store is open then, so it answers {} and changes nothing",
+    "req": {
+     "t": "req",
+     "id": "busy-7",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:3IfjfB8p6eoXOwLLuzC9zdbpAKu7IISaY1D4YA4h9WBm1iFNrO99jdp5dLhHFTn0DZ6o72qp6XAm5Wn2_Cqvuy3HDJZZGgS36-PJ6ytzQJ9wIRlEljn9_LXsmSlSYkz4EjXDGxE_2ux6OHAxqgnkyi7yKxlpD9Vp3w5kj6Z4aWmOroBW_j5RoIakSxL0W1KUuSbn8aJC4AfVF-o1PSqLbHesBNVs3I1H7V0fh-o9270FJp007EhqMR1e5wqabRMSNMXz9t7U2DHsEeZJkRCkcZ_vuC0WZRrDMzRpSL-_JCW3kKDlAz7xnGxI5v9T9BEghhcN7KxdocCKsBIcu7ws0J-m6lM-367AoDF7lPTX3gZaJMMjVmp198vd57oNrWhpu7hfLoo1D-1V870yeThFPAAmYGfwOIv9CqMYWyHXjfKF26QRX-4rkx5uJYnCKnLu",
+      "sender": "qzrYxYi+1R07wZq1JM3XfoLPBFdzBh/Ner8TMnaqGCo=",
+      "rid": "QnVzeTdXYWl0c1NlY29uZE9mVHdv",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-7",
+     "ok": true,
+     "data": {}
+    }
+   },
+   {
+    "note": "one more unlock while one runs and two wait: the store is busy, at once, with no derivation and no wait",
+    "req": {
+     "t": "req",
+     "id": "busy-8",
+     "op": "sign_ins_unlock",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:3Fn5F6oIJDNM8EEMqGVgn0hr3HnQHWoNIp8gJcKMKnY9c8pQvIkkTPtpcvUeIpiB6WUs-DFKn8mTe-ynCLCg3T_vK3SekDymyNsiptPj_Uk4YR2FZK0JBFEWgI9pbeCY2QR0M5m3UKiwXjKqNUjo_qiwoQXJ4Vyqi_jlh2j8ae_Dh0pJ37hribuAsL4RnJoiAuXLz-J6WM48Keewvww3BgsnNTOegqQjkHL4i2PAzfEp-CKPjGEIoB0hrcOqzEY7C6PXQhtpe4W6QILL-qDnrK_AULbclaufj85I1FRlQTWpzHoNc_LJJSg5w8yWi0yoTaU0PC-eyMmrsPeXxiJQ-Fd3E1XOl9tF2LVQ-chzTAtP2IIlSKYwz3m0NXtAlILrX6MRkjGKjPHw6Mbr-pGsWr9rGiob8KF9FTcJMH1KQD7y4t-WdyyLdlbvyh1ITzjr",
+      "sender": "kYB2JhCFVYpi9RJenE0dhEgl6yJVwCvQw9xWwUCOPFI=",
+      "rid": "QnVzeThPbmVNb3JlVGhhblR3bw",
+      "at": "2026-11-10T20:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "busy-8",
+     "ok": false,
+     "error": "the store is busy; try again"
+    }
+   }
+  ],
+  "order": [
+   "busy-8",
+   "busy-5",
+   "busy-6",
+   "busy-7"
   ]
  }
 }

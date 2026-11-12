@@ -507,17 +507,19 @@ const runNode = (args: string[]) => new Promise<{ code: number | null; stdout: s
   execFile(process.execPath, args, { cwd: ROOT, timeout: 30_000 }, (e, stdout, stderr) => resolve({ code: e ? (e as any).code ?? 1 : 0, stdout, stderr }));
 });
 
-test("no other agent-browser command loads node:ffi: only the relay's self-test, the service's control door (board ab-v16.94.2: the pidfd of the MainPID), the service's tools lock (board ab-v16.94.3: flock of the Google Chrome install), the service's link (board ab-v16.94.9: the pidfd that ends an old host) and the MCP port's socket take (board ab-v16.94.5: FD_CLOEXEC on systemd's fds) import it, dynamically", async () => {
+test("no other agent-browser command loads node:ffi: only the relay's self-test, the service's control door (board ab-v16.94.2: the pidfd of the MainPID), the service's tools lock (board ab-v16.94.3: flock of the Google Chrome install), the service's link (board ab-v16.94.9: the pidfd that ends an old host), the MCP port's socket take (board ab-v16.94.5: FD_CLOEXEC on systemd's fds) and the service's non-dumpable start (board ab-v16.97.2: prctl PR_SET_DUMPABLE) import it, dynamically", async () => {
   // The source: no static import or require of node:ffi; one dynamic import is in src/relay/peer.ts, one in
   // src/service/admission.ts (pidfd_open, which only `agent-browser service` loads, at its start), one in
   // src/service/unit/google-chrome.ts (flock, which only the service's install and prune of Google Chrome load), and one
   // in src/service/link/old-host.ts (pidfd_open and pidfd_send_signal, which only the service with its link loads), and one
-  // in src/service/mcp/listen-fds.ts (fcntl, which only the service that takes the MCP port's socket from systemd loads).
+  // in src/service/mcp/listen-fds.ts (fcntl, which only the service that takes the MCP port's socket from systemd loads),
+  // and one in src/service/signins/protect.ts (prctl, which only the real service loads at its start: board ab-v16.97.2).
   const files = (d: string): string[] => readdirSync(join(ROOT, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(d, e.name)) : /\.(ts|js|mjs)$/.test(e.name) ? [join(d, e.name)] : []));
   const code = (f: string) => readFileSync(join(ROOT, f), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
   const all = [...files("src"), ...files("bin"), "index.js", "loader.js"];
   assert.deepEqual(all.filter((f) => /from\s*["']node:ffi["']|require\(\s*["'](node:)?ffi["']\s*\)|import\s*["']node:ffi["']/.test(code(f))), [], "no static import or require of node:ffi");
-  assert.deepEqual(all.filter((f) => /import\(\s*["']node:ffi["']\s*\)/.test(code(f))).sort(), ["src/relay/peer.ts", "src/service/admission.ts", "src/service/link/old-host.ts", "src/service/mcp/listen-fds.ts", "src/service/unit/google-chrome.ts"], "a dynamic import in the peer reader, in the control door's admission, in the link's old-host end, in the MCP port's socket take and in the tools lock");
+  assert.deepEqual(all.filter((f) => /import\(\s*["']node:ffi["']\s*\)/.test(code(f))).sort(), ["src/relay/peer.ts", "src/service/admission.ts", "src/service/link/old-host.ts", "src/service/mcp/listen-fds.ts", "src/service/signins/protect.ts", "src/service/unit/google-chrome.ts"], "a dynamic import in the peer reader, in the control door's admission, in the link's old-host end, in the MCP port's socket take, in the non-dumpable start and in the tools lock");
+  assert.equal(code("src/service/signins/protect.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);
   assert.equal(code("src/service/mcp/listen-fds.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);
   assert.equal(code("src/service/link/old-host.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);
   assert.equal(code("src/service/unit/google-chrome.ts").match(/import\(\s*["']node:ffi["']\s*\)/g)?.length, 1);

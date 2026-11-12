@@ -12,6 +12,11 @@
 // service opens the MCP port only when systemd passes the socket of agent-browser-mcp.socket (the sd_listen_fds protocol,
 // mcp/listen-fds.ts); `--test` opens it only with `--test-mcp-port PORT`, a free port on 127.0.0.1 that the harness gives
 // (0: one that the kernel picks), never a default port. With neither, the service opens no MCP port.
+//
+// The stored sign-ins (stage 1e part 1, board ab-v16.97.2; C12, "The stored sign-ins"): on Linux the service makes itself
+// non-dumpable at its start (prctl through node:ffi), before it opens any door, and it has the store with the feature
+// sign_ins; the store opens only while both protections of its memory hold (signins/protect.ts). On the Mac the store
+// stays off until stage 4, so its hello has no sign_ins.
 
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -29,6 +34,8 @@ import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
+import { SIGN_INS_FEATURE } from "./signins/part.ts";
+import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
 export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
@@ -39,6 +46,9 @@ type Values = Record<string, string | boolean | undefined>;
 
 /** The link socket of the native link (stage 1b part 2): `link.sock` in the folder of control.sock. */
 export const linkSocketFor = (controlDoor: string) => join(dirname(controlDoor), "link.sock");
+
+/** The features of the real service's hello that its run fixes at its start: sign_ins on Linux (C12; the Mac at stage 4). */
+export const serviceFeatures = (platform: NodeJS.Platform = process.platform): string[] => (platform === "linux" ? [SIGN_INS_FEATURE] : []);
 
 /** Resolves at the first SIGTERM or SIGINT. */
 const signalled = () => new Promise<void>((r) => { process.once("SIGTERM", () => r()); process.once("SIGINT", () => r()); });
@@ -116,7 +126,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
-    await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, FAKE_FEATURES) : serviceHello(version, commit, [])), () => r()));
+    await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, FAKE_FEATURES) : serviceHello(version, commit, serviceFeatures())), () => r()));
     return 0;
   }
   if (fake) {
@@ -145,6 +155,10 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (!toolsDir) throw new UsageError(`--tools-dir is required: the tools folder of Google Chrome, which agentwatch's unit gives; ${SERVICE_USAGE}`);
   const controlDoor = str("control-door") ?? defaultControlDoor();
   if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
+  // The non-dumpable start (the design, section 5.5): before any door opens. The store opens only while it holds.
+  const linux = process.platform === "linux";
+  const memory = linux ? await nonDumpableStart() : null;
+  if (memory) log(memory.failed === null ? "service: the process is not dumpable (prctl PR_SET_DUMPABLE 0)" : `service: the process stays dumpable (${memory.failed}), so the stored sign-ins do not open`);
   const paths = unitPaths(resolve(stateFolder), resolve(toolsDir));
   const display = test ? Number(str("test-display")) : null;
   // The MCP port: --test's port, or systemd's socket (never in --test), else none; the LISTEN_* variables go in every
@@ -169,6 +183,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       link: { socket: linkSocketFor(resolve(controlDoor)) },
       // The MCP path (stage 1d part 2b): only with its socket.
       ...(listen ? { mcp: { listen } } : {}),
+      // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
+      ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
     });
   } catch (e) {
     if (e instanceof NotOwnerAtStart) { log(`service: ${e.message}`); return 1; }
