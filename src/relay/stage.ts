@@ -174,23 +174,57 @@ export const FIELD_STILL = `() => { const el = globalThis.__agentBrowserStageFie
 export const FIELD_STILL_IN = `function () { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("this.ownerDocument")} return a === el && el.ownerDocument.hasFocus(); }`;
 /** Playwright's retarget for fill (follow-label): the control of a label, the field itself otherwise (playwright-core 1.65.0, injected retarget). */
 const RETARGET = "let el = this.nodeType === 1 ? this : this.parentElement; if (!el) return null; if (follow) { if (!el.matches('input, textarea, select') && !el.isContentEditable) el = el.closest('button, [role=button], [role=checkbox], [role=radio]') || el; if (!el.matches('a, input, textarea, button, select, option, optgroup, [role=link], [role=button], [role=checkbox], [role=radio]') && !el.isContentEditable) { const l = el.closest('label'); if (l && l.control) el = l.control; } }";
+/** The parent of a node in the flat tree: a slotted node's slot, else its parent element, else a shadow root's host (review-122 note 5). */
+const UP = "const up = (n) => n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.nodeType === 11 ? n.parentNode.host : null);";
+/**
+ * The field's widget signs (board ab-t30.18, the operator's answer on board item ab-pf8; C11, the focus click), in
+ * FIELD_STATE: the role combobox (a token of the field's role, or of the role of an element around it in the flat tree:
+ * the pattern of ARIA 1.1), aria-haspopup with a value of ARIA's other than false, aria-expanded true or false,
+ * aria-autocomplete list or both, an input whose list names a datalist. The first that holds, in this order, or null.
+ */
+const WIDGET = "const A = (n, q = el) => String(q.getAttribute(n) || '').trim().toLowerCase(), hp = A('aria-haspopup'), ex = A('aria-expanded'), ac = A('aria-autocomplete'), combo = (q) => A('role', q).split(/\\s+/).includes('combobox'); let around = false; for (let p = up(el), i = 0; p && p.nodeType === 1 && i < 64; p = up(p), i++) if (combo(p)) { around = true; break; } const widget = combo(el) ? 'combobox' : ['true', 'menu', 'listbox', 'tree', 'grid', 'dialog'].includes(hp) ? 'haspopup' : ex === 'true' || ex === 'false' ? 'expanded' : ac === 'list' || ac === 'both' ? 'autocomplete' : tag === 'input' && el.list ? 'list' : around ? 'comboboxAround' : null;";
 /**
  * The focus click's read of the field (C11, the focus click), in Playwright's utility world on the node's own handle: its
- * kind, whether it has the focus (Playwright's _activelyFocused), the length of its text, its caret, and its box with the
- * sum of its same-origin frames (as NODE_GEO).
+ * kind, whether it has the focus (Playwright's _activelyFocused), the length of its text, its caret, its widget sign
+ * (WIDGET), and its box with the sum of its same-origin frames (as NODE_GEO).
  */
-export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled, readOnly: !!el.readOnly, active, focused, len, s, e, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
+export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; ${UP} ${WIDGET} const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled, readOnly: !!el.readOnly, active, focused, len, s, e, widget, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
 /** The focus click's hit test (C11, the focus click), on the node's handle: the element at the point of the field's own document is the field or inside it. */
 export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.getRootNode(), h = (typeof r.elementFromPoint === 'function' ? r : el.ownerDocument).elementFromPoint(x, y); if (!h || !(h === el || el.contains(h))) return false; let w = el.ownerDocument.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, b = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); x += b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += b.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); const fr = fe.getRootNode(), fh = (typeof fr.elementFromPoint === 'function' ? fr : fe.ownerDocument).elementFromPoint(x, y); if (fh !== fe) return false; w = w.parent; } return true; }`;
 /** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
 export const CARET_SET = `function (s, e, follow) { ${RETARGET} el.setSelectionRange(s, e); return true; }`;
+/**
+ * The events of a click whose listener on a field is a widget sign (board ab-t30.18; C11, the focus click): a listener of
+ * the page's own scripts on the field itself for one of these gets no focus click.
+ */
+export const WIDGET_LISTENERS = ["mousedown", "mouseup", "click", "pointerdown", "pointerup"];
+/** The field's element (fill's retarget), as a handle of Playwright's utility world: the read of its listeners resolves it into the page's main world. */
+export const FIELD_ELEMENT = `function (follow) { ${RETARGET} return el; }`;
+/** The area near a field of the cover read (board ab-t30.18): its box widened by this much across and down and up, in px. */
+export const COVER_AREA_PX = [40, 240] as const;
+/** The points of the cover read's grid over that area: across, down. */
+export const COVER_GRID = [9, 25] as const;
+/**
+ * The cover read before the focus click (board ab-t30.18; C11, the focus click), in Playwright's utility world on the
+ * node's own handle: the area near the field (COVER_AREA_PX, within the viewport of its own document) at a grid of
+ * COVER_GRID points, and every element at each point (elementsFromPoint), kept in the world for COVER_AFTER. The count
+ * of the points (0: no area).
+ */
+export const COVER_BEFORE = `function (follow) { ${RETARGET} const d = el.ownerDocument, w = d.defaultView, b = el.getBoundingClientRect(); delete globalThis.__agentBrowserStageCover; const x0 = Math.max(0, b.left - ${COVER_AREA_PX[0]}), x1 = Math.min(w.innerWidth - 1, b.right + ${COVER_AREA_PX[0]}), y0 = Math.max(0, b.top - ${COVER_AREA_PX[1]}), y1 = Math.min(w.innerHeight - 1, b.bottom + ${COVER_AREA_PX[1]}); if (!(x1 >= x0 && y1 >= y0)) return 0; const pts = []; for (let i = 0; i < ${COVER_GRID[0]}; i++) for (let j = 0; j < ${COVER_GRID[1]}; j++) pts.push([x0 + ((x1 - x0) * i) / ${COVER_GRID[0] - 1}, y0 + ((y1 - y0) * j) / ${COVER_GRID[1] - 1}]); const seen = new Set(); for (const p of pts) for (const q of d.elementsFromPoint(p[0], p[1])) seen.add(q); globalThis.__agentBrowserStageCover = { el, d, pts, seen }; return pts.length; }`;
+/**
+ * The cover read after the focus click (board ab-t30.18), two frames after the release: the new elements that cover the
+ * area, as a count. A new element is the top element at a point of the grid that was at no point of it before, that is
+ * not the field, inside it or around it; each counts once, with its highest ancestor that was at no point before (a
+ * panel with its cells). Null with no kept read. The world lets go of the kept read.
+ */
+export const COVER_AFTER = "function () { const C = globalThis.__agentBrowserStageCover; delete globalThis.__agentBrowserStageCover; if (!C) return null; return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => { const roots = new Set(); for (const p of C.pts) { const t = C.d.elementFromPoint(p[0], p[1]); if (!t || C.seen.has(t) || t === C.el || C.el.contains(t) || t.contains(C.el)) continue; let a = t; while (a.parentElement && !C.seen.has(a.parentElement)) a = a.parentElement; roots.add(a); } r(roots.size); }))); }";
+/** The world lets go of a kept cover read (the focus click's plan ended before its release). */
+export const COVER_CLEAR = "function () { delete globalThis.__agentBrowserStageCover; return true; }";
 
 /** A scroller of the scroll's reads: an element whose overflow on an axis is auto, scroll or overlay, with more content than its box on that axis ([x, y]): the wheel moves it. */
 const SCROLLS = "const scrolls = (p, cs) => [/(auto|scroll|overlay)/.test(cs.overflowX) && p.scrollWidth > p.clientWidth + 1, /(auto|scroll|overlay)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1];";
 /** A box that clips its content with overflow hidden or clip, with more content than its box on that axis ([x, y]): no wheel moves it (review-122 B2). */
 const CLIPS = "const clips = (p, cs) => [/(hidden|clip)/.test(cs.overflowX) && p.scrollWidth > p.clientWidth + 1, /(hidden|clip)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1];";
-/** The parent of a node in the flat tree: a slotted node's slot, else its parent element, else a shadow root's host (review-122 note 5). */
-const UP = "const up = (n) => n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.nodeType === 11 ? n.parentNode.host : null);";
 /** Whether `b` is `a` or inside it in the flat tree (a composed containment test: review-122 B1). */
 const INSIDE = "const inside = (a, b) => { for (let p = b, i = 0; p && i < 4096; p = up(p), i++) if (p === a) return true; return false; };";
 /** The element at a point of a document, into its open shadow roots. */
@@ -499,7 +533,9 @@ type FocusRead = { tag: string; type?: string; editable: boolean; typing: boolea
 /** Where that read ran: null for the top page (the stage's own world), else a node of a cross-origin frame's session. */
 type FocusVia = { child: string; node: string } | null;
 /** The focus click's read of a field (FIELD_STATE), with its box and offset in the top page's points; lox, loy: the same-origin sum alone. */
-type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: string; disabled: boolean; readOnly: boolean; active: boolean; focused: boolean; len: number; s: number | null; e: number | null; box: Rect; ox: number; oy: number; lox: number; loy: number;
+type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: string; disabled: boolean; readOnly: boolean; active: boolean; focused: boolean; len: number; s: number | null; e: number | null;
+  /** The field's widget sign (WIDGET; board ab-t30.18), or null. */
+  widget?: string | null; box: Rect; ox: number; oy: number; lox: number; loy: number;
   /** The cross-origin levels above the field, innermost first: the parent's session, the owner's node, its content box in the parent's points. */
   levels: { parent: string | undefined; owner: number; r: Rect }[] };
 const TIMEOUT = Symbol("timeout");
@@ -2280,6 +2316,14 @@ export class Stage {
       f = h;
     }
     if (a.over) return pass();
+    // A field that opens a panel at a click gets no click (board ab-t30.18, the operator's answer on board item ab-pf8,
+    // 2026-11-12): a widget sign of the field's read, else a listener of the page's own scripts on the field for an event of
+    // a click. Playwright's script focus goes as the client sent it, as with Playwright's own input (its focus() also
+    // scrolls the field into view: no notches), in the same action; the stage counts it and the sign.
+    const sign = f.widget ?? (await this.clickListener(page, e.child, node, fill));
+    if (sign === TIMEOUT) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+    if (sign) { this.count(`focusWidget:${sign}`); this.noClick(page, "focusWidget", sign); return this.keepAction(st, a, pass); }
+    if (a.over) return pass();
     // A field out of view first gets notches into view (C11, the focus click; board ab-t30.11, review-119 N14), also inside
     // a frame's own scroller; then the stage reads the field again. On the Mac (no notch until the Mac's wheel model) and
     // when the notches cannot bring it into view, no click, counted.
@@ -2301,9 +2345,14 @@ export class Stage {
     if (!at) return this.keepAction(st, a, pass);
     // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
     const want = f.kind === "input" && reset ? { s: 0, e: 0 } : typeof f.s === "number" && typeof f.e === "number" ? { s: f.s, e: f.e } : null;
+    // The new elements that cover the area near the field after the click (board ab-t30.18): the first read before the
+    // path, the second two frames after the release. A count only, to measure the panels that the signs above miss: the
+    // stage sends no input of its own for them.
+    const cover = await this.coverBefore(page, e.child, node, fill);
     this.count("focusClicks");
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click (${f.kind})`);
-    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass();
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) { if (cover) this.coverClear(page, e.child, node); return pass(); }
+    if (cover) await this.coverAfter(page, e.child, node);
     if (!fill && want && (f.kind === "input" || f.kind === "textarea")) {
       const h = await this.fieldRead(page, st, e.child, node, fill);
       if (!h || !h.active) why("focusClickMissed");
@@ -2321,8 +2370,55 @@ export class Stage {
     return pass();
   }
 
-  /** No focus click (or a click that missed): the count, and with the trace a log line of its reason (never a point). */
-  private noClick(page: StagePage, k: string): void { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: no focus click (${k})`); }
+  /** No focus click (or a click that missed): the count, and with the trace a log line of its reason (and the widget's sign; never a point). */
+  private noClick(page: StagePage, k: string, sign?: string): void { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: no focus click (${k}${sign ? `: ${sign}` : ""})`); }
+
+  /**
+   * The field's listener sign (board ab-t30.18; C11, the focus click): a listener of the page's own scripts on the field
+   * itself for an event of a click (WIDGET_LISTENERS). The field's element (fill's retarget) as a handle of Playwright's
+   * utility world (FIELD_ELEMENT, in the stage's group) is resolved into the page's main world (DOM.describeNode,
+   * DOM.resolveNode: a handle, no script), where DOMDebugger.getEventListeners with no pierce reports the listeners of
+   * that world only: the page's own (as rule 2 of the wheel point reads them). A listener of another node (a child) does
+   * not count. "listener", null, or TIMEOUT when a read fails or reaches its limit (then the field gets no click).
+   */
+  private async clickListener(page: StagePage, child: string | undefined, node: string, follow: boolean): Promise<"listener" | null | typeof TIMEOUT> {
+    try {
+      const h = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_ELEMENT, arguments: [{ value: follow }], returnByValue: false, objectGroup: STAGE_GROUP }));
+      const id = h === TIMEOUT ? undefined : (h as any)?.result?.objectId;
+      if (typeof id !== "string") return TIMEOUT;
+      const d = await this.read(page.send(child, "DOM.describeNode", { objectId: id }));
+      const backendNodeId = d === TIMEOUT ? undefined : (d as any)?.node?.backendNodeId;
+      if (!Number.isInteger(backendNodeId)) return TIMEOUT;
+      const m = await this.read(page.send(child, "DOM.resolveNode", { backendNodeId, objectGroup: STAGE_GROUP }));
+      const main = m === TIMEOUT ? undefined : (m as any)?.object?.objectId;
+      if (typeof main !== "string") return TIMEOUT;
+      const l = await this.read(page.send(child, "DOMDebugger.getEventListeners", { objectId: main, pierce: false }));
+      if (l === TIMEOUT) return TIMEOUT;
+      return ((l as any)?.listeners ?? []).some((x: any) => WIDGET_LISTENERS.includes(x?.type) && x?.backendNodeId === backendNodeId) ? "listener" : null;
+    } finally {
+      void page.send(child, "Runtime.releaseObjectGroup", { objectGroup: STAGE_GROUP }).catch(() => {});
+    }
+  }
+
+  /** The cover read before the focus click (COVER_BEFORE): true when the world keeps it. */
+  private async coverBefore(page: StagePage, child: string | undefined, node: string, follow: boolean): Promise<boolean> {
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: COVER_BEFORE, arguments: [{ value: follow }], returnByValue: true }));
+    const n = r === TIMEOUT ? undefined : (r as any)?.result?.value;
+    return typeof n === "number" && n > 0;
+  }
+  /** The cover read after the focus click (COVER_AFTER, two frames after the release): the count of the new covering elements, and with the trace a log line with the count only. */
+  private async coverAfter(page: StagePage, child: string | undefined, node: string): Promise<void> {
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: COVER_AFTER, returnByValue: true, awaitPromise: true }));
+    const n = r === TIMEOUT ? undefined : (r as any)?.result?.value;
+    if (typeof n !== "number" || !(n > 0)) return;
+    this.count("focusNewCovers", n);
+    this.count("focusClicksCovering");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: ${n} new covering element${n === 1 ? "" : "s"}`);
+  }
+  /** The world lets go of a kept cover read (the click's plan ended before its release). */
+  private coverClear(page: StagePage, child: string | undefined, node: string): void {
+    void page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: COVER_CLEAR, returnByValue: true }).catch(() => {});
+  }
 
   /** The focus click's read of the field (FIELD_STATE), with its box in the top page's points (the frame mapping), or null. */
   private async fieldRead(page: StagePage, st: TabState, child: string | undefined, node: string, follow: boolean): Promise<FieldRead | null> {

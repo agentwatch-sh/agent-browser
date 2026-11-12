@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, ELEMENT_KIND, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -102,6 +102,15 @@ export class FakeTab implements StagePage {
   private mods = new Set<string>();
   /** The field that the stage's last focus read marked (the typing rule's read; review-119 P1). */
   private marked: string | null = null;
+  /**
+   * Board ab-t30.18 (the operator's answer on ab-pf8): a node with `opensAt: <id>` is a panel that a press on the node
+   * <id> opens (a widget that a click opens): it is not there before (no hit, no box in the cover read). `coverSeen`: the
+   * nodes of the area near the field at the last COVER_BEFORE (null when no read is kept).
+   */
+  readonly opened = new Set<string>();
+  coverSeen: { field: string; area: { x0: number; y0: number; x1: number; y1: number }; seen: Set<string> } | null = null;
+  /** Whether a node is there (a panel only after its press). */
+  present(id: string): boolean { const n = this.v.page.nodes[id]; return !!n && (!n.opensAt || this.opened.has(id)); }
   /**
    * review-119: an input event that opens a dialog in the page (an alert in its handler): Chrome holds its answer until the
    * close, and drops each input event that it gets while the dialog is open; the stage and the client hear of the dialog
@@ -211,7 +220,7 @@ export class FakeTab implements StagePage {
    */
   hitIn(doc: string, p: { x: number; y: number }, into = false): { kind: "node" | "scroller" | "frame" | "body"; id: string; doc: string } {
     const V = this.v, inDoc = (s: string) => this.docOf(s) === doc;
-    const nodes = Object.keys(V.page.nodes).filter((id) => inDoc(this.nodeScroller(id)) && within(p, this.liveBox(id)) && this.clipped(p, this.chainOf(this.nodeScroller(id)).filter((s) => s !== doc && inDoc(s))));
+    const nodes = Object.keys(V.page.nodes).filter((id) => this.present(id) && inDoc(this.nodeScroller(id)) && within(p, this.liveBox(id)) && this.clipped(p, this.chainOf(this.nodeScroller(id)).filter((s) => s !== doc && inDoc(s))));
     const over = nodes.find((id) => V.page.nodes[id].over && !V.page.nodes[id].frame);
     if (over) return { kind: "node", id: over, doc };
     if (doc === "document") for (const f of Object.keys(V.page.frames ?? {})) {
@@ -388,6 +397,8 @@ export class FakeTab implements StagePage {
     else this.colKeep = { hit, m: ms, roots };
     return out;
   }
+  /** Whether a node's box meets an area of the cover read (both ends inside). */
+  private meetsArea(id: string, a: { x0: number; y0: number; x1: number; y1: number }): boolean { const b = this.liveBox(id); return b.x <= a.x1 && b.x + b.width > a.x0 && b.y <= a.y1 && b.y + b.height > a.y0; }
   /** The value of a field (the tests). */
   valueOf(id: string): string | undefined { return this.fields.get(id)?.value; }
 
@@ -496,7 +507,9 @@ export class FakeTab implements StagePage {
     const p = s.params, V = this.v;
     if (s.method === "Input.dispatchMouseEvent" && p.type === "mousePressed") {
       const top = (id: string) => this.liveBox(id);
-      const hit = Object.entries<any>(V.page.nodes).filter(([id]) => within(p, top(id))).sort(([a], [b]) => top(a).width * top(a).height - top(b).width * top(b).height)[0];
+      const hit = Object.entries<any>(V.page.nodes).filter(([id]) => this.present(id) && within(p, top(id))).sort(([a], [b]) => top(a).width * top(a).height - top(b).width * top(b).height)[0];
+      // A panel that a press on the node opens (board ab-t30.18: a widget that a click opens).
+      if (hit) for (const [id, n] of Object.entries<any>(V.page.nodes)) if (n.opensAt === hit[0]) this.opened.add(id);
       if (hit && this.fields.has(hit[0])) {
         this.focusedId = hit[0];
         const fl = this.fields.get(hit[0])!, at = p.x - top(hit[0]).x <= 6 ? 0 : fl.value.length;
@@ -634,6 +647,22 @@ export class FakeTab implements StagePage {
     }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ROOT) return { result: { type: "object", subtype: "node", objectId: `root:${p.objectId}:${this.rootsK.get(p.objectId)}:${p.arguments[0].value}` } };
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_CLEAR) { this.cleared.push(String(p.objectId)); return { result: { type: "boolean", value: true } }; }
+    // Board ab-t30.18: the field's element as a handle of Playwright's utility world (FIELD_ELEMENT); DOM.describeNode
+    // gives its backendNodeId (500 + its index), DOM.resolveNode a handle of the page's main world, and
+    // DOMDebugger.getEventListeners on that handle with no pierce the page's own listeners of the field (its `listeners`,
+    // except those of `world: "utility"`) and of its children (`childListeners`, with another backendNodeId).
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_ELEMENT) {
+      if (!V.page.nodes[p.objectId]) throw new Error("Could not find object with given id");
+      return { result: { type: "object", subtype: "node", objectId: `field:${p.objectId}` } };
+    }
+    if (s.method === "DOM.describeNode" && String(p.objectId).startsWith("field:")) return { node: { nodeId: 0, backendNodeId: 500 + Object.keys(V.page.nodes).indexOf(String(p.objectId).slice(6)), nodeType: 1, nodeName: "INPUT" } };
+    if (s.method === "DOM.resolveNode" && p.backendNodeId >= 500 && p.backendNodeId < 900) return { object: { type: "object", subtype: "node", objectId: `mainfield:${Object.keys(V.page.nodes)[p.backendNodeId - 500]}` } };
+    if (s.method === "DOMDebugger.getEventListeners" && String(p.objectId).startsWith("mainfield:")) {
+      const id = String(p.objectId).slice(10), n = V.page.nodes[id], b = 500 + Object.keys(V.page.nodes).indexOf(id);
+      if (p.pierce === true) return { listeners: [] };
+      const of = (l: any, backendNodeId: number) => { const x = typeof l === "string" ? { type: l } : l; return x.world === "utility" ? [] : [{ type: x.type, useCapture: false, passive: false, once: false, scriptId: "9", lineNumber: 0, columnNumber: 0, backendNodeId }]; };
+      return { listeners: [...(n.listeners ?? []).flatMap((l: any) => of(l, b)), ...(n.childListeners ?? []).flatMap((l: any) => of(l, 880))] };
+    }
     // The scroller of WHEEL_ROOT in the page's main world: DOM.describeNode gives its backendNodeId (1000 + the reader's
     // index), DOM.resolveNode its main world's handle. DOMDebugger.getEventListeners reports the page's listeners only on a
     // handle of the main world and with no pierce (else the listeners of the handle's own world, none here).
@@ -671,6 +700,26 @@ export class FakeTab implements StagePage {
       return { model: { content: [x0, y0, x1, y0, x1, y1, x0, y1] } };
     }
     if (s.method === "Runtime.callFunctionOn" && [OBSTACLE_FIND, OBSTACLE_BOTH, OBSTACLE_AGAIN, TWO_FRAMES].includes(p.functionDeclaration)) return { result: { type: "object", subtype: "null", value: null } };
+    // The cover read (board ab-t30.18): the nodes that are there in the area near the field (its box widened by 40 px
+    // across and 240 px down and up, within the viewport), before the click; after it, the new ones there, each once with
+    // its highest new ancestor (`parent`).
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === COVER_BEFORE) {
+      const n = V.page.nodes[p.objectId];
+      if (!n) throw new Error("Could not find object with given id");
+      const b = this.liveBox(p.objectId), vw = V.page.viewport.width, vh = V.page.viewport.height;
+      const area = { x0: Math.max(0, b.x - 40), y0: Math.max(0, b.y - 240), x1: Math.min(vw - 1, b.x + b.width + 40), y1: Math.min(vh - 1, b.y + b.height + 240) };
+      const doc = this.docOf(this.nodeScroller(p.objectId));
+      this.coverSeen = { field: p.objectId, area, seen: new Set(Object.keys(V.page.nodes).filter((id) => id !== p.objectId && this.present(id) && this.docOf(this.nodeScroller(id)) === doc && this.meetsArea(id, area))) };
+      return { result: { type: "number", value: 225 } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === COVER_AFTER) {
+      const C = this.coverSeen;
+      this.coverSeen = null;
+      if (!C) return { result: { type: "object", subtype: "null", value: null } };
+      const fresh = Object.keys(V.page.nodes).filter((id) => id !== C.field && this.present(id) && !C.seen.has(id) && this.meetsArea(id, C.area));
+      return { result: { type: "number", value: fresh.filter((id) => !fresh.includes(V.page.nodes[id].parent)).length } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === COVER_CLEAR) { this.coverSeen = null; return { result: { type: "boolean", value: true } }; }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_STATE) {
       const n = V.page.nodes[p.objectId];
       if (!n) throw new Error("Could not find object with given id");
@@ -679,7 +728,7 @@ export class FakeTab implements StagePage {
       const kind = n.tag === "textarea" ? "textarea" : n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text") ? "input" : n.contenteditable ? "editable" : "other";
       const active = this.focusedId === p.objectId;
       const hasFocus = !n.windowAway || (this.windowFocus && !n.windowStaysAway);
-      return { result: { type: "object", value: { kind, type: n.tag === "input" ? n.type ?? "text" : undefined, disabled: !!n.disabled, readOnly: !!n.readOnly, active, focused: active && hasFocus, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, ox, oy, top: !cross, flat: true,
+      return { result: { type: "object", value: { kind, type: n.tag === "input" ? n.type ?? "text" : undefined, disabled: !!n.disabled, readOnly: !!n.readOnly, active, focused: active && hasFocus, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, widget: n.widget ?? null, ox, oy, top: !cross, flat: true,
         box: { x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height } } } };
     }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_HIT) {
@@ -723,12 +772,12 @@ export class FakeTab implements StagePage {
  * step of the gate, any other call is sent when it leaves the gate (an ordinary call does not wait for its answer), and a
  * client's Page.handleJavaScriptDialog goes at once, before the gate.
  */
-export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => any; tab?: (t: FakeTab) => void; maxMs?: number; noAttach?: boolean } = {}) {
+export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => any; tab?: (t: FakeTab) => void; maxMs?: number; noAttach?: boolean; trace?: boolean } = {}) {
   const clock = new FakeClock();
   const seed = o.seed ?? v.seed;
   const tab = new FakeTab({ ...v, seed }, clock);
   const logs: string[] = [];
-  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp });
+  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp, ...(o.trace ? { trace: true } : {}) });
   tab.stage = stage;
   if (o.hook) tab.hook = o.hook;
   o.tab?.(tab);
