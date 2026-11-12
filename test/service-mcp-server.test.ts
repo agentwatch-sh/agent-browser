@@ -1113,7 +1113,8 @@ test("review-115b P4: the pinned MCP gives no answer to a message of another sha
 
 test("review-115 note 3: the scope's folder goes with its files once its worker stopped (dropScope), and a later session of that name starts with an empty folder; keepScopes removes the folder of each scope that it does not name; a link goes as a link", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const tr = await import(TRANSPORT) as { removeScopeFolder?: (state: string, scope: string) => boolean };
-  await withTransport({}, async ({ t, h, dir, log }) => {
+  const holds: (() => void)[] = [];
+  await withTransport({}, async ({ t, h, dir, log }) => { try {
     const x = t as McpTransport & { dropScope?: (scope: string, why: string) => Promise<void>; keepScopes?: (named: ReadonlySet<string>) => Promise<void> };
     assert.equal(typeof x.dropScope, "function", "the transport's dropScope");
     const state = join(dir, "state"), mcp = join(state, "mcp"), folder = scopeFolder(state, "web-1");
@@ -1124,6 +1125,7 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
       let go!: () => void;
       const gate = new Promise<void>((r) => { go = r; });
       w.stop = () => gate.then(real);
+      holds.push(go);
       return go;
     };
     await init(h.url("web-1"));
@@ -1171,7 +1173,7 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
     await x.dropScope!("web-3", "a test");
     assert.equal(existsSync(join(mcp, "web-3")), false);
     assert.equal(readFileSync(join(dir, "target", "keep.txt"), "utf8"), "a test file");
-  });
+  } finally { for (const go of holds) go(); } }); // a held stop always ends, so no worker outlives the test
   // <state>/mcp itself a link: nothing goes.
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-drop-"));
   try {
