@@ -66,9 +66,9 @@ export type RelayTransport = {
 };
 /**
  * `traffic()` (board ab-v16.94.11): `agents`, the open connections that the walk admitted (an MCP's own ticket connection
- * is none); `busy`, the client messages that the model handles now (of every connection); `quietFor`, the ms since the
- * last client message came or ended (Infinity before one). Nothing of the model's own (its bridge calls, a tab's events)
- * counts.
+ * is none); `busy`, the messages of those connections that the model handles now; `quietFor`, the ms since the last such
+ * message came or ended (Infinity before one). Nothing of the model's own (its bridge calls, a tab's events) and nothing
+ * of an MCP's own connection counts (review-120b O2).
  */
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic };
 
@@ -166,13 +166,15 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
         const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root);
-        // An agent's connection counts by being open; an MCP's own ticket connection counts only by its messages.
+        // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
+        // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
         const agent = !a.own;
         if (agent) agents++;
         ws.once("close", () => { if (agent) agents--; });
         ws.on("message", (data) => {
           let msg: unknown;
           try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
+          if (!agent) { void model.onMessage(conn, msg); return; }
           busy++;
           lastMessage = now();
           void model.onMessage(conn, msg).finally(() => { busy--; lastMessage = now(); });

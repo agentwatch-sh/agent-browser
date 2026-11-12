@@ -38,8 +38,13 @@ const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist]
 
 /** The MCP handler behind the admission (part 2b: the Streamable HTTP transport and the Playwright MCP). */
 export interface McpHandler {
-  /** A request that passed steps 1 to 8, of the connection's scope: the handler answers it (a rejection gets the 500). */
-  request(req: IncomingMessage, res: ServerResponse, scope: string): void | Promise<void>;
+  /**
+   * A request that passed steps 1 to 8, of the connection's scope: the handler answers it (a rejection gets the 500).
+   * `browser` (board ab-v16.94.11): the request passed step 8 while Chrome is down or its lists are not confirmed, so it
+   * needs no browser; a tool call calls `browser()` first, which starts Chrome and waits (the start at a use), then runs
+   * steps 3 to 8 again: true to go on, false when the port answered the request (a refusal).
+   */
+  request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>): void | Promise<void>;
   /** End the MCP sessions of `scope` (C11: at session_ended, and at the close at a change). */
   endSessions(scope: string): void;
 }
@@ -60,11 +65,13 @@ export type McpPortOptions = {
   /** What step 8 reads of the service, for the connection's scope. */
   readiness: (scope: string) => McpReadiness;
   /**
-   * The service's start at a use (board ab-v16.94.11): a request that step 8 refuses because the link is down or the
-   * allowlist is not confirmed yet waits for `wake(scope)`, then steps 3 to 8 run again. `wake` answers null (check
-   * again) or the 503 text of a start that failed.
+   * The service's start at a use (board ab-v16.94.11; C11, step 8): while step 8 refuses for a link that is down or an
+   * allowlist that is not confirmed yet, `refusal(scope)` gives the step-8 answer that the service gives at once from its
+   * own snapshot (a scope with no list or no site), or null; then the request passes step 8 with no start (it needs no
+   * browser), and only a tool call starts Chrome through `wake(scope)` (null: check again, or the 503 text of a start that
+   * failed).
    */
-  wake?: (scope: string) => Promise<string | null>;
+  use?: { refusal(scope: string): string | null; wake(scope: string): Promise<string | null> };
   log: (line: string) => void;
   /** Tests only: the fake reader of the vectors (default: /proc), the platform, the service's uid, the compare of step 7. */
   reader?: McpReader;
@@ -221,23 +228,33 @@ export class McpPort {
     const check = (): Refusal | null => admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
     let r;
     try { r = check(); } catch { fail(); return; }
-    // The service's start at a use (board ab-v16.94.11): the request waits with no body timeout, then steps 3 to 8 run
-    // again; a start that failed gives its 503 at step 8.
-    const wake = this.o.wake;
-    if (r !== null && r.step === 8 && r.status === 503 && WAKES.has(r.body) && wake) {
-      conn.socket.setTimeout(0);
-      void wake(conn.scope).then((why) => (why === null ? check() : { step: 8, status: 503, body: why }), () => check()).then((again) => {
-        if (conn.socket.destroyed || this.stopping) return;
-        if (conn.reading) conn.socket.setTimeout(this.o.idleMs ?? MCP_IDLE_MS);
-        this.decide(again, req, res, expect, conn, fail);
-      }, fail);
-      return;
+    // The service's start at a use (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, a request
+    // that the service's own snapshot does not refuse passes step 8 with no start; a tool call starts Chrome through its
+    // `browser` gate, then steps 3 to 8 run again (C11, step 8).
+    const use = this.o.use;
+    let browser: (() => Promise<boolean>) | undefined;
+    if (r !== null && r.step === 8 && r.status === 503 && WAKES.has(r.body) && use) {
+      let why: string | null;
+      try { why = use.refusal(conn.scope); } catch { fail(); return; }
+      if (why !== null) r = { step: 8, status: 503, body: why };
+      else {
+        r = null;
+        browser = async () => {
+          let w: string | null;
+          try { w = await use.wake(conn.scope); } catch { w = null; }
+          if (conn.socket.destroyed || this.stopping) return false;
+          const again = w === null ? check() : { step: 8, status: 503, body: w };
+          if (again === null) return true;
+          this.refuse(again, req, res, conn);
+          return false;
+        };
+      }
     }
-    this.decide(r, req, res, expect, conn, fail);
+    this.decide(r, req, res, expect, conn, fail, browser);
   }
 
   /** The answer of steps 3 to 8: the handler, the 100 or 417 of an expectation, or the refusal. */
-  private decide(r: Refusal | null, req: IncomingMessage, res: ServerResponse, expect: "continue" | "expectation" | null, conn: Conn, fail: () => void): void {
+  private decide(r: Refusal | null, req: IncomingMessage, res: ServerResponse, expect: "continue" | "expectation" | null, conn: Conn, fail: () => void, browser?: () => Promise<boolean>): void {
     if (r === null) {
       if (expect === "expectation") {
         // Steps 3 to 8 passed; an expectation that the service does not know gets the 417, and the connection closes.
@@ -248,13 +265,18 @@ export class McpPort {
       }
       if (expect === "continue") res.writeContinue();
       try {
-        const p = this.o.handler.request(req, res, conn.scope);
+        const p = this.o.handler.request(req, res, conn.scope, browser);
         if (p && typeof (p as Promise<void>).then === "function") (p as Promise<void>).catch(fail);
       } catch { fail(); }
       return;
     }
-    // The first refusal closes the connection.
+    this.refuse(r, req, res, conn);
+  }
+
+  /** A refusal of steps 3 to 8: its fixed text; the first refusal closes the connection. */
+  private refuse(r: Refusal, req: IncomingMessage, res: ServerResponse, conn: Conn): void {
     conn.refused = true;
+    if (res.headersSent || res.destroyed) return;
     res.writeHead(r.status, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(r.body), ...(r.status === 401 ? { "WWW-Authenticate": WWW_AUTHENTICATE } : {}), Connection: "close" }).end(r.body);
     this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request refused at step ${r.step} (${r.status})`);
   }

@@ -50,10 +50,10 @@ export class McpPart implements ServicePart {
 
   /**
    * Open the port, once the agent door runs: `url` gives the scope's CDP URL on the agent door, `readiness` what step 8
-   * reads, and `wake` the service's start at a use (board ab-v16.94.11). A failure leaves the part `failed` (fail closed:
+   * reads, and `use` the service's start at a use (board ab-v16.94.11). A failure leaves the part `failed` (fail closed:
    * no MCP port; the socket unit keeps the port).
    */
-  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; wake?: (scope: string) => Promise<string | null> }): Promise<void> {
+  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"] }): Promise<void> {
     try {
       if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
@@ -63,7 +63,7 @@ export class McpPart implements ServicePart {
         list, stateFolder: this.o.stateFolder, log: this.o.log, ...this.o.transport,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
-      const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, wake: o.wake, log: this.o.log, ...this.o.port });
+      const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });
       this.transport = transport; this.port = port;
       if (this.last) port.setSessions(this.last);
     } catch (e) {

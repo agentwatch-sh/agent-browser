@@ -501,57 +501,72 @@ class WorldReader implements McpReader {
   cgroup(pid: number) { return this.w.get(pid)?.cgroup ?? null; }
 }
 const OK = "the stub transport admits this request";
-async function mcpPort(readiness: () => McpReadiness, wake: (scope: string) => Promise<string | null>) {
+/**
+ * The port with a stub handler: a request with the header `x-tool: call` stands for a tool call, so the stub calls its
+ * browser gate first (as the transport does) and answers only when the gate says go on; every other request stands for
+ * one that needs no browser.
+ */
+async function mcpPort(readiness: () => McpReadiness, use: { refusal(scope: string): string | null; wake(scope: string): Promise<string | null> }) {
   const r = new WorldReader();
-  const seen: string[] = [];
-  const handler: McpHandler = { request(_req, res, scope) { seen.push(scope); res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(OK) }).end(OK); }, endSessions() {} };
-  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness, wake, log: () => {}, reader: r, uid: UID });
+  const seen: string[] = [], forwarded: string[] = [];
+  const handler: McpHandler = {
+    async request(req, res, scope, browser) {
+      seen.push(`${scope}${browser ? " (Chrome down)" : ""}`);
+      if (req.headers["x-tool"] === "call" && browser && !(await browser())) return;
+      forwarded.push(scope);
+      res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(OK) }).end(OK);
+    },
+    endSessions() {},
+  };
+  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness, use, log: () => {}, reader: r, uid: UID });
   r.service = `127.0.0.1:${port.port}`;
   port.listener.prependListener("connection", (s: Socket) => r.accepted(`127.0.0.1:${s.remotePort}`));
   port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
-  const ask = async (): Promise<{ status: number; body: string }> => {
+  const ask = async (tool = false): Promise<{ status: number; body: string }> => {
     r.pending.push([3102]);
     const s = connect({ host: "127.0.0.1", port: port.port });
     s.on("error", () => {});
     let buf = "";
     s.on("data", (d) => { buf += d; });
-    s.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\n\r\n`);
+    s.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\n${tool ? "x-tool: call\r\n" : ""}\r\n`);
     await until(() => /\r\n\r\n/.test(buf) && buf.length >= buf.indexOf("\r\n\r\n") + 4 + Number(/content-length: (\d+)/i.exec(buf)?.[1] ?? 0), "the answer", 10_000);
     s.destroy();
     return { status: Number(buf.split(" ")[1]), body: buf.slice(buf.indexOf("\r\n\r\n") + 4) };
   };
-  return { port, seen, ask, reader: r };
+  return { port, seen, forwarded, ask, reader: r };
 }
 
-test("the MCP path: a request that step 8 refuses for a link that is down waits for the start at a use, then steps 3 to 8 run again and the handler answers; a failed start's text is the 503 of step 8", async () => {
+test("O1: while Chrome is down, an MCP request that needs no browser passes step 8 with no start; a tool call starts Chrome through its gate, steps 3 to 8 run again, and the handler answers; a failed start's text is the 503 of step 8; the service's own refusal comes at once", async () => {
   let ready: McpReadiness = { controlOff: false, notReady: NOT_READY.link, sites: null };
-  const calls: string[] = [];
-  let answer: string | null = null;
-  const p = await mcpPort(() => ready, async (scope) => { calls.push(scope); await sleep(30); if (answer === null) ready = { controlOff: false, notReady: null, sites: 2 }; return answer; });
+  const wakes: string[] = [];
+  let answer: string | null = null, refusal: string | null = null;
+  const p = await mcpPort(() => ready, { refusal: () => refusal, wake: async (scope) => { wakes.push(scope); await sleep(30); if (answer === null) ready = { controlOff: false, notReady: null, sites: 2 }; return answer; } });
   try {
-    assert.deepEqual(await p.ask(), { status: 200, body: OK });
-    assert.deepEqual([calls, p.seen], [["md-lead"], ["md-lead"]]);
+    assert.deepEqual(await p.ask(), { status: 200, body: OK }, "a request that needs no browser");
+    assert.deepEqual([wakes, p.seen], [[], ["md-lead (Chrome down)"]], "no start");
+    assert.deepEqual(await p.ask(true), { status: 200, body: OK }, "a tool call");
+    assert.deepEqual(wakes, ["md-lead"], "the tool call started Chrome");
     ready = { controlOff: false, notReady: NOT_READY.allowlist, sites: null };
     answer = "The agent browser could not get ready: Xvfb not found on PATH.";
-    assert.deepEqual(await p.ask(), { status: 503, body: answer });
-    assert.equal(calls.length, 2);
+    assert.deepEqual(await p.ask(true), { status: 503, body: answer });
+    refusal = NOT_READY.noList;
+    assert.deepEqual(await p.ask(), { status: 503, body: NOT_READY.noList }, "the service's own refusal, at once");
+    assert.equal(wakes.length, 2);
   } finally { await p.port.stop(); }
 });
 
-test("the MCP path: no wait for control off, an extension too old, or a scope with no list", async () => {
+test("the MCP path: no gate and no start for control off, an extension too old, or a scope with no list while Chrome runs", async () => {
   const calls: string[] = [];
   for (const [ready, body] of [
     [{ controlOff: true, notReady: NOT_READY.link, sites: null }, MCP_TEXT.controlOff],
     [{ controlOff: false, notReady: NOT_READY.old, sites: null }, NOT_READY.old],
     [{ controlOff: false, notReady: null, sites: null }, NOT_READY.noList],
   ] as [McpReadiness, string][]) {
-    const p = await mcpPort(() => ready, async (scope) => { calls.push(scope); return null; });
-    try { assert.deepEqual(await p.ask(), { status: 503, body }); } finally { await p.port.stop(); }
+    const p = await mcpPort(() => ready, { refusal: (scope) => { calls.push(`refusal ${scope}`); return null; }, wake: async (scope) => { calls.push(scope); return null; } });
+    try { assert.deepEqual(await p.ask(true), { status: 503, body }); } finally { await p.port.stop(); }
   }
   assert.deepEqual(calls, []);
 });
-
-// ------------------------------------------------------------------ the send (stage1c.ts)
 
 test("a send needs the browser: each import calls the start at a use before its wait for the receiver", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-use-send-"));
@@ -681,7 +696,7 @@ test("the service with its MCP path: an MCP tool call that runs is a use, an ope
     (s.part as any).idleStop = Promise.resolve();
     assert.equal(readiness("web-1").notReady, NOT_READY.link, "a stop by use that runs");
     (s.part as any).idleStop = null;
-    assert.equal(typeof port.o.wake, "function", "the MCP path has the start at a use");
+    assert.equal(typeof port.o.use?.wake, "function", "the MCP path has the start at a use");
     // An open MCP session is no use; a tool call that runs is (the daemon lead's P1).
     assert.deepEqual(s.part!.usedBy(), []);
     const tr = s.mcp!.mcpTransport as any;
@@ -757,7 +772,7 @@ const me = () => [{ pid: process.pid, start: myStart() }];
 const session = (scope: string, repo: string, roots: { pid: number; start: number }[], extra: object = {}) => ({ scope, repo, roots, cgroup: null, lifetime_id: null, mcp_token: null, ...extra });
 const starts = (x: Svc) => x.logs.filter((l) => l === "unit: an agent uses the agent browser; starting Chrome").length;
 
-test("B1: while Chrome is off, the service's own checks come at once with no start and no wait: a process of web-1 at web-2's path gets the session's 403, a scope that the object does not name or gives no list the no-list 503; their retries never start Chrome nor count as a use; only an upgrade that passes every check but the link starts it", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+test("B1: while Chrome is off, the service's own checks come at once with no start and no wait: a process of web-1 at web-2's path gets the session's 403, a scope that no confirm can name or that has no list the no-list 503; their retries never start Chrome nor count as a use; only an upgrade that passes every check but the link starts it", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
   const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
   const part = x.part!;
   // web-1 is this process's session; web-2's session is another one (a root that is gone).
@@ -768,14 +783,14 @@ test("B1: while Chrome is off, the service's own checks come at once with no sta
     const at = Date.now();
     const other = await raw(x.url("web-2"));
     assert.deepEqual([other.status, other.body], [403, sessionRefusal(process.pid)], "the session's 403 at once");
-    // A scope that the object does not name (a launch that the restart gate holds), and a scope that it gives no list.
-    for (const v of [{ named: false, list: null, sites: 0 }, { named: true, list: null, sites: 0 }]) {
+    // A scope that no confirm can name (two live sessions share it), and a scope that the object gives no list.
+    for (const v of [{ named: false, nameable: false, list: null, sites: 0 }, { named: true, nameable: true, list: null, sites: 0 }]) {
       s1c.useView = (scope: string) => (scope === "web-1" ? v : view(scope));
       const nolist = await raw(x.url("web-1"));
       assert.deepEqual([nolist.status, nolist.body], [503, NOT_READY.noList], `the no-list 503 at once (${JSON.stringify(v)})`);
     }
-    // C11's order: a scope that the object does not name gets the no-list 503 before the session check.
-    s1c.useView = (scope: string) => (scope === "web-2" ? { named: false, list: null, sites: 0 } : view(scope));
+    // C11's order: a scope that no confirm can name gets the no-list 503 before the session check.
+    s1c.useView = (scope: string) => (scope === "web-2" ? { named: false, nameable: false, list: null, sites: 0 } : view(scope));
     const unnamed = await raw(x.url("web-2"));
     assert.deepEqual([unnamed.status, unnamed.body], [503, NOT_READY.noList], "step 5 comes before step 6");
     s1c.useView = view;
@@ -812,6 +827,79 @@ test("B1 on the MCP path: a session whose list has no site gets the no-list 503 
     assert.ok(Date.now() - at < 2000, "at once");
   }
   assert.deepEqual([x.w.named("chromium").length, starts(x), x.part!.usedBy().length], [0, 0, 0]);
+});
+
+test("F1: a launch after the service's start while Chrome is off starts Chrome on the agent door; the client connects after the push and its confirm name its scope", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  await x.sessions([]); // the first complete read: no session
+  await x.sessions([session("web-1", "owner/repo", me())]); // a launch after it: the restart gate keeps it out of the object
+  const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+  assert.deepEqual(s1c.useView("web-1"), { named: false, nameable: true, list: "owner.repo", sites: 1 }, "left out until a confirm");
+  const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+  assert.equal(starts(x), 1, "the launch's use started Chrome");
+  assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/);
+  const pushes = x.shims.at(-1)!.main.filter((q) => q.op === "set_scopes");
+  assert.ok(pushes.length >= 2 && !Object.hasOwn(pushes[0].scopes, "web-1") && pushes.at(-1).scopes["web-1"] === "owner.repo", "the first push leaves the launch out, a later one names it");
+  await cdp.close();
+});
+
+test("F1 on the MCP path: a launch after the service's start: initialize needs no browser, and a tool call starts Chrome and gets its answer after the push and its confirm", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const tok = control.testTokens[0];
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true });
+  await x.sessions([]);
+  await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
+  const url = `http://127.0.0.1:${x.mcp!.mcpPort!.port}/mcp/web-1`;
+  const post = async (body: object, sid?: string) => {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${tok.token}`, ...(sid ? { "Mcp-Session-Id": sid } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
+    const text = await r.text();
+    return { status: r.status, sid: r.headers.get("mcp-session-id"), body: text ? JSON.parse(text) : null, text };
+  };
+  const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } });
+  assert.equal(init.status, 200, init.text);
+  assert.equal(starts(x), 0, "no start for initialize");
+  const a = await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, init.sid!);
+  assert.ok(a.status === 200 && a.body.result, a.text);
+  assert.equal(starts(x), 1, "the tool call started Chrome");
+  assert.ok(x.shims.at(-1)!.main.filter((q) => q.op === "set_scopes").length >= 2, "the push that names the launch came after the first confirm");
+});
+
+test("F1: a name that ended while Chrome was off and launches again starts Chrome; the client connects after the prune of the name and the push that names it", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "web-1" } as any);
+  await x.sessions([session("web-1", "owner/repo", me())]); // the name launches again: rule 2 keeps it out until a confirm
+  const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+  assert.deepEqual([s1c.useView("web-1").named, s1c.useView("web-1").nameable], [false, true]);
+  const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+  assert.equal(starts(x), 1);
+  assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/);
+  await cdp.close();
+});
+
+test("F1: a scope that two live sessions share is refused at once with no start (the door refuses such a snapshot; the check holds also when one reaches the book); its roots keep both sessions' roots", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  await x.sessions([session("web-1", "owner/repo", me()), session("web-1", "owner/repo", [{ pid: 999_999, start: 1 }])]);
+  assert.deepEqual((x.state as any).roots().get("web-1"), [...me(), { pid: 999_999, start: 1 }], "the roots of both sessions");
+  const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+  assert.deepEqual(s1c.useView("web-1"), { named: false, nameable: false, list: null, sites: 0 });
+  const r = await raw(x.url("web-1"));
+  assert.deepEqual([r.status, r.body], [503, NOT_READY.noList]);
+  assert.deepEqual([starts(x), x.part!.usedBy().length], [0, 0]);
+});
+
+test("review-120b's note: a send in the hold-off after a fail-closed stop gets that moment's answer at once, with no wait for a receiver", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const part = x.part as any;
+  part.failClosedAt = part.clock();
+  part.lastStop = { reason: "receiver_missing", at: "2026-11-12T00:00:00Z", by: null };
+  assert.equal(x.part!.failClosedHold(), true);
+  const payload = { v: 1, domain: "example.com", url: "https://www.example.com/", origin: "https://www.example.com", cookies: [], storage: { local: {}, session: {}, idb: [], caches: [] } };
+  const at = Date.now();
+  const a = await x.state.handle({ t: "req", id: "i", op: "import", by: { kind: "operator", user: "ann", via: "send" }, payload } as any);
+  assert.deepEqual(a, { error: "The sign-in for example.com was not sent: the agent extension is not connected." });
+  assert.ok(Date.now() - at < 2000, "at once");
+  assert.equal(starts(x), 0);
 });
 
 test("B1: the service's own pid (an MCP's browser) passes the check before a start at a use only with a live ticket of its scope", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
@@ -852,7 +940,7 @@ test("B2: the quiet time counts only the agents' traffic: after the client leave
   assert.deepEqual(part.usedBy(), []);
 });
 
-test("P1: an MCP session stays open over a stop by use and is no use by being open; its next tool call waits at step 8 for the start at a use, the MCP's browser connects again with a new ticket, and the call gets its answer", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+test("P1 and O1: initialize, tools/list and a DELETE start nothing; an MCP session stays open over a stop by use and is no use by being open; its next tool call starts Chrome again, the MCP's browser connects again with a new ticket, and the call gets its answer", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
   const tok = control.testTokens[0];
   const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true });
   const part = x.part!;
@@ -868,12 +956,15 @@ test("P1: an MCP session stays open over a stop by use and is no use by being op
   };
   const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } });
   assert.equal(init.status, 200, init.text);
-  assert.equal(starts(x), 1, "the initialize waited for the start at a use");
   const sid = init.sid!;
   await post({ jsonrpc: "2.0", method: "notifications/initialized" }, sid);
+  const list = await post({ jsonrpc: "2.0", id: 9, method: "tools/list" }, sid);
+  assert.ok(list.status === 200 && list.body.result.tools.length > 0, list.text);
+  assert.deepEqual([starts(x), x.w.named("chromium").length, part.usedBy().length], [0, 0, 0], "initialize, the notification and tools/list need no browser: no start, no use (review-120b O1)");
   const call = (id: number) => post({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, sid);
   const a = await call(2);
   assert.ok(a.status === 200 && a.body.result, a.text);
+  assert.equal(starts(x), 1, "the tool call started Chrome");
   assert.equal(minted, 1, "the MCP's browser connected with a ticket");
   const act = x.mcp!.activity();
   assert.ok(act.calls === 0 && act.quietFor < 10_000, "the tool call counted as a use while it ran, and its end starts the quiet time");
@@ -892,9 +983,15 @@ test("P1: an MCP session stays open over a stop by use and is no use by being op
   assert.notEqual(x.w.named("chromium")[0].pid, pid1, "a new Chrome");
   assert.equal(minted, 2, "a new ticket for the new connection");
   await until(() => (x.agent as any).relay.model.connectionCount === 1, "the MCP's own connection to the new Chrome");
+  // The session's end while Chrome is off (a DELETE) starts nothing.
+  (part as any).idleMinutes = 0.02;
+  await until(() => !part.unit.running(), "the second stop by use", 15_000);
+  const del = await fetch(url, { method: "DELETE", headers: { Authorization: `Bearer ${tok.token}`, "Mcp-Session-Id": sid }, signal: AbortSignal.timeout(30_000) });
+  assert.equal(del.status, 200, await del.text());
+  assert.deepEqual([starts(x), part.unit.running()], [2, false], "a DELETE at the session's end starts nothing");
 });
 
-test("P1: the MCP's own ticket connection counts only by its messages, an agent's open connection counts by being open", { timeout: 30_000 }, async () => {
+test("P1 and O2: the MCP's own ticket connection is no use, neither open nor by its messages; an agent's open connection counts by being open and by its messages", { timeout: 30_000 }, async () => {
   const { Tickets } = await import("../src/service/mcp/ticket.ts");
   const { PeerGate } = await import("../src/relay/peer.ts");
   const reader = { form: "stat", peer: () => ({ pid: process.pid, uid: 1001, pidfd: null, start: 77 }), proc: (p: number) => (p === process.pid ? { ppid: 1, start: 77, state: "S" } : null), cgroup: () => null, poll: () => 0, fdinfoPid: () => null, close: () => {} };
@@ -906,7 +1003,7 @@ test("P1: the MCP's own ticket connection counts only by its messages, an agent'
     assert.deepEqual([h.relay.traffic().agents, h.relay.traffic().busy], [0, 0], "the MCP's own connection is no agent's");
     assert.equal(h.relay.traffic().quietFor, Infinity);
     await own.send("Browser.getVersion");
-    assert.ok(h.relay.traffic().quietFor < 1000, "its message counts");
+    assert.deepEqual([h.relay.traffic().busy, h.relay.traffic().quietFor], [0, Infinity], "its messages are no use (review-120b O2): its tool calls count");
     await own.close();
   } finally { await h.close(); }
   const h2 = await harness();
@@ -914,6 +1011,8 @@ test("P1: the MCP's own ticket connection counts only by its messages, an agent'
     await h2.ready();
     const c = await h2.connect("s1");
     assert.equal(h2.relay.traffic().agents, 1, "an agent's open connection");
+    await c.send("Browser.getVersion");
+    assert.ok(h2.relay.traffic().quietFor < 1000, "an agent's message counts");
     await c.close();
     await until(() => h2.relay.traffic().agents === 0, "the close");
   } finally { await h2.close(); }
@@ -958,30 +1057,28 @@ test("B3: a client that resets while its upgrade waits does not crash or stop th
   } finally { await h.close(); }
 });
 
-test("B3: a client that leaves while its MCP request waits at step 8 does not crash or stop the port: its request never reaches the handler, and the next request gets its answer", { timeout: 30_000 }, async () => {
+test("B3: a client that leaves while its MCP tool call waits for the start at a use does not crash or stop the port: its call never reaches the MCP, and the next request gets its answer", { timeout: 30_000 }, async () => {
   let ready: McpReadiness = { controlOff: false, notReady: NOT_READY.link, sites: null };
   let release!: (r: string | null) => void;
   let waits = 0;
-  const p = await mcpPort(() => ready, () => { waits++; return new Promise((r) => { release = r; }); });
+  const p = await mcpPort(() => ready, { refusal: () => null, wake: () => { waits++; return new Promise((r) => { release = r; }); } });
   try {
     // The port's fake reader takes this connection as md-lead's (the vectors' world).
     p.reader.pending.push([3102]);
     const s = connect({ host: "127.0.0.1", port: p.port.port });
     s.on("error", () => {});
     await new Promise((r) => s.once("connect", r));
-    s.write(`POST /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}`);
-    await until(() => waits === 1, "the wait at step 8");
+    s.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\nx-tool: call\r\n\r\n`);
+    await until(() => waits === 1, "the tool call's wait");
     s.resetAndDestroy();
     await sleep(30);
     ready = { controlOff: false, notReady: null, sites: 2 };
     release(null);
     await sleep(100);
-    assert.deepEqual(p.seen, [], "the request of the client that left never reached the handler");
-    assert.deepEqual(await p.ask(), { status: 200, body: OK }, "the port goes on");
+    assert.deepEqual(p.forwarded, [], "the call of the client that left never reached the MCP");
+    assert.deepEqual(await p.ask(true), { status: 200, body: OK }, "the port goes on");
   } finally { await p.port.stop(); }
 });
-
-// ------------------------------------------------------------------ review-120 notes 1, 3, 4, 5, 6 and 11
 
 test("note 1: the limit of a request's wait covers the whole wait: the end of a stop by use, and the start", async () => {
   const r = await rig({ useWaitMs: 40 });

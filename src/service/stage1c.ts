@@ -467,15 +467,23 @@ export class Stage1c implements ServicePart {
 
   /**
    * What the start at a use (board ab-v16.94.11) checks while Chrome is down, from the current object (the one that the
-   * receiver gets next): whether it names the scope, the scope's list (or null), and that list's number of sites.
+   * receiver gets next): whether it names the scope; whether a confirm can name it (`nameable`): a live session's scope
+   * that the object leaves out only for the restart gate (a launch after the service's start) or for rule 2 (a name that
+   * ended while Chrome was off) can be named after a push and its confirm, which need Chrome; a scope that two live
+   * sessions share, or a scope of no live session, never; and the scope's list (or null) with its number of sites.
    */
-  useView(scope: string): { named: boolean; list: string | null; sites: number } {
+  useView(scope: string): { named: boolean; nameable: boolean; list: string | null; sites: number } {
     const t = this.book.ticket();
-    if (t === null || !Object.hasOwn(t.body.scopes, scope)) return { named: false, list: null, sites: 0 };
-    // A list that the object names but does not hold is no list (C11, step 7).
-    const named = own(t.body.scopes, scope) ?? null;
-    const list = named !== null && Object.hasOwn(t.body.lists, named) ? named : null;
-    return { named: true, list, sites: list === null ? 0 : t.body.lists[list].length };
+    if (t === null) return { named: false, nameable: false, list: null, sites: 0 };
+    if (Object.hasOwn(t.body.scopes, scope)) {
+      // A list that the object names but does not hold is no list (C11, step 7).
+      const named = own(t.body.scopes, scope) ?? null;
+      const list = named !== null && Object.hasOwn(t.body.lists, named) ? named : null;
+      return { named: true, nameable: true, list, sites: list === null ? 0 : t.body.lists[list].length };
+    }
+    const list = this.book.shared().has(scope) ? null : this.book.listOf(scope);
+    if (list === null) return { named: false, nameable: false, list: null, sites: 0 };
+    return { named: false, nameable: true, list, sites: list === UNREAD_LIST ? 0 : this.files.read(list).hosts.length };
   }
 
   // ------------------------------------------------------------------ status

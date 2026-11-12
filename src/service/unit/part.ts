@@ -20,9 +20,11 @@
 // The start and the stop by use (board ab-v16.94.11; the operator's answer Q5 on board item ab-1n8; the design, section
 // 19): the service's doors run at all times, and Chrome and Xvfb run only while agents use them.
 //
-// - The use signal (`use`, which the service builds): an open client connection of the agent door, a bridge request that
-//   runs, a send (an import) that runs, an MCP session, and each request that waits for the browser (`wake`). `quietFor`
-//   gives the time since the last request or send, so a use between two checks counts too.
+// - The use signal (`use`, which the service builds): only an agent's real activity. An agent's open client connection of
+//   the agent door (`client`), an agent's client message that the model handles (`request`), a send, an import, that runs
+//   (`send`), an MCP tool call that runs (`mcp`), and each request that waits for the browser (`wake`, `waiting`).
+//   `quietFor` gives the time since the last of these messages, sends and tool calls, so a use between two checks counts
+//   too. The MCP's own CDP connection, an open MCP session, the model's own bridge calls and a tab's events are no use.
 // - The start at a use (`wake`): a request that needs the browser while Chrome does not run starts Chrome and Xvfb (one
 //   start for all the requests that wait), waits until its caller's check says ready, at most USE_WAIT_MS, then goes on.
 //   The state is `starting` from its first moment, and the start sends `ready` with Chrome's pid. A start that fails
@@ -83,11 +85,18 @@ export function idleStopMinutes(v: unknown): number | null {
   return typeof v === "number" && Number.isSafeInteger(v) && v >= 1 && v <= IDLE_STOP_MAX_MINUTES ? v : null;
 }
 
-/** The use of the browser (board ab-v16.94.11), which the service builds from its doors, its link and its MCP path. */
+/**
+ * The use of the browser (board ab-v16.94.11), which the service builds from its doors, its link and its MCP path: only an
+ * agent's real activity.
+ */
 export type UseSignal = {
-  /** The sources that use the browser now, by name (`client`, `request`, `send`, `mcp`); empty when none does. */
+  /**
+   * The sources that use the browser now, by name: `client` (an agent's open client connection of the agent door),
+   * `request` (an agent's client message that the model handles), `send` (an import that runs), `mcp` (an MCP tool call
+   * that runs); empty when none does.
+   */
   now(): string[];
-  /** ms since the last request or send was read or answered (Infinity before one). */
+  /** ms since the last agent's client message, send or MCP tool call came or ended (Infinity before one). */
   quietFor(): number;
 };
 
@@ -367,7 +376,7 @@ export class UnitPart implements ServicePart {
     if (this.closed || !cfg || !cfg.enabled) return null;
     // After a fail-closed stop, a use starts Chrome again at most once in FAIL_HOLD_MS: until then the request gets that
     // moment's answer at once, and the state stays failed closed (the daemon lead's P2).
-    if (!this.unit.running() && this.failClosedAt !== null && this.lastStop !== null && FAIL_CLOSED.has(this.lastStop.reason) && this.clock() - this.failClosedAt < FAIL_HOLD_MS) return null;
+    if (this.failClosedHold()) return null;
     this.waiters++;
     this.lastUse = this.clock();
     // The limit covers the whole wait: the end of a stop by use, the start and the caller's check (review-120 note 1).
@@ -395,6 +404,11 @@ export class UnitPart implements ServicePart {
       this.waiters--;
       this.lastUse = this.clock();
     }
+  }
+
+  /** True in the hold-off after a fail-closed stop, while Chrome does not run: a use starts nothing (the daemon lead's P2). */
+  failClosedHold(): boolean {
+    return !this.unit.running() && this.failClosedAt !== null && this.lastStop !== null && FAIL_CLOSED.has(this.lastStop.reason) && this.clock() - this.failClosedAt < FAIL_HOLD_MS;
   }
 
   /** The one start at a use: null when Chrome runs, else the text for the waiting requests. */

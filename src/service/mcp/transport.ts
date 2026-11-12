@@ -19,7 +19,9 @@
 //   notifications only `notifications/initialized` and `notifications/cancelled`.
 // - endSessions (C11's close at a change, C12's session_ended, the lead's OP4) ends the scope's MCP sessions.
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
-//   `activity()` gives the tool calls that run and the time since the last one came or ended.
+//   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
+//   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
+//   only a tool call goes through the port's `browser` gate, which starts Chrome (the start at a use).
 //
 // The log rule (C11, C12): a line names a session's number, a scope, a method and a result; never an argument, a
 // payload, a page's content, a session id, a header, a token or a fingerprint.
@@ -125,8 +127,8 @@ export class McpTransport implements McpHandler {
   /** The worker of `scope` while it runs (the tests and the memory measures). */
   workerOf(scope: string): ScopeWorker | undefined { return this.workers.get(scope); }
 
-  async request(req: IncomingMessage, res: ServerResponse, scope: string): Promise<void> {
-    if (req.method === "POST") return this.post(req, res, scope);
+  async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>): Promise<void> {
+    if (req.method === "POST") return this.post(req, res, scope, browser);
     if (req.method === "DELETE") { req.resume(); return this.delete(req, res, scope); }
     req.resume();
     send(res, "noStream", null, { Allow: "POST, DELETE" });
@@ -163,7 +165,7 @@ export class McpTransport implements McpHandler {
     });
   }
 
-  private async post(req: IncomingMessage, res: ServerResponse, scope: string): Promise<void> {
+  private async post(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>): Promise<void> {
     const body = await this.readBody(req);
     if (body === null) { send(res, "tooLarge", null, { Connection: "close" }); return; }
     let msg: unknown;
@@ -192,6 +194,10 @@ export class McpTransport implements McpHandler {
         return;
       }
     }
+    // A tool call needs the browser (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, it starts
+    // Chrome and waits (the port's gate, which answers a refusal itself); a request whose client left meanwhile gets
+    // false from the gate and never reaches the MCP.
+    if (msg.method === "tools/call" && browser && !(await browser())) return;
     const forward = msg;
     // An id of a request of this MCP session that still waits: refused, and the waiting request keeps its own answer.
     const key = JSON.stringify(forward.id);

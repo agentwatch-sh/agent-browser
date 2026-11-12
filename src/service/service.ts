@@ -40,6 +40,7 @@ import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
+import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
 import { realDisplayFs } from "./unit/display.ts";
 import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
 import { Owner, type UnitStateReader } from "./unit/owner.ts";
@@ -173,8 +174,15 @@ export class Stage1a implements Handler {
   /** A scope of a session of the last set_sessions (none that ended since): only such a scope's use starts Chrome (board ab-v16.94.11). */
   liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope); }
 
-  /** The roots of each session of the last set_sessions, by scope: the session check before a start at a use (board ab-v16.94.11). */
-  roots(): Map<string, { pid: number; start: number }[]> { return new Map(this.sessions.map((s) => [s.scope, s.roots.map((r) => ({ ...r }))])); }
+  /**
+   * The roots of the sessions of the last set_sessions, by scope: the session check before a start at a use (board
+   * ab-v16.94.11). A scope that two sessions share keeps the roots of both.
+   */
+  roots(): Map<string, { pid: number; start: number }[]> {
+    const out = new Map<string, { pid: number; start: number }[]>();
+    for (const s of this.sessions) out.set(s.scope, [...(out.get(s.scope) ?? []), ...s.roots.map((r) => ({ ...r }))]);
+    return out;
+  }
 
   status(): Record<string, unknown> {
     const data: Record<string, unknown> = {
@@ -355,16 +363,20 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     },
   }) : null;
   // The start at a use (board ab-v16.94.11): only a scope of a live session, and only while agent control is on.
-  const model = () => (agent as (AgentDoor & { relay?: { model: { notReady(): string | null; sitesOf(scope: string): number | null } } }) | null)?.relay?.model ?? null;
-  const modelReady = () => { const m = model(); return m !== null && m.notReady() === null; };
+  const model = () => (agent as (AgentDoor & { relay?: { model: { notReady(): string | null; sitesOf(scope: string): number | null; named(scope: string): boolean } } }) | null)?.relay?.model ?? null;
+  // A request waits until the model is ready and its line names the scope: a launch after the service's start, or a
+  // name that ended while Chrome was off, is named only after a push and its confirm (C4's restart gate and rule 2).
+  const modelReady = (scope: string) => () => { const m = model(); return m !== null && m.notReady() === null && m.named(scope); };
   const mayWake = (scope: string) => !!part && state.liveScope(scope) && state.config?.control !== false;
   const peerReader = "failed" in t ? null : t.reader;
   // The checks that the service makes while Chrome is down, before a start at a use (C11's steps 5 to 7 from its own
-  // snapshot, in their order): a scope that the object does not name, the session check with set_sessions' roots (the
-  // MCP's own pid only with a live ticket of the scope), a scope with no list. Their answer comes at once, with no wait.
+  // snapshot, in their order): a scope that no confirm can name (a scope that two live sessions share), the session check
+  // with the roots of the scope's sessions in set_sessions (the MCP's own pid only with a live ticket of the scope), a
+  // scope with no list. Their answer comes at once, with no wait. A live session's scope that the next object leaves out
+  // only for the restart gate or for rule 2 passes step 5: only a push and its confirm, which need Chrome, name it.
   const doorRefusal = (scope: string, peer: Peer | null, ticket: string | null): [number, string] | null => {
     const v = stage1c?.useView(scope);
-    if (!v || !v.named) return [503, NOT_READY.noList];
+    if (!v || !v.nameable) return [503, NOT_READY.noList];
     if (peer === null || peerReader === null) return [403, PEER_UNREAD];
     if (mcp && peer.pid === process.pid) {
       if (ticket === null || !mcp.tickets.alive(ticket, scope)) return [403, sessionRefusal(peer.pid)];
@@ -375,18 +387,24 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     if (!mayWake(scope)) return null;
     const refused = doorRefusal(scope, peer, ticket);
     if (refused) return refused;
-    const why = await part!.wake(modelReady);
+    const why = await part!.wake(modelReady(scope));
     return why === null ? null : [503, why];
   };
-  // The MCP path's step 8 (its steps 1 to 7 made the walk and the token check): a scope with no list, or a list with no
-  // site, gets the no-list 503 at once.
-  const mcpWake = async (scope: string): Promise<string | null> => {
+  // The MCP path's step 8 while Chrome is down (its steps 1 to 7 made the walk and the token check): a scope with no
+  // list, or a list with no site, gets the no-list 503 at once; else a request that needs no browser passes with no
+  // start, and only a tool call starts Chrome and waits (review-120b O1).
+  const mcpRefusal = (scope: string): string | null => {
     if (!mayWake(scope)) return null;
     const v = stage1c?.useView(scope);
-    if (!v || !v.named || v.list === null || v.sites === 0) return NOT_READY.noList;
-    return part!.wake(modelReady);
+    return !v || !v.nameable || v.list === null || v.sites === 0 ? NOT_READY.noList : null;
   };
-  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => part!.wake(() => port.isUp()) } : {}) });
+  const mcpWake = async (scope: string): Promise<string | null> => {
+    if (!mayWake(scope)) return null;
+    return mcpRefusal(scope) ?? part!.wake(modelReady(scope));
+  };
+  // A send in the hold-off after a fail-closed stop gets that moment's answer at once (its extension is not connected),
+  // not a wait for a receiver that cannot come (review-120b's note).
+  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp())) } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
@@ -405,7 +423,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
         return { controlOff: state.config?.control === false, notReady: m ? m.notReady() ?? (part?.idleStopping ? NOT_READY.link : null) : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
       },
-      ...(part ? { wake: mcpWake } : {}),
+      ...(part ? { use: { refusal: mcpRefusal, wake: mcpWake } } : {}),
     });
   }
   // The control door opens next, before the agent door and before any Chrome start (the design's build note 8).
