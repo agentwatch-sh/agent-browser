@@ -3,7 +3,7 @@
  "format": {
   "vector": "id; row (the first cell of a row of the input design's table, section 5.1, exactly) or rule (the lead of a bullet of C11's part on the input stage); note; platform (linux or mac); seed (the generator's seed); clock (the fake clock's ms at the start); page (the fake page's facts: viewport, last (the page's last point or null), nodes (by the objectId of the node's handle: tag, type, role, box in its frame's own CSS px, the length of its text, focused, frame), focused, frames, scrollers); chrome (optional: how the fake Chrome answers, below); in; out; answers.",
   "in": "The client calls, in the order in which the client sends them: id; at (ms on the fake clock), or after (the id of the call whose answer makes the client send this one, as Playwright's await does), or afterEvent (an event of Chrome that the client gets); waitMs (the client's own wait after that); session (child: the session of a cross-origin frame; else the tab's own session); method; params (as the client sends them). A utility call carries Playwright 1.65.0's function text.",
-  "out": "What the stage sends to Chrome, in the order in which it sends it: method; type; for (the id of the client call whose plan holds the event); from (start, in:<id> (the arrival of a call) or out:<k> (the last event of an earlier item)) and at ([lo, hi] ms after it); rule (the first value that bounds at, when one does); fields (the key fields: a number is exact, [lo, hi] is a range; a point is in the top page's CSS px). pass: the client's call as it sent it, with the stage's timestamp for an input call. path: the moves of a path from a point to a point (part outside or inside of a box, for a hover; until dragIntercepted and rest, for a drag), one each gapMs, count [lo, hi] moves, durMs [lo, hi] from its first move to its last. line: the samples of a short move. notches: that many wheel events, gapMs [lo, hi] apart. typing: the text as typed keys (a keyDown and a keyUp for each character, a Shift rawKeyDown and keyUp around each character of shift), each hold in holdMs.",
+  "out": "What the stage sends to Chrome, in the order in which it sends it: method; type; for (the id of the client call whose plan holds the event); from (start, in:<id> (the arrival of a call) or out:<k> (the last event of an earlier item)) and at ([lo, hi] ms after it); rule (the first value that bounds at, when one does); fields (the key fields: a number is exact, [lo, hi] is a range; a point is in the top page's CSS px). pass: the client's call as it sent it, with the stage's timestamp for an input call. path: the moves of a path from a point to a point (part outside or inside of a box, for a hover; until dragIntercepted and rest, for a drag), one each gapMs, count [lo, hi] moves, durMs [lo, hi] from its first move to its last. line: the samples of a short move. notches: that many wheel events, gapMs [lo, hi] apart. rest: the rest of a wheel call as one wheel event, the sum of its notches, after the notches that its column lets go (review-122). typing: the text as typed keys (a keyDown and a keyUp for each character, a Shift rawKeyDown and keyUp around each character of shift), each hold in holdMs.",
   "answers": "The answers of the client calls, in the order in which the stage gives them: id; after (out:<k>: the item whose events the answer follows, and Chrome's answer to them; none: an answer of the stage with no event, with its result); mayBeEarly and before (a keyUp's early answer, which comes before out:<k> when the plan says that the next key can overlap); waits (the id of a call whose answer comes first: a dialog's answer); error (chrome: Chrome's error; the same: the error of the plan's refused event); from and at (a later time, with its rule).",
   "chrome": "results (by in id: Chrome's result for a passed call); events (Chrome's events, at the time of an out item; toClient false: an event of the stage's own interception, which no client gets); dialog (opensAt and closesAt: while the dialog is open, Chrome answers no input event, and after it closes it answers them in order); errors (by out item: Chrome's error for that event). Every other call gets {} at once.",
   "times": "Each range holds for every seed: its bounds come from C11's constants and first values (constants, firstValues). A range with no rule is an order with a wide bound (a person's time from one key press to the next has no bound in C11)."
@@ -2402,7 +2402,7 @@
   {
    "id": "wheel-residual",
    "row": "`mouse.wheel(dx, dy)`",
-   "note": "Four calls of mouse.wheel(0, 100), each awaited: n = max(0, round((|delta| + r) / 120)), half up, with r the residual in the call's direction. The calls get 1, 1, 1 and 0 notches (r: 0, -20, -40, -60, then +40): 360 px for 400 asked, within one notch. The fourth call gets no event, because earlier notches have already given it.",
+   "note": "Four calls of mouse.wheel(0, 100), each awaited: n = max(0, round((|delta| + r) / 120)), half up, with r the residual in the call's direction. The calls get 1, 1, 1 and 0 notches (r: 0, -20, -40, -60, then +40): 360 px for 400 asked, within one notch. The fourth call gets no event, because earlier notches have already given it. The first notch of a call comes at the later of its arrival and one person's gap after the page's last notch (35 to 90 ms), so the calls of a client that sends them at once give a person's gaps too.",
    "platform": "linux",
    "seed": 28,
    "clock": 0,
@@ -2448,8 +2448,9 @@
      "method": "Input.dispatchMouseEvent",
      "type": "mouseWheel",
      "for": 2,
-     "from": "in:2",
-     "at": [0, 0],
+     "from": "out:0",
+     "at": [35, 90],
+     "rule": "notchGapMs",
      "notches": 1,
      "gapMs": [35, 90],
      "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
@@ -2458,8 +2459,9 @@
      "method": "Input.dispatchMouseEvent",
      "type": "mouseWheel",
      "for": 3,
-     "from": "in:3",
-     "at": [0, 0],
+     "from": "out:1",
+     "at": [35, 90],
+     "rule": "notchGapMs",
      "notches": 1,
      "gapMs": [35, 90],
      "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
@@ -2490,6 +2492,104 @@
    ],
    "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
    "answers": [{"id": 1, "after": "out:0"}]
+  },
+  {
+   "id": "wheel-column",
+   "row": "`mouse.wheel(dx, dy)`",
+   "note": "mouse.wheel(0, 1440) at the page's last point 640,360, with a canvas (an element of rule 1) 540 px below it in the page's column (600,900, 100 x 100; the page is 4,000 px tall). The stage reads the call's column before the notches (review-122, the lead's option b): 4 notches go, because the 5th would bring the canvas under the point (after 4 notches its top is at 420), and the rest (8 notches, 960 px) goes as one wheel event at the same point, one person's gap after the 4th notch. The residual is the call's own (0). The call is answered after Chrome's answer of that event. The canvas gets no wheel event.",
+   "platform": "linux",
+   "seed": 29,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "c": {
+      "tag": "canvas",
+      "box": {
+       "x": 600,
+       "y": 900,
+       "width": 100,
+       "height": 100
+      }
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Input.dispatchMouseEvent",
+     "params": {
+      "type": "mouseWheel",
+      "x": 640,
+      "y": 360,
+      "modifiers": 0,
+      "deltaX": 0,
+      "deltaY": 1440
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ],
+     "notches": 4,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 360,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      35,
+      90
+     ],
+     "rule": "notchGapMs",
+     "rest": true,
+     "fields": {
+      "x": 640,
+      "y": 360,
+      "deltaX": 0,
+      "deltaY": 960
+     }
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1"
+    }
+   ]
   },
   {
    "id": "scroll-into-view",
@@ -2556,6 +2656,684 @@
    "answers": [
     {"id": 1, "after": "out:0"},
     {"id": 2, "after": "out:1", "from": "out:1", "at": [350, 400], "rule": "scrollWaitMs", "result": {}}
+   ]
+  },
+  {
+   "id": "scroll-into-view-mac",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "The Mac: until the Mac's wheel model exists, the stage sends DOM.scrollIntoViewIfNeeded as the client sent it (a script scroll), and counts it.",
+   "platform": "mac",
+   "seed": 81,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.15": {
+      "tag": "button",
+      "box": {
+       "x": 600,
+       "y": 2400,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "7.3.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "pass": true,
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ]
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:0"
+    }
+   ]
+  },
+  {
+   "id": "scroll-wheel-point",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "The wheel point (the input design's section 8.3): the page's last point 640,360 is over a canvas whose page zooms at the wheel (600 x 420 at 350,150), so it is no wheel point, and neither is any point of the 5 x 5 grid over the canvas; 640,101 is not over it, but its column (the content that the 17 notches move under it, from y 101 to 2141) meets the canvas. The stage tries the points of the grid over the visible part of the scroller (here the viewport), the nearest to the last point first: 640,619 passes (its column starts below the canvas). A path goes there, then 17 notches (round(2060 / 120)) one person's gap after the path, then {} after the smooth scroll's 350 ms.",
+   "platform": "linux",
+   "seed": 82,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.15": {
+      "tag": "button",
+      "box": {
+       "x": 600,
+       "y": 2400,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     },
+     "7.3.16": {
+      "tag": "canvas",
+      "listener": "nonpassive",
+      "box": {
+       "x": 350,
+       "y": 150,
+       "width": 600,
+       "height": 420
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "7.3.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      8
+     ],
+     "path": {
+      "from": {
+       "x": 640,
+       "y": 360
+      },
+      "to": {
+       "x": 640,
+       "y": 619
+      }
+     },
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [
+      300,
+      1000
+     ],
+     "count": [
+      10,
+      126
+     ],
+     "fields": {
+      "button": "none",
+      "buttons": 0
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      35,
+      90
+     ],
+     "rule": "notchGapMs",
+     "notches": 17,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 619,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1",
+     "from": "out:1",
+     "at": [
+      350,
+      400
+     ],
+     "rule": "scrollWaitMs",
+     "result": {}
+    }
+   ]
+  },
+  {
+   "id": "scroll-no-move",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "A round that does not move the scroller ends the notches: a listener of the window that is not passive calls preventDefault (the wheel point's rule does not count the listeners of the window and the document, so 640,360 is a wheel point). After the first round of 17 notches and the smooth scroll's 350 ms the document's scroll position is the same, so the stage sends the client's call as it is (a script scroll), and counts it.",
+   "platform": "linux",
+   "seed": 83,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.15": {
+      "tag": "button",
+      "box": {
+       "x": 600,
+       "y": 2400,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000,
+      "stops": true
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "7.3.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ],
+     "notches": 17,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 360,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    },
+    {
+     "pass": true,
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      350,
+      400
+     ]
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1"
+    }
+   ]
+  },
+  {
+   "id": "scroll-frame",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "An element of a cross-origin frame (400 x 300 at 300,100, no border) that its own document scrolls (2,000 px tall): the frame's session sends the call. The stage reads the box there and maps it to the top page (the frame mapping), reads the top page's scrollers on the frame's owner, and sends the notches on the top page's session at a point over the frame: the page's last point 900,600 is not over the frame, so the nearest point of the 5 x 5 grid over the frame's visible part, 644,358, where the top page's element is the frame's owner. 11 notches (round((1520 - 150) / 120)), one person's gap after the path, bring the element's middle to the frame's middle, then {} after 350 ms.",
+   "platform": "linux",
+   "seed": 84,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 900,
+     "y": 600
+    },
+    "nodes": {
+     "8.5.15": {
+      "tag": "button",
+      "frame": "xf",
+      "box": {
+       "x": 50,
+       "y": 1500,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "frames": {
+     "xf": {
+      "origin": "cross",
+      "box": {
+       "x": 300,
+       "y": 100,
+       "width": 400,
+       "height": 300
+      },
+      "border": 0,
+      "padding": 0,
+      "scrollY": 0,
+      "height": 2000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "session": "child",
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "8.5.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      8
+     ],
+     "path": {
+      "from": {
+       "x": 900,
+       "y": 600
+      },
+      "to": {
+       "x": 644,
+       "y": 358
+      }
+     },
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [
+      300,
+      1000
+     ],
+     "count": [
+      13,
+      126
+     ],
+     "fields": {
+      "button": "none",
+      "buttons": 0
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      35,
+      90
+     ],
+     "rule": "notchGapMs",
+     "notches": 11,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 644,
+      "y": 358,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1",
+     "from": "out:1",
+     "at": [
+      350,
+      400
+     ],
+     "rule": "scrollWaitMs",
+     "result": {}
+    }
+   ]
+  },
+  {
+   "id": "focus-field-below-fold",
+   "rule": "The focus click.",
+   "note": "fill('ab') into a text input 2,100 px below the viewport (C11: a field out of view first gets notches into view, then the click; review-119 N14): the page's last point 640,360 is a wheel point, so 17 notches (round((2415 - 360) / 120)) go there with no DOM.scrollIntoViewIfNeeded; after the smooth scroll's 350 ms the field is in view (its middle at 375), and the focus click goes at its left end (it has text), then Playwright's script and the typed keys.",
+   "platform": "linux",
+   "seed": 85,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {
+       "x": 200,
+       "y": 2400,
+       "width": 300,
+       "height": 30
+      },
+      "text": 3,
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "chrome": {
+    "results": {
+     "1": {
+      "result": {
+       "type": "string",
+       "value": "needsinput"
+      }
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {
+        "objectId": "7.3.1"
+       },
+       {
+        "value": true
+       },
+       {
+        "value": true
+       },
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {
+        "value": 1
+       },
+       {
+        "value": {
+         "a": [
+          {
+           "h": 0
+          },
+          {
+           "h": 1
+          },
+          {
+           "o": [
+            {
+             "k": "value",
+             "v": "ab"
+            },
+            {
+             "k": "force",
+             "v": false
+            },
+            {
+             "k": "frameVisible",
+             "v": true
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "objectId": "7.3.2"
+       },
+       {
+        "objectId": "7.3.18"
+       }
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.insertText",
+     "params": {
+      "text": "ab"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ],
+     "notches": 17,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 360,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      350,
+      400
+     ],
+     "path": {
+      "from": {
+       "x": 640,
+       "y": 360
+      },
+      "to": {
+       "x": [
+        202,
+        205
+       ],
+       "y": [
+        371,
+        379
+       ]
+      }
+     },
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [
+      300,
+      1000
+     ],
+     "count": [
+      16,
+      126
+     ],
+     "fields": {
+      "button": "none",
+      "buttons": 0
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:1",
+     "at": [
+      80,
+      400
+     ],
+     "rule": "pauseMs",
+     "fields": {
+      "button": "left",
+      "buttons": 1,
+      "clickCount": 1,
+      "modifiers": 0,
+      "force": 0.5,
+      "x": [
+       202,
+       205
+      ],
+      "y": [
+       371,
+       379
+      ]
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:2",
+     "at": [
+      60,
+      180
+     ],
+     "rule": "holdMs",
+     "fields": {
+      "button": "left",
+      "buttons": 0,
+      "clickCount": 1,
+      "modifiers": 0,
+      "x": [
+       202,
+       205
+      ],
+      "y": [
+       371,
+       379
+      ]
+     }
+    },
+    {
+     "pass": true,
+     "for": 1,
+     "from": "out:3",
+     "at": [
+      0,
+      8
+     ]
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "for": 2,
+     "from": "in:2",
+     "at": [
+      0,
+      2000
+     ],
+     "typing": "ab",
+     "holdMs": [
+      50,
+      250
+     ],
+     "shift": []
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:4"
+    },
+    {
+     "id": 2,
+     "after": "out:5"
+    }
    ]
   },
   {
