@@ -401,14 +401,15 @@ export class McpTransport implements McpHandler {
 
   /**
    * C12's set_sessions (review-115 note 3): the folder of each scope that the snapshot does not name goes (also of a
-   * session that ended while the service was down, which got no session_ended). Only a folder whose name is a scope.
+   * session that ended while the service was down, which got no session_ended). Only a folder whose name is a scope
+   * (removeScopeFolder).
    */
   async keepScopes(named: ReadonlySet<string>): Promise<void> {
     const mcp = join(this.o.stateFolder, "mcp");
     if (!realFolder(mcp)) return;
     let names: string[];
     try { names = readdirSync(mcp); } catch { return; }
-    await Promise.all(names.filter((n) => SCOPE.test(n) && !named.has(n)).map((n) => this.dropScope(n, "the sessions name it no more")));
+    await Promise.all(names.filter((n) => !named.has(n)).map((n) => this.dropScope(n, "the sessions name it no more")));
   }
 
   /** The service stops: every session and every worker. */

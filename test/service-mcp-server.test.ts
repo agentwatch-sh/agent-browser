@@ -966,6 +966,9 @@ test("review-115b's note: a client's own notifications/cancelled of a waiting re
     const req = w.request.bind(w), note = w.notify.bind(w);
     w.request = (s, m) => { seen.push(`request ${String(m.method)} ${JSON.stringify(m.id)}`); return m.id === "c1" && m.method === "tools/call" ? new Promise(() => {}) : req(s, m); };
     w.notify = (s, m) => { seen.push(`notify ${String(m.method)} ${JSON.stringify((m.params as any)?.requestId)}`); note(s, m); };
+    const wd = w as typeof w & { drop?: (s: string, id: unknown) => void };
+    const drop = wd.drop?.bind(w);
+    wd.drop = (s, id) => { seen.push(`drop ${JSON.stringify(id)}`); drop?.(s, id); };
     const first = post(h.url("web-1"), tabs("c1"), sid);
     await until(() => seen.includes('request tools/call "c1"'), "the call reaches the worker");
     assert.equal((await post(h.url("web-1"), cancelNote("c1"), sid)).status, 202);
@@ -974,6 +977,7 @@ test("review-115b's note: a client's own notifications/cancelled of a waiting re
     const want = answerOf("cancelled");
     assert.deepEqual([got.status, got.body], [200, { jsonrpc: "2.0", id: "c1", error: { code: -32800, message: want.text } }]);
     assert.ok(seen.includes('notify notifications/cancelled "c1"'), "the cancel reached the MCP");
+    assert.ok(seen.includes('drop "c1"'), "the worker drops the call's wait (an answer that still came would find none)");
     assert.equal((await post(h.url("web-1"), { jsonrpc: "2.0", id: "c1", method: "ping" }, sid)).status, 200, "the id is free");
     assert.equal(t.activity().calls, 0);
   });
@@ -1065,10 +1069,6 @@ const BAD_SHAPES: unknown[] = [
 ];
 
 test("review-115b P4: a body that is JSON but no message of the MCP's three shapes, also an id that is no safe integer, gets 400 Invalid Request with or without a session id and never reaches the MCP; each shape that it takes gets the MCP's answer", { timeout: 60_000 }, async () => {
-  const { messageShape } = await import(TRANSPORT) as { messageShape?: (m: unknown) => string | null };
-  assert.equal(typeof messageShape, "function", "the transport's shape check");
-  for (const b of BAD_SHAPES) assert.equal(messageShape!(b), null, JSON.stringify(b));
-  assert.deepEqual([tabs(1), { jsonrpc: "2.0", method: "notifications/initialized" }, { jsonrpc: "2.0", id: "a", result: {} }, { jsonrpc: "2.0", id: 0, error: { code: 1, message: "x" } }].map((m) => messageShape!(m)), ["request", "notification", "answer", "answer"]);
   await withTransport({}, async ({ t, h }) => {
     const sid = await init(h.url("web-1"));
     const w = t.workerOf("web-1")!;
@@ -1089,6 +1089,10 @@ test("review-115b P4: a body that is JSON but no message of the MCP's three shap
       assert.deepEqual([r.status, r.body], [200, { jsonrpc: "2.0", id, result: {} }], `ping ${id}`);
     }
   });
+  const { messageShape } = await import(TRANSPORT) as { messageShape?: (m: unknown) => string | null };
+  assert.equal(typeof messageShape, "function", "the transport's shape check");
+  for (const b of BAD_SHAPES) assert.equal(messageShape!(b), null, JSON.stringify(b));
+  assert.deepEqual([tabs(1), { jsonrpc: "2.0", method: "notifications/initialized" }, { jsonrpc: "2.0", id: "a", result: {} }, { jsonrpc: "2.0", id: 0, error: { code: 1, message: "x" } }].map((m) => messageShape!(m)), ["request", "notification", "answer", "answer"]);
 });
 
 test("review-115b P4: the pinned MCP gives no answer to a message of another shape (an extra member, a params that is no object, a _meta that is no object), so the transport refuses such a body", { timeout: 60_000 }, async () => {
@@ -1113,17 +1117,45 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
     const x = t as McpTransport & { dropScope?: (scope: string, why: string) => Promise<void>; keepScopes?: (named: ReadonlySet<string>) => Promise<void> };
     assert.equal(typeof x.dropScope, "function", "the transport's dropScope");
     const state = join(dir, "state"), mcp = join(state, "mcp"), folder = scopeFolder(state, "web-1");
+    /** Hold the stop of the scope's worker until the test lets it go. */
+    const holdStop = () => {
+      const w = t.workerOf("web-1")!;
+      const real = w.stop.bind(w);
+      let go!: () => void;
+      const gate = new Promise<void>((r) => { go = r; });
+      w.stop = () => gate.then(real);
+      return go;
+    };
     await init(h.url("web-1"));
     writeFileSync(join(folder, "shot.png"), "a test file of an earlier session");
-    await x.dropScope!("web-1", "its session ended");
+    let go = holdStop();
+    const dropping = x.dropScope!("web-1", "its session ended");
+    await sleep(200);
+    assert.ok(existsSync(join(folder, "shot.png")), "the folder waits for the worker's stop");
+    go();
+    await dropping;
     assert.equal(existsSync(folder), false, "the folder and its file are gone");
     assert.equal(t.size("web-1"), 0);
     assert.equal(t.workerOf("web-1"), undefined);
     assert.ok(log.includes("mcp: the folder of scope web-1 is emptied (its session ended)"), log.join("\n"));
     await x.dropScope!("web-7", "a test");
     assert.ok(!log.some((l) => l.includes("web-7")), "no log line for a scope with no folder");
+    // A new MCP session of the scope before the worker's stop keeps the folder.
+    await init(h.url("web-1"));
+    writeFileSync(join(folder, "kept.png"), "a test file");
+    go = holdStop();
+    const dropping2 = x.dropScope!("web-1", "its session ended");
+    await sleep(100);
+    await init(h.url("web-1"));
+    go();
+    await dropping2;
+    assert.ok(existsSync(join(folder, "kept.png")), "a new MCP session meanwhile keeps the folder");
+    await x.dropScope!("web-1", "its session ended");
     await init(h.url("web-1"));
     assert.deepEqual(readdirSync(folder), [], "a later session of the same name: an empty folder");
+    // No name that is no scope: `..` would be the state folder.
+    assert.equal(tr.removeScopeFolder!(state, ".."), false);
+    assert.ok(existsSync(join(state, "mcp")), "the state folder stays");
     await init(h.url("web-2"));
     mkdirSync(join(mcp, "old-1"));
     writeFileSync(join(mcp, "old-1", "f.pdf"), "a test file");
