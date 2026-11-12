@@ -551,7 +551,7 @@ The stage's limits, so that a translated action ends inside the defaults:
   rest of the run goes at Playwright's own speed, with no person's timing, and the harness counts it. With
   an average typist's speed, about 50 characters go at the person's speed and about 170 in all inside the
   25 s. So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a
-  `pressSequentially` or a `type` of more than about BOUND characters (measured live by board ab-t30.18,
+  `pressSequentially` or a `type` of more than about 1,400 characters (measured live by board ab-t30.18,
   review-123; fewer on a busy box) ends with that timeout, and the rest of its text does not go.
 - `STAGE_ACTION_MAX_MS` ends any lock hold in the same way (section 4.4).
 - **A whole test of `@playwright/test`.** Its default test timeout is 30 s for the whole test, and the
@@ -1206,7 +1206,7 @@ The questions below stay as the operator read them.
   goes to the fast end after 12 s; after 25 s (about 170 characters) the rest goes at Playwright's own
   speed. No client action reaches its timeout.
   (A note of board ab-t30.18, review-123, not the operator's words: measured live, a `pressSequentially` of
-  more than about BOUND characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy
+  more than about 1,400 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy
   box.)
 - b. Always type every character. A `fill` of 500 characters takes about 1 to 2 minutes: with the default
   30 s timeout it fails, so clients must set longer timeouts. The page always sees keys.

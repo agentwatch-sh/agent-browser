@@ -1818,7 +1818,7 @@ const STAGE_ITEMS: string[] = [
   "At `STAGE_ACTION_MAX_MS` the rest of the run goes at Playwright's own speed, with no person's timing, and the stage counts it.",
   "Each key event of that rest goes at once: each `keyUp` gets the early answer (above), and each other key event gets Chrome's own answer, so a character of the rest waits for one answer of Chrome.",
   "A key press whose answer comes while an early-answered release before it has none did not reach the page (Chrome answers at once, and drops, an input event that it gets while a dialog is open, and it answers the event that opened the dialog after the close): the stage sends it again after that release's answer, and the call gets Chrome's answer of the second send.",
-  "So a key run ends inside Playwright's default action timeout of 30 s only up to a bound: about BOUND characters, measured live (board ab-t30.18), and fewer on a busy box.",
+  "So a key run ends inside Playwright's default action timeout of 30 s only up to a bound: about 1,400 characters, measured live (board ab-t30.18), and fewer on a busy box.",
   "A longer `pressSequentially` or `type` ends with Playwright's timeout error, and the rest of its text does not go.",
   "The focus click.",
   "Before Playwright's script focus of a text field (the focus and fill recognizers, below), the stage clicks the field as a person does, by the rules of `src/input.ts` `focusField`.",

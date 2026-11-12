@@ -333,8 +333,8 @@ test("review-123 the long pressSequentially bound: a keyUp of the rest that open
 test("review-123: the design states the bound next to its texts (section 6.3, and a note next to the operator's record of Q2 a)", () => {
   const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   for (const t of [
-    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about BOUND characters (measured live by board ab-t30.18, review-123; fewer on a busy box) ends with that timeout, and the rest of its text does not go.",
-    "(A note of board ab-t30.18, review-123, not the operator's words: measured live, a `pressSequentially` of more than about BOUND characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box.)",
+    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about 1,400 characters (measured live by board ab-t30.18, review-123; fewer on a busy box) ends with that timeout, and the rest of its text does not go.",
+    "(A note of board ab-t30.18, review-123, not the operator's words: measured live, a `pressSequentially` of more than about 1,400 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box.)",
     "speed. No client action reaches its timeout.",
   ]) assert.ok(D.includes(t), `the design says: ${t}`);
   assert.ok(!D.includes("So no client action reaches the 30 s timeout because of the stage (Q2)."), "the old sentence of section 6.3 is gone");
