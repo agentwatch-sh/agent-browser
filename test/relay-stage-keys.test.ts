@@ -905,3 +905,52 @@ test("review-119b note: Playwright's focus call with no focus click (a button, a
   await f.clock.advance(RUN_IDLE_MS + 50);
   assert.equal(f.stage.lock.held, 0);
 });
+
+test("the daemon lead's point (review-119b): the wait for Chrome's answers at STAGE_EVENT_WAIT_MS has a bound of one more STAGE_EVENT_WAIT_MS; a page that never answers: the lock is free, another tab's input goes, no rest goes, the call's error names the characters that may not have gone, and the plan's keys go up (Chrome gives them at its next answer, or at the session's end)", async () => {
+  const TEXT = "about the bear cubs";
+  const hangAtB = (ms: number) => (t: FakeTab) => { let once = false; t.busy = (s) => (!once && s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "b" && (once = true) ? ms : 0); };
+  const ups = (t: FakeTab) => { const n = new Map<string, number>(); for (const s of keyEvents(t)) n.set(s.params.code, (n.get(s.params.code) ?? 0) + (s.params.type === "keyUp" ? -1 : s.params.autoRepeat ? 0 : 1)); return [...n].filter(([, v]) => v !== 0); };
+  // A page that never answers again, with another tab's click waiting for the lock.
+  const { A, B, stage } = await twoTabs([fillCall("n", TEXT), insert(TEXT)], click(900, 650, 1000), { nodes: { n: INPUT() } }, 30_000, (a) => hangAtB(Infinity)(a));
+  const err = A.answers.find((x) => x.id === 2);
+  assert.ok(err, "the text's call gets an answer");
+  assert.ok(B.answers.length === B.v.in.length, "the other tab's click went");
+  assert.equal(stage.lock.held, 0, "the lock is free");
+  assert.equal(A.t.sent.filter((s) => s.method === "Input.insertText").length, 0, "no rest");
+  assert.deepEqual(ups(A.t), [], "each key of the plan goes up (Chrome gives it to the page when it answers again)");
+  assert.ok(err!.t <= 1000 + 2 * 2000 + 2000, `the error by the bound: ${err!.t}`);
+  const r = await runVector(own([fillCall("n", TEXT), insert(TEXT)], { nodes: { n: INPUT() } }), { maxMs: 30_000, tab: hangAtB(Infinity) });
+  const body = answerOf(r, 2).body;
+  assert.match(body.error?.message ?? "", /and 18 characters may not have gone: the page did not answer\.$/, `the error names the count: ${body.error?.message}`);
+  // A page that answers again after 60 s: the end's releases reach it then, after the hung key (the seeds whose plan holds a
+  // key at the end).
+  let held = 0;
+  for (let seed = 1; seed <= 6; seed++) {
+    const l = await runVector(own([fillCall("n", TEXT), insert(TEXT)], { nodes: { n: INPUT() } }), { seed, maxMs: 120_000, tab: hangAtB(60_000) });
+    assert.match(answerOf(l, 2).body.error?.message ?? "", /characters may not have gone: the page did not answer\.$/);
+    await l.clock.advance(60_000);
+    const b = keyEvents(l.tab).find((s) => s.params.text === "b")!, late = keyEvents(l.tab).filter((s) => s.params.type === "keyUp" && s.t >= b.t + 2000);
+    if (late.length) held++;
+    assert.ok(late.every((s) => s.answered !== undefined && s.answered >= b.answered!), `seed ${seed}: the releases, answered after the hung key's answer`);
+    assert.equal(l.tab.sent.filter((s) => s.method === "Input.insertText").length, 0, `seed ${seed}: no rest`);
+    assert.deepEqual(ups(l.tab), [], `seed ${seed}: each key goes up`);
+  }
+  assert.ok(held > 0, `a key held at the end in ${held} seeds`);
+  // The session ends during the bound: nothing goes back, no rest, and the plan's keys go up at the drop.
+  const q = await runVector(own([fillCall("n", TEXT), insert(TEXT)], { nodes: { n: INPUT() } }), { maxMs: 30_000, tab: (t) => { hangAtB(Infinity)(t); t.clock.timer(3200, () => t.stage.drop(t.id, "session")); } });
+  assert.equal(q.answers.find((x) => x.id === 2), undefined, "nothing goes back at a session's end");
+  assert.equal(q.tab.sent.filter((s) => s.method === "Input.insertText").length, 0, "no rest");
+  assert.deepEqual(ups(q.tab), []);
+  // The wait before the error of a field that lost the focus (review-119b O2) has the same bound: a dialog's kept events
+  // that Chrome never answers after the close.
+  const v = own([fillCall("n", "Hello world"), insert("Hello world"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 500, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
+  const o = await runVector(v, { maxMs: 30_000, tab: (t) => {
+    let k = 0;
+    t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === 4;
+    t.heldAfterCloseMs = 1e9;
+    const h = t.hook; t.hook = (s) => { if (s.method === "Page.handleJavaScriptDialog") t.focusedId = null; return h(s); };
+  } });
+  const close = o.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, oe = answerOf(o, 2);
+  assert.match(oe?.body.error?.message ?? "", /the field no longer has the focus/, "the error");
+  assert.ok(oe.t >= close + 2000 && oe.t <= close + 2000 + 500, `the error ${oe.t - close} ms after the close: the bound`);
+});

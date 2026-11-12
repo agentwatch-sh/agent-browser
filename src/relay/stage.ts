@@ -871,6 +871,14 @@ export class Stage {
     });
   }
 
+  /** A promise's end within `ms` on the stage's clock: true when it settled first (its answer or its error), false at the bound. */
+  private async within(p: Promise<unknown>, ms: number): Promise<boolean> {
+    let cancel = () => {};
+    const r = await Promise.race([p.then(() => true, () => true), new Promise<boolean>((res) => { cancel = this.clock.timer(ms, () => res(false)); })]);
+    cancel();
+    return r;
+  }
+
   /** Wait until `t` on the stage's clock, or until the plan ends. */
   private async until(a: Action, t: number): Promise<void> {
     const ms = t - this.clock.now();
@@ -1538,11 +1546,13 @@ export class Stage {
    * Chrome drops each input event that it gets while the dialog is open, so a keyDown sent after the first event that has
    * no answer at the end did not (review-119 N4). At STAGE_EVENT_WAIT_MS and at the limit Chrome queues the events of a
    * busy page and gives them later: the stage waits for Chrome's answers of the sent events, and each sent keyDown is
-   * typed (review-119b R3). After the dialog's close, with the lock taken again in the order of arrival (as the pointer
+   * typed (review-119b R3); the wait has a bound of one more STAGE_EVENT_WAIT_MS, and at its end no character of the rest
+   * goes and the call gets an error (the daemon lead's point). After the dialog's close, with the lock taken again in the order of arrival (as the pointer
    * part's ended events) and the activation (review-119b O1), the stage releases each key of the plan that is down, then
    * sends the characters that were not typed as one Input.insertText when the field still has the focus (sentence 13's
    * test; review-119 P1), whose answer is Chrome's. Else (or at a navigation) no character goes, and the call gets an
-   * error that names the end and the count, after Chrome's answers of the plan's events (review-119b O2). With every
+   * error that names the end and the count, after Chrome's answers of the plan's events (review-119b O2), or after
+   * STAGE_EVENT_WAIT_MS when they do not come. With every
    * character typed, the call gets its answer after Chrome's answers of its events (review-119 B2 a).
    */
   private async typedEnded(page: StagePage, st: TabState, a: Action, e: Entry, text: string, items: KeyItem[], navigated = false, via: FocusVia = null): Promise<void> {
@@ -1551,14 +1561,25 @@ export class Stage {
     this.count("typedTextsEnded");
     const end = a.over ? a.endedAt : this.clock.now();
     const sent = items.filter((x) => x.sent).map((x) => x.sent!.catch(() => {}));
+    const why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
     // Each sent keyDown is typed, except at a dialog: Chrome drops each input event that it gets while a dialog is open (N4).
     // At STAGE_EVENT_WAIT_MS and at the limit (a busy page) Chrome queues the input events and gives them to the page later:
-    // the stage first waits for their answers (review-119b R3).
+    // the stage first waits for their answers (review-119b R3), with the lock free, for at most one more
+    // STAGE_EVENT_WAIT_MS (the daemon lead's point). A page that does not answer in that time (a key handler that never
+    // returns): no character of the rest goes, because an unanswered key can still reach the page later; the call gets an
+    // error with the count of the characters whose keyDown has no answer; the end's releases go in finish, as at any end of
+    // a plan (Chrome gives them to the page when it answers again), or at a session's end in drop.
     const queued = !navigated && (a.ended === "wait" || a.ended === "limit");
-    if (queued) await Promise.all(sent);
+    if (queued && !(await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS))) {
+      if (st.gone === "session") return;
+      this.count("typedTextsUnanswered");
+      const n = [...text].length - items.filter((x) => !x.ev.own && x.ev.type !== "keyUp" && x.answeredAt !== undefined).length;
+      e.answer({ error: { code: -32000, message: `The input stage ended a typed text at ${why}, and ${n} characters may not have gone: the page did not answer.` } });
+      return;
+    }
     const held = a.ended === "dialog" ? items.findIndex((x) => x.sent && !(x.answeredAt !== undefined && x.answeredAt <= end)) : -1;
     const typed = items.filter((x, i) => !x.ev.own && x.ev.type !== "keyUp" && x.sent && (held < 0 || i <= held)).length;
-    const rest = [...text].slice(typed).join(""), why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
+    const rest = [...text].slice(typed).join("");
     if (a.over) await this.dialogGone(st);
     if (st.gone === "session") return;
     // The activation before the focus read (review-119b O1): another tab's action may have taken the window's focus.
@@ -1574,8 +1595,9 @@ export class Stage {
     const still = !navigated && !st.gone && (await this.stillFocused(page, via));
     if (!still) {
       this.count("typedTextsCut");
-      // The error after Chrome's answers of the plan's events and of its releases (review-119b O2).
-      await Promise.all(sent);
+      // The error after Chrome's answers of the plan's events and of its releases (review-119b O2), or after
+      // STAGE_EVENT_WAIT_MS when they do not come (the daemon lead's point).
+      await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS);
       e.answer({ error: { code: -32000, message: `The input stage ended a typed text at ${why}, and ${[...rest].length} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
       return;
     }
