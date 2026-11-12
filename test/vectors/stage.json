@@ -2402,7 +2402,7 @@
   {
    "id": "wheel-residual",
    "row": "`mouse.wheel(dx, dy)`",
-   "note": "Four calls of mouse.wheel(0, 100), each awaited: n = max(0, round((|delta| + r) / 120)), half up, with r the residual in the call's direction. The calls get 1, 1, 1 and 0 notches (r: 0, -20, -40, -60, then +40): 360 px for 400 asked, within one notch. The fourth call gets no event, because earlier notches have already given it.",
+   "note": "Four calls of mouse.wheel(0, 100), each awaited: n = max(0, round((|delta| + r) / 120)), half up, with r the residual in the call's direction. The calls get 1, 1, 1 and 0 notches (r: 0, -20, -40, -60, then +40): 360 px for 400 asked, within one notch. The fourth call gets no event, because earlier notches have already given it. The first notch of a call comes at the later of its arrival and one person's gap after the page's last notch (35 to 90 ms), so the calls of a client that sends them at once give a person's gaps too.",
    "platform": "linux",
    "seed": 28,
    "clock": 0,
@@ -2448,8 +2448,9 @@
      "method": "Input.dispatchMouseEvent",
      "type": "mouseWheel",
      "for": 2,
-     "from": "in:2",
-     "at": [0, 0],
+     "from": "out:0",
+     "at": [35, 90],
+     "rule": "notchGapMs",
      "notches": 1,
      "gapMs": [35, 90],
      "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
@@ -2458,8 +2459,9 @@
      "method": "Input.dispatchMouseEvent",
      "type": "mouseWheel",
      "for": 3,
-     "from": "in:3",
-     "at": [0, 0],
+     "from": "out:1",
+     "at": [35, 90],
+     "rule": "notchGapMs",
      "notches": 1,
      "gapMs": [35, 90],
      "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
@@ -2556,6 +2558,683 @@
    "answers": [
     {"id": 1, "after": "out:0"},
     {"id": 2, "after": "out:1", "from": "out:1", "at": [350, 400], "rule": "scrollWaitMs", "result": {}}
+   ]
+  },
+  {
+   "id": "scroll-into-view-mac",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "The Mac: until the Mac's wheel model exists, the stage sends DOM.scrollIntoViewIfNeeded as the client sent it (a script scroll), and counts it.",
+   "platform": "mac",
+   "seed": 81,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.15": {
+      "tag": "button",
+      "box": {
+       "x": 600,
+       "y": 2400,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "7.3.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "pass": true,
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ]
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:0"
+    }
+   ]
+  },
+  {
+   "id": "scroll-wheel-point",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "The wheel point (M11): the page's last point 640,360 is over a number input, whose value a notch would change, so it is no wheel point. The stage tries the points of a 5 x 5 grid over the visible part of the scroller (here the viewport), the nearest first: 640,230 passes. A path goes there, then 17 notches (round(2060 / 120)), then {} after the smooth scroll's 350 ms.",
+   "platform": "linux",
+   "seed": 82,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.15": {
+      "tag": "button",
+      "box": {
+       "x": 600,
+       "y": 2400,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     },
+     "7.3.16": {
+      "tag": "input",
+      "type": "number",
+      "box": {
+       "x": 600,
+       "y": 340,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "7.3.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      8
+     ],
+     "path": {
+      "from": {
+       "x": 640,
+       "y": 360
+      },
+      "to": {
+       "x": 640,
+       "y": 230
+      }
+     },
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [
+      300,
+      1000
+     ],
+     "count": [
+      5,
+      126
+     ],
+     "fields": {
+      "button": "none",
+      "buttons": 0
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      0,
+      90
+     ],
+     "notches": 17,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 230,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1",
+     "from": "out:1",
+     "at": [
+      350,
+      400
+     ],
+     "rule": "scrollWaitMs",
+     "result": {}
+    }
+   ]
+  },
+  {
+   "id": "scroll-no-move",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "A round that does not move the scroller ends the notches: a listener of the window that is not passive calls preventDefault (the wheel point's rule does not count the listeners of the window and the document, so 640,360 is a wheel point). After the first round of 17 notches and the smooth scroll's 350 ms the document's scroll position is the same, so the stage sends the client's call as it is (a script scroll), and counts it.",
+   "platform": "linux",
+   "seed": 83,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.15": {
+      "tag": "button",
+      "box": {
+       "x": 600,
+       "y": 2400,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000,
+      "stops": true
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "7.3.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ],
+     "notches": 17,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 360,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    },
+    {
+     "pass": true,
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      350,
+      400
+     ],
+     "rule": "scrollWaitMs"
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1"
+    }
+   ]
+  },
+  {
+   "id": "scroll-frame",
+   "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
+   "note": "An element of a cross-origin frame (400 x 300 at 300,100, no border) that its own document scrolls (2,000 px tall): the frame's session sends the call. The stage reads the box there and maps it to the top page (the frame mapping), reads the top page's scrollers on the frame's owner, and sends the notches on the top page's session at a point over the frame: the page's last point 900,600 is not over the frame, so the nearest point of the 5 x 5 grid over the frame's visible part, 644,358, where the top page's element is the frame's owner. 11 notches (round((1520 - 150) / 120)) bring the element's middle to the frame's middle, then {} after 350 ms.",
+   "platform": "linux",
+   "seed": 84,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 900,
+     "y": 600
+    },
+    "nodes": {
+     "8.5.15": {
+      "tag": "button",
+      "frame": "xf",
+      "box": {
+       "x": 50,
+       "y": 1500,
+       "width": 100,
+       "height": 40
+      },
+      "focused": false
+     }
+    },
+    "focused": null,
+    "frames": {
+     "xf": {
+      "origin": "cross",
+      "box": {
+       "x": 300,
+       "y": 100,
+       "width": 400,
+       "height": 300
+      },
+      "border": 0,
+      "padding": 0,
+      "scrollY": 0,
+      "height": 2000
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "session": "child",
+     "method": "DOM.scrollIntoViewIfNeeded",
+     "params": {
+      "objectId": "8.5.15"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      8
+     ],
+     "path": {
+      "from": {
+       "x": 900,
+       "y": 600
+      },
+      "to": {
+       "x": 644,
+       "y": 358
+      }
+     },
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [
+      300,
+      1000
+     ],
+     "count": [
+      13,
+      126
+     ],
+     "fields": {
+      "button": "none",
+      "buttons": 0
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      0,
+      90
+     ],
+     "notches": 11,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 644,
+      "y": 358,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:1",
+     "from": "out:1",
+     "at": [
+      350,
+      400
+     ],
+     "rule": "scrollWaitMs",
+     "result": {}
+    }
+   ]
+  },
+  {
+   "id": "focus-field-below-fold",
+   "rule": "The focus click.",
+   "note": "fill('ab') into a text input 2,100 px below the viewport (C11: a field out of view first gets notches into view, then the click; review-119 N14): the page's last point 640,360 is a wheel point, so 17 notches (round((2415 - 360) / 120)) go there with no DOM.scrollIntoViewIfNeeded; after the smooth scroll's 350 ms the field is in view (its middle at 375), and the focus click goes at its left end (it has text), then Playwright's script and the typed keys.",
+   "platform": "linux",
+   "seed": 85,
+   "clock": 0,
+   "page": {
+    "viewport": {
+     "width": 1280,
+     "height": 720
+    },
+    "last": {
+     "x": 640,
+     "y": 360
+    },
+    "nodes": {
+     "7.3.18": {
+      "tag": "input",
+      "type": "text",
+      "box": {
+       "x": 200,
+       "y": 2400,
+       "width": 300,
+       "height": 30
+      },
+      "text": 3,
+      "focused": false
+     }
+    },
+    "focused": null,
+    "scrollers": {
+     "document": {
+      "scrollY": 0,
+      "height": 4000
+     }
+    }
+   },
+   "chrome": {
+    "results": {
+     "1": {
+      "result": {
+       "type": "string",
+       "value": "needsinput"
+      }
+     }
+    }
+   },
+   "in": [
+    {
+     "id": 1,
+     "at": 0,
+     "method": "Runtime.callFunctionOn",
+     "params": {
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {
+        "objectId": "7.3.1"
+       },
+       {
+        "value": true
+       },
+       {
+        "value": true
+       },
+       {
+        "value": "async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }"
+       },
+       {
+        "value": 1
+       },
+       {
+        "value": {
+         "a": [
+          {
+           "h": 0
+          },
+          {
+           "h": 1
+          },
+          {
+           "o": [
+            {
+             "k": "value",
+             "v": "ab"
+            },
+            {
+             "k": "force",
+             "v": false
+            },
+            {
+             "k": "frameVisible",
+             "v": true
+            }
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "objectId": "7.3.2"
+       },
+       {
+        "objectId": "7.3.18"
+       }
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
+     }
+    },
+    {
+     "id": 2,
+     "after": 1,
+     "method": "Input.insertText",
+     "params": {
+      "text": "ab"
+     }
+    }
+   ],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [
+      0,
+      0
+     ],
+     "notches": 17,
+     "gapMs": [
+      35,
+      90
+     ],
+     "fields": {
+      "x": 640,
+      "y": 360,
+      "deltaX": 0,
+      "deltaY": 120
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "out:0",
+     "at": [
+      350,
+      400
+     ],
+     "path": {
+      "from": {
+       "x": 640,
+       "y": 360
+      },
+      "to": {
+       "x": [
+        202,
+        205
+       ],
+       "y": [
+        371,
+        379
+       ]
+      }
+     },
+     "gapMs": 8,
+     "durRule": "pathMs",
+     "durMs": [
+      300,
+      1000
+     ],
+     "count": [
+      16,
+      126
+     ],
+     "fields": {
+      "button": "none",
+      "buttons": 0
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:1",
+     "at": [
+      80,
+      400
+     ],
+     "rule": "pauseMs",
+     "fields": {
+      "button": "left",
+      "buttons": 1,
+      "clickCount": 1,
+      "modifiers": 0,
+      "force": 0.5,
+      "x": [
+       202,
+       205
+      ],
+      "y": [
+       371,
+       379
+      ]
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:2",
+     "at": [
+      60,
+      180
+     ],
+     "rule": "holdMs",
+     "fields": {
+      "button": "left",
+      "buttons": 0,
+      "clickCount": 1,
+      "modifiers": 0,
+      "x": [
+       202,
+       205
+      ],
+      "y": [
+       371,
+       379
+      ]
+     }
+    },
+    {
+     "pass": true,
+     "for": 1,
+     "from": "out:3",
+     "at": [
+      0,
+      8
+     ]
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "for": 2,
+     "from": "in:2",
+     "at": [
+      0,
+      2000
+     ],
+     "typing": "ab",
+     "holdMs": [
+      50,
+      250
+     ],
+     "shift": []
+    }
+   ],
+   "answers": [
+    {
+     "id": 1,
+     "after": "out:4"
+    },
+    {
+     "id": 2,
+     "after": "out:5"
+    }
    ]
   },
   {

@@ -23,17 +23,15 @@ const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.ur
 const F = V.firstValues, K = V.constants;
 const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === id));
 
-/** The vectors of the pointer part (board ab-t30.9), of the keys and the text (board ab-t30.10), and those of the later parts (boards ab-t30.11 and ab-t30.12). */
+/** The vectors of the pointer part (board ab-t30.9), of the keys and the text (board ab-t30.10), of the scroll and the wheel (board ab-t30.11), and those of the later part (board ab-t30.12). */
 const POINTER = ["click", "dblclick", "dblclick-button", "triple-click", "right-click", "click-delay", "click-modifiers", "hover-modifiers", "click-position",
   "click-trial", "move-steps", "hover", "move", "move-same-point", "down-up", "mouse-click", "check", "frame-click", "frame-hover", "tap", "rule-gate",
   "rule-dialog-at-press", "rule-event-error"];
 const KEYS = ["type", "press-sequentially", "type-delay", "press-chord", "fill", "fill-line-feed", "fill-long", "clear", "insert-text", "focus-field", "focus-button"];
+const SCROLL = ["wheel", "wheel-residual", "wheel-mac", "scroll-into-view", "scroll-into-view-mac", "scroll-wheel-point", "scroll-no-move", "scroll-frame", "focus-field-below-fold"];
 const LATER: Record<string, string[]> = {
-  "ab-t30.11 (scroll and wheel)": ["wheel", "wheel-residual", "wheel-mac", "scroll-into-view"],
   "ab-t30.12 (the script calls)": ["mouse-drag", "fill-date", "select-option", "set-files-paths", "set-files-payloads", "drag-to", "drop", "blur", "select-text", "dispatch-event"],
 };
-/** A method of a later part that a pointer vector holds: its pass is no event of this part (DOM.scrollIntoViewIfNeeded: ab-t30.11). */
-const LATER_METHODS = new Set(["DOM.scrollIntoViewIfNeeded"]);
 
 const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2;
 const fits = (v: number, want: unknown) => (isRange(want) ? v >= want[0] - 1e-9 && v <= want[1] + 1e-9 : v === want);
@@ -44,8 +42,7 @@ const inBox = (p: { x: number; y: number }, b: { x: number; y: number; width: nu
 function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number) {
   const w = `${v.id} (seed ${seed})`;
   const { tab, answers, arrived } = run;
-  const laterIds = new Set(v.in.filter((c: any) => LATER_METHODS.has(c.method)).map((c: any) => c.id));
-  const sent = tab.sent.filter((s) => !s.read && !(s.pass !== undefined && laterIds.has(s.pass)));
+  const sent = tab.sent.filter((s) => !s.read);
   const items: { first: number; last: number }[] = [];
   let i = 0;
   const fromT = (ref: string) => ref === "start" ? 0 : ref.startsWith("in:") ? arrived.get(Number(ref.slice(3)))! : items[Number(ref.slice(4))].last;
@@ -79,6 +76,19 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
       assert.deepEqual([...new Set(downs.filter((d) => charKey(d.params.text)!.modifiers & SHIFT).map((d) => d.params.text))], o.shift, `${at}: the shifted characters`);
       items[k] = { first: run[0].t, last: run[run.length - 1].t };
       i = j;
+    } else if (o.notches !== undefined) {
+      // Wheel notches: that many mouseWheel events, each with the item's fields, gapMs apart, on the top page's session.
+      const runOf = sent.slice(i, i + o.notches);
+      assert.equal(runOf.length, o.notches, `${at}: ${o.notches} notches`);
+      for (const [q, x] of runOf.entries()) {
+        assert.ok(x.pass === undefined && x.method === o.method && x.params.type === o.type && !x.child, `${at}: notch ${q} is a mouseWheel of the top page (${x.method} ${x.params?.type})`);
+        for (const [f, want] of Object.entries(o.fields ?? {})) assert.ok(fits(x.params[f], want), `${at}: notch ${q}: ${f} ${x.params[f]}, not ${JSON.stringify(want)}`);
+        if (q > 0) assert.ok(fits(x.t - runOf[q - 1].t, o.gapMs), `${at}: a gap of ${x.t - runOf[q - 1].t} ms, not in ${o.gapMs}`);
+      }
+      const next = sent[i + o.notches];
+      assert.ok(!next || next.pass !== undefined || next.params?.type !== "mouseWheel", `${at}: no notch after the ${o.notches}`);
+      items[k] = { first: runOf[0].t, last: runOf[runOf.length - 1].t };
+      i += o.notches;
     } else if (o.path || o.line) {
       // The run ends at another event, or at the next item's first event when that item is a run of its own from a later call.
       const next = v.out[k + 1], nextAt = next && (next.path || next.line) && String(next.from).startsWith("in:") ? arrived.get(Number(next.from.slice(3)))! : Infinity;
@@ -128,10 +138,10 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
     assert.ok(sendAt - ts >= K.STAGE_LATENCY_MS[0] - 0.5 && sendAt - ts <= K.STAGE_LATENCY_MS[1] + 0.5, `${w}: the timestamp ${sendAt - ts} ms before the send`);
   }
   // The answers: in the vector's order, each after its item's events, with its result or error.
-  const order = answers.filter((a) => !laterIds.has(a.id)).map((a) => a.id);
-  assert.deepEqual(order, v.answers.map((a: any) => a.id).filter((id: number) => !laterIds.has(id)), `${w}: the order of the answers`);
+  const order = answers.map((a) => a.id);
+  assert.deepEqual(order, v.answers.map((a: any) => a.id), `${w}: the order of the answers`);
   const errorOf = (id: number) => answers.find((a) => a.id === id)!.body.error;
-  for (const want of v.answers.filter((a: any) => !laterIds.has(a.id))) {
+  for (const want of v.answers) {
     const got = answers.find((a) => a.id === want.id)!;
     if (want.after === "none") {
       if (want.result) assert.deepEqual(got.body.result, want.result, `${w} answer ${want.id}: the stage's own result`);
@@ -141,18 +151,20 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
     else if (want.error === "the same") assert.deepEqual(got.body.error, errorOf(v.answers.find((x: any) => x.error === "chrome").id), `${w} answer ${want.id}: the same error`);
     else assert.ok(!got.body.error, `${w} answer ${want.id}: no error (${JSON.stringify(got.body.error)})`);
     if (want.waits !== undefined) assert.ok(got.t >= answers.find((a) => a.id === want.waits)!.t, `${w} answer ${want.id}: after the answer of ${want.waits}`);
+    if (want.after !== "none" && want.result) assert.deepEqual(got.body.result, want.result, `${w} answer ${want.id}: its result`);
+    if (want.from !== undefined) { const dt = got.t - fromT(want.from); assert.ok(dt >= want.at[0] && dt <= want.at[1], `${w} answer ${want.id}: ${dt} ms after ${want.from}, not in ${want.at}`); }
   }
 }
 
 // ================================================================ the vectors of the pointer rows
 
-test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows and of the key and text rows", () => {
+test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows, of the key and text rows, and of the scroll and wheel rows", () => {
   const all = V.vectors.map((x: any) => x.id).sort();
-  assert.deepEqual([...POINTER, ...KEYS, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
-  for (const id of [...POINTER, ...KEYS]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
+  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
+  for (const id of [...POINTER, ...KEYS, ...SCROLL]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
 });
 
-for (const id of [...POINTER, ...KEYS]) {
+for (const id of [...POINTER, ...KEYS, ...SCROLL]) {
   test(`vector ${id}: the stage's events, their times and fields, and the answers (5 seeds)`, async () => {
     const v = vec(id);
     for (const seed of [v.seed, v.seed + 101, v.seed + 202, v.seed + 303, v.seed + 404]) check(v, await runVector(v, { seed }), seed);
