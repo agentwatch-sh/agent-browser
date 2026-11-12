@@ -419,7 +419,7 @@ export class UnitPart implements ServicePart {
     this.unit.config = cfg;
     // The grace time of the stop by use (board ab-v16.94.11): agentwatch's browser.idle_stop_minutes, as data.
     const minutes = idleStopMinutes(keys.idle_stop_minutes);
-    if (minutes === null && keys.idle_stop_minutes != null) this.o.log(`unit: config's idle_stop_minutes is not a whole number from 1 to ${IDLE_STOP_MAX_MINUTES}; the grace time stays ${IDLE_STOP_DEFAULT_MINUTES} min`);
+    if (minutes === null && keys.idle_stop_minutes != null) this.o.log(`unit: config's idle_stop_minutes is not a whole number from 1 to ${IDLE_STOP_MAX_MINUTES}; the grace time is ${IDLE_STOP_DEFAULT_MINUTES} min`);
     this.idleMinutes = minutes ?? IDLE_STOP_DEFAULT_MINUTES;
     if (!cfg.enabled) {
       // browser.enabled false stops the browser (no event: turning it off is not a fault).

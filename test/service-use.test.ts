@@ -174,6 +174,22 @@ test("the stop by use: after the grace time with no use, Chrome and Xvfb stop, t
   } finally { await r.close(); }
 });
 
+test("the grace time counts from each start of Chrome: a start op after a long time with no Chrome is not stopped at once", async () => {
+  const r = await rig();
+  try {
+    await config(r);
+    r.w.now += 60 * MIN;
+    await ticks();
+    assert.deepEqual(await req(r.c, "start", TOKEN), { t: "res", id: `q${n}`, ok: true, data: {} });
+    await ticks();
+    r.w.now += 10 * MIN - 1000;
+    await ticks();
+    assert.equal(events(r.c, "stopped").length, 0, "no stop before the grace time after the start");
+    r.w.now += 1000;
+    await r.c.next((l) => l.ev === "stopped" && l.reason === "idle");
+  } finally { await r.close(); }
+});
+
 test("no stop while a client is connected or a request or a send runs; the grace time counts from the last use, also from a request between two checks", async () => {
   const r = await rig();
   try {
@@ -246,7 +262,7 @@ test("the grace time: status gives it (default 10 min); config's idle_stop_minut
       await config(r, { idle_stop_minutes: bad });
       assert.equal((await status(r.c)).idle_stop_minutes, 10, JSON.stringify(bad));
     }
-    assert.equal(r.logs.filter((l) => l === "unit: config's idle_stop_minutes is not a whole number from 1 to 1440; the grace time stays 10 min").length, 6);
+    assert.equal(r.logs.filter((l) => l === "unit: config's idle_stop_minutes is not a whole number from 1 to 1440; the grace time is 10 min").length, 6);
     await config(r, { idle_stop_minutes: null });
     await config(r, { idle_stop_minutes: 1440 });
     assert.equal((await status(r.c)).idle_stop_minutes, 1440);
