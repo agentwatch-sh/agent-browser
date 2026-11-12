@@ -330,7 +330,7 @@ test("at most STAGE_SCROLL_ROUNDS rounds: a page that moves a small distance at 
   assert.equal(r.stage.counts["scrollAsIs:rounds"], 1);
 });
 
-test("an inner scroller in view: the notches at a point over its visible part (the nearest of the grid), bringing the element's middle to the middle of that part; the page does not move", async () => {
+test("an inner scroller in view: the notches at a point over its visible part (the nearest of the grid), bringing the element's middle to the middle of that part; the page does not move; an element in the viewport but out of its list's visible part is not in view", async () => {
   const page = { nodes: { b: BUTTON(2000, { box: { x: 150, y: 2000, width: 100, height: 40 }, scroller: "list" }) }, scrollers: { list: { box: { x: 100, y: 100, width: 400, height: 300 }, height: 3000, scrollY: 0 } } };
   const r = await runVector(own([scroll("b")], page));
   const n = notchesOf(r.tab);
@@ -339,6 +339,11 @@ test("an inner scroller in view: the notches at a point over its visible part (t
   assert.equal(r.tab.sc.list.y, 1800);
   assert.equal(r.tab.sc.document.y, 0);
   assert.deepEqual(answerOf(r, 1).body, { result: {} });
+  // An element inside the viewport but out of its list's visible part (the list shows 100 to 400; the element is at 500):
+  // not in view, so the list's notches bring it in.
+  const clipped = await runVector(own([scroll("b")], { ...page, nodes: { b: BUTTON(500, { box: { x: 150, y: 500, width: 100, height: 40 }, scroller: "list" }) } }));
+  assert.equal(notchesOf(clipped.tab).length, Math.round((520 - 250) / 120), "2 notches: in the viewport, but not in view of its list");
+  assert.equal(clipped.tab.sc.list.y, 240);
 });
 
 test("an inner scroller below the fold: first the page's notches (not over the list), then the list's notches over it; the element ends in the middle of the list's visible part", async () => {
