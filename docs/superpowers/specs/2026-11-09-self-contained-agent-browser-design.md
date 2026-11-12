@@ -109,8 +109,8 @@ constraint.
 8. **The move (section 13).** Six stages. Each stage is a pull request with tests and a pin bump, and has a
    rollback. The service first runs beside today's path, off by default, and the old path stays the
    default and unchanged until stage 6. The switch on a box moves every part at once; the tested rollback
-   (switch-off, with the same Chrome and the same list files) is its safeguard. The move keeps today's
-   rule for start and stop; Q5 asks the operator about a change.
+   (switch-off, with the same Chrome and the same list files) is its safeguard. The old path keeps today's
+   rule for start and stop; in the service they are automatic, by use (Q5's answer, section 19).
 9. **The operator's answers (section 19).** The operator answered Q1 to Q4 on 2026-11-10, and the
    recommendations of the three open points of section 17 hold. The operator answered board item ab-6ng
    on 2026-11-10: each repo gets its own connection token for the MCP, and agentwatch connects the MCP when
@@ -373,12 +373,16 @@ where the stage runs.
   - Chrome's kind, version, pid and update state, and the extension's version;
   - the agent door's state: the peer check's form, or why it cannot run;
   - the sessions and lists that the service has.
-- **Start and stop** of the agent browser (Chrome and Xvfb) keep today's rule during the move. The control
-  door takes them from the daemon. The daemon takes them from a password login or from the API token, as
-  today (an agent's `endpoint` wait sends a start). Each op names its caller's kind (section 7.1), so the
-  service logs who asked. The operator answered Q5 (section 19): start and stop become automatic, by use
-  (board ab-v16.94.11). The service process itself starts with its unit at login.
-- **Update**: the service checks Google's index every 12 hours and moves Chrome when idle (today's rule).
+- **Start and stop** of the agent browser (Chrome and Xvfb) keep today's rule on the old path, until a box
+  switches. In the service they are automatic, by use (below); the control door takes `start` and `stop` from the
+  daemon for its own needs (the switch-off, the uninstall, `stop --all`) and for tests, from a password login or from
+  the API token. Each op names its caller's kind (section 7.1), so the service logs who asked. The operator answered Q5 (section 19): start and stop are automatic, by use (board
+  ab-v16.94.11; C12, the start and the stop by use): a request that needs the browser starts Chrome and Xvfb, and they
+  stop when no agent used them for the grace time (agentwatch's `browser.idle_stop_minutes`, 10 minutes by default).
+  Only an agent's real activity counts: nothing of the service's own keeps Chrome up.
+  The service process itself starts with its unit at login.
+- **Update**: the service checks Google's index every 12 hours and moves Chrome when idle (today's rule): at the next
+  stop by use, after which the next start runs the new copy (board ab-v16.94.11), or after the idle hour (the floor).
   It reports each step on the event stream. agentwatch updates the service itself by its pin (the daemon
   lead's C7).
 - **`browser.control: false`**: a key of agentwatch's config file, as today. The daemon passes it in
@@ -500,7 +504,7 @@ The control door follows the daemon lead's proposal and review.
 | `list_set {list, allow, providers}` (operator) | Checks each entry with the host rules (`normalize_entry`), answers the refused entries, writes the list file; the next `set_scopes` carries it. |
 | `prompt_allow {id}`, `prompt_dismiss {id}` (operator) | The service owns the prompts and their dismissals. The allow adds the host to the prompt's list, as a `list_set`. |
 | `import {payload}` (operator, `via: send`) | Checks the payload (C2), drops the box's own sign-in cookies (the hosts and names of `set_sessions`), sends `import` to the receiver, answers the counts. Nothing is written to disk. |
-| `start`, `stop` (`by.kind`: `operator` or `token`) | Starts or stops Chrome and Xvfb. Today's rule stays during the move (the API token may start and stop); Q5 asks about a change. |
+| `start`, `stop` (`by.kind`: `operator` or `token`) | Starts or stops Chrome and Xvfb, for the daemon's own needs (the switch-off, the uninstall, `stop --all`) and for tests: the operator answered Q5 (section 19), and in the service start and stop are automatic, by use (C12, the start and the stop by use; board ab-v16.94.11). |
 | `sign_ins_setup {sealed}`, `sign_ins_unlock {sealed}`, `sign_ins_rekey {sealed}`, `sign_in_seal {record, offer, sealed}`, `sign_in_reseal {record}`, `sign_in_start_again {credential}` (operator; an offer with `kind: token`), `sign_ins_lock` (operator, or the daemon at the uninstall) | The stored sign-ins (C12; the sign-in design, section 6.2): the set-up, the unlock, a new passphrase, the seal and the new seal of a record, the operator's "Start again" of a stopped credential, the lock. Only sealed text crosses the door. |
 | `sign_ins {key, records}` | A complete snapshot of the store's files, at each connect after `set_sessions` and at each change. |
 | `status`, `lists_get`, `prompts_get`, `endpoint {scope}`, `sender` | The status of section 5.6, with an agent's text and an operator's text (I2); the lists and the old single list (read only); the open prompts; the agent door's URL for a scope (for `agentwatch browser endpoint` and `env`); the sender's ID, version and package (C1, C9). |
@@ -975,7 +979,7 @@ Every rule of today holds. The table names where each rule lives after the chang
 | No prompt, no remote-debugging port | the daemon's flags and `chrome_args.py`; agent-browser's `assertSafeChromeArgs` | `assertSafeChromeArgs` in the service, on every Chrome start |
 | The operator's own Chrome is never reachable | the operator package has no `debugger`; the host manifest only in the agent profile; the host checks its parent's profile; the daemon checks the host's parent is the unit's Chrome | the same package rule; the owner of the Chrome unit writes the manifest only in its agent profile; the shim checks its parent's profile; the service checks that the shim's parent is its own Chrome, by pid and start time (M1); on the Mac the service never writes the default folders |
 | Fail closed: no confirmed receiver, Chrome stops after 60 s; no scope object before the first complete read of the sessions | the daemon (`check_receiver`, `_fail_closed`) | the owner of the Chrome unit only (section 13.2: the service's unit state); the daemon's watch reads the unit state again right before it stops Chrome; the `stopped` event to the daemon and the last stop in `status` |
-| Start and stop | the API token or a web login (#643 open) | unchanged during the move; each op names its caller's kind; Q5 asks about a change |
+| Start and stop | the API token or a web login (#643 open) | automatic, by use (Q5's answer, section 19; board ab-v16.94.11): only an agent's real activity starts Chrome or keeps it up; the control door's `start` and `stop` stay for the daemon's own needs, each op with its caller's kind |
 | A web page cannot connect | the `Origin` 403 of the endpoint | the same on CDP and MCP paths (M3); a Unix socket is out of a web page's reach; the MCP port refuses an `Origin` header, admits only the `Host` `127.0.0.1:<port>` or `localhost:<port>`, and its walk refuses a browser process (section 19) |
 | Another OS user | the 0600 sockets in a 0700 folder | the same for the doors; on the MCP port the uid column refuses another OS user before any scan, and a socket unit holds the port while the service is down (section 19); the entry files are 0600 in 0700 folders |
 | Secrets | no secret in argv or a log; payloads in memory | the same; the service gets a payload on the control door and keeps it in memory only; logs carry a user, a domain and counts; the MCP's one-time ticket never leaves the service's process; each session's token lives only in its 0600 entry file under agentwatch's tokens folder and in its client's memory; the service holds only its SHA-256 |
@@ -1282,8 +1286,8 @@ These notes come from the last fresh review. They are not decisions; the build t
   turned agent control off. Today the endpoint does not exist then, so a client got a connection error.
   This is a small change of what a client sees, not of what it may do.
 - No operator decision changes. Decision 4 stays: nothing copies the old single list, and no scope uses it
-  (section 7.5). The rule for start and stop stays as today during the move; Q5 asks the operator about a
-  change.
+  (section 7.5). The rule for start and stop stays as today on the old path; in the service they are automatic,
+  by use (Q5's answer, section 19; board ab-v16.94.11).
 
 ## 15. Other shapes (notes only)
 
@@ -1542,6 +1546,13 @@ The lead reads it so (board ab-v16.94.11 builds it and records the details that 
    daemon's own needs (switch-off, uninstall, `stop --all`) and for tests. A stop by the use rule is no
    crash: the supervisor does not restart it.
 5. Chrome's update moves at the next automatic stop; the idle rule of section 5.1's update row stays the floor.
+
+Board ab-v16.94.11 picked these details (C12, the start and the stop by use; C11, the start at a use): the use is only an
+agent's real activity: an agent's open client connection of the agent door, a client message, a send or an MCP tool call
+that runs, and a request that waits for the browser (an open MCP session, the MCP's own connection and the service's own
+calls are no use); the grace time is agentwatch's `browser.idle_stop_minutes`, a whole
+number of minutes from 1 to 1440, 10 by default; a request waits at most 60 s for a start at a use; a start at a use
+that fails gives its reason to the waiting requests, and for 10 s to each new one with no new start.
 
 Until ab-v16.94.11 merges and a box switches, today's rule stays on the old path: the API token may start and
 stop the agent browser, and an agent's `endpoint` wait sends a start.

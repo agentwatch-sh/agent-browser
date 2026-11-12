@@ -17,6 +17,9 @@
 // The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
 // each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
 // has a fingerprint (never the fingerprint). It serves no MCP.
+// The start and the stop by use (C12; board ab-v16.94.11): its config takes idle_stop_minutes by the service's rule and
+// its status gives it; it runs no start and no stop by use (no agent door listens): a test sends `stopped` with the reason
+// `idle` on its standard input, which sets its state to off and its last_stop.
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -30,6 +33,7 @@ import { agentDoorUrl } from "./agent-door.ts";
 import { ControlDoor, ERR, eventFits, serviceHello, type Answer, type By, type Handler, type Req } from "./control.ts";
 import { packageInfo } from "./service.ts";
 import { atFits } from "./signins/store.ts";
+import { IDLE_STOP_DEFAULT_MINUTES, idleStopMinutes } from "./unit/part.ts";
 
 /** A prompt's recipient: a session that a block stopped, with the lifetime id of that run (null: the session had none). */
 type Recipient = { session: string; lifetime_id: string | null };
@@ -47,7 +51,7 @@ export const FAKE_STATE = {
   state: "ready",
   texts: {
     ready: { agent_text: "The agent browser is ready.", operator_text: "The agent browser is ready." },
-    off: { agent_text: "The agent browser is not running.", operator_text: "The agent browser is not running. A start on the Browser page starts it." },
+    off: { agent_text: "The agent browser is not running; it gets ready when an agent uses it.", operator_text: "The agent browser is not running. It starts at the next use by an agent." },
   },
   chrome: { kind: "google-chrome", version: "157.0.7000.1-1", pid: 4242 },
   extension_version: "0.3.6",
@@ -294,6 +298,8 @@ export class FakeService implements Handler {
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
+  /** The grace time of the stop by use from the last config (C12; board ab-v16.94.11). */
+  private idleStop = IDLE_STOP_DEFAULT_MINUTES;
   private readonly store: FakeStore;
 
   constructor(o: { agentDoor?: string; now?: () => Date; unprotected?: Unprotected }) {
@@ -306,6 +312,17 @@ export class FakeService implements Handler {
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
   has(): boolean { return true; }
+
+  /**
+   * An event that a test sends on the fake's standard input, before it goes out (C12, the fake): a `stopped` with the
+   * reason `idle` is a stop by use, so the state is `off` and `last_stop` carries it, with no `by` (review-120 note 7).
+   */
+  observe(ev: Record<string, unknown>): void {
+    if (ev.ev === "stopped" && ev.reason === "idle") {
+      this.state = "off";
+      this.lastStop = { reason: "idle", at: this.now().toISOString(), by: null };
+    }
+  }
 
   /** The state of the last `sign_ins` event: the store starts in `none`, and each change of the state sends one. */
   private told: "none" | "locked" | "open" = "none";
@@ -350,14 +367,17 @@ export class FakeService implements Handler {
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo), mcp_token: s.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
-      sign_ins: this.store.status(),
+      sign_ins: this.store.status(), idle_stop_minutes: this.idleStop,
     };
   }
 
   handle(req: Req): Answer | Promise<Answer> {
     const prompt = () => this.prompts.find((p) => p.id === req.prompt);
     switch (req.op) {
-      case "config": return { data: {} };
+      case "config":
+        // The grace time of the stop by use, by the service's rule (C12); the fake runs no stop by use.
+        this.idleStop = idleStopMinutes(req.idle_stop_minutes) ?? IDLE_STOP_DEFAULT_MINUTES;
+        return { data: {} };
       case "set_sessions":
         this.sessions = (req.sessions as { scope: string; repo: string | null; mcp_token: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo, mcp_token: s.mcp_token }));
         this.box = { hosts: [...(req.box as any).hosts], cookie_names: [...(req.box as any).cookie_names] };
@@ -458,15 +478,16 @@ export async function startFake(o: { controlDoor: string; agentDoor?: string; re
     const ft = statSync(f, { throwIfNoEntry: false });
     if ((ft && ft.dev === st.dev && ft.ino === st.ino) || realOf(f) === realpathSync(dir)) refuse();
   }
+  const service = new FakeService({ agentDoor: o.agentDoor, unprotected: o.unprotected });
   const door = await ControlDoor.open({
-    path: o.controlDoor, handler: new FakeService({ agentDoor: o.agentDoor, unprotected: o.unprotected }), log: o.log,
+    path: o.controlDoor, handler: service, log: o.log,
     admit: o.refuse ? async () => ({ ok: false, reason: FAKE_REFUSED }) : async () => ({ ok: true }),
   });
   const lines = o.input ? createInterface({ input: o.input, crlfDelay: Infinity }) : null;
   lines?.on("line", (line) => {
     let ev: unknown;
     try { ev = JSON.parse(line); } catch { ev = null; }
-    if (eventFits(ev)) door.emit(ev as Record<string, unknown>);
+    if (eventFits(ev)) { service.observe(ev as Record<string, unknown>); door.emit(ev as Record<string, unknown>); }
     else o.log("fake: dropped a line of its standard input that is not an event of C12");
   });
   o.log(`fake: ready on ${o.controlDoor} (agent-browser service --fake; no Chrome)`);

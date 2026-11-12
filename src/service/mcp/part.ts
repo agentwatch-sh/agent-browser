@@ -49,10 +49,11 @@ export class McpPart implements ServicePart {
   constructor(o: McpPartOptions) { this.o = o; }
 
   /**
-   * Open the port, once the agent door runs: `url` gives the scope's CDP URL on the agent door, and `readiness` what step
-   * 8 reads. A failure leaves the part `failed` (fail closed: no MCP port; the socket unit keeps the port).
+   * Open the port, once the agent door runs: `url` gives the scope's CDP URL on the agent door, `readiness` what step 8
+   * reads, and `use` the service's start at a use (board ab-v16.94.11). A failure leaves the part `failed` (fail closed:
+   * no MCP port; the socket unit keeps the port).
    */
-  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness }): Promise<void> {
+  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"] }): Promise<void> {
     try {
       if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
@@ -62,7 +63,7 @@ export class McpPart implements ServicePart {
         list, stateFolder: this.o.stateFolder, log: this.o.log, ...this.o.transport,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
-      const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, log: this.o.log, ...this.o.port });
+      const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });
       this.transport = transport; this.port = port;
       if (this.last) port.setSessions(this.last);
     } catch (e) {
@@ -70,6 +71,9 @@ export class McpPart implements ServicePart {
       this.o.log(`mcp: the MCP port cannot open, so the service serves no MCP: ${(e as Error).message}`);
     }
   }
+
+  /** The MCP's use of the browser (board ab-v16.94.11): its tool calls that run, and the ms since the last one; an open MCP session is no use. */
+  activity(): { calls: number; quietFor: number } { return this.transport?.activity() ?? { calls: 0, quietFor: Infinity }; }
 
   /** The port while it runs (the tests). */
   get mcpPort(): McpPort | null { return this.port; }
