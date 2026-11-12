@@ -36,7 +36,7 @@ const NAMED: Record<string, [string, number, number]> = { Shift: ["ShiftLeft", 1
 const rd = (name: string, modifiers = 0) => ({ method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", modifiers, windowsVirtualKeyCode: NAMED[name][1], code: NAMED[name][0], commands: [], key: name, text: "", unmodifiedText: "", autoRepeat: false, location: NAMED[name][2], isKeypad: false } });
 const ru = (name: string, modifiers = 0) => ({ method: "Input.dispatchKeyEvent", params: { type: "keyUp", modifiers, key: name, windowsVirtualKeyCode: NAMED[name][1], code: NAMED[name][0], location: NAMED[name][2], isKeypad: false } });
 /** keyboard.type(text): each key's press, then its release, each sent at the answer of the call before (Playwright awaits each). */
-const typeCalls = (text: string) => [...text].flatMap((ch) => (charKey(ch) ? [kd(ch), ku(ch)] : [{ method: "Input.insertText", params: { text: ch } }]));
+const typeCalls = (text: string) => [...text].flatMap((ch): { method: string; params: Record<string, unknown> }[] => (charKey(ch) ? [kd(ch), ku(ch)] : [{ method: "Input.insertText", params: { text: ch } }]));
 const insert = (text: string) => ({ method: "Input.insertText", params: { text } });
 const evaluate = () => ({ method: "Runtime.evaluate", params: { expression: "1" } });
 const mouse = (type: string, x: number, y: number) => ({ method: "Input.dispatchMouseEvent", params: { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: type === "mousePressed" ? 1 : 0, modifiers: 0, ...(type === "mouseMoved" ? {} : { clickCount: 1 }) } });
@@ -173,7 +173,7 @@ test("keys: the stage's own Shift goes up at its planned time, 15 to 60 ms after
 // ================================================================ the lock of a key run
 
 /** Two tabs of one stage, each with its own fake Chrome; each tab's calls as in `own` (chained by their answers). */
-async function twoTabs(callsA: any[], callsB: any[], pageA: Partial<any> = {}, maxMs = 120_000) {
+async function twoTabs(callsA: any[], callsB: any[], pageA: Partial<any> = {}, maxMs = 120_000, setup?: (A: FakeTab, B: FakeTab) => void) {
   const clock = new FakeClock();
   const stage = new Stage({ log: () => {}, random: seededRandom(3), platform: "linux", clock, stamp: clock.stamp });
   const mk = (id: number, calls: any[], page: Partial<any>) => {
@@ -181,12 +181,16 @@ async function twoTabs(callsA: any[], callsB: any[], pageA: Partial<any> = {}, m
     const t = new FakeTab(v, clock, { id });
     t.stage = stage;
     const answers: { id: number; t: number }[] = [];
-    const send = (c: any) => t.queue(undefined, c.method, c.params, () => { answers.push({ id: c.id, t: clock.now() }); for (const x of v.in) if (x.after === c.id) later(x); });
+    const done = (c: any) => () => { answers.push({ id: c.id, t: clock.now() }); for (const x of v.in) if (x.after === c.id) later(x); };
+    // A client's Page.handleJavaScriptDialog goes at once, before the gate (as in runVector); an afterEvent call waits for its event.
+    const send = (c: any) => (c.method === "Page.handleJavaScriptDialog" ? void t.pass(undefined, c.method, c.params, done(c)) : t.queue(undefined, c.method, c.params, done(c)));
     const later = (c: any) => (c.waitMs ? clock.timer(c.waitMs, () => send(c)) : send(c));
     for (const c of v.in) if (c.at !== undefined) clock.timer(c.at, () => later(c));
+    t.onClientEvent = (method) => { for (const c of v.in) if (c.afterEvent === method) later(c); };
     return { t, v, answers };
   };
   const A = mk(1, callsA, pageA), B = mk(2, callsB, {});
+  setup?.(A.t, B.t);
   await clock.run(() => A.answers.length === A.v.in.length && B.answers.length === B.v.in.length, maxMs);
   return { A, B, stage, clock };
 }
@@ -775,4 +779,129 @@ test("review-119 N6: a disabled or read-only field gets no focus click, counted"
       assert.equal(r.stage.counts[count], 1, `${flag}: counted`);
     }
   }
+});
+
+// ================================================================ review-119b (the narrow re-check)
+
+test("review-119b R2: a client's Shift that merged into the stage's Shift of the other side (ShiftRight) goes up with the code of the key that is down, after STAGE_ACTION_MAX_MS (the plain path) and at an ended plan; no Shift stays down, and the lock is free", async () => {
+  let right = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    // The plain path: the limit passes while the client holds A and its Shift.
+    const r = await runVector(own([{ at: 0, ...kd("A") }, { at: 300, ...rd("Shift", SHIFT) }, { at: 30_000, ...ru("Shift") }, { at: 30_100, ...ku("A") }], FIELD), { seed, maxMs: 60_000 });
+    const down = keyEvents(r.tab).find((s) => s.params.key === "Shift" && s.params.type === "rawKeyDown")!;
+    if (down.params.code !== "ShiftRight") continue;
+    right++;
+    const ups = keyEvents(r.tab).filter((s) => s.params.key === "Shift" && s.params.type === "keyUp");
+    assert.deepEqual(ups.map((s) => [s.params.code, s.params.location]), [["ShiftRight", 2]], `seed ${seed}: the release of the key that is down`);
+    await r.clock.advance(3000);
+    assert.deepEqual(r.stage.state(r.tab.id)!.keys, [], `seed ${seed}: no key left down`);
+    assert.equal(r.stage.lock.held, 0, `seed ${seed}: the lock is free`);
+    // The ended path: a key that opens a dialog (the stage hears of it 200 ms later); the client's Shift release arrives in
+    // that time, so it goes as an event of the ended plan. Then (noticeMs 0) it arrives after the end's own releases: no
+    // second release, as for any key that the end released.
+    for (const noticeMs of [200, 0]) {
+      const v = own([{ at: 0, ...kd("A") }, { at: 300, ...rd("Shift", SHIFT) }, { at: 400, ...kd("B", { modifiers: SHIFT }) }, { at: 450, ...ru("Shift") }, { at: 460, ...ku("B") }, { at: 470, ...ku("A") },
+        { afterEvent: "Page.javascriptDialogOpening", waitMs: 500, method: "Page.handleJavaScriptDialog", params: { accept: true } }], FIELD);
+      const d = await runVector(v, { seed, tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "B"; t.dialogNoticeMs = noticeMs; } });
+      const dUps = keyEvents(d.tab).filter((s) => s.params.key === "Shift" && s.params.type === "keyUp" && !s.dropped);
+      assert.deepEqual(dUps.map((s) => s.params.code), ["ShiftRight"], `seed ${seed}, notice ${noticeMs} ms: one release, of the key that is down`);
+      assert.equal(d.stage.counts.dialogEnds, 1);
+      assert.deepEqual(d.stage.state(d.tab.id)!.keys, []);
+    }
+  }
+  assert.ok(right >= 3, `ShiftRight in ${right} seeds`);
+});
+
+test("review-119b R3: a busy page (a keydown handler that blocks 2.5 s at b): at STAGE_EVENT_WAIT_MS the stage waits for Chrome's answers of the sent keys before it counts them, so the rest of the text never doubles the queued characters (alone, and with another tab waiting for the lock); the same at STAGE_ACTION_MAX_MS", async () => {
+  const TEXT = "about the bear cubs";
+  const busyAtB = (t: FakeTab) => { let once = false; t.busy = (s) => (!once && s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "b" && (once = true) ? 2500 : 0); };
+  const r = await runVector(own([fillCall("n", TEXT), insert(TEXT)], { nodes: { n: INPUT() } }), { tab: busyAtB });
+  assert.equal(r.stage.counts.waitEnds, 1, "the plan ends at STAGE_EVENT_WAIT_MS");
+  assert.deepEqual(answerOf(r, 2).body, { result: {} }, "alone: no error");
+  assert.equal(r.tab.valueOf("n"), TEXT, "alone: the text once");
+  // Another tab's click waits for the lock; it gets the lock at the end, and the text's rest goes after it.
+  const { A, B } = await twoTabs([fillCall("n", TEXT), insert(TEXT)], click(900, 650, 1000), { nodes: { n: INPUT() } }, 120_000, (a) => busyAtB(a));
+  assert.ok(mouseEvents(B.t).length > 0, "the other tab's click");
+  assert.equal(A.t.valueOf("n"), TEXT, "with another tab: the text once");
+  // At STAGE_ACTION_MAX_MS: a key run of 19 s (a key each 900 ms keeps it open), then a typed text; a key of the text at
+  // 24.6 s blocks 1.5 s (no wait end), and the limit ends the plan while its answer is held.
+  const T40 = "The quick brown fox jumps over the dogs.", runCalls = Array.from({ length: 22 }, (_, i) => [{ at: i * 900, ...kd("x") }, { at: i * 900 + 120, ...ku("x") }]).flat();
+  const l = await runVector(own([...runCalls, { at: 19_500, ...insert(T40) }], FIELD), { maxMs: 200_000, tab: (t) => {
+    let once = false;
+    t.busy = (s) => (!once && s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.t >= 24_600 && (once = true) ? 1500 : 0);
+  } });
+  assert.equal(l.stage.counts.limitEnds, 1, "the plan ends at STAGE_ACTION_MAX_MS");
+  assert.equal(l.stage.counts.typedTextsEnded, 1, "the typed text ends at the limit");
+  assert.equal(l.tab.valueOf("7.3.18"), "x".repeat(22) + T40, "at the limit: the text once");
+});
+
+test("review-119b O1: at the end of a typed text the activation goes before the focus read: another tab's action that took the window's focus while the lock was free gives no false error", async () => {
+  const TEXT = "Hello world";
+  const { A, B } = await twoTabs([fillCall("n", TEXT), insert(TEXT), { afterEvent: "Page.javascriptDialogOpening", waitMs: 500, method: "Page.handleJavaScriptDialog", params: { accept: true } }],
+    click(900, 650, 300), { nodes: { n: INPUT({ windowAway: true }) } }, 120_000, (a, b) => {
+      let k = 0;
+      a.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === 4;
+      // The other tab's activation brings its own window forward: the first tab's document loses the focus.
+      const act = b.activate.bind(b);
+      b.activate = async () => { await act(); a.windowFocus = false; };
+    });
+  assert.ok(B.t.activations.length > 0, "the other tab's action ran (its activation)");
+  const ins = A.answers.find((x) => x.id === 2)!;
+  assert.ok(ins, "the text's answer");
+  assert.equal(A.t.valueOf("n"), TEXT, "the rest of the text went");
+  assert.equal(A.t.sent.filter((s) => s.method === "Input.insertText").length, 1, "one insertText of the rest");
+});
+
+test("review-119b O2: the error at the end of a typed text (the field lost the focus) comes after Chrome's answers of the plan's events", async () => {
+  const v = own([fillCall("n", "Hello world"), insert("Hello world"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 500, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
+  const r = await runVector(v, { tab: (t) => {
+    let k = 0;
+    t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === 4;
+    t.heldAfterCloseMs = 300;
+    const h = t.hook; t.hook = (s) => { if (s.method === "Page.handleJavaScriptDialog") t.focusedId = null; return h(s); };
+  } });
+  const err = answerOf(r, 2);
+  assert.ok(err.body.error, "the error");
+  const late = keyEvents(r.tab).filter((s) => !s.dropped && !(s.answered !== undefined && s.answered <= err.t));
+  assert.equal(late.length, 0, `the error at ${err.t}, after Chrome's answer of each event (${late.length} answered later or never)`);
+});
+
+test("review-119b R4: the hit test of a cross-origin level sends DOM.getNodeForLocation a document point (the mapped point plus the parent's scroll): on a top page scrolled 300 px the field gets its click; scrolled 30 px, a fixed banner over the frame's lower part and the field's point gets no click", async () => {
+  const field = { tag: "input", type: "text", frame: "xf", box: { x: 20, y: 60, width: 200, height: 30 }, text: 0, focused: false };
+  const far = await runVector(own([fillCall("n", "Card 4242", "child"), insert("Card 4242")], { scroll: { x: 0, y: 300 }, nodes: { n: field },
+    frames: { xf: { origin: "cross", box: { x: 460, y: 300, width: 300, height: 120 }, border: 3, padding: 4 } } }));
+  assert.ok(pressOf(far.tab), "scrolled 300 px: a click");
+  assert.equal(far.stage.counts.focusCovered, undefined);
+  const lm = far.tab.sent.find((s) => s.method === "DOM.getNodeForLocation")!;
+  assert.ok(lm.params.y >= 300 + 300 + 7 + 60, `a document point: ${lm.params.y}`);
+  const near = await runVector(own([fillCall("n", "Card 4242", "child"), insert("Card 4242")], { scroll: { x: 0, y: 30 }, nodes: { n: field, banner: { tag: "div", over: true, box: { x: 0, y: 620, width: 1280, height: 100 } } },
+    frames: { xf: { origin: "cross", box: { x: 460, y: 560, width: 300, height: 120 }, border: 3, padding: 4 } } }));
+  assert.equal(mouseEvents(near.tab).filter((s) => s.params.type === "mousePressed").length, 0, "scrolled 30 px: no click on the banner");
+  assert.equal(near.stage.counts.focusCovered, 1);
+  assert.equal(near.tab.valueOf("n"), "Card 4242");
+});
+
+test("review-119b note: Playwright's focus call with no focus click (a button, a disabled or read-only field, an email input with text, a field with the focus) and the keys after it are one action (one activation); with no key after it the lock frees RUN_IDLE_MS after the call", async () => {
+  const cases: [string, any, string][] = [
+    ["a button", { tag: "button", box: { x: 200, y: 300, width: 120, height: 30 } }, "fieldNotText"],
+    ["a disabled field", INPUT({ text: 3, disabled: true }), "fieldDisabled"],
+    ["a read-only field", INPUT({ text: 3, readOnly: true }), "fieldReadOnly"],
+    ["an email input with text", INPUT({ type: "email", value: "a@b.co", caret: [6, 6] }), "focusNoCaret"],
+  ];
+  for (const [name, node, count] of cases) {
+    // The client's key comes 5 ms after the focus call's answer (as Playwright's next call does).
+    const r = await runVector(own([focusCall("n", true), { ...kd("m"), waitMs: 5 }, ku("m")], { nodes: { n: node } }));
+    assert.equal(r.stage.counts[count], 1, `${name}: counted`);
+    assert.equal(mouseEvents(r.tab).length, 0, `${name}: no click`);
+    assert.equal(r.tab.activations.length, 1, `${name}: one action for the focus call and its key`);
+    const idle = await runVector(own([{ at: 100, ...focusCall("n", true) }], { nodes: { n: node } }));
+    assert.equal(idle.stage.lock.held, 1, `${name}: the lock held after the focus call`);
+    await idle.clock.advance(RUN_IDLE_MS + 50);
+    assert.equal(idle.stage.lock.held, 0, `${name}: the lock free RUN_IDLE_MS after it`);
+  }
+  const f = await runVector(own([{ at: 100, ...focusCall("7.3.18", true) }], FIELD));
+  assert.equal(f.stage.counts.fieldFocused, 1);
+  assert.equal(f.stage.lock.held, 1, "a field with the focus: the lock held after the focus call");
+  await f.clock.advance(RUN_IDLE_MS + 50);
+  assert.equal(f.stage.lock.held, 0);
 });

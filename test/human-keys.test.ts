@@ -478,7 +478,7 @@ test("keys (review-111b): the release of a client's modifier waits for the lates
   for (let seed = 1; seed <= 3000; seed++) {
     // The client holds Shift; A (with an early release); Control+Home (the stream's own chord); then the client's Shift release.
     // A person with a wide spread of holds (the first values' spread makes the case rare: a long hold of A, a short one of Home).
-    const WIDE = { ...MID, params: { ...MID.params, keys: { ...MID.params.keys, holdMs: { lognormal: [113.6, 0.6], min: 50, max: 250 } as const } } };
+    const WIDE = { ...MID, params: { ...MID.params, keys: { ...MID.params.keys, holdMs: { lognormal: [113.6, 0.6] as [number, number], min: 50, max: 250 } } } };
     const s = new KeyStream(WIDE, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 30] });
     const A: Key = { key: "A", code: "KeyA", keyCode: 65, text: "A", modifiers: SHIFT }, home = parseKey("Control+Home");
     const ev: KeyEv[] = [...s.next(SHIFTK, 0)];

@@ -31,7 +31,7 @@ import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, s
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
 import { seededRandom } from "./human/random.ts";
-import { charKey } from "./human/keys.ts";
+import { charKey, macCommands } from "./human/keys.ts";
 import type { Hands } from "./input.ts";
 
 // ---------- the step script ----------

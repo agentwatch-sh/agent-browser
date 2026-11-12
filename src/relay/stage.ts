@@ -291,9 +291,9 @@ class TabState {
   lastMoveAt = -Infinity;
   releasedAt = -Infinity;
   press: Press | null = null;
-  /** The buttons that the stage's events hold down, each with the clickCount of its press, and the keys (by their code; `own`: a key of the stage's own, its Shift or a chord's modifier). */
+  /** The buttons that the stage's events hold down, each with the clickCount of its press, and the keys (by their code; `own`: a key of the stage's own, its Shift or a chord's modifier; `merged`: a Shift of the stage's own that a client's press of Shift took). */
   readonly buttons = new Map<string, number>();
-  readonly keys = new Map<string, { at: number; params: any; own?: boolean }>();
+  readonly keys = new Map<string, { at: number; params: any; own?: boolean; merged?: boolean }>();
   /**
    * The key run (C11, the input lock and the keys): the tab's key stream (the scope's person; it lives with the tab, so the
    * drift of the person's speed goes on from run to run), whether a run is open, the planned key events that have not
@@ -789,6 +789,8 @@ export class Stage {
       const p = k.params;
       void this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", { type: "keyUp", key: p.key, code: p.code, windowsVirtualKeyCode: p.windowsVirtualKeyCode, location: p.location ?? 0, modifiers: 0, timestamp: this.stamp(page, st) }).catch(() => {});
       st.released.add(`key:${code}`);
+      // A client's modifier that merged into the stage's own of the other side: the client's later release has its own code (review-119b R2).
+      if (k.merged) st.released.add(`mod:${p.key}`);
     }
     st.keys.clear();
     st.press = null;
@@ -979,9 +981,21 @@ export class Stage {
 
   // ---------------------------------------------------------------- the steps
 
+  /**
+   * The key of a client's modifier release that is down (review-119b R2): a client's Shift that merged into the stage's
+   * own Shift of the other side is that Shift, so its release goes with that key's code, as keyParams sends it on the
+   * planned path, also after STAGE_ACTION_MAX_MS and at an ended plan.
+   */
+  private downKey(st: TabState, e: Entry): Record<string, unknown> {
+    const p = e.params;
+    if (e.kind !== "key" || p.type !== "keyUp" || st.keys.has(p.code) || !MODIFIER_KEYS.has(p.key)) return {};
+    for (const [code, k] of st.keys) if (k.merged && k.params.key === p.key) return { key: k.params.key, code, windowsVirtualKeyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0 };
+    return {};
+  }
+
   /** An event of an ended plan: the client's own event at once (C11, dialogs), and Chrome's own answer when it comes. */
   private async endedEvent(page: StagePage, st: TabState, e: Entry): Promise<void> {
-    const p = e.params, params: Record<string, unknown> = { ...p };
+    const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse") {
       const pr = p.type === "mouseReleased" && st.press?.button === p.button ? st.press : null;
       const pt = pr && same(pr.client, this.fit(p)) ? pr.point : this.fit(p);
@@ -992,7 +1006,7 @@ export class Stage {
     const { sent } = r;
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
-    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(p.code); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params: p }); }
+    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params: p }); }
     this.answerWith(page, e, sent);
   }
 
@@ -1000,12 +1014,12 @@ export class Stage {
   private async plainStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
-    const p = e.params, params: Record<string, unknown> = { ...p };
+    const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse" && typeof p.x === "number" && typeof p.y === "number") { const q = this.fit(p); params.x = q.x; params.y = q.y; }
     if (e.kind !== "text") params.timestamp = this.stamp(page, st);
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") st.buttons.delete(p.button);
-    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(p.code); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params }); }
+    if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params }); }
     if (e.kind === "key" || e.kind === "text") st.runOpen = true;
     const pr = this.sendEvent(page, st, undefined, e.method, params);
     const r = await this.settle(a, pr);
@@ -1345,7 +1359,7 @@ export class Stage {
    */
   private async keyStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params;
-    if (p.type === "keyUp" && st.released.delete(`key:${p.code}`) && !st.keys.has(p.code)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
+    if (p.type === "keyUp" && (st.released.delete(`key:${p.code}`) || st.released.delete(`mod:${p.key}`)) && !st.keys.has(p.code)) { this.count("releasedAlready"); e.answer({ result: {} }); return; }
     if (st.runPlain) { this.count("plainKeys"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
@@ -1366,7 +1380,7 @@ export class Stage {
       // A press of a Shift that is down already (the stream's own, which the client now holds): no event, and the key is the
       // client's now: the stage sends no release of its own for it (review-119 N2, P2).
       if (!evs.length) {
-        for (const k of st.keys.values()) if (k.own && k.params.key === p.key) k.own = false;
+        for (const k of st.keys.values()) if (k.own && k.params.key === p.key) { k.own = false; k.merged = true; }
         this.count("keysDownAlready"); e.answer({ result: {} }); return;
       }
       items = evs.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
@@ -1520,26 +1534,35 @@ export class Stage {
 
   /**
    * The end of a typed text's plan before its last event (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS, a navigation
-   * of the main frame; C11, the keys and the text). A character is typed when its keyDown reached the page: Chrome drops
-   * each input event that it gets while a dialog is open, so a keyDown sent after the first event that has no answer at the
-   * end did not (review-119 N4). After the dialog's close, with the lock taken again in the order of arrival (as the
-   * pointer part's ended events), the stage releases each key of the plan that is down, then sends the characters that did
-   * not go as one Input.insertText when the field still has the focus (sentence 13's test; review-119 P1), whose answer is
-   * Chrome's. Else (or at a navigation) no character goes, and the call gets an error that names the end and the count.
-   * With every character typed, the call gets its answer after Chrome's answers of its events (review-119 B2 a).
+   * of the main frame; C11, the keys and the text). A character is typed when its keyDown reached the page. At a dialog
+   * Chrome drops each input event that it gets while the dialog is open, so a keyDown sent after the first event that has
+   * no answer at the end did not (review-119 N4). At STAGE_EVENT_WAIT_MS and at the limit Chrome queues the events of a
+   * busy page and gives them later: the stage waits for Chrome's answers of the sent events, and each sent keyDown is
+   * typed (review-119b R3). After the dialog's close, with the lock taken again in the order of arrival (as the pointer
+   * part's ended events) and the activation (review-119b O1), the stage releases each key of the plan that is down, then
+   * sends the characters that were not typed as one Input.insertText when the field still has the focus (sentence 13's
+   * test; review-119 P1), whose answer is Chrome's. Else (or at a navigation) no character goes, and the call gets an
+   * error that names the end and the count, after Chrome's answers of the plan's events (review-119b O2). With every
+   * character typed, the call gets its answer after Chrome's answers of its events (review-119 B2 a).
    */
   private async typedEnded(page: StagePage, st: TabState, a: Action, e: Entry, text: string, items: KeyItem[], navigated = false, via: FocusVia = null): Promise<void> {
     st.kq = st.kq.filter((x) => !items.includes(x));
     if (a.failed) { e.answer({ error: a.failBody ?? { code: -32000, message: "the input stage stopped the plan at an error of an event" } }); return; }
     this.count("typedTextsEnded");
     const end = a.over ? a.endedAt : this.clock.now();
-    const held = items.findIndex((x) => x.sent && !(x.answeredAt !== undefined && x.answeredAt <= end));
+    const sent = items.filter((x) => x.sent).map((x) => x.sent!.catch(() => {}));
+    // Each sent keyDown is typed, except at a dialog: Chrome drops each input event that it gets while a dialog is open (N4).
+    // At STAGE_EVENT_WAIT_MS and at the limit (a busy page) Chrome queues the input events and gives them to the page later:
+    // the stage first waits for their answers (review-119b R3).
+    const queued = !navigated && (a.ended === "wait" || a.ended === "limit");
+    if (queued) await Promise.all(sent);
+    const held = a.ended === "dialog" ? items.findIndex((x) => x.sent && !(x.answeredAt !== undefined && x.answeredAt <= end)) : -1;
     const typed = items.filter((x, i) => !x.ev.own && x.ev.type !== "keyUp" && x.sent && (held < 0 || i <= held)).length;
     const rest = [...text].slice(typed).join(""), why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
-    const sent = items.filter((x) => x.sent).map((x) => x.sent!.catch(() => {}));
     if (a.over) await this.dialogGone(st);
     if (st.gone === "session") return;
-    if (a.over) await this.retake(page, st, false);
+    // The activation before the focus read (review-119b O1): another tab's action may have taken the window's focus.
+    if (a.over) await this.retake(page, st, rest.length > 0 && !navigated);
     // The release of each key of the plan that is down (the stage's own: no client call asked for it alone).
     const codes = new Set(items.filter((x) => x.ev.type === "keyUp" && !x.sent).map((x) => x.ev.code));
     for (const code of codes) {
@@ -1551,6 +1574,8 @@ export class Stage {
     const still = !navigated && !st.gone && (await this.stillFocused(page, via));
     if (!still) {
       this.count("typedTextsCut");
+      // The error after Chrome's answers of the plan's events and of its releases (review-119b O2).
+      await Promise.all(sent);
       e.answer({ error: { code: -32000, message: `The input stage ended a typed text at ${why}, and ${[...rest].length} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
       return;
     }
@@ -1584,15 +1609,16 @@ export class Stage {
     // Playwright's focus call starts an action (C11, the window comes forward for input): the lock and the activation first.
     let a = !fill ? await this.begin(page, st) : null;
     if (a?.over) return pass();
+    // Playwright's focus call and the keys after it are one action also when it gets no click (review-119b: C11's one action).
     const g = await this.fieldRead(page, st, e.child, node, fill);
-    if (!g) { why("fieldNoRead"); return pass(); }
-    if (g.kind === "other") { why("fieldNotText"); return pass(); }
+    if (!g) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+    if (g.kind === "other") { why("fieldNotText"); return this.keepAction(st, a, pass); }
     // A disabled or read-only field gets no click: Playwright's fill refuses it, and a script focus of a disabled field does
     // nothing (review-119 N6).
-    if (g.disabled || g.readOnly) { why(g.disabled ? "fieldDisabled" : "fieldReadOnly"); return pass(); }
+    if (g.disabled || g.readOnly) { why(g.disabled ? "fieldDisabled" : "fieldReadOnly"); return this.keepAction(st, a, pass); }
     // An email or a number input with text: its caret cannot be read or set, and Playwright's script focus leaves it where
     // the field's own selection is; a click would move it (review-119 B4). fill selects the text, so it gets the click.
-    if (!fill && g.kind === "input" && (g.type === "email" || g.type === "number") && g.len > 0) { why("focusNoCaret"); return pass(); }
+    if (!fill && g.kind === "input" && (g.type === "email" || g.type === "number") && g.len > 0) { why("focusNoCaret"); return this.keepAction(st, a, pass); }
     // The field has the focus (sentence 13's test, after the activation for Playwright's focus call). Before fill, a field
     // that fails it gets the lock and the activation, and the read again (review-119 N5).
     let f = g;
@@ -1668,15 +1694,25 @@ export class Stage {
     if (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight)) { this.noClick(page, "focusOutOfView"); return null; }
     // The stage's own hit test (review-119 B3): the field's own document at the field's own point (the top page's point less
     // the offset of the field's document), and each same-origin frame above it (FIELD_HIT); then at each cross-origin level
-    // the node at the mapped point of the parent's session is the frame's owner (DOM.getNodeForLocation).
+    // the node at the mapped point of the parent's session is the frame's owner (DOM.getNodeForLocation). That command reads
+    // a point of the parent's document (Chromium's InspectorDOMAgent: DocumentToFrame; measured, review-119b R4), so the
+    // point gets the parent document's scroll: its layout viewport's offset (Page.getLayoutMetrics on that session).
     const hit = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: p.x - f.ox }, { value: p.y - f.oy }, { value: follow }], returnByValue: true }));
     if (hit === TIMEOUT || (hit as any)?.result?.value !== true) { this.noClick(page, "focusCovered"); return null; }
     for (let i = 0; i < f.levels.length; i++) {
       const L = f.levels[i];
       let px = p.x, py = p.y;
       for (const up of f.levels.slice(i + 1)) { px -= up.r.x0; py -= up.r.y0; }
-      const at = await this.read(page.send(L.parent, "DOM.getNodeForLocation", { x: Math.round(px), y: Math.round(py), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false }));
-      if (at === TIMEOUT || (at as any)?.backendNodeId !== L.owner) { this.noClick(page, "focusCovered"); return null; }
+      const sm = L.parent === undefined ? lm : await this.read(page.send(L.parent, "Page.getLayoutMetrics", {}));
+      const sc = sm === TIMEOUT ? null : (sm as any)?.cssLayoutViewport;
+      if (typeof sc?.pageX !== "number" || typeof sc?.pageY !== "number") {
+        if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the hit test of a cross-origin frame level: no scroll read`);
+        this.noClick(page, "focusCovered"); return null;
+      }
+      const at = await this.read(page.send(L.parent, "DOM.getNodeForLocation", { x: Math.round(px + sc.pageX), y: Math.round(py + sc.pageY), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false }));
+      const owner = at !== TIMEOUT && (at as any)?.backendNodeId === L.owner;
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the hit test of a cross-origin frame level: ${owner ? "the frame's owner" : at === TIMEOUT ? "no answer" : "another node"}`);
+      if (!owner) { this.noClick(page, "focusCovered"); return null; }
     }
     return p;
   }

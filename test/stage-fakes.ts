@@ -110,6 +110,14 @@ export class FakeTab implements StagePage {
   opensDialog: (s: Sent) => boolean = () => false;
   dialogNoticeMs = 0;
   heldAfterCloseMs = 0;
+  /**
+   * review-119b R3: a key handler of the page that blocks the page's main thread for that many ms at an input event (a busy
+   * page). Chrome queues the later input events and gives them to the page in order when it is free (none is dropped), and
+   * each answer, and each read of the page, comes then.
+   */
+  busy: (s: Sent) => number = () => 0;
+  private freeAt = 0;
+  private async free(): Promise<void> { const ms = this.freeAt - this.clock.now(); if (ms > 0) await new Promise<void>((r) => this.clock.timer(ms, r)); }
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
     this.v = v; this.clock = clock; this.id = o.id ?? 7;
     this.person = o.person ?? drawPerson(paramsFor(v.platform === "mac" ? "darwin" : "linux"), seededRandom(v.seed));
@@ -145,6 +153,7 @@ export class FakeTab implements StagePage {
     this.sent.push(s);
     const h = await this.hook(s);
     if (h !== undefined) return h;
+    await this.free();
     if (fn === ELEMENT_KIND) return this.elementAt(args[0], args[1]);
     if (fn === FOCUSED_FIELD) {
       const n = this.focusedId ? this.v.page.nodes[this.focusedId] : null;
@@ -298,6 +307,9 @@ export class FakeTab implements StagePage {
         if (err && !this.errorsUsed.has(key)) { this.errorsUsed.add(key); throw Object.assign(new Error(err.message), { code: err.code }); }
       }
       if (this.dialogOpen) await new Promise<void>((r) => this.held.push(r));
+      const ms = this.busy(s);
+      if (ms > 0) this.freeAt = Math.max(this.freeAt, this.clock.now()) + ms;
+      await this.free();
       s.answered = this.clock.now();
       return {};
     }
@@ -313,10 +325,13 @@ export class FakeTab implements StagePage {
       } else setImmediate(() => { for (const r of held) r(); this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }); });
       return {};
     }
+    await this.free();
     s.answered = this.clock.now();
     if (s.pass !== undefined) { this.script(s); return ch.results?.[s.pass] ?? {}; }
     const p = s.params as any;
-    if (s.method === "Page.getLayoutMetrics") return { cssLayoutViewport: { clientWidth: V.page.viewport.width, clientHeight: V.page.viewport.height, pageX: 0, pageY: 0 } };
+    // The top page's scroll (review-119b R4): the boxes are viewport points; the layout viewport's offset is the scroll.
+    const scroll = V.page.scroll ?? { x: 0, y: 0 };
+    if (s.method === "Page.getLayoutMetrics") return { cssLayoutViewport: { clientWidth: V.page.viewport.width, clientHeight: V.page.viewport.height, pageX: scroll.x, pageY: scroll.y } };
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === NODE_GEO) {
       const n = V.page.nodes[p.objectId];
       if (!n) throw new Error("Could not find object with given id");
@@ -366,8 +381,9 @@ export class FakeTab implements StagePage {
     }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_STILL_IN) return { result: { type: "boolean", value: this.stillFocused() } };
     if (s.method === "DOM.getNodeForLocation") {
-      // The node at a point of the top page: a node that lies over the others (over: true), else a frame's owner, else the smallest node.
-      const el = this.elementAt(p.x, p.y), frames = Object.keys(V.page.frames ?? {});
+      // The node at a point of the top page: a node that lies over the others (over: true), else a frame's owner, else the
+      // smallest node. Chrome reads a document point (InspectorDOMAgent: DocumentToFrame), so the scroll comes off.
+      const el = this.elementAt(p.x - scroll.x, p.y - scroll.y), frames = Object.keys(V.page.frames ?? {});
       const id = String(el.id).startsWith("frame:") ? 900 + frames.indexOf(String(el.id).slice(6)) : 500 + Object.keys(V.page.nodes).indexOf(el.id);
       return { backendNodeId: id, frameId: "main" };
     }

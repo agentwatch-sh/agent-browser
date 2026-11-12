@@ -52,6 +52,8 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 #sf{position:absolute;left:960px;top:220px;width:300px;height:100px;border:2px solid #000}
 #xf2{position:absolute;left:520px;top:700px;width:360px;height:120px;border:3px solid #000;padding:4px}
 #banner{position:fixed;left:510px;top:690px;width:400px;height:150px;background:rgba(255,255,200,0.95);z-index:20}
+#xs{position:absolute;left:960px;top:600px;width:300px;height:120px;border:3px solid #000;padding:4px}
+#banner2{position:fixed;left:940px;top:607px;width:330px;height:150px;background:rgba(200,255,255,0.95);z-index:20}
 </style></head><body>
 <input id=t value="old text"><input id=num type=number><input id=em type=email>
 <textarea id=ta></textarea><textarea id=ta2></textarea><div id=ce contenteditable=true></div>
@@ -60,11 +62,12 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 <input id=mask placeholder="(555) 123-4567"><input id=tags placeholder="tags"><div id=chips></div>
 <input id=dp placeholder="date"><div id=dpop>calendar</div><button id=after>After</button>
 <input id=cb placeholder="color"><div id=cblist>red blue green</div><button id=after2>After 2</button>
-<iframe id=xf src="http://b.localhost:${port}/kframe?o=cross"></iframe><iframe id=sf src="/kframe?o=same"></iframe><iframe id=xf2 src="http://b.localhost:${port}/kframe?o=cross2"></iframe>
-<div id=banner>We use cookies. <a href="#ok" id=bannerok>OK</a></div>
+<iframe id=xf src="http://b.localhost:${port}/kframe?o=cross"></iframe><iframe id=sf src="/kframe?o=same"></iframe><iframe id=xf2 src="http://b.localhost:${port}/kframe?o=cross2"></iframe><iframe id=xs src="http://b.localhost:${port}/kframe?o=cross3"></iframe>
+<div id=banner>We use cookies. <a href="#ok" id=bannerok>OK</a></div><div id=banner2>Sign up for news.</div>
 <script>
-window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, shiftDowns: 0, keydowns: 0, banner: 0 };
+window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, shiftDowns: 0, keydowns: 0, banner: 0, banner2: 0 };
 document.getElementById('banner').addEventListener('mousedown', () => __k.banner++);
+document.getElementById('banner2').addEventListener('mousedown', () => __k.banner2++);
 document.getElementById('ta2').value = 'set by a script';
 addEventListener('keydown', (e) => { __k.keydowns++; if (e.key === 'Shift') __k.shiftDowns++; }, true);
 document.getElementById('kd').addEventListener('keydown', (e) => { if (e.key === 'x') { __k.dialogs.push('key'); alert('x'); } });
@@ -80,7 +83,8 @@ document.getElementById('after').addEventListener('click', () => __k.after++);
 document.getElementById('after2').addEventListener('click', () => __k.after2++);
 </script></body></html>`;
 }
-const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margin:0}input{position:absolute;left:20px;top:30px;width:200px;height:30px;font:16px monospace}</style></head><body><input id=fi></body></html>`;
+const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margin:0}input{position:absolute;left:20px;top:30px;width:200px;height:30px;font:16px monospace}</style></head><body><input id=fi>`
+  + `<script>window.__fd = 0; document.getElementById('fi').addEventListener('mousedown', () => __fd++);</script></body></html>`;
 
 /** The server of the keys page, its frame, and the recorder (with its box and its /log). */
 function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
@@ -110,7 +114,7 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
 }
 
 /** A row: its action (with `before` steps), the fields that it decides, and `measure` for the open points' widgets (a report). */
-type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2; frame?: boolean; frames?: string[]; extra?: string[] };
+type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2; frame?: boolean; frames?: string[]; extra?: string[]; trace?: RegExp; fieldDown?: string };
 const T40 = "The quick brown fox jumps over the dogs.", T140 = "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text in one step, as a paste.";
 const click = (p: any, sel: string) => p.locator(sel).click();
 const ROWS: Row[] = [
@@ -134,8 +138,8 @@ const ROWS: Row[] = [
     await click(p, "#t"); await p.keyboard.press("End"); await p.keyboard.down("Shift"); for (let i = 0; i < 3; i++) await p.keyboard.press("ArrowLeft"); await p.keyboard.up("Shift"); await p.keyboard.type("X"); }, fields: ["t"] },
   { name: "keyboard.insertText()", act: async (p) => { await click(p, "#t"); await p.keyboard.press("End"); await p.keyboard.insertText(" inserted"); }, fields: ["t"] },
   { name: "a capital and a symbol with Shift: keyboard.type('A@!')", act: async (p) => { await click(p, "#ta"); await p.keyboard.type("A@! Bb"); }, fields: ["ta"] },
-  { name: "a field in a cross-origin frame: fill()", act: (p) => p.frameLocator("#xf").locator("#fi").fill("Card 4242"), fields: [], frame: true },
-  { name: "a field in a cross-origin frame: pressSequentially()", act: (p) => p.frameLocator("#xf").locator("#fi").pressSequentially("4242 Exp"), fields: [], frame: true },
+  { name: "a field in a cross-origin frame: fill()", act: (p) => p.frameLocator("#xf").locator("#fi").fill("Card 4242"), fields: [], frame: true, trace: /^a focus click/, fieldDown: "cross" },
+  { name: "a field in a cross-origin frame: pressSequentially()", act: (p) => p.frameLocator("#xf").locator("#fi").pressSequentially("4242 Exp"), fields: [], frame: true, trace: /^a focus click/, fieldDown: "cross" },
   { name: "a dialog at a key (alert() in a keydown handler)", act: async (p) => { await click(p, "#kd"); await p.keyboard.type("axb"); }, fields: ["kd"], extra: ["dialogs"] },
   { name: "a dialog at a focus click (M9: alert() at the blur of the field before)", before: (p) => click(p, "#blur"), act: (p) => p.locator("#t").fill("after the dialog"), fields: ["t"], extra: ["dialogs"] },
   // review-119: a field in a same-origin frame (the hit test at the field's own point), a field in a cross-origin frame
@@ -144,6 +148,11 @@ const ROWS: Row[] = [
   { name: "a field in a same-origin frame: fill()", act: (p) => p.frameLocator("#sf").locator("#fi").fill("Same 4242"), fields: [], frames: ["same"] },
   { name: "a field in a cross-origin frame under a fixed banner of the top page: fill()", act: (p) => p.frameLocator("#xf2").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross2"], extra: ["banner"] },
   { name: "pressSequentially() into an email input whose text a fill set (the caret at its end)", before: async (p) => { await p.locator("#em").fill("a@b.co"); await click(p, "#t"); }, act: (p) => p.locator("#em").pressSequentially("m"), fields: ["em"] },
+  // review-119b R4: the hit test of a cross-origin level on a scrolled top page (the field gets its click at 300 px; at 30 px
+  // a fixed banner lies over the frame's lower part and the field's point: no click on the banner). `trace`: the stage's
+  // own line that the row needs (its focus click, or none).
+  { name: "a field in a cross-origin frame of a page scrolled 300 px: fill()", before: (p) => p.evaluate(() => scrollTo(0, 300)), act: (p) => p.frameLocator("#xs").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross3"], extra: ["banner2"], trace: /^a focus click/, fieldDown: "cross3" },
+  { name: "a field in a cross-origin frame of a page scrolled 30 px, under a fixed banner over the frame's lower part: fill()", before: (p) => p.evaluate(() => scrollTo(0, 30)), act: (p) => p.frameLocator("#xs").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross3"], extra: ["banner2"], trace: /^no focus click \(focusCovered\)/ },
   { name: "a long pressSequentially() (600 characters) with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(14).slice(0, 600)), fields: ["ta"] },
   { name: "open point 1: a date picker that opens at a click; then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], measure: 1 },
   { name: "open point 1: a combobox that opens at a click; then a click on the button under it", act: async (p) => { await p.locator("#cb").fill("blue"); await p.locator("#after2").click({ timeout: 10_000 }); }, fields: ["cb"], extra: ["after2", "cblist"], measure: 1 },
@@ -157,10 +166,12 @@ async function stateOf(p: any): Promise<any> {
     const v = (id: string) => { const el = document.getElementById(id) as any; return el.isContentEditable ? el.textContent : el.value; };
     const k = (window as any).__k;
     return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips,
-      after: k.after, after2: k.after2, dpop: getComputedStyle(document.getElementById("dpop")!).display, cblist: getComputedStyle(document.getElementById("cblist")!).display, shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner };
+      after: k.after, after2: k.after2, dpop: getComputedStyle(document.getElementById("dpop")!).display, cblist: getComputedStyle(document.getElementById("cblist")!).display, shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner, banner2: k.banner2 };
   });
   s.frames = {} as Record<string, unknown>;
-  for (const f of p.frames()) { const o = /kframe\?o=(\w+)/.exec(f.url())?.[1]; if (o) s.frames[o] = await f.evaluate(() => (document.getElementById("fi") as HTMLInputElement).value).catch((e: Error) => `error: ${e.message.split("\n")[0]}`); }
+  // The mousedowns on each frame's field (the stage's focus click; not compared: Playwright's own fill gives none).
+  s.frameDowns = {} as Record<string, unknown>;
+  for (const f of p.frames()) { const o = /kframe\?o=(\w+)/.exec(f.url())?.[1]; if (o) { s.frames[o] = await f.evaluate(() => (document.getElementById("fi") as HTMLInputElement).value).catch((e: Error) => `error: ${e.message.split("\n")[0]}`); s.frameDowns[o] = await f.evaluate(() => (window as any).__fd).catch(() => null); } }
   s.frame = s.frames.cross ?? null;
   return s;
 }
@@ -209,10 +220,11 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           const pp = await plain.newPage();
           const q = await run(pp).finally(() => pp.close().catch(() => {}));
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
-          const fieldLines = trace.filter((l) => /^(a focus click|no focus click|typed keys|a text as it is)/.test(l));
+          const fieldLines = trace.filter((l) => /^(a focus click|no focus click|the hit test|typed keys|a text as it is)/.test(l));
           const same = JSON.stringify(compared(row, s.state)) === JSON.stringify(compared(row, q.state));
-          const ok = row.measure ? true : s.ok && q.ok && same;
-          const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same,
+          const traced = (!row.trace || fieldLines.some((l) => row.trace!.test(l))) && (!row.fieldDown || s.state.frameDowns[row.fieldDown] === 1);
+          const ok = row.measure ? true : s.ok && q.ok && same && traced;
+          const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same, ...(row.trace ? { traced, frameDowns: s.state.frameDowns } : {}),
             shiftDowns: [s.state.shiftDowns, q.state.shiftDowns], fieldLines, ...(same ? {} : { stageState: compared(row, s.state), ownState: compared(row, q.state) }) };
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail });
           (out.rows as unknown[]).push({ version, row: row.name, measure: row.measure ?? null, stage: s, own: q, same, trace });
