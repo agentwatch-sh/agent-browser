@@ -67,7 +67,8 @@ test("ab-pf8 case 1: a field with a widget sign gets no focus click: Playwright'
     ["autocomplete", { widget: "autocomplete" }],
     ["list", { widget: "list" }],
     ["comboboxAround", { widget: "comboboxAround" }],
-    ...["mousedown", "mouseup", "click", "pointerdown", "pointerup"].map((type): [string, object] => [`listener (${type})`, { listeners: [type] }]),
+    ["listener (click)", { listeners: ["click"] }],
+    ["listener (click, with others)", { listeners: ["keydown", "click", "mousedown"] }],
   ];
   for (const [name, facts] of signs) for (const [call, calls, value] of CALLS) {
     const sign = name.startsWith("listener") ? "listener" : name;
@@ -84,10 +85,12 @@ test("ab-pf8 case 1: a field with a widget sign gets no focus click: Playwright'
   }
 });
 
-test("ab-pf8 case 1: no sign, the focus click as before: a listener of another event (keydown, input, focus, blur, change, keyup), a listener of Playwright's utility world (not the page's), a listener of a child of the field (another node), and a field with no fact", async () => {
+test("ab-pf8 case 1: no sign, the focus click as before: a listener of another event (mousedown, mouseup, pointerdown, pointerup, dblclick, keydown, input, focus, blur, change, keyup, focusin), a listener of Playwright's utility world (not the page's), a listener of a child of the field (another node), and a field with no fact", async () => {
   const none: [string, object][] = [
     ["no fact", {}],
-    ...["keydown", "input", "focus", "blur", "change", "keyup", "focusin"].map((t): [string, object] => [`a ${t} listener`, { listeners: [t] }]),
+    // A field whose page counts its presses (a mousedown listener, as an analytics or a bot check's script can) opens nothing
+    // (the live rows' frame field): only a click listener is a sign.
+    ...["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick", "keydown", "input", "focus", "blur", "change", "keyup", "focusin"].map((t): [string, object] => [`a ${t} listener`, { listeners: [t] }]),
     ["a click listener of Playwright's utility world", { listeners: [{ type: "click", world: "utility" }] }],
     ["a click listener of a child of the field", { childListeners: ["click", "mousedown"] }],
   ];
@@ -155,7 +158,7 @@ test("ab-pf8 case 1: a read of the listeners that does not answer: no click (the
 });
 
 test("ab-pf8 case 1: a widget field out of view gets no notches and no click: Playwright's script focus scrolls it, as Playwright's own input does", async () => {
-  for (const [name, facts] of [["combobox", { widget: "combobox" }], ["listener", { listeners: ["mousedown"] }]] as const) {
+  for (const [name, facts] of [["combobox", { widget: "combobox" }], ["listener", { listeners: ["click"] }]] as const) {
     const r = await runVector(own([fillCall("n", "ab"), insert("ab")], { last: { x: 640, y: 360 }, nodes: { n: INPUT({ text: 3, box: { x: 200, y: 2400, width: 300, height: 30 }, ...facts }) }, scrollers: { document: { scrollY: 0, height: 4000 } } }));
     assert.equal(inputEvents(r.tab).filter((s) => s.method === "Input.dispatchMouseEvent").length, 0, `${name}: no wheel, no path, no click`);
     assert.ok(!r.tab.sent.some((s) => s.method === "DOM.scrollIntoViewIfNeeded"), name);

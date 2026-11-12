@@ -194,10 +194,12 @@ export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.get
 /** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
 export const CARET_SET = `function (s, e, follow) { ${RETARGET} el.setSelectionRange(s, e); return true; }`;
 /**
- * The events of a click whose listener on a field is a widget sign (board ab-t30.18; C11, the focus click): a listener of
- * the page's own scripts on the field itself for one of these gets no focus click.
+ * The events whose listener on a field is a widget sign (board ab-t30.18; C11, the focus click): a listener of the page's
+ * own scripts on the field itself for one of these gets no focus click. Only `click`: the live rows measured a field
+ * whose page counts its presses with a `mousedown` listener (as an analytics or a bot check's script can), which opens
+ * nothing; with `mousedown`, `mouseup`, `pointerdown` and `pointerup` too, that field lost its focus click.
  */
-export const WIDGET_LISTENERS = ["mousedown", "mouseup", "click", "pointerdown", "pointerup"];
+export const WIDGET_LISTENERS = ["click"];
 /** The field's element (fill's retarget), as a handle of Playwright's utility world: the read of its listeners resolves it into the page's main world. */
 export const FIELD_ELEMENT = `function (follow) { ${RETARGET} return el; }`;
 /** The area near a field of the cover read (board ab-t30.18): its box widened by this much across and down and up, in px. */
