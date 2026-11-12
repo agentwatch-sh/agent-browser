@@ -340,8 +340,8 @@ export class FakeTab implements StagePage {
    * { frame }; else the element under the point and, on each axis (the vertical first), the first scroller of its chain that
    * can move in the call's direction (not a hidden box), its range left, and the notches that go before the next one would
    * bring a node of rule 1, a frame or another scroller with a range on that axis under the point (the element under the
-   * point, the scrollers around it and fixed nodes do not count). `again`: `same` is whether the element and the scrollers
-   * are the first read's.
+   * point, the scrollers around it and fixed nodes do not count). `again`: `same` is whether the scrollers are the first
+   * read's and the element under the point is the first read's or one whose chain passes rule 1 (review-122b R3).
    */
   wheelColumn(x: number, y: number, ny: number, nx: number, px: number, again: boolean): any {
     const V = this.v, p = { x, y }, top = this.hitIn("document", p);
@@ -382,7 +382,9 @@ export class FakeTab implements StagePage {
       if (ax) shift = dir * Math.min(out.k[ax] * px, left);
     }
     const hit = `${h.kind}:${h.id}`;
-    if (again) { if (this.colKeep?.hit !== hit) out.same = false; if (this.colKeep) this.colKeep.roots = roots; }
+    // review-122b R3: a new element under the point passes when its chain up to the same scroller passes rule 1 (no node of rule 1, no frame).
+    const bad = h.kind === "frame" || (h.kind === "node" && (BAD.includes(V.page.nodes[h.id].tag) || !!V.page.nodes[h.id].contenteditable));
+    if (again) { if (!this.colKeep || (this.colKeep.hit !== hit && bad)) out.same = false; if (this.colKeep) this.colKeep.roots = roots; }
     else this.colKeep = { hit, m: ms, roots };
     return out;
   }

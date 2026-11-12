@@ -194,3 +194,55 @@ test("a call that earlier notches have given gets no event, no lock and no activ
   assert.ok(r.tab.activations[0] <= answerOf(r, 1).t);
   assert.deepEqual(answerOf(r, 2).body, { result: {} });
 });
+
+// ================================================================ review-122b (the narrow re-check)
+
+test("after a dialog's close the rest goes when the new element under the point has a chain up to the same scroller that passes rule 1 (review-122b R3): the notches before the end moved another paragraph under the point", async () => {
+  const P = { p1: { tag: "p", box: { x: 0, y: 340, width: 1280, height: 40 } }, p2: { tag: "p", box: { x: 0, y: 580, width: 1280, height: 40 } } };
+  let k = 0;
+  const r = await runVector(own([{ at: 0, ...wheel(0, 600) }, { afterEvent: "Page.javascriptDialogOpening", waitMs: 1000, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: P, ...DOC() }),
+    { tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++k === 2; } });
+  assert.deepEqual(dys(notchesOf(r.tab)), [120, 120, 360], "the rest goes over the second paragraph");
+  assert.ok(!answerOf(r, 1).body.error);
+  // An input under the point after the close (the page put it there while the dialog was open): its chain fails rule 1, no rest.
+  k = 0;
+  const q = await runVector(own([{ at: 0, ...wheel(0, 600) }, { afterEvent: "Page.javascriptDialogOpening", waitMs: 1000, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { p1: P.p1 }, ...DOC() }),
+    { tab: (t) => {
+      t.opensDialog = (s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++k === 2;
+      t.hook = (s) => { if (s.method === "Page.handleJavaScriptDialog") t.v.page.nodes.i = { tag: "input", type: "number", box: { x: 0, y: 580, width: 1280, height: 40 } }; return undefined; };
+    } });
+  assert.deepEqual(dys(notchesOf(q.tab)).slice(0, 2), [120, 120]);
+  assert.match(answerOf(q, 1).body.error?.message ?? "", /no longer a wheel point of its scroller/);
+});
+
+test("a navigation of the main frame during the call's column read stops the notches (review-122b R5): no notch goes to the new document, and the call gets the error with all its notches", async () => {
+  const r = await runVector(own([wheel(0, 1440)], { nodes: { c: CANVAS(540) }, ...DOC() }), { tab: (t) => {
+    t.hook = (s) => { if (s.method === "ownRead" && s.params.fn === WHEEL_COLUMN && s.params.args[5] === 0) t.navigate(); return undefined; };
+  } });
+  assert.equal(notchesOf(r.tab).length, 0);
+  assert.equal(answerOf(r, 1).body.error?.message, "The input stage ended a wheel call at a navigation of the main frame, and 12 notches did not go: the page navigated.");
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("STAGE_ACTION_MAX_MS ends a wheel plan (review-122b R7): the stage waits for the notches' answers as at STAGE_EVENT_WAIT_MS; answers that come: the rest goes; none in one more STAGE_EVENT_WAIT_MS: the call gets the error with the count of the notches that may not have gone", async () => {
+  const r = await runVector(own([wheel(0, 60_000)], DOC(80_000)), { maxMs: 60_000 });
+  const n = notchesOf(r.tab), rest = n.at(-1)!;
+  assert.equal(r.stage.counts.limitEnds, 1);
+  assert.ok(n.length > 100 && n.slice(0, -1).every((s) => s.params.deltaY === 120), `${n.length - 1} notches before the limit`);
+  assert.equal(rest.params.deltaY, 60_000 - 120 * (n.length - 1), "then the rest");
+  assert.ok(!answerOf(r, 1).body.error);
+  const late = 24_000;
+  const q = await runVector(own([wheel(0, 60_000)], DOC(80_000)), { maxMs: 60_000, tab: (t) => {
+    t.hook = (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && t.clock.now() >= late ? new Promise((res) => t.clock.timer(5000, () => res({}))) : undefined);
+  } });
+  const m = notchesOf(q.tab), answered = m.filter((s) => s.t < late).length;
+  assert.ok(m.every((s) => s.params.deltaY === 120), "no rest");
+  assert.equal(answerOf(q, 1).body.error?.message, `The input stage ended a wheel call at the limit of 25000 ms, and ${500 - answered} notches may not have gone: the page did not answer.`);
+});
+
+test("a wheel call of delta 0 on both axes: its one event goes at the client's point, not at the page's last point (review-122b R7)", async () => {
+  const r = await runVector(own([wheel(0, 0, 500, 300)], DOC()));
+  const n = notchesOf(r.tab);
+  assert.equal(n.length, 1);
+  assert.deepEqual([n[0].params.x, n[0].params.y, n[0].params.deltaX, n[0].params.deltaY], [500, 300, 0, 0]);
+});

@@ -166,12 +166,13 @@ a card to drag to a zone below the fold, a scroller in a shadow root around a sl
 scroll-padding (review 122). Each row passes when the action passes through the stage with Playwright's default
 timeout, the page's state is the same as with Playwright's own input (a wheel's scroll within one notch; an element in
 view where Playwright's own scroll centers it), and the stage's trace shows the row's notches or its counted fallback.
-The two rows of `mouse.wheel`'s column have a bar of their own on the stage's state (the list does not move, the canvas
-gets no wheel event, the page moves the asked total), because Playwright's own input gives the later notches to the
-element that comes under the point. The harness rows R5, R6 and P7
+The rows of `mouse.wheel`'s column (also in quirks mode) require the same state: Playwright's own input sends one wheel
+event (the list does not move, the canvas gets no wheel event, the page moves the asked total), and the stage's notches
+stop before the element that would come under the point, with the rest as one event. The harness rows R5, R6 and P7
 score the recorder's wheel calls and clicks below the fold through the stage against `STAGE_REFERENCE`, and against
 `STAGE_PERSON` when it names a reference of the operator's published numbers (a report: the Mac's wheel model is board
-ab-t30.13). It writes `stage-scroll-live.json`, `stage-scroll-harness-results.json` and
+ab-t30.13), and two reports give the wheel calls that went with the rest as one event (`wheelRestAsOne / wheelCalls`), in
+the harness and in the whole run. It writes `stage-scroll-live.json`, `stage-scroll-harness-results.json` and
 `stage-scroll-harness-report.txt` in the run folder.
 
 ## Input harness

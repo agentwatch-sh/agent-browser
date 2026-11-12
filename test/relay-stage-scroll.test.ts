@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { seededRandom } from "../src/human/random.ts";
-import { SCROLL_STATE, SCROLL_WAIT_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, WHEEL_LISTENERS_WAIT_MS } from "../src/relay/stage.ts";
+import { SCROLL_STATE, SCROLL_WAIT_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, WHEEL_LISTENERS_WAIT_MS, WHEEL_ROOTS, WHEEL_ROOTS_AT, WHEEL_ROOTS_MAX } from "../src/relay/stage.ts";
 import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -600,4 +600,30 @@ test("rule 2 reads the listeners inside each open shadow root of the scroller to
   // A closed shadow root stays out of the read.
   const closed = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { ...comp, shadow: false, closed: true } }, ...DOC() }));
   assert.deepEqual(at(notchesOf(closed.tab)[0]), [640, 360]);
+});
+
+// ================================================================ review-122b (the narrow re-check)
+
+test("a navigation of the main frame during a scroll's rounds stops them: no notch goes to the new document, and the client's call goes, counted (review-122b R7)", async () => {
+  let navAt = 0;
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, ...DOC() }), { tab: (t) => { t.clock.timer(150, () => { navAt = t.clock.now(); t.navigate(); }); } });
+  const n = notchesOf(r.tab);
+  assert.ok(n.length >= 1 && n.length < 17 && n.every((s) => s.t <= navAt), `no notch after the navigation (${n.length})`);
+  assert.ok(passOf(r.tab, 1)!.t >= navAt);
+  assert.equal(r.stage.counts["scrollAsIs:navigated"], 1);
+});
+
+test("a frame around the target at a level above it does not count in the round's column (review-122b R4, the fake's model): a same-origin frame across the page below the fold gets notches over the page", async () => {
+  const r = await runVector(own([scroll("fb")], { nodes: { fb: { tag: "button", frame: "f", box: { x: 50, y: 2500, width: 100, height: 40 } } },
+    frames: { f: { origin: "same", box: { x: 0, y: 1000, width: 1280, height: 1000 }, border: 0, height: 3000 } }, ...DOC() }));
+  assert.ok(notchesOf(r.tab).length > 0, "notches");
+  assert.equal(r.stage.counts["scrollAsIs:noWheelPoint"], undefined);
+});
+
+test("rule 2's reads take at most WHEEL_ROOTS_MAX (32) roots (review-122b R7): the read of the scroller's roots and the column's", async () => {
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, ...DOC() }));
+  const read = r.tab.sent.find((s) => s.params?.functionDeclaration === WHEEL_ROOTS)!;
+  assert.ok(read && read.params.arguments[1].value === 32 && WHEEL_ROOTS_MAX === 32);
+  const w = await runVector(own([wheel(0, 1440)], { nodes: { c: { tag: "canvas", box: { x: 600, y: 900, width: 100, height: 100 } } }, ...DOC() }));
+  assert.deepEqual(w.tab.sent.find((s) => s.method === "ownRead" && s.params.fn === WHEEL_ROOTS_AT)!.params.args, [32]);
 });

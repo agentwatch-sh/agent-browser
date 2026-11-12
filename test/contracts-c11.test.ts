@@ -1867,11 +1867,13 @@ const STAGE_ITEMS: string[] = [
   // review-122 note 8: a case with no rule before.
   "A call whose delta is 0 on both axes gets one wheel event with that delta at the client's point, as Playwright's own input sends it.",
   "The notches of the vertical axis go first.",
-  "The first notch of a call comes at the later of its arrival and one gap after the page's last notch or the end of the stage's path before it, so the calls of a client that sends them at once get a person's gaps too.",
+  // review-122b R8 (before: "The first notch of a call comes at the later of its arrival and one gap after the page's last notch or the end of the stage's path before it, so the calls of a client that sends them at once get a person's gaps too.").
+  "The first notch of a call comes after the call's column read (below), at the later of that read's end and one gap after the page's last notch or the end of the stage's path before it, so the calls of a client that sends them at once get a person's gaps too.",
   "When the page has no last point, the stage first sends a path to the client's point, as before a press, and the notches go there.",
   "The stage sends each notch at its time with no wait for the answer of the one before, as a wheel sends its events.",
   // review-122, the lead's option b: a case with no rule before.
-  "Before the notches, the stage reads the call's column from the page's last point, in the relay's own isolated world: the content that the notches move under the point, on the scroller that the point's chain scrolls first in the direction of the call, as rules 1, 2 and 4 of the wheel point (below) read it, also inside open shadow roots.",
+  // review-122b R2 (before: "Before the notches, the stage reads the call's column from the page's last point, in the relay's own isolated world: the content that the notches move under the point, on the scroller that the point's chain scrolls first in the direction of the call, as rules 1, 2 and 4 of the wheel point (below) read it, also inside open shadow roots.").
+  "Before the notches, the stage reads the call's column from the page's last point, in the relay's own isolated world: the content that the notches move under the point, on the scroller that the point's chain scrolls first in the direction of the call, as rules 1, 2 and 4 of the wheel point (below) read it, also inside open shadow roots and in the elements assigned to their slots.",
   "The element under the point at the start, the elements around it, the elements inside it when it is an element of rule 1, and the elements with `position: fixed` do not count.",
   "When the column meets such an element, the notches go until the next one would bring it under the point, and the rest goes as one wheel event at the same point, one gap later, in the same action, and the stage counts it.",
   "The residual does not change, and the stage answers the call after Chrome answers that event.",
@@ -1880,9 +1882,11 @@ const STAGE_ITEMS: string[] = [
   "When the plan of a call ends before its last event (dialogs, above), a notch is gone when Chrome answered it, and at a dialog also the first notch with no answer at the end (it opened the dialog), but no later one (Chrome drops the input that it gets while a dialog is open).",
   // review-122, the daemon lead's P1 and note 1: a case with no rule before.
   "At `STAGE_EVENT_WAIT_MS` and at `STAGE_ACTION_MAX_MS` the stage first waits for the answers, for at most one more `STAGE_EVENT_WAIT_MS`; when they do not come, the call gets an error with the count of the notches that may not have gone.",
-  "The notches that did not go go as one wheel event with their sum, at the page's last point, as the client's own event of an ended plan, only when the page's last point is still a wheel point of the call's scroller: after a dialog's close, with the lock taken again, the stage reads the column again, the element under the point and the scroller must be the same, and the column must hold no element of rules 1, 2 and 4.",
+  // review-122b R3 (before: "The notches that did not go go as one wheel event with their sum, at the page's last point, as the client's own event of an ended plan, only when the page's last point is still a wheel point of the call's scroller: after a dialog's close, with the lock taken again, the stage reads the column again, the element under the point and the scroller must be the same, and the column must hold no element of rules 1, 2 and 4.").
+  "The notches that did not go go as one wheel event with their sum, at the page's last point, as the client's own event of an ended plan, only when the page's last point is still a wheel point of the call's scroller: after a dialog's close, with the lock taken again, the stage reads the column again; the scroller of each axis must be the same, the element under the point must be the same or have a chain up to that scroller that passes rule 1, and the column must hold no element of rules 1, 2 and 4.",
   "Else no rest goes, and the call gets an error that names the end and the count of the notches that did not go.",
-  "A navigation of the main frame stops the notches of a call, as it stops a typed text: no rest goes, and the call gets that error.",
+  // review-122b R5 (before: "A navigation of the main frame stops the notches of a call, as it stops a typed text: no rest goes, and the call gets that error.").
+  "A navigation of the main frame from the start of the column read stops the notches of a call, as it stops a typed text: no rest goes, and the call gets that error.",
   "`DOM.scrollIntoViewIfNeeded` (Playwright's scroll before each pointer action, and `scrollIntoViewIfNeeded()`), on Linux:",
   // Board ab-t30.11 (before: "The stage reads the element's box (`DOM.getContentQuads` with the node of the call) and the viewport (`Page.getLayoutMetrics`).").
   // review-122 B2, notes 4 and 5 (before: "The stage reads the element's box (the call's `rect` in it, when the call has one) and its scrollers, innermost first, up through its same-origin frames, in Playwright's utility world on the node of the call: the box, the scroll position and the scroll range of each.").
@@ -1891,7 +1895,8 @@ const STAGE_ITEMS: string[] = [
   "A level is a scroller, or a box that clips the element and that no notch moves.",
   // review-122 B2: a case with no rule before.
   "A scroller is an element whose overflow on an axis is `auto`, `scroll` or `overlay` and whose content is larger than its box there, and the document.",
-  "A box that no notch moves is an element whose overflow on an axis is `hidden` or `clip` and whose content is larger than its box there (a carousel), and the document on an axis where its overflow is `hidden` or `clip`; a script scroll moves it.",
+  // review-122b R8 (before: "A box that no notch moves is an element whose overflow on an axis is `hidden` or `clip` and whose content is larger than its box there (a carousel), and the document on an axis where its overflow is `hidden` or `clip`; a script scroll moves it.").
+  "A box that no notch moves is an element whose overflow on an axis is `hidden` or `clip` and whose content is larger than its box there (a carousel), and the document on an axis where its overflow is `hidden` or `clip`; the client's call gives it the state that Playwright's own input gives it (a script scroll moves a box with `hidden`, and no scroll moves a box with `clip`).",
   "The scrollers above an element with `position: fixed` do not move it.",
   // review-122 B2 (before: "The stage reads the viewport (`Page.getLayoutMetrics`), and it finds the visible part of each scroller: its box within the viewport and within each scroller around it.").
   "The stage reads the viewport (`Page.getLayoutMetrics`), and it finds the visible part of each level: its box within the viewport and within each level around it.",
@@ -1924,7 +1929,8 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.11 (before: "No element on that chain has a wheel listener (`wheel`, `mousewheel`) that is not passive (`DOMDebugger.getEventListeners`).").
   "No element of the scroller (it, or an element inside it) that has a wheel listener (`wheel`, `mousewheel`) that is not passive has a box that holds the point or meets its column (rule 4).",
   // review-122 B1 and note 13 (before: "The stage reads the listeners of the page's own scripts on the scroller with its whole subtree (`DOMDebugger.getEventListeners` with no `pierce`, on the scroller resolved in the page's main world with `DOM.describeNode` and `DOM.resolveNode`), and the boxes of their elements (`DOM.getContentQuads`).").
-  "The stage reads the listeners of the page's own scripts on the scroller with its whole subtree and on each open shadow root inside it (`DOMDebugger.getEventListeners` with no `pierce`, on each root resolved in the page's main world with `DOM.describeNode` and `DOM.resolveNode`), and the boxes of their elements (`DOM.getContentQuads`), in at most 1,000 ms in all.",
+  // review-122b R2 (before: "The stage reads the listeners of the page's own scripts on the scroller with its whole subtree and on each open shadow root inside it (`DOMDebugger.getEventListeners` with no `pierce`, on each root resolved in the page's main world with `DOM.describeNode` and `DOM.resolveNode`), and the boxes of their elements (`DOM.getContentQuads`), in at most 1,000 ms in all.").
+  "The stage reads the listeners of the page's own scripts on the scroller with its whole subtree, on each open shadow root inside it, and on each element assigned to a slot inside it that the scroller's own tree does not hold (`DOMDebugger.getEventListeners` with no `pierce`, on each root resolved in the page's main world with `DOM.describeNode` and `DOM.resolveNode`), and the boxes of their elements (`DOM.getContentQuads`), in at most 1,000 ms in all.",
   // review-122 B1 and note 13: a case with no rule before.
   "A closed shadow root, and the roots after the first 32, stay out of the read.",
   "The listeners of the window and of the document do not count.",
@@ -1933,11 +1939,13 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.11: a case with no rule before (the content that the notches move under the point).
   "The point's column holds no element of rule 1 and no other scroller with a range on the axis of the move.",
   // review-122 B1 (before: "The column is the line from the point along the round's move (the vertical axis first), as the page's content is now: the content that the notches move under the point.").
-  "The column is the line from the point along the round's move (the vertical axis first), as the page's content is now, also inside open shadow roots: the content that the notches move under the point.",
+  // review-122b R2 (before: "The column is the line from the point along the round's move (the vertical axis first), as the page's content is now, also inside open shadow roots: the content that the notches move under the point.").
+  "The column is the line from the point along the round's move (the vertical axis first), as the page's content is now, also inside open shadow roots and in the elements assigned to their slots: the content that the notches move under the point.",
   // review-122 B1 and note 3 (before: "The element, the elements around it and inside it, and the elements with `position: fixed`, which do not move, do not count.").
   "The elements around the element and inside it (in the flat tree), and the elements with `position: fixed`, which do not move, do not count.",
   // review-122 B1 and note 3: a case with no rule before.
-  "The element itself counts when it is a `canvas`, an `embed`, an `object`, a `video`, an `audio` or a frame, or when it has the focus and is an element of rule 1 (a focused number input changes its value under the wheel).",
+  // review-122b R4 (before: "The element itself counts when it is a `canvas`, an `embed`, an `object`, a `video`, an `audio` or a frame, or when it has the focus and is an element of rule 1 (a focused number input changes its value under the wheel).").
+  "The element itself counts when it is a `canvas`, an `embed`, an `object`, a `video`, an `audio` or a frame, or when it has the focus and is an element of rule 1 (a focused number input changes its value under the wheel); a frame around the element at a level above it, and a cross-origin frame's owner, are around it and do not count.",
   "Chromium gives each wheel event of CDP to the element under the point at its time (measured by board ab-t30.11 on Chromium 156: an inner scroller that came under the point got the later notches of one `mouse.wheel`).",
   // Board ab-t30.11 (before: "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller.").
   "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller, at 14%, 32%, 50%, 68% and 86% of it across and down, the nearest to the page's last point first.",
