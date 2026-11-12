@@ -1525,10 +1525,12 @@ const STAGE_ITEMS: string[] = [
   "An ordinary call that the stage passes leaves the gate when the model sends it, not when Chrome answers (above).",
   "The stage's own reads (an element's box, the focused element, a hit test, a frame's offset, a scroll position) go to Chrome inside the step, and no client sees them or their answers.",
   // review-119 B3 (before: "... `Target.getTargetInfo`, `DOMDebugger.getEventListeners`).").
-  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `DOM.getBoxModel`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `Target.getTargetInfo`, `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`).",
+  // Board ab-t30.11 (before: "... `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`).").
+  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `DOM.getBoxModel`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `Target.getTargetInfo`, `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`, `DOM.resolveNode`, `Runtime.getProperties`).",
   // Board ab-t30.10 (before: "Three reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field, and the recovery's read at the hit point.").
   // review-119 P1 (before: "... the typing rule's read of the focused element in a cross-origin frame ...").
-  "These reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field and its hit test, the typing rule's reads of the focused element in a cross-origin frame (on a node of that frame that a client's call named), and the recovery's read at the hit point.",
+  // Board ab-t30.11 (before: "... (on a node of that frame that a client's call named), and the recovery's read at the hit point.").
+  "These reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field and its hit test, the typing rule's reads of the focused element in a cross-origin frame (on a node of that frame that a client's call named), the scroll's read of the element and its scrollers, the wheel point's read, and the recovery's read at the hit point.",
   "The input lock.",
   "The agent browser has one input lock for all its pages, in memory (board ab-v16.46).",
   "A translated action holds the lock from its first event to its last.",
@@ -1832,7 +1834,10 @@ const STAGE_ITEMS: string[] = [
   // review-119 B4.
   "Before Playwright's focus call, an `input` of the type `email` or `number` with text gets no click: its caret cannot be read or set, and the script focus leaves it where the field's own selection is.",
   "The utility call alone gives it the focus, and the stage counts it.",
-  "A field out of view first gets notches into view (the scroll, below), then the click.",
+  // Board ab-t30.11, review-119 N14 (before: "A field out of view first gets notches into view (the scroll, below), then the click.").
+  "A field out of view first gets notches into view (the scroll, below), also inside a frame's own scroller; then the stage reads the field again and clicks it.",
+  "When the notches cannot bring it into view, and on the Mac until the Mac's wheel model exists, the field gets no click, and the stage counts it.",
+  "A point of the click outside the visible part of the field's nearest scroller gets no click, and the stage counts it.",
   // review-119 B3 (before: "A field that has no box, or that another element covers at the point of the click (the stage's own hit test), gets no click.").
   "A field that has no box, or that another element covers at the point of the click, gets no click.",
   // review-119b R4 (before: "The stage's own hit test reads the element at the point in the field's own document, and at each frame level above it the element at the mapped point: in a same-origin level in Playwright's utility world, and in a cross-origin level with `DOM.getNodeForLocation` on the parent's session, against the frame owner's `backendNodeId`.").
@@ -1849,25 +1854,51 @@ const STAGE_ITEMS: string[] = [
   "When `n` is 0 and `r` is 0 or more, the call gets one notch, so a call whose delta is not 0 gets a wheel event unless earlier notches have already given it.",
   "So a series of wheel calls scrolls the asked total within one notch.",
   "Playwright's `mouse.wheel` does not wait for the scroll and does not check it.",
+  // Board ab-t30.11: cases with no rule before (the call that earlier notches have given, the order of the axes, the gap
+  // across calls, a page with no last point, the notches with no wait for each answer, the end of a plan in the notches).
+  "A call that earlier notches have given gets no event: the stage answers it at once, with no lock and no activation.",
+  "The notches of the vertical axis go first.",
+  "The first notch of a call comes at the later of its arrival and one gap after the page's last notch or the end of the stage's path before it, so the calls of a client that sends them at once get a person's gaps too.",
+  "When the page has no last point, the stage first sends a path to the client's point, as before a press, and the notches go there.",
+  "The stage sends each notch at its time with no wait for the answer of the one before, as a wheel sends its events.",
+  "When the plan of a call ends before its last notch (dialogs, above), the notches that did not go go as one wheel event with their sum, at the page's last point, as the client's own event of an ended plan.",
   "`DOM.scrollIntoViewIfNeeded` (Playwright's scroll before each pointer action, and `scrollIntoViewIfNeeded()`), on Linux:",
-  "The stage reads the element's box (`DOM.getContentQuads` with the node of the call) and the viewport (`Page.getLayoutMetrics`).",
+  // Board ab-t30.11 (before: "The stage reads the element's box (`DOM.getContentQuads` with the node of the call) and the viewport (`Page.getLayoutMetrics`).").
+  "The stage reads the element's box (the call's `rect` in it, when the call has one) and its scrollers, innermost first, up through its same-origin frames, in Playwright's utility world on the node of the call: the box, the scroll position and the scroll range of each.",
+  "A scroller is an element whose overflow on an axis is `auto`, `scroll` or `overlay` and whose content is larger than its box there, and the document, which has no range on an axis where its overflow is `hidden` or `clip`.",
+  "The scrollers above an element with `position: fixed` do not move it.",
+  "The stage reads the viewport (`Page.getLayoutMetrics`), and it finds the visible part of each scroller: its box within the viewport and within each scroller around it.",
   "When the element is in view, the stage answers `{}` with no scroll.",
-  "An element is in view when all of it is inside the viewport on an axis, or when its middle is in the middle 60% (vertical) or 80% (horizontal) of the viewport.",
-  "Else the stage finds the element's scroller and a wheel point over it (below).",
-  "It moves the pointer there with a path when it is not there, and it sends the notches that bring the element's middle to the middle of the viewport.",
+  // Board ab-t30.11 (before: "An element is in view when all of it is inside the viewport on an axis, or when its middle is in the middle 60% (vertical) or 80% (horizontal) of the viewport.").
+  "An element is in view when on each axis all of it is inside the visible part of its nearest scroller (the viewport for an element with no inner scroller), or its middle is in the middle 60% (vertical) or 80% (horizontal) of that part.",
+  // Board ab-t30.11 (before: "Else the stage finds the element's scroller and a wheel point over it (below)." and "It moves the pointer there with a path when it is not there, and it sends the notches that bring the element's middle to the middle of the viewport.").
+  "Else the stage plans, for each scroller from the innermost out, the move that brings the element's middle to the middle of that scroller's box, within its scroll range, with no move on an axis where the element is in view of that box already; for each scroller, the element is clipped to the scroller inside it, after that one's move.",
+  "The round is the outermost scroller that must move, so that the scrollers inside it come into view first.",
+  "The stage finds a wheel point over the visible part of that scroller (below).",
+  "It moves the pointer there with a path when it is not there, and it sends the notches of that move: `round(|move| / 120)` on each axis, and at least one.",
   "It waits for the smooth scroll to end (350 ms, a first value), reads again, and repeats, at most `STAGE_SCROLL_ROUNDS = 4` rounds.",
   "When the element is in view, it answers `{}`.",
-  "When the element is still not in view, or when a round did not move the scroller, the stage sends the client's call as it is (a script scroll), and logs it.",
+  // Board ab-t30.11 (before: "When the element is still not in view, or when a round did not move the scroller, the stage sends the client's call as it is (a script scroll), and logs it.").
+  "When the element is still not in view, when a round did not move its scroller, or when no scroller can move it, the stage sends the client's call as it is (a script scroll), and logs it.",
+  // Board ab-t30.11: a case with no rule before (the end of a plan in a scroll's rounds).
+  "When the plan ends during the rounds (dialogs, above), the stage sends the client's call as it is, at once.",
   "The wheel point.",
   "A point over the visible part of the scroller is a wheel point only when all of these are true (the stage's own read):",
   "The element under the point, and each ancestor of it up to the scroller, is not an `input`, `select`, `textarea`, contenteditable, `canvas`, `embed`, `object`, `video`, `audio` or `iframe`.",
   "No element on that chain has a wheel listener (`wheel`, `mousewheel`) that is not passive (`DOMDebugger.getEventListeners`).",
   "The listeners of the window and of the document do not count.",
-  "The element under the point scrolls the target scroller.",
-  "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller.",
+  // Board ab-t30.11 (before: "The element under the point scrolls the target scroller.").
+  "The element under the point scrolls the target scroller: no other scroller comes before it on that chain.",
+  // Board ab-t30.11 (before: "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller.").
+  "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller, at 14%, 32%, 50%, 68% and 86% of it across and down, the nearest to the page's last point first.",
   "When no point passes, the stage sends the client's call as it is.",
+  // Board ab-t30.11: a case with no rule before (a point over a frame).
+  "A point over a frame is a wheel point of a scroller in that frame only when, at each frame level above the scroller, the element at the point is the frame's element.",
   "An element in a cross-origin frame: the frame's session sends the call.",
-  "The stage reads the box there, and it sends the notches on the top page's session at a point over the frame.",
+  // Board ab-t30.11 (before: "The stage reads the box there, and it sends the notches on the top page's session at a point over the frame.").
+  "The stage reads the box and the frame's scrollers there and maps them to the top page (the frame mapping, below).",
+  "It reads the top page's scrollers on the frame's owner, in its own world (`DOM.resolveNode` with the owner's `backendNodeId`), and it sends the notches on the top page's session at a point over the frame where the top page's element is the frame's owner.",
+  "For an element of a cross-origin frame inside another cross-origin frame, the stage sends the client's call as it is.",
   "A retry's script scroll (the retry scroll recognizer, below) passes in the first build, and the stage counts it.",
   "The Mac (with the stage on).",
   "Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
@@ -2250,9 +2281,10 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
           assert.equal(o.fields.clickCount, c.params.clickCount, `${at}: the client's clickCount`);
           assert.equal(o.fields.button, c.params.button, `${at}: the client's button`);
         } else {
-          // A click of the stage's own (the focus click, the file input's click): inside the field.
+          // A click of the stage's own (the focus click, the file input's click): inside the field, after the page's notches before it.
           const n = v.page.nodes[nodeOf(c.params) ?? c.params.objectId];
-          assert.ok(n && within(o.fields.x, [n.box.x, n.box.x + n.box.width]) && within(o.fields.y, [n.box.y, n.box.y + n.box.height]), `${at}: the stage's click is inside its element`);
+          const dy = v.out.slice(0, k).filter((x: any) => x.notches && !n.frame).reduce((a: number, x: any) => a + x.notches * x.fields.deltaY, 0);
+          assert.ok(n && within(o.fields.x, [n.box.x, n.box.x + n.box.width]) && within(o.fields.y, [n.box.y - dy, n.box.y - dy + n.box.height]), `${at}: the stage's click is inside its element`);
         }
       }
       if (o.method === "Input.dispatchMouseEvent" && o.type === "mouseReleased") {
@@ -2293,7 +2325,9 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
           const field = v.page.nodes[v.page.focused];
           assert.ok(/[\n\t]/.test(t) || [...t].some((ch) => !charKey(ch)) || t.length * F.fastKeyMs[0] > K.STAGE_TYPE_MAX_MS || !typesInto(field), `${at}: an Input.insertText passes only when the typing rule refuses it`);
         }
-        if (c.method === "DOM.scrollIntoViewIfNeeded") assert.ok(!linux, `${at}: a scroll into view passes only on the Mac or at its fallback`);
+        // A scroll into view passes on the Mac, or at a fallback: here the end after a round that does not move the scroller.
+        const round = o.from.startsWith("out:") ? v.out[outIndex(o.from)] : null;
+        if (c.method === "DOM.scrollIntoViewIfNeeded") assert.ok(!linux || (round?.notches > 0 && round.for === o.for && o.at[0] >= F.scrollWaitMs), `${at}: a scroll into view passes only on the Mac or at its fallback`);
       }
     });
     // The wheel: n = max(0, round((|delta| + r) / 120)) notches, r the residual in the call's direction; one notch when n is 0 and r >= 0.
@@ -2308,19 +2342,24 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
       else assert.ok(items.length === 1 && items[0].notches === n && items[0].fields.deltaY === sign * K.STAGE_NOTCH_PX, `${w} ${c.id}: ${n} notches`);
       assert.ok(Math.abs(residual) < K.STAGE_NOTCH_PX, `${w} ${c.id}: the total within one notch`);
     }
-    // DOM.scrollIntoViewIfNeeded on Linux: in view, {} with no event; else the notches that bring the middle to the middle.
+    // DOM.scrollIntoViewIfNeeded on Linux: in view, {} with no event; else the notches that bring the middle to the middle
+    // of its scroller (the viewport, or a frame's own viewport), from the scroller's position; then {} after the smooth
+    // scroll's wait, or the client's call when the round did not move the scroller.
     for (const c of v.in.filter((x: any) => x.method === "DOM.scrollIntoViewIfNeeded")) {
-      const n = v.page.nodes[c.params.objectId], b = n.box, vp = v.page.viewport;
+      const n = v.page.nodes[c.params.objectId], b = n.box, f = n.frame ? v.page.frames[n.frame] : null, d = f ? (f.border ?? 0) + (f.padding ?? 0) : 0;
+      const vp = f ? { width: f.box.width - 2 * d, height: f.box.height - 2 * d } : v.page.viewport, sy = f ? f.scrollY ?? 0 : v.page.scrollers?.document?.scrollY ?? 0;
       const axis = (lo: number, size: number, view: number, share: number) => (lo >= 0 && lo + size <= view) || Math.abs(lo + size / 2 - view / 2) <= (view * share) / 2;
-      const inView = axis(b.x, b.width, vp.width, 0.8) && axis(b.y, b.height, vp.height, 0.6);
+      const inView = axis(b.x, b.width, vp.width, 0.8) && axis(b.y - sy, b.height, vp.height, 0.6);
       const items = v.out.filter((o: any) => o.for === c.id);
       const a = v.answers.find((x: any) => x.id === c.id);
       if (!linux) continue;
       if (inView) assert.ok(items.length === 0 && a.after === "none" && isObj(a.result) && Object.keys(a.result).length === 0, `${w} ${c.id}: in view: {} with no event`);
       else {
-        const want = Math.round((b.y + b.height / 2 - vp.height / 2) / K.STAGE_NOTCH_PX);
+        const want = Math.round((b.y - sy + b.height / 2 - vp.height / 2) / K.STAGE_NOTCH_PX);
         assert.ok(items.some((o: any) => o.notches === Math.abs(want) && o.fields.deltaY === Math.sign(want) * K.STAGE_NOTCH_PX), `${w} ${c.id}: ${want} notches bring the middle to the middle`);
-        assert.ok(a.rule === "scrollWaitMs" && a.at[0] >= F.scrollWaitMs && isObj(a.result), `${w} ${c.id}: {} after the smooth scroll's wait`);
+        const passed = items.find((o: any) => o.pass);
+        if (passed) assert.ok(passed.at[0] >= F.scrollWaitMs && a.after === `out:${v.out.indexOf(passed)}`, `${w} ${c.id}: the client's call after the round that did not move the scroller`);
+        else assert.ok(a.rule === "scrollWaitMs" && a.at[0] >= F.scrollWaitMs && isObj(a.result), `${w} ${c.id}: {} after the smooth scroll's wait`);
       }
     }
     // The recognizers' effects: a hover's path before the setup, a focus click before the script focus of a text field.

@@ -2627,7 +2627,7 @@
   {
    "id": "scroll-wheel-point",
    "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
-   "note": "The wheel point (M11): the page's last point 640,360 is over a number input, whose value a notch would change, so it is no wheel point. The stage tries the points of a 5 x 5 grid over the visible part of the scroller (here the viewport), the nearest first: 640,230 passes. A path goes there, then 17 notches (round(2060 / 120)), then {} after the smooth scroll's 350 ms.",
+   "note": "The wheel point (the input design's section 8.3): the page's last point 640,360 is over a canvas whose page zooms at the wheel (600 x 420 at 350,150), so it is no wheel point, and neither is any point of the 5 x 5 grid over the canvas. The stage tries the points of the grid over the visible part of the scroller (here the viewport), the nearest to the last point first: 640,101 passes. A path goes there, then 17 notches (round(2060 / 120)) one person's gap after the path, then {} after the smooth scroll's 350 ms.",
    "platform": "linux",
    "seed": 82,
    "clock": 0,
@@ -2652,13 +2652,13 @@
       "focused": false
      },
      "7.3.16": {
-      "tag": "input",
-      "type": "number",
+      "tag": "canvas",
+      "listener": "nonpassive",
       "box": {
-       "x": 600,
-       "y": 340,
-       "width": 100,
-       "height": 40
+       "x": 350,
+       "y": 150,
+       "width": 600,
+       "height": 420
       },
       "focused": false
      }
@@ -2698,7 +2698,7 @@
       },
       "to": {
        "x": 640,
-       "y": 230
+       "y": 101
       }
      },
      "gapMs": 8,
@@ -2708,7 +2708,7 @@
       1000
      ],
      "count": [
-      5,
+      10,
       126
      ],
      "fields": {
@@ -2722,9 +2722,10 @@
      "for": 1,
      "from": "out:0",
      "at": [
-      0,
+      35,
       90
      ],
+     "rule": "notchGapMs",
      "notches": 17,
      "gapMs": [
       35,
@@ -2732,7 +2733,7 @@
      ],
      "fields": {
       "x": 640,
-      "y": 230,
+      "y": 101,
       "deltaX": 0,
       "deltaY": 120
      }
@@ -2828,8 +2829,7 @@
      "at": [
       350,
       400
-     ],
-     "rule": "scrollWaitMs"
+     ]
     }
    ],
    "answers": [
@@ -2842,7 +2842,7 @@
   {
    "id": "scroll-frame",
    "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
-   "note": "An element of a cross-origin frame (400 x 300 at 300,100, no border) that its own document scrolls (2,000 px tall): the frame's session sends the call. The stage reads the box there and maps it to the top page (the frame mapping), reads the top page's scrollers on the frame's owner, and sends the notches on the top page's session at a point over the frame: the page's last point 900,600 is not over the frame, so the nearest point of the 5 x 5 grid over the frame's visible part, 644,358, where the top page's element is the frame's owner. 11 notches (round((1520 - 150) / 120)) bring the element's middle to the frame's middle, then {} after 350 ms.",
+   "note": "An element of a cross-origin frame (400 x 300 at 300,100, no border) that its own document scrolls (2,000 px tall): the frame's session sends the call. The stage reads the box there and maps it to the top page (the frame mapping), reads the top page's scrollers on the frame's owner, and sends the notches on the top page's session at a point over the frame: the page's last point 900,600 is not over the frame, so the nearest point of the 5 x 5 grid over the frame's visible part, 644,358, where the top page's element is the frame's owner. 11 notches (round((1520 - 150) / 120)), one person's gap after the path, bring the element's middle to the frame's middle, then {} after 350 ms.",
    "platform": "linux",
    "seed": 84,
    "clock": 0,
@@ -2937,9 +2937,10 @@
      "for": 1,
      "from": "out:0",
      "at": [
-      0,
+      35,
       90
      ],
+     "rule": "notchGapMs",
      "notches": 11,
      "gapMs": [
       35,

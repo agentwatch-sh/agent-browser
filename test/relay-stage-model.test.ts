@@ -32,6 +32,8 @@ const SETUP = { functionDeclaration: "(utilityScript, ...args) => utilityScript.
 /** Playwright's focusNode with the caret reset, and fill's call, on node 7.3.18 (Playwright 1.65.0's texts). */
 const util = (fn: string, arg: unknown) => ({ functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "7.3.1", returnByValue: true, awaitPromise: true, userGesture: true,
   arguments: [{ objectId: "7.3.1" }, { value: true }, { value: true }, { value: fn }, { value: 1 }, { value: { a: [{ h: 0 }, { h: 1 }, arg] } }, { objectId: "7.3.2" }, { objectId: "7.3.18" }] });
+/** A retry's script scroll (Playwright 1.65.0's text, the retry scroll recognizer). */
+const RETRY = util("([injected, node, options2]) => {\n              if (node.nodeType === 1)\n                node.scrollIntoView({ ...options2, behavior: \"instant\" });\n              return \"done\";\n            }", { o: [{ k: "block", v: "end" }] });
 const PW_FOCUS = util("([injected, node, resetSelectionIfNotFocused2]) => injected.focusNode(node, resetSelectionIfNotFocused2)", true);
 const PW_FILL = util("async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }",
   { o: [{ k: "value", v: "jane.doe@example.com" }, { k: "force", v: false }, { k: "frameVisible", v: true }] });
@@ -72,6 +74,15 @@ test("the build switch off (the default): the relay sends each input call as tod
       ["Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 0, windowsVirtualKeyCode: 46, code: "Delete", commands: [], key: "Delete", text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false }],
       ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: "Delete", windowsVirtualKeyCode: 46, code: "Delete", location: 0, isKeypad: false }],
       ["DOM.scrollIntoViewIfNeeded", { objectId: "7.3.10" }],
+      // The scroll and wheel rows (board ab-t30.11): a wheel on both axes, a series of small wheels (the residual), a
+      // wheel of no delta, a scroll with the call's rect (click({ position })), and a retry's script scroll: each as the
+      // client sent it, with no notch, no path and no read of the stage.
+      ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 100, y: 200, deltaX: 240, deltaY: -360, modifiers: 0 }],
+      ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 100, y: 200, deltaX: 0, deltaY: 100, modifiers: 0 }],
+      ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 100, y: 200, deltaX: 0, deltaY: 100, modifiers: 0 }],
+      ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 100, y: 200, deltaX: 0, deltaY: 0, modifiers: 0 }],
+      ["DOM.scrollIntoViewIfNeeded", { objectId: "7.3.10", rect: { x: 7, y: 9, width: 0, height: 0 } }],
+      ["Runtime.callFunctionOn", RETRY],
       ["Page.handleJavaScriptDialog", { accept: true }],
     ];
     await Promise.all(calls.map(([m, params]) => c.send(m, params, p.sessionId)));
@@ -464,4 +475,28 @@ test("with the stage on (board ab-t30.10): keyboard.type('Hi') through the model
     } finally { await h.close(); }
   }
   assert.ok(early > 0, "a seed whose last keyUp is answered early");
+});
+
+test("with the stage on (board ab-t30.11): mouse.wheel(0, 360) through the model gives three notches of 120 px at the page's last point, each with its timestamp, 35 to 90 ms apart, and the answer after the last; the stage's host resolves a node of the top page into the relay's own world (DOM.resolveNode with that world's context)", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 400, y: 300, modifiers: 0 }, p.sessionId);
+    const from = h.fake.requests.length;
+    await c.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: 0, deltaY: 360, modifiers: 0 }, p.sessionId);
+    const wheels = cmds(h, from).filter((x) => x.method === "Input.dispatchMouseEvent");
+    assert.deepEqual(wheels.map((x) => [x.params.type, x.params.x, x.params.y, x.params.deltaX, x.params.deltaY]), Array(3).fill(["mouseWheel", 400, 300, 0, 120]));
+    assert.ok(wheels.every((x) => typeof x.params.timestamp === "number" && Math.abs(x.params.timestamp * 1000 - Math.round(x.params.timestamp * 1000)) < 1e-6), "whole-ms timestamps");
+    const t = wheels.map((x) => x.params.timestamp * 1000);
+    for (let i = 1; i < t.length; i++) assert.ok(t[i] - t[i - 1] >= 35 - 3 && t[i] - t[i - 1] <= 90 + 10, `a gap of ${t[i] - t[i - 1]} ms`);
+    // The stage's host: a node of the top page resolved into the relay's own world.
+    let resolved: any = null;
+    h.fake.command = (_target, method, params) => (method === "DOM.resolveNode" ? ((resolved = params), { object: { type: "object", subtype: "node", objectId: "own-1" } }) : undefined);
+    const host = (h.relay.model as any).stagePage((h.relay.model as any).tabs.get(p.tab.id));
+    assert.equal(await host.ownNode(900), "own-1");
+    const worlds = cmds(h).filter((x) => x.method === "Page.createIsolatedWorld");
+    assert.ok(resolved && resolved.backendNodeId === 900 && Number.isInteger(resolved.executionContextId) && worlds.length > 0, "DOM.resolveNode into the relay's own world");
+  } finally { await h.close(); }
 });

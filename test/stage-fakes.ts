@@ -132,6 +132,8 @@ export class FakeTab implements StagePage {
   /** The scrollers of each reader's last SCROLL_STATE (by its handle), and the elements of its last WHEEL_POINTS. */
   private readonly marks = new Map<string, string[]>();
   private readonly els = new Map<string, string[]>();
+  /** The arguments of the last SCROLL_STATE (the client's rect). */
+  private lastArgs: any[] | null = null;
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
     this.v = v; this.clock = clock; this.id = o.id ?? 7;
     this.person = o.person ?? drawPerson(paramsFor(v.platform === "mac" ? "darwin" : "linux"), seededRandom(v.seed));
@@ -249,7 +251,9 @@ export class FakeTab implements StagePage {
     let chain = this.chainOf(start);
     if (cross) chain = chain.slice(0, chain.indexOf(`frame:${f}`) + 1);
     const o = cross ? this.frameContent(f) : { x: 0, y: 0 };
-    const b = own ? this.frameBox(f) : this.liveBox(objectId);
+    const lb = own ? this.frameBox(f) : this.liveBox(objectId), a = (i: number) => this.lastArgs?.[i];
+    // The client's rect (DOM.scrollIntoViewIfNeeded's, relative to the node's border box): that part of the node.
+    const b = typeof a(0) === "number" ? { x: lb.x + a(0), y: lb.y + a(1), width: a(2), height: a(3) } : lb;
     this.marks.set(objectId, chain);
     const rect = (x: Box) => [x.x - o.x, x.y - o.y, x.x - o.x + x.width, x.y - o.y + x.height];
     const levels = chain.map((s) => ({ r: rect(this.clientBox(s)), s: [this.sc[s].x, this.sc[s].y], m: this.maxOf(s), doc: s === "document" || s.startsWith("frame:") }));
@@ -506,7 +510,7 @@ export class FakeTab implements StagePage {
     if (s.method === "Page.getLayoutMetrics" && s.child) return { cssLayoutViewport: { clientWidth: V.page.viewport.width, clientHeight: V.page.viewport.height, pageX: 0, pageY: 0 } };
     if (s.method === "Page.getLayoutMetrics") return { cssLayoutViewport: { clientWidth: V.page.viewport.width, clientHeight: V.page.viewport.height, pageX: scroll.x + this.sc.document.x, pageY: scroll.y + this.sc.document.y } };
     // The scroll's reads (board ab-t30.11).
-    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_STATE) return this.scrollState(p.objectId, s.child);
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_STATE) { this.lastArgs = (p.arguments ?? []).map((x: any) => x?.value); return this.scrollState(p.objectId, s.child); }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_POINTS) return this.wheelPoints(p.objectId, s.child, p.arguments[0].value, p.arguments[1].value);
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ELS) return { result: { type: "object", subtype: "array", objectId: `els:${p.objectId}` } };
     if (s.method === "Runtime.getProperties" && String(p.objectId).startsWith("els:")) return { result: (this.els.get(String(p.objectId).slice(4)) ?? []).map((name, i) => ({ name: String(i), value: { type: "object", subtype: "node", objectId: `el:${name}` } })) };

@@ -340,7 +340,7 @@ test("the focus click: a text field with no focus gets a path, a pause, a press 
   }
 });
 
-test("the focus click: none for a field with the focus, for a button, for a field with no box, for a field that another element covers at the point, or out of view (until board ab-t30.11's notches); the utility call goes as the client sent it, and the stage counts each", async () => {
+test("the focus click: none for a field with the focus, for a button, for a field with no box, for a field that another element covers at the point, or out of view where no notch can bring it into view (a page that does not scroll: board ab-t30.11); the utility call goes as the client sent it, and the stage counts each", async () => {
   const cases: [string, any, string][] = [
     ["focused", { nodes: { n: INPUT({ text: 3, focused: true }) }, focused: "n" }, "fieldFocused"],
     ["button", { nodes: { n: { tag: "button", box: { x: 60, y: 220, width: 80, height: 40 } } } }, "fieldNotText"],

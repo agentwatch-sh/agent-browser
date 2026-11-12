@@ -756,6 +756,7 @@ export class Model {
       inGate: (fn) => this.behind(tab, (tab.gate ?? Promise.resolve()).then(fn).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`))),
       point: () => this.pointOf(tab),
       xPoint: () => this.stageXPoint(tab),
+      ownNode: (backendNodeId) => this.stageNode(tab, backendNodeId),
     };
     this.stagePages.set(tab.id, page);
     return page;
@@ -771,6 +772,18 @@ export class Model {
     if (!at) return null;
     const g = await this.geometry(tab, { keep: false });
     return this.usableFor(g, tab) ? toPage(g, at) : null;
+  }
+
+  /**
+   * A node of the top page in the relay's own isolated world (the scroll's read of a cross-origin frame's owner, board
+   * ab-t30.11): DOM.resolveNode by its backendNodeId into the world's context; the objectId of its handle, or null.
+   */
+  private async stageNode(tab: Tab, backendNodeId: number): Promise<string | null> {
+    if (!Number.isInteger(backendNodeId)) return null;
+    const id = await this.relayWorld(tab);
+    if (id === null) return null;
+    const r = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "DOM.resolveNode", { backendNodeId, executionContextId: id }]);
+    return typeof r?.object?.objectId === "string" ? r.object.objectId : null;
   }
 
   /** A read of the stage in the relay's own isolated world (the geometry read's world): `fn` called with its numbers, by value. */

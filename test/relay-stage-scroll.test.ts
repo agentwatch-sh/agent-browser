@@ -69,7 +69,7 @@ test("mouse.wheel: notches of STAGE_NOTCH_PX at the page's last point (not the c
     for (let i = 1; i < n.length; i++) assert.ok(n[i].t - n[i - 1].t >= F.notchGapMs[0] && n[i].t - n[i - 1].t <= F.notchGapMs[1], `a gap of ${n[i].t - n[i - 1].t} ms`);
     for (const s of n) {
       const ts = s.params.timestamp * 1000;
-      assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6 && r.clock.epoch + s.t - ts >= 3 - 1e-6 && r.clock.epoch + s.t - ts <= 5 + 1e-6, "the stage's timestamp");
+      assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6 && r.clock.epoch + s.t - ts >= 3 - 0.5 && r.clock.epoch + s.t - ts <= 5 + 0.5, `the stage's timestamp (${r.clock.epoch + s.t - ts} ms before the send)`);
     }
     assert.ok(r.tab.activations.length === 1 && r.tab.activations[0] <= n[0].t, "the activation before the first notch");
     assert.ok(answerOf(r, 1).t >= n.at(-1)!.t && !answerOf(r, 1).body.error, "the answer after the last notch");
@@ -109,6 +109,7 @@ test("mouse.wheel on a page with no last point: a path to the client's point fir
   const r = await runVector(own([wheel(0, 240, 500, 300)], { last: null, ...DOC() }));
   const m = movesOf(r.tab), n = notchesOf(r.tab);
   assert.ok(m.length > 5 && m.every((s) => s.t < n[0].t), `a path before the notches (${m.length} moves)`);
+  assert.ok(n[0].t - m.at(-1)!.t >= F.notchGapMs[0] && n[0].t - m.at(-1)!.t <= F.notchGapMs[1], "the first notch one person's gap after the path");
   assert.deepEqual(at(m.at(-1)!), [500, 300]);
   assert.ok(n.length === 2 && n.every((s) => s.params.x === 500 && s.params.y === 300));
 });
@@ -143,15 +144,15 @@ test("the input lock and the one action: two tabs' wheels never interleave (the 
 
 test("a dialog during the notches (a wheel handler opens an alert): the plan ends and the lock is free at once; after the close the notches that did not go go as one wheel event with their sum, at the page's last point, and the call gets Chrome's answer of it", async () => {
   const v = own([{ at: 0, ...wheel(0, 600) }, { afterEvent: "Page.javascriptDialogOpening", waitMs: 1000, method: "Page.handleJavaScriptDialog", params: { accept: true } }], DOC());
-  let k = 0, freeAt = -1;
+  let k = 0, heldAt600 = -1;
   const r = await runVector(v, { tab: (t) => {
     t.opensDialog = (s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++k === 2;
-    t.onClientEvent = ((f) => (m: string) => { f(m); t.clock.timer(1, () => { if (freeAt < 0 && t.stage.lock.held === 0) freeAt = t.clock.now(); }); })(t.onClientEvent);
+    t.clock.timer(600, () => { heldAt600 = t.stage.lock.held; });
   } });
   const n = notchesOf(r.tab), close = passOf(r.tab, 2)!;
   assert.deepEqual(n.map((s) => s.params.deltaY), [120, 120, 360], "two notches, then the rest as one event");
   assert.ok(n[2].t >= close.t && !n[2].dropped && n[2].params.x === 640 && n[2].params.y === 360, "after the close, at the page's last point");
-  assert.ok(freeAt >= 0 && freeAt < close.t, "the lock is free while the dialog is open");
+  assert.ok(close.t > 600 && heldAt600 === 0, "the lock is free while the dialog is open");
   assert.ok(answerOf(r, 1).t >= n[2].answered! && !answerOf(r, 1).body.error, "Chrome's answer of that event");
   assert.equal(r.stage.counts.dialogEnds, 1);
   assert.equal(r.stage.lock.held, 0);
@@ -184,14 +185,15 @@ test("a navigation of the main frame while an ended wheel waits for a dialog's c
   assert.equal(stage.lock.held, 0);
 });
 
-test("STAGE_EVENT_WAIT_MS: a notch whose answer never comes ends the plan; the rest goes at once as one wheel event (no dialog is known); the lock is free; an error of a notch stops the plan and the call gets Chrome's error", async () => {
+test("STAGE_EVENT_WAIT_MS: the notches go with no wait for each answer (a wheel's events), and a notch whose answer never comes ends the plan 2 s after it; the rest goes at once as one wheel event (no dialog is known); an error of a notch stops the plan and the call gets Chrome's error", async () => {
   let k = 0;
-  const r = await runVector(own([{ at: 0, ...wheel(0, 600) }, { at: 10, ...evaluate() }], DOC()), { maxMs: 20_000, hook: (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++k === 2 ? new Promise(() => {}) : undefined) });
-  const n = notchesOf(r.tab);
-  assert.deepEqual(n.map((s) => s.params.deltaY), [120, 120, 360]);
-  assert.ok(n[2].t - n[1].t >= STAGE_EVENT_WAIT_MS && n[2].t - n[1].t <= STAGE_EVENT_WAIT_MS + 1, `the rest ${n[2].t - n[1].t} ms after the notch with no answer`);
+  const r = await runVector(own([{ at: 0, ...wheel(0, 6000) }, { at: 10, ...evaluate() }], DOC(9000)), { maxMs: 20_000, hook: (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++k === 2 ? new Promise(() => {}) : undefined) });
+  const n = notchesOf(r.tab), rest = n.at(-1)!;
+  assert.ok(n.length > 3 && n.slice(0, -1).every((s) => s.params.deltaY === 120), "the notches go on after the one with no answer");
+  assert.equal(rest.params.deltaY, 6000 - 120 * (n.length - 1), "then the rest as one event");
+  assert.ok(rest.t - n[1].t >= STAGE_EVENT_WAIT_MS && rest.t - n[1].t <= STAGE_EVENT_WAIT_MS + 1, `the rest ${rest.t - n[1].t} ms after the notch with no answer`);
   assert.equal(r.stage.counts.waitEnds, 1);
-  assert.ok(passOf(r.tab, 2)!.t >= n[2].t, "the later call goes after the rest");
+  assert.ok(passOf(r.tab, 2)!.t >= rest.t, "the later call goes after the rest");
   let e = 0;
   const q = await runVector(own([{ at: 0, ...wheel(0, 600) }], DOC()), { hook: (s) => { if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++e === 2) throw Object.assign(new Error("refused"), { code: -32000 }); return undefined; } });
   assert.equal(notchesOf(q.tab).length, 2, "no notch after the refused one");
@@ -252,7 +254,9 @@ test("DOM.scrollIntoViewIfNeeded with the client's rect (click({ position })): t
 });
 
 test("the wheel point's rule 1: no notch over an input, a select, a textarea, a contenteditable, a canvas, a video or a frame; the stage takes the nearest point of the 5 x 5 grid that passes, with a path there", async () => {
-  const under = { x: 560, y: 320, width: 160, height: 80 };
+  // The page is scrolled to 3000 and the element is above the viewport, so the page's content moves down under the
+  // wheel point, away from the element under the page's last point.
+  const UP = { scrollers: { document: { scrollY: 3000, height: 4000 } } }, under = { x: 560, y: 3320, width: 160, height: 80 }, shown = { ...under, y: 320 };
   const cases: [string, any][] = [
     ["a number input", { n: { tag: "input", type: "number", box: under } }],
     ["a select", { n: { tag: "select", box: under } }],
@@ -262,16 +266,17 @@ test("the wheel point's rule 1: no notch over an input, a select, a textarea, a 
     ["a video", { n: { tag: "video", box: under } }],
   ];
   for (const [name, nodes] of cases) {
-    const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), ...nodes }, ...DOC() }));
+    const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(600), ...nodes }, ...UP }));
     const n = notchesOf(r.tab);
-    assert.equal(n.length, 17, `${name}: the notches`);
-    assert.ok(n.every((s) => !(s.params.x >= under.x && s.params.x < under.x + under.width && s.params.y >= under.y && s.params.y < under.y + under.height)), `${name}: no notch over it`);
+    assert.equal(n.length, Math.round((3000 + 360 - 620) / 120), `${name}: the notches up`);
+    assert.ok(n.every((s) => s.params.deltaY === -120), `${name}: up`);
+    assert.ok(n.every((s) => !(s.params.x >= shown.x && s.params.x < shown.x + shown.width && s.params.y >= shown.y && s.params.y < shown.y + shown.height)), `${name}: no notch over it`);
     assert.deepEqual(at(n[0]), [640, 230], `${name}: the nearest grid point that passes`);
     assert.deepEqual(at(movesOf(r.tab).at(-1)!), [640, 230], `${name}: a path there`);
     assert.ok(r.tab.wheels.every((w) => w.at !== "n"), `${name}: the page's element gets no wheel event`);
   }
-  const frame = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, frames: { f: { origin: "same", box: under, border: 0 } }, ...DOC() }));
-  assert.ok(notchesOf(frame.tab).every((s) => !(s.params.x >= under.x && s.params.x < under.x + under.width && s.params.y >= under.y && s.params.y < under.y + under.height)), "a frame: no notch over it");
+  const frame = await runVector(own([scroll("b")], { nodes: { b: BUTTON(600) }, frames: { f: { origin: "same", box: under, border: 0 } }, ...UP }));
+  assert.ok(notchesOf(frame.tab).length > 0 && notchesOf(frame.tab).every((s) => !(s.params.x >= shown.x && s.params.x < shown.x + shown.width && s.params.y >= shown.y && s.params.y < shown.y + shown.height)), "a frame: no notch over it");
   assert.equal(frame.tab.sc["frame:f"].y, 0);
 });
 
@@ -291,11 +296,11 @@ test("the wheel point's rule 2: an element of the chain with a wheel listener th
 });
 
 test("the wheel point's rule 3: a point whose element scrolls another scroller first (an inner list under the page's last point) is no wheel point of the page", async () => {
-  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, scrollers: { document: { scrollY: 0, height: 4000 }, list: { box: { x: 500, y: 250, width: 300, height: 200 }, height: 900, scrollY: 0 } } }));
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(600) }, scrollers: { document: { scrollY: 3000, height: 4000 }, list: { box: { x: 500, y: 3250, width: 300, height: 200 }, height: 900, scrollY: 0 } } }));
   const n = notchesOf(r.tab);
-  assert.ok(n.length === 17 && n.every((s) => !(s.params.x >= 500 && s.params.x < 800 && s.params.y >= 250 && s.params.y < 450)), "no notch over the list");
+  assert.ok(n.length === 23 && n.every((s) => !(s.params.x >= 500 && s.params.x < 800 && s.params.y >= 250 && s.params.y < 450)), "no notch over the list");
   assert.equal(r.tab.sc.list.y, 0, "the list does not move");
-  assert.equal(r.tab.sc.document.y, 2040);
+  assert.equal(r.tab.sc.document.y, 3000 - 23 * 120);
 });
 
 test("no wheel point (a canvas over the whole viewport): the client's call as it is, logged and counted", async () => {

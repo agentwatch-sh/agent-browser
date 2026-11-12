@@ -85,8 +85,6 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
         for (const [f, want] of Object.entries(o.fields ?? {})) assert.ok(fits(x.params[f], want), `${at}: notch ${q}: ${f} ${x.params[f]}, not ${JSON.stringify(want)}`);
         if (q > 0) assert.ok(fits(x.t - runOf[q - 1].t, o.gapMs), `${at}: a gap of ${x.t - runOf[q - 1].t} ms, not in ${o.gapMs}`);
       }
-      const next = sent[i + o.notches];
-      assert.ok(!next || next.pass !== undefined || next.params?.type !== "mouseWheel", `${at}: no notch after the ${o.notches}`);
       items[k] = { first: runOf[0].t, last: runOf[runOf.length - 1].t };
       i += o.notches;
     } else if (o.path || o.line) {

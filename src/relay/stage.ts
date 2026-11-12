@@ -1,7 +1,8 @@
-// The input stage (boards ab-t30.9, the pointer part, and ab-t30.10, the keys and the text; the input design,
-// docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, sections 4 to 7, and build tasks 5 and 6 of
-// its section 14; contract C11 "The input stage (board ab-t30.6)", the master, with test/vectors/stage.json). A client
-// writes plain Playwright, and the stage turns its input into a person's input: a path from the page's last point at a
+// The input stage (boards ab-t30.9, the pointer part, ab-t30.10, the keys and the text, and ab-t30.11, the scroll and the
+// wheel; the input design, docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md, sections 4 to 8, and
+// build tasks 5 to 7 of its section 14; contract C11 "The input stage (board ab-t30.6)", the master, with
+// test/vectors/stage.json). A client writes plain Playwright, and the stage turns its input into a person's input: a path
+// from the page's last point at a
 // device's rate, a pause, a press of a person's length, a person's gap between the presses of a double click, the hover's
 // path around Playwright's hit-target check, the frame mapping, the recovery after a miss of that check, and the spread of
 // the press point; keys with a person's holds, gaps and rollover, a real Shift key for a capital or a symbol, chords, the
@@ -19,9 +20,14 @@
 // ab-t30.12 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
 // relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
 //
-// Not in these parts (C11 names them; their board tasks build them): the scroll and the wheel (ab-t30.11: a wheel event
-// goes as it is, DOM.scrollIntoViewIfNeeded is not taken; the focus click of a field out of view waits for its notches),
-// and the calls that only a script makes (ab-t30.12: a move with a button down, the drag, select text, the file chooser).
+// The scroll and the wheel (board ab-t30.11): mouse.wheel as a person's notches with the page's residual, at the page's
+// last point; DOM.scrollIntoViewIfNeeded on every session translated into notches at a wheel point (no form control,
+// canvas, frame or listener of the wheel that is not passive under it), round by round, the outermost scroller first, up
+// through frames (same-origin and cross-origin), with the end after a round that does not move its scroller and the
+// counted fallbacks; the focus click's notches into view; the Mac's pass.
+//
+// Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12: a move
+// with a button down, the drag, select text, the file chooser).
 //
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
@@ -31,6 +37,7 @@ import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
 import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv } from "../human/keys.ts";
 import { draw, uniform, type Random } from "../human/random.ts";
+import { notches, notchGapMs, Wheel, wheelPlan } from "../human/wheel.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
 import { PLAYWRIGHT_FOCUS, startsAction } from "./policy.ts";
 
@@ -243,6 +250,8 @@ export type StagePage = {
   point(): { x: number; y: number; x11: boolean } | null;
   /** The X pointer's place mapped into the page (Linux, with the pointer paths on), or null (outside the page, unknown, the Mac). */
   xPoint?(): Promise<{ x: number; y: number } | null>;
+  /** A node of the top page resolved into the stage's own isolated world (DOM.resolveNode by its backendNodeId): the objectId of its handle, or null. */
+  ownNode?(backendNodeId: number): Promise<string | null>;
 };
 
 /** The stage's clock: the player's (now, sleep) and a timer that can be cancelled. A test gives a fake one. */
@@ -263,7 +272,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup" | "field";
+type Kind = "mouse" | "key" | "text" | "setup" | "field" | "scroll";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -384,6 +393,9 @@ class TabState {
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
   /** An open dialog of the tab: the ended plan's events wait for its close (Chrome drops the input that it gets while it is open). */
   dialog: { closed: Promise<void>; close: () => void } | null = null;
+  /** The page's residual of each axis of its wheel calls (C11, the scroll and the wheel), and the time of its last notch. */
+  wheel: Wheel | null = null;
+  lastNotchAt = -Infinity;
 }
 
 /** The input lock: one for all pages of the agent browser, in the order of arrival. */
@@ -454,6 +466,20 @@ export function quadRect(q: unknown): Rect | null {
   return r;
 }
 
+/** The handle on which a scroller's reads run: its session, its objectId, the offset of its points in the top page, and (a cross-origin frame's levels) the handle of the frame's owner in the stage's own world. */
+type Reader = { child: string | undefined; obj: string; ox: number; oy: number; owner?: string };
+/** A scroller of the scroll's read, in the top page's points: its visible box (unclipped), its scroll position and range ([x, y]), its reader and its index there. */
+type Level = { r: Rect; s: [number, number]; m: [number, number]; doc: boolean; rd: Reader; k: number };
+/** The scroll's read: the target, its scrollers (innermost first), and the visible part of each (its box within the viewport and within each scroller around it). */
+type ScrollView = { t: Rect; levels: Level[]; vis: Rect[]; owner?: string };
+const shift = (r: Rect, x: number, y: number): Rect => ({ x0: r.x0 + x, y0: r.y0 + y, x1: r.x1 + x, y1: r.y1 + y });
+const meet = (a: Rect, b: Rect): Rect => ({ x0: Math.max(a.x0, b.x0), y0: Math.max(a.y0, b.y0), x1: Math.min(a.x1, b.x1), y1: Math.min(a.y1, b.y1) });
+const rectOf = (q: unknown): Rect | null => (Array.isArray(q) && q.length === 4 && q.every((v) => typeof v === "number" && Number.isFinite(v)) ? { x0: q[0], y0: q[1], x1: q[2], y1: q[3] } : null);
+/** C11's in-view rule on one axis: all of it inside the view, or its middle in the middle share of the view (60% vertically, 80% across). */
+const axisIn = (lo: number, hi: number, vlo: number, vhi: number, share: number) => vhi > vlo && ((lo >= vlo && hi <= vhi) || Math.abs((lo + hi) / 2 - (vlo + vhi) / 2) <= ((vhi - vlo) * share) / 2);
+/** An element is in view (C11, the scroll and the wheel) of the visible part of its nearest scroller (the viewport for an element with no inner scroller). */
+export const inView = (t: Rect, v: Rect) => axisIn(t.x0, t.x1, v.x0, v.x1, 0.8) && axisIn(t.y0, t.y1, v.y0, v.y1, 0.6);
+
 // ------------------------------------------------------------------ the stage
 
 export class Stage {
@@ -481,7 +507,8 @@ export class Stage {
   state(id: number) {
     const s = this.tabs.get(id);
     return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
-      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) } : null;
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0),
+      residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0] } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
   /** A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. */
@@ -505,17 +532,20 @@ export class Stage {
   /**
    * A client's call arrives (before the tab's gate): the entry of a call that the stage takes, or null. On the tab's own
    * session the stage takes Input.dispatchMouseEvent, Input.dispatchKeyEvent and Input.insertText, and on every session
-   * the hit-target setup and the focus and fill recognizers (the other recognizers of C11's table belong to the later
-   * parts, and pass).
+   * the hit-target setup, the focus and fill recognizers and DOM.scrollIntoViewIfNeeded (the other recognizers of C11's
+   * table belong to the later part, and pass; a retry's script scroll passes, counted).
    */
   arrive(page: StagePage, child: string | undefined, method: string, params: any, answer: (body: Body) => void): Entry | null {
     let kind: Kind | null = null, util: Utility | null = null;
     if (!child && method === "Input.dispatchMouseEvent") kind = "mouse";
     else if (!child && method === "Input.dispatchKeyEvent") kind = "key";
     else if (!child && method === "Input.insertText") kind = "text";
+    else if (method === "DOM.scrollIntoViewIfNeeded") kind = "scroll";
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
       else if (util.name === "focus" || util.name === "fill") kind = "field";
+      // A retry's script scroll passes in the first build, and the stage counts it (C11, the scroll and the wheel).
+      else if (util.name === "retry scroll") this.count("retryScrolls");
     }
     if (!kind) return null;
     const st = this.st(page);
@@ -544,10 +574,12 @@ export class Stage {
       if (e.kind !== "text" && e.kind !== "field") st.fillNext = false;
       if (e.kind === "setup") return await this.setupStep(page, st, e);
       if (e.kind === "field") return await this.fieldStep(page, st, e);
+      if (e.kind === "scroll") return await this.scrollStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
       if (e.kind === "mouse") {
         const t = e.params.type;
         if (t === "mouseMoved" && !e.params.buttons && (e.params.button ?? "none") === "none") return await this.moveStep(page, st, e);
+        if (t === "mouseWheel") return await this.wheelStep(page, st, e);
         if (t === "mousePressed") return await this.pressStep(page, st, e);
         if (t === "mouseReleased") return await this.releaseStep(page, st, e);
         this.count("plainMouse");
@@ -721,7 +753,7 @@ export class Stage {
     a.fire();
     this.count(why === "dialog" ? "dialogEnds" : why === "wait" ? "waitEnds" : "limitEnds");
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
-    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field") x.ended = true;
+    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.ended = true;
     this.dropRest(st);
     // The key run: at a dialog and at STAGE_EVENT_WAIT_MS its planned events are dropped (the end's releases cover the keys
     // that the plan holds); at STAGE_ACTION_MAX_MS its planned releases go at the end, and the rest of the run goes as the
@@ -855,7 +887,7 @@ export class Stage {
     if (a) { a.failed = true; a.fire(); }
     this.count("eventErrors");
     this.stopKeyTimer(st);
-    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field") x.failedWith = body;
+    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.failedWith = body;
     this.dropRest(st); st.spread = null;
     this.releaseHeld(page, st);
     return body;
@@ -1216,6 +1248,312 @@ export class Stage {
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
     if (!r.ok) return this.fail(page, st, e, r.error);
     e.answer({ result: r.value ?? {} });
+  }
+
+  // ---------------------------------------------------------------- the scroll and the wheel (board ab-t30.11)
+
+  /** A call as the client sent it (C11, the cases of no change), counted by `k` and its reason: an input call with the stage's timestamp, in the lock; a scroll as it is. */
+  private asIs(page: StagePage, st: TabState, e: Entry, k: string, why: string): Promise<void> {
+    this.count(k); this.count(`${k}:${why}`);
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: ${e.kind === "scroll" ? "a scroll into view" : "a wheel call"} as the client sent it (${why})`);
+    return e.kind === "scroll" ? page.pass(e.child, e.method, e.params, e.answer) : this.plainStep(page, st, e);
+  }
+
+  /**
+   * mouseWheel (C11, the scroll and the wheel). On Linux: notches of STAGE_NOTCH_PX in the direction of the call, on each
+   * axis (the vertical first), at the page's last point, with a person's gaps; their count with the page's residual of
+   * each axis (src/human/wheel.ts). A call that earlier notches have given gets no event, no lock and its answer at once.
+   * With no last point, a path to the client's point first. The call is answered after Chrome answered its last notch. At
+   * an end of the plan (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS, a drop), the notches that did not go go as
+   * one wheel event with their sum, the client's own event of an ended plan. On the Mac the call goes as it is.
+   */
+  private async wheelStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    if (!this.linux()) return this.asIs(page, st, e, "wheelAsIs", "mac");
+    if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
+    const p = e.params, px = page.person.params.wheel.notchPx, W = (st.wheel ??= new Wheel(px));
+    this.dropRest(st);
+    const nx = notches(Number(p.deltaX) || 0, W.x, px), ny = notches(Number(p.deltaY) || 0, W.y, px);
+    if (!nx.count && !ny.count) { W.x = nx.residual; W.y = ny.residual; this.count("wheelNoNotch"); e.answer({ result: {} }); return; }
+    const a = await this.begin(page, st);
+    if (a.over) return this.endedEvent(page, st, e);
+    W.x = nx.residual; W.y = ny.residual;
+    if (!this.from(page, st)) {
+      // A page with no last point: a path to the client's point first (as a press does).
+      const client = this.fit(p), from = await this.startOf(page);
+      if (from && !same(from, client)) {
+        const r = await this.play(page, st, a, this.plan(page, st, from, client, DEFAULT_WIDTH), { modifiers: p.modifiers ?? 0 });
+        if (r.error !== undefined) return this.fail(page, st, e, r.error);
+      }
+    }
+    const at = this.from(page, st) ?? this.fit(p);
+    this.count("wheelCalls");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a wheel call: ${Math.abs(nx.count) + Math.abs(ny.count)} notches`);
+    const r = await this.notchesAt(page, st, a, at, { x: nx.count, y: ny.count }, { ...p });
+    if (r.error !== undefined) return this.fail(page, st, e, r.error);
+    if (r.rest.x || r.rest.y) {
+      // The end of the plan: the notches that did not go, as one event of the ended plan (after a dialog's close, with the lock again).
+      this.count("wheelRests");
+      const er = await this.endedSend(page, st, e, { ...p, x: at.x, y: at.y, deltaX: r.rest.x * px, deltaY: r.rest.y * px });
+      if (er) this.answerWith(page, e, er.sent);
+      return;
+    }
+    const s = await this.settle(a, r.all);
+    if ("ended" in s) { this.answerWith(page, e, r.all.then(() => ({}))); return; }
+    if (!s.ok) return this.fail(page, st, e, s.error);
+    e.answer({ result: {} });
+  }
+
+  /**
+   * Notches at a point (a signed count on each axis, the vertical first), each at its time with no wait for the answer of
+   * the one before, as a wheel's events: the first at the later of now and one person's gap after the page's last notch
+   * or the end of the path before it (a hand that stops, then turns the wheel).
+   * `rest`: the notches that did not go because the plan ended; `all`: Chrome's answers of those that went; `error`: a
+   * refused notch (the plan sends no more).
+   */
+  private async notchesAt(page: StagePage, st: TabState, a: Action, at: Pt, count: { x: number; y: number }, base: Record<string, unknown>): Promise<{ rest: { x: number; y: number }; all: Promise<unknown>; sent: number; error?: unknown }> {
+    const P = page.person, plan = wheelPlan(count, P, this.o.random);
+    const t0 = Math.max(this.clock.now(), Math.max(st.lastNotchAt, st.lastWasMove ? st.lastMoveAt : -Infinity) + notchGapMs(P, this.o.random));
+    const sent: Promise<unknown>[] = [], done = { x: 0, y: 0 };
+    let error: unknown;
+    for (const n of plan) {
+      await this.until(a, t0 + n.t);
+      if (a.over || error !== undefined) break;
+      const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { ...base, type: "mouseWheel", x: at.x, y: at.y, deltaX: n.dx, deltaY: n.dy, timestamp: this.stamp(page, st) });
+      st.lastNotchAt = this.clock.now();
+      pr.catch((x) => { if (error === undefined) error = x; });
+      sent.push(pr);
+      if (n.dy) done.y += Math.sign(n.dy); else done.x += Math.sign(n.dx);
+    }
+    const all = Promise.all(sent);
+    all.catch(() => {});
+    if (error === undefined && !a.over) { const s = await this.settle(a, all); if (!("ended" in s) && !s.ok) error = s.error; }
+    return { rest: error !== undefined ? { x: 0, y: 0 } : { x: count.x - done.x, y: count.y - done.y }, all, sent: sent.length, ...(error !== undefined ? { error } : {}) };
+  }
+
+  /**
+   * DOM.scrollIntoViewIfNeeded (C11, the scroll and the wheel), on every session. On Linux: the element in view gets {}
+   * with no event; else notches into view (intoView), then {}. When it cannot (no wheel point, a round that does not move
+   * the scroller, STAGE_SCROLL_ROUNDS, a read that fails, the end of the plan), the client's call goes as it is (a script
+   * scroll), logged and counted. On the Mac the call goes as it is.
+   */
+  private async scrollStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const p = e.params, node = typeof p.objectId === "string" ? p.objectId : null;
+    if (!this.linux()) return this.asIs(page, st, e, "scrollAsIs", "mac");
+    if (!node || st.action?.over) return this.asIs(page, st, e, "scrollAsIs", node ? "ended" : "noHandle");
+    const q = p.rect, rect = q && [q.x, q.y, q.width, q.height].every((v) => typeof v === "number" && Number.isFinite(v)) ? { x: q.x, y: q.y, w: q.width, h: q.height } : null;
+    const r = await this.intoView(page, st, null, e.child, node, false, rect);
+    if (r.ok) {
+      this.count(r.notched ? "scrollNotched" : "scrollInView");
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a scroll into view: ${r.notched ? `${r.notched} notches in ${r.rounds} rounds` : "in view"}`);
+      e.answer({ result: {} });
+      return;
+    }
+    if (r.why === "error") return this.fail(page, st, e, r.error);
+    this.o.log(`relay: the input stage: a scroll into view of tab ${page.id} went as the client sent it (${r.why})`);
+    return this.asIs(page, st, e, "scrollAsIs", r.why);
+  }
+
+  /**
+   * Notches into view (C11, the scroll and the wheel; the focus click's notches): the element is in view when it is in view
+   * of the visible part of its nearest scroller. Else each round finds the outermost scroller that must move (the plan of
+   * scrollPlan), a wheel point over its visible part (wheelPoint), a path there when the pointer is not there, the notches
+   * that bring the element's middle to the middle of that scroller, the wait for the smooth scroll (SCROLL_WAIT_MS), and
+   * the read again; at most STAGE_SCROLL_ROUNDS rounds, and a round that does not move its scroller ends them. On the Mac
+   * the read alone (no notch). The action is the caller's (`a`), else one that it begins at its first event.
+   */
+  private async intoView(page: StagePage, st: TabState, a: Action | null, child: string | undefined, node: string, follow: boolean, rect: { x: number; y: number; w: number; h: number } | null):
+    Promise<{ ok: true; view: ScrollView; notched: number; rounds: number } | { ok: false; why: string; error?: unknown }> {
+    const owners: string[] = [];
+    const read = async () => { const v = await this.scrollRead(page, st, child, node, follow, rect); if (v && v !== "none" && v.owner) owners.push(v.owner); return v; };
+    try {
+      let view = await read(), rounds = 0, notched = 0;
+      for (;;) {
+        if (view === null) return { ok: false, why: "readFails" };
+        if (view === "none") return { ok: false, why: "noBox" };
+        if (inView(view.t, view.vis[0])) return { ok: true, view, notched, rounds };
+        if (!this.linux()) return { ok: false, why: "mac" };
+        if (rounds >= STAGE_SCROLL_ROUNDS) return { ok: false, why: "rounds" };
+        const plan = this.scrollPlan(view);
+        if (!plan) return { ok: false, why: "noRange" };
+        const at = await this.wheelPoint(page, st, view, plan.k);
+        if (at === TIMEOUT) return { ok: false, why: "readFails" };
+        if (!at) return { ok: false, why: "noWheelPoint" };
+        a ??= await this.begin(page, st);
+        if (a.over) return { ok: false, why: "ended" };
+        // The pointer goes to the wheel point with a path when it is not there (the way to a wheel point: C11, one window per page).
+        const from = this.from(page, st) ?? (await this.startOf(page));
+        if (from && !same(from, at)) {
+          const r = await this.play(page, st, a, this.plan(page, st, from, at, DEFAULT_WIDTH), { modifiers: this.clientBits(st) });
+          if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
+          if (a.over || r.stopped) return { ok: false, why: "ended" };
+        }
+        const px = page.person.params.wheel.notchPx, n = (d: number) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / px)));
+        const before = view.levels[plan.k].s;
+        const r = await this.notchesAt(page, st, a, at, { x: n(plan.d[0]), y: n(plan.d[1]) }, { modifiers: this.clientBits(st) });
+        if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
+        if (a.over) return { ok: false, why: "ended" };
+        rounds++; notched += r.sent;
+        this.count("scrollRounds");
+        // The smooth scroll of the round ends (a first value), then the read again.
+        await this.until(a, st.lastNotchAt + SCROLL_WAIT_MS);
+        if (a.over) return { ok: false, why: "ended" };
+        const next = await read();
+        // A round that does not move its scroller ends the notches: no notch goes to a page that does not scroll with it.
+        if (next && next !== "none" && next.levels.length === view.levels.length && next.levels[plan.k].s[0] === before[0] && next.levels[plan.k].s[1] === before[1]) return { ok: false, why: "noMove" };
+        view = next;
+      }
+    } finally {
+      for (const o of owners) void page.send(undefined, "Runtime.releaseObject", { objectId: o }).catch(() => {});
+    }
+  }
+
+  /**
+   * The scroll's read (SCROLL_STATE on the node's handle): the target and its scrollers in the top page's points. For a node
+   * of a cross-origin frame (a child session), its frame's levels get the frame mapping's offset, and the top page's
+   * levels come from the same read on the frame's owner in the stage's own world (one cross-origin level only). Then the
+   * visible part of each level, from the viewport (Page.getLayoutMetrics) inward. "none": the node has no box; null: a read
+   * failed (the stage fails open).
+   */
+  private async scrollRead(page: StagePage, st: TabState, child: string | undefined, node: string, follow: boolean, rect: { x: number; y: number; w: number; h: number } | null): Promise<ScrollView | "none" | null> {
+    const args = rect ? [rect.x, rect.y, rect.w, rect.h] : [null, null, null, null];
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCROLL_STATE, arguments: [...args.map((value) => ({ value })), { value: follow }, { value: false }], returnByValue: true }));
+    const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+    if (v?.none) return "none";
+    const t = rectOf(v?.t);
+    if (!v || !t || !Array.isArray(v.levels) || v.flat === false) return null;
+    const lv = (list: any[], rd: Reader, x: number, y: number): Level[] | null => {
+      const out: Level[] = [];
+      for (const [k, l] of list.entries()) { const b = rectOf(l?.r); if (!b || !Array.isArray(l.s) || !Array.isArray(l.m)) return null; out.push({ r: shift(b, x, y), s: [Number(l.s[0]) || 0, Number(l.s[1]) || 0], m: [Number(l.m[0]) || 0, Number(l.m[1]) || 0], doc: !!l.doc, rd, k }); }
+      return out;
+    };
+    let ox = 0, oy = 0, outer: Level[] = [], owner: string | undefined;
+    if (!v.top) {
+      // A cross-origin frame: one level of it (its owner on the top page), else the stage fails open.
+      if (!child || !page.ownNode) return null;
+      const m = await this.mapped(page, st, child, { ox: v.ox, oy: v.oy, top: false, flat: true, box: t });
+      if (!m || m.levels.length !== 1 || m.levels[0].parent !== undefined) { this.count("scrollFrameDeep"); return null; }
+      ox = m.ox - v.ox; oy = m.oy - v.oy;
+      const o = await this.read(page.ownNode(m.levels[0].owner));
+      if (o === TIMEOUT || typeof o !== "string") return null;
+      owner = o;
+      const w = await this.read(page.send(undefined, "Runtime.callFunctionOn", { objectId: o, functionDeclaration: SCROLL_STATE, arguments: [{ value: null }, { value: null }, { value: null }, { value: null }, { value: false }, { value: true }], returnByValue: true }));
+      const u = w === TIMEOUT ? null : (w as any)?.result?.value;
+      const ol = u && u.top && u.flat !== false && Array.isArray(u.levels) ? lv(u.levels, { child: undefined, obj: o, ox: 0, oy: 0 }, 0, 0) : null;
+      if (!ol) { void page.send(undefined, "Runtime.releaseObject", { objectId: o }).catch(() => {}); return null; }
+      outer = ol;
+    }
+    const inner = lv(v.levels, { child, obj: node, ox, oy, owner }, ox, oy);
+    if (!inner) return null;
+    const levels = [...inner, ...outer];
+    const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
+    const vp = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
+    const port: Rect | null = vp?.clientWidth > 0 && vp?.clientHeight > 0 ? { x0: 0, y0: 0, x1: vp.clientWidth, y1: vp.clientHeight } : levels.at(-1)?.r ?? null;
+    if (!port) return null;
+    const vis: Rect[] = [];
+    let V = port;
+    for (let i = levels.length - 1; i >= 0; i--) vis[i] = V = meet(levels[i].r, V);
+    return { t: shift(t, ox, oy), levels, vis: levels.length ? vis : [port], owner };
+  }
+
+  /**
+   * The plan of a round (as Chromium's own scroll into view, innermost first): for each scroller, the move on each axis that
+   * brings the element's middle (clipped to the scroller inside it, after that one's move) to the middle of its box, unless
+   * it is in view there already, within its scroll range. The round is the outermost scroller that must move, so that the
+   * scrollers inside it come into view before their own notches. Null: no scroller can move it.
+   */
+  private scrollPlan(v: ScrollView): { k: number; d: [number, number] } | null {
+    let thing = v.t;
+    const ds: [number, number][] = [];
+    for (const L of v.levels) {
+      const R = L.r, d: [number, number] = [0, 0];
+      for (const ax of [0, 1] as const) {
+        const [lo, hi, vlo, vhi] = ax ? [thing.y0, thing.y1, R.y0, R.y1] : [thing.x0, thing.x1, R.x0, R.x1];
+        if (axisIn(lo, hi, vlo, vhi, ax ? 0.6 : 0.8)) continue;
+        d[ax] = Math.max(-L.s[ax], Math.min(L.m[ax] - L.s[ax], (lo + hi) / 2 - (vlo + vhi) / 2));
+      }
+      ds.push(d);
+      const moved = shift(thing, -d[0], -d[1]), cut = meet(moved, R);
+      thing = cut.x1 >= cut.x0 && cut.y1 >= cut.y0 ? cut : moved;
+    }
+    for (let i = ds.length - 1; i >= 0; i--) if (Math.abs(ds[i][0]) >= 1 || Math.abs(ds[i][1]) >= 1) return { k: i, d: ds[i] };
+    return null;
+  }
+
+  /**
+   * The wheel point of a scroller (C11, the wheel point): the page's last point first, then the points of a 5 x 5 grid over
+   * the scroller's visible part, the nearest to the last point first; the first that passes rules 1 and 3 (WHEEL_POINTS on
+   * the scroller's reader), the frame's owner at the point on the top page for a cross-origin frame's scroller (OWNER_AT),
+   * and rule 2 (no listener of `wheel` or `mousewheel` that is not passive on its chain). Null: no point passes; TIMEOUT:
+   * a read failed.
+   */
+  private async wheelPoint(page: StagePage, st: TabState, view: ScrollView, k: number): Promise<Pt | null | typeof TIMEOUT> {
+    const L = view.levels[k], V = view.vis[k];
+    if (!(V.x1 - V.x0 >= 1 && V.y1 - V.y0 >= 1)) return null;
+    const inV = (q: Pt) => q.x >= V.x0 && q.y >= V.y0 && q.x < V.x1 && q.y < V.y1;
+    const last = this.from(page, st), cands: Pt[] = last && inV(last) ? [last] : [], grid: Pt[] = [];
+    for (let i = 0; i < 25; i++) {
+      const q = this.fit({ x: V.x0 + (V.x1 - V.x0) * (0.5 + ((i % 5) - 2) * 0.18), y: V.y0 + (V.y1 - V.y0) * (0.5 + (Math.floor(i / 5) - 2) * 0.18) });
+      if (inV(q) && !cands.some((c) => same(c, q)) && !grid.some((c) => same(c, q))) grid.push(q);
+    }
+    const o = last ?? { x: (V.x0 + V.x1) / 2, y: (V.y0 + V.y1) / 2 };
+    grid.sort((p, q) => Math.hypot(p.x - o.x, p.y - o.y) - Math.hypot(q.x - o.x, q.y - o.y));
+    cands.push(...grid);
+    const rd = L.rd;
+    for (let from = 0; from < cands.length;) {
+      const batch = cands.slice(from);
+      const r = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_POINTS, arguments: [{ value: L.k }, { value: batch.map((q) => [q.x - rd.ox, q.y - rd.oy]) }], returnByValue: true }));
+      const pass: { i: number; chain: number[] }[] | null = r === TIMEOUT ? null : (r as any)?.result?.value;
+      if (!Array.isArray(pass)) return TIMEOUT;
+      if (!pass.length) return null;
+      from += Math.max(...pass.map((x) => x.i)) + 1;
+      let ok = pass;
+      if (rd.owner) {
+        const w = await this.read(page.send(undefined, "Runtime.callFunctionOn", { objectId: rd.owner, functionDeclaration: OWNER_AT, arguments: [{ value: pass.map((x) => [batch[x.i].x, batch[x.i].y]) }], returnByValue: true }));
+        const hits = w === TIMEOUT ? null : (w as any)?.result?.value;
+        if (!Array.isArray(hits)) return TIMEOUT;
+        ok = pass.filter((_, j) => hits[j] === true);
+      }
+      if (!ok.length) continue;
+      const good = await this.listenersPass(page, rd, ok);
+      if (good === TIMEOUT) return TIMEOUT;
+      if (good) return batch[good.i];
+    }
+    return null;
+  }
+
+  /**
+   * Rule 2 of the wheel point: the first point whose chain has no listener of `wheel` or `mousewheel` that is not passive
+   * (DOMDebugger.getEventListeners on each element of the last WHEEL_POINTS, its own listeners only), on handles of the
+   * stage's own group, which it releases.
+   */
+  private async listenersPass(page: StagePage, rd: Reader, cands: { i: number; chain: number[] }[]): Promise<{ i: number } | null | typeof TIMEOUT> {
+    try {
+      const arr = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ELS, returnByValue: false, objectGroup: STAGE_GROUP }));
+      const id = arr === TIMEOUT ? undefined : (arr as any)?.result?.objectId;
+      if (typeof id !== "string") return TIMEOUT;
+      const props = await this.read(page.send(rd.child, "Runtime.getProperties", { objectId: id, ownProperties: true }));
+      if (props === TIMEOUT) return TIMEOUT;
+      const ids = new Map<number, string>();
+      for (const x of (props as any)?.result ?? []) if (/^\d+$/.test(String(x?.name)) && typeof x?.value?.objectId === "string") ids.set(Number(x.name), x.value.objectId);
+      const bad = new Map<number, boolean>();
+      for (const c of cands) {
+        let ok = true;
+        for (const j of c.chain) {
+          if (!bad.has(j)) {
+            const oid = ids.get(j);
+            if (!oid) return TIMEOUT;
+            const l = await this.read(page.send(rd.child, "DOMDebugger.getEventListeners", { objectId: oid, depth: 0 }));
+            if (l === TIMEOUT) return TIMEOUT;
+            bad.set(j, ((l as any)?.listeners ?? []).some((x: any) => (x?.type === "wheel" || x?.type === "mousewheel") && x?.passive !== true));
+          }
+          if (bad.get(j)) { ok = false; break; }
+        }
+        if (ok) return c;
+      }
+      return null;
+    } finally {
+      void page.send(rd.child, "Runtime.releaseObjectGroup", { objectGroup: STAGE_GROUP }).catch(() => {});
+    }
   }
 
   // ---------------------------------------------------------------- the keys and the text (board ab-t30.10)
@@ -1687,7 +2025,24 @@ export class Stage {
       f = h;
     }
     if (a.over) return pass();
-    const at = await this.clickPoint(page, st, e.child, node, f, fill);
+    // A field out of view first gets notches into view (C11, the focus click; board ab-t30.11, review-119 N14), also inside
+    // a frame's own scroller; then the stage reads the field again. On the Mac (no notch until the Mac's wheel model) and
+    // when the notches cannot bring it into view, no click, counted.
+    const into = await this.intoView(page, st, a, e.child, node, fill, null);
+    if (!into.ok) {
+      if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return pass(); }
+      if (into.why === "ended") return pass();
+      why(into.why === "readFails" ? "fieldNoRead" : into.why === "noBox" ? "focusNoBox" : "focusOutOfView");
+      return this.keepAction(st, a, pass);
+    }
+    if (into.notched) {
+      this.count("focusNotches");
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: ${into.notched} notches into view`);
+      const h = await this.fieldRead(page, st, e.child, node, fill);
+      if (!h) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+      f = h;
+    }
+    const at = await this.clickPoint(page, st, e.child, node, f, fill, into.view.vis[0]);
     if (!at) return this.keepAction(st, a, pass);
     // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
     const want = f.kind === "input" && reset ? { s: 0, e: 0 } : typeof f.s === "number" && typeof f.e === "number" ? { s: f.s, e: f.e } : null;
@@ -1728,9 +2083,10 @@ export class Stage {
    * The point of the focus click (C11, the focus click): 2 to 5 px from the left edge of an input or a textarea with text,
    * and of a contenteditable; 25% to 75% across an empty input or textarea; 35% to 65% down an input, 6 to 12 px from the
    * top of a textarea or a contenteditable; whole px inside the box on Linux. Null (no click, counted) when the field has no
-   * box, is out of the viewport, or another element covers it at the point.
+   * box, the point is out of the visible part of its scroller (`vis`, after the notches into view), or another element
+   * covers it at the point.
    */
-  private async clickPoint(page: StagePage, st: TabState, child: string | undefined, node: string, f: FieldRead, follow: boolean): Promise<Pt | null> {
+  private async clickPoint(page: StagePage, st: TabState, child: string | undefined, node: string, f: FieldRead, follow: boolean, vis: Rect): Promise<Pt | null> {
     const b = f.box, w = b.x1 - b.x0, h = b.y1 - b.y0;
     if (!(w >= 1 && h >= 1)) { this.noClick(page, "focusNoBox"); return null; }
     const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
@@ -1745,8 +2101,8 @@ export class Stage {
       return l <= u ? Math.min(u, Math.max(l, r)) : r;
     };
     const p = { x: pick(xa, xb, b.x0, b.x1 - 1), y: pick(ya, yb, b.y0, b.y1 - 1) };
-    // A field out of view (C11: notches first, then the click): the notches are board ab-t30.11's; until then no click.
-    if (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight)) { this.noClick(page, "focusOutOfView"); return null; }
+    // The point out of the visible part of the field's scroller (a field in view by the middle rule, clipped at its edge): no click.
+    if (!inside(p, vis) || (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight))) { this.noClick(page, "focusOutOfView"); return null; }
     // The stage's own hit test (review-119 B3): the field's own document at the field's own point (the top page's point less
     // the offset of the field's document), and each same-origin frame above it (FIELD_HIT); then at each cross-origin level
     // the node at the mapped point of the parent's session is the frame's owner (DOM.getNodeForLocation). That command reads
