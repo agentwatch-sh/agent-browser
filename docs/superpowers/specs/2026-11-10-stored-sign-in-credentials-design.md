@@ -681,9 +681,11 @@ starts it, as any request that needs the browser does, and Chrome does not stop 
   space", `chrome.debugger` has no `Browser.setWindowBounds`, and a minimized state changes nothing on an Xvfb
   with no window manager (all round 1). The service runs Xvfb and holds its X authority, so it moves the act window
   at the X level to the right of the screen's area (as `xdotool windowmove` did in round 1). Round 1: the
-  framebuffer then held no pixel of the window, Chrome reported the new bounds, and the sign-in worked there. The
-  act types no key until `windows.get` reports the window outside the screen; else it ends with "The agent browser
-  could not move the sign-in window off the screen."
+  framebuffer then held no pixel of the window, Chrome reported the new bounds, and the sign-in worked there. The act
+  types no key until `windows.get` reports the window outside the screen; else it ends with "The agent browser could
+  not move the sign-in window off the screen." The service finds the act window, and the window of each act popup, by
+  a title that it sets in that tab's page: a new random value for each act and each act popup (`aw-act-` and 8 random
+  bytes in hex; the X move takes no title of another form), never by the bounds of a window (board ab-v16.97.4).
 - **The live view (review-104 B2).** From the act's start to its end, agentwatch's live view sends no frame of the
   display to any viewer (a fixed frame "A stored sign-in runs" in its place) and plays no input from it. The
   service sends the act's start and end as a `sign_in` event with `phase` (section 8). So a test login, which any
@@ -769,7 +771,8 @@ worker each sent the whole password to the other host, and `Fetch` paused neithe
 worker with no attach of it. Round 1 measured rules A, B and C: with them, no request of any channel reached the
 other host. Rules D and E are designed, not measured.
 
-**The guard.** The service also keeps `Fetch` on in the act tab for every URL, at the request stage. For each paused
+**The guard.** The service also keeps `Fetch` on in the act tab and in each act popup that its session holds, for
+every URL, at the request stage. For each paused
 request:
 
 - When its URL holds the password (plain, URL-encoded, JSON-escaped, base64 or base64url), on any origin: it fails
@@ -790,11 +793,12 @@ paused request whose event is too large for the link fails: the guard cannot rea
 of `send_to`, at any path (the site's own endpoints); a hash, an encryption or a compression of the password; a
 part of the value (the person's input types a key at a time, about 5 characters a second, so a script can send
 each prefix to a `send_to` origin); a WebSocket to a `send_to` origin; a WebSocket to a subdomain or another port
-of a `send_to` host from a service worker (rule C is by host); a top-level navigation by GET of the act tab to a host
-on the scope's list, with a changed or partial value (the guard finds only the whole value); the requests of an act
-popup before the service's session holds its `Fetch` (its first navigation among them), so a popup that the page opens
-after the act's last key, or in the moment before the service learns of it, can send a GET with the whole value (board
-ab-v16.97.4, review-124 B2: the act ends at an act popup that opens before its last key); DNS prefetch and
+of a `send_to` host from a service worker (rule C is by host); a top-level navigation by GET of the act tab or an act
+popup to a host on the scope's list, with a changed or partial value (the guard finds only the whole value); the
+requests of an act popup before the service's session holds its `Fetch` (its first navigation among them), so a popup
+that the page opens after the password's last key, or in the moment before the service learns of it, can send a GET
+with the whole value (board ab-v16.97.4, review-124 B2: the act ends at an act popup that opens before the password's
+last key); DNS prefetch and
 preconnect (`<link rel=dns-prefetch>`), which make no request that a rule sees; and WebRTC (a STUN or TURN request,
 or a data channel), which no rule and no `Fetch` sees (not measured).
 
@@ -1383,9 +1387,9 @@ Recommendation: a, with b or c as a later task when a site needs it. No answer: 
 - **The block and the guard** stop every request except a top-level GET to a host outside `send_to`, and the guard sees five forms of the
   password. Not stopped: the site's own origins of `send_to` (a hash, an encryption, a compression, a part of the
   value, a WebSocket), a service worker's WebSocket to a subdomain or another port of a `send_to` host, a top-level
-  GET of the act tab to a host on the scope's list with a changed or partial value, the first requests of an act popup
-  before the service's session holds its `Fetch` (a popup after the act's last key), DNS prefetch and preconnect, and
-  WebRTC
+  GET of the act tab or an act popup to a host on the scope's list with a changed or partial value, the first requests
+  of an act popup before the service's session holds its `Fetch` (a popup that opens after the password's last key, or
+  in the moment before the service learns of it), DNS prefetch and preconnect, and WebRTC
   (section 7.6).
 - **The display**: a program of the user with the display's X authority can read the display and the act window's
   title, move the window back onto the screen and send it input (T16). A site's own reveal control that shows the

@@ -390,6 +390,87 @@ test("review-124 B4: an incognito tab whose opener is no tab of the act (the ope
   assert.equal(w.popupWindows.get(50)!.bounds.left, 10);
 });
 
+test("review-124b F1: a popup's event during the type watch's read stops the next key: no key goes after the service learns of the popup", async () => {
+  const w = new ActWorld({ password: PASS_KEYS });
+  let hits = 0, opened = false, keysAfter = 0;
+  w.onHit = () => { if (++hits === 2 && !opened) { opened = true; w.openPopup(41, 40); } };
+  w.onInput = (m, p) => { if (opened && m === "Input.dispatchKeyEvent" && p.type !== "keyUp") keysAfter++; };
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.popup));
+  assert.ok(opened, "the popup came during a read of the type watch");
+  assert.equal(keysAfter, 0, "no key after it");
+});
+
+test("review-124b F2: a popup known only by webNavigation.onCreatedNavigationTarget (an act tab as its source, no act openerTabId) ends the act `popup` before the next key, gets the act's attach and Fetch, and moves by its own marker", async () => {
+  const w = new ActWorld();
+  let opened = false, keysAfter = 0;
+  w.onInput = (m, p) => {
+    if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && !opened) {
+      opened = true;
+      w.popupTabs.set(41, { windowId: 40 });
+      w.popupWindows.set(40, { bounds: { left: 10, top: 10, width: 400, height: 300 }, marker: null });
+      // The receiver's order: the navigation target first (its opener by sourceTabId), then tabs.onCreated with the active tab as openerTabId.
+      w.emit({ t: "ev", ch: "bridge", ev: "webNavigation.onCreatedNavigationTarget", details: { sourceTabId: 31, sourceFrameId: 0, tabId: 41, url: "about:blank" } });
+      w.emit({ t: "ev", ch: "bridge", ev: "tabs.onCreated", tab: { id: 41, windowId: 40, incognito: true, openerTabId: 7, url: "" }, attached: false, held: false });
+      return;
+    }
+    if (opened && (m === "Input.insertText" || (m === "Input.dispatchKeyEvent" && p.type !== "keyUp"))) keysAfter++;
+  };
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.popup));
+  assert.equal(keysAfter, 0);
+  assert.ok(w.log.some((r) => r.what === "attach" && r.detail === 41), "the act's own session on the popup");
+  assert.ok(w.popupCalls.some((c) => c.tab === 41 && c.method === "Fetch.enable"), "the guard on the popup");
+  await until(() => w.log.some((r) => r.what === "popupMoved" && r.detail === 40), "the popup's window moves by its marker");
+});
+
+test("review-124b F2: the added tab of an act popup's tabs.onReplaced is an act popup: the act ends `popup`, and the added tab gets the act's attach and Fetch and moves by its own marker", async () => {
+  const w = new ActWorld();
+  let opened = false;
+  w.onInput = (m, p) => {
+    if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && !opened) {
+      opened = true;
+      w.openPopup(41, 40);
+      w.popupTabs.set(42, { windowId: 44 });
+      w.popupWindows.set(44, { bounds: { left: 30, top: 30, width: 400, height: 300 }, marker: null });
+      w.emit({ t: "ev", ch: "bridge", ev: "tabs.onReplaced", addedTabId: 42, removedTabId: 41 });
+    }
+  };
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.popup));
+  assert.ok(w.log.some((r) => r.what === "attach" && r.detail === 42), "the act's own session on the added tab");
+  assert.ok(w.popupCalls.some((c) => c.tab === 42 && c.method === "Fetch.enable"), "the guard on the added tab");
+  await until(() => w.log.some((r) => r.what === "popupMoved" && r.detail === 44), "the added tab's window moves by its marker");
+});
+
+test("review-124b note d: a popup whose attach the receiver refuses ends the act `popup`, also after the password's last key (fail closed)", async () => {
+  const w = new ActWorld();
+  w.refuseAttach.add(41);
+  w.submitTo = null;
+  w.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && w.popupTabs.size === 0) w.openPopup(41, 40); };
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.popup));
+  assert.ok(w.first("act_end") > 0);
+});
+
+test("review-124b note b: a popup whose windows.get fails is not taken for a closed one: its window is not confirmed off the screen, and the act ends `window`", async () => {
+  const w = new ActWorld();
+  w.failWindowGet.add(40);
+  w.submitTo = null;
+  w.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && w.popupTabs.size === 0) w.openPopup(41, 40); };
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.window));
+});
+
+test("the daemon lead's point 2: the X move's title is a new random value for each act and each act popup, which the service sets (aw-act- and 8 random bytes in hex)", async () => {
+  const markers: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const w = new ActWorld();
+    w.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && w.popupTabs.size === 0) w.openPopup(41, 40); };
+    await w.act().signIn(LOCAL, { name: "staging" });
+    await until(() => w.log.some((r) => r.what === "popupMoved"), "the popup's move");
+    markers.push(...new Set(w.log.filter((r) => r.what === "moveOff").map((r) => r.detail as string)));
+  }
+  assert.ok(markers.length >= 4, markers.join(" "));
+  for (const m of markers) assert.match(m, /^aw-act-[0-9a-f]{16}$/);
+  assert.equal(new Set(markers).size, markers.length, "each act's and each popup's title is its own");
+});
+
 test("review-124 B1 and N2: requests that wait in check 7's queue are checked again at their turn: act 1 stops the credential, and the requests behind it are refused `stopped` with no act; the same for the hour's limit and for a lock during the wait; their values open only at the turn", async () => {
   // The lockout guard: 2 failed results in a row before; act 1 is not accepted (the third), so it stops the credential.
   const w = new ActWorld();

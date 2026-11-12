@@ -140,10 +140,10 @@ type Run = {
   window: number | null; tab: number | null; world: number | null; frame: string | null;
   blocked: number; guarded: number; guardedIds: Set<string>;
   sockets: Map<string, string>; navAt: number | null; loads: number; lost: boolean; popupFailed: boolean; watching: boolean; watchCtx: number | null;
-  /** The act's tabs (the act tab and each act popup), the act popups' windows (their place confirmed outside the screen or not). */
-  actTabs: Set<number>; popups: Map<number, { window: number | null; outside: boolean }>;
-  /** An act popup opened before the act's last key (the act ends `popup`), and the last key went. */
-  popupEarly: boolean; lastKey: boolean;
+  /** The act's tabs (the act tab and each act popup), and each act popup's window (null until the service knows it). */
+  actTabs: Set<number>; popups: Map<number, { window: number | null }>;
+  /** An act popup opened before the password's last key, or one whose session or guard failed (the act ends `popup`); the last key went. */
+  popupEarly: boolean; popupUnguarded: boolean; lastKey: boolean;
   last: Pt | null; viewport: { width: number; height: number };
 };
 
@@ -229,7 +229,7 @@ export class SignInAct {
       this.o.emit({ t: "ev", ev: "sign_in", phase: "start", act, scope: c.scope, repo, id: record.id, name: record.name, origin: record.origin, at: this.at() });
       const run: Run = { scope: c.scope, record, values, password: values.password.toString("utf8"), window: null, tab: null, world: null, frame: null,
         blocked: 0, guarded: 0, guardedIds: new Set(), sockets: new Map(), navAt: null, loads: 0, lost: false, popupFailed: false, watching: false, watchCtx: null, last: null, viewport: { width: 1280, height: 800 },
-        actTabs: new Set(), popups: new Map(), popupEarly: false, lastKey: false };
+        actTabs: new Set(), popups: new Map(), popupEarly: false, popupUnguarded: false, lastKey: false };
       let result: ActResult;
       try { result = await this.run(run); }
       catch { result = this.o.model.notReady() !== null ? "not_ready" : "lost"; }
@@ -433,7 +433,7 @@ export class SignInAct {
   }
 
   private openConnection(r: Run): ActResult | null {
-    return openOutside(r.sockets.values(), r.record.send_to).length ? "open_connection" : r.popupEarly ? "popup" : r.popupFailed ? "window" : null;
+    return openOutside(r.sockets.values(), r.record.send_to).length ? "open_connection" : r.popupEarly || r.popupUnguarded ? "popup" : r.popupFailed ? "window" : null;
   }
 
   /** The page's load after a navigation of the main frame, in the outcome's time. */
@@ -470,16 +470,18 @@ export class SignInAct {
     if (!box) return "no_form";
     await this.click(r, box);
     const person = this.o.model.person(r.scope), random = this.o.model.random;
+    // An act popup before the password's last key ends the act: no key goes after the service learns of it (review-124
+    // B2, B3). The flags are read again after the type watch's read, at once before the key (review-124b F1): a popup's
+    // event can come during that read.
+    const flags = (): ActResult | null => (r.lost ? "lost" : r.popupEarly || r.popupUnguarded ? "popup" : r.popupFailed ? "window" : null);
     const check = async (): Promise<ActResult | null> => {
-      if (r.lost) return "lost";
-      // An act popup before the last key ends the act: no key goes after the service learns of it (review-124 B2, B3).
-      if (r.popupEarly) return "popup";
-      if (r.popupFailed) return "window";
+      const before = flags();
+      if (before) return before;
       if (password && r.watching) {
         const hit = await this.watchEval<boolean | null>(r, call(WATCH_HIT));
         if (hit !== false) return hit === true ? "type_watch" : "lost";
       }
-      return null;
+      return flags();
     };
     const keyed = [...value].every((ch) => charKey(ch) !== undefined);
     const pace = keyed ? typingPace(value, person, random) : null;
@@ -536,6 +538,7 @@ export class SignInAct {
     const end = performance.now() + this.limits.outcomeMs;
     while (performance.now() < end) {
       if (r.lost) return "lost";
+      if (r.popupUnguarded) return "popup";
       if (r.popupFailed) return "window";
       if (r.navAt !== null && performance.now() - r.navAt >= this.limits.settleMs) {
         const read = await this.evaluate<PageRead>(r, call(READ_PAGE)).catch(() => null);
@@ -668,14 +671,18 @@ export class SignInAct {
     const id = tabId as number;
     this.o.model.hide(id);
     r.actTabs.add(id);
-    r.popups.set(id, { window: null, outside: false });
+    r.popups.set(id, { window: null });
     if (!r.lastKey) r.popupEarly = true;
     void (async () => {
       try {
         await this.o.model.call("debugger.attach", [id]);
         await this.sendTo(id, "Network.enable");
         await this.sendTo(id, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
-      } catch { /* a popup that closed, or one that the receiver refuses: the rules still hold for it */ }
+      } catch {
+        // A popup with no guard ends the act, also after the password's last key (review-124b note d: fail closed). A popup
+        // that closed meanwhile ends nothing.
+        if (r.popups.has(id)) r.popupUnguarded = true;
+      }
     })();
     if (windowId !== null) this.popupWindow(r, id, windowId);
     else void this.o.model.call("tabs.get", [id]).then((t: any) => { if (Number.isInteger(t?.windowId)) this.popupWindow(r, id, t.windowId); }, () => {});
@@ -685,7 +692,7 @@ export class SignInAct {
     const p = r.popups.get(tabId);
     if (!p) return;
     p.window = windowId;
-    if (windowId === r.window) { p.outside = true; return; }
+    if (windowId === r.window) return;
     void this.movePopup(r, tabId, windowId);
   }
 
@@ -695,13 +702,13 @@ export class SignInAct {
     const marker = `aw-act-${randomBytes(8).toString("hex")}`;
     const end = performance.now() + this.limits.popupMs;
     while (performance.now() < end && r.popups.has(tabId)) {
+      // A read that fails is no proof of a close: only tabs.onRemoved takes the popup out (review-124b note b).
       const w = await this.o.model.call("windows.get", [windowId]).catch(() => null);
-      if (!w) { r.popups.delete(tabId); return; } // it closed
-      if (screen && outsideScreen(w, screen)) { const p = r.popups.get(tabId); if (p) p.outside = true; return; }
+      if (w && screen && outsideScreen(w, screen)) return;
       // The marker in the popup's current document (a new document of the popup takes it again at the next turn).
       const tree = await this.sendTo(tabId, "Page.getFrameTree").catch(() => null);
       const frame = tree?.frameTree?.frame?.id;
-      if (frame) {
+      if (w && frame) {
         const world = await this.sendTo(tabId, "Page.createIsolatedWorld", { frameId: frame, worldName: `aw-act-${randomBytes(4).toString("hex")}`, grantUniversalAccess: false }).catch(() => null);
         if (Number.isInteger(world?.executionContextId)) await this.sendTo(tabId, "Runtime.evaluate", { expression: call(MARK_TITLE, marker), contextId: world.executionContextId, returnByValue: true }).catch(() => null);
         await this.o.screen.moveOff(marker).catch(() => 0);

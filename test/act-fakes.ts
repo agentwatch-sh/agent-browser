@@ -85,6 +85,12 @@ export class ActWorld {
   }
   /** The wait (C10) of each debugger.sendCommand of the act. */
   readonly waits: number[] = [];
+  /** A test's hook at each read of the type watch's flag (a popup's event during that read: review-124b F1). */
+  onHit: () => void = () => {};
+  /** Tabs whose debugger.attach the receiver refuses (a popup before its mark: review-124b note d). */
+  readonly refuseAttach = new Set<number>();
+  /** Windows whose windows.get fails (review-124b note b). */
+  readonly failWindowGet = new Set<number>();
   /** A server that never answers: Page.navigate gets no answer and no page loads. */
   stall = false;
   /** A test's hook at each Input call (a page that flips the field's type, a WebSocket that opens). */
@@ -143,7 +149,7 @@ export class ActWorld {
       case "box": { const f = p?.fields.find((x) => x.i === arg[0]); return f ? f.box : null; }
       case "submit": return p?.submit ?? null;
       case "watch": this.watchInstalled = true; this.rec("watch", arg[0]); return true;
-      case "hit": return this.watchHit;
+      case "hit": this.onHit(); return this.watchHit;
       case "empty": this.emptied++; this.typed.clear(); this.rec("empty"); return 2;
       case "local": return { origin: p?.origin ?? "null", items: p?.local ?? {} };
     }
@@ -180,12 +186,13 @@ export class ActWorld {
         case "windows.get": {
           this.rec("windows.get", args[0]);
           if (args[0] === 30) return { id: 30, incognito: true, ...this.bounds };
+          if (this.failWindowGet.has(args[0])) throw new Error("timeout");
           const pw = this.popupWindows.get(args[0]);
           if (!pw) throw new Error(`No window with id: ${args[0]}.`);
           return { id: args[0], ...pw.bounds };
         }
         case "tabs.get": { const t = this.popupTabs.get(args[0]); if (!t) throw new Error(`No tab with id: ${args[0]}.`); return { id: args[0], windowId: t.windowId, incognito: true }; }
-        case "debugger.attach": this.rec("attach", args[0]); return { already: false };
+        case "debugger.attach": this.rec("attach", args[0]); if (this.refuseAttach.has(args[0])) throw new Error("not an agent tab"); return { already: false };
         case "debugger.sendCommand": {
           const [target, method, params] = args;
           if (target.tabId !== 31) return this.popupCmd(target.tabId, method, params ?? {});
