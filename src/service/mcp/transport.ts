@@ -376,7 +376,7 @@ export class McpTransport implements McpHandler {
     this.o.log(`mcp: MCP session ${s.n} of scope ${s.scope} ended: ${why}`);
     if (![...this.sessions.values()].some((x) => x.worker === s.worker) && this.workers.get(s.scope) === s.worker) {
       this.workers.delete(s.scope);
-      const halt = s.worker.stop();
+      const halt = s.worker.stop().catch(() => {});
       this.halts.set(s.scope, halt);
       void halt.finally(() => { if (this.halts.get(s.scope) === halt) this.halts.delete(s.scope); });
     }
