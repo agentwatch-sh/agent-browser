@@ -146,12 +146,15 @@ export function checkRequest(req: Record<string, unknown>, has: (op: string) => 
 export const SIGN_IN_END = ["result", "ms", "blocked", "guarded", "stopped_now"] as const;
 /**
  * An event of C12's table with exactly its fields, and a `by` of the right shape for a stop (the fake's standard input).
- * A stop also has `by`, and the end of a sign-in act also has the fields of SIGN_IN_END.
+ * A stop also has `by`, and the end of a sign-in act also has the fields of SIGN_IN_END; a refusal's end that the service
+ * sends after refusal ends that it did not send (the rate of the refusal ends) also has `dropped`, a positive count.
  */
 export function eventFits(ev: unknown): boolean {
   if (!isObj(ev) || ev.t !== "ev" || typeof ev.ev !== "string" || !Object.hasOwn(EVENTS, ev.ev)) return false;
-  const want = ["t", "ev", ...EVENTS[ev.ev], ...(ev.ev === "stopped" && ev.reason === "stop" ? ["by"] : []), ...(ev.ev === "sign_in" && ev.phase === "end" ? SIGN_IN_END : [])].sort();
+  const end = ev.ev === "sign_in" && ev.phase === "end";
+  const want = ["t", "ev", ...EVENTS[ev.ev], ...(ev.ev === "stopped" && ev.reason === "stop" ? ["by"] : []), ...(end ? SIGN_IN_END : []), ...(end && Object.hasOwn(ev, "dropped") ? ["dropped"] : [])].sort();
   const keys = Object.keys(ev).sort();
+  if (Object.hasOwn(ev, "dropped") && !(Number.isSafeInteger(ev.dropped) && (ev.dropped as number) >= 1)) return false;
   return keys.length === want.length && keys.every((k, i) => k === want[i]) && (ev.by === undefined || byFits(ev.by));
 }
 

@@ -16,6 +16,7 @@ import { runWatchBack } from "./watchback.ts";
 import { startRelay } from "./relay/endpoint.ts";
 import { SERVICE_USAGE, serviceMain } from "./service/main.ts";
 import { runHost } from "./service/link/host.ts";
+import { signIn, signInHuman, signIns } from "./sign-in-cli.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
 
@@ -88,6 +89,10 @@ through this consumer's proxy socket. Read pages with outline or text before any
 
 Commands:
 ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
+
+sign-in <name> and sign-ins (agent mode with the agent browser service, --cdp-url): sign in to a site with a
+credential that the operator stored, by its name, and list the names that this session may use. The agent browser
+types the stored username and password itself, in a private window that no agent sees; no answer holds them.
 
 chromes and commands need no --state-dir. chromes lists every agent-browser Chrome of this user
 from the process table and the state folders' files; it connects to none and signals none.
@@ -318,6 +323,15 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       // node:ffi for that (only then), in its self-test.
       const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log, peerCheck: values["peer-check"] === true });
       await relay.closed;
+      return 0;
+    }
+    if (name === "sign-in" || name === "sign-ins") {
+      // The stored sign-ins (C11, the sign-in act): the method over agent mode's endpoint, so the walk gives the scope.
+      for (const k of Object.keys(values)) if (!(k in GLOBAL_FLAGS)) throw new UsageError(`--${k} is not an option of ${name}`);
+      if (name === "sign-in" ? rest.length !== 1 : rest.length !== 0) throw new UsageError(`usage: agent-browser ${name === "sign-in" ? "sign-in <name>" : "sign-ins"} --cdp-url URL --state-dir DIR`);
+      const s = optionsFromFlags(values, log);
+      const result = name === "sign-in" ? await signIn(s, rest[0]) : await signIns(s);
+      await write(io.stdout, json ? JSON.stringify(result) + "\n" : signInHuman(result));
       return 0;
     }
     const spec = COMMAND_SPECS.find((c) => c.name === name);

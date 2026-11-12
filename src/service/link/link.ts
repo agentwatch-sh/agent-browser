@@ -349,6 +349,16 @@ export class LinkReceiverPort implements ReceiverPort {
   }
   allowlist(line: AllowlistLine): void { this.carrier?.allowlist(line as unknown as Record<string, unknown>); }
   endScope(scope: string): void { this.carrier?.endScope(scope); }
+  /**
+   * The current connection's hello's features (C4: a list). The sign-in act tests for membership of `act` in it, never for
+   * equality, so a receiver with more features than the service knows still has the act.
+   */
+  features(): ReadonlySet<string> { return this.link.features(); }
+  /** The sign-in act's requests of channel main (C4): act_rules, act_cookies and act_end, each waited from its send. */
+  act(op: "act_rules" | "act_cookies" | "act_end", body: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
+    if (!this.link.connected()) return Promise.reject(new ReceiverError("down", NOT_CONNECTED_TEXT));
+    return this.link.request(op, body, waitMs);
+  }
   /** The model's daemon.blocked (C10): the same handler as the receiver's notice. */
   blocked(b: Blocked): void { this.events?.blocked(b); }
 }

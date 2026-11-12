@@ -163,12 +163,21 @@ export class Conn {
   discover = false;
   download: { behavior: string; path?: string; events: boolean } | null = null;
   grants: { type: string; pattern: string }[] = [];
-  constructor(id: number, scope: string, socket: Socket, root: Root | null = null) { this.id = id; this.scope = scope; this.socket = socket; this.root = root; }
+  /** How the connection was admitted (C11, the sign-in act's check 1): the agent door's walk and an MCP ticket of a local admission are local. */
+  readonly admission: "local" | "remote";
+  constructor(id: number, scope: string, socket: Socket, root: Root | null = null, admission: "local" | "remote" = "local") {
+    this.id = id; this.scope = scope; this.socket = socket; this.root = root; this.admission = admission;
+  }
   send(msg: object): void { this.socket.send(JSON.stringify(msg)); }
   event(sessionId: string | undefined, method: string, params: object): void { this.send(sessionId ? { method, params, sessionId } : { method, params }); }
 }
 
 type Handler = (c: Conn, p: any, sessionId: string | undefined, tab: Tab | undefined) => Promise<object>;
+/** The sign-in act of the service (src/service/signins/act.ts): AgentBrowser.signIn and AgentBrowser.signIns (C11). */
+export type SignInHost = {
+  signIn(c: { scope: string; admission: "local" | "remote" }, params: Record<string, unknown>): Promise<object>;
+  signIns(c: { scope: string; admission: "local" | "remote" }): object;
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const newSessionId = () => randomBytes(16).toString("hex").toUpperCase();
 
@@ -268,6 +277,17 @@ export class Model {
   private readonly scopePersons = new Map<string, Person>();
   /** One activation at a time, also between the stage's activations (inside the tab's gate) and the activation chain's steps. */
   private activating: Promise<void> = Promise.resolve();
+  // ---- the sign-in act (C11; board ab-v16.97.4)
+  /** The service's sign-in act, or null (the relay: it refuses both methods as calls outside its set). */
+  private signInHost: SignInHost | null = null;
+  /**
+   * The hidden tabs (C10's list N4; C11, the sign-in act): every incognito tab (the act's tabs and the operator's private
+   * tabs) and each tab that the act marks. No event or read of one reaches a client; the act's listeners get their events.
+   */
+  private readonly hiddenTabs = new Set<number>();
+  /** The downloads of incognito tabs (by item id): no client hears of them. */
+  private readonly hiddenDownloads = new Set<number>();
+  private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
     pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock } = {}) {
@@ -510,7 +530,7 @@ export class Model {
     if (link !== this.link || !Array.isArray(targets)) { this.points.clear(); return; }
     const ids = new Map<number, string>(), attached = new Set<number>();
     for (const t of targets) {
-      if (!Number.isInteger(t?.tabId) || t.tabId < 0) continue;
+      if (!Number.isInteger(t?.tabId) || t.tabId < 0 || this.hiddenTabs.has(t.tabId)) continue;
       if (typeof t.id === "string" && t.id) ids.set(t.tabId, t.id);
       if (t.attached === true) attached.add(t.tabId);
     }
@@ -544,6 +564,7 @@ export class Model {
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
+    this.hiddenTabs.clear(); this.hiddenDownloads.clear();
     for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
     // The relay drops its line at each link change (C10), and its roots with it.
@@ -594,8 +615,8 @@ export class Model {
 
   // ------------------------------------------------------------------ connections
 
-  open(scope: string, socket: Socket, root: Root | null = null): Conn {
-    const c = new Conn(this.nextConn++, scope, socket, root);
+  open(scope: string, socket: Socket, root: Root | null = null, admission: "local" | "remote" = "local"): Conn {
+    const c = new Conn(this.nextConn++, scope, socket, root, admission);
     this.conns.add(c);
     // The receiver attaches and holds each new tab while a connection is open: popups wait for their owner.
     if (this.conns.size === 1) this.bridge.call("bridge.attachNew", [true]).catch((e) => this.log(`relay: bridge.attachNew failed: ${e.message}`));
@@ -645,7 +666,7 @@ export class Model {
       if (!tab) return fail(TEXT.noSession);
       onPage = true;
     }
-    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage });
+    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null });
     if (typeof to === "object") return fail(to.refused);
     // Layer 1 of the guard (C11; the per-scope design, section 6): a navigation of the tab's main frame, or a new tab's
     // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off
@@ -1445,6 +1466,71 @@ export class Model {
     if (this.pointerLog) this.log(`relay: catch-up in tab ${tab.id}: ${sent} moves in ${Date.now() - t0} ms`);
   }
 
+  // ------------------------------------------------------------------ the sign-in act (C11; board ab-v16.97.4)
+
+  /** The service gives the model its sign-in act: from then on the model answers AgentBrowser.signIn and signIns. */
+  setSignIns(host: SignInHost | null): void { this.signInHost = host; }
+
+  /** The act's port to the browser (src/service/signins/act.ts, ActModelPort): the bridge, the hiding, the events, the input lock. */
+  actPort() {
+    return {
+      notReady: () => this.notReady(),
+      entries: (scope: string) => this.entriesOf(scope),
+      call: <T = any>(op: string, args: unknown[] = [], o: { wait?: number } = {}) => this.bridge.call<T>(op, args, o),
+      hide: (tabId: number) => { this.hiddenTabs.add(tabId); this.keptScopes.delete(tabId); },
+      listen: (fn: (ev: Record<string, any>) => void) => { this.actListeners.add(fn); return () => { this.actListeners.delete(fn); }; },
+      inputLock: <T>(fn: () => Promise<T>) => this.inputLock(fn),
+      person: (scope: string) => this.personOf(scope),
+      random: this.random,
+    };
+  }
+
+  /** Tests: whether a tab is hidden (an incognito tab, or an act tab). */
+  isHidden(tabId: number): boolean { return this.hiddenTabs.has(tabId); }
+
+  /**
+   * The browser's input lock for the act's clicks and keys (the input design, section 4.4): with the input stage on, the
+   * stage's lock, which every client input takes; with it off, a step of the activation chain, which each client input
+   * that starts an action waits for (Linux's one window per page). A client's input calls wait for it.
+   */
+  private inputLock<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.stage) return this.stage.lock.acquire().then(async (release) => { try { return await fn(); } finally { release(); } });
+    const run = this.activations.then(fn);
+    this.activations = run.then(() => {}, () => {});
+    return run;
+  }
+
+  /**
+   * C10's list N4: each event that the receiver still gives of an incognito tab (the act tab, its popups, and the
+   * operator's private tabs) goes to the act's listeners only, never to a client: tabs.onCreated, tabs.onUpdated,
+   * tabs.onRemoved, tabs.onReplaced, webNavigation.onCreatedNavigationTarget, webNavigation.onErrorOccurred, the
+   * downloads of an incognito tab, bridge.tabScope, bridge.tooLarge, and the act tab's debugger.onEvent and
+   * debugger.onDetach (the act's own session: they carry the typed values). True when the event is such one.
+   */
+  private hiddenEvent(ev: any): boolean {
+    const hid = (id: unknown) => Number.isInteger(id) && this.hiddenTabs.has(id as number);
+    const add = (id: unknown) => { if (Number.isInteger(id)) { this.hiddenTabs.add(id as number); this.keptScopes.delete(id as number); } };
+    let mine = false;
+    switch (ev?.ev) {
+      case "tabs.onCreated": if (ev.tab?.incognito === true || hid(ev.tab?.id)) { add(ev.tab?.id); mine = true; } break;
+      case "tabs.onUpdated": if (ev.tab?.incognito === true || hid(ev.tabId)) { add(ev.tabId); mine = true; } break;
+      case "tabs.onRemoved": mine = hid(ev.tabId); break;
+      case "tabs.onReplaced": if (hid(ev.removedTabId) || hid(ev.addedTabId)) { add(ev.addedTabId); mine = true; } break;
+      case "webNavigation.onCreatedNavigationTarget": if (hid(ev.details?.sourceTabId) || hid(ev.details?.tabId)) { add(ev.details?.tabId); mine = true; } break;
+      case "webNavigation.onErrorOccurred": mine = hid(ev.details?.tabId); break;
+      case "debugger.onEvent": case "debugger.onDetach": mine = hid(ev.source?.tabId); break;
+      case "bridge.tooLarge": case "bridge.tabScope": mine = hid(ev.tabId); break;
+      case "downloads.onCreated": if (ev.item?.incognito === true) { if (Number.isInteger(ev.item.id)) this.hiddenDownloads.add(ev.item.id); return true; } return false;
+      case "downloads.onChanged": return this.hiddenDownloads.has(ev.delta?.id);
+      default: return false;
+    }
+    if (!mine) return false;
+    for (const fn of [...this.actListeners]) { try { fn(ev); } catch (e) { this.log(`relay: the sign-in act's listener failed: ${(e as Error).message}`); } }
+    if (ev.ev === "tabs.onRemoved") this.hiddenTabs.delete(ev.tabId);
+    if (ev.ev === "tabs.onReplaced" && hid(ev.removedTabId)) this.hiddenTabs.delete(ev.removedTabId);
+    return true;
+  }
+
   // ------------------------------------------------------------------ tabs and sessions
 
   private tabOf(id: number): Tab {
@@ -1472,7 +1558,7 @@ export class Model {
 
   private async targetIdOf(tabId: number): Promise<string> {
     for (let i = 0; i < 40; i++) {
-      const hit = (await this.bridge.call<any[]>("debugger.getTargets")).find((t) => t.tabId === tabId);
+      const hit = this.hiddenTabs.has(tabId) ? undefined : (await this.bridge.call<any[]>("debugger.getTargets")).find((t) => t.tabId === tabId);
       if (hit) return hit.id;
       await sleep(50);
     }
@@ -1656,6 +1742,7 @@ export class Model {
   // ------------------------------------------------------------------ the receiver's events
 
   private onEvent(ev: any): void {
+    if (this.hiddenEvent(ev)) return;
     switch (ev.ev) {
       case "debugger.onEvent": return this.onCdpEvent(ev.source ?? {}, String(ev.method), ev.params ?? {});
       case "debugger.onDetach": {
@@ -1933,6 +2020,8 @@ export class Model {
   private async windowInScope(c: Conn, windowId: unknown, tabIds: number[] = []): Promise<any> {
     if (typeof windowId !== "number") throw new Error(TEXT.noWindow);
     const inWindow = await this.bridge.call<any[]>("tabs.query", [{ windowId }]);
+    // The act window (and each window of an incognito tab) is in no window lookup (C11, the refusals).
+    if (inWindow.some((t) => t?.incognito === true || this.hiddenTabs.has(t?.id))) throw new Error(TEXT.noWindow);
     if (!inWindow.some((t) => this.tabs.get(t.id)?.scope === c.scope)) throw new Error(TEXT.noWindow);
     tabIds.push(...inWindow.map((t) => t.id));
     return this.bridge.call("windows.get", [windowId]);
@@ -2108,5 +2197,14 @@ export class Model {
     // On a page session with one window per page only (route): the page draws in its window, so focus emulation
     // would only make it report the focus while another page has it.
     [FOCUS_EMULATION]: async () => ({}),
+    // The sign-in act (C11): only a model with the act routes them here (route), on the root and on a browser session.
+    "AgentBrowser.signIn": async (c, p) => {
+      if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIn"));
+      return this.signInHost.signIn({ scope: c.scope, admission: c.admission }, p && typeof p === "object" ? p : {});
+    },
+    "AgentBrowser.signIns": async (c) => {
+      if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIns"));
+      return this.signInHost.signIns({ scope: c.scope, admission: c.admission });
+    },
   };
 }
