@@ -920,3 +920,26 @@ test("review-115 note 1: the service removes LISTEN_PID, LISTEN_FDS and LISTEN_F
   // main.ts takes its listen from mcpListen only.
   assert.match(readFileSync(join(ROOT, "src/service/main.ts"), "utf8"), /await mcpListen\(/);
 });
+
+// ------------------------------------------------------------------ board ab-v16.94.12: review-115b's note on the socket take
+
+test("review-115b's note: the socket take marks every passed fd close-on-exec before it reads LISTEN_FDNAMES (C11, as sd_listen_fds does), also when the names fail", async () => {
+  const run = async (names: string) => {
+    const events: string[] = [];
+    const target: Record<string, string | undefined> = { LISTEN_PID: "4242", LISTEN_FDS: "2", LISTEN_FDNAMES: names, KEEP: "1" };
+    // The environment records each read of LISTEN_FDNAMES, in its order with the fcntl calls.
+    const env = new Proxy(target, { get: (t, k) => { if (k === "LISTEN_FDNAMES") events.push("names"); return Reflect.get(t, k); } });
+    const fcntl = (f: number, cmd: number) => { if (cmd === 2) events.push(`mark ${f}`); return 0; };
+    const got = await takeMcpSocket(env, { pid: 4242, fcntl }).then((fd) => ({ fd }), (e: Error) => ({ error: e.message }));
+    return { events, got, left: Object.keys(target) };
+  };
+  const ok = await run(`${MCP_SOCKET_UNIT}:other.socket`);
+  assert.deepEqual(ok.got, { fd: 3 });
+  assert.deepEqual(ok.events.slice(0, 2), ["mark 3", "mark 4"], `the marks come first: ${ok.events.join(", ")}`);
+  assert.ok(ok.events.includes("names"), "then the names");
+  assert.deepEqual(ok.left, ["KEEP"]);
+  const bad = await run("a.socket:b.socket");
+  assert.match((bad.got as { error: string }).error, /no socket named agent-browser-mcp\.socket/);
+  assert.deepEqual(bad.events.slice(0, 2), ["mark 3", "mark 4"], `the marks come first: ${bad.events.join(", ")}`);
+  assert.deepEqual(bad.left, ["KEEP"]);
+});
