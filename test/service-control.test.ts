@@ -480,6 +480,29 @@ test("the fake's own rules: a start in the state off sends the vectors' first re
   } finally { await d.close(); }
 });
 
+test("the fake follows the start and the stop by use where C12 says it does (board ab-v16.94.11): its config takes idle_stop_minutes by the service's rule, its status gives it, and it runs no stop by use (a test sends stopped idle on its standard input)", async () => {
+  const d = await openDoor(new FakeService({}));
+  try {
+    const { c } = await hello(d.path);
+    const cfg = { kind: "daemon", user: "ann", via: "config" }, own = { kind: "daemon", user: "ann", via: "daemon" };
+    const grace = async (id: string) => { c.send({ t: "req", id, op: "status", by: own }); return (await c.answer(id)).data.idle_stop_minutes; };
+    assert.equal(await grace("s0"), 10, "the default before any config");
+    const base = { t: "req", op: "config", by: cfg, enabled: true, control: true, chrome_bin: null, chrome_args: [] };
+    let n = 0;
+    for (const [v, want] of [[3, 3], [1440, 1440], [0, 10], [1441, 10], [2.5, 10], ["5", 10], [null, 10], [7, 7]] as const) {
+      c.send({ ...base, id: `c${++n}`, idle_stop_minutes: v });
+      await c.answer(`c${n}`);
+      assert.equal(await grace(`g${n}`), want, JSON.stringify(v));
+    }
+    c.send({ ...base, id: "c-none" });
+    await c.answer("c-none");
+    assert.equal(await grace("g-none"), 10, "a config with no key: the default");
+    await sleep(50);
+    assert.equal(c.lines.filter((l) => l.t === "ev").length, 0, "no stop by use of its own");
+    c.end();
+  } finally { await d.close(); }
+});
+
 test("the fake sends each event line of its standard input to each connection past the hellos, and drops each other line without logging it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-fake-"));
   const input = new PassThrough();

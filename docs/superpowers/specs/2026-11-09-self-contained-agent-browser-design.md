@@ -376,9 +376,12 @@ where the stage runs.
 - **Start and stop** of the agent browser (Chrome and Xvfb) keep today's rule during the move. The control
   door takes them from the daemon. The daemon takes them from a password login or from the API token, as
   today (an agent's `endpoint` wait sends a start). Each op names its caller's kind (section 7.1), so the
-  service logs who asked. The operator answered Q5 (section 19): start and stop become automatic, by use
-  (board ab-v16.94.11). The service process itself starts with its unit at login.
-- **Update**: the service checks Google's index every 12 hours and moves Chrome when idle (today's rule).
+  service logs who asked. The operator answered Q5 (section 19): start and stop are automatic, by use (board
+  ab-v16.94.11; C12, the start and the stop by use): a request that needs the browser starts Chrome and Xvfb, and they
+  stop when no agent used them for the grace time (agentwatch's `browser.idle_stop_minutes`, 10 minutes by default).
+  The service process itself starts with its unit at login.
+- **Update**: the service checks Google's index every 12 hours and moves Chrome when idle (today's rule): at the next
+  stop by use, after which the next start runs the new copy (board ab-v16.94.11), or after the idle hour (the floor).
   It reports each step on the event stream. agentwatch updates the service itself by its pin (the daemon
   lead's C7).
 - **`browser.control: false`**: a key of agentwatch's config file, as today. The daemon passes it in
@@ -1542,6 +1545,12 @@ The lead reads it so (board ab-v16.94.11 builds it and records the details that 
    daemon's own needs (switch-off, uninstall, `stop --all`) and for tests. A stop by the use rule is no
    crash: the supervisor does not restart it.
 5. Chrome's update moves at the next automatic stop; the idle rule of section 5.1's update row stays the floor.
+
+Board ab-v16.94.11 picked these details (C12, the start and the stop by use; C11, the start at a use): the use is an
+open client connection of the agent door (the MCP's own among them), a bridge request or a send that runs, an MCP
+session, and a request that waits for the browser; the grace time is agentwatch's `browser.idle_stop_minutes`, a whole
+number of minutes from 1 to 1440, 10 by default; a request waits at most 60 s for a start at a use; a start at a use
+that fails gives its reason to the waiting requests, and for 10 s to each new one with no new start.
 
 Until ab-v16.94.11 merges and a box switches, today's rule stays on the old path: the API token may start and
 stop the agent browser, and an agent's `endpoint` wait sends a start.
