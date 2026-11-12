@@ -27,10 +27,11 @@
 // payload, a page's content, a session id, a header, a token or a fingerprint.
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { checkCall, filterTools, type AllowList } from "./allow-list.ts";
+import { checkCall, filterTools, realFolder, type AllowList } from "./allow-list.ts";
+import { SCOPE } from "../../relay/scopes.ts";
 import { rawValues } from "./admission.ts";
 import type { McpHandler } from "./port.ts";
 import type { Message } from "./session.ts";
@@ -59,6 +60,7 @@ export const MCP_ANSWERS = {
   perService: { status: 503, code: -32000, text: `The agent browser serves at most ${MCP_SESSIONS_PER_SERVICE} MCP sessions, and each is in use. Initialize again later.` },
   notOpened: { status: 503, code: -32000, text: "The agent browser could not make an MCP session now. Initialize again." },
   methodNotFound: { status: 200, code: -32601, text: "Method not found" },
+  cancelled: { status: 200, code: -32800, text: "Request cancelled: the client sent notifications/cancelled for this request." },
   ended: { status: 200, code: -32603, text: "This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session." },
   memory: { status: 200, code: -32603, text: "This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session." },
   failed: { status: 200, code: -32603, text: "This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session." },
@@ -70,7 +72,49 @@ export const MCP_ANSWER = Object.fromEntries(Object.entries(MCP_ANSWERS).map(([k
 export const MCP_REQUESTS: readonly string[] = Object.freeze(["initialize", "ping", "tools/list", "tools/call"]);
 export const MCP_NOTIFICATIONS: readonly string[] = Object.freeze(["notifications/initialized", "notifications/cancelled"]);
 
-type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Set<string> };
+/** Why a waiting request ends with no answer of the MCP: its client cancelled it, or its client closed its connection. */
+type Cancel = "client" | "closed";
+/** An MCP session; `waiting` maps the id (JSON) of each request that waits to the cancel of that request. */
+type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel) => void> };
+
+/** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
+const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
+
+/** The MCP's key of a related task in `_meta` (the SDK's schema of a request's `_meta`). */
+const RELATED_TASK = "io.modelcontextprotocol/related-task";
+/** A `params`: none, or a JSON object whose `_meta`, when it has one, is the SDK's shape of a request's `_meta`. */
+function paramsOk(o: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(o, "params")) return true;
+  const p = o.params;
+  if (!isObj(p)) return false;
+  if (!Object.hasOwn(p, "_meta")) return true;
+  const m = p._meta;
+  if (!isObj(m)) return false;
+  if (Object.hasOwn(m, "progressToken") && !isId(m.progressToken)) return false;
+  return !Object.hasOwn(m, RELATED_TASK) || (isObj(m[RELATED_TASK]) && typeof (m[RELATED_TASK] as Record<string, unknown>).taskId === "string");
+}
+/** The members of each shape (the SDK's schemas are strict: a message with another member gets no answer). */
+const MEMBERS = {
+  request: new Set(["jsonrpc", "id", "method", "params"]),
+  notification: new Set(["jsonrpc", "method", "params"]),
+  answer: new Set(["jsonrpc", "id", "result", "error"]),
+} as const;
+
+/**
+ * The shape of a JSON-RPC 2.0 message (C11, the transport; review-115b P4), as the MCP's own SDK takes it: a request
+ * (`jsonrpc`, an `id`, a `method` that is a string, a `params` or none), a notification (`jsonrpc`, a `method` that is a
+ * string, a `params` or none), or a client's answer (`jsonrpc`, an `id`, and exactly one of `result` and `error`), with
+ * no other member. A `params` is a JSON object, and its `_meta` the SDK's shape; an `id` is a string or a safe integer.
+ * Null for any other body: the 400 `Invalid Request` (the MCP gives no answer to such a message, so it would wait).
+ */
+export function messageShape(m: unknown): "request" | "notification" | "answer" | null {
+  if (!isObj(m) || m.jsonrpc !== "2.0") return null;
+  const shape = Object.hasOwn(m, "method")
+    ? (typeof m.method !== "string" ? null : !Object.hasOwn(m, "id") ? "notification" : isId(m.id) ? "request" : null)
+    : (isId(m.id) && Object.hasOwn(m, "result") !== Object.hasOwn(m, "error") ? "answer" : null);
+  if (shape === null || !Object.keys(m).every((k) => MEMBERS[shape].has(k))) return null;
+  return shape === "answer" || paramsOk(m) ? shape : null;
+}
 
 export type McpTransportOptions = {
   list: AllowList;
@@ -104,10 +148,24 @@ function send(res: ServerResponse, name: keyof typeof MCP_ANSWERS, id: unknown, 
 /** The folder of a scope, `<state>/mcp/<scope>/` (C11), with one trailing slash. */
 export const scopeFolder = (state: string, scope: string) => `${join(state, "mcp", scope)}/`;
 
+/**
+ * Remove a scope's folder with its files (C11; review-115 note 3): only when `<state>/mcp` is a real folder of the
+ * service's user, never through a link (a link in the scope's place goes as a link: `rm` reads it with lstat). True
+ * when the folder is gone.
+ */
+export function removeScopeFolder(state: string, scope: string): boolean {
+  if (!SCOPE.test(scope)) return false;
+  const mcp = join(state, "mcp");
+  if (!realFolder(mcp)) return false;
+  try { rmSync(join(mcp, scope), { recursive: true, force: true }); return true; } catch { return false; }
+}
+
 export class McpTransport implements McpHandler {
   private readonly o: McpTransportOptions;
   private readonly sessions = new Map<string, Session>();
   private readonly workers = new Map<string, ScopeWorker>();
+  /** The stop of each scope's last worker that the transport stopped (the folder goes only after it: note 3). */
+  private readonly halts = new Map<string, Promise<void>>();
   private count = 0;
   private stopped = false;
   /** The tool calls that run now, and the time (performance.now) of the last one's start or end (board ab-v16.94.11). */
@@ -171,16 +229,22 @@ export class McpTransport implements McpHandler {
     let msg: unknown;
     try { msg = JSON.parse(body.toString("utf8")); } catch { send(res, "parse", null); return; }
     if (Array.isArray(msg)) { send(res, "batch", null); return; }
-    if (!isObj(msg) || msg.jsonrpc !== "2.0") { send(res, "invalid", null); return; }
-    const isRequest = typeof msg.method === "string" && Object.hasOwn(msg, "id");
-    // A request's id is a string or an integer (MCP); another id never reaches the MCP (review-115 note 7).
-    if (isRequest && typeof msg.id !== "string" && !Number.isSafeInteger(msg.id)) { send(res, "invalid", null); return; }
-    if (isRequest && msg.method === "initialize") return this.initialize(req, res, scope, msg);
-    const s = this.sessionOf(req, res, scope, isRequest ? msg.id : null);
+    // The message's shape (C11; review-115b P4): a request, a notification or a client's answer, each id a string or a
+    // safe integer (review-115 note 7); another body never reaches the MCP.
+    const shape = messageShape(msg);
+    if (shape === null || !isObj(msg)) { send(res, "invalid", null); return; }
+    if (shape === "request" && msg.method === "initialize") return this.initialize(req, res, scope, msg);
+    const s = this.sessionOf(req, res, scope, shape === "request" ? msg.id : null);
     if (s === null) return;
-    if (!isRequest) {
+    if (shape !== "request") {
       // A notification, or a client's answer: the service has no request of its own to the client.
-      if (typeof msg.method === "string" && MCP_NOTIFICATIONS.includes(msg.method)) s.worker.notify(s.id, msg);
+      if (shape === "notification" && MCP_NOTIFICATIONS.includes(msg.method as string)) {
+        s.worker.notify(s.id, msg);
+        // A client's own cancel of a request that still waits frees its id at once, and its open POST gets the cancelled
+        // answer (the MCP never answers a cancelled request; review-115b's note).
+        const rid = msg.method === "notifications/cancelled" && isObj(msg.params) ? msg.params.requestId : undefined;
+        if (isId(rid)) s.waiting.get(JSON.stringify(rid))?.("client");
+      }
       answer(res, 202, null);
       return;
     }
@@ -194,28 +258,53 @@ export class McpTransport implements McpHandler {
         return;
       }
     }
-    // A tool call needs the browser (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, it starts
-    // Chrome and waits (the port's gate, which answers a refusal itself); a request whose client left meanwhile gets
-    // false from the gate and never reaches the MCP.
-    if (msg.method === "tools/call" && browser && !(await browser())) return;
     const forward = msg;
-    // An id of a request of this MCP session that still waits: refused, and the waiting request keeps its own answer.
+    // An id of a request of this MCP session that still waits (also a tool call that waits for the browser): refused,
+    // and the waiting request keeps its own answer.
     const key = JSON.stringify(forward.id);
     if (s.waiting.has(key)) { send(res, "duplicateId", forward.id); return; }
-    s.waiting.add(key);
-    // A client that goes away before the answer cancels its call (the MCP's own notifications/cancelled).
-    const gone = () => { if (!res.writableEnded) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: forward.id, reason: "the client closed its connection" } }); };
+    // A cancel frees the id at once (review-115b P2): the MCP never answers a cancelled request, so a later request
+    // with this id goes on; the request's own wait ends too (no answer of the MCP comes for it).
+    const at: { cancelled: Cancel | null; sent: boolean } = { cancelled: null, sent: false };
+    let stopWait!: () => void;
+    const stopped = new Promise<null>((r) => { stopWait = () => r(null); });
+    const cancel = (why: Cancel) => {
+      if (at.cancelled !== null) return;
+      at.cancelled = why;
+      if (s.waiting.get(key) === cancel) s.waiting.delete(key);
+      if (at.sent) s.worker.drop(s.id, forward.id);
+      stopWait();
+    };
+    s.waiting.set(key, cancel);
+    // A client that goes away before the answer cancels its call: the MCP's own notifications/cancelled, once the MCP
+    // has the request.
+    const gone = () => {
+      if (res.writableEnded || at.cancelled !== null) return;
+      if (at.sent) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: forward.id, reason: "the client closed its connection" } });
+      cancel("closed");
+    };
     res.once("close", gone);
-    let got: Message | null;
-    const call = forward.method === "tools/call";
-    if (call) { this.calls++; this.lastCall = performance.now(); }
-    try { got = await s.worker.request(s.id, forward); }
-    finally {
-      s.waiting.delete(key); res.off("close", gone);
-      if (call) { this.calls--; this.lastCall = performance.now(); }
+    try {
+      // A tool call needs the browser (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, it
+      // starts Chrome and waits (the port's gate, which answers a refusal itself); a request whose client left meanwhile
+      // gets false from the gate and never reaches the MCP.
+      if (forward.method === "tools/call" && browser && !(await browser())) return;
+      if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
+      if (at.cancelled !== null) return;
+      let got: Message | null;
+      const call = forward.method === "tools/call";
+      if (call) { this.calls++; this.lastCall = performance.now(); }
+      at.sent = true;
+      try { got = await Promise.race([s.worker.request(s.id, forward), stopped]); }
+      finally { if (call) { this.calls--; this.lastCall = performance.now(); } }
+      if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
+      if (at.cancelled !== null) return;
+      if (got === null) { send(res, this.endOf(s), forward.id); return; }
+      answer(res, 200, forward.method === "tools/list" ? this.filtered(got) : got);
+    } finally {
+      if (s.waiting.get(key) === cancel) s.waiting.delete(key);
+      res.off("close", gone);
     }
-    if (got === null) { send(res, this.endOf(s), forward.id); return; }
-    answer(res, 200, forward.method === "tools/list" ? this.filtered(got) : got);
   }
 
   /** `tools/list`'s answer without each tool that the allow list does not name. */
@@ -238,7 +327,7 @@ export class McpTransport implements McpHandler {
     if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
     if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) { send(res, "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
     const worker = this.workerFor(scope);
-    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true, waiting: new Set() };
+    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true, waiting: new Map() };
     this.sessions.set(s.id, s);
     const why = await worker.open(s.id);
     if (why !== null || !s.open) {
@@ -286,13 +375,39 @@ export class McpTransport implements McpHandler {
     this.o.log(`mcp: MCP session ${s.n} of scope ${s.scope} ended: ${why}`);
     if (![...this.sessions.values()].some((x) => x.worker === s.worker) && this.workers.get(s.scope) === s.worker) {
       this.workers.delete(s.scope);
-      void s.worker.stop();
+      const halt = s.worker.stop();
+      this.halts.set(s.scope, halt);
+      void halt.finally(() => { if (this.halts.get(s.scope) === halt) this.halts.delete(s.scope); });
     }
   }
 
   /** C11's close at a change and C12's session_ended (the lead's OP4): every MCP session of `scope` ends. */
   endSessions(scope: string): void {
     for (const s of [...this.sessions.values()]) if (s.scope === scope) this.end(s, "its agentwatch session ended or changed");
+  }
+
+  /**
+   * The scope's agentwatch session ended (C12's session_ended), or the last set_sessions no longer names the scope
+   * (review-115 note 3): its MCP sessions end, and once its worker has stopped, its folder goes with its files, so a
+   * later session of the same launch name never reads them. A new MCP session of the scope in the meantime keeps it.
+   */
+  async dropScope(scope: string, why: string): Promise<void> {
+    this.endSessions(scope);
+    await this.halts.get(scope);
+    if (this.stopped || this.workers.has(scope) || this.size(scope) > 0) return;
+    if (removeScopeFolder(this.o.stateFolder, scope)) this.o.log(`mcp: the folder of scope ${scope} is emptied (${why})`);
+  }
+
+  /**
+   * C12's set_sessions (review-115 note 3): the folder of each scope that the snapshot does not name goes (also of a
+   * session that ended while the service was down, which got no session_ended). Only a folder whose name is a scope.
+   */
+  async keepScopes(named: ReadonlySet<string>): Promise<void> {
+    const mcp = join(this.o.stateFolder, "mcp");
+    if (!realFolder(mcp)) return;
+    let names: string[];
+    try { names = readdirSync(mcp); } catch { return; }
+    await Promise.all(names.filter((n) => SCOPE.test(n) && !named.has(n)).map((n) => this.dropScope(n, "the sessions name it no more")));
   }
 
   /** The service stops: every session and every worker. */

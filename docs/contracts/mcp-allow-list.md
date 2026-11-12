@@ -89,3 +89,6 @@ CDP connection (the design, section 18), so the test needs no Chrome. It fails w
 - no name of `service_tools` is a tool of the pinned version's `tools/list`;
 - `service_tools` is exactly the value that this file gives;
 - `capabilities` names none of `core-install`, `storage`, `devtools`, `testing` and `config`.
+- the rule of file and path keys has no exception for a string whose values an `enum` or a `const` fixes: such a string
+  that speaks of a file or a path is in `paths`, or is left out of `keys`, as any string (`browser_take_screenshot`'s
+  `type` is an `enum` string of this kind).
