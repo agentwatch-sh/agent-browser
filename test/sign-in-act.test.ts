@@ -196,7 +196,7 @@ test("form rules before the first key: another origin, two password fields, a GE
   }
 });
 
-test("the act's rules: a refused act_rules, an empty answer and a late one end the act with no key; act_end follows each", async () => {
+test("the act's rules: a refused act_rules, an empty answer and a late one end the act with no key; act_end follows each", { timeout: 20_000 }, async () => {
   for (const answer of [{ error: "rules not held" }, { rules: [] }, { late: true }]) {
     const w = new ActWorld();
     w.rulesAnswer = () => answer;

@@ -331,9 +331,15 @@ export class SignInAct {
     // Outside the screen before the page loads: the X move by the window's title marker, then the window's place.
     const marker = `aw-act-${randomBytes(8).toString("hex")}`;
     await this.evaluate(r, call(MARK_TITLE, marker));
-    await this.o.screen.moveOff(marker).catch(() => 0);
-    const placed = await m.call("windows.get", [r.window]).catch(() => null);
-    if (!placed || !outsideScreen(placed, screen)) return "window";
+    // Chrome gives the X window the page's title a moment later: the move tries again until the place is outside.
+    let outside = false;
+    for (const end = performance.now() + this.limits.popupMs + 1000; !outside && performance.now() < end;) {
+      if ((await this.o.screen.moveOff(marker).catch(() => 0)) === 0) { await sleep(100); continue; }
+      const placed = await m.call("windows.get", [r.window]).catch(() => null);
+      outside = !!placed && outsideScreen(placed, screen);
+      if (!outside) await sleep(100);
+    }
+    if (!outside) return "window";
     // Form rule 1: the record's page, on its exact origin.
     const loaded = this.navigated(r);
     await this.send(r, "Page.navigate", { url: `${rec.origin}${rec.path}` });

@@ -109,6 +109,11 @@ test("the act tab is hidden: no client's Target.getTargets, discover, auto-attac
     for (const m of ["Browser.getWindowBounds", "Browser.setWindowBounds"]) {
       assert.deepEqual((await c.ask(m, { windowId: a.window, bounds: { left: 0 } })).error?.message, "Browser window not found", m);
     }
+    // A window that holds an incognito tab is in no window lookup, also when a tab of the scope were in it too.
+    const ownTab = [...h.fake.tabs.values()].find((t) => t.targetId === own)!;
+    h.fake.op = ({ op, args }) => (op === "tabs.query" && args[0]?.windowId === a.window ? [h.fake.chromeTab(h.fake.tabs.get(a.tab)!), h.fake.chromeTab(ownTab)] : undefined);
+    assert.deepEqual((await c.ask("Browser.getWindowBounds", { windowId: a.window })).error?.message, "Browser window not found", "a window with an incognito tab");
+    h.fake.op = () => undefined;
     const text = JSON.stringify(c.got);
     assert.ok(!text.includes(a.targetId) && !text.includes(`"tabId":${a.tab}`), "no event names the act tab");
     // No request of the model names the act tab, except the act's own create and attach.
