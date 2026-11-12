@@ -199,22 +199,27 @@ const DEEP = "const deep = (doc, x, y) => { let e = doc.elementFromPoint(x, y); 
  */
 export const SCROLL_STATE = `function (rx, ry, rw, rh, follow, owner) { ${RETARGET} if (!el.isConnected) return null; ${SCROLLS} ${UP} const b = el.getBoundingClientRect(); if (!owner && !el.getClientRects().length) return { none: true }; const t = typeof rx === 'number' ? [b.left + rx, b.top + ry, b.left + rx + rw, b.top + ry + rh] : [b.left, b.top, b.right, b.bottom]; const L = [], marks = [], wins = [], fes = [], offs = []; let w = el.ownerDocument.defaultView, n = el, flat = true, d = 0; for (; d < 8; d++) { wins[d] = w; const doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, hs = w.getComputedStyle(html); let fixed = w.getComputedStyle(n).position === 'fixed'; for (let p = fixed ? null : up(n); p && p !== html; p = up(p)) { if (p === se) continue; const cs = w.getComputedStyle(p), s = scrolls(p, cs); if ((s[0] || s[1]) && !(p === doc.body && hs.overflowX === 'visible' && hs.overflowY === 'visible')) { const r = p.getBoundingClientRect(); L.push({ d, r: [r.left + p.clientLeft, r.top + p.clientTop, r.left + p.clientLeft + p.clientWidth, r.top + p.clientTop + p.clientHeight], s: [p.scrollLeft, p.scrollTop], m: [s[0] ? p.scrollWidth - p.clientWidth : 0, s[1] ? p.scrollHeight - p.clientHeight : 0], doc: false }); marks.push(p); } if (cs.position === 'fixed') { fixed = true; break; } } if (!fixed) { const bs = doc.body ? w.getComputedStyle(doc.body) : hs, ov = (k) => (hs[k] !== 'visible' ? hs[k] : bs[k]), q = doc.compatMode === 'BackCompat' && doc.body ? doc.body : html, vw = q.clientWidth, vh = q.clientHeight; L.push({ d, r: [0, 0, vw, vh], s: [w.scrollX, w.scrollY], m: [/(hidden|clip)/.test(ov('overflowX')) ? 0 : Math.max(0, se.scrollWidth - vw), /(hidden|clip)/.test(ov('overflowY')) ? 0 : Math.max(0, se.scrollHeight - vh)], doc: true }); marks.push(doc); } if (w === w.top || !w.frameElement) break; const fe = w.frameElement, fr = fe.getBoundingClientRect(), fcs = w.parent.getComputedStyle(fe); if (fcs.transform && fcs.transform !== 'none') flat = false; fes[d] = fe; offs[d] = [fr.left + parseFloat(fcs.borderLeftWidth) + parseFloat(fcs.paddingLeft), fr.top + parseFloat(fcs.borderTopWidth) + parseFloat(fcs.paddingTop)]; n = fe; w = w.parent; } const cum = []; cum[d] = [0, 0]; for (let i = d - 1; i >= 0; i--) cum[i] = [cum[i + 1][0] + offs[i][0], cum[i + 1][1] + offs[i][1]]; globalThis.__agentBrowserStageScroll = { el, marks, depth: L.map((l) => l.d), wins, fes, cum }; return { t: [t[0] + cum[0][0], t[1] + cum[0][1], t[2] + cum[0][0], t[3] + cum[0][1]], levels: L.map((l) => ({ r: [l.r[0] + cum[l.d][0], l.r[1] + cum[l.d][1], l.r[2] + cum[l.d][0], l.r[3] + cum[l.d][1]], s: l.s, m: l.m, doc: l.doc })), top: w === w.top, flat, ox: cum[0][0], oy: cum[0][1] }; }`;
 /**
- * The wheel point's rules 1 and 3 (C11, the wheel point), on the handle of the last SCROLL_STATE, for the scroller `k` of
+ * The wheel point's rules 1, 3 and 4 (C11, the wheel point), on the handle of the last SCROLL_STATE, for the scroller `k` of
  * that read and the points `pts` (in that read's points), in their order: at each frame level above the scroller the
  * element at the point is the frame's element; in the scroller's document, the element at the point and each ancestor
  * up to the scroller is not an input, select, textarea, contenteditable, canvas, embed, object, video, audio or frame,
- * and no other scroller comes first. The first four points that pass, each with its chain (indexes into the elements
- * that WHEEL_ELS gives, for the listeners of rule 2).
+ * and no other scroller comes first (rules 1 and 3); and with the round's move `mv` ([dx, dy] px), the point's column,
+ * the line from the point along the move as the page's content is now (the content that the notches move under the
+ * point, the vertical axis first), meets no element of rule 1 and no other scroller with a range on the moved axis, apart
+ * from the element, the elements around it and inside it, and elements with `position: fixed` (rule 4). The indexes of
+ * the points that pass.
  */
-export const WHEEL_POINTS = `function (k, pts) { const S = globalThis.__agentBrowserStageScroll; if (!S || !S.marks[k]) return null; ${SCROLLS} ${UP} ${DEEP} const BAD = ['input', 'select', 'textarea', 'canvas', 'embed', 'object', 'video', 'audio', 'iframe', 'frame']; const m = S.marks[k], dk = S.depth[k], D = S.wins.length - 1, els = [], pass = []; for (let i = 0; i < pts.length && pass.length < 4; i++) { const px = pts[i][0], py = pts[i][1]; let ok = true; for (let j = D; j > dk && ok; j--) if (deep(S.wins[j].document, px - S.cum[j][0], py - S.cum[j][1]) !== S.fes[j - 1]) ok = false; if (!ok) continue; const w = S.wins[dk], doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, e = deep(doc, px - S.cum[dk][0], py - S.cum[dk][1]); if (!e) continue; const chain = []; let found = false; for (let p = e; p; p = up(p)) { if (p === m || p === html) { chain.push(p); found = p === m || m === doc; break; } if (BAD.includes(p.localName) || p.isContentEditable) break; if (p !== se && p !== doc.body) { const s = scrolls(p, w.getComputedStyle(p)); if (s[0] || s[1]) break; } chain.push(p); } if (!found) continue; pass.push({ i, chain: chain.map((c) => { let x = els.indexOf(c); if (x < 0) { x = els.length; els.push(c); } return x; }) }); } globalThis.__agentBrowserStageEls = els; return pass; }`;
-/** The elements of the chains of the last WHEEL_POINTS, as one array (a handle): their listeners are rule 2's read (DOMDebugger.getEventListeners). */
-export const WHEEL_ELS = "function () { return globalThis.__agentBrowserStageEls || []; }";
+export const WHEEL_POINTS = `function (k, pts, mv) { const S = globalThis.__agentBrowserStageScroll; if (!S || !S.marks[k]) return null; ${SCROLLS} ${UP} ${DEEP} const BAD = ['input', 'select', 'textarea', 'canvas', 'embed', 'object', 'video', 'audio', 'iframe', 'frame']; const bad = (p) => BAD.includes(p.localName) || p.isContentEditable; const m = S.marks[k], dk = S.depth[k], D = S.wins.length - 1, w = S.wins[dk], doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, ox = S.cum[dk][0], oy = S.cum[dk][1]; const segs = (q) => { const x = q[0] - ox, y = q[1] - oy, out = []; if (mv && mv[1]) out.push([x, Math.min(y, y + mv[1]), x, Math.max(y, y + mv[1])]); if (mv && mv[0]) out.push([Math.min(x, x + mv[0]), y + (mv[1] || 0), Math.max(x, x + mv[0]), y + (mv[1] || 0)]); return out; }; const meets = (r, g) => r[0] <= g[2] && r[2] > g[0] && r[1] <= g[3] && r[3] > g[1]; const all = pts.map(segs), col = []; if (mv && (mv[0] || mv[1])) { const root = m.nodeType === 9 ? doc.body || html : m, anc = dk === 0 ? S.el : S.fes[dk - 1], cs = new Map(), style = (e) => { let c = cs.get(e); if (!c) cs.set(e, (c = w.getComputedStyle(e))); return c; }; const fixedUp = (e) => { for (let p = e; p && p !== root; p = up(p)) if (style(p).position === 'fixed') return true; return false; }; for (const e of root.querySelectorAll('*')) { if (e === anc || e.contains(anc) || anc.contains(e)) continue; const b = e.getBoundingClientRect(), r = [b.left, b.top, b.right, b.bottom]; if (!(b.width > 0 || b.height > 0) || !all.some((g) => g.some((x) => meets(r, x)))) continue; const s = scrolls(e, style(e)); if (!(bad(e) || (e !== m && ((mv[0] && s[0]) || (mv[1] && s[1]))))) continue; if (!fixedUp(e)) col.push(r); } } const pass = []; for (let i = 0; i < pts.length; i++) { const px = pts[i][0], py = pts[i][1]; let ok = true; for (let j = D; j > dk && ok; j--) if (deep(S.wins[j].document, px - S.cum[j][0], py - S.cum[j][1]) !== S.fes[j - 1]) ok = false; if (!ok) continue; const e = deep(doc, px - ox, py - oy); if (!e) continue; let found = false; for (let p = e; p; p = up(p)) { if (p === m || p === html) { found = p === m || m === doc; break; } if (bad(p)) break; if (p !== se && p !== doc.body) { const s = scrolls(p, w.getComputedStyle(p)); if (s[0] || s[1]) break; } } if (!found || col.some((r) => all[i].some((g) => meets(r, g)))) continue; pass.push(i); } return pass; }`;
+/** The scroller `k` of the last SCROLL_STATE as a handle (the html element for a document): rule 2 reads the listeners of it and of every element inside it. */
+export const WHEEL_ROOT = "function (k) { const S = globalThis.__agentBrowserStageScroll, m = S && S.marks[k]; return m ? (m.nodeType === 9 ? m.documentElement : m) : null; }";
 /** A cross-origin frame's level (C11, the scroll in a frame): at each point of the top page, the element is the frame's owner (on its handle, after SCROLL_STATE with `owner`). */
 export const OWNER_AT = `function (pts) { const S = globalThis.__agentBrowserStageScroll; if (!S || S.el !== this) return null; ${DEEP} const D = S.wins.length - 1; return pts.map((q) => { for (let j = D; j > 0; j--) if (deep(S.wins[j].document, q[0] - S.cum[j][0], q[1] - S.cum[j][1]) !== S.fes[j - 1]) return false; return deep(S.wins[0].document, q[0] - S.cum[0][0], q[1] - S.cum[0][1]) === this; }); }`;
 /** The wait for the smooth scroll of a round to end (C11: 350 ms, a first value; the vectors' scrollWaitMs). */
 export const SCROLL_WAIT_MS = 350;
 /** The group of the stage's own handles of a wheel point's read (released after it). */
 export const STAGE_GROUP = "agent-browser-stage";
+/** Rule 2 reads the boxes of at most this many elements with a wheel listener that is not passive; with more, the read fails open. */
+export const WHEEL_LISTENERS_MAX = 64;
 
 /** Condition 3 of the press point, in the stage's own isolated world: the element at the client's point. */
 export const ELEMENT_KIND = "(x, y) => { const el = document.elementFromPoint(x, y); if (!el) return null; return { tag: el.localName, type: el.getAttribute('type') ?? undefined, role: el.getAttribute('role') ?? undefined, href: el.localName === 'a' && el.hasAttribute('href'), usemap: el.localName === 'img' && el.hasAttribute('usemap'), editable: el.isContentEditable }; }";
@@ -1375,7 +1380,9 @@ export class Stage {
         if (rounds >= STAGE_SCROLL_ROUNDS) return { ok: false, why: "rounds" };
         const plan = this.scrollPlan(view);
         if (!plan) return { ok: false, why: "noRange" };
-        const at = await this.wheelPoint(page, st, view, plan.k);
+        const px = page.person.params.wheel.notchPx, n = (d: number) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / px)));
+        const count = { x: n(plan.d[0]), y: n(plan.d[1]) };
+        const at = await this.wheelPoint(page, st, view, plan.k, [count.x * px, count.y * px]);
         if (at === TIMEOUT) return { ok: false, why: "readFails" };
         if (!at) return { ok: false, why: "noWheelPoint" };
         a ??= await this.begin(page, st);
@@ -1387,9 +1394,8 @@ export class Stage {
           if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
           if (a.over || r.stopped) return { ok: false, why: "ended" };
         }
-        const px = page.person.params.wheel.notchPx, n = (d: number) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / px)));
         const before = view.levels[plan.k].s;
-        const r = await this.notchesAt(page, st, a, at, { x: n(plan.d[0]), y: n(plan.d[1]) }, { modifiers: this.clientBits(st) });
+        const r = await this.notchesAt(page, st, a, at, count, { modifiers: this.clientBits(st) });
         if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
         if (a.over) return { ok: false, why: "ended" };
         rounds++; notched += r.sent;
@@ -1480,13 +1486,14 @@ export class Stage {
   }
 
   /**
-   * The wheel point of a scroller (C11, the wheel point): the page's last point first, then the points of a 5 x 5 grid over
-   * the scroller's visible part, the nearest to the last point first; the first that passes rules 1 and 3 (WHEEL_POINTS on
-   * the scroller's reader), the frame's owner at the point on the top page for a cross-origin frame's scroller (OWNER_AT),
-   * and rule 2 (no listener of `wheel` or `mousewheel` that is not passive on its chain). Null: no point passes; TIMEOUT:
-   * a read failed.
+   * The wheel point of a scroller for a round's move `mv` (C11, the wheel point): the page's last point first, then the
+   * points of a 5 x 5 grid over the scroller's visible part, the nearest to the last point first; the first that passes
+   * rules 1, 3 and 4 (WHEEL_POINTS on the scroller's reader: the point's own chain and its column, the content that the
+   * notches move under it), the frame's owner at the point on the top page for a cross-origin frame's scroller
+   * (OWNER_AT), and rule 2 (no box of an element with a listener of `wheel` or `mousewheel` that is not passive holds the
+   * point or meets its column). Null: no point passes; TIMEOUT: a read failed.
    */
-  private async wheelPoint(page: StagePage, st: TabState, view: ScrollView, k: number): Promise<Pt | null | typeof TIMEOUT> {
+  private async wheelPoint(page: StagePage, st: TabState, view: ScrollView, k: number, mv: [number, number]): Promise<Pt | null | typeof TIMEOUT> {
     const L = view.levels[k], V = view.vis[k];
     if (!(V.x1 - V.x0 >= 1 && V.y1 - V.y0 >= 1)) return null;
     const inV = (q: Pt) => q.x >= V.x0 && q.y >= V.y0 && q.x < V.x1 && q.y < V.y1;
@@ -1499,58 +1506,58 @@ export class Stage {
     grid.sort((p, q) => Math.hypot(p.x - o.x, p.y - o.y) - Math.hypot(q.x - o.x, q.y - o.y));
     cands.push(...grid);
     const rd = L.rd;
-    for (let from = 0; from < cands.length;) {
-      const batch = cands.slice(from);
-      const r = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_POINTS, arguments: [{ value: L.k }, { value: batch.map((q) => [q.x - rd.ox, q.y - rd.oy]) }], returnByValue: true }));
-      const pass: { i: number; chain: number[] }[] | null = r === TIMEOUT ? null : (r as any)?.result?.value;
-      if (!Array.isArray(pass)) return TIMEOUT;
-      if (!pass.length) return null;
-      from += Math.max(...pass.map((x) => x.i)) + 1;
-      let ok = pass;
-      if (rd.owner) {
-        const w = await this.read(page.send(undefined, "Runtime.callFunctionOn", { objectId: rd.owner, functionDeclaration: OWNER_AT, arguments: [{ value: pass.map((x) => [batch[x.i].x, batch[x.i].y]) }], returnByValue: true }));
-        const hits = w === TIMEOUT ? null : (w as any)?.result?.value;
-        if (!Array.isArray(hits)) return TIMEOUT;
-        ok = pass.filter((_, j) => hits[j] === true);
-      }
-      if (!ok.length) continue;
-      const good = await this.listenersPass(page, rd, ok);
-      if (good === TIMEOUT) return TIMEOUT;
-      if (good) return batch[good.i];
+    const r = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_POINTS, arguments: [{ value: L.k }, { value: cands.map((q) => [q.x - rd.ox, q.y - rd.oy]) }, { value: mv }], returnByValue: true }));
+    let pass: number[] | null = r === TIMEOUT ? null : (r as any)?.result?.value;
+    if (!Array.isArray(pass)) return TIMEOUT;
+    if (pass.length && rd.owner) {
+      // A cross-origin frame's scroller: the top page's element at the point is the frame's owner.
+      const w = await this.read(page.send(undefined, "Runtime.callFunctionOn", { objectId: rd.owner, functionDeclaration: OWNER_AT, arguments: [{ value: pass.map((i) => [cands[i].x, cands[i].y]) }], returnByValue: true }));
+      const hits = w === TIMEOUT ? null : (w as any)?.result?.value;
+      if (!Array.isArray(hits)) return TIMEOUT;
+      pass = pass.filter((_, j) => hits[j] === true);
+    }
+    if (!pass.length) return null;
+    const boxes = await this.wheelListeners(page, rd, L.k);
+    if (boxes === TIMEOUT) return TIMEOUT;
+    // Rule 2: no box of an element with a wheel listener that is not passive holds the point or meets its column.
+    const meets = (b: Rect, g: Rect) => b.x0 <= g.x1 && b.x1 > g.x0 && b.y0 <= g.y1 && b.y1 > g.y0;
+    for (const i of pass) {
+      const x = cands[i].x - rd.ox, y = cands[i].y - rd.oy;
+      const col: Rect[] = [{ x0: x, y0: y, x1: x, y1: y }];
+      if (mv[1]) col.push({ x0: x, y0: Math.min(y, y + mv[1]), x1: x, y1: Math.max(y, y + mv[1]) });
+      if (mv[0]) col.push({ x0: Math.min(x, x + mv[0]), y0: y + mv[1], x1: Math.max(x, x + mv[0]), y1: y + mv[1] });
+      if (!boxes.some((b) => col.some((g) => meets(b, g)))) return cands[i];
     }
     return null;
   }
 
   /**
-   * Rule 2 of the wheel point: the first point whose chain has no listener of `wheel` or `mousewheel` that is not passive
-   * (DOMDebugger.getEventListeners on each element of the last WHEEL_POINTS, its own listeners only), on handles of the
-   * stage's own group, which it releases.
+   * Rule 2's read: the boxes (DOM.getContentQuads) of the elements of the scroller (it, and every element inside it) that
+   * have a listener of `wheel` or `mousewheel` that is not passive (DOMDebugger.getEventListeners on the scroller, with its
+   * whole subtree), in the reader's points; the window's and the document's listeners do not count. The scroller's handle
+   * is of the stage's own group, which it releases.
    */
-  private async listenersPass(page: StagePage, rd: Reader, cands: { i: number; chain: number[] }[]): Promise<{ i: number } | null | typeof TIMEOUT> {
+  private async wheelListeners(page: StagePage, rd: Reader, k: number): Promise<Rect[] | typeof TIMEOUT> {
     try {
-      const arr = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ELS, returnByValue: false, objectGroup: STAGE_GROUP }));
-      const id = arr === TIMEOUT ? undefined : (arr as any)?.result?.objectId;
+      const root = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ROOT, arguments: [{ value: k }], returnByValue: false, objectGroup: STAGE_GROUP }));
+      const id = root === TIMEOUT ? undefined : (root as any)?.result?.objectId;
       if (typeof id !== "string") return TIMEOUT;
-      const props = await this.read(page.send(rd.child, "Runtime.getProperties", { objectId: id, ownProperties: true }));
-      if (props === TIMEOUT) return TIMEOUT;
-      const ids = new Map<number, string>();
-      for (const x of (props as any)?.result ?? []) if (/^\d+$/.test(String(x?.name)) && typeof x?.value?.objectId === "string") ids.set(Number(x.name), x.value.objectId);
-      const bad = new Map<number, boolean>();
-      for (const c of cands) {
-        let ok = true;
-        for (const j of c.chain) {
-          if (!bad.has(j)) {
-            const oid = ids.get(j);
-            if (!oid) return TIMEOUT;
-            const l = await this.read(page.send(rd.child, "DOMDebugger.getEventListeners", { objectId: oid, depth: 0 }));
-            if (l === TIMEOUT) return TIMEOUT;
-            bad.set(j, ((l as any)?.listeners ?? []).some((x: any) => (x?.type === "wheel" || x?.type === "mousewheel") && x?.passive !== true));
-          }
-          if (bad.get(j)) { ok = false; break; }
+      const l = await this.read(page.send(rd.child, "DOMDebugger.getEventListeners", { objectId: id, depth: -1, pierce: true }));
+      if (l === TIMEOUT) return TIMEOUT;
+      const nodes = [...new Set<number>(((l as any)?.listeners ?? []).filter((x: any) => (x?.type === "wheel" || x?.type === "mousewheel") && x?.passive !== true && Number.isInteger(x?.backendNodeId)).map((x: any) => x.backendNodeId))];
+      if (nodes.length > WHEEL_LISTENERS_MAX) return TIMEOUT;
+      const boxes: Rect[] = [];
+      for (const b of nodes) {
+        // A node with no box (Chrome refuses its quads) is under no point.
+        const q = await this.read(page.send(rd.child, "DOM.getContentQuads", { backendNodeId: b }).catch(() => ({ quads: [] })));
+        if (q === TIMEOUT) return TIMEOUT;
+        for (const quad of (q as any)?.quads ?? []) {
+          if (!Array.isArray(quad) || quad.length !== 8) continue;
+          const xs = [quad[0], quad[2], quad[4], quad[6]], ys = [quad[1], quad[3], quad[5], quad[7]];
+          boxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
         }
-        if (ok) return c;
       }
-      return null;
+      return boxes;
     } finally {
       void page.send(rd.child, "Runtime.releaseObjectGroup", { objectGroup: STAGE_GROUP }).catch(() => {});
     }

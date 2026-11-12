@@ -283,7 +283,8 @@ test("the wheel point's rule 1: no notch over an input, a select, a textarea, a 
 test("the wheel point's rule 2: an element of the chain with a wheel listener that is not passive is no wheel point; a passive listener is; a listener of the window (it stops the wheel) does not count", async () => {
   const under = { x: 560, y: 320, width: 160, height: 80 };
   const non = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { tag: "div", listener: "nonpassive", box: under } }, ...DOC() }));
-  assert.deepEqual(at(notchesOf(non.tab)[0]), [640, 230], "not passive: another point");
+  // 640,230 is not over it, but the page's move down brings it under that point (its column, rule 4): 640,490.
+  assert.deepEqual(at(notchesOf(non.tab)[0]), [640, 490], "not passive: another point, whose column does not meet it");
   assert.ok(non.tab.sent.some((s) => s.method === "DOMDebugger.getEventListeners"), "the listeners' read");
   const pas = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { tag: "div", listener: "passive", box: under } }, ...DOC() }));
   assert.deepEqual(at(notchesOf(pas.tab)[0]), [640, 360], "passive: the page's last point");
@@ -450,4 +451,33 @@ test("the focus click's point outside the visible part of the field's nearest sc
   assert.equal(notchesOf(r.tab).length, 0, "in view: no notch");
   assert.equal(r.stage.counts.focusOutOfView, 1);
   assert.ok(passOf(r.tab, 1), "the utility call goes");
+});
+
+test("the wheel point's rule 4 (the column): a point whose column (the content that the round's notches move under it) meets a number input, a canvas, a frame, another scroller or an element with a wheel listener that is not passive is no wheel point; an element with position: fixed, and the element and the elements around it, do not count", async () => {
+  // The page scrolls down 2,040 px: the content from y 360 to 2400 at x 640 passes under the page's last point 640,360.
+  const below = { x: 600, y: 1200, width: 100, height: 40 };
+  for (const [name, node] of [["a number input", { tag: "input", type: "number", box: below }], ["a canvas", { tag: "canvas", box: below }],
+    ["another scroller", null], ["an element with a wheel listener that is not passive", { tag: "div", listener: "nonpassive", box: below }]] as const) {
+    const page = node ? { nodes: { b: BUTTON(), n: node }, ...DOC() } : { nodes: { b: BUTTON() }, scrollers: { document: { scrollY: 0, height: 4000 }, list: { box: below, height: 900, scrollY: 0 } } };
+    const r = await runVector(own([scroll("b")], page));
+    const n = notchesOf(r.tab);
+    assert.equal(n.length, 17, `${name}: the notches`);
+    assert.ok(n.every((s) => s.params.x < 600 || s.params.x >= 700), `${name}: a point whose column does not meet it (${at(n[0])})`);
+    assert.ok(r.tab.wheels.every((w) => w.at !== "n" && w.moved !== "list"), `${name}: no wheel event over it, and it does not move`);
+  }
+  const frame = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, frames: { f: { origin: "same", box: below, border: 0 } }, ...DOC() }));
+  assert.ok(notchesOf(frame.tab).every((s) => s.params.x < 600 || s.params.x >= 700), "a frame in the column: another point");
+  // A fixed header in the column does not move under the point: the page's last point stays the wheel point.
+  const fixed = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), h: { tag: "canvas", fixed: true, box: { x: 0, y: 600, width: 1280, height: 60 } } }, ...DOC() }));
+  assert.deepEqual(at(notchesOf(fixed.tab)[0]), [640, 360], "a fixed element does not count");
+  // The target is in its own column: it does not count (a field to be clicked is an input).
+  const field = await runVector(own([scroll("f")], { nodes: { f: { tag: "input", type: "number", box: { x: 600, y: 2400, width: 100, height: 30 } } }, ...DOC() }));
+  assert.deepEqual(at(notchesOf(field.tab)[0]), [640, 360], "the element itself does not count");
+});
+
+test("no point whose column is clear (a canvas across the page between the viewport and the element): the client's call as it is, counted; the canvas gets no wheel event", async () => {
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), c: { tag: "canvas", box: { x: 0, y: 1100, width: 1280, height: 240 } } }, ...DOC() }));
+  assert.equal(notchesOf(r.tab).length, 0);
+  assert.ok(passOf(r.tab, 1));
+  assert.equal(r.stage.counts["scrollAsIs:noWheelPoint"], 1);
 });

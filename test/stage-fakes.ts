@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, ELEMENT_KIND, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_ELS, WHEEL_POINTS, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, ELEMENT_KIND, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_POINTS, WHEEL_ROOT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -129,9 +129,8 @@ export class FakeTab implements StagePage {
    */
   readonly sc: Record<string, { x: number; y: number }> = {};
   readonly wheels: { t: number; x: number; y: number; dx: number; dy: number; at: string; moved: string | null }[] = [];
-  /** The scrollers of each reader's last SCROLL_STATE (by its handle), and the elements of its last WHEEL_POINTS. */
+  /** The scrollers of each reader's last SCROLL_STATE (by its handle). */
   private readonly marks = new Map<string, string[]>();
-  private readonly els = new Map<string, string[]>();
   /** The arguments of the last SCROLL_STATE (the client's rect). */
   private lastArgs: any[] | null = null;
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
@@ -177,7 +176,7 @@ export class FakeTab implements StagePage {
     return { x: o.x, y: o.y, width: b.width, height: b.height };
   }
   /** A node's box in the top page, now. */
-  liveBox(id: string): Box { const n = this.v.page.nodes[id], o = this.toTop(this.nodeScroller(id), n.box.x, n.box.y); return { x: o.x, y: o.y, width: n.box.width, height: n.box.height }; }
+  liveBox(id: string): Box { const n = this.v.page.nodes[id]; if (n.fixed) return n.box; const o = this.toTop(this.nodeScroller(id), n.box.x, n.box.y); return { x: o.x, y: o.y, width: n.box.width, height: n.box.height }; }
   /** A scroller's range ([x, y]). */
   maxOf(name: string): [number, number] {
     const f = this.facts(name) ?? {}, c = this.clientBox(name);
@@ -259,15 +258,29 @@ export class FakeTab implements StagePage {
     const levels = chain.map((s) => ({ r: rect(this.clientBox(s)), s: [this.sc[s].x, this.sc[s].y], m: this.maxOf(s), doc: s === "document" || s.startsWith("frame:") }));
     return { result: { type: "object", value: { t: rect(b), levels, top: !cross, flat: true, ox: cross ? 0 : 0, oy: 0 } } };
   }
-  /** WHEEL_POINTS: rules 1 and 3 of the wheel point at each point (in the reader's points), for the reader's scroller k. */
-  private wheelPoints(objectId: string, child: string | undefined, k: number, pts: [number, number][]): any {
+  /**
+   * WHEEL_POINTS: rules 1, 3 and 4 of the wheel point at each point (in the reader's points), for the reader's scroller k
+   * and the round's move `mv`: the indexes of the points that pass. The column (rule 4): the nodes of rule 1, the frames
+   * and the other scrollers with a range on the moved axis whose boxes meet the line from the point along the move,
+   * apart from the target, the scrollers around it and the nodes with `fixed`.
+   */
+  private wheelPoints(objectId: string, child: string | undefined, k: number, pts: [number, number][], mv: [number, number] | null): any {
     const V = this.v, chain = this.marks.get(objectId), m = chain?.[k];
     if (!m) return { result: { type: "object", value: null } };
-    const f = objectId.startsWith("own:") ? null : V.page.nodes[objectId]?.frame;
+    const own = objectId.startsWith("own:"), f = own ? null : V.page.nodes[objectId]?.frame, target = own ? `frame:${Object.keys(V.page.frames)[Number(objectId.slice(4)) - 900]}` : objectId;
     const cross = !!f && V.page.frames[f].origin === "cross" && !!child, o = cross ? this.frameContent(f) : { x: 0, y: 0 };
     const doc = this.docOf(m), BAD = ["input", "select", "textarea", "canvas", "embed", "object", "video", "audio", "iframe", "frame"];
-    const els: string[] = [], pass: { i: number; chain: number[] }[] = [];
-    for (let i = 0; i < pts.length && pass.length < 4; i++) {
+    const around = new Set(own ? this.chainOf(this.frameScroller(target.slice(6))) : this.chainOf(this.nodeScroller(objectId)));
+    const meets = (b: Box, g: number[]) => b.x <= g[2] && b.x + b.width > g[0] && b.y <= g[3] && b.y + b.height > g[1];
+    const segs = (p: { x: number; y: number }) => [...(mv?.[1] ? [[p.x, Math.min(p.y, p.y + mv[1]), p.x, Math.max(p.y, p.y + mv[1])]] : []), ...(mv?.[0] ? [[Math.min(p.x, p.x + mv[0]), p.y + mv[1], Math.max(p.x, p.x + mv[0]), p.y + mv[1]]] : [])];
+    const inDoc = (s: string) => this.docOf(s) === doc;
+    const col: Box[] = [
+      ...Object.keys(V.page.nodes).filter((id) => id !== objectId && inDoc(this.nodeScroller(id)) && !V.page.nodes[id].fixed && (BAD.includes(V.page.nodes[id].tag) || V.page.nodes[id].contenteditable)).map((id) => this.liveBox(id)),
+      ...Object.keys(V.page.scrollers ?? {}).filter((x) => x !== "document" && x !== m && inDoc(x) && !around.has(x) && this.maxOf(x).some((r, a) => r > 0 && !!mv?.[a])).map((x) => this.clientBox(x)),
+      ...(doc === "document" ? Object.keys(V.page.frames ?? {}).filter((x) => `frame:${x}` !== target && !around.has(`frame:${x}`)).map((x) => this.frameBox(x)) : []),
+    ];
+    const pass: number[] = [];
+    for (let i = 0; i < pts.length; i++) {
       const p = { x: pts[i][0] + o.x, y: pts[i][1] + o.y };
       // The frame levels above the scroller's document: the element there is the frame's (a cross-origin reader checks its own document only).
       if (doc !== "document" && !cross) { const top = this.hitIn("document", p); if (top.kind !== "frame" || `frame:${top.id}` !== doc) continue; }
@@ -278,18 +291,28 @@ export class FakeTab implements StagePage {
       const sch = this.hitChain(h).filter((s) => this.docOf(s) === doc);
       if (sch[0] !== m && !(m === doc && sch[0] === doc)) continue;
       if (sch.slice(0, sch.indexOf(m) + 1).some((s) => BAD.includes(this.facts(s)?.tag))) continue;
-      const names = [...(node ? [`node:${h.id}`] : []), ...sch.slice(0, sch.indexOf(m) + 1).filter((s) => s !== doc).map((s) => `sc:${s}`), ...(m === doc ? [`html:${doc}`] : [])];
-      pass.push({ i, chain: names.map((x) => { let j = els.indexOf(x); if (j < 0) { j = els.length; els.push(x); } return j; }) });
+      if (col.some((b) => segs(p).some((g) => meets(b, g)))) continue;
+      pass.push(i);
     }
-    this.els.set(objectId, els);
     return { result: { type: "object", value: pass } };
   }
-  /** DOMDebugger.getEventListeners of an element of a wheel point's chain: the page's facts (`listener`: nonpassive or passive). */
-  private listenersOf(objectId: string): any {
-    const name = objectId.slice(3);
-    const kind = name.startsWith("html:") ? this.facts(name.slice(5))?.htmlListener : (name.startsWith("node:") ? this.v.page.nodes[name.slice(5)] : name.startsWith("sc:") ? this.facts(name.slice(3)) : null)?.listener;
-    const l = kind === "nonpassive" ? [{ passive: false }] : kind === "passive" ? [{ passive: true }] : [];
-    return { listeners: l.map((x) => ({ type: "wheel", useCapture: false, once: false, scriptId: "1", lineNumber: 0, columnNumber: 0, ...x })) };
+  /**
+   * DOMDebugger.getEventListeners of a scroller with its whole subtree (WHEEL_ROOT's handle): the listeners of the page's
+   * facts (`listener`: nonpassive or passive) of each node and scroller inside it, and of the html element of a document
+   * (`htmlListener`), each with its node's backendNodeId (nodes 500 + i, scrollers 700 + i, the html 499).
+   */
+  private subtreeListeners(objectId: string): any {
+    const [, reader, k] = /^root:(.*):(\d+)$/.exec(objectId) ?? [];
+    const m = this.marks.get(reader)?.[Number(k)];
+    if (!m) return { listeners: [] };
+    const V = this.v, doc = this.docOf(m), ids = Object.keys(V.page.nodes), scs = Object.keys(V.page.scrollers ?? {});
+    const inside = (s: string) => (m === doc ? this.docOf(s) === doc : this.chainOf(s).includes(m));
+    const out: any[] = [];
+    const add = (kind: string | undefined, backendNodeId: number) => { if (kind === "nonpassive" || kind === "passive") out.push({ type: "wheel", useCapture: false, passive: kind === "passive", once: false, scriptId: "1", lineNumber: 0, columnNumber: 0, backendNodeId }); };
+    for (const [i, id] of ids.entries()) if (inside(this.nodeScroller(id))) add(V.page.nodes[id].listener, 500 + i);
+    for (const [i, s] of scs.entries()) if (s !== "document" && inside(s)) add(this.facts(s).listener, 700 + i);
+    if (m === doc) add(this.facts(doc)?.htmlListener, 499);
+    return { listeners: out };
   }
   /** The value of a field (the tests). */
   valueOf(id: string): string | undefined { return this.fields.get(id)?.value; }
@@ -511,10 +534,14 @@ export class FakeTab implements StagePage {
     if (s.method === "Page.getLayoutMetrics") return { cssLayoutViewport: { clientWidth: V.page.viewport.width, clientHeight: V.page.viewport.height, pageX: scroll.x + this.sc.document.x, pageY: scroll.y + this.sc.document.y } };
     // The scroll's reads (board ab-t30.11).
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_STATE) { this.lastArgs = (p.arguments ?? []).map((x: any) => x?.value); return this.scrollState(p.objectId, s.child); }
-    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_POINTS) return this.wheelPoints(p.objectId, s.child, p.arguments[0].value, p.arguments[1].value);
-    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ELS) return { result: { type: "object", subtype: "array", objectId: `els:${p.objectId}` } };
-    if (s.method === "Runtime.getProperties" && String(p.objectId).startsWith("els:")) return { result: (this.els.get(String(p.objectId).slice(4)) ?? []).map((name, i) => ({ name: String(i), value: { type: "object", subtype: "node", objectId: `el:${name}` } })) };
-    if (s.method === "DOMDebugger.getEventListeners") return this.listenersOf(String(p.objectId));
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_POINTS) return this.wheelPoints(p.objectId, s.child, p.arguments[0].value, p.arguments[1].value, p.arguments[2]?.value ?? null);
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ROOT) return { result: { type: "object", subtype: "node", objectId: `root:${p.objectId}:${p.arguments[0].value}` } };
+    if (s.method === "DOMDebugger.getEventListeners") return this.subtreeListeners(String(p.objectId));
+    // The quads of a node (500 + i) or a scroller (700 + i) of a listener, and the html element (499: the whole document).
+    if (s.method === "DOM.getContentQuads" && typeof p.backendNodeId === "number" && p.backendNodeId < 900) {
+      const b = p.backendNodeId === 499 ? { x: -1e6, y: -1e6, width: 2e6, height: 2e6 } : p.backendNodeId >= 700 ? this.clientBox(Object.keys(V.page.scrollers)[p.backendNodeId - 700]) : this.liveBox(Object.keys(V.page.nodes)[p.backendNodeId - 500]);
+      return { quads: [[b.x, b.y, b.x + b.width, b.y, b.x + b.width, b.y + b.height, b.x, b.y + b.height]] };
+    }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === OWNER_AT) {
       const f = Object.keys(V.page.frames)[Number(String(p.objectId).slice(4)) - 900];
       return { result: { type: "object", value: (p.arguments[0].value as [number, number][]).map(([x, y]) => { const h = this.hitIn("document", { x, y }); return h.kind === "frame" && h.id === f; }) } };

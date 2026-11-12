@@ -1526,7 +1526,7 @@ const STAGE_ITEMS: string[] = [
   "The stage's own reads (an element's box, the focused element, a hit test, a frame's offset, a scroll position) go to Chrome inside the step, and no client sees them or their answers.",
   // review-119 B3 (before: "... `Target.getTargetInfo`, `DOMDebugger.getEventListeners`).").
   // Board ab-t30.11 (before: "... `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`).").
-  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `DOM.getBoxModel`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `Target.getTargetInfo`, `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`, `DOM.resolveNode`, `Runtime.getProperties`).",
+  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `DOM.getBoxModel`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `Target.getTargetInfo`, `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`, `DOM.resolveNode`).",
   // Board ab-t30.10 (before: "Three reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field, and the recovery's read at the hit point.").
   // review-119 P1 (before: "... the typing rule's read of the focused element in a cross-origin frame ...").
   // Board ab-t30.11 (before: "... (on a node of that frame that a client's call named), and the recovery's read at the hit point.").
@@ -1885,10 +1885,16 @@ const STAGE_ITEMS: string[] = [
   "The wheel point.",
   "A point over the visible part of the scroller is a wheel point only when all of these are true (the stage's own read):",
   "The element under the point, and each ancestor of it up to the scroller, is not an `input`, `select`, `textarea`, contenteditable, `canvas`, `embed`, `object`, `video`, `audio` or `iframe`.",
-  "No element on that chain has a wheel listener (`wheel`, `mousewheel`) that is not passive (`DOMDebugger.getEventListeners`).",
+  // Board ab-t30.11 (before: "No element on that chain has a wheel listener (`wheel`, `mousewheel`) that is not passive (`DOMDebugger.getEventListeners`).").
+  "No element of the scroller (it, or an element inside it) that has a wheel listener (`wheel`, `mousewheel`) that is not passive has a box that holds the point or meets its column (rule 4).",
+  "The stage reads the listeners of the scroller with its whole subtree (`DOMDebugger.getEventListeners`) and the boxes of their elements (`DOM.getContentQuads`).",
   "The listeners of the window and of the document do not count.",
   // Board ab-t30.11 (before: "The element under the point scrolls the target scroller.").
   "The element under the point scrolls the target scroller: no other scroller comes before it on that chain.",
+  // Board ab-t30.11: a case with no rule before (the content that the notches move under the point).
+  "The point's column holds no element of rule 1 and no other scroller with a range on the axis of the move.",
+  "The column is the line from the point along the round's move (the vertical axis first), as the page's content is now: the content that the notches move under the point.",
+  "The element, the elements around it and inside it, and the elements with `position: fixed`, which do not move, do not count.",
   // Board ab-t30.11 (before: "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller.").
   "The stage tries the page's last point first, then the points of a 5 x 5 grid over the visible part of the scroller, at 14%, 32%, 50%, 68% and 86% of it across and down, the nearest to the page's last point first.",
   "When no point passes, the stage sends the client's call as it is.",

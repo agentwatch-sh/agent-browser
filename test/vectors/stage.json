@@ -2627,7 +2627,7 @@
   {
    "id": "scroll-wheel-point",
    "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
-   "note": "The wheel point (the input design's section 8.3): the page's last point 640,360 is over a canvas whose page zooms at the wheel (600 x 420 at 350,150), so it is no wheel point, and neither is any point of the 5 x 5 grid over the canvas. The stage tries the points of the grid over the visible part of the scroller (here the viewport), the nearest to the last point first: 640,101 passes. A path goes there, then 17 notches (round(2060 / 120)) one person's gap after the path, then {} after the smooth scroll's 350 ms.",
+   "note": "The wheel point (the input design's section 8.3): the page's last point 640,360 is over a canvas whose page zooms at the wheel (600 x 420 at 350,150), so it is no wheel point, and neither is any point of the 5 x 5 grid over the canvas; 640,101 is not over it, but its column (the content that the 17 notches move under it, from y 101 to 2141) meets the canvas. The stage tries the points of the grid over the visible part of the scroller (here the viewport), the nearest to the last point first: 640,619 passes (its column starts below the canvas). A path goes there, then 17 notches (round(2060 / 120)) one person's gap after the path, then {} after the smooth scroll's 350 ms.",
    "platform": "linux",
    "seed": 82,
    "clock": 0,
@@ -2698,7 +2698,7 @@
       },
       "to": {
        "x": 640,
-       "y": 101
+       "y": 619
       }
      },
      "gapMs": 8,
@@ -2733,7 +2733,7 @@
      ],
      "fields": {
       "x": 640,
-      "y": 101,
+      "y": 619,
       "deltaX": 0,
       "deltaY": 120
      }

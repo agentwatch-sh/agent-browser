@@ -111,7 +111,9 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
  * fields whose numbers may differ by up to that much (a wheel's scroll: one notch, as C11's residual gives it).
  * `trace`: a line of the stage that the row needs (its notches, or the counted fallback).
  */
-type Row = { name: string; v?: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; within?: Record<string, number>; trace?: RegExp };
+type Row = { name: string; v?: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; within?: Record<string, number>; trace?: RegExp;
+  /** A measure (it passes when the facts are read): does Chromium give each wheel event of CDP to the element under the point at its time? */
+  measure?: true };
 const click = (sel: string) => (p: any) => p.locator(sel).click();
 const ROWS: Row[] = [
   { name: "mouse.wheel(0, 600)", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 600), fields: ["scrollY", "scrollX"], trace: /^a wheel call: 5 notches/ },
@@ -134,6 +136,9 @@ const ROWS: Row[] = [
   { name: "an inner scroller across the page that the content moves under the wheel point: a click below the fold", v: "list", act: click("#far"), fields: ["clicks", "acrossTop"] },
   { name: "a focused number input across the page that the content moves under the wheel point (M11): a click below the fold", v: "num", before: async (p) => { await p.locator("#across").fill("7"); await p.evaluate(() => scrollTo(0, 0)); }, act: click("#far"), fields: ["clicks", "acrossValue"] },
   { name: "a canvas with a wheel handler across the page that the content moves under the wheel point: a click below the fold", v: "canvas", act: click("#far"), fields: ["clicks", "across"] },
+  // The measures (C11's wheel point rule 4): mouse.wheel keeps the client's point, so the page's content moves under it.
+  { name: "measure: mouse.wheel(0, 1440) at a point that the inner scroller across the page comes under (does it get the later notches?)", v: "list", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 1440), fields: ["acrossTop", "scrollY"], measure: true },
+  { name: "measure: mouse.wheel(0, 1440) at a point that the canvas across the page comes under (does its handler get the later notches?)", v: "canvas", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 1440), fields: ["across", "scrollY"], measure: true },
 ];
 
 /** The page's state after a row: its scroll, the clicks, the fields, the listeners' counts, what is in view, and the frames' clicks and fields. */
@@ -203,11 +208,11 @@ export async function stageScrollCases(o: StageContext): Promise<void> {
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
           const same = agree(row, s.state, q.state);
           const traced = !row.trace || trace.some((l) => row.trace!.test(l));
-          const ok = s.ok && q.ok && same && traced;
+          const ok = row.measure ? s.ok && q.ok : s.ok && q.ok && same && traced;
           const pick = (st: any) => Object.fromEntries(row.fields.map((f) => [f, st[f]]));
           const scrollLines = trace.filter((l) => /^(a scroll into view|a wheel call|a focus click|no focus click)/.test(l));
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail: { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) },
-            same, traced, scrollLines, ...(same ? {} : { stageState: pick(s.state), ownState: pick(q.state) }) } });
+            same, traced, scrollLines, ...(row.measure ? { measure: true } : {}), ...(same && !row.measure ? {} : { stageState: pick(s.state), ownState: pick(q.state) }) } });
           (out.rows as unknown[]).push({ version, row: row.name, stage: s, own: q, same, traced, trace });
         }
         if (version === "1.65.0" && !process.env.STAGE_SCROLL_ROWS) await harnessScroll(o, ctx, port, recs, out);
