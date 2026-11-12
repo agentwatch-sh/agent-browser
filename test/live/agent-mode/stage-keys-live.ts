@@ -49,6 +49,9 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 #cb{left:420px;top:420px;width:200px;height:30px}#cblist{display:none;left:420px;top:452px;width:220px;height:160px;background:#fdd;z-index:10}
 #after2{left:450px;top:520px;width:140px;height:40px}
 #xf{position:absolute;left:100px;top:700px;width:360px;height:120px;border:3px solid #000;padding:4px}
+#sf{position:absolute;left:960px;top:220px;width:300px;height:100px;border:2px solid #000}
+#xf2{position:absolute;left:520px;top:700px;width:360px;height:120px;border:3px solid #000;padding:4px}
+#banner{position:fixed;left:510px;top:690px;width:400px;height:150px;background:rgba(255,255,200,0.95);z-index:20}
 </style></head><body>
 <input id=t value="old text"><input id=num type=number><input id=em type=email>
 <textarea id=ta></textarea><textarea id=ta2></textarea><div id=ce contenteditable=true></div>
@@ -57,9 +60,11 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 <input id=mask placeholder="(555) 123-4567"><input id=tags placeholder="tags"><div id=chips></div>
 <input id=dp placeholder="date"><div id=dpop>calendar</div><button id=after>After</button>
 <input id=cb placeholder="color"><div id=cblist>red blue green</div><button id=after2>After 2</button>
-<iframe id=xf src="http://b.localhost:${port}/kframe"></iframe>
+<iframe id=xf src="http://b.localhost:${port}/kframe?o=cross"></iframe><iframe id=sf src="/kframe?o=same"></iframe><iframe id=xf2 src="http://b.localhost:${port}/kframe?o=cross2"></iframe>
+<div id=banner>We use cookies. <a href="#ok" id=bannerok>OK</a></div>
 <script>
-window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, shiftDowns: 0, keydowns: 0 };
+window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, shiftDowns: 0, keydowns: 0, banner: 0 };
+document.getElementById('banner').addEventListener('mousedown', () => __k.banner++);
 document.getElementById('ta2').value = 'set by a script';
 addEventListener('keydown', (e) => { __k.keydowns++; if (e.key === 'Shift') __k.shiftDowns++; }, true);
 document.getElementById('kd').addEventListener('keydown', (e) => { if (e.key === 'x') { __k.dialogs.push('key'); alert('x'); } });
@@ -105,7 +110,7 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
 }
 
 /** A row: its action (with `before` steps), the fields that it decides, and `measure` for the open points' widgets (a report). */
-type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2; frame?: boolean; extra?: string[] };
+type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2; frame?: boolean; frames?: string[]; extra?: string[] };
 const T40 = "The quick brown fox jumps over the dogs.", T140 = "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text in one step, as a paste.";
 const click = (p: any, sel: string) => p.locator(sel).click();
 const ROWS: Row[] = [
@@ -133,6 +138,13 @@ const ROWS: Row[] = [
   { name: "a field in a cross-origin frame: pressSequentially()", act: (p) => p.frameLocator("#xf").locator("#fi").pressSequentially("4242 Exp"), fields: [], frame: true },
   { name: "a dialog at a key (alert() in a keydown handler)", act: async (p) => { await click(p, "#kd"); await p.keyboard.type("axb"); }, fields: ["kd"], extra: ["dialogs"] },
   { name: "a dialog at a focus click (M9: alert() at the blur of the field before)", before: (p) => click(p, "#blur"), act: (p) => p.locator("#t").fill("after the dialog"), fields: ["t"], extra: ["dialogs"] },
+  // review-119: a field in a same-origin frame (the hit test at the field's own point), a field in a cross-origin frame
+  // under a fixed banner of the top page (no click on the banner), an email field whose caret a fill left at its end
+  // (no focus click: B4), and a long pressSequentially with Playwright's default timeout (B7).
+  { name: "a field in a same-origin frame: fill()", act: (p) => p.frameLocator("#sf").locator("#fi").fill("Same 4242"), fields: [], frames: ["same"] },
+  { name: "a field in a cross-origin frame under a fixed banner of the top page: fill()", act: (p) => p.frameLocator("#xf2").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross2"], extra: ["banner"] },
+  { name: "pressSequentially() into an email input whose text a fill set (the caret at its end)", before: async (p) => { await p.locator("#em").fill("a@b.co"); await click(p, "#t"); }, act: (p) => p.locator("#em").pressSequentially("m"), fields: ["em"] },
+  { name: "a long pressSequentially() (600 characters) with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(14).slice(0, 600)), fields: ["ta"] },
   { name: "open point 1: a date picker that opens at a click; then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], measure: 1 },
   { name: "open point 1: a combobox that opens at a click; then a click on the button under it", act: async (p) => { await p.locator("#cb").fill("blue"); await p.locator("#after2").click({ timeout: 10_000 }); }, fields: ["cb"], extra: ["after2", "cblist"], measure: 1 },
   { name: "open point 2: a tag input (a comma makes a chip)", act: (p) => p.locator("#tags").fill("red,green,blue"), fields: ["tags"], extra: ["chips"], measure: 2 },
@@ -145,13 +157,15 @@ async function stateOf(p: any): Promise<any> {
     const v = (id: string) => { const el = document.getElementById(id) as any; return el.isContentEditable ? el.textContent : el.value; };
     const k = (window as any).__k;
     return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips,
-      after: k.after, after2: k.after2, dpop: getComputedStyle(document.getElementById("dpop")!).display, cblist: getComputedStyle(document.getElementById("cblist")!).display, shiftDowns: k.shiftDowns, keydowns: k.keydowns };
+      after: k.after, after2: k.after2, dpop: getComputedStyle(document.getElementById("dpop")!).display, cblist: getComputedStyle(document.getElementById("cblist")!).display, shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner };
   });
-  const f = p.frames().find((x: any) => /\/kframe/.test(x.url()));
-  s.frame = f ? await f.evaluate(() => (document.getElementById("fi") as HTMLInputElement).value).catch((e: Error) => `error: ${e.message.split("\n")[0]}`) : null;
+  s.frames = {} as Record<string, unknown>;
+  for (const f of p.frames()) { const o = /kframe\?o=(\w+)/.exec(f.url())?.[1]; if (o) s.frames[o] = await f.evaluate(() => (document.getElementById("fi") as HTMLInputElement).value).catch((e: Error) => `error: ${e.message.split("\n")[0]}`); }
+  s.frame = s.frames.cross ?? null;
   return s;
 }
-const compared = (row: Row, st: any) => ({ ...Object.fromEntries(row.fields.map((f) => [f, st.values[f]])), ...Object.fromEntries((row.extra ?? []).map((x) => [x, st[x]])), ...(row.frame ? { frame: st.frame } : {}) });
+const compared = (row: Row, st: any) => ({ ...Object.fromEntries(row.fields.map((f) => [f, st.values[f]])), ...Object.fromEntries((row.extra ?? []).map((x) => [x, st[x]])), ...(row.frame ? { frame: st.frame } : {}),
+  ...Object.fromEntries((row.frames ?? []).map((o) => [`frame:${o}`, st.frames[o]])) });
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number; value?: T; error?: string }> {
   const t0 = Date.now();

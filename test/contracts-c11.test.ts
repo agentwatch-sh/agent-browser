@@ -1524,9 +1524,11 @@ const STAGE_ITEMS: string[] = [
   "So a `Runtime.evaluate` after a click sees the page after the click.",
   "An ordinary call that the stage passes leaves the gate when the model sends it, not when Chrome answers (above).",
   "The stage's own reads (an element's box, the focused element, a hit test, a frame's offset, a scroll position) go to Chrome inside the step, and no client sees them or their answers.",
-  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `DOM.getBoxModel`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `Target.getTargetInfo`, `DOMDebugger.getEventListeners`).",
+  // review-119 B3 (before: "... `Target.getTargetInfo`, `DOMDebugger.getEventListeners`).").
+  "They run in the relay's own isolated world (the geometry read, above), or they are protocol reads (`DOM.getContentQuads`, `DOM.getBoxModel`, `Page.getLayoutMetrics`, `DOM.getFrameOwner`, `Target.getTargetInfo`, `DOMDebugger.getEventListeners`, `DOM.getNodeForLocation`).",
   // Board ab-t30.10 (before: "Three reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field, and the recovery's read at the hit point.").
-  "These reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field and its hit test, the typing rule's read of the focused element in a cross-origin frame (on a node of that frame that a client's call named), and the recovery's read at the hit point.",
+  // review-119 P1 (before: "... the typing rule's read of the focused element in a cross-origin frame ...").
+  "These reads start from the node handle of a client's call, and they run in Playwright's utility world on that handle: the frame mapping, the focus click's read of the field and its hit test, the typing rule's reads of the focused element in a cross-origin frame (on a node of that frame that a client's call named), and the recovery's read at the hit point.",
   "The input lock.",
   "The agent browser has one input lock for all its pages, in memory (board ab-v16.46).",
   "A translated action holds the lock from its first event to its last.",
@@ -1534,8 +1536,11 @@ const STAGE_ITEMS: string[] = [
   "A pointer action is its path, its press and its release.",
   "A key run is the keys of one tab with no other call between them: it ends at the tab's next call that is not a key, or 1 s after its last key.",
   // Board ab-t30.10: the open point N10 of PR #116 (board ab-t30.17): the lock rule for keys.
-  "A key that a client holds down, a modifier or not, keeps its run and the lock until the key's `keyUp`, as a held button does, within the limit `STAGE_ACTION_MAX_MS` (board ab-t30.10, the open point N10 of board ab-t30.17).",
+  // review-119 N13 and B7 (before: "A key that a client holds down, a modifier or not, keeps its run and the lock until the key's `keyUp`, as a held button does, within the limit `STAGE_ACTION_MAX_MS` (board ab-t30.10, the open point N10 of board ab-t30.17).").
+  "A key that a client holds down, a modifier or not, keeps the action and its lock until the key's `keyUp`, as a held button does, within the limit `STAGE_ACTION_MAX_MS`, which counts from the action's start (board ab-t30.10, the open point N10 of board ab-t30.17).",
+  "The tab's next call that is not a key still ends the key run, and it goes in the same action.",
   "The 1 s counts from the run's last key event when the client holds no key.",
+  "Playwright's focus call (and the call of `fill` when it gets a focus click), its focus click and the keys or the text that follow it are one action: one lock, one activation and one limit, from the focus call.",
   "Another tab's input waits for the lock, in the order of arrival, and that tab's later calls wait behind it in its own gate.",
   "In the service, agent-browser's own commands reach Chrome through the endpoint and the stage, so they share the lock.",
   "The file lock `input.lock` stays only for agent-browser's direct mode (its own Chrome, with no endpoint).",
@@ -1543,7 +1548,8 @@ const STAGE_ITEMS: string[] = [
   "A hold has the limit `STAGE_ACTION_MAX_MS = 25000`: at the limit the plan ends (dialogs, below), so the lock is free at once, the rest of the action goes with no person's timing, and the stage logs it.",
   // Board ab-t30.10 (before: "At this limit the stage sends no release of its own: the client still holds its button or key, and its own release goes later.").
   "At this limit the stage sends no release of a client's button or key: the client still holds it, and its own release goes later.",
-  "The stage sends at once the planned releases of a key run (a release that it answered early) and the release of each key of its own (its Shift, a chord's modifier).",
+  // review-119 B6 and the daemon lead's P3 (before: "The stage sends at once the planned releases of a key run (a release that it answered early) and the release of each key of its own (its Shift, a chord's modifier).").
+  "The stage takes the lock again in the order of arrival, with the same limit, as the events of an ended plan do (dialogs, below), and then sends the planned releases of a key run (a release that it answered early) and the release of each key of its own (its Shift, the modifier of a chord that the stage sends, such as the Control of `Control+Home`, and a key of a typed text).",
   // Review-116b R1: the lock that an ended plan's events take again has a limit.
   "The lock that an ended plan's events take again (dialogs, below) has the same limit: at the limit it is free, and the plan's remaining ended calls go with no lock and no activation.",
   "The answers.",
@@ -1668,7 +1674,8 @@ const STAGE_ITEMS: string[] = [
   "A run of shifted characters keeps Shift down.",
   "In a chord, each modifier comes 40 to 120 ms before the key, and the releases come 20 to 80 ms apart, in reverse order.",
   // Board ab-t30.10 (review-111 point 3): a client's chord of two modifiers.
-  "A client's second modifier of one chord (for example `Control+Shift+ArrowLeft`) comes 20 to 80 ms after the first.",
+  // review-119 N9 (before: "A client's second modifier of one chord (for example `Control+Shift+ArrowLeft`) comes 20 to 80 ms after the first.").
+  "A client's later modifier of one chord (for example the Shift of `Control+Shift+ArrowLeft`) comes 20 to 80 ms after the one before, and less when that keeps all of them within 80 ms of the first, so that the key comes 40 to 120 ms after each.",
   "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11), and the gaps between notches are 35 to 90 ms.",
   "No idle moves: the pointer moves only for a client's call (the answer Q4 a).",
   "The pointer:",
@@ -1742,6 +1749,9 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.10: the cases with no rule before (review-111 points 1 and 2; a raw client's char and modifier bits).
   "A key that comes with the Shift bit while no Shift key is down gets the same Shift press.",
   "A client's own press of Shift while the stage's Shift is down sends no event, because the key is down; the client's later release is the release of that Shift.",
+  // review-119 N2 and the daemon lead's P2.
+  "The Shift is then the client's, and the stage sends no release of its own for it.",
+  "When the client releases it before the stage's shifted characters end, the next shifted character gets a new Shift press of the stage's.",
   "A bit of `Control`, `Alt` or `Meta` that a client sets while it holds no such key goes on the event as it is, with no press of the stage's own.",
   "A press of a key that is down already (a second `keyDown` with no `keyUp` between) is a keyboard's auto-repeat: it goes at its arrival with `autoRepeat` true, with no new hold.",
   "A `char` goes right after its key's press.",
@@ -1761,7 +1771,8 @@ const STAGE_ITEMS: string[] = [
   "A longer text goes as one `Input.insertText` (the answer Q2 a).",
   "On the Mac the same, with the Mac's editing commands for keys such as Backspace (`src/record.ts` `macCommands`).",
   // Board ab-t30.10: rule 5 (a held modifier would change the typed keys), the plan's own times (review-111 point 4), the answer.
-  "The client holds no modifier key: a held Shift, Control, Alt or Meta would change the typed keys.",
+  // review-119 B2 b (before: "The client holds no modifier key: a held Shift, Control, Alt or Meta would change the typed keys.").
+  "The client holds no key: a held Shift, Control, Alt or Meta would change the typed keys, and a held letter would go down twice.",
   "Typed keys follow the times of the plan that rule 3 checked, so the typed text takes at most `STAGE_TYPE_MAX_MS`.",
   "The call is answered after the plan's last event.",
   "After the last key the stage reads the value of the field.",
@@ -1769,7 +1780,12 @@ const STAGE_ITEMS: string[] = [
   "When it is not the field's text before the keys with the typed text in place of its selection (after `fill`, whose script selects all of it: the text), the stage logs it, with no text, and counts it, and it does not repair the field.",
   "This is the one named exception to the same result as Playwright's own input: a key handler of a page (a tag input, an autocomplete, an input mask) can act on typed keys, where Playwright's own `fill` inserts the text in one step.",
   // Board ab-t30.10: the end of a typed text's plan (a case with no rule before).
-  "When a plan of typed keys ends before its last key (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`), the stage sends the release of each key that the plan holds, and the characters whose keys did not go as one `Input.insertText`, as the client's own call, which gets Chrome's answer.",
+  // review-119 B2 a, B6, N3, N4 and the daemon lead's P1 (before: "When a plan of typed keys ends before its last key (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`), the stage sends the release of each key that the plan holds, and the characters whose keys did not go as one `Input.insertText`, as the client's own call, which gets Chrome's answer.").
+  "When a plan of typed keys ends before its last event (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`, or a navigation of the main frame), a character is typed when its `keyDown` reached the page: Chrome drops each input event that it gets while a dialog is open, so a `keyDown` sent after the first event of the plan that has no answer at the end did not reach it.",
+  "After the dialog's close, with the lock taken again in the order of arrival, the stage sends the release of each key that the plan holds.",
+  "Then, when the field that the typing rule's read marked (a value of the world of that read, which no page script sees) still has the focus by the focus click's test (it is the active element of its document, and that document has the focus), the stage sends the characters that were not typed as one `Input.insertText`, as the client's own call, which gets Chrome's answer.",
+  "Else, and at a navigation of the main frame, no character goes, and the call gets the error `The input stage ended a typed text at <the end>, and <n> characters did not go: <the field no longer has the focus, or the page navigated>.`",
+  "When every character was typed, the call gets its answer after Chrome's answers of the plan's events.",
   "The time of a key run.",
   "The stage does not know the length of a run in advance.",
   "It types at the person's speed for the first `STAGE_RUN_SLOW_MS = 12000` of the run, then at the fast end of the person's spread.",
@@ -1781,7 +1797,10 @@ const STAGE_ITEMS: string[] = [
   "A field with the focus gets no click.",
   // Board ab-t30.10: which focus counts, and the field of fill.
   "Before Playwright's focus call the stage takes the lock and runs the activation (the window comes forward for input, above); the field then has the focus when it is the active element of its document and that document has the focus (Playwright's own test).",
-  "Before `fill`, the field has the focus when it is the active element of its document, because the script of `fill` selects its text; the field is Playwright's retarget of the node (the control of a label).",
+  // review-119 N5 and N6 (before: "Before `fill`, the field has the focus when it is the active element of its document, because the script of `fill` selects its text; the field is Playwright's retarget of the node (the control of a label).").
+  "Before `fill` the stage reads the field before the activation: when it has the focus by the same test, the stage gives no click and runs no activation; else the stage takes the lock, runs the activation and reads the field again.",
+  "The field of `fill` is Playwright's retarget of the node (the control of a label).",
+  "A field that is disabled or read-only gets no click (Playwright's `fill` refuses it, and a script focus of a disabled field does nothing), and the stage counts it.",
   "Only a text field gets the click: an `input` of a text type, a `textarea` or a contenteditable.",
   "On another element the utility call passes (the answer Q3 a).",
   "The click goes where the script focus puts the caret.",
@@ -1792,10 +1811,17 @@ const STAGE_ITEMS: string[] = [
   "The script focus puts the caret at the start of an `input` with the caret reset (`pressSequentially`, `press` and `type`), and else where the field's own selection is (a `textarea`, and `focus()`).",
   "When the caret is not there after the click, the stage sends keys of its own that move it: to the start `Home` (an `input`) or `Control+Home` (a `textarea`), to the end `End` or `Control+End`, and to another place in a text of at most 64 characters the start, then `ArrowRight` and `Shift+ArrowRight`.",
   "Else the stage sets it with the field's own `setSelectionRange` in Playwright's utility world, and counts it.",
-  "On the Mac the keys are `Meta+ArrowLeft` (an `input`) or `Meta+ArrowUp` (a `textarea`) to the start and `Meta+ArrowRight` or `Meta+ArrowDown` to the end, with the Mac's editing commands.",
+  // review-119 B5 (before: "... `Meta+ArrowDown` to the end, with the Mac's editing commands.").
+  "On the Mac the keys are `Meta+ArrowLeft` (an `input`) or `Meta+ArrowUp` (a `textarea`) to the start and `Meta+ArrowRight` or `Meta+ArrowDown` to the end, with the Mac's editing commands of each key with its modifiers (`src/record.ts` `macCommands`: `Meta+ArrowRight` is `moveToRightEndOfLine`).",
   "`fill` gets no caret keys, because its script selects the text.",
+  // review-119 B4.
+  "Before Playwright's focus call, an `input` of the type `email` or `number` with text gets no click: its caret cannot be read or set, and the script focus leaves it where the field's own selection is.",
+  "The utility call alone gives it the focus, and the stage counts it.",
   "A field out of view first gets notches into view (the scroll, below), then the click.",
-  "A field that has no box, or that another element covers at the point of the click (the stage's own hit test), gets no click.",
+  // review-119 B3 (before: "A field that has no box, or that another element covers at the point of the click (the stage's own hit test), gets no click.").
+  "A field that has no box, or that another element covers at the point of the click, gets no click.",
+  "The stage's own hit test reads the element at the point in the field's own document, and at each frame level above it the element at the mapped point: in a same-origin level in Playwright's utility world, and in a cross-origin level with `DOM.getNodeForLocation` on the parent's session, against the frame owner's `backendNodeId`.",
+  "Each must be the field or the frame's owner.",
   "The utility call alone gives it the focus, and the stage counts it.",
   "A field in a cross-origin frame: the stage maps the point of the click to the top page (the frame mapping, below), and it sends the click on the top page's session.",
   "`selectText()` on an `input` or a `textarea`: a click on it and the select-all chord (`Control+A`, on the Mac `Meta+A`), then the utility call.",
