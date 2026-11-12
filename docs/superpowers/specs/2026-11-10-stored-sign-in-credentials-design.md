@@ -722,8 +722,8 @@ scripts cannot change the service's reads.
    only new requests, so this check covers the ones that the page opened before it.
 7. **The type watch (review-104 B2).** Before the first key, the service puts a `MutationObserver` on the password
    field's `type` attribute in its isolated world. When the type changes (a click on a "show password" control),
-   the observer empties the field in its own callback, before the page paints again, and the act ends with "The
-   page showed the password field as text, so the agent browser stopped." Round 1: the observer saw the change
+   the observer empties the field in its own callback, before the page paints again, and the act ends with "The page
+   showed the password field as text, so the agent browser ended the sign-in." (C11's text: it names no stop, I2) Round 1: the observer saw the change
    after 3 of 19 keys, the field was empty, and the act stopped.
 
 The first build reads only the main frame. A sign-in form in a frame gets "no sign-in form that the agent browser
@@ -778,10 +778,13 @@ request:
   body: it fails (this covers a request that rule D lets pass by its host but whose origin is not exact).
 - Every other request continues unchanged.
 
-A blocked or failed request is no reason to stop the act: a third-party script's request fails, and the sign-in
-goes on (round 1). The service sends the operator an event with the host of each blocked or failed request (not
-its path); the pane shows it on the credential's row. When the site's own sign-in request goes to another origin,
-the sign-in fails, and the pane's list of blocked hosts tells the operator which origin to add to `send_to`.
+A blocked or failed request is no reason to end the act: a third-party script's request fails, and the sign-in goes on
+(round 1). No event, prompt, report or log line names the host of a blocked or failed request, because a host that the
+page chooses can carry the password (contract C11 and C12, review-112 B1; board ab-v16.97.4 brings this section to the
+contract): the act's `end` event and its log line give only the number of requests that the block stopped (`blocked`)
+and the number that the guard failed (`guarded`). When the site's own sign-in request goes to another origin, the
+sign-in fails, and the operator finds the origin to add to `send_to` from the site's own page, not from the act. A
+paused request whose event is too large for the link fails: the guard cannot read it.
 
 **What the block and the guard do not stop**, stated plainly: a send to the site's own origin or to another origin
 of `send_to`, at any path (the site's own endpoints); a hash, an encryption or a compression of the password; a
@@ -839,7 +842,10 @@ In this order, also after a refusal in the middle of the act:
      `localStorage` items written by a tab of the origin): before the act the agent's pages showed "not signed
      in"; after the move, "signed in", by the cookie and by the token that the site kept in `localStorage`.
 3. It clears the tab's history (`Page.resetNavigationHistory`).
-4. It turns `Fetch` off, removes the block's rules, and closes the act window and its popups. Chrome drops the
+4. It turns `Fetch` off and sends the receiver's `act_end` (C4): the receiver closes each tab of the act (the act
+window and its popups) first, then removes the block's rules, so no page of the act is left when the rules go
+(chrome-extension's order, board ab-v16.97.3); the service closes no window itself. An act whose rules request failed
+or came late sends `act_end` too. Chrome drops the
    act's context with its last window: its cookies, its storage, its HTTP cache and its history (round 1: no row of
    the act's pages in the profile's `History` file; no profile file held the username or the password).
 5. It fills the Buffers of the values with zeros, and drops the opened record.
@@ -874,11 +880,13 @@ The answer of `AgentBrowser.signIn`, the CLI's output and the MCP tool's text:
 | an open connection | `The sign-in page keeps a connection to another site open.` |
 | the rules | `The agent browser could not hold the sign-in's rules.` |
 | the window | `The agent browser could not move the sign-in window off the screen.` |
-| the type watch | `The page showed the password field as text, so the agent browser stopped.` |
+| no act window (board ab-v16.97.4: a receiver with no feature `act`, no incognito window) | `The agent browser could not open the sign-in window.` |
+| the type watch | `The page showed the password field as text, so the agent browser ended the sign-in.` |
 | not accepted | `The site did not accept the stored sign-in.` |
 | a second factor | `The site asks for a second factor. The agent browser cannot answer it: ask the operator.` |
 | a host on no list | `The site went to a host on no list after the sign-in.` |
 | timeout | `The site did not finish the sign-in in 30 s.` |
+| a lost act tab (board ab-v16.97.4: its session ended, it closed, or a call of the act failed) | `The agent browser lost the sign-in window before the sign-in finished.` |
 | a leak of the site | `The site keeps the password where its pages can read it, so the agent browser did not keep the sign-in.` |
 | the move | `The sign-in worked, but the agent browser could not move it to your tabs.` |
 
@@ -920,21 +928,28 @@ With Q2 b, the first condition goes: every repo whose list covers the host may u
 
 - No log line of either side holds a username, a password, a passphrase, a sealed record, a pane's seal, a form
   value, a page's text, a URL path or a query. The C12 log rule gains these words (section 10).
-- The service logs one line for each act: the user, the scope, the repo key, the credential's id and name, the
-  origin, the result's code, the time it took. For each request that the block or the guard stopped: the host
-  only. The move logs stage 1c's import line (counts only).
+- The service logs one line for each request of `AgentBrowser.signIn` (C11): the user, the scope, the session's `repo`
+(no repo key: the answer Q2 b needs none, and the token design's revision removed it), the act id, the credential's id
+and name (none for a refusal by check 1 or 2), the origin, the result's code, the time it took, and the number of
+requests that the block stopped and the number that the guard failed; never their hosts. The move logs stage 1c's
+import line (counts only).
 - The daemon logs one line for each operator act: the user, the op, the credential's id and name.
 
 **The audit.**
 
-- The service sends a `sign_in` event at each act's start (`phase: "start"`: `scope`, `repo`, `id`, `name`,
-  `origin`, `at`), so the daemon blanks the live view, and at its end (`phase: "end"`: the same, and `result` (the
-  code of section 7.9), `ms` and `blocked`, the hosts of the requests that the block or the guard stopped). The
-  daemon also ends the blank 60 s after a start with no end.
+- The service sends a `sign_in` event at each act's start (`phase: "start"`: `act`, an id of 16 hex digits for the
+request, `scope`, `repo`, `id`, `name`, `origin`, `at`), so the daemon blanks the live view, and at its end
+(`phase: "end"`: the same, and `result` (the code of section 7.9), `ms`, `blocked` and `guarded` (the numbers of the
+requests that the block and the guard stopped, never their hosts) and `stopped_now`). A request that a check refuses
+is no act: one `end` with its own `act` and no `start`, at most 10 of them for one scope in any 60 s, then one a
+minute with `dropped`, the number that did not go (C12). The daemon also ends the blank 60 s after a start with no
+end.
 - The daemon keeps the last 200 events in its own state (no secret), and the pane shows the last 20 of each
   credential: which scope and repo used it, when, and with which result.
-- `status` gives `sign_ins`: `{"state":"none"|"locked"|"open","records":<count>,"acts":<count since the
-  start>,"pane_key":"<the public half>"}`, with no name of a credential.
+- `status` gives `sign_ins`:
+`{"state":"none"|"locked"|"open","records":<count>,"acts":<count since the start>,"pane_key":"<the public half>","stopped":[<ids>],"unprotected":null|"dumpable"|"signal"}`
+(C12): the ids of the stopped credentials and the reason of a protection of the service's memory that does not hold,
+with no name and no origin of a credential.
 
 ## 9. A second factor
 

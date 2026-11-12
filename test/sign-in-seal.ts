@@ -59,10 +59,11 @@ export function sealPayload(payload: object, binding: { purpose: string; fields:
 }
 
 /** A pane's seal of C12 (`sealed`) for a request: its op, a new rid (or `rid`), the time `at`, and the record's fields of a seal. */
-export function paneSeal(paneKey: string, payload: object, req: { op: string; record?: { name: string; origin: string; path: string; send_to: string[] }; offer?: boolean }, o: { at: string; rid?: string; keys?: { ephemeral?: Buffer; sender?: Buffer }; pad?: boolean }) {
+export function paneSeal(paneKey: string, payload: object, req: { op: string; record?: { id: string; name: string; origin: string; path: string; send_to: string[] }; offer?: boolean }, o: { at: string; rid?: string; keys?: { ephemeral?: Buffer; sender?: Buffer }; pad?: boolean }) {
   const rid = o.rid ?? randomBytes(16).toString("base64url");
   const fields: Record<string, string> = { op: req.op, rid, at: o.at };
-  if (req.op === "sign_in_seal") Object.assign(fields, { name: req.record!.name, origin: req.record!.origin, path: req.record!.path, send_to: req.record!.send_to.join(" "), offer: String(req.offer) });
+  // The credential's id is in the binding too (board ab-v16.97.4; review-118 note 6).
+  if (req.op === "sign_in_seal") Object.assign(fields, { id: req.record!.id, name: req.record!.name, origin: req.record!.origin, path: req.record!.path, send_to: req.record!.send_to.join(" "), offer: String(req.offer) });
   const s = sealPayload(payload, { purpose: "browser-sign-in", fields }, paneKey, o.keys, o.pad ?? true);
   return { text: s.sealed, sender: s.senderPublicB64, rid, at: o.at };
 }

@@ -344,7 +344,7 @@ export class SignInAct {
     if ("refused" in plan) return plan.refused;
     // The act's rules (C4, C5), confirmed before the first key; after a failed or late answer the clean end sends act_end.
     try {
-      const a = await this.o.receiver.request("act_rules", { tab, origin: rec.origin, send_to: [...rec.send_to] }, this.limits.receiverMs);
+      const a = await this.ask("act_rules", { tab, origin: rec.origin, send_to: [...rec.send_to] });
       if (!Array.isArray(a?.rules) || a.rules.length === 0) return "rules";
     } catch { return "rules"; }
     // The guard: Fetch on the act tab, every URL, at the request stage.
@@ -387,6 +387,13 @@ export class SignInAct {
     });
     if (filled) return filled;
     return this.outcome(r);
+  }
+
+  /** One request of C4's channel main for the act: the act's own timer of 10 s from the send too (a late answer is a failure). */
+  private ask(op: "act_rules" | "act_cookies" | "act_end", body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), this.limits.receiverMs + 50); });
+    return Promise.race([this.o.receiver.request(op, body, this.limits.receiverMs), late]).finally(() => clearTimeout(timer));
   }
 
   /** The fill and the submit under the browser's input lock (a client's input calls wait for it). */
@@ -520,8 +527,7 @@ export class SignInAct {
       await this.send(r, "Fetch.disable").catch(() => {});
     }
     try {
-      const e = await this.o.receiver.request("act_end", {}, this.limits.receiverMs);
-      void e;
+      await this.ask("act_end", {});
     } catch (e) {
       this.o.log(`sign-in: act_end failed (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"}); the next act window or the receiver's start ends the act`);
     }
@@ -531,7 +537,7 @@ export class SignInAct {
   /** The leak check, then the move through stage 1c's import path (C2, the box's rule, C4's import). */
   private async leakAndMove(r: Run): Promise<ActResult> {
     const host = new URL(r.record.origin).hostname;
-    const a = await this.o.receiver.request("act_cookies", { tab: r.tab, domain: host }, this.limits.receiverMs);
+    const a = await this.ask("act_cookies", { tab: r.tab, domain: host });
     const cookies = Array.isArray(a?.cookies) ? (a.cookies as C2Cookie[]) : [];
     const ls = await this.evaluate<{ origin: string; items: Record<string, string> | null }>(r, call(READ_LOCAL)).catch(() => null);
     // The origin's localStorage, read only when the page is on the credential's origin (else the move holds none of it).

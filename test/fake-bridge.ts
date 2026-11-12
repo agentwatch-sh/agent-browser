@@ -16,7 +16,7 @@ import { startRelay, type Relay, type RelayUse } from "../src/relay/endpoint.ts"
 import type { PeerGate } from "../src/relay/peer.ts";
 import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 
-export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string; active: boolean };
+export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string; active: boolean; incognito?: boolean };
 /** A page's geometry as the relay's read gives it (src/relay/pointer.ts, Geo). */
 export type FakeGeo = { sx: number; sy: number; ow: number; oh: number; iw: number; ih: number; cw: number; ch: number; dpr: number; scale: number; sw: number; sh: number; vis: string };
 /**
@@ -70,6 +70,8 @@ export class FakeReceiver {
   lateCreatedMs = 0;
   private readonly lateCreated = new Map<number, Promise<void>>();
   private nextTab = 7;
+  /** The next new tab is an incognito tab (windows.create with incognito true and the mark act: C10's act window). */
+  private nextIncognito = false;
   /** A test's answer to a CDP command, or to any op. */
   command: (target: any, method: string, params: any) => any = () => undefined;
   op: Override = () => undefined;
@@ -90,7 +92,7 @@ export class FakeReceiver {
    * windows.create, whose scope the relay named, so no bridge.tabScope comes for it.
    */
   newTab(url: string, opener?: FakeTab, windowId = 1, late = 0, scope?: string | null, own = false): FakeTab {
-    const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, active: true, ...(opener ? { openerId: opener.targetId } : {}) };
+    const tab = { id: this.nextTab++, windowId, url, title: "", targetId: `T${this.nextTab - 1}`, active: true, ...(opener ? { openerId: opener.targetId } : {}), ...(this.nextIncognito ? { incognito: true } : {}) };
     for (const t of this.tabs.values()) if (t.windowId === windowId) t.active = false;
     this.tabs.set(tab.id, tab);
     const inherited = scope === undefined ? (opener ? this.scopes.get(opener.id) : undefined) : scope ?? undefined;
@@ -115,7 +117,7 @@ export class FakeReceiver {
     return tab;
   }
 
-  chromeTab(t: FakeTab) { return { id: t.id, windowId: t.windowId, index: 0, active: t.active, url: t.url, title: t.title, status: "complete" }; }
+  chromeTab(t: FakeTab) { return { id: t.id, windowId: t.windowId, index: 0, active: t.active, url: t.url, title: t.title, status: "complete", ...(t.incognito ? { incognito: true } : {}) }; }
 
   private async handle(req: { id: string; op: string; args: any[]; wait: number }): Promise<void> {
     if (req.op.startsWith("daemon.")) {
@@ -138,7 +140,8 @@ export class FakeReceiver {
     const tab = (id: number) => { const t = this.tabs.get(id); if (!t) throw new Error(`No tab with id: ${id}.`); return t; };
     switch (op) {
       case "bridge.info": return this.info;
-      case "bridge.tabScopes": return [...this.scopes].filter(([id]) => this.tabs.has(id)).map(([tabId, scope]) => ({ tabId, scope }));
+      // The receiver leaves every incognito tab out of its map's answer (C10: an act tab is in no client's view).
+      case "bridge.tabScopes": return [...this.scopes].filter(([id]) => this.tabs.has(id) && !this.tabs.get(id)!.incognito).map(([tabId, scope]) => ({ tabId, scope }));
       case "bridge.attachNew": this.attachNew = args[0]; return null;
       case "debugger.attach": { tab(args[0]); await this.lateCreated.get(args[0]); const already = this.attached.has(args[0]); this.attached.add(args[0]); return { already }; }
       case "debugger.detach": this.attached.delete(args[0]); return null;
@@ -169,9 +172,14 @@ export class FakeReceiver {
       }
       case "tabs.create": return this.chromeTab(this.newTab(args[0].url, undefined, 1, this.lateCreatedMs, args[1] ?? null, true));
       case "windows.create": {
-        const id = this.nextWindow++, t = this.newTab(args[0].url, undefined, id, this.lateCreatedMs, args[1] ?? null, true);
+        // C10's act window: incognito true only with the mark act (the pair rule), else `bad args`.
+        if ((args[0].incognito === true) !== (args[2] === "act")) return { error: "bad args" };
+        this.nextIncognito = args[0].incognito === true;
+        let t: FakeTab;
+        const id = this.nextWindow++;
+        try { t = this.newTab(args[0].url, undefined, id, this.lateCreatedMs, args[1] ?? null, true); } finally { this.nextIncognito = false; }
         if (args[0].focused !== false) this.focusedWindow = id;
-        return { id, state: "normal", focused: this.focusedWindow === id, tabs: [this.chromeTab(t)] };
+        return { id, state: "normal", focused: this.focusedWindow === id, ...(t.incognito ? { incognito: true } : {}), tabs: [this.chromeTab(t)] };
       }
       case "tabs.get": return this.chromeTab(tab(args[0]));
       case "tabs.query": return [...this.tabs.values()].filter((t) => args[0].windowId === undefined || t.windowId === args[0].windowId).map((t) => this.chromeTab(t));
