@@ -350,6 +350,11 @@ test("COVER_BEFORE and COVER_AFTER, as the page runs them: the area near the fie
   doc.body.append(panel); panel.append(cell);
   before(); shown.push(panel, cell);
   assert.equal(await after(), 1, "the panel once");
+  // A panel that the page draws at its next frame (a framework's render after the click): the read waits two frames.
+  shown.length = 0;
+  before();
+  (ctx as any).requestAnimationFrame(() => shown.push(panel));
+  assert.equal(await after(), 1, "the panel of the next frame");
   // Two new elements: a panel and a hint above the field.
   shown.length = 0;
   const hint = new El("div", {}, { x: 100, y: 20, w: 120, h: 30 });
