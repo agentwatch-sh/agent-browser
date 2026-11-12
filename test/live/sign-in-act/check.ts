@@ -266,8 +266,10 @@ try {
   const page = xSeen.filter((w) => /aw-live-sign-in-page/.test(w.name));
   check("the sign-in page's X window was outside the screen each time that the watch saw it (to the right of the 1280 px screen)", page.length > 0 && page.every((w) => w.x >= 1280), `${page.length} looks: ${JSON.stringify(page.slice(0, 3))}`);
   check("the act window's title marker was outside the screen once the page loaded (the move before the page)", xSeen.every((w) => !/aw-live-sign-in-page/.test(w.name) || w.x >= 1280));
-  check("the client saw no target of the act: Target.getTargets during the act held only its own tabs", ![...targetsSeen].some((t) => t.includes("/login")) && [...targetsSeen].every((t) => before.has(t.split(" ")[0])), [...targetsSeen].join(", "));
-  check("no Target event of the client named the act tab or its page", !events.some((e) => e.includes("/login") || e.includes("aw-act-")), String(events.length));
+  // The act's page is the path /login (the host login.localhost is in every URL of the site, the client's own tabs too).
+  const actPage = (u: string) => { try { return new URL(u).pathname === "/login" || u.startsWith("about:blank"); } catch { return false; } };
+  check("the client saw no target of the act: Target.getTargets during the act held only its own tabs", ![...targetsSeen].some((t) => actPage(t.split(" ")[1] ?? "")) && [...targetsSeen].every((t) => before.has(t.split(" ")[0])), [...targetsSeen].join(", "));
+  check("no Target event of the client named the act tab or its page", !events.some((e) => /localhost:\d+\/login\b|aw-act-|aw-live-sign-in-page/.test(e)), `${events.length} events`);
 
   // 5. The outcome and the clean end.
   const start = d.lines.find((l) => l.t === "ev" && l.ev === "sign_in" && l.phase === "start");
