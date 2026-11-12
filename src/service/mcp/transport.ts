@@ -80,6 +80,14 @@ type Session = { readonly id: string; readonly n: number; readonly scope: string
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
 
+/**
+ * A cancel's params that the pinned SDK acts on (review-121 note 2): params of its schema (a `requestId` that is an id,
+ * a `reason` that is a string when there is one) with a `requestId` that is not falsy. It ignores any other cancel and
+ * answers the call, so the transport then frees nothing: the id stays busy and the call a use until the MCP's answer.
+ */
+export const mcpTakesCancel = (p: unknown): boolean =>
+  isObj(p) && isId(p.requestId) && p.requestId !== 0 && p.requestId !== "" && (!Object.hasOwn(p, "reason") || typeof p.reason === "string");
+
 /** The MCP's key of a related task in `_meta` (the SDK's schema of a request's `_meta`). */
 const RELATED_TASK = "io.modelcontextprotocol/related-task";
 /** A `params`: none, or a JSON object whose `_meta`, when it has one, is the SDK's shape of a request's `_meta`. */
@@ -148,25 +156,34 @@ function send(res: ServerResponse, name: keyof typeof MCP_ANSWERS, id: unknown, 
 /** The folder of a scope, `<state>/mcp/<scope>/` (C11), with one trailing slash. */
 export const scopeFolder = (state: string, scope: string) => `${join(state, "mcp", scope)}/`;
 
+/** Why no scope's folder can go: `<state>/mcp` is a link or no folder of the service's user (a log text, with no path). */
+export const MCP_FOLDER_NOT_OURS = "<state>/mcp is a link or no folder of the service's user";
+/** The code of an error, for a log line: never its message, which holds the path (review-121 B2). */
+const codeOf = (e: unknown) => String((e as NodeJS.ErrnoException)?.code ?? "an error with no code");
+
 /**
  * Remove a scope's folder with its files (C11; review-115 note 3): only when `<state>/mcp` is a real folder of the
- * service's user, never through a link (a link in the scope's place goes as a link: `rm` reads it with lstat). True
- * when it removed a folder (or a link) of that name.
+ * service's user, never through a link (a link in the scope's place, or in the folder, goes as a link: `rm` reads it
+ * with lstat), and only a folder or a link: another entry of the scope's name stays (review-121 note 6). `removed`, or
+ * why not: null when there is nothing to remove, else a text for the log with no path (review-121 B2).
  */
-export function removeScopeFolder(state: string, scope: string): boolean {
-  if (!SCOPE.test(scope)) return false;
+export function removeScopeFolder(state: string, scope: string): { removed: true } | { removed: false; why: string | null } {
+  if (!SCOPE.test(scope)) return { removed: false, why: null };
   const mcp = join(state, "mcp");
-  if (!realFolder(mcp)) return false;
-  try { lstatSync(join(mcp, scope)); } catch { return false; } // no folder (and no link) of that name
-  try { rmSync(join(mcp, scope), { recursive: true, force: true }); return true; } catch { return false; }
+  try { lstatSync(mcp); } catch (e) { return { removed: false, why: (e as NodeJS.ErrnoException).code === "ENOENT" ? null : codeOf(e) }; }
+  if (!realFolder(mcp)) return { removed: false, why: MCP_FOLDER_NOT_OURS };
+  let st;
+  try { st = lstatSync(join(mcp, scope)); } catch (e) { return { removed: false, why: (e as NodeJS.ErrnoException).code === "ENOENT" ? null : codeOf(e) }; }
+  if (!st.isDirectory() && !st.isSymbolicLink()) return { removed: false, why: "it is no folder" };
+  try { rmSync(join(mcp, scope), { recursive: true, force: true }); return { removed: true }; } catch (e) { return { removed: false, why: codeOf(e) }; }
 }
 
 export class McpTransport implements McpHandler {
   private readonly o: McpTransportOptions;
   private readonly sessions = new Map<string, Session>();
   private readonly workers = new Map<string, ScopeWorker>();
-  /** The stop of each scope's last worker that the transport stopped (the folder goes only after it: note 3). */
-  private readonly halts = new Map<string, Promise<void>>();
+  /** The stops of each scope's workers that still stop (the folder goes only after all of them: note 3, review-121 note 4). */
+  private readonly halts = new Map<string, Set<Promise<void>>>();
   private count = 0;
   private stopped = false;
   /** The tool calls that run now, and the time (performance.now) of the last one's start or end (board ab-v16.94.11). */
@@ -243,8 +260,9 @@ export class McpTransport implements McpHandler {
         s.worker.notify(s.id, msg);
         // A client's own cancel of a request that still waits frees its id at once, and its open POST gets the cancelled
         // answer (the MCP never answers a cancelled request; review-115b's note).
+        // A cancel that the MCP ignores frees nothing once the MCP has the request (review-121 note 2).
         const rid = msg.method === "notifications/cancelled" && isObj(msg.params) ? msg.params.requestId : undefined;
-        if (isId(rid)) s.waiting.get(JSON.stringify(rid))?.("client");
+        if (isId(rid)) s.waiting.get(JSON.stringify(rid))?.("client", mcpTakesCancel(msg.params));
       }
       answer(res, 202, null);
       return;
@@ -269,8 +287,8 @@ export class McpTransport implements McpHandler {
     const at: { cancelled: Cancel | null; sent: boolean } = { cancelled: null, sent: false };
     let stopWait!: () => void;
     const stopped = new Promise<null>((r) => { stopWait = () => r(null); });
-    const cancel = (why: Cancel) => {
-      if (at.cancelled !== null) return;
+    const cancel = (why: Cancel, mcpTakes = true) => {
+      if (at.cancelled !== null || (at.sent && !mcpTakes)) return;
       at.cancelled = why;
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
       if (at.sent) s.worker.drop(s.id, forward.id);
@@ -278,10 +296,13 @@ export class McpTransport implements McpHandler {
     };
     s.waiting.set(key, cancel);
     // A client that goes away before the answer cancels its call: the MCP's own notifications/cancelled, once the MCP
-    // has the request.
+    // has the request. For an id that the MCP would not cancel (0 or ""), the call runs to the MCP's answer: its id stays
+    // busy and the call a use until then (review-121 note 2).
     const gone = () => {
       if (res.writableEnded || at.cancelled !== null) return;
-      if (at.sent) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: forward.id, reason: "the client closed its connection" } });
+      const params = { requestId: forward.id, reason: "the client closed its connection" };
+      if (at.sent && !mcpTakesCancel(params)) return;
+      if (at.sent) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params });
       cancel("closed");
     };
     res.once("close", gone);
@@ -292,6 +313,9 @@ export class McpTransport implements McpHandler {
       if (forward.method === "tools/call" && browser && !(await browser())) return;
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
+      // The MCP session ended while the call waited for the browser (a DELETE, session_ended, the close at a change,
+      // the worker's end): the answer of its end, and the call never reaches the MCP (review-121 B1).
+      if (!s.open) { send(res, this.endOf(s), forward.id); return; }
       let got: Message | null;
       const call = forward.method === "tools/call";
       if (call) { this.calls++; this.lastCall = performance.now(); }
@@ -377,8 +401,11 @@ export class McpTransport implements McpHandler {
     if (![...this.sessions.values()].some((x) => x.worker === s.worker) && this.workers.get(s.scope) === s.worker) {
       this.workers.delete(s.scope);
       const halt = s.worker.stop().catch(() => {});
-      this.halts.set(s.scope, halt);
-      void halt.finally(() => { if (this.halts.get(s.scope) === halt) this.halts.delete(s.scope); });
+      let set = this.halts.get(s.scope);
+      if (!set) this.halts.set(s.scope, (set = new Set()));
+      const halts = set;
+      halts.add(halt);
+      void halt.then(() => { halts.delete(halt); if (halts.size === 0 && this.halts.get(s.scope) === halts) this.halts.delete(s.scope); });
     }
   }
 
@@ -394,9 +421,14 @@ export class McpTransport implements McpHandler {
    */
   async dropScope(scope: string, why: string): Promise<void> {
     this.endSessions(scope);
-    await this.halts.get(scope);
+    // Every worker of the scope that still stops, also one that stops meanwhile (review-121 note 4). The first await
+    // also puts the removal after the control door's answer (C12).
+    do { await Promise.all([...(this.halts.get(scope) ?? [])]); } while (this.halts.get(scope)?.size);
     if (this.stopped || this.workers.has(scope) || this.size(scope) > 0) return;
-    if (removeScopeFolder(this.o.stateFolder, scope)) this.o.log(`mcp: the folder of scope ${scope} is emptied (${why})`);
+    const r = removeScopeFolder(this.o.stateFolder, scope);
+    // A failed removal gets its line too, with the scope and the error's code only (review-121 B2).
+    if (r.removed) this.o.log(`mcp: the folder of scope ${scope} is emptied (${why})`);
+    else if (r.why !== null) this.o.log(`mcp: the folder of scope ${scope} is not emptied (${r.why})`);
   }
 
   /**
@@ -406,9 +438,10 @@ export class McpTransport implements McpHandler {
    */
   async keepScopes(named: ReadonlySet<string>): Promise<void> {
     const mcp = join(this.o.stateFolder, "mcp");
-    if (!realFolder(mcp)) return;
+    try { lstatSync(mcp); } catch { return; } // no MCP session made it yet
+    if (!realFolder(mcp)) { this.o.log(`mcp: no scope's folder is emptied (${MCP_FOLDER_NOT_OURS})`); return; }
     let names: string[];
-    try { names = readdirSync(mcp); } catch { return; }
+    try { names = readdirSync(mcp); } catch (e) { this.o.log(`mcp: no scope's folder is emptied (${codeOf(e)})`); return; }
     await Promise.all(names.filter((n) => !named.has(n)).map((n) => this.dropScope(n, "the sessions name it no more")));
   }
 
