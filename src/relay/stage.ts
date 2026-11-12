@@ -2319,8 +2319,8 @@ export class Stage {
     }
     if (a.over) return pass();
     // A field that opens a panel at a click gets no click (board ab-t30.18, the operator's answer on board item ab-pf8,
-    // 2026-11-12): a widget sign of the field's read, else a listener of the page's own scripts on the field for an event of
-    // a click. Playwright's script focus goes as the client sent it, as with Playwright's own input (its focus() also
+    // 2026-11-12): a widget sign of the field's read, else a click listener of the page's own scripts on the field itself.
+    // Playwright's script focus goes as the client sent it, as with Playwright's own input (its focus() also
     // scrolls the field into view: no notches), in the same action; the stage counts it and the sign.
     const sign = f.widget ?? (await this.clickListener(page, e.child, node, fill));
     if (sign === TIMEOUT) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
@@ -2377,7 +2377,7 @@ export class Stage {
 
   /**
    * The field's listener sign (board ab-t30.18; C11, the focus click): a listener of the page's own scripts on the field
-   * itself for an event of a click (WIDGET_LISTENERS). The field's element (fill's retarget) as a handle of Playwright's
+   * itself for an event of WIDGET_LISTENERS (a click). The field's element (fill's retarget) as a handle of Playwright's
    * utility world (FIELD_ELEMENT, in the stage's group) is resolved into the page's main world (DOM.describeNode,
    * DOM.resolveNode: a handle, no script), where DOMDebugger.getEventListeners with no pierce reports the listeners of
    * that world only: the page's own (as rule 2 of the wheel point reads them). A listener of another node (a child) does
