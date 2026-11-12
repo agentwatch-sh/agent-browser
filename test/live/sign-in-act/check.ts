@@ -41,7 +41,8 @@ const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
 const display = Number(arg("--display") ?? "171");
-const refused = reservedDisplay(display, "--display") ?? ([169, 173, 174, 175].includes(display) ? `--display names :${display}, another harness's display` : null);
+// This check runs on :171 or :172 only (review-124 N11); the guard's reserved list holds too.
+const refused = reservedDisplay(display, "--display") ?? (![171, 172].includes(display) ? `--display names :${display}: this check runs on :171 or :172 only` : null);
 if (!Number.isSafeInteger(display) || refused) { process.stderr.write(`sign-in-act: ${refused ?? "--display must be a number"}\n`); process.exit(2); }
 if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`)) { process.stderr.write(`sign-in-act: :${display} is in use; this check runs on a free display only\n`); process.exit(2); }
 const CE = arg("--chrome-extension");
