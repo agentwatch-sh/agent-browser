@@ -637,10 +637,11 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
     // A client's message that runs: the fake receiver holds the answer of its bridge call. The model's own bridge calls
     // are no use (review-120 B2).
     const model = (s.agent as any).relay.model;
+    fr.op = (q) => (q.op === "tabs.query" ? new Promise(() => {}) : undefined);
     void model.bridge.call("tabs.query", [{}]).catch(() => {});
-    await sleep(50);
-    assert.ok(!part.usedBy().includes("request"), "a bridge call of the model's own is no use");
-    fr.op = (q) => (q.op === "tabs.create" || q.op === "windows.create" ? new Promise(() => {}) : undefined);
+    await until(() => (s.carrier as any).inFlight() > 0, "the model's own call in flight");
+    assert.ok(!part.usedBy().includes("request"), "a bridge call of the model's own that runs is no use");
+    fr.op = (q) => (q.op === "tabs.query" || q.op === "tabs.create" || q.op === "windows.create" ? new Promise(() => {}) : undefined);
     void cdp.send("Target.createTarget", { url: "about:blank" }).catch(() => {});
     await until(() => part.usedBy().includes("request"), "the client's request");
     // A send that runs.
@@ -773,6 +774,10 @@ test("B1: while Chrome is off, the service's own checks come at once with no sta
       const nolist = await raw(x.url("web-1"));
       assert.deepEqual([nolist.status, nolist.body], [503, NOT_READY.noList], `the no-list 503 at once (${JSON.stringify(v)})`);
     }
+    // C11's order: a scope that the object does not name gets the no-list 503 before the session check.
+    s1c.useView = (scope: string) => (scope === "web-2" ? { named: false, list: null, sites: 0 } : view(scope));
+    const unnamed = await raw(x.url("web-2"));
+    assert.deepEqual([unnamed.status, unnamed.body], [503, NOT_READY.noList], "step 5 comes before step 6");
     s1c.useView = view;
     assert.ok(Date.now() - at < 2000, "no wait");
     assert.deepEqual(part.usedBy(), [], "a refused client is never held");
