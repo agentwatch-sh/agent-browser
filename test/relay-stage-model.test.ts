@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
-import { STAGE_TEST_ENV } from "../src/relay/stage.ts";
+import { STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 
@@ -498,5 +498,10 @@ test("with the stage on (board ab-t30.11): mouse.wheel(0, 360) through the model
     assert.equal(await host.ownNode(900), "own-1");
     const worlds = cmds(h).filter((x) => x.method === "Page.createIsolatedWorld");
     assert.ok(resolved && resolved.backendNodeId === 900 && Number.isInteger(resolved.executionContextId) && worlds.length > 0, "DOM.resolveNode into the relay's own world");
+    // review-122 (the lead's option b): a handle of the relay's own world for rule 2 of mouse.wheel's column, in the stage's group.
+    let evaluated: any = null;
+    h.fake.command = (_target, method, params) => (method === "Runtime.evaluate" && params?.returnByValue === false ? ((evaluated = params), { result: { type: "object", subtype: "node", objectId: "own-2" } }) : undefined);
+    assert.equal(await host.ownObject(WHEEL_ROOT_AT, [0]), "own-2");
+    assert.ok(evaluated && evaluated.contextId === resolved.executionContextId && evaluated.objectGroup === STAGE_GROUP && evaluated.expression === `(${WHEEL_ROOT_AT})(0)`, "the relay's own world, by handle, in the stage's group");
   } finally { await h.close(); }
 });

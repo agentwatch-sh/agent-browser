@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, ELEMENT_KIND, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_POINTS, WHEEL_ROOT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, ELEMENT_KIND, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -125,15 +125,26 @@ export class FakeTab implements StagePage {
    * scroller's content (`scroller`, else its frame's document or the top page), so a scroll moves it. A wheel event
    * scrolls the first scroller under the point that can move in its direction (a frame's document, then its owner's), by
    * its delta (at most `step`); none when a scroller on the way `stops` the wheel (a non-passive listener that prevents
-   * the default action). `wheels`: each wheel event that the page got, with the element under its point.
+   * the default action). `wheels`: each wheel event that the page got, with the element under its point. review-122: a
+   * scroller with `hidden` is a box with overflow hidden (no wheel moves it; a script scroll does), `pad` its
+   * scroll-padding and a node's `margin` its scroll-margin ([left, top, right, bottom]); a node with `shadow` is inside an
+   * open shadow root of its scroller (rule 2 reads its listeners on that root's handle only) and one with `closed` inside a
+   * closed one (no read sees its listeners).
    */
   readonly sc: Record<string, { x: number; y: number }> = {};
   readonly wheels: { t: number; x: number; y: number; dx: number; dy: number; at: string; moved: string | null }[] = [];
   /** The scrollers of each reader's last SCROLL_STATE (by its handle), and the scrollers that DOM.describeNode named. */
   private readonly marks = new Map<string, string[]>();
   private readonly roots: string[] = [];
+  /** The scroller of each reader's last WHEEL_ROOTS (by its handle). */
+  private readonly rootsK = new Map<string, number>();
+  /** mouse.wheel's column (WHEEL_COLUMN): the first read's element under the point and scroller of each axis, and the roots of WHEEL_ROOTS_AT. */
+  private colKeep: { hit: string; m: (string | null)[]; roots: string[] } | null = null;
+  private colRoots: { m: string; shadow: boolean }[] = [];
   /** The arguments of the last SCROLL_STATE (the client's rect). */
   private lastArgs: any[] | null = null;
+  /** The handles of each SCROLL_CLEAR (review-122 note 9). */
+  readonly cleared: string[] = [];
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
     this.v = v; this.clock = clock; this.id = o.id ?? 7;
     this.person = o.person ?? drawPerson(paramsFor(v.platform === "mac" ? "darwin" : "linux"), seededRandom(v.seed));
@@ -229,6 +240,7 @@ export class FakeTab implements StagePage {
       for (const s of chain) {
         const f = this.facts(s) ?? {};
         if (f.stops) break;
+        if (f.hidden) continue;
         const m = this.maxOf(s)[axis === "x" ? 0 : 1], at = this.sc[s][axis];
         if ((d > 0 && at >= m) || (d < 0 && at <= 0)) continue;
         const step = Math.min(Math.abs(d), f.step ?? Infinity) * Math.sign(d);
@@ -256,8 +268,8 @@ export class FakeTab implements StagePage {
     const b = typeof a(0) === "number" ? { x: lb.x + a(0), y: lb.y + a(1), width: a(2), height: a(3) } : lb;
     this.marks.set(objectId, chain);
     const rect = (x: Box) => [x.x - o.x, x.y - o.y, x.x - o.x + x.width, x.y - o.y + x.height];
-    const levels = chain.map((s) => ({ r: rect(this.clientBox(s)), s: [this.sc[s].x, this.sc[s].y], m: this.maxOf(s), doc: s === "document" || s.startsWith("frame:") }));
-    return { result: { type: "object", value: { t: rect(b), levels, top: !cross, flat: true, ox: cross ? 0 : 0, oy: 0 } } };
+    const levels = chain.map((s) => { const m = this.maxOf(s), hidden = !!this.facts(s)?.hidden; return { r: rect(this.clientBox(s)), s: [this.sc[s].x, this.sc[s].y], m, doc: s === "document" || s.startsWith("frame:"), wheel: [!hidden && m[0] > 0, !hidden && m[1] > 0], pad: this.facts(s)?.pad ?? [0, 0, 0, 0] }; });
+    return { result: { type: "object", value: { t: rect(b), mg: n?.margin ?? [0, 0, 0, 0], levels, top: !cross, flat: true, ox: cross ? 0 : 0, oy: 0 } } };
   }
   /**
    * WHEEL_POINTS: rules 1, 3 and 4 of the wheel point at each point (in the reader's points), for the reader's scroller k
@@ -275,9 +287,10 @@ export class FakeTab implements StagePage {
     const meets = (b: Box, g: number[]) => b.x <= g[2] && b.x + b.width > g[0] && b.y <= g[3] && b.y + b.height > g[1];
     const segs = (p: { x: number; y: number }) => [...(mv?.[1] ? [[p.x, Math.min(p.y, p.y + mv[1]), p.x, Math.max(p.y, p.y + mv[1])]] : []), ...(mv?.[0] ? [[Math.min(p.x, p.x + mv[0]), p.y + mv[1], Math.max(p.x, p.x + mv[0]), p.y + mv[1]]] : [])];
     const inDoc = (s: string) => this.docOf(s) === doc;
+    const self = !own && !!V.page.nodes[objectId] && (["canvas", "embed", "object", "video", "audio", "iframe", "frame"].includes(V.page.nodes[objectId].tag) || ((BAD.includes(V.page.nodes[objectId].tag) || !!V.page.nodes[objectId].contenteditable) && this.focusedId === objectId));
     const col: Box[] = [
-      ...Object.keys(V.page.nodes).filter((id) => id !== objectId && inDoc(this.nodeScroller(id)) && !V.page.nodes[id].fixed && (BAD.includes(V.page.nodes[id].tag) || V.page.nodes[id].contenteditable)).map((id) => this.liveBox(id)),
-      ...Object.keys(V.page.scrollers ?? {}).filter((x) => x !== "document" && x !== m && inDoc(x) && !around.has(x) && this.maxOf(x).some((r, a) => r > 0 && !!mv?.[a])).map((x) => this.clientBox(x)),
+      ...Object.keys(V.page.nodes).filter((id) => (id !== objectId || self) && inDoc(this.nodeScroller(id)) && !V.page.nodes[id].fixed && (BAD.includes(V.page.nodes[id].tag) || V.page.nodes[id].contenteditable)).map((id) => this.liveBox(id)),
+      ...Object.keys(V.page.scrollers ?? {}).filter((x) => x !== "document" && x !== m && !this.facts(x).hidden && inDoc(x) && !around.has(x) && this.maxOf(x).some((r, a) => r > 0 && !!mv?.[a])).map((x) => this.clientBox(x)),
       ...(doc === "document" ? Object.keys(V.page.frames ?? {}).filter((x) => `frame:${x}` !== target && !around.has(`frame:${x}`)).map((x) => this.frameBox(x)) : []),
     ];
     const pass: number[] = [];
@@ -289,7 +302,7 @@ export class FakeTab implements StagePage {
       if (h.kind === "frame") continue;
       const node = h.kind === "node" ? V.page.nodes[h.id] : null;
       if (node && (BAD.includes(node.tag) || node.contenteditable)) continue;
-      const sch = this.hitChain(h).filter((s) => this.docOf(s) === doc);
+      const sch = this.hitChain(h).filter((s) => this.docOf(s) === doc && !this.facts(s)?.hidden);
       if (sch[0] !== m && !(m === doc && sch[0] === doc)) continue;
       if (sch.slice(0, sch.indexOf(m) + 1).some((s) => BAD.includes(this.facts(s)?.tag))) continue;
       if (col.some((b) => segs(p).some((g) => meets(b, g)))) continue;
@@ -303,17 +316,75 @@ export class FakeTab implements StagePage {
    * (`htmlListener`), each with its node's backendNodeId (nodes 500 + i, scrollers 700 + i, the html 499).
    */
   private subtreeListeners(objectId: string): any {
-    const [, reader, k] = /^root:(.*):(\d+)$/.exec(objectId) ?? [];
-    const m = this.marks.get(reader)?.[Number(k)];
+    const r = /^root:(.*):(\d+):(\d+)$/.exec(objectId), c = /^col:(\d+)$/.exec(objectId);
+    const m = r ? this.marks.get(r[1])?.[Number(r[2])] : c ? this.colRoots[Number(c[1])]?.m : undefined;
+    const shadow = r ? r[3] === "1" : c ? !!this.colRoots[Number(c[1])]?.shadow : false;
     if (!m) return { listeners: [] };
     const V = this.v, doc = this.docOf(m), ids = Object.keys(V.page.nodes), scs = Object.keys(V.page.scrollers ?? {});
     const inside = (s: string) => (m === doc ? this.docOf(s) === doc : this.chainOf(s).includes(m));
     const out: any[] = [];
     const add = (kind: string | undefined, backendNodeId: number) => { if (kind === "nonpassive" || kind === "passive") out.push({ type: "wheel", useCapture: false, passive: kind === "passive", once: false, scriptId: "1", lineNumber: 0, columnNumber: 0, backendNodeId }); };
-    for (const [i, id] of ids.entries()) if (inside(this.nodeScroller(id))) add(V.page.nodes[id].listener, 500 + i);
+    for (const [i, id] of ids.entries()) if (inside(this.nodeScroller(id)) && !V.page.nodes[id].closed && !!V.page.nodes[id].shadow === shadow) add(V.page.nodes[id].listener, 500 + i);
+    if (shadow) return { listeners: out };
     for (const [i, s] of scs.entries()) if (s !== "document" && inside(s)) add(this.facts(s).listener, 700 + i);
     if (m === doc) add(this.facts(doc)?.htmlListener, 499);
     return { listeners: out };
+  }
+  /** Whether a node inside an open shadow root is in a scroller's content (a second root of rule 2's read). */
+  private shadowIn(m: string): boolean {
+    const doc = this.docOf(m), inside = (s: string) => (m === doc ? this.docOf(s) === doc : this.chainOf(s).includes(m));
+    return Object.keys(this.v.page.nodes).some((id) => this.v.page.nodes[id].shadow && inside(this.nodeScroller(id)));
+  }
+  /**
+   * WHEEL_COLUMN (mouse.wheel's column, in the stage's own world at the page's last point): over a cross-origin frame,
+   * { frame }; else the element under the point and, on each axis (the vertical first), the first scroller of its chain that
+   * can move in the call's direction (not a hidden box), its range left, and the notches that go before the next one would
+   * bring a node of rule 1, a frame or another scroller with a range on that axis under the point (the element under the
+   * point, the scrollers around it and fixed nodes do not count). `again`: `same` is whether the element and the scrollers
+   * are the first read's.
+   */
+  wheelColumn(x: number, y: number, ny: number, nx: number, px: number, again: boolean): any {
+    const V = this.v, p = { x, y }, top = this.hitIn("document", p);
+    const BAD = ["input", "select", "textarea", "canvas", "embed", "object", "video", "audio", "iframe", "frame"];
+    if (top.kind === "frame" && V.page.frames[top.id].origin === "cross") {
+      const hit = `frame:${top.id}`, same = !again || this.colKeep?.hit === hit;
+      if (!again) this.colKeep = { hit, m: [null, null], roots: [] };
+      return { frame: true, same };
+    }
+    const h = this.hitIn("document", p, true), chain = this.hitChain(h).filter((s) => !this.facts(s)?.hidden), around = new Set(chain);
+    const out: any = { k: [0, 0], left: [0, 0], col: [null, null], same: true }, ms: (string | null)[] = [null, null], roots: string[] = [];
+    let shift = 0;
+    for (const ax of [1, 0]) {
+      const n = ax ? ny : nx;
+      if (!n) continue;
+      const dir = Math.sign(n), N = Math.abs(n), key = ax ? "y" : "x";
+      const m = chain.find((s) => { const at = this.sc[s][key], max = this.maxOf(s)[ax]; return (dir > 0 ? max - at : at) > 0.5; }) ?? null;
+      ms[ax] = m;
+      if (again && this.colKeep && this.colKeep.m[ax] !== m) out.same = false;
+      if (!m) { out.k[ax] = N; continue; }
+      roots.push(m);
+      const left = dir > 0 ? this.maxOf(m)[ax] - this.sc[m][key] : this.sc[m][key], D = Math.min(N * px, left), ly = y + (ax ? 0 : shift);
+      const g = ax ? [x, Math.min(ly, ly + dir * D), x, Math.max(ly, ly + dir * D)] : [Math.min(x, x + dir * D), ly, Math.max(x, x + dir * D), ly];
+      out.col[ax] = g; out.left[ax] = left;
+      const doc = this.docOf(m), inM = (s: string) => (m === doc ? this.docOf(s) === doc : this.chainOf(s).includes(m));
+      const boxes: Box[] = [
+        ...Object.keys(V.page.nodes).filter((id) => !(h.kind === "node" && h.id === id) && inM(this.nodeScroller(id)) && !V.page.nodes[id].fixed && (BAD.includes(V.page.nodes[id].tag) || V.page.nodes[id].contenteditable)).map((id) => this.liveBox(id)),
+        ...Object.keys(V.page.scrollers ?? {}).filter((s) => s !== "document" && s !== m && !this.facts(s).hidden && !around.has(s) && this.chainOf(s).slice(1).includes(m) && this.maxOf(s)[ax] > 0).map((s) => this.clientBox(s)),
+        ...Object.keys(V.page.frames ?? {}).filter((f) => !around.has(`frame:${f}`) && inM(this.frameScroller(f))).map((f) => this.frameBox(f)),
+      ];
+      let dmin = Infinity;
+      for (const b of boxes) {
+        if (!(b.x <= g[2] && b.x + b.width > g[0] && b.y <= g[3] && b.y + b.height > g[1])) continue;
+        const dd = ax ? (dir > 0 ? b.y - ly : ly - (b.y + b.height)) : (dir > 0 ? b.x - x : x - (b.x + b.width));
+        dmin = Math.min(dmin, Math.max(0, dd));
+      }
+      out.k[ax] = dmin === Infinity ? N : Math.min(N, Math.max(0, Math.ceil(dmin / px) - 1));
+      if (ax) shift = dir * Math.min(out.k[ax] * px, left);
+    }
+    const hit = `${h.kind}:${h.id}`;
+    if (again) { if (this.colKeep?.hit !== hit) out.same = false; if (this.colKeep) this.colKeep.roots = roots; }
+    else this.colKeep = { hit, m: ms, roots };
+    return out;
   }
   /** The value of a field (the tests). */
   valueOf(id: string): string | undefined { return this.fields.get(id)?.value; }
@@ -355,6 +426,24 @@ export class FakeTab implements StagePage {
     }
     if (fn === FIELD_STILL) return this.stillFocused();
     if (fn === SAME_ELEMENT) { const a = this.elementAt(args[0], args[1]), b = this.elementAt(args[2], args[3]); return !!a && a.id === b?.id; }
+    if (fn === WHEEL_COLUMN) return this.wheelColumn(args[0], args[1], args[2], args[3], args[4], args[5] === 1);
+    if (fn === WHEEL_ROOTS_AT) {
+      this.colRoots = [];
+      for (const m of this.colKeep?.roots ?? []) { this.colRoots.push({ m, shadow: false }); if (this.shadowIn(m)) this.colRoots.push({ m, shadow: true }); }
+      this.colRoots = this.colRoots.slice(0, args[0]);
+      return this.colRoots.length;
+    }
+    if (fn === WHEEL_CLEAR) { this.colKeep = null; return true; }
+    throw new Error(`no fake for ${fn.slice(0, 40)}`);
+  }
+  /** A handle of the stage's own world (WHEEL_ROOT_AT: a root of the column's scrollers, `col:<i>`). */
+  async ownObject(fn: string, args: number[]): Promise<string | null> {
+    const s: Sent = { t: this.clock.now(), method: "ownObject", params: { fn, args }, read: true };
+    this.sent.push(s);
+    const h = await this.hook(s);
+    if (h !== undefined) return h;
+    await this.free();
+    if (fn === WHEEL_ROOT_AT) return this.colRoots[args[0]] ? `col:${args[0]}` : null;
     throw new Error(`no fake for ${fn.slice(0, 40)}`);
   }
   /** A node of the top page resolved into the stage's own world (a cross-origin frame's owner, by its backendNodeId). */
@@ -536,11 +625,17 @@ export class FakeTab implements StagePage {
     // The scroll's reads (board ab-t30.11).
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_STATE) { this.lastArgs = (p.arguments ?? []).map((x: any) => x?.value); return this.scrollState(p.objectId, s.child); }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_POINTS) return this.wheelPoints(p.objectId, s.child, p.arguments[0].value, p.arguments[1].value, p.arguments[2]?.value ?? null);
-    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ROOT) return { result: { type: "object", subtype: "node", objectId: `root:${p.objectId}:${p.arguments[0].value}` } };
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ROOTS) {
+      const k = p.arguments[0].value, m = this.marks.get(p.objectId)?.[k];
+      this.rootsK.set(p.objectId, k);
+      return { result: { type: "number", value: m ? Math.min(p.arguments[1].value, 1 + (this.shadowIn(m) ? 1 : 0)) : 0 } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ROOT) return { result: { type: "object", subtype: "node", objectId: `root:${p.objectId}:${this.rootsK.get(p.objectId)}:${p.arguments[0].value}` } };
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_CLEAR) { this.cleared.push(String(p.objectId)); return { result: { type: "boolean", value: true } }; }
     // The scroller of WHEEL_ROOT in the page's main world: DOM.describeNode gives its backendNodeId (1000 + the reader's
     // index), DOM.resolveNode its main world's handle. DOMDebugger.getEventListeners reports the page's listeners only on a
     // handle of the main world and with no pierce (else the listeners of the handle's own world, none here).
-    if (s.method === "DOM.describeNode" && String(p.objectId).startsWith("root:")) { this.roots.push(String(p.objectId)); return { node: { nodeId: 0, backendNodeId: 999 + this.roots.length, nodeType: 1, nodeName: "DIV" } }; }
+    if (s.method === "DOM.describeNode" && /^(root|col):/.test(String(p.objectId))) { this.roots.push(String(p.objectId)); return { node: { nodeId: 0, backendNodeId: 999 + this.roots.length, nodeType: 1, nodeName: "DIV" } }; }
     if (s.method === "DOM.resolveNode" && this.roots[p.backendNodeId - 1000]) return { object: { type: "object", subtype: "node", objectId: `main:${this.roots[p.backendNodeId - 1000]}` } };
     if (s.method === "DOMDebugger.getEventListeners") return String(p.objectId).startsWith("main:") && p.pierce !== true ? this.subtreeListeners(String(p.objectId).slice(5)) : { listeners: [] };
     // The quads of a node (500 + i) or a scroller (700 + i) of a listener, and the html element (499: the whole document).

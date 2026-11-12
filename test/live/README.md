@@ -160,10 +160,15 @@ whose names match (with no harness rows, unless `STAGE_SCROLL_HARNESS=1`). Its p
 button and two fields below the fold, an inner scroller below the fold, a same-origin frame and a cross-origin frame on
 `b.localhost` whose own documents scroll, and in the first screen an element with a wheel listener that is not passive, a
 canvas with a wheel handler and a number input. Its variants add a listener of the window that prevents the wheel, or an
-inner scroller, a number input or a canvas across the page that the page's content moves under the wheel point. Each
-row passes when the action passes through the stage with Playwright's default timeout, the page's state is the same as
-with Playwright's own input (a wheel's scroll within one notch; an element in view where Playwright's own scroll
-centers it), and the stage's trace shows the row's notches or its counted fallback. The harness rows R5, R6 and P7
+inner scroller, a number input or a canvas across the page that the page's content moves under the wheel point (also a
+canvas inside an open shadow root), a carousel with `overflow: hidden`, a focused number input as the click's target,
+a card to drag to a zone below the fold, a scroller in a shadow root around a slot, and a fixed header of the page's
+scroll-padding (review 122). Each row passes when the action passes through the stage with Playwright's default
+timeout, the page's state is the same as with Playwright's own input (a wheel's scroll within one notch; an element in
+view where Playwright's own scroll centers it), and the stage's trace shows the row's notches or its counted fallback.
+The two rows of `mouse.wheel`'s column have a bar of their own on the stage's state (the list does not move, the canvas
+gets no wheel event, the page moves the asked total), because Playwright's own input gives the later notches to the
+element that comes under the point. The harness rows R5, R6 and P7
 score the recorder's wheel calls and clicks below the fold through the stage against `STAGE_REFERENCE`, and against
 `STAGE_PERSON` when it names a reference of the operator's published numbers (a report: the Mac's wheel model is board
 ab-t30.13). It writes `stage-scroll-live.json`, `stage-scroll-harness-results.json` and

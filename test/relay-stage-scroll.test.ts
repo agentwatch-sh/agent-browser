@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { seededRandom } from "../src/human/random.ts";
-import { SCROLL_STATE, SCROLL_WAIT_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS } from "../src/relay/stage.ts";
+import { SCROLL_STATE, SCROLL_WAIT_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, WHEEL_LISTENERS_WAIT_MS } from "../src/relay/stage.ts";
 import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -185,15 +185,15 @@ test("a navigation of the main frame while an ended wheel waits for a dialog's c
   assert.equal(stage.lock.held, 0);
 });
 
-test("STAGE_EVENT_WAIT_MS: the notches go with no wait for each answer (a wheel's events), and a notch whose answer never comes ends the plan 2 s after it; the rest goes at once as one wheel event (no dialog is known); an error of a notch stops the plan and the call gets Chrome's error", async () => {
+// review-122 (the daemon lead's P1): the rest after STAGE_EVENT_WAIT_MS has its own test in relay-stage-wheel.test.ts.
+test("STAGE_EVENT_WAIT_MS: the notches go with no wait for each answer (a wheel's events), and a notch whose answer never comes ends the plan 2 s after it: no notch after the end, and the later call goes after it; an error of a notch stops the plan and the call gets Chrome's error", async () => {
   let k = 0;
   const r = await runVector(own([{ at: 0, ...wheel(0, 6000) }, { at: 10, ...evaluate() }], DOC(9000)), { maxMs: 20_000, hook: (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++k === 2 ? new Promise(() => {}) : undefined) });
-  const n = notchesOf(r.tab), rest = n.at(-1)!;
-  assert.ok(n.length > 3 && n.slice(0, -1).every((s) => s.params.deltaY === 120), "the notches go on after the one with no answer");
-  assert.equal(rest.params.deltaY, 6000 - 120 * (n.length - 1), "then the rest as one event");
-  assert.ok(rest.t - n[1].t >= STAGE_EVENT_WAIT_MS && rest.t - n[1].t <= STAGE_EVENT_WAIT_MS + 1, `the rest ${rest.t - n[1].t} ms after the notch with no answer`);
+  const n = notchesOf(r.tab);
+  assert.ok(n.length > 3 && n.every((s) => s.params.deltaY === 120), "the notches go on after the one with no answer");
+  assert.ok(n.at(-1)!.t - n[1].t < STAGE_EVENT_WAIT_MS, "no notch after the end of the plan");
   assert.equal(r.stage.counts.waitEnds, 1);
-  assert.ok(passOf(r.tab, 2)!.t >= rest.t, "the later call goes after the rest");
+  assert.ok(passOf(r.tab, 2)!.t >= n[1].t + STAGE_EVENT_WAIT_MS, "the later call goes after the end");
   let e = 0;
   const q = await runVector(own([{ at: 0, ...wheel(0, 600) }], DOC()), { hook: (s) => { if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && ++e === 2) throw Object.assign(new Error("refused"), { code: -32000 }); return undefined; } });
   assert.equal(notchesOf(q.tab).length, 2, "no notch after the refused one");
@@ -486,4 +486,118 @@ test("no point whose column is clear (a canvas across the page between the viewp
   assert.equal(notchesOf(r.tab).length, 0);
   assert.ok(passOf(r.tab, 1));
   assert.equal(r.stage.counts["scrollAsIs:noWheelPoint"], 1);
+});
+
+// ================================================================ review 122
+
+test("a box with overflow: hidden that clips the element (a carousel) is a level that clips the visible part and that no notch moves: when the plan must move it, the client's call goes at once, counted; when only the page must move, the notches go; a page whose html has overflow: hidden is such a level too (review-122 B2)", async () => {
+  const car = { hidden: true, box: { x: 0, y: 100, width: 600, height: 200 }, width: 1800, height: 200, scrollX: 0 };
+  const r = await runVector(own([scroll("b")], { nodes: { b: { tag: "button", scroller: "car", box: { x: 700, y: 150, width: 100, height: 40 } } }, scrollers: { document: { scrollY: 0, height: 720 }, car } }));
+  assert.equal(notchesOf(r.tab).length, 0, "no notch");
+  assert.equal(passOf(r.tab, 1)!.t, 0, "the client's call at once");
+  assert.equal(r.stage.counts["scrollAsIs:hidden"], 1);
+  const page = await runVector(own([scroll("b")], { nodes: { b: { tag: "button", scroller: "car", box: { x: 200, y: 2350, width: 100, height: 40 } } }, scrollers: { document: { scrollY: 0, height: 4000 }, car: { ...car, box: { x: 0, y: 2300, width: 600, height: 200 } } } }));
+  assert.ok(notchesOf(page.tab).length > 10, "the page's notches");
+  assert.equal(page.stage.counts["scrollAsIs:hidden"], undefined);
+  assert.equal(page.stage.counts.scrollNotched, 1);
+  const doc = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, ...DOC(4000, { hidden: true }) }));
+  assert.equal(notchesOf(doc.tab).length, 0);
+  assert.equal(doc.stage.counts["scrollAsIs:hidden"], 1);
+});
+
+test("scroll-padding and scroll-margin (review-122 note 4): an element under the page's scroll-padding (a fixed header) is not in view, and the notches bring its middle to the middle of the padded box; an element whose scroll-margin is out of view gets notches too", async () => {
+  const pad = await runVector(own([scroll("b")], { nodes: { b: BUTTON(1030) }, scrollers: { document: { scrollY: 1000, height: 4000, pad: [0, 100, 0, 0] } } }));
+  assert.deepEqual(notchesOf(pad.tab).map((s) => s.params.deltaY), [-120, -120, -120], "the middle 50 to the padded box's middle 410");
+  const margin = await runVector(own([scroll("b")], { nodes: { b: BUTTON(650, { margin: [0, 0, 0, 300] }) }, ...DOC() }));
+  assert.ok(notchesOf(margin.tab).length === 4 && notchesOf(margin.tab).every((s) => s.params.deltaY === 120), "the margin's middle 820 to 360");
+  const none = await runVector(own([scroll("b")], { nodes: { b: BUTTON(650) }, ...DOC() }));
+  assert.equal(notchesOf(none.tab).length, 0, "the same element with no margin is in view");
+});
+
+test("a scroll into view while the stage holds a button (dragTo's scroll of its drop target) goes as the client sent it, counted (review-122 B3): no move with no button and no notch while the button is down", async () => {
+  const press = { method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 640, y: 360, button: "left", buttons: 1, clickCount: 1, modifiers: 0 } };
+  const release = { method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: 640, y: 360, button: "left", buttons: 0, clickCount: 1, modifiers: 0 } };
+  const r = await runVector(own([press, scroll("b"), release], { nodes: { b: BUTTON() }, ...DOC() }));
+  const p = r.tab.sent.findIndex((s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mousePressed");
+  assert.ok(p >= 0, "the press");
+  assert.equal(notchesOf(r.tab).length, 0, "no notch");
+  assert.ok(passOf(r.tab, 2), "the client's call");
+  assert.ok(r.tab.sent.slice(p).every((s) => !(s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" && s.params.buttons === 0)), "no move with no button");
+  assert.equal(r.stage.counts["scrollAsIs:held"], 1);
+});
+
+test("a cross-origin frame inside another one: the client's call as it is, counted as its own reason (review-122 B4 and note 10)", async () => {
+  const v = own([scroll("8.5.15", { session: "child" })], { nodes: { "8.5.15": { tag: "button", frame: "yf", box: { x: 50, y: 1500, width: 100, height: 40 } } },
+    frames: { xf: { origin: "cross", box: { x: 300, y: 100, width: 600, height: 500 }, border: 0, height: 720 }, yf: { origin: "cross", scroller: "frame:xf", box: { x: 50, y: 50, width: 400, height: 300 }, border: 0, height: 2000 } } });
+  const r = await runVector(v, { noAttach: true, tab: (t) => {
+    t.stage.event(t, undefined, "Target.attachedToTarget", { sessionId: "outer", targetInfo: { type: "iframe", targetId: "F-xf" } });
+    t.stage.event(t, "outer", "Target.attachedToTarget", { sessionId: "child", targetInfo: { type: "iframe", targetId: "F-yf" } });
+  } });
+  assert.ok(passOf(r.tab, 1));
+  assert.equal(notchesOf(r.tab).length, 0);
+  assert.equal(r.stage.counts["scrollAsIs:frameDeep"], 1);
+  assert.equal(r.stage.counts["scrollAsIs:readFails"], undefined);
+});
+
+test("no scroller can move the element (a page with no range, the element below its end): the client's call as it is, counted (C11 step 1; review-122 B4)", async () => {
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(900) }, ...DOC(720) }));
+  assert.equal(notchesOf(r.tab).length, 0);
+  assert.equal(passOf(r.tab, 1)!.t, 0);
+  assert.equal(r.stage.counts["scrollAsIs:noRange"], 1);
+});
+
+test("rule 4 counts the target itself when it is a form control with the focus (a focused number input changes its value under the wheel; review-122 note 3) or a canvas; a field with no focus does not count", async () => {
+  const f = { tag: "input", type: "number", box: { x: 600, y: 2400, width: 100, height: 30 } };
+  const focused = await runVector(own([scroll("f")], { nodes: { f }, focused: "f", ...DOC() }));
+  // The field moves from 2400 to the middle (360): its column from the page's last point meets it; 640,230 is above its end.
+  assert.ok(notchesOf(focused.tab).length === 17 && String(at(notchesOf(focused.tab)[0])) !== "640,360", `a focused field: another point (${at(notchesOf(focused.tab)[0])})`);
+  assert.ok(focused.tab.wheels.every((w) => w.at !== "f"));
+  const canvas = await runVector(own([scroll("c")], { nodes: { c: { tag: "canvas", box: { x: 600, y: 2400, width: 100, height: 100 } } }, ...DOC() }));
+  assert.ok(notchesOf(canvas.tab).length > 0 && String(at(notchesOf(canvas.tab)[0])) !== "640,360" && canvas.tab.wheels.every((w) => w.at !== "c"), "a canvas: another point");
+  const free = await runVector(own([scroll("f")], { nodes: { f }, ...DOC() }));
+  assert.deepEqual(at(notchesOf(free.tab)[0]), [640, 360], "no focus: the page's last point");
+});
+
+test("a move below 1 px on an axis gets no notch on that axis (review-122 note 7)", async () => {
+  const r = await runVector(own([scroll("b")], { nodes: { b: { tag: "button", box: { x: 1250, y: 2400, width: 40, height: 40 } } }, scrollers: { document: { scrollY: 0, height: 4000, width: 1280.5 } } }));
+  const n = notchesOf(r.tab);
+  assert.ok(n.length > 0 && n.every((s) => s.params.deltaX === 0), `no horizontal notch (${n.filter((s) => s.params.deltaX).length})`);
+});
+
+test("the scroll's reads end with a read that lets go of the elements and windows that the world kept (review-122 note 9)", async () => {
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON() }, ...DOC() }));
+  assert.ok(r.tab.cleared.includes("b") && notchesOf(r.tab).length === 17);
+  const inView = await runVector(own([scroll("b")], { nodes: { b: BUTTON(300) }, ...DOC() }));
+  assert.ok(inView.tab.cleared.includes("b"), "also for an element in view");
+});
+
+test("a path to the wheel point that the in-flight bound stops: the client's call as it is, counted as its own reason, not as the end of the plan (review-122 note 11)", async () => {
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), c: { tag: "canvas", fixed: true, box: { x: 560, y: 280, width: 160, height: 160 } } }, ...DOC() }), { maxMs: 20_000,
+    hook: (s) => (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" ? new Promise(() => {}) : undefined) });
+  assert.ok(passOf(r.tab, 1));
+  assert.equal(r.stage.counts["scrollAsIs:inFlight"], 1);
+  assert.equal(r.stage.counts["scrollAsIs:ended"], undefined);
+  assert.equal(notchesOf(r.tab).length, 0);
+});
+
+test("rule 2's reads of one wheel point end within WHEEL_LISTENERS_WAIT_MS in all (review-122 note 13): many slow reads, each within GEOMETRY_WAIT_MS, fail open at the total limit", async () => {
+  const nodes: Record<string, object> = { b: BUTTON() };
+  for (let i = 0; i < 12; i++) nodes[`l${i}`] = { tag: "div", listener: "nonpassive", box: { x: 0, y: 3000 + 20 * i, width: 10, height: 10 } };
+  const r = await runVector(own([scroll("b")], { nodes, ...DOC() }), { tab: (t) => { t.hook = (s) => (s.method === "DOM.getContentQuads" ? new Promise((res) => t.clock.timer(150, () => res(undefined))) : undefined); } });
+  const pass = passOf(r.tab, 1)!;
+  assert.ok(pass.t >= WHEEL_LISTENERS_WAIT_MS && pass.t < WHEEL_LISTENERS_WAIT_MS + 250, `the client's call at ${pass.t} ms`);
+  assert.equal(r.stage.counts["scrollAsIs:readFails"], 1);
+  assert.equal(notchesOf(r.tab).length, 0);
+});
+
+test("rule 2 reads the listeners inside each open shadow root of the scroller too (review-122 B1): a canvas of a web component with a wheel listener that is not passive, across the column", async () => {
+  const comp = { tag: "div", listener: "nonpassive", shadow: true, box: { x: 560, y: 1200, width: 160, height: 80 } };
+  const r = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: comp }, ...DOC() }));
+  assert.ok(notchesOf(r.tab).every((s) => s.params.x < 560 || s.params.x >= 720), `another point (${at(notchesOf(r.tab)[0])})`);
+  const reads = r.tab.sent.filter((s) => s.method === "DOMDebugger.getEventListeners");
+  assert.equal(reads.length, 2, "the scroller's root and the shadow root");
+  assert.ok(reads.every((s) => String(s.params.objectId).startsWith("main:") && s.params.pierce === false && s.params.depth === -1));
+  // A closed shadow root stays out of the read.
+  const closed = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { ...comp, shadow: false, closed: true } }, ...DOC() }));
+  assert.deepEqual(at(notchesOf(closed.tab)[0]), [640, 360]);
 });

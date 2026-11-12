@@ -9,10 +9,14 @@
 //   wheel point's cross-cases: a click below the fold with the pointer over an element with a wheel listener that is not
 //   passive, over a canvas with a wheel handler, and over a focused number input (M11); a page whose listener of the window
 //   prevents the wheel (the end after a round that does not move); and the page's content that passes under the wheel
-//   point during a round (an inner scroller, a focused number input and a canvas across the page), with real Playwright
-//   of the three pinned versions. Each row passes when the action passes with Playwright's default timeout through the
-//   stage, and the page's state is the same as with Playwright's own input on a second Chromium with no stage (a wheel's
-//   scroll within one notch, as C11's residual gives it; an element in view where Playwright's own scroll centers it).
+//   point during a round (an inner scroller, a focused number input and a canvas across the page, also inside an open
+//   shadow root), with real Playwright of the three pinned versions. Review 122 added a carousel with overflow: hidden, a
+//   focused number input as the target, dragTo's scroll with the button down, a scroller in a shadow root around a slot,
+//   and a fixed header of the page's scroll-padding. Each row passes when the action passes with Playwright's default
+//   timeout through the stage, and the page's state is the same as with Playwright's own input on a second Chromium with no
+//   stage (a wheel's scroll within one notch, as C11's residual gives it; an element in view where Playwright's own scroll
+//   centers it). The two rows of mouse.wheel's column (review-122, the lead's option b) have a bar of their own: Playwright's
+//   own input gives the later notches to the element that comes under the point (measured), and the stage does not.
 // - The harness rows R5, R6 and P7 (board ab-t30.2's harness): the input research's recorder page through the stage with
 //   Playwright 1.65.0 (wheel calls and clicks below the fold), scored as the harness scores, against STAGE_REFERENCE, and
 //   against STAGE_PERSON when it names a reference of the operator's published numbers (PR #117): a report, not a bar,
@@ -43,7 +47,13 @@ const RECORDER = join(HERE, "../../../docs/research/2026-11-09-click-box-input-s
 function scrollPage(port: number, v: string): string {
   const across = v === "list" ? `<div id=across class=a style="left:0;top:1100px;width:2600px;height:240px;overflow:auto;border:1px solid #000"><div style="height:1200px">a list</div></div>`
     : v === "num" ? `<input id=across class=a type=number style="left:0;top:1100px;width:2600px;height:40px">`
-    : v === "canvas" ? `<canvas id=across class=a width=2600 height=240 style="left:0;top:1100px;width:2600px;height:240px;background:#eef"></canvas>` : "";
+    : v === "canvas" ? `<canvas id=across class=a width=2600 height=240 style="left:0;top:1100px;width:2600px;height:240px;background:#eef"></canvas>`
+    : v === "shadow" ? `<x-wheel id=across class=a style="left:0;top:1100px;width:2600px;height:240px;display:block"></x-wheel>`
+    : v === "car" ? `<div id=car class=a style="left:0;top:2000px;width:600px;height:120px;overflow:hidden;border:1px solid #000"><div style="position:relative;width:1800px;height:100px"><button id=cbtn style="position:absolute;left:700px;top:30px;width:120px;height:40px">Next slide</button></div></div>`
+    : v === "fnum" ? `<input id=fnum class=a type=number style="left:600px;top:2400px;width:100px;height:130px">`
+    : v === "drag" ? `<div id=card class=a style="left:1150px;top:100px;width:100px;height:60px;background:#ccf">card</div><div id=zone class=a style="left:1100px;top:2400px;width:160px;height:100px;background:#cfc">zone</div>`
+    : v === "slot" ? `<x-scroll id=xs class=a style="left:1130px;top:100px;width:140px;height:300px;display:block"><div style="height:1500px;position:relative"><button id=sbtn style="position:absolute;top:1200px;left:10px;width:110px;height:40px">Slot</button></div></x-scroll>`
+    : v === "pad" ? `<style>html{scroll-padding-top:120px}</style><div id=hdr style="position:fixed;left:0;top:0;width:100%;height:120px;background:#333;z-index:9"></div>` : "";
   return `<!doctype html><html><head><meta charset=utf-8><title>stage scroll</title><style>
 body{margin:0;font:16px sans-serif;height:5200px;width:2600px;position:relative}
 .a{position:absolute;box-sizing:border-box}
@@ -64,15 +74,26 @@ ${across}
 <button id=far class=a>Far</button><input id=fld class=a><input id=fld2 class=a>
 <div id=list class=a><div style="position:relative;height:2000px"><button id=lbtn>In the list</button></div></div>
 <script>
-window.__s = { clicks: { far: 0, lbtn: 0 }, map: 0, cv: 0, across: 0, downs: { fld: 0, fld2: 0 } };
-for (const id of ['far', 'lbtn']) document.getElementById(id).addEventListener('click', () => __s.clicks[id]++);
+window.__s = { clicks: { far: 0, lbtn: 0, cbtn: 0, sbtn: 0 }, map: 0, cv: 0, across: 0, downs: { fld: 0, fld2: 0 }, drag: { down: 0, bad: 0, dropped: 0 } };
+for (const id of ['far', 'lbtn', 'cbtn', 'sbtn']) document.getElementById(id)?.addEventListener('click', () => __s.clicks[id]++);
 for (const id of ['fld', 'fld2']) document.getElementById(id).addEventListener('mousedown', () => __s.downs[id]++);
 // A map that zooms at the wheel, and a canvas with a wheel handler: listeners that are not passive (they prevent the scroll).
 document.getElementById('map').addEventListener('wheel', (e) => { __s.map++; e.preventDefault(); }, { passive: false });
 document.getElementById('cv').addEventListener('wheel', (e) => { __s.cv++; e.preventDefault(); }, { passive: false });
 const across = document.getElementById('across');
 if (across && across.localName === 'canvas') across.addEventListener('wheel', (e) => { __s.across++; e.preventDefault(); }, { passive: false });
-if (across && across.localName !== 'canvas') across.addEventListener('wheel', () => __s.across++, { passive: true });
+if (across && (across.localName === 'div' || across.localName === 'input')) across.addEventListener('wheel', () => __s.across++, { passive: true });
+// review-122 B1: a canvas with a wheel handler inside an open shadow root; note 5: a scroller in a shadow root around a slot.
+customElements.define('x-wheel', class extends HTMLElement { constructor() { super(); const r = this.attachShadow({ mode: 'open' }); r.innerHTML = '<canvas width=2600 height=240 style="display:block;width:2600px;height:240px;background:#eef"></canvas>'; r.querySelector('canvas').addEventListener('wheel', (e) => { __s.across++; e.preventDefault(); }, { passive: false }); } });
+customElements.define('x-scroll', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<div style="height:300px;overflow:auto"><slot></slot></div>'; } });
+// review-122 B3: a drag of the page's own (mouse events): every move after the press has the button down.
+const card = document.getElementById('card'), zone = document.getElementById('zone');
+if (card) {
+  let down = false;
+  card.addEventListener('mousedown', () => { down = true; __s.drag.down++; });
+  addEventListener('mousemove', (e) => { if (down && !(e.buttons & 1)) __s.drag.bad++; });
+  addEventListener('mouseup', (e) => { if (down && zone.contains(e.target)) __s.drag.dropped++; down = false; });
+}
 ${v === "stop" ? "addEventListener('wheel', (e) => { __s.stopped = (__s.stopped || 0) + 1; e.preventDefault(); }, { passive: false });" : ""}
 </script></body></html>`;
 }
@@ -112,8 +133,8 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
  * `trace`: a line of the stage that the row needs (its notches, or the counted fallback).
  */
 type Row = { name: string; v?: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; within?: Record<string, number>; trace?: RegExp;
-  /** A measure (it passes when the facts are read): does Chromium give each wheel event of CDP to the element under the point at its time? */
-  measure?: true };
+  /** A bar of the row's own on the stage's state (Playwright's own input differs by design), in place of the same state. */
+  bar?: (stage: any) => boolean };
 const click = (sel: string) => (p: any) => p.locator(sel).click();
 const ROWS: Row[] = [
   { name: "mouse.wheel(0, 600)", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 600), fields: ["scrollY", "scrollX"], trace: /^a wheel call: 5 notches/ },
@@ -136,20 +157,32 @@ const ROWS: Row[] = [
   { name: "an inner scroller across the page that the content moves under the wheel point: a click below the fold", v: "list", act: click("#far"), fields: ["clicks", "acrossTop"] },
   { name: "a focused number input across the page that the content moves under the wheel point (M11): a click below the fold", v: "num", before: async (p) => { await p.locator("#across").fill("7"); await p.evaluate(() => scrollTo(0, 0)); }, act: click("#far"), fields: ["clicks", "acrossValue"] },
   { name: "a canvas with a wheel handler across the page that the content moves under the wheel point: a click below the fold", v: "canvas", act: click("#far"), fields: ["clicks", "across"] },
-  // The measures (C11's wheel point rule 4): mouse.wheel keeps the client's point, so the page's content moves under it.
-  { name: "measure: mouse.wheel(0, 1440) at a point that the inner scroller across the page comes under (does it get the later notches?)", v: "list", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 1440), fields: ["acrossTop", "scrollY"], measure: true },
-  { name: "measure: mouse.wheel(0, 1440) at a point that the canvas across the page comes under (does its handler get the later notches?)", v: "canvas", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 1440), fields: ["across", "scrollY"], measure: true },
+  // mouse.wheel's column (review-122, the lead's option b; the measures of the first round): the notches stop before the
+  // element that the page's content would bring under the point, and the rest goes as one event. Playwright's own input
+  // gives the later notches to that element (the list moves, the canvas's handler runs): the row's bar is the stage's.
+  { name: "mouse.wheel(0, 1440) at a point that the inner scroller across the page would come under: the list does not move, and the page moves the asked total (the call's column)", v: "list", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 1440), fields: ["acrossTop", "scrollY"],
+    bar: (s) => s.acrossTop === 0 && Math.abs(s.scrollY - 1440) <= 120, trace: /^a wheel call: \d+ notches, then the rest as one event/ },
+  { name: "mouse.wheel(0, 1440) at a point that the canvas across the page would come under: its handler gets no wheel event, and the page moves the asked total (the call's column)", v: "canvas", before: (p) => p.mouse.move(640, 300), act: (p) => p.mouse.wheel(0, 1440), fields: ["across", "scrollY"],
+    bar: (s) => s.across === 0 && Math.abs(s.scrollY - 1440) <= 120, trace: /^a wheel call: \d+ notches, then the rest as one event/ },
+  // Review 122.
+  { name: "a button in a box with overflow: hidden (a carousel) below the fold: locator('#cbtn').click() (review-122 B2)", v: "car", act: click("#cbtn"), fields: ["clicks", "carLeft"], trace: /^a scroll into view as the client sent it \(hidden\)/ },
+  { name: "a canvas with a wheel handler inside an open shadow root across the page: a click below the fold (review-122 B1)", v: "shadow", act: click("#far"), fields: ["clicks", "across"] },
+  { name: "a focused number input as the click's target below the fold, the pointer below the page's middle (review-122 note 3)", v: "fnum", before: async (p) => { await p.locator("#fnum").fill("5"); await p.evaluate(() => scrollTo(0, 0)); await p.mouse.move(640, 560); }, act: click("#fnum"), fields: ["fnumValue"], trace: /^a scroll into view: \d+ notches/ },
+  { name: "dragTo() from a card to a zone below the fold: the zone's scroll while the button is down (review-122 B3)", v: "drag", act: (p) => p.locator("#card").dragTo(p.locator("#zone")), fields: ["drag"], trace: /^a scroll into view as the client sent it \(held\)/ },
+  { name: "a button in a shadow root's scroller around a slot (the flat tree): locator('#sbtn').click() (review-122 note 5)", v: "slot", act: click("#sbtn"), fields: ["clicks", "scrollY"], within: { scrollY: 120 }, trace: /^a scroll into view: \d+ notches/ },
+  { name: "a button under a fixed header of the page's scroll-padding: locator('#far').click() (review-122 note 4)", v: "pad", before: (p) => p.evaluate(() => scrollTo(0, 2340)), act: click("#far"), fields: ["clicks", "farTop"], within: { farTop: 120 }, trace: /^a scroll into view: \d+ notches/ },
 ];
 
 /** The page's state after a row: its scroll, the clicks, the fields, the listeners' counts, what is in view, and the frames' clicks and fields. */
 async function stateOf(p: any): Promise<any> {
   const s = await p.evaluate(() => {
     const k = (window as any).__s, inView = (id: string) => { const r = document.getElementById(id)!.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; };
-    const across = document.getElementById("across") as any;
+    const across = document.getElementById("across") as any, el = (id: string) => document.getElementById(id) as any;
     return { scrollY: Math.round(scrollY), scrollX: Math.round(scrollX), clicks: k.clicks, map: k.map, cv: k.cv, across: k.across, downs: k.downs,
       values: { fld: (document.getElementById("fld") as HTMLInputElement).value, fld2: (document.getElementById("fld2") as HTMLInputElement).value },
       numValue: (document.getElementById("num") as HTMLInputElement).value, farInView: inView("far"), lbtnInView: inView("lbtn"),
-      acrossTop: across && across.localName === "div" ? across.scrollTop : null, acrossValue: across && across.localName === "input" ? across.value : null };
+      acrossTop: across && across.localName === "div" ? across.scrollTop : null, acrossValue: across && across.localName === "input" ? across.value : null,
+      carLeft: el("car") ? el("car").scrollLeft : null, fnumValue: el("fnum") ? el("fnum").value : null, drag: k.drag, farTop: Math.round(el("far").getBoundingClientRect().top) };
   });
   s.frames = {} as Record<string, unknown>; s.frameValues = {} as Record<string, unknown>; s.frameDowns = {} as Record<string, unknown>;
   for (const f of p.frames()) {
@@ -208,11 +241,12 @@ export async function stageScrollCases(o: StageContext): Promise<void> {
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
           const same = agree(row, s.state, q.state);
           const traced = !row.trace || trace.some((l) => row.trace!.test(l));
-          const ok = row.measure ? s.ok && q.ok : s.ok && q.ok && same && traced;
+          const met = row.bar ? row.bar(s.state) : same;
+          const ok = s.ok && q.ok && met && traced;
           const pick = (st: any) => Object.fromEntries(row.fields.map((f) => [f, st[f]]));
           const scrollLines = trace.filter((l) => /^(a scroll into view|a wheel call|a focus click|no focus click)/.test(l));
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail: { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) },
-            same, traced, scrollLines, ...(row.measure ? { measure: true } : {}), ...(same && !row.measure ? {} : { stageState: pick(s.state), ownState: pick(q.state) }) } });
+            same, traced, scrollLines, ...(row.bar ? { bar: met } : {}), ...(same && !row.bar ? {} : { stageState: pick(s.state), ownState: pick(q.state) }) } });
           (out.rows as unknown[]).push({ version, row: row.name, stage: s, own: q, same, traced, trace });
         }
         // The harness rows with Playwright 1.65.0: with all rows, or alone with STAGE_SCROLL_HARNESS=1.

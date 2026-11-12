@@ -21,10 +21,12 @@
 // relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
 //
 // The scroll and the wheel (board ab-t30.11): mouse.wheel as a person's notches with the page's residual, at the page's
-// last point; DOM.scrollIntoViewIfNeeded on every session translated into notches at a wheel point (no form control,
-// canvas, frame or listener of the wheel that is not passive under it), round by round, the outermost scroller first, up
-// through frames (same-origin and cross-origin), with the end after a round that does not move its scroller and the
-// counted fallbacks; the focus click's notches into view; the Mac's pass.
+// last point, until its column would bring a form control, a canvas, a frame, another scroller or a listener of the
+// wheel that is not passive under the point (then the rest as one event); DOM.scrollIntoViewIfNeeded on every session
+// translated into notches at a wheel point (no such element under it or in its column), round by round, the outermost
+// scroller first, up through frames (same-origin and cross-origin), with the end after a round that does not move its
+// scroller and the counted fallbacks (a box that no wheel moves, a button held down); the focus click's notches into
+// view; the Mac's pass.
 //
 // Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12: a move
 // with a button down, the drag, select text, the file chooser).
@@ -183,43 +185,84 @@ export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.get
 /** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
 export const CARET_SET = `function (s, e, follow) { ${RETARGET} el.setSelectionRange(s, e); return true; }`;
 
-/** A scroller of the scroll's reads: an element whose overflow on an axis is auto, scroll or overlay, with more content than its box on that axis ([x, y]). */
+/** A scroller of the scroll's reads: an element whose overflow on an axis is auto, scroll or overlay, with more content than its box on that axis ([x, y]): the wheel moves it. */
 const SCROLLS = "const scrolls = (p, cs) => [/(auto|scroll|overlay)/.test(cs.overflowX) && p.scrollWidth > p.clientWidth + 1, /(auto|scroll|overlay)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1];";
-/** The parent of a node in the flat tree (a shadow root's host). */
-const UP = "const up = (n) => n.parentElement || (n.parentNode && n.parentNode.nodeType === 11 ? n.parentNode.host : null);";
+/** A box that clips its content with overflow hidden or clip, with more content than its box on that axis ([x, y]): no wheel moves it (review-122 B2). */
+const CLIPS = "const clips = (p, cs) => [/(hidden|clip)/.test(cs.overflowX) && p.scrollWidth > p.clientWidth + 1, /(hidden|clip)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1];";
+/** The parent of a node in the flat tree: a slotted node's slot, else its parent element, else a shadow root's host (review-122 note 5). */
+const UP = "const up = (n) => n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.nodeType === 11 ? n.parentNode.host : null);";
+/** Whether `b` is `a` or inside it in the flat tree (a composed containment test: review-122 B1). */
+const INSIDE = "const inside = (a, b) => { for (let p = b, i = 0; p && i < 4096; p = up(p), i++) if (p === a) return true; return false; };";
 /** The element at a point of a document, into its open shadow roots. */
 const DEEP = "const deep = (doc, x, y) => { let e = doc.elementFromPoint(x, y); for (let i = 0; e && e.shadowRoot && i < 16; i++) { const f = e.shadowRoot.elementFromPoint(x, y); if (!f || f === e) break; e = f; } return e; };";
+/** Rule 1's elements (C11, the wheel point). */
+const BADS = "const BAD = ['input', 'select', 'textarea', 'canvas', 'embed', 'object', 'video', 'audio', 'iframe', 'frame']; const bad = (p) => BAD.includes(p.localName) || p.isContentEditable;";
+/** Each element under a root, into the open shadow roots of each element (review-122 B1), at most 50,000. */
+const EACH = "const each = (root, fn) => { const st = [root]; if (root.shadowRoot) st.push(root.shadowRoot); let n = 0; while (st.length && n < 50000) { const r = st.pop(); for (const e of r.querySelectorAll('*')) { n++; fn(e); if (e.shadowRoot) st.push(e.shadowRoot); } } };";
+/** A box's four sides of a computed style (scroll-padding, scroll-margin: review-122 note 4), left, top, right, bottom; `auto` is 0. */
+const SIDES = "const sides = (cs, k) => ['Left', 'Top', 'Right', 'Bottom'].map((s) => { const v = parseFloat(cs[k + s]); return Number.isFinite(v) ? v : 0; });";
+/** The open shadow roots under a root (and the root itself), at most WHEEL_ROOTS_MAX: rule 2 reads each one's listeners (review-122 B1). */
+const ROOTS = "const rootsOf = (r0, max) => { const out = [r0], st = [r0]; if (r0.shadowRoot) { out.push(r0.shadowRoot); st.push(r0.shadowRoot); } while (st.length && out.length < max) { const r = st.pop(); for (const e of r.querySelectorAll('*')) if (e.shadowRoot && out.length < max) { out.push(e.shadowRoot); st.push(e.shadowRoot); } } return out; };";
 /**
  * The scroll's read (C11, the scroll and the wheel), in Playwright's utility world on the node's own handle (or, with
  * `owner`, in the relay's own world on a cross-origin frame's owner): the target's box (the node's border box, or the
- * client's `rect` in it), and its scrollers, innermost first, up through its same-origin frames: each one's visible box
- * (its client box; a document's: its viewport), its scroll position and its scroll range ([x, y]). A document whose
- * overflow is hidden has no range; the scrollers above an element with `position: fixed` do not move it. All in the
- * points of the top of its process (`top`: the top page). The world keeps the scrollers for WHEEL_POINTS.
+ * client's `rect` in it) with its scroll-margin, and its scrollers, innermost first, up through its same-origin frames, in
+ * the flat tree: each one's visible box (its client box; a document's: its viewport), its scroll position, its scroll
+ * range ([x, y]), the axes that the wheel moves, and its scroll-padding. A box that clips with overflow hidden or clip is a
+ * level that the wheel does not move; the scrollers above an element with `position: fixed` do not move it. All in the
+ * points of the top of its process (`top`: the top page). The world keeps the scrollers for WHEEL_POINTS and WHEEL_ROOTS.
  */
-export const SCROLL_STATE = `function (rx, ry, rw, rh, follow, owner) { ${RETARGET} if (!el.isConnected) return null; ${SCROLLS} ${UP} const b = el.getBoundingClientRect(); if (!owner && !el.getClientRects().length) return { none: true }; const t = typeof rx === 'number' ? [b.left + rx, b.top + ry, b.left + rx + rw, b.top + ry + rh] : [b.left, b.top, b.right, b.bottom]; const L = [], marks = [], wins = [], fes = [], offs = []; let w = el.ownerDocument.defaultView, n = el, flat = true, d = 0; for (; d < 8; d++) { wins[d] = w; const doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, hs = w.getComputedStyle(html); let fixed = w.getComputedStyle(n).position === 'fixed'; for (let p = fixed ? null : up(n); p && p !== html; p = up(p)) { if (p === se) continue; const cs = w.getComputedStyle(p), s = scrolls(p, cs); if ((s[0] || s[1]) && !(p === doc.body && hs.overflowX === 'visible' && hs.overflowY === 'visible')) { const r = p.getBoundingClientRect(); L.push({ d, r: [r.left + p.clientLeft, r.top + p.clientTop, r.left + p.clientLeft + p.clientWidth, r.top + p.clientTop + p.clientHeight], s: [p.scrollLeft, p.scrollTop], m: [s[0] ? p.scrollWidth - p.clientWidth : 0, s[1] ? p.scrollHeight - p.clientHeight : 0], doc: false }); marks.push(p); } if (cs.position === 'fixed') { fixed = true; break; } } if (!fixed) { const bs = doc.body ? w.getComputedStyle(doc.body) : hs, ov = (k) => (hs[k] !== 'visible' ? hs[k] : bs[k]), q = doc.compatMode === 'BackCompat' && doc.body ? doc.body : html, vw = q.clientWidth, vh = q.clientHeight; L.push({ d, r: [0, 0, vw, vh], s: [w.scrollX, w.scrollY], m: [/(hidden|clip)/.test(ov('overflowX')) ? 0 : Math.max(0, se.scrollWidth - vw), /(hidden|clip)/.test(ov('overflowY')) ? 0 : Math.max(0, se.scrollHeight - vh)], doc: true }); marks.push(doc); } if (w === w.top || !w.frameElement) break; const fe = w.frameElement, fr = fe.getBoundingClientRect(), fcs = w.parent.getComputedStyle(fe); if (fcs.transform && fcs.transform !== 'none') flat = false; fes[d] = fe; offs[d] = [fr.left + parseFloat(fcs.borderLeftWidth) + parseFloat(fcs.paddingLeft), fr.top + parseFloat(fcs.borderTopWidth) + parseFloat(fcs.paddingTop)]; n = fe; w = w.parent; } const cum = []; cum[d] = [0, 0]; for (let i = d - 1; i >= 0; i--) cum[i] = [cum[i + 1][0] + offs[i][0], cum[i + 1][1] + offs[i][1]]; globalThis.__agentBrowserStageScroll = { el, marks, depth: L.map((l) => l.d), wins, fes, cum }; return { t: [t[0] + cum[0][0], t[1] + cum[0][1], t[2] + cum[0][0], t[3] + cum[0][1]], levels: L.map((l) => ({ r: [l.r[0] + cum[l.d][0], l.r[1] + cum[l.d][1], l.r[2] + cum[l.d][0], l.r[3] + cum[l.d][1]], s: l.s, m: l.m, doc: l.doc })), top: w === w.top, flat, ox: cum[0][0], oy: cum[0][1] }; }`;
+export const SCROLL_STATE = `function (rx, ry, rw, rh, follow, owner) { ${RETARGET} if (!el.isConnected) return null; ${SCROLLS} ${CLIPS} ${UP} ${SIDES} const b = el.getBoundingClientRect(); if (!owner && !el.getClientRects().length) return { none: true }; const t = typeof rx === 'number' ? [b.left + rx, b.top + ry, b.left + rx + rw, b.top + ry + rh] : [b.left, b.top, b.right, b.bottom]; const mg = owner ? [0, 0, 0, 0] : sides(el.ownerDocument.defaultView.getComputedStyle(el), 'scrollMargin'); const L = [], marks = [], wins = [], fes = [], offs = []; let w = el.ownerDocument.defaultView, n = el, flat = true, d = 0; for (; d < 8; d++) { wins[d] = w; const doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, hs = w.getComputedStyle(html); let fixed = w.getComputedStyle(n).position === 'fixed'; for (let p = fixed ? null : up(n); p && p !== html; p = up(p)) { if (p === se) continue; const cs = w.getComputedStyle(p), s = scrolls(p, cs), c = clips(p, cs); if ((s[0] || s[1] || c[0] || c[1]) && !(p === doc.body && hs.overflowX === 'visible' && hs.overflowY === 'visible')) { const r = p.getBoundingClientRect(); L.push({ d, r: [r.left + p.clientLeft, r.top + p.clientTop, r.left + p.clientLeft + p.clientWidth, r.top + p.clientTop + p.clientHeight], s: [p.scrollLeft, p.scrollTop], m: [s[0] || c[0] ? p.scrollWidth - p.clientWidth : 0, s[1] || c[1] ? p.scrollHeight - p.clientHeight : 0], doc: false, wheel: [s[0], s[1]], pad: sides(cs, 'scrollPadding') }); marks.push(p); } if (cs.position === 'fixed') { fixed = true; break; } } if (!fixed) { const bs = doc.body ? w.getComputedStyle(doc.body) : hs, ov = (k) => (hs[k] !== 'visible' ? hs[k] : bs[k]), q = doc.compatMode === 'BackCompat' && doc.body ? doc.body : html, vw = q.clientWidth, vh = q.clientHeight, mx = Math.max(0, se.scrollWidth - vw), my = Math.max(0, se.scrollHeight - vh); L.push({ d, r: [0, 0, vw, vh], s: [w.scrollX, w.scrollY], m: [mx, my], doc: true, wheel: [mx > 0 && !/(hidden|clip)/.test(ov('overflowX')), my > 0 && !/(hidden|clip)/.test(ov('overflowY'))], pad: sides(hs, 'scrollPadding') }); marks.push(doc); } if (w === w.top || !w.frameElement) break; const fe = w.frameElement, fr = fe.getBoundingClientRect(), fcs = w.parent.getComputedStyle(fe); if (fcs.transform && fcs.transform !== 'none') flat = false; fes[d] = fe; offs[d] = [fr.left + parseFloat(fcs.borderLeftWidth) + parseFloat(fcs.paddingLeft), fr.top + parseFloat(fcs.borderTopWidth) + parseFloat(fcs.paddingTop)]; n = fe; w = w.parent; } const cum = []; cum[d] = [0, 0]; for (let i = d - 1; i >= 0; i--) cum[i] = [cum[i + 1][0] + offs[i][0], cum[i + 1][1] + offs[i][1]]; globalThis.__agentBrowserStageScroll = { el, marks, depth: L.map((l) => l.d), wins, fes, cum }; return { t: [t[0] + cum[0][0], t[1] + cum[0][1], t[2] + cum[0][0], t[3] + cum[0][1]], mg, levels: L.map((l) => ({ r: [l.r[0] + cum[l.d][0], l.r[1] + cum[l.d][1], l.r[2] + cum[l.d][0], l.r[3] + cum[l.d][1]], s: l.s, m: l.m, doc: l.doc, wheel: l.wheel, pad: l.pad })), top: w === w.top, flat, ox: cum[0][0], oy: cum[0][1] }; }`;
 /**
  * The wheel point's rules 1, 3 and 4 (C11, the wheel point), on the handle of the last SCROLL_STATE, for the scroller `k` of
  * that read and the points `pts` (in that read's points), in their order: at each frame level above the scroller the
  * element at the point is the frame's element; in the scroller's document, the element at the point and each ancestor
- * up to the scroller is not an input, select, textarea, contenteditable, canvas, embed, object, video, audio or frame,
- * and no other scroller comes first (rules 1 and 3); and with the round's move `mv` ([dx, dy] px), the point's column,
- * the line from the point along the move as the page's content is now (the content that the notches move under the
- * point, the vertical axis first), meets no element of rule 1 and no other scroller with a range on the moved axis, apart
- * from the element, the elements around it and inside it, and elements with `position: fixed` (rule 4). The indexes of
- * the points that pass.
+ * up to the scroller in the flat tree is not an input, select, textarea, contenteditable, canvas, embed, object, video,
+ * audio or frame, and no other scroller comes first (rules 1 and 3); and with the round's move `mv` ([dx, dy] px), the
+ * point's column, the line from the point along the move as the page's content is now, also into open shadow roots,
+ * meets no element of rule 1 and no other scroller with a range on the moved axis (rule 4). The elements around the
+ * element and inside it (in the flat tree) and elements with `position: fixed` do not count; the element itself counts
+ * when it is a canvas, an embed, an object, a video, an audio or a frame, or has the focus (review-122 note 3). The
+ * indexes of the points that pass.
  */
-export const WHEEL_POINTS = `function (k, pts, mv) { const S = globalThis.__agentBrowserStageScroll; if (!S || !S.marks[k]) return null; ${SCROLLS} ${UP} ${DEEP} const BAD = ['input', 'select', 'textarea', 'canvas', 'embed', 'object', 'video', 'audio', 'iframe', 'frame']; const bad = (p) => BAD.includes(p.localName) || p.isContentEditable; const m = S.marks[k], dk = S.depth[k], D = S.wins.length - 1, w = S.wins[dk], doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, ox = S.cum[dk][0], oy = S.cum[dk][1]; const segs = (q) => { const x = q[0] - ox, y = q[1] - oy, out = []; if (mv && mv[1]) out.push([x, Math.min(y, y + mv[1]), x, Math.max(y, y + mv[1])]); if (mv && mv[0]) out.push([Math.min(x, x + mv[0]), y + (mv[1] || 0), Math.max(x, x + mv[0]), y + (mv[1] || 0)]); return out; }; const meets = (r, g) => r[0] <= g[2] && r[2] > g[0] && r[1] <= g[3] && r[3] > g[1]; const all = pts.map(segs), col = []; if (mv && (mv[0] || mv[1])) { const root = m.nodeType === 9 ? doc.body || html : m, anc = dk === 0 ? S.el : S.fes[dk - 1], cs = new Map(), style = (e) => { let c = cs.get(e); if (!c) cs.set(e, (c = w.getComputedStyle(e))); return c; }; const fixedUp = (e) => { for (let p = e; p && p !== root; p = up(p)) if (style(p).position === 'fixed') return true; return false; }; for (const e of root.querySelectorAll('*')) { if (e === anc || e.contains(anc) || anc.contains(e)) continue; const b = e.getBoundingClientRect(), r = [b.left, b.top, b.right, b.bottom]; if (!(b.width > 0 || b.height > 0) || !all.some((g) => g.some((x) => meets(r, x)))) continue; const s = scrolls(e, style(e)); if (!(bad(e) || (e !== m && ((mv[0] && s[0]) || (mv[1] && s[1]))))) continue; if (!fixedUp(e)) col.push(r); } } const pass = []; for (let i = 0; i < pts.length; i++) { const px = pts[i][0], py = pts[i][1]; let ok = true; for (let j = D; j > dk && ok; j--) if (deep(S.wins[j].document, px - S.cum[j][0], py - S.cum[j][1]) !== S.fes[j - 1]) ok = false; if (!ok) continue; const e = deep(doc, px - ox, py - oy); if (!e) continue; let found = false; for (let p = e; p; p = up(p)) { if (p === m || p === html) { found = p === m || m === doc; break; } if (bad(p)) break; if (p !== se && p !== doc.body) { const s = scrolls(p, w.getComputedStyle(p)); if (s[0] || s[1]) break; } } if (!found || col.some((r) => all[i].some((g) => meets(r, g)))) continue; pass.push(i); } return pass; }`;
-/** The scroller `k` of the last SCROLL_STATE as a handle (the html element for a document): rule 2 reads the listeners of it and of every element inside it. */
-export const WHEEL_ROOT = "function (k) { const S = globalThis.__agentBrowserStageScroll, m = S && S.marks[k]; return m ? (m.nodeType === 9 ? m.documentElement : m) : null; }";
+export const WHEEL_POINTS = `function (k, pts, mv) { const S = globalThis.__agentBrowserStageScroll; if (!S || !S.marks[k]) return null; ${SCROLLS} ${UP} ${INSIDE} ${DEEP} ${BADS} ${EACH} const m = S.marks[k], dk = S.depth[k], D = S.wins.length - 1, w = S.wins[dk], doc = w.document, html = doc.documentElement, se = doc.scrollingElement || html, ox = S.cum[dk][0], oy = S.cum[dk][1]; const segs = (q) => { const x = q[0] - ox, y = q[1] - oy, out = []; if (mv && mv[1]) out.push([x, Math.min(y, y + mv[1]), x, Math.max(y, y + mv[1])]); if (mv && mv[0]) out.push([Math.min(x, x + mv[0]), y + (mv[1] || 0), Math.max(x, x + mv[0]), y + (mv[1] || 0)]); return out; }; const meets = (r, g) => r[0] <= g[2] && r[2] > g[0] && r[1] <= g[3] && r[3] > g[1]; const all = pts.map(segs), col = []; if (mv && (mv[0] || mv[1])) { const root = m.nodeType === 9 ? doc.body || html : m, anc = dk === 0 ? S.el : S.fes[dk - 1], cs = new Map(), style = (e) => { let c = cs.get(e); if (!c) cs.set(e, (c = w.getComputedStyle(e))); return c; }; let act = doc.activeElement; for (let i = 0; act && act.shadowRoot && act.shadowRoot.activeElement && i < 16; i++) act = act.shadowRoot.activeElement; const self = ['canvas', 'embed', 'object', 'video', 'audio', 'iframe', 'frame'].includes(anc.localName) || (bad(anc) && anc === act); const fixedUp = (e) => { for (let p = e; p && p !== root; p = up(p)) if (style(p).position === 'fixed') return true; return false; }; each(root, (e) => { if (e === anc ? !self : inside(e, anc) || inside(anc, e)) return; const b = e.getBoundingClientRect(), r = [b.left, b.top, b.right, b.bottom]; if (!(b.width > 0 || b.height > 0) || !all.some((g) => g.some((x) => meets(r, x)))) return; const s = scrolls(e, style(e)); if (!(bad(e) || (e !== m && ((mv[0] && s[0]) || (mv[1] && s[1]))))) return; if (!fixedUp(e)) col.push(r); }); } const pass = []; for (let i = 0; i < pts.length; i++) { const px = pts[i][0], py = pts[i][1]; let ok = true; for (let j = D; j > dk && ok; j--) if (deep(S.wins[j].document, px - S.cum[j][0], py - S.cum[j][1]) !== S.fes[j - 1]) ok = false; if (!ok) continue; const e = deep(doc, px - ox, py - oy); if (!e) continue; let found = false; for (let p = e; p; p = up(p)) { if (p === m || p === html) { found = p === m || m === doc; break; } if (bad(p)) break; if (p !== se && p !== doc.body) { const s = scrolls(p, w.getComputedStyle(p)); if (s[0] || s[1]) break; } } if (!found || col.some((r) => all[i].some((g) => meets(r, g)))) continue; pass.push(i); } return pass; }`;
+/** The open shadow roots under the scroller `k` of the last SCROLL_STATE (the html element for a document), with the scroller first, at most `max`: their count; WHEEL_ROOT gives each one as a handle. */
+export const WHEEL_ROOTS = `function (k, max) { const S = globalThis.__agentBrowserStageScroll, m = S && S.marks[k]; if (!m) return 0; ${ROOTS} S.roots = rootsOf(m.nodeType === 9 ? m.documentElement : m, max); return S.roots.length; }`;
+/** The root `i` of the last WHEEL_ROOTS, as a handle: rule 2 resolves it into the page's main world and reads its listeners and those of every element inside it. */
+export const WHEEL_ROOT = "function (i) { const S = globalThis.__agentBrowserStageScroll; return S && S.roots ? S.roots[i] || null : null; }";
 /** A cross-origin frame's level (C11, the scroll in a frame): at each point of the top page, the element is the frame's owner (on its handle, after SCROLL_STATE with `owner`). */
 export const OWNER_AT = `function (pts) { const S = globalThis.__agentBrowserStageScroll; if (!S || S.el !== this) return null; ${DEEP} const D = S.wins.length - 1; return pts.map((q) => { for (let j = D; j > 0; j--) if (deep(S.wins[j].document, q[0] - S.cum[j][0], q[1] - S.cum[j][1]) !== S.fes[j - 1]) return false; return deep(S.wins[0].document, q[0] - S.cum[0][0], q[1] - S.cum[0][1]) === this; }); }`;
+/** The end of a scroll's or a wheel call's reads: the world lets go of the elements and windows of its last read (review-122 note 9). */
+export const SCROLL_CLEAR = "function () { delete globalThis.__agentBrowserStageScroll; delete globalThis.__agentBrowserStageWheel; return true; }";
+/** The same in the stage's own world on the top page (mouse.wheel's column). */
+export const WHEEL_CLEAR = "() => { delete globalThis.__agentBrowserStageWheel; return true; }";
+/**
+ * mouse.wheel's column (C11, `mouseWheel`; review-122 option b), in the stage's own world on the top page at the page's
+ * last point (x, y), for `ny` and `nx` signed notches of `px`: the element under the point (into open shadow roots and
+ * same-origin frames; a cross-origin frame: `frame`), and on each axis (the vertical first) the scroller that the point's
+ * chain scrolls first in the call's direction (a frame's document chains to its owner's), its range left, and the
+ * distance along the move to the near edge of the first element of its content that the notches would bring under the
+ * point: an element of rule 1, or another scroller with a range on that axis (also into open shadow roots). The element
+ * under the point, the elements around it and inside it, and elements with `position: fixed` do not count. Each axis's
+ * column in the top page's points (rule 2's boxes meet them). `again`: the same read after a plan's end; `same` is false
+ * when the element under the point or the vertical scroller is not the one of the call's first read. The world keeps
+ * the scrollers for WHEEL_ROOTS_AT.
+ */
+export const WHEEL_COLUMN = `(x, y, ny, nx, px, again) => { ${SCROLLS} ${UP} ${INSIDE} ${DEEP} ${BADS} ${EACH} const lv = [{ doc: document, fe: null, ox: 0, oy: 0 }]; let e = deep(document, x, y); for (let i = 0; e && (e.localName === 'iframe' || e.localName === 'frame') && i < 8; i++) { let cd = null; try { cd = e.contentDocument; } catch (z) {} if (!cd) return { frame: true }; const r = e.getBoundingClientRect(), cs = e.ownerDocument.defaultView.getComputedStyle(e), top = lv[lv.length - 1]; const o = { doc: cd, fe: e, ox: top.ox + r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft), oy: top.oy + r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop) }; lv.push(o); e = deep(cd, x - o.ox, y - o.oy); } if (!e) return { none: true }; const find = (ax, dir) => { let n = e; for (let i = lv.length - 1; i >= 0; i--) { const L = lv[i], doc = L.doc, w = doc.defaultView, html = doc.documentElement, se = doc.scrollingElement || html; let fixed = false; for (let p = n; p && p !== html; p = up(p)) { if (p === se) continue; const cs = w.getComputedStyle(p), s = scrolls(p, cs); if (s[ax]) { const at = ax ? p.scrollTop : p.scrollLeft, max = ax ? p.scrollHeight - p.clientHeight : p.scrollWidth - p.clientWidth, left = dir > 0 ? max - at : at; if (left > 0.5) return { m: p, L, left }; } if (cs.position === 'fixed') { fixed = true; break; } } if (!fixed) { const hs = w.getComputedStyle(html), bs = doc.body ? w.getComputedStyle(doc.body) : hs, ov = (k) => (hs[k] !== 'visible' ? hs[k] : bs[k]); if (!/(hidden|clip)/.test(ov(ax ? 'overflowY' : 'overflowX'))) { const at = ax ? w.scrollY : w.scrollX, max = ax ? se.scrollHeight - html.clientHeight : se.scrollWidth - html.clientWidth, left = dir > 0 ? max - at : at; if (left > 0.5) return { m: doc, L, left }; } } if (!L.fe) break; n = L.fe; } return null; }; const fam = new Set(lv.map((l) => l.fe).filter(Boolean)); const exempt = (q) => q === e || fam.has(q) || inside(q, e) || inside(e, q); const out = { k: [0, 0], left: [0, 0], col: [null, null], same: true }, keep = { e, roots: [] }; let shift = 0; for (const ax of [1, 0]) { const n = ax ? ny : nx; if (!n) continue; const dir = Math.sign(n), f = find(ax, dir), N = Math.abs(n); if (!f) { out.k[ax] = N; continue; } keep.roots.push(f.m.nodeType === 9 ? f.m.documentElement : f.m); const D = Math.min(N * px, f.left), lx = x - f.L.ox, ly = y - f.L.oy + (ax ? 0 : shift), g = ax ? [lx, Math.min(ly, ly + dir * D), lx, Math.max(ly, ly + dir * D)] : [Math.min(lx, lx + dir * D), ly, Math.max(lx, lx + dir * D), ly]; out.col[ax] = [g[0] + f.L.ox, g[1] + f.L.oy, g[2] + f.L.ox, g[3] + f.L.oy]; out.left[ax] = f.left; if (ax && again && globalThis.__agentBrowserStageWheel && (globalThis.__agentBrowserStageWheel.e !== e || globalThis.__agentBrowserStageWheel.my !== f.m)) out.same = false; if (ax) keep.my = f.m; const w = f.L.doc.defaultView, root = f.m.nodeType === 9 ? f.m.body || f.m.documentElement : f.m, cs = new Map(), style = (q) => { let c = cs.get(q); if (!c) cs.set(q, (c = w.getComputedStyle(q))); return c; }; const fixedUp = (q) => { for (let p = q; p && p !== root; p = up(p)) if (style(p).position === 'fixed') return true; return false; }; let dmin = Infinity; each(root, (q) => { if (exempt(q)) return; const b = q.getBoundingClientRect(); if (!(b.width > 0 || b.height > 0) || !(b.left <= g[2] && b.right > g[0] && b.top <= g[3] && b.bottom > g[1])) return; const s = scrolls(q, style(q)); if (!(bad(q) || (q !== f.m && s[ax]))) return; if (fixedUp(q)) return; const dd = ax ? (dir > 0 ? b.top - ly : ly - b.bottom) : (dir > 0 ? b.left - lx : lx - b.right); dmin = Math.min(dmin, Math.max(0, dd)); }); out.k[ax] = dmin === Infinity ? N : Math.min(N, Math.max(0, Math.ceil(dmin / px) - 1)); if (ax) shift = dir * Math.min(out.k[ax] * px, f.left); } if (!again) globalThis.__agentBrowserStageWheel = keep; else if (globalThis.__agentBrowserStageWheel) globalThis.__agentBrowserStageWheel.roots = keep.roots; return out; }`;
+/** The open shadow roots under the scrollers of the last WHEEL_COLUMN (with each scroller first), at most `max`: their count; WHEEL_ROOT_AT gives each one as a handle. */
+export const WHEEL_ROOTS_AT = `(max) => { const S = globalThis.__agentBrowserStageWheel; if (!S) return 0; ${ROOTS} const all = []; for (const r of S.roots || []) for (const q of rootsOf(r, max)) if (all.length < max && !all.includes(q)) all.push(q); S.all = all; return all.length; }`;
+/** The root `i` of the last WHEEL_ROOTS_AT, as a handle (the stage's own world). */
+export const WHEEL_ROOT_AT = "(i) => { const S = globalThis.__agentBrowserStageWheel; return S && S.all ? S.all[i] || null : null; }";
 /** The wait for the smooth scroll of a round to end (C11: 350 ms, a first value; the vectors' scrollWaitMs). */
 export const SCROLL_WAIT_MS = 350;
 /** The group of the stage's own handles of a wheel point's read (released after it). */
 export const STAGE_GROUP = "agent-browser-stage";
 /** Rule 2 reads the boxes of at most this many elements with a wheel listener that is not passive; with more, the read fails open. */
 export const WHEEL_LISTENERS_MAX = 64;
+/** Rule 2 reads the listeners of at most this many roots (the scroller and the open shadow roots inside it); the others stay out of the read (review-122 B1). */
+export const WHEEL_ROOTS_MAX = 32;
+/** All of rule 2's reads for one wheel point end within this time, else the read fails open (review-122 note 13). */
+export const WHEEL_LISTENERS_WAIT_MS = 1000;
 
 /** Condition 3 of the press point, in the stage's own isolated world: the element at the client's point. */
 export const ELEMENT_KIND = "(x, y) => { const el = document.elementFromPoint(x, y); if (!el) return null; return { tag: el.localName, type: el.getAttribute('type') ?? undefined, role: el.getAttribute('role') ?? undefined, href: el.localName === 'a' && el.hasAttribute('href'), usemap: el.localName === 'img' && el.hasAttribute('usemap'), editable: el.isContentEditable }; }";
@@ -257,6 +300,8 @@ export type StagePage = {
   xPoint?(): Promise<{ x: number; y: number } | null>;
   /** A node of the top page resolved into the stage's own isolated world (DOM.resolveNode by its backendNodeId): the objectId of its handle, or null. */
   ownNode?(backendNodeId: number): Promise<string | null>;
+  /** A handle of the stage's own isolated world on the top page (`fn` called with `args`, numbers only; the stage's object group): its objectId, or null (mouse.wheel's column, rule 2). */
+  ownObject?(fn: string, args: number[]): Promise<string | null>;
 };
 
 /** The stage's clock: the player's (now, sleep) and a timer that can be cancelled. A test gives a fake one. */
@@ -401,6 +446,8 @@ class TabState {
   /** The page's residual of each axis of its wheel calls (C11, the scroll and the wheel), and the time of its last notch. */
   wheel: Wheel | null = null;
   lastNotchAt = -Infinity;
+  /** The count of the main frame's navigations: one stops the notches of a wheel call and of a scroll (review-122 note 6). */
+  navs = 0;
 }
 
 /** The input lock: one for all pages of the agent browser, in the order of arrival. */
@@ -474,9 +521,22 @@ export function quadRect(q: unknown): Rect | null {
 /** The handle on which a scroller's reads run: its session, its objectId, the offset of its points in the top page, and (a cross-origin frame's levels) the handle of the frame's owner in the stage's own world. */
 type Reader = { child: string | undefined; obj: string; ox: number; oy: number; owner?: string };
 /** A scroller of the scroll's read, in the top page's points: its visible box (unclipped), its scroll position and range ([x, y]), its reader and its index there. */
-type Level = { r: Rect; s: [number, number]; m: [number, number]; doc: boolean; rd: Reader; k: number };
-/** The scroll's read: the target, its scrollers (innermost first), and the visible part of each (its box within the viewport and within each scroller around it). */
-type ScrollView = { t: Rect; levels: Level[]; vis: Rect[]; owner?: string };
+type Level = { r: Rect; s: [number, number]; m: [number, number]; doc: boolean; rd: Reader; k: number; w: [boolean, boolean]; pad: Sides };
+/**
+ * The scroll's read: the target and its scroll-margin, its scrollers (innermost first; also the boxes with overflow hidden
+ * or clip, whose `w` is false: no wheel moves them), and the visible part of each (its box within the viewport and within
+ * each scroller around it).
+ */
+type ScrollView = { t: Rect; mg: Sides; levels: Level[]; vis: Rect[]; owner?: string };
+/** A box's four sides of a computed style (scroll-padding, scroll-margin: review-122 note 4): left, top, right, bottom. */
+type Sides = [number, number, number, number];
+const sidesOf = (q: unknown): Sides => (Array.isArray(q) && q.length === 4 && q.every((v) => typeof v === "number" && Number.isFinite(v)) ? [q[0], q[1], q[2], q[3]] : [0, 0, 0, 0]);
+/** A box grown by sides (scroll-margin), or shrunk (scroll-padding: `sign` -1). */
+const grow = (r: Rect, d: Sides, sign = 1): Rect => ({ x0: r.x0 - sign * d[0], y0: r.y0 - sign * d[1], x1: r.x1 + sign * d[2], y1: r.y1 + sign * d[3] });
+/** A notch, or the rest of a wheel call as one event (review-122 option b): its time in the plan, its deltas, the notches that it holds, and when it went and Chrome answered it. */
+type WheelItem = { t: number; dx: number; dy: number; n: { x: number; y: number }; one?: boolean; sent?: Promise<unknown>; answeredAt?: number };
+/** mouse.wheel's column (WHEEL_COLUMN and rule 2): the notches of each axis that go, whether the point is the first read's, and whether it is over a cross-origin frame. */
+type Column = { k: { x: number; y: number }; same: boolean; frame: boolean };
 const shift = (r: Rect, x: number, y: number): Rect => ({ x0: r.x0 + x, y0: r.y0 + y, x1: r.x1 + x, y1: r.y1 + y });
 const meet = (a: Rect, b: Rect): Rect => ({ x0: Math.max(a.x0, b.x0), y0: Math.max(a.y0, b.y0), x1: Math.min(a.x1, b.x1), y1: Math.min(a.y1, b.y1) });
 const rectOf = (q: unknown): Rect | null => (Array.isArray(q) && q.length === 4 && q.every((v) => typeof v === "number" && Number.isFinite(v)) ? { x0: q[0], y0: q[1], x1: q[2], y1: q[3] } : null);
@@ -638,7 +698,8 @@ export class Stage {
       this.count("navigationDrops");
     }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
-    if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; }
+    // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
+    if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
@@ -969,10 +1030,10 @@ export class Stage {
     p.then((r) => e.answer({ result: r ?? {} }), (err) => e.answer({ error: page.error(e.method, err) }));
   }
 
-  /** A read of the stage, at most GEOMETRY_WAIT_MS (C11): its value, or TIMEOUT (a failed read too; then the stage fails open). */
-  private async read<T>(p: Promise<T>): Promise<T | typeof TIMEOUT> {
+  /** A read of the stage, at most GEOMETRY_WAIT_MS (C11; or `ms`, less): its value, or TIMEOUT (a failed read too; then the stage fails open). */
+  private async read<T>(p: Promise<T>, ms = GEOMETRY_WAIT_MS): Promise<T | typeof TIMEOUT> {
     let cancel = () => {};
-    const r = await Promise.race([p.catch(() => TIMEOUT), new Promise<typeof TIMEOUT>((res) => { cancel = this.clock.timer(GEOMETRY_WAIT_MS, () => res(TIMEOUT)); })]);
+    const r = await Promise.race([p.catch(() => TIMEOUT), new Promise<typeof TIMEOUT>((res) => { cancel = this.clock.timer(Math.min(ms, GEOMETRY_WAIT_MS), () => res(TIMEOUT)); })]);
     cancel();
     if (r === TIMEOUT) this.count("readFails");
     return r;
@@ -1267,16 +1328,19 @@ export class Stage {
   /**
    * mouseWheel (C11, the scroll and the wheel). On Linux: notches of STAGE_NOTCH_PX in the direction of the call, on each
    * axis (the vertical first), at the page's last point, with a person's gaps; their count with the page's residual of
-   * each axis (src/human/wheel.ts). A call that earlier notches have given gets no event, no lock and its answer at once.
-   * With no last point, a path to the client's point first. The call is answered after Chrome answered its last notch. At
-   * an end of the plan (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS, a drop), the notches that did not go go as
-   * one wheel event with their sum, the client's own event of an ended plan. On the Mac the call goes as it is.
+   * each axis (src/human/wheel.ts). A call that earlier notches have given gets no event, no lock and its answer at once;
+   * a call of delta 0 on both axes gets one event, as Playwright's own input sends it (review-122 note 8). With no last
+   * point, a path to the client's point first. Before the notches, the call's column (wheelColumn, review-122 option b):
+   * the notches go until the next one would bring an element of rules 1, 2 or 4 under the point, and the rest goes as one
+   * wheel event at the same point, one person's gap later. The call is answered after Chrome answered its last event. An
+   * end of the plan: wheelEnded. On the Mac the call goes as it is.
    */
   private async wheelStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     if (!this.linux()) return this.asIs(page, st, e, "wheelAsIs", "mac");
     if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
     const p = e.params, px = page.person.params.wheel.notchPx, W = (st.wheel ??= new Wheel(px));
     this.dropRest(st);
+    if (!Number(p.deltaX) && !Number(p.deltaY)) { this.count("wheelZero"); return this.plainStep(page, st, e); }
     const nx = notches(Number(p.deltaX) || 0, W.x, px), ny = notches(Number(p.deltaY) || 0, W.y, px);
     if (!nx.count && !ny.count) { W.x = nx.residual; W.y = ny.residual; this.count("wheelNoNotch"); e.answer({ result: {} }); return; }
     const a = await this.begin(page, st);
@@ -1290,61 +1354,182 @@ export class Stage {
         if (r.error !== undefined) return this.fail(page, st, e, r.error);
       }
     }
-    const at = this.from(page, st) ?? this.fit(p);
+    const at = this.from(page, st) ?? this.fit(p), count = { x: nx.count, y: ny.count };
     this.count("wheelCalls");
-    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a wheel call: ${Math.abs(nx.count) + Math.abs(ny.count)} notches`);
-    const r = await this.notchesAt(page, st, a, at, { x: nx.count, y: ny.count }, { ...p });
-    if (r.error !== undefined) return this.fail(page, st, e, r.error);
-    if (r.rest.x || r.rest.y) {
-      // The end of the plan: the notches that did not go, as one event of the ended plan (after a dialog's close, with the lock again).
-      this.count("wheelRests");
-      const er = await this.endedSend(page, st, e, { ...p, x: at.x, y: at.y, deltaX: r.rest.x * px, deltaY: r.rest.y * px });
-      if (er) this.answerWith(page, e, er.sent);
+    try {
+      const col = await this.wheelColumn(page, st, at, count, false);
+      if (!col || col.frame) this.count(`wheelNoColumn:${col ? "frame" : "readFails"}`);
+      const go = col && !col.frame ? col.k : count, one = { x: count.x - go.x, y: count.y - go.y };
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a wheel call: ${Math.abs(go.x) + Math.abs(go.y)} notches${one.x || one.y ? ", then the rest as one event" : ""}`);
+      const r = await this.notchesAt(page, st, a, at, go, { ...p }, one);
+      if (r.error !== undefined) return this.fail(page, st, e, r.error);
+      if (a.over || r.navigated) return await this.wheelEnded(page, st, a, e, r.items, count, at, r.navigated, !!col?.frame);
+      e.answer({ result: {} });
+    } finally {
+      void page.ownRead(WHEEL_CLEAR, []).catch(() => {});
+    }
+  }
+
+  /**
+   * The end of a wheel call's plan (C11, the end of a wheel plan; the daemon lead's P1): a dialog, STAGE_EVENT_WAIT_MS,
+   * STAGE_ACTION_MAX_MS, a drop, or a navigation of the main frame. A notch is gone when Chrome answered it; at a dialog
+   * also the first one with no answer at the end (it opened the dialog), and no later one (Chrome dropped it: review-122
+   * note 1, the keys' rule). At STAGE_EVENT_WAIT_MS and at the limit, the stage first waits for the answers, at most one
+   * more STAGE_EVENT_WAIT_MS; with none, the call gets an error with the count of the notches that may not have gone. The
+   * notches that did not go go as one wheel event (after the dialog's close, with the lock again) only when the page's
+   * last point is still a wheel point of the call's scroller (wheelColumn again: the same element under the point and the
+   * same scroller, and a column with no element of rules 1, 2 or 4 for the rest); else, and at a navigation, no rest
+   * goes, and the call gets an error that names the end and the count of the notches that did not go.
+   */
+  private async wheelEnded(page: StagePage, st: TabState, a: Action, e: Entry, items: WheelItem[], count: { x: number; y: number }, at: Pt, navigated: boolean, frame: boolean): Promise<void> {
+    if (a.failed) { e.answer({ error: a.failBody ?? { code: -32000, message: "the input stage stopped the plan at an error of an event" } }); return; }
+    this.count("wheelEnds");
+    const end = a.over ? a.endedAt : this.clock.now(), sent = items.filter((x) => x.sent);
+    const answers = Promise.all(sent.map((x) => x.sent!.catch(() => {})));
+    const why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
+    const size = (q: { x: number; y: number }) => Math.abs(q.x) + Math.abs(q.y);
+    const queued = !navigated && (a.ended === "wait" || a.ended === "limit");
+    if (queued && !(await this.within(answers, STAGE_EVENT_WAIT_MS))) {
+      if (st.gone === "session") return;
+      this.count("wheelEndsUnanswered");
+      const left = size(count) - items.filter((x) => x.answeredAt !== undefined).reduce((n, x) => n + size(x.n), 0);
+      e.answer({ error: { code: -32000, message: `The input stage ended a wheel call at ${why}, and ${left} notches may not have gone: the page did not answer.` } });
       return;
     }
-    const s = await this.settle(a, r.all);
-    if ("ended" in s) { this.answerWith(page, e, r.all.then(() => ({}))); return; }
-    if (!s.ok) return this.fail(page, st, e, s.error);
-    e.answer({ result: {} });
+    const held = a.ended === "dialog" && !navigated ? items.findIndex((x) => x.sent && !(x.answeredAt !== undefined && x.answeredAt <= end)) : -1;
+    const gone = { x: 0, y: 0 };
+    items.forEach((x, i) => { if (x.sent && (held < 0 || i <= held)) { gone.x += x.n.x; gone.y += x.n.y; } });
+    const rest = { x: count.x - gone.x, y: count.y - gone.y }, px = page.person.params.wheel.notchPx;
+    if (!rest.x && !rest.y) { this.answerWith(page, e, Promise.all(sent.map((x) => x.sent!)).then(() => ({}))); return; }
+    const cut = async (because: string) => {
+      this.count("wheelRestsCut");
+      // The error after Chrome's answers of the notches that went, or after STAGE_EVENT_WAIT_MS when they do not come.
+      await this.within(answers, STAGE_EVENT_WAIT_MS);
+      e.answer({ error: { code: -32000, message: `The input stage ended a wheel call at ${why}, and ${size(rest)} notches did not go: ${because}.` } });
+    };
+    if (navigated) return cut("the page navigated");
+    if (a.over) await this.dialogGone(st);
+    if (st.gone === "session") return;
+    if (st.heldGone) { e.answer({ error: st.heldGone }); return; }
+    if (!st.gone) {
+      await this.retake(page, st, false);
+      const c = await this.wheelColumn(page, st, at, rest, true);
+      if (!c || !c.same || c.frame !== frame || c.k.x !== rest.x || c.k.y !== rest.y) return cut("the page's last point is no longer a wheel point of its scroller");
+    }
+    this.count("wheelRests");
+    const er = await this.endedSend(page, st, e, { ...e.params, x: at.x, y: at.y, deltaX: rest.x * px, deltaY: rest.y * px });
+    if (er) this.answerWith(page, e, er.sent);
+  }
+
+  /**
+   * mouse.wheel's column (C11, `mouseWheel`; review-122 option b), read from the page's last point in the stage's own
+   * world (WHEEL_COLUMN: rules 1 and 4, also into open shadow roots; `again`: the read after an end of the plan), then rule
+   * 2 on its scrollers (columnListeners): the notches of each axis that go before the next one would bring such an element
+   * under the point. The boxes of rule 2 that hold the point (the element under it and the elements around it) do not
+   * count. When rule 2 cuts the vertical notches, the horizontal ones go in the rest too (their column was read after all
+   * the vertical ones). `frame`: the point is over a cross-origin frame (all the notches); null: a read failed.
+   */
+  private async wheelColumn(page: StagePage, st: TabState, at: Pt, n: { x: number; y: number }, again: boolean): Promise<Column | null> {
+    const px = page.person.params.wheel.notchPx;
+    const r = await this.read(page.ownRead(WHEEL_COLUMN, [at.x, at.y, n.y, n.x, px, again ? 1 : 0]));
+    const v = r === TIMEOUT ? null : (r as any);
+    if (!v || typeof v !== "object") return null;
+    if (v.frame) return { k: { ...n }, same: v.same !== false, frame: true };
+    if (!Array.isArray(v.k) || !Array.isArray(v.col) || !v.k.every((x: unknown) => Number.isInteger(x) && (x as number) >= 0)) return null;
+    const k = { x: Math.sign(n.x) * Math.min(Math.abs(n.x), v.k[0]), y: Math.sign(n.y) * Math.min(Math.abs(n.y), v.k[1]) };
+    const cols = [rectOf(v.col[0]), rectOf(v.col[1])];
+    if (cols.some((c) => c)) {
+      const boxes = await this.columnListeners(page);
+      if (boxes === TIMEOUT) return null;
+      const holds = (b: Rect) => at.x >= b.x0 && at.x <= b.x1 && at.y >= b.y0 && at.y <= b.y1;
+      const meets = (b: Rect, g: Rect) => b.x0 <= g.x1 && b.x1 > g.x0 && b.y0 <= g.y1 && b.y1 > g.y0;
+      const ky = k.y;
+      for (const ax of [1, 0] as const) {
+        const g = cols[ax], N = ax ? n.y : n.x;
+        if (!g || !N) continue;
+        let d = Infinity;
+        for (const b of boxes) {
+          if (holds(b) || !meets(b, g)) continue;
+          const dd = ax ? (N > 0 ? b.y0 - at.y : at.y - b.y1) : (N > 0 ? b.x0 - at.x : at.x - b.x1);
+          d = Math.min(d, Math.max(0, dd));
+        }
+        if (d === Infinity) continue;
+        const kk = Math.max(0, Math.ceil(d / px) - 1);
+        if (ax) k.y = Math.sign(N) * Math.min(Math.abs(k.y), kk); else k.x = Math.sign(N) * Math.min(Math.abs(k.x), kk);
+      }
+      if (k.y !== ky) k.x = 0;
+    }
+    return { k, same: v.same !== false, frame: false };
+  }
+
+  /**
+   * Rule 2's boxes for mouse.wheel's column: the scrollers of the last WHEEL_COLUMN and the open shadow roots inside them
+   * (at most WHEEL_ROOTS_MAX), as handles of the stage's own world (WHEEL_ROOTS_AT, WHEEL_ROOT_AT), then as rule 2 reads them
+   * (listenerBoxes). The handles are of the stage's own group, which it releases.
+   */
+  private async columnListeners(page: StagePage): Promise<Rect[] | typeof TIMEOUT> {
+    if (!page.ownObject) return TIMEOUT;
+    const until = this.clock.now() + WHEEL_LISTENERS_WAIT_MS, left = () => until - this.clock.now();
+    try {
+      const n = await this.read(page.ownRead(WHEEL_ROOTS_AT, [WHEEL_ROOTS_MAX]), left());
+      if (n === TIMEOUT || typeof n !== "number") return TIMEOUT;
+      const ids: string[] = [];
+      for (let i = 0; i < n; i++) {
+        const h = left() > 0 ? await this.read(page.ownObject(WHEEL_ROOT_AT, [i]), left()) : TIMEOUT;
+        if (h === TIMEOUT || typeof h !== "string") return TIMEOUT;
+        ids.push(h);
+      }
+      return await this.listenerBoxes(page, undefined, ids, until);
+    } finally {
+      void page.send(undefined, "Runtime.releaseObjectGroup", { objectGroup: STAGE_GROUP }).catch(() => {});
+    }
   }
 
   /**
    * Notches at a point (a signed count on each axis, the vertical first), each at its time with no wait for the answer of
    * the one before, as a wheel's events: the first at the later of now and one person's gap after the page's last notch
-   * or the end of the path before it (a hand that stops, then turns the wheel).
-   * `rest`: the notches that did not go because the plan ended; `all`: Chrome's answers of those that went; `error`: a
-   * refused notch (the plan sends no more).
+   * or the end of the path before it (a hand that stops, then turns the wheel); then `one`, the rest of a wheel call as one
+   * event, one person's gap after the last notch (review-122 option b). An end of the plan, a refused event or a navigation
+   * of the main frame stops them. `items`: each notch (and the rest), with its send and the time of Chrome's answer; `all`:
+   * Chrome's answers of those that went; `error`: a refused one (the plan sends no more).
    */
-  private async notchesAt(page: StagePage, st: TabState, a: Action, at: Pt, count: { x: number; y: number }, base: Record<string, unknown>): Promise<{ rest: { x: number; y: number }; all: Promise<unknown>; sent: number; error?: unknown }> {
-    const P = page.person, plan = wheelPlan(count, P, this.o.random);
+  private async notchesAt(page: StagePage, st: TabState, a: Action, at: Pt, count: { x: number; y: number }, base: Record<string, unknown>, one = { x: 0, y: 0 }):
+    Promise<{ items: WheelItem[]; all: Promise<unknown>; sent: number; navigated: boolean; error?: unknown }> {
+    const P = page.person, px = P.params.wheel.notchPx, plan = wheelPlan(count, P, this.o.random);
     const t0 = Math.max(this.clock.now(), Math.max(st.lastNotchAt, st.lastWasMove ? st.lastMoveAt : -Infinity) + notchGapMs(P, this.o.random));
-    const sent: Promise<unknown>[] = [], done = { x: 0, y: 0 };
+    const items: WheelItem[] = plan.map((n) => ({ t: n.t, dx: n.dx, dy: n.dy, n: n.dy ? { x: 0, y: Math.sign(n.dy) } : { x: Math.sign(n.dx), y: 0 } }));
+    if (one.x || one.y) items.push({ t: plan.length ? plan[plan.length - 1].t + notchGapMs(P, this.o.random) : 0, dx: one.x * px, dy: one.y * px, n: { ...one }, one: true });
+    const nav = st.navs;
     let error: unknown;
-    for (const n of plan) {
-      await this.until(a, t0 + n.t);
-      if (a.over || error !== undefined) break;
-      const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { ...base, type: "mouseWheel", x: at.x, y: at.y, deltaX: n.dx, deltaY: n.dy, timestamp: this.stamp(page, st) });
+    for (const it of items) {
+      await this.until(a, t0 + it.t);
+      if (a.over || error !== undefined || st.navs !== nav) break;
+      const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { ...base, type: "mouseWheel", x: at.x, y: at.y, deltaX: it.dx, deltaY: it.dy, timestamp: this.stamp(page, st) });
       st.lastNotchAt = this.clock.now();
-      pr.catch((x) => { if (error === undefined) error = x; });
-      sent.push(pr);
-      if (n.dy) done.y += Math.sign(n.dy); else done.x += Math.sign(n.dx);
+      it.sent = pr;
+      pr.then(() => { it.answeredAt = this.clock.now(); }, (x) => { it.answeredAt = this.clock.now(); if (error === undefined) error = x; });
+      if (it.one) this.count("wheelRestAsOne");
     }
+    const sent = items.filter((x) => x.sent).map((x) => x.sent!);
     const all = Promise.all(sent);
     all.catch(() => {});
-    if (error === undefined && !a.over) { const s = await this.settle(a, all); if (!("ended" in s) && !s.ok) error = s.error; }
-    return { rest: error !== undefined ? { x: 0, y: 0 } : { x: count.x - done.x, y: count.y - done.y }, all, sent: sent.length, ...(error !== undefined ? { error } : {}) };
+    if (error === undefined && !a.over && st.navs === nav) { const s = await this.settle(a, all); if (!("ended" in s) && !s.ok) error = s.error; }
+    return { items, all, sent: sent.length, navigated: st.navs !== nav, ...(error !== undefined ? { error } : {}) };
   }
 
   /**
    * DOM.scrollIntoViewIfNeeded (C11, the scroll and the wheel), on every session. On Linux: the element in view gets {}
    * with no event; else notches into view (intoView), then {}. When it cannot (no wheel point, a round that does not move
-   * the scroller, STAGE_SCROLL_ROUNDS, a read that fails, the end of the plan), the client's call goes as it is (a script
-   * scroll), logged and counted. On the Mac the call goes as it is.
+   * the scroller, STAGE_SCROLL_ROUNDS, a box that no wheel moves, a read that fails, the end of the plan), the client's
+   * call goes as it is (a script scroll), logged and counted. While the stage holds a button (dragTo's scroll of its drop
+   * target), the call goes as it is, counted (review-122 B3: a path with no button would end the drag; ab-t30.12 decides
+   * the drag). On the Mac the call goes as it is.
    */
   private async scrollStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params, node = typeof p.objectId === "string" ? p.objectId : null;
     if (!this.linux()) return this.asIs(page, st, e, "scrollAsIs", "mac");
     if (!node || st.action?.over) return this.asIs(page, st, e, "scrollAsIs", node ? "ended" : "noHandle");
+    if (st.buttons.size) return this.asIs(page, st, e, "scrollAsIs", "held");
     const q = p.rect, rect = q && [q.x, q.y, q.width, q.height].every((v) => typeof v === "number" && Number.isFinite(v)) ? { x: q.x, y: q.y, w: q.width, h: q.height } : null;
     const r = await this.intoView(page, st, null, e.child, node, false, rect);
     if (r.ok) {
@@ -1359,28 +1544,33 @@ export class Stage {
   }
 
   /**
-   * Notches into view (C11, the scroll and the wheel; the focus click's notches): the element is in view when it is in view
-   * of the visible part of its nearest scroller. Else each round finds the outermost scroller that must move (the plan of
-   * scrollPlan), a wheel point over its visible part (wheelPoint), a path there when the pointer is not there, the notches
-   * that bring the element's middle to the middle of that scroller, the wait for the smooth scroll (SCROLL_WAIT_MS), and
-   * the read again; at most STAGE_SCROLL_ROUNDS rounds, and a round that does not move its scroller ends them. On the Mac
-   * the read alone (no notch). The action is the caller's (`a`), else one that it begins at its first event.
+   * Notches into view (C11, the scroll and the wheel; the focus click's notches): the element (grown by its scroll-margin)
+   * is in view when it is in view of the visible part of its nearest level (shrunk by its scroll-padding). Else each round
+   * finds the outermost scroller that must move (the plan of scrollPlan; a box that no wheel moves ends them), a wheel
+   * point over its visible part (wheelPoint), a path there when the pointer is not there, the notches that bring the
+   * element's middle to the middle of that scroller, the wait for the smooth scroll (SCROLL_WAIT_MS), and the read again;
+   * at most STAGE_SCROLL_ROUNDS rounds, and a round that does not move its scroller ends them. On the Mac the read alone
+   * (no notch). The action is the caller's (`a`), else one that it begins at its first event. At the end the world lets
+   * go of what its reads kept (review-122 note 9).
    */
   private async intoView(page: StagePage, st: TabState, a: Action | null, child: string | undefined, node: string, follow: boolean, rect: { x: number; y: number; w: number; h: number } | null):
     Promise<{ ok: true; view: ScrollView; notched: number; rounds: number } | { ok: false; why: string; error?: unknown }> {
     const owners: string[] = [];
-    const read = async () => { const v = await this.scrollRead(page, st, child, node, follow, rect); if (v && v !== "none" && v.owner) owners.push(v.owner); return v; };
+    const read = async () => { const v = await this.scrollRead(page, st, child, node, follow, rect); if (v && typeof v === "object" && v.owner) owners.push(v.owner); return v; };
     try {
       let view = await read(), rounds = 0, notched = 0;
       for (;;) {
         if (view === null) return { ok: false, why: "readFails" };
         if (view === "none") return { ok: false, why: "noBox" };
-        if (inView(view.t, view.vis[0])) return { ok: true, view, notched, rounds };
+        if (view === "deep") return { ok: false, why: "frameDeep" };
+        if (inView(grow(view.t, view.mg), grow(view.vis[0], view.levels[0]?.pad ?? [0, 0, 0, 0], -1))) return { ok: true, view, notched, rounds };
         if (!this.linux()) return { ok: false, why: "mac" };
         if (rounds >= STAGE_SCROLL_ROUNDS) return { ok: false, why: "rounds" };
         const plan = this.scrollPlan(view);
         if (!plan) return { ok: false, why: "noRange" };
-        const px = page.person.params.wheel.notchPx, n = (d: number) => (d === 0 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / px)));
+        if (plan === "hidden") return { ok: false, why: "hidden" };
+        // At least one notch on each axis that must move 1 px or more (review-122 note 7).
+        const px = page.person.params.wheel.notchPx, n = (d: number) => (Math.abs(d) < 1 ? 0 : Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / px)));
         const count = { x: n(plan.d[0]), y: n(plan.d[1]) };
         const at = await this.wheelPoint(page, st, view, plan.k, [count.x * px, count.y * px]);
         if (at === TIMEOUT) return { ok: false, why: "readFails" };
@@ -1392,12 +1582,15 @@ export class Stage {
         if (from && !same(from, at)) {
           const r = await this.play(page, st, a, this.plan(page, st, from, at, DEFAULT_WIDTH), { modifiers: this.clientBits(st) });
           if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
-          if (a.over || r.stopped) return { ok: false, why: "ended" };
+          if (a.over) return { ok: false, why: "ended" };
+          // The in-flight bound stopped the path while the plan is live (review-122 note 11).
+          if (r.stopped) return { ok: false, why: "inFlight" };
         }
         const before = view.levels[plan.k].s;
         const r = await this.notchesAt(page, st, a, at, count, { modifiers: this.clientBits(st) });
         if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
         if (a.over) return { ok: false, why: "ended" };
+        if (r.navigated) return { ok: false, why: "navigated" };
         rounds++; notched += r.sent;
         this.count("scrollRounds");
         // The smooth scroll of the round ends (a first value), then the read again.
@@ -1405,22 +1598,26 @@ export class Stage {
         if (a.over) return { ok: false, why: "ended" };
         const next = await read();
         // A round that does not move its scroller ends the notches: no notch goes to a page that does not scroll with it.
-        if (next && next !== "none" && next.levels.length === view.levels.length && next.levels[plan.k].s[0] === before[0] && next.levels[plan.k].s[1] === before[1]) return { ok: false, why: "noMove" };
+        if (next && typeof next === "object" && next.levels.length === view.levels.length && next.levels[plan.k].s[0] === before[0] && next.levels[plan.k].s[1] === before[1]) return { ok: false, why: "noMove" };
         view = next;
       }
     } finally {
-      for (const o of owners) void page.send(undefined, "Runtime.releaseObject", { objectId: o }).catch(() => {});
+      void page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCROLL_CLEAR, returnByValue: true }).catch(() => {});
+      for (const o of owners) {
+        void page.send(undefined, "Runtime.callFunctionOn", { objectId: o, functionDeclaration: SCROLL_CLEAR, returnByValue: true }).catch(() => {});
+        void page.send(undefined, "Runtime.releaseObject", { objectId: o }).catch(() => {});
+      }
     }
   }
 
   /**
-   * The scroll's read (SCROLL_STATE on the node's handle): the target and its scrollers in the top page's points. For a node
+   * The scroll's read (SCROLL_STATE on the node's handle): the target and its levels in the top page's points. For a node
    * of a cross-origin frame (a child session), its frame's levels get the frame mapping's offset, and the top page's
-   * levels come from the same read on the frame's owner in the stage's own world (one cross-origin level only). Then the
-   * visible part of each level, from the viewport (Page.getLayoutMetrics) inward. "none": the node has no box; null: a read
-   * failed (the stage fails open).
+   * levels come from the same read on the frame's owner in the stage's own world (one cross-origin level only; "deep": a
+   * cross-origin frame inside another one). Then the visible part of each level, from the viewport (Page.getLayoutMetrics)
+   * inward. "none": the node has no box; null: a read failed (the stage fails open).
    */
-  private async scrollRead(page: StagePage, st: TabState, child: string | undefined, node: string, follow: boolean, rect: { x: number; y: number; w: number; h: number } | null): Promise<ScrollView | "none" | null> {
+  private async scrollRead(page: StagePage, st: TabState, child: string | undefined, node: string, follow: boolean, rect: { x: number; y: number; w: number; h: number } | null): Promise<ScrollView | "none" | "deep" | null> {
     const args = rect ? [rect.x, rect.y, rect.w, rect.h] : [null, null, null, null];
     const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCROLL_STATE, arguments: [...args.map((value) => ({ value })), { value: follow }, { value: false }], returnByValue: true }));
     const v = r === TIMEOUT ? null : (r as any)?.result?.value;
@@ -1429,7 +1626,12 @@ export class Stage {
     if (!v || !t || !Array.isArray(v.levels) || v.flat === false) return null;
     const lv = (list: any[], rd: Reader, x: number, y: number): Level[] | null => {
       const out: Level[] = [];
-      for (const [k, l] of list.entries()) { const b = rectOf(l?.r); if (!b || !Array.isArray(l.s) || !Array.isArray(l.m)) return null; out.push({ r: shift(b, x, y), s: [Number(l.s[0]) || 0, Number(l.s[1]) || 0], m: [Number(l.m[0]) || 0, Number(l.m[1]) || 0], doc: !!l.doc, rd, k }); }
+      for (const [k, l] of list.entries()) {
+        const b = rectOf(l?.r);
+        if (!b || !Array.isArray(l.s) || !Array.isArray(l.m)) return null;
+        const w: [boolean, boolean] = Array.isArray(l.wheel) ? [l.wheel[0] === true, l.wheel[1] === true] : [true, true];
+        out.push({ r: shift(b, x, y), s: [Number(l.s[0]) || 0, Number(l.s[1]) || 0], m: [Number(l.m[0]) || 0, Number(l.m[1]) || 0], doc: !!l.doc, rd, k, w, pad: sidesOf(l.pad) });
+      }
       return out;
     };
     let ox = 0, oy = 0, outer: Level[] = [], owner: string | undefined;
@@ -1437,7 +1639,8 @@ export class Stage {
       // A cross-origin frame: one level of it (its owner on the top page), else the stage fails open.
       if (!child || !page.ownNode) return null;
       const m = await this.mapped(page, st, child, { ox: v.ox, oy: v.oy, top: false, flat: true, box: t });
-      if (!m || m.levels.length !== 1 || m.levels[0].parent !== undefined) { this.count("scrollFrameDeep"); return null; }
+      if (!m) return null;
+      if (m.levels.length !== 1 || m.levels[0].parent !== undefined) return "deep";
       ox = m.ox - v.ox; oy = m.oy - v.oy;
       const o = await this.read(page.ownNode(m.levels[0].owner));
       if (o === TIMEOUT || typeof o !== "string") return null;
@@ -1458,29 +1661,32 @@ export class Stage {
     const vis: Rect[] = [];
     let V = port;
     for (let i = levels.length - 1; i >= 0; i--) vis[i] = V = meet(levels[i].r, V);
-    return { t: shift(t, ox, oy), levels, vis: levels.length ? vis : [port], owner };
+    return { t: shift(t, ox, oy), mg: sidesOf(v.mg), levels, vis: levels.length ? vis : [port], owner };
   }
 
   /**
-   * The plan of a round (as Chromium's own scroll into view, innermost first): for each scroller, the move on each axis that
-   * brings the element's middle (clipped to the scroller inside it, after that one's move) to the middle of its box, unless
-   * it is in view there already, within its scroll range. The round is the outermost scroller that must move, so that the
-   * scrollers inside it come into view before their own notches. Null: no scroller can move it.
+   * The plan of a round (as Chromium's own scroll into view, innermost first): for each level, the move on each axis that
+   * brings the element's middle (grown by its scroll-margin; clipped to the level inside it, after that one's move) to the
+   * middle of its box (shrunk by its scroll-padding), unless it is in view there already, within its scroll range. The
+   * round is the outermost scroller that must move, so that the scrollers inside it come into view before their own
+   * notches. "hidden": a level that must move is a box that no wheel moves (overflow hidden or clip: review-122 B2); null:
+   * no level can move it.
    */
-  private scrollPlan(v: ScrollView): { k: number; d: [number, number] } | null {
-    let thing = v.t;
+  private scrollPlan(v: ScrollView): { k: number; d: [number, number] } | "hidden" | null {
+    let thing = grow(v.t, v.mg);
     const ds: [number, number][] = [];
     for (const L of v.levels) {
-      const R = L.r, d: [number, number] = [0, 0];
+      const R = grow(L.r, L.pad, -1), d: [number, number] = [0, 0];
       for (const ax of [0, 1] as const) {
         const [lo, hi, vlo, vhi] = ax ? [thing.y0, thing.y1, R.y0, R.y1] : [thing.x0, thing.x1, R.x0, R.x1];
         if (axisIn(lo, hi, vlo, vhi, ax ? 0.6 : 0.8)) continue;
         d[ax] = Math.max(-L.s[ax], Math.min(L.m[ax] - L.s[ax], (lo + hi) / 2 - (vlo + vhi) / 2));
       }
       ds.push(d);
-      const moved = shift(thing, -d[0], -d[1]), cut = meet(moved, R);
+      const moved = shift(thing, -d[0], -d[1]), cut = meet(moved, L.r);
       thing = cut.x1 >= cut.x0 && cut.y1 >= cut.y0 ? cut : moved;
     }
+    if (ds.some((d, i) => (Math.abs(d[0]) >= 1 && !v.levels[i].w[0]) || (Math.abs(d[1]) >= 1 && !v.levels[i].w[1]))) return "hidden";
     for (let i = ds.length - 1; i >= 0; i--) if (Math.abs(ds[i][0]) >= 1 || Math.abs(ds[i][1]) >= 1) return { k: i, d: ds[i] };
     return null;
   }
@@ -1532,44 +1738,67 @@ export class Stage {
   }
 
   /**
-   * Rule 2's read: the boxes (DOM.getContentQuads) of the elements of the scroller (it, and every element inside it) that
-   * have a listener of `wheel` or `mousewheel` that is not passive, in the reader's points; the window's and the
-   * document's listeners do not count. The listeners are the page's own: DOMDebugger.getEventListeners reports the
-   * listeners of the world of its handle only (unless `pierce`, which also walks shadow roots and frames and reports every
-   * world, and after which the renderer of the input research's recorder page crashed, twice, live), so the stage resolves
-   * the scroller into the page's main world (DOM.describeNode, DOM.resolveNode: a handle, no script) and reads its whole
-   * subtree there with no `pierce`. The handles are of the stage's own group, which it releases.
+   * Rule 2's read for a scroll's wheel point: the scroller and the open shadow roots inside it (WHEEL_ROOTS, at most
+   * WHEEL_ROOTS_MAX; WHEEL_ROOT gives each one's handle on the scroller's reader), then their boxes (listenerBoxes), all
+   * within WHEEL_LISTENERS_WAIT_MS (review-122 note 13). The handles are of the stage's own group, which it releases.
    */
   private async wheelListeners(page: StagePage, rd: Reader, k: number): Promise<Rect[] | typeof TIMEOUT> {
+    const until = this.clock.now() + WHEEL_LISTENERS_WAIT_MS, left = () => until - this.clock.now();
     try {
-      const root = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ROOT, arguments: [{ value: k }], returnByValue: false, objectGroup: STAGE_GROUP }));
-      const id = root === TIMEOUT ? undefined : (root as any)?.result?.objectId;
-      if (typeof id !== "string") return TIMEOUT;
-      const node = await this.read(page.send(rd.child, "DOM.describeNode", { objectId: id }));
-      const backendNodeId = node === TIMEOUT ? undefined : (node as any)?.node?.backendNodeId;
-      if (!Number.isInteger(backendNodeId)) return TIMEOUT;
-      const main = await this.read(page.send(rd.child, "DOM.resolveNode", { backendNodeId, objectGroup: STAGE_GROUP }));
-      const mainId = main === TIMEOUT ? undefined : (main as any)?.object?.objectId;
-      if (typeof mainId !== "string") return TIMEOUT;
-      const l = await this.read(page.send(rd.child, "DOMDebugger.getEventListeners", { objectId: mainId, depth: -1, pierce: false }));
-      if (l === TIMEOUT) return TIMEOUT;
-      const nodes = [...new Set<number>(((l as any)?.listeners ?? []).filter((x: any) => (x?.type === "wheel" || x?.type === "mousewheel") && x?.passive !== true && Number.isInteger(x?.backendNodeId)).map((x: any) => x.backendNodeId))];
-      if (nodes.length > WHEEL_LISTENERS_MAX) return TIMEOUT;
-      const boxes: Rect[] = [];
-      for (const b of nodes) {
-        // A node with no box (Chrome refuses its quads) is under no point.
-        const q = await this.read(page.send(rd.child, "DOM.getContentQuads", { backendNodeId: b }).catch(() => ({ quads: [] })));
-        if (q === TIMEOUT) return TIMEOUT;
-        for (const quad of (q as any)?.quads ?? []) {
-          if (!Array.isArray(quad) || quad.length !== 8) continue;
-          const xs = [quad[0], quad[2], quad[4], quad[6]], ys = [quad[1], quad[3], quad[5], quad[7]];
-          boxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
-        }
+      const n = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ROOTS, arguments: [{ value: k }, { value: WHEEL_ROOTS_MAX }], returnByValue: true }), left());
+      const count = n === TIMEOUT ? undefined : (n as any)?.result?.value;
+      if (typeof count !== "number" || !(count >= 1)) return TIMEOUT;
+      const ids: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const root = left() > 0 ? await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ROOT, arguments: [{ value: i }], returnByValue: false, objectGroup: STAGE_GROUP }), left()) : TIMEOUT;
+        const id = root === TIMEOUT ? undefined : (root as any)?.result?.objectId;
+        if (typeof id !== "string") return TIMEOUT;
+        ids.push(id);
       }
-      return boxes;
+      return await this.listenerBoxes(page, rd.child, ids, until);
     } finally {
       void page.send(rd.child, "Runtime.releaseObjectGroup", { objectGroup: STAGE_GROUP }).catch(() => {});
     }
+  }
+
+  /**
+   * Rule 2's boxes (DOM.getContentQuads) of the elements under some roots (a scroller, the open shadow roots inside it:
+   * each root and every element inside it, not into a shadow root) that have a listener of `wheel` or `mousewheel` that is
+   * not passive, in the points of the roots' session; the window's and the document's listeners do not count. The
+   * listeners are the page's own: DOMDebugger.getEventListeners reports the listeners of the world of its handle only
+   * (unless `pierce`, which also walks shadow roots and frames and reports every world, and after which the renderer of the
+   * input research's recorder page crashed, twice, live), so the stage resolves each root into the page's main world
+   * (DOM.describeNode, DOM.resolveNode: a handle, no script) and reads its subtree there with no `pierce`. A closed shadow
+   * root and the roots after WHEEL_ROOTS_MAX stay out of the read. All the reads end by `until`, else the read fails open.
+   */
+  private async listenerBoxes(page: StagePage, child: string | undefined, roots: string[], until: number): Promise<Rect[] | typeof TIMEOUT> {
+    const left = () => until - this.clock.now();
+    const step = async <T>(p: () => Promise<T>): Promise<T | typeof TIMEOUT> => (left() > 0 ? this.read(p(), left()) : TIMEOUT);
+    const nodes = new Set<number>();
+    for (const id of roots) {
+      const node = await step(() => page.send(child, "DOM.describeNode", { objectId: id }));
+      const backendNodeId = node === TIMEOUT ? undefined : (node as any)?.node?.backendNodeId;
+      if (!Number.isInteger(backendNodeId)) return TIMEOUT;
+      const main = await step(() => page.send(child, "DOM.resolveNode", { backendNodeId, objectGroup: STAGE_GROUP }));
+      const mainId = main === TIMEOUT ? undefined : (main as any)?.object?.objectId;
+      if (typeof mainId !== "string") return TIMEOUT;
+      const l = await step(() => page.send(child, "DOMDebugger.getEventListeners", { objectId: mainId, depth: -1, pierce: false }));
+      if (l === TIMEOUT) return TIMEOUT;
+      for (const x of (l as any)?.listeners ?? []) if ((x?.type === "wheel" || x?.type === "mousewheel") && x?.passive !== true && Number.isInteger(x?.backendNodeId)) nodes.add(x.backendNodeId);
+      if (nodes.size > WHEEL_LISTENERS_MAX) return TIMEOUT;
+    }
+    const boxes: Rect[] = [];
+    for (const b of nodes) {
+      // A node with no box (Chrome refuses its quads) is under no point.
+      const q = await step(() => page.send(child, "DOM.getContentQuads", { backendNodeId: b }).catch(() => ({ quads: [] })));
+      if (q === TIMEOUT) return TIMEOUT;
+      for (const quad of (q as any)?.quads ?? []) {
+        if (!Array.isArray(quad) || quad.length !== 8) continue;
+        const xs = [quad[0], quad[2], quad[4], quad[6]], ys = [quad[1], quad[3], quad[5], quad[7]];
+        boxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
+      }
+    }
+    return boxes;
   }
 
   // ---------------------------------------------------------------- the keys and the text (board ab-t30.10)
@@ -2047,8 +2276,8 @@ export class Stage {
     const into = await this.intoView(page, st, a, e.child, node, fill, null);
     if (!into.ok) {
       if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return pass(); }
-      if (into.why === "ended") return pass();
-      why(into.why === "readFails" ? "fieldNoRead" : into.why === "noBox" ? "focusNoBox" : "focusOutOfView");
+      if (into.why === "ended" || into.why === "navigated") return pass();
+      why(into.why === "readFails" || into.why === "frameDeep" ? "fieldNoRead" : into.why === "noBox" ? "focusNoBox" : "focusOutOfView");
       return this.keepAction(st, a, pass);
     }
     if (into.notched) {
