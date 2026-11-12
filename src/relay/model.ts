@@ -27,7 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { Stage, stageOn, type Body, type DropWhy, type StageClock, type StagePage } from "./stage.ts";
+import { Stage, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClock, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
@@ -777,6 +777,8 @@ export class Model {
       inGate: (fn) => this.behind(tab, (tab.gate ?? Promise.resolve()).then(fn).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`))),
       point: () => this.pointOf(tab),
       xPoint: () => this.stageXPoint(tab),
+      ownNode: (backendNodeId) => this.stageNode(tab, backendNodeId),
+      ownObject: (fn, args) => this.stageObject(tab, fn, args),
     };
     this.stagePages.set(tab.id, page);
     return page;
@@ -794,6 +796,18 @@ export class Model {
     return this.usableFor(g, tab) ? toPage(g, at) : null;
   }
 
+  /**
+   * A node of the top page in the relay's own isolated world (the scroll's read of a cross-origin frame's owner, board
+   * ab-t30.11): DOM.resolveNode by its backendNodeId into the world's context; the objectId of its handle, or null.
+   */
+  private async stageNode(tab: Tab, backendNodeId: number): Promise<string | null> {
+    if (!Number.isInteger(backendNodeId)) return null;
+    const id = await this.relayWorld(tab);
+    if (id === null) return null;
+    const r = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "DOM.resolveNode", { backendNodeId, executionContextId: id }]);
+    return typeof r?.object?.objectId === "string" ? r.object.objectId : null;
+  }
+
   /** A read of the stage in the relay's own isolated world (the geometry read's world): `fn` called with its numbers, by value. */
   private async stageRead(tab: Tab, fn: string, args: number[]): Promise<unknown> {
     if (!args.every((a) => typeof a === "number" && Number.isFinite(a))) throw new Error("a read of the stage takes numbers only");
@@ -801,6 +815,18 @@ export class Model {
     if (id === null) throw new Error("no world");
     const r = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Runtime.evaluate", { expression: `(${fn})(${args.join(", ")})`, contextId: id, returnByValue: true, disableBreaks: true }]);
     return r?.result?.value;
+  }
+
+  /**
+   * A handle of the relay's own isolated world (mouse.wheel's column, review-122 option b): `fn` called with its numbers,
+   * not by value, in the stage's object group (the stage releases the group); the objectId, or null for no object.
+   */
+  private async stageObject(tab: Tab, fn: string, args: number[]): Promise<string | null> {
+    if (!args.every((a) => typeof a === "number" && Number.isFinite(a))) throw new Error("a read of the stage takes numbers only");
+    const id = await this.relayWorld(tab);
+    if (id === null) throw new Error("no world");
+    const r = await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Runtime.evaluate", { expression: `(${fn})(${args.join(", ")})`, contextId: id, returnByValue: false, objectGroup: STAGE_GROUP, disableBreaks: true }]);
+    return typeof r?.result?.objectId === "string" ? r.result.objectId : null;
   }
 
   /** The tab's next calls wait for `step`; the last one clears the gate. */

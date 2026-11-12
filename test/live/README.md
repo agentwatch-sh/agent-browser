@@ -157,6 +157,27 @@ recorder's keys through the stage against `STAGE_REFERENCE`, and against `STAGE_
 the operator's published numbers (a report, not a bar, until board ab-t30.13 fits the parameters). It writes
 `stage-keys-live.json`, `stage-keys-harness-results.json` and `stage-keys-harness-report.txt` in the run folder.
 
+The scroll and the wheel (board ab-t30.11, `stage-scroll-live.ts`) are a part of the same group. `STAGE_PARTS=scroll`
+runs this part alone (the default is `pointer,keys,scroll`), and `STAGE_SCROLL_ROWS=<a regular expression>` only its rows
+whose names match (with no harness rows, unless `STAGE_SCROLL_HARNESS=1`). Its page on `a.localhost` is taller and wider than the viewport. It holds a
+button and two fields below the fold, an inner scroller below the fold, a same-origin frame and a cross-origin frame on
+`b.localhost` whose own documents scroll, and in the first screen an element with a wheel listener that is not passive, a
+canvas with a wheel handler and a number input. Its variants add a listener of the window that prevents the wheel, or an
+inner scroller, a number input or a canvas across the page that the page's content moves under the wheel point (also a
+canvas inside an open shadow root), a carousel with `overflow: hidden`, a focused number input as the click's target,
+a card to drag to a zone below the fold, a scroller in a shadow root around a slot, and a fixed header of the page's
+scroll-padding (review 122). Each row passes when the action passes through the stage with Playwright's default
+timeout, the page's state is the same as with Playwright's own input (a wheel's scroll within one notch; an element in
+view where Playwright's own scroll centers it), and the stage's trace shows the row's notches or its counted fallback.
+The rows of `mouse.wheel`'s column (also in quirks mode) require the same state: Playwright's own input sends one wheel
+event (the list does not move, the canvas gets no wheel event, the page moves the asked total), and the stage's notches
+stop before the element that would come under the point, with the rest as one event. The harness rows R5, R6 and P7
+score the recorder's wheel calls and clicks below the fold through the stage against `STAGE_REFERENCE`, and against
+`STAGE_PERSON` when it names a reference of the operator's published numbers (a report: the Mac's wheel model is board
+ab-t30.13), and two reports give the wheel calls that went with the rest as one event (`wheelRestAsOne / wheelCalls`), in
+the harness and in the whole run. It writes `stage-scroll-live.json`, `stage-scroll-harness-results.json` and
+`stage-scroll-harness-report.txt` in the run folder.
+
 ## Input harness
 
 `input-harness/run.ts` (board ab-t30.2) scores agent input against a reference input, gap by gap, by the
