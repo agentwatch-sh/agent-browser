@@ -591,11 +591,19 @@ test("review-119 B1: a text that the typing rule refuses goes after every planne
 test("review-119 B2 (a): a dialog that ends a typed text after its last key: the insertText's answer comes after Chrome's answers of its sent events, never at once", async () => {
   const v = own([fillCall("n", "ab"), insert("ab"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 3000, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
   v.in[1].after = 1;
-  const r = await runVector(v, { tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "b"; } });
-  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
-  assert.ok(answerOf(r, 2).t >= close, `the insertText's answer at ${answerOf(r, 2).t}, after the close at ${close}`);
+  // Chrome sends the dialog's close event before the answers of the input events that it kept (here 300 ms before).
+  const r = await runVector(v, { tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "b"; t.heldAfterCloseMs = 300; } });
+  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, b = keyEvents(r.tab).find((s) => s.params.text === "b")!;
+  assert.ok(answerOf(r, 2).t >= close && answerOf(r, 2).t >= b.answered!, `the insertText's answer at ${answerOf(r, 2).t}, after the close at ${close} and b's answer at ${b.answered}`);
   assert.ok(!answerOf(r, 2).body.error);
   assert.equal(r.tab.valueOf("n"), "ab");
+  // A dialog that the stage does not hear of (no Page event): STAGE_EVENT_WAIT_MS ends the plan at 2 s; the answer still
+  // waits for Chrome's answer of b's keyDown, which comes at the client's own close at 5 s.
+  const w = own([fillCall("n", "ab"), insert("ab"), { at: 5000, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
+  w.in[1].after = 1;
+  const q = await runVector(w, { maxMs: 20_000, tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "b"; t.dialogNoticeMs = 1e9; } });
+  assert.equal(q.stage.counts.waitEnds, 1, "the plan ends at STAGE_EVENT_WAIT_MS");
+  assert.ok(answerOf(q, 2).t >= 5000, `the insertText's answer at ${answerOf(q, 2).t}: after Chrome's answer at the close (5000)`);
 });
 
 test("review-119 B2 (b): no typed keys while the client holds any key (keyboard.down('a'), insertText('abc'), keyboard.up('a')): the text as it is, and one keyUp of a", async () => {
@@ -724,7 +732,10 @@ test("review-119 N3: a navigation of the main frame ends a typed text: no typed 
 
 test("review-119 B7: Playwright's focus call, its focus click and the key run are one action with one limit (one activation): a long pressSequentially ends by STAGE_ACTION_MAX_MS from the focus call, then at Playwright's own speed", async () => {
   const TEXT = "the quick brown fox jumps over the lazy dog ".repeat(8).slice(0, 300);
-  const r = await runVector(own([focusCall("t", true), ...typeCalls(TEXT)], { nodes: { t: TEXTAREA() } }), { maxMs: 200_000 });
+  // The client's first key comes 5 ms after the focus call's answer (as Playwright's next call does).
+  const calls: any[] = [focusCall("t", true), ...typeCalls(TEXT)];
+  calls[1] = { ...calls[1], waitMs: 5 };
+  const r = await runVector(own(calls, { nodes: { t: TEXTAREA() } }), { maxMs: 200_000 });
   assert.ok(pressOf(r.tab), "a focus click");
   assert.equal(r.tab.activations.filter((t) => t < STAGE_ACTION_MAX_MS).length, 1, "one activation for the focus call, its click and the key run (the run after the limit goes as the client sends it, in actions of its own)");
   const last = Math.max(...r.answers.map((a) => a.t));

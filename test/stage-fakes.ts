@@ -109,6 +109,7 @@ export class FakeTab implements StagePage {
    */
   opensDialog: (s: Sent) => boolean = () => false;
   dialogNoticeMs = 0;
+  heldAfterCloseMs = 0;
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
     this.v = v; this.clock = clock; this.id = o.id ?? 7;
     this.person = o.person ?? drawPerson(paramsFor(v.platform === "mac" ? "darwin" : "linux"), seededRandom(v.seed));
@@ -304,8 +305,12 @@ export class FakeTab implements StagePage {
       s.answered = this.clock.now();
       this.dialogOpen = false; this.dialogSeen = false;
       const held = this.held.splice(0);
-      // Chrome answers the dialog's command first, then the input events that it kept, in order, and the close event.
-      setImmediate(() => { for (const r of held) r(); this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }); });
+      // Chrome answers the dialog's command first, then the input events that it kept, in order, and the close event. With
+      // heldAfterCloseMs (review-119 B2 a), the close event comes first and the kept events' answers that much later.
+      if (this.heldAfterCloseMs > 0) {
+        setImmediate(() => this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }));
+        this.clock.timer(this.heldAfterCloseMs, () => { for (const r of held) r(); });
+      } else setImmediate(() => { for (const r of held) r(); this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }); });
       return {};
     }
     s.answered = this.clock.now();
