@@ -122,6 +122,31 @@ export function pairClass(a: Key, b: Key): PairClass {
   return fa && fb && fa[1] === fb[1] ? "sameFinger" : "sameHand";
 }
 
+// ---------------------------------------------------------------- the Mac's editing commands (moved here from src/record.ts)
+
+/**
+ * macOS: Chrome runs editing keys and shortcuts in a text field (Backspace, the arrows, Cmd-A, Cmd-C) through editing
+ * commands that the OS key event carries. A CDP key event has none, so we name them, as a real Mac keyboard would. A page
+ * that handles the key itself (preventDefault) still does. (src/record.ts re-exports macCommands.)
+ */
+const MAC_COMMANDS: Record<string, string[]> = {
+  Backspace: ["deleteBackward"], Delete: ["deleteForward"], ArrowUp: ["moveUp"], ArrowDown: ["moveDown"], ArrowLeft: ["moveLeft"], ArrowRight: ["moveRight"],
+  "Shift+ArrowUp": ["moveUpAndModifySelection"], "Shift+ArrowDown": ["moveDownAndModifySelection"],
+  "Shift+ArrowLeft": ["moveLeftAndModifySelection"], "Shift+ArrowRight": ["moveRightAndModifySelection"],
+  Home: ["scrollToBeginningOfDocument"], End: ["scrollToEndOfDocument"], PageUp: ["scrollPageUp"], PageDown: ["scrollPageDown"],
+  "Meta+KeyA": ["selectAll"], "Meta+KeyZ": ["undo"], "Shift+Meta+KeyZ": ["redo"],
+  "Alt+Backspace": ["deleteWordBackward"], "Meta+Backspace": ["deleteToBeginningOfLine"],
+  "Meta+ArrowLeft": ["moveToLeftEndOfLine"], "Meta+ArrowRight": ["moveToRightEndOfLine"], "Alt+ArrowLeft": ["moveWordLeft"], "Alt+ArrowRight": ["moveWordRight"],
+  // The start and the end of a textarea (board ab-t30.10: the input stage's caret keys).
+  "Meta+ArrowUp": ["moveToBeginningOfDocument"], "Meta+ArrowDown": ["moveToEndOfDocument"],
+};
+
+/** The Mac's editing commands of a key with its modifiers (none for a key that has none). */
+export function macCommands(k: { code: string; modifiers: number }): string[] {
+  const prefix = ([[SHIFT, "Shift"], [CONTROL, "Control"], [ALT, "Alt"], [META, "Meta"]] as const).filter(([bit]) => k.modifiers & bit).map(([, n]) => `${n}+`).join("");
+  return MAC_COMMANDS[prefix + k.code] ?? [];
+}
+
 // ---------------------------------------------------------------- the draws (design 10.2)
 
 /** A key's hold (ms): a lognormal, mean 116 ms, SD 24 ms, from 50 to 250 ms; `bounds` a caller's range in place of the file's. */
@@ -253,6 +278,8 @@ export class KeyStream {
 
   /** Whether the stream holds a Shift of its own (a caller's planned release waits for it). */
   get ownShift(): boolean { const m = this.mods.get(SHIFT); return !!m && !m.client; }
+  /** Whether a key that the stream's own Shift holds is still down (its release has not come): the Shift waits for it. */
+  get shiftHoldsDown(): boolean { for (const d of this.down.values()) if (d.shift) return true; return false; }
 
   /** The release of the stream's own Shift at or after `at`, with no end of the run (the run's next key keeps its interval). */
   idle(at: number): KeyEv[] { return this.releaseShift(at); }
@@ -289,9 +316,14 @@ export class KeyStream {
       // A press of a modifier that the client holds already: a keyboard's auto-repeat.
       if (own) return [{ ...this.ev(Math.max(at, own.press), "rawKeyDown", { key: own.key, code: own.code, keyCode: own.keyCode }, this.modsAt(at) | bit, false, own.location), repeat: true }];
       let t = Math.max(at, this.notBefore);
-      // The client's second modifier of one chord (no key pressed since the first): 20 to 80 ms after it (review-111 point 3).
-      const prev = [...this.mods.values()].filter((m) => m.client && (!this.last || this.last.t < m.press)).sort((a, b) => b.press - a.press)[0];
-      if (prev) t = Math.max(t, prev.press + draw(this.random, this.K.chord.releaseGapMs));
+      // A client's later modifier of one chord (no key pressed since the first): 20 to 80 ms after the one before, while all
+      // of them stay within 80 ms of the first, so that the key can come 40 to 120 ms after each (review-111 point 3, review-119 N9).
+      const chord = [...this.mods.values()].filter((m) => m.client && (!this.last || this.last.t < m.press)).sort((a, b) => a.press - b.press);
+      if (chord.length) {
+        const [g0, g1] = boundsOf(this.K.chord.releaseGapMs), [b0, b1] = boundsOf(this.K.chord.beforeMs);
+        const first = chord[0].press, prev = chord[chord.length - 1].press, room = Math.max(0, b1 - b0 - (prev - first));
+        t = Math.max(t, prev + draw(this.random, this.K.chord.releaseGapMs, [Math.min(g0, room), Math.min(g1, room)]));
+      }
       this.mods.set(bit, { bit, key: k.key, code: k.code, keyCode: k.keyCode, location: locationOf(k.code), press: t, client: true });
       // A key whose release is planned after this press gains the modifier at its release (review-111b).
       for (const e of this.releases) if (e.t > t) e.modifiers |= bit;

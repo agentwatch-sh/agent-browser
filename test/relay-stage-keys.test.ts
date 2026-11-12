@@ -32,7 +32,7 @@ const ku = (ch: string, extra: object = {}) => {
   return { method: "Input.dispatchKeyEvent", params: { type: "keyUp", modifiers: 0, key: k.key, windowsVirtualKeyCode: k.keyCode, code: k.code, location: 0, isKeypad: false, ...extra } };
 };
 /** A named key (no text): its rawKeyDown and keyUp. */
-const NAMED: Record<string, [string, number, number]> = { Shift: ["ShiftLeft", 16, 1], Control: ["ControlLeft", 17, 1], Delete: ["Delete", 46, 0], ArrowLeft: ["ArrowLeft", 37, 0], a: ["KeyA", 65, 0] };
+const NAMED: Record<string, [string, number, number]> = { Shift: ["ShiftLeft", 16, 1], Control: ["ControlLeft", 17, 1], Alt: ["AltLeft", 18, 1], Delete: ["Delete", 46, 0], ArrowLeft: ["ArrowLeft", 37, 0], a: ["KeyA", 65, 0], Tab: ["Tab", 9, 0] };
 const rd = (name: string, modifiers = 0) => ({ method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", modifiers, windowsVirtualKeyCode: NAMED[name][1], code: NAMED[name][0], commands: [], key: name, text: "", unmodifiedText: "", autoRepeat: false, location: NAMED[name][2], isKeypad: false } });
 const ru = (name: string, modifiers = 0) => ({ method: "Input.dispatchKeyEvent", params: { type: "keyUp", modifiers, key: name, windowsVirtualKeyCode: NAMED[name][1], code: NAMED[name][0], location: NAMED[name][2], isKeypad: false } });
 /** keyboard.type(text): each key's press, then its release, each sent at the answer of the call before (Playwright awaits each). */
@@ -110,8 +110,7 @@ test("keys: the early answer gives rollover: some releases are answered before t
     const r = await runVector(own(calls, { nodes: { "7.3.18": INPUT({ focused: true }) }, focused: "7.3.18" }), { seed });
     const ev = keyEvents(r.tab), ups = ev.filter((s) => s.params.type === "keyUp");
     for (const c of r.tab.v.in.filter((x: any) => x.params.type === "keyUp")) {
-      const a = answerOf(r, c.id), sent = ups.find((s) => s.params === r.tab.sent.find((x) => x === s)?.params && s.params.code === c.params.code && s.t >= 0 && r.tab.sent.indexOf(s) >= 0 && !r.tab.sent.slice(0, r.tab.sent.indexOf(s)).includes(s))!;
-      void sent;
+      const a = answerOf(r, c.id);
       if (a.n < r.tab.sent.findIndex((s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyUp" && s.params.code === c.params.code && s.t >= r.arrived.get(c.id)!) + 1) early++;
     }
     const m = keyMeasures(recsOf(ev))!;
@@ -264,7 +263,7 @@ test("the typing rule: typed keys into an input or a textarea; the text as it is
   }
   // A modifier that the client holds would change the typed keys: keyboard.down('Shift'), then keyboard.insertText('abc').
   const r = await runVector(own([rd("Shift", SHIFT), insert("abc"), ru("Shift")], FIELD));
-  assert.equal(r.stage.counts["textAsIs:modifierHeld"], 1);
+  assert.equal(r.stage.counts["textAsIs:keyHeld"], 1);
   assert.equal(r.tab.sent.filter((s) => s.pass === 2).length, 1);
 });
 
@@ -511,11 +510,13 @@ test("the model's gate (the stage's other()): a call that the stage does not tak
   assert.ok(checked > 0, `the last release answered early in ${checked} seeds`);
 });
 
-test("the focus test: before fill, a field that is the active element of its document needs no click (fill's script selects its text), and no activation; before Playwright's focus call, the window's focus counts too (Playwright's _activelyFocused), read after the activation", async () => {
+test("the focus test: before fill, a field with the focus needs no click and no activation; a field that is the active element of a document with no focus gets the activation, then the read again; before Playwright's focus call, the window's focus counts too (Playwright's _activelyFocused), read after the activation", async () => {
   // The field is the active element of its document; its window does not have the focus until the activation.
   const page = { nodes: { n: INPUT({ text: 3, windowAway: true }) }, focused: "n" };
   const f = await runVector(own([fillCall("n", "abc")], page));
-  assert.deepEqual([mouseEvents(f.tab).length, f.tab.activations.length, f.stage.counts.fieldFocused], [0, 0, 1], "fill: no click, no activation");
+  assert.deepEqual([mouseEvents(f.tab).length, f.tab.activations.length, f.stage.counts.fieldFocused], [0, 1, 1], "fill: the activation, then the field has the focus: no click");
+  const ff = await runVector(own([fillCall("n", "abc")], { nodes: { n: INPUT({ text: 3 }) }, focused: "n" }));
+  assert.deepEqual([mouseEvents(ff.tab).length, ff.tab.activations.length], [0, 0], "fill on a field with the focus: no click and no activation");
   const p = await runVector(own([focusCall("n", true)], page));
   assert.deepEqual([mouseEvents(p.tab).length, p.tab.activations.length, p.stage.counts.fieldFocused], [0, 1, 1], "Playwright's focus call: the activation, then the field has the focus: no click");
   // A window that the activation does not bring forward: Playwright's focusNode would reset the caret; a person clicks.
@@ -565,4 +566,202 @@ test("an end of a key plan at the client's session end (the daemon lead's point)
   assert.ok(!ev.some((s) => s.params.key === "i"), "the held press of i never goes");
   assert.ok(!answers.includes(2) && !answers.includes(3), "nothing goes back for the held calls");
   assert.equal(stage.lock.held, 0);
+});
+
+// ================================================================ review-119 (the fix round)
+
+/** The index in the tab's sends of the first event that `pred` matches. */
+const sendIndex = (t: FakeTab, pred: (s: Sent) => boolean) => t.sent.findIndex(pred);
+
+test("review-119 B1: a text that the typing rule refuses goes after every planned release of the run, in the order of the sends (keyboard.type('café'): f's keyUp before é)", async () => {
+  let early = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const v = own(typeCalls("café"), FIELD);
+    const r = await runVector(v, { seed });
+    const fUp = sendIndex(r.tab, (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyUp" && s.params.key === "f");
+    const text = sendIndex(r.tab, (s) => s.method === "Input.insertText");
+    assert.ok(fUp >= 0 && text > fUp, `seed ${seed}: f's keyUp (send ${fUp}) before the text (send ${text})`);
+    const fUpCall = v.in.find((c: any) => c.params.type === "keyUp" && c.params.key === "f").id;
+    if (answerOf(r, fUpCall).n <= fUp) early++;
+    assert.equal(r.tab.valueOf("7.3.18"), "café");
+  }
+  assert.ok(early > 0, `f's keyUp answered early in ${early} seeds`);
+});
+
+test("review-119 B2 (a): a dialog that ends a typed text after its last key: the insertText's answer comes after Chrome's answers of its sent events, never at once", async () => {
+  const v = own([fillCall("n", "ab"), insert("ab"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 3000, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
+  v.in[1].after = 1;
+  const r = await runVector(v, { tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.text === "b"; } });
+  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+  assert.ok(answerOf(r, 2).t >= close, `the insertText's answer at ${answerOf(r, 2).t}, after the close at ${close}`);
+  assert.ok(!answerOf(r, 2).body.error);
+  assert.equal(r.tab.valueOf("n"), "ab");
+});
+
+test("review-119 B2 (b): no typed keys while the client holds any key (keyboard.down('a'), insertText('abc'), keyboard.up('a')): the text as it is, and one keyUp of a", async () => {
+  const r = await runVector(own([rd("a"), insert("abc"), ru("a")], FIELD));
+  assert.equal(r.stage.counts["textAsIs:keyHeld"], 1);
+  assert.equal(keyEvents(r.tab).filter((s) => s.params.type === "keyUp" && s.params.code === "KeyA").length, 1, "one keyUp of a");
+});
+
+test("review-119 B3 (a): a field in a same-origin frame: the focus click's hit test reads the field's own document at the field's own point; the click goes at the mapped point", async () => {
+  const page = { nodes: { n: { tag: "input", type: "text", frame: "sf", box: { x: 20, y: 30, width: 200, height: 30 }, text: 0, focused: false } },
+    frames: { sf: { origin: "same", box: { x: 100, y: 200, width: 300, height: 120 }, border: 2 } } };
+  const r = await runVector(own([fillCall("n", "Hello"), insert("Hello")], page));
+  const p = pressOf(r.tab);
+  // The field at 122..322 x 232..262 in the top page; empty: 25% to 75% across, 35% to 65% down.
+  assert.ok(p && p.params.x >= 172 && p.params.x <= 272 && p.params.y >= 242 && p.params.y <= 252, `a click at the mapped point: ${p?.params.x},${p?.params.y}`);
+  assert.equal(r.stage.counts.focusCovered, undefined);
+  assert.equal(r.tab.valueOf("n"), "Hello");
+});
+
+test("review-119 B3 (b): a field in a frame under an element of the top page (a fixed banner): no click, counted; the fill goes by Playwright's script focus (a cross-origin frame and a same-origin one)", async () => {
+  for (const origin of ["cross", "same"]) {
+    const page = { nodes: { n: { tag: "input", type: "text", frame: "xf", box: { x: 20, y: 30, width: 200, height: 30 }, text: 0, focused: false },
+      banner: { tag: "div", over: true, box: { x: 0, y: 560, width: 1280, height: 120 } } },
+      frames: { xf: { origin, box: { x: 460, y: 560, width: 300, height: 120 }, border: 3, padding: 4 } } };
+    const r = await runVector(own([fillCall("n", "Card 4242", origin === "cross" ? "child" : undefined), insert("Card 4242")], page));
+    assert.equal(mouseEvents(r.tab).filter((s) => s.params.type === "mousePressed").length, 0, `${origin}: no click on the banner`);
+    assert.equal(r.stage.counts.focusCovered, 1, `${origin}: counted`);
+    assert.equal(r.tab.valueOf("n"), "Card 4242", `${origin}: the text`);
+  }
+});
+
+test("review-119 B4: before Playwright's focus call, an email or a number input with text gets no click (its caret cannot be read or set as the script focus leaves it), counted; an empty one gets the click; fill (which selects the text) gets the click", async () => {
+  for (const type of ["email", "number"]) {
+    const value = type === "email" ? "a@b.co" : "123";
+    const r = await runVector(own([focusCall("n", true)], { nodes: { n: INPUT({ type, value, caret: [value.length, value.length] }) } }));
+    assert.equal(mouseEvents(r.tab).length, 0, `${type} with text: no click`);
+    assert.equal(r.stage.counts.focusNoCaret, 1);
+    const empty = await runVector(own([focusCall("n", true)], { nodes: { n: INPUT({ type }) } }));
+    assert.ok(pressOf(empty.tab), `${type} empty: a click`);
+    const f = await runVector(own([fillCall("n", type === "email" ? "x@y.z" : "7"), insert(type === "email" ? "x@y.z" : "7")], { nodes: { n: INPUT({ type, value }) } }));
+    assert.ok(pressOf(f.tab), `fill of an ${type} input with text: a click`);
+    assert.equal(f.tab.valueOf("n"), type === "email" ? "x@y.z" : "7");
+  }
+});
+
+test("review-119 B5: on the Mac the caret keys carry src/record.ts macCommands with the key's modifiers: Meta+ArrowRight is moveToRightEndOfLine in an input", async () => {
+  const r = await runVector(own([focusCall("n", false)], { nodes: { n: INPUT({ value: "hello", caret: [5, 5] }) } }, { platform: "mac" }));
+  const right = keyEvents(r.tab).find((s) => s.params.key === "ArrowRight" && s.params.type !== "keyUp")!;
+  assert.deepEqual([right.params.modifiers, right.params.commands], [4, ["moveToRightEndOfLine"]]);
+  assert.deepEqual(r.tab.fields.get("n"), { value: "hello", s: 5, e: 5 }, "the caret at the end, as the script focus leaves it");
+});
+
+test("review-119 B6 (sentence 2): at STAGE_ACTION_MAX_MS the stage takes the lock again in the order of arrival, then releases its own keys (its Shift); the client's held key gets no release of the stage", async () => {
+  const { A, B, clock } = await twoTabs([{ at: 0, ...kd("B") }], click(500, 400, 100), FIELD, 60_000);
+  await clock.advance(30_000);
+  const ka = keyEvents(A.t), mb = mouseEvents(B.t);
+  const shiftUp = ka.find((s) => s.params.key === "Shift" && s.params.type === "keyUp");
+  assert.ok(shiftUp, "the stage's own Shift goes up");
+  assert.ok(shiftUp!.t >= mb.at(-1)!.t, `after B's action (the lock taken again in the order of arrival): ${shiftUp!.t} against ${mb.at(-1)!.t}`);
+  assert.ok(!ka.some((s) => s.params.key === "B" && s.params.type === "keyUp"), "no release of the client's key");
+});
+
+test("review-119 B6 (sentence 9): a key with the Shift bit and no Shift down gets the stage's Shift press; a Control bit with no Control down goes on the event as it is, with no press", async () => {
+  const tab = { method: "Input.dispatchKeyEvent", params: { ...rd("Tab").params, modifiers: SHIFT } };
+  const r = await runVector(own([tab, ru("Tab", SHIFT)], FIELD));
+  const ev = keyEvents(r.tab);
+  assert.deepEqual(ev.filter((s) => s.params.type !== "keyUp").map((s) => [s.params.key, s.params.modifiers]), [["Shift", SHIFT], ["Tab", SHIFT]]);
+  const ctl = { method: "Input.dispatchKeyEvent", params: { ...rd("a").params, modifiers: CONTROL } };
+  const c = await runVector(own([ctl, ru("a", CONTROL)], FIELD));
+  const ce = keyEvents(c.tab);
+  assert.deepEqual(ce.map((s) => [s.params.type, s.params.key, s.params.modifiers]), [["rawKeyDown", "a", CONTROL], ["keyUp", "a", CONTROL]], "no Control press of the stage");
+});
+
+test("review-119 B6 (sentence 3): an empty text goes as it is, with no error", async () => {
+  const r = await runVector(own([insert("")], FIELD));
+  assert.deepEqual(answerOf(r, 1).body, { result: {} });
+  assert.equal(r.stage.counts["textAsIs:empty"], 1);
+});
+
+test("review-119 B6 (sentence 12) and P1: a dialog that ends a typed text: the releases of the held keys first, then the rest of the text as one insertText while the field still has the focus; else no character goes, and the call gets an error that names the end and the count", async () => {
+  const run = (lose: boolean) => {
+    const v = own([fillCall("n", "Hello world"), insert("Hello world"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 500, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
+    v.in[1].after = 1;
+    return runVector(v, { tab: (t) => {
+      let k = 0;
+      t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === 4;
+      if (lose) { const h = t.hook; t.hook = (s) => { if (s.method === "Page.handleJavaScriptDialog") t.focusedId = null; return h(s); }; }
+    } });
+  };
+  const r = await run(false);
+  const text = sendIndex(r.tab, (s) => s.method === "Input.insertText"), close = sendIndex(r.tab, (s) => s.method === "Page.handleJavaScriptDialog");
+  const ups = r.tab.sent.map((s, i) => [s, i] as const).filter(([s, i]) => i > close && s.method === "Input.dispatchKeyEvent" && s.params.type === "keyUp");
+  assert.ok(text > 0 && ups.length > 0 && ups.every(([, i]) => i < text), "the releases, then the text");
+  assert.equal(r.tab.valueOf("n"), "Hello world");
+  const lost = await run(true);
+  assert.equal(lost.tab.sent.filter((s) => s.method === "Input.insertText").length, 0, "no character when the field lost the focus");
+  const err = answerOf(lost, 2).body.error!;
+  assert.ok(err && /a dialog/.test(err.message) && /\b7 characters\b/.test(err.message), `the error names the end and the count: ${err?.message}`);
+});
+
+test("review-119 N4: a key that Chrome got after the dialog opened (before the stage heard of it) is not typed: its character goes in the rest of the text", async () => {
+  const v = own([fillCall("n", "abcdefgh"), insert("abcdefgh"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 500, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { n: INPUT() } });
+  v.in[1].after = 1;
+  const r = await runVector(v, { tab: (t) => {
+    let k = 0;
+    t.opensDialog = (s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === 3;
+    t.dialogNoticeMs = 400;
+  } });
+  assert.ok(keyEvents(r.tab).some((s) => s.dropped && s.params.type === "keyDown"), "Chrome dropped a key");
+  assert.equal(r.tab.valueOf("n"), "abcdefgh", "no character lost");
+});
+
+test("review-119 N3: a navigation of the main frame ends a typed text: no typed key after it, only releases, and the call gets an error that names the navigation", async () => {
+  const v = own([fillCall("n", "Hello world"), insert("Hello world")], { nodes: { n: INPUT() } });
+  v.in[1].after = 1;
+  let navAt = -1;
+  const r = await runVector(v, { tab: (t) => {
+    let k = 0;
+    const h = t.hook;
+    t.hook = (s) => { if (s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === 3) setImmediate(() => { navAt = t.sent.length; t.navigate(); }); return h(s); };
+  } });
+  const after = r.tab.sent.slice(navAt).filter((s) => s.method === "Input.dispatchKeyEvent");
+  assert.ok(navAt > 0 && after.every((s) => s.params.type === "keyUp"), `only releases after the navigation: ${after.map((s) => s.params.type)}`);
+  assert.ok(/navigat/.test(answerOf(r, 2).body.error?.message ?? ""), `the error names the navigation: ${answerOf(r, 2).body.error?.message}`);
+});
+
+test("review-119 B7: Playwright's focus call, its focus click and the key run are one action with one limit (one activation): a long pressSequentially ends by STAGE_ACTION_MAX_MS from the focus call, then at Playwright's own speed", async () => {
+  const TEXT = "the quick brown fox jumps over the lazy dog ".repeat(8).slice(0, 300);
+  const r = await runVector(own([focusCall("t", true), ...typeCalls(TEXT)], { nodes: { t: TEXTAREA() } }), { maxMs: 200_000 });
+  assert.ok(pressOf(r.tab), "a focus click");
+  assert.equal(r.tab.activations.filter((t) => t < STAGE_ACTION_MAX_MS).length, 1, "one activation for the focus call, its click and the key run (the run after the limit goes as the client sends it, in actions of its own)");
+  const last = Math.max(...r.answers.map((a) => a.t));
+  assert.ok(last <= STAGE_ACTION_MAX_MS + 500, `the last answer at ${last} ms (the limit counts from the focus call)`);
+  assert.equal(r.tab.valueOf("t"), TEXT);
+});
+
+test("review-119 N1: the stage's own Shift goes up at its planned time also while the client holds another key (keyboard.down('a'), then B)", async () => {
+  const r = await runVector(own([rd("a"), ...typeCalls("B"), { ...ru("a"), waitMs: 3000 }], FIELD));
+  const ev = keyEvents(r.tab), bUp = ev.find((s) => s.params.key === "B" && s.params.type === "keyUp")!, su = ev.find((s) => s.params.key === "Shift" && s.params.type === "keyUp")!;
+  assert.ok(su && su.t - bUp.t >= 15 && su.t - bUp.t <= 60, `Shift up ${su ? su.t - bUp.t : "never"} ms after B's (not at a's keyUp)`);
+});
+
+test("review-119 N2 and P2: a client's Shift press that merges into the stage's Shift: no release of the stage for it at STAGE_ACTION_MAX_MS; the client's release goes once; after it, the next shifted key gets a new Shift press", async () => {
+  const r = await runVector(own([{ at: 0, ...kd("A") }, { at: 300, ...rd("Shift", SHIFT) }, { at: 30_000, ...ru("Shift") }, { at: 30_100, ...ku("A") }], FIELD), { maxMs: 60_000 });
+  const ups = keyEvents(r.tab).filter((s) => s.params.key === "Shift" && s.params.type === "keyUp");
+  assert.equal(ups.length, 1, "one Shift release");
+  assert.ok(ups[0].t >= 30_000, `the client's own release, at ${ups[0].t}`);
+  const p = await runVector(own([...typeCalls("A"), rd("Shift", SHIFT), ru("Shift"), ...typeCalls("B")], FIELD));
+  const downs = keyEvents(p.tab).filter((s) => s.params.key === "Shift" && s.params.type === "rawKeyDown");
+  const b = keyEvents(p.tab).find((s) => s.params.key === "B")!;
+  assert.equal(downs.length, 2, "the stage's Shift for A, and a new one for B");
+  assert.ok(downs[1].t < b.t && b.params.modifiers === SHIFT);
+});
+
+test("review-119 N5: before fill, a field that is the active element of a document that does not have the focus (and does not get it at the activation) gets the click", async () => {
+  const r = await runVector(own([fillCall("n", "abc"), insert("abc")], { nodes: { n: INPUT({ text: 3, windowAway: true, windowStaysAway: true }) }, focused: "n" }));
+  assert.ok(pressOf(r.tab), "a click");
+  assert.equal(r.tab.activations.length, 1);
+});
+
+test("review-119 N6: a disabled or read-only field gets no focus click, counted", async () => {
+  for (const [flag, count] of [["disabled", "fieldDisabled"], ["readOnly", "fieldReadOnly"]] as const) {
+    for (const call of [fillCall("n", "abc"), focusCall("n", true)]) {
+      const r = await runVector(own([call], { nodes: { n: INPUT({ text: 3, [flag]: true }) } }));
+      assert.equal(mouseEvents(r.tab).length, 0, `${flag}: no click`);
+      assert.equal(r.stage.counts[count], 1, `${flag}: counted`);
+    }
+  }
 });

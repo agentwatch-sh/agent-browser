@@ -29,7 +29,7 @@ import { CdpPlayer, systemClock, linuxStamp, macStamp, type Clock } from "../hum
 import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
-import { ALT, charKey, CONTROL, KeyStream, META, SHIFT, typingPace, type Key, type KeyEv } from "../human/keys.ts";
+import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv } from "../human/keys.ts";
 import { draw, uniform, type Random } from "../human/random.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
 import { PLAYWRIGHT_FOCUS, startsAction } from "./policy.ts";
@@ -152,11 +152,17 @@ export const TWO_FRAMES = "function () { return new Promise((r) => requestAnimat
 /** The obstacle's box again (the second read): the panel has closed, so it is the trigger's box. */
 export const OBSTACLE_AGAIN = "function () { const a = this[0].getBoundingClientRect(); return { x0: a.left, y0: a.top, x1: a.right, y1: a.bottom }; }";
 /** The focused element of a document (its shadow roots and its same-origin frames followed), as the typing rule reads it: a cross-origin frame stops the read. */
-const FOCUS_BODY = (doc: string) => `const TT = ${JSON.stringify(TEXT_TYPES)}; let el = ${doc}.activeElement; for (let i = 0; el && i < 16; i++) { if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; } if (el.localName === 'iframe' || el.localName === 'frame') { let d = null; try { d = el.contentDocument; } catch (x) {} if (!d) return { frame: true }; el = d.activeElement; continue; } break; } if (!el || el.localName === 'body' || el.localName === 'html') return null; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined, typing = (tag === 'input' && TT.includes(type)) || tag === 'textarea'; let s = null, e = null; if (typing) { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } return { tag, type, editable: !!el.isContentEditable, typing, value: typing ? String(el.value) : null, s, e };`;
-/** The typing rule's read of the focused element (C11, the typing rule 1), in the stage's own isolated world on the top page. */
+const FOCUS_BODY = (doc: string) => `const TT = ${JSON.stringify(TEXT_TYPES)}; let el = ${doc}.activeElement; for (let i = 0; el && i < 16; i++) { if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; } if (el.localName === 'iframe' || el.localName === 'frame') { let d = null; try { d = el.contentDocument; } catch (x) {} if (!d) return { frame: true }; el = d.activeElement; continue; } break; } if (!el || el.localName === 'body' || el.localName === 'html') return null; globalThis.__agentBrowserStageField = el; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined, typing = (tag === 'input' && TT.includes(type)) || tag === 'textarea'; let s = null, e = null; if (typing) { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } return { tag, type, editable: !!el.isContentEditable, typing, value: typing ? String(el.value) : null, s, e };`;
+/** The typing rule's read of the focused element (C11, the typing rule 1), in the stage's own isolated world on the top page; it marks that element (a global of the world, which no page script sees) for FIELD_STILL. */
 export const FOCUSED_FIELD = `() => { ${FOCUS_BODY("document")} }`;
 /** The same read in a cross-origin frame, on a node's handle of that frame (Playwright's utility world): `away` when that frame's document does not have the focus. */
 export const FOCUSED_IN = `function () { if (!this.ownerDocument.hasFocus()) return { away: true }; ${FOCUS_BODY("this.ownerDocument")} }`;
+/** The deep focused element of a document (its shadow roots and its same-origin frames followed), or null; a cross-origin frame stops it. */
+const DEEP_ACTIVE = (doc: string) => `let a = ${doc}.activeElement; for (let i = 0; a && i < 16; i++) { if (a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue; } if (a.localName === 'iframe' || a.localName === 'frame') { let d = null; try { d = a.contentDocument; } catch (x) {} if (!d) { a = null; break; } a = d.activeElement; continue; } break; }`;
+/** review-119 P1: the field that the last focus read marked still has the focus (sentence 13's test: the deep active element, and its document has the focus). */
+export const FIELD_STILL = `() => { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("document")} return a === el && el.ownerDocument.hasFocus(); }`;
+/** The same in a cross-origin frame, on a node's handle of that frame (Playwright's utility world). */
+export const FIELD_STILL_IN = `function () { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("this.ownerDocument")} return a === el && el.ownerDocument.hasFocus(); }`;
 /** Playwright's retarget for fill (follow-label): the control of a label, the field itself otherwise (playwright-core 1.65.0, injected retarget). */
 const RETARGET = "let el = this.nodeType === 1 ? this : this.parentElement; if (!el) return null; if (follow) { if (!el.matches('input, textarea, select') && !el.isContentEditable) el = el.closest('button, [role=button], [role=checkbox], [role=radio]') || el; if (!el.matches('a, input, textarea, button, select, option, optgroup, [role=link], [role=button], [role=checkbox], [role=radio]') && !el.isContentEditable) { const l = el.closest('label'); if (l && l.control) el = l.control; } }";
 /**
@@ -164,9 +170,9 @@ const RETARGET = "let el = this.nodeType === 1 ? this : this.parentElement; if (
  * kind, whether it has the focus (Playwright's _activelyFocused), the length of its text, its caret, and its box with the
  * sum of its same-origin frames (as NODE_GEO).
  */
-export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, active, focused, len, s, e, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
+export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled, readOnly: !!el.readOnly, active, focused, len, s, e, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
 /** The focus click's hit test (C11, the focus click), on the node's handle: the element at the point of the field's own document is the field or inside it. */
-export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.getRootNode(), h = (typeof r.elementFromPoint === 'function' ? r : el.ownerDocument).elementFromPoint(x, y); return !!h && (h === el || el.contains(h)); }`;
+export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.getRootNode(), h = (typeof r.elementFromPoint === 'function' ? r : el.ownerDocument).elementFromPoint(x, y); if (!h || !(h === el || el.contains(h))) return false; let w = el.ownerDocument.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, b = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); x += b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += b.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); const fr = fe.getRootNode(), fh = (typeof fr.elementFromPoint === 'function' ? fr : fe.ownerDocument).elementFromPoint(x, y); if (fh !== fe) return false; w = w.parent; } return true; }`;
 /** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
 export const CARET_SET = `function (s, e, follow) { ${RETARGET} el.setSelectionRange(s, e); return true; }`;
 
@@ -251,6 +257,8 @@ class Action {
   failed = false;
   /** The error of the plan's refused event, for the client calls of the plan that come later. */
   failBody: { code: number; message: string } | undefined;
+  /** The time of the plan's end (a key whose answer came after it, while a dialog was open, did not reach the page). */
+  endedAt = Infinity;
   readonly endSignal: Promise<void>;
   private fireEnd!: () => void;
   readonly unanswered = new Set<{ t: number }>();
@@ -273,7 +281,7 @@ type Setup = { node: string | undefined; child: string | undefined; action: stri
  * the call was answered early). `typed`: a key of a typed text or of the stage's own keys (no client call asked for it
  * alone). `sent`: Chrome's answer, once it went.
  */
-type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any> };
+type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any>; answeredAt?: number };
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
 class TabState {
   readonly pending: Entry[] = [];
@@ -302,6 +310,8 @@ class TabState {
   field: { child: string | undefined; node: string; follow: boolean } | null = null;
   /** The next Input.insertText is fill's (its script selected the field's text): the value check wants the text alone. */
   fillNext = false;
+  /** A typed text's plan that runs: a navigation of the main frame stops it (review-119 N3). */
+  typing: { navigated: boolean } | null = null;
   readonly childNodes = new Map<string, string>();
   /** The buttons and keys ("key:<code>") that the stage released at the end of a plan: the client's own release gets no event. */
   readonly released = new Set<string>();
@@ -362,10 +372,6 @@ export class InputLock {
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
 const MODIFIER_BIT: Record<string, number> = { Alt: ALT, Control: CONTROL, Meta: META, Shift: SHIFT };
-/** The Mac's editing commands of the stage's own keys (C11, the typing rule 4; src/record.ts macCommands): a key's code, "+Shift" for the shifted one. */
-const MAC_KEY_COMMANDS: Record<string, string[]> = {
-  ArrowLeft: ["moveToLeftEndOfLine"], ArrowUp: ["moveToBeginningOfDocument"], ArrowDown: ["moveToEndOfDocument"], ArrowRight: ["moveRight"], "ArrowRight+Shift": ["moveRightAndModifySelection"],
-};
 /**
  * The key of a client's key event for the stream: what it types, and the modifiers that it needs: Shift for a shifted
  * character of the US layout that comes with no Shift (Playwright's capital or symbol), the client's own Shift, and the
@@ -387,7 +393,9 @@ type FocusRead = { tag: string; type?: string; editable: boolean; typing: boolea
 /** Where that read ran: null for the top page (the stage's own world), else a node of a cross-origin frame's session. */
 type FocusVia = { child: string; node: string } | null;
 /** The focus click's read of a field (FIELD_STATE), with its box and offset in the top page's points; lox, loy: the same-origin sum alone. */
-type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; active: boolean; focused: boolean; len: number; s: number | null; e: number | null; box: Rect; ox: number; oy: number; lox: number; loy: number };
+type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: string; disabled: boolean; readOnly: boolean; active: boolean; focused: boolean; len: number; s: number | null; e: number | null; box: Rect; ox: number; oy: number; lox: number; loy: number;
+  /** The cross-origin levels above the field, innermost first: the parent's session, the owner's node, its content box in the parent's points. */
+  levels: { parent: string | undefined; owner: number; r: Rect }[] };
 const TIMEOUT = Symbol("timeout");
 const same = (a: Pt | null | undefined, b: Pt | null | undefined) => !!a && !!b && a.x === b.x && a.y === b.y;
 const near = (a: Pt, b: Pt, d: number) => Math.hypot(a.x - b.x, a.y - b.y) <= d;
@@ -560,7 +568,7 @@ export class Stage {
       this.count("navigationDrops");
     }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
-    if (mainNav) { st.quads.clear(); st.handles.clear(); }
+    if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
@@ -676,6 +684,7 @@ export class Stage {
     const a = st.action;
     if (!a || a.over) return;
     a.ended = why;
+    a.endedAt = this.clock.now();
     a.fire();
     this.count(why === "dialog" ? "dialogEnds" : why === "wait" ? "waitEnds" : "limitEnds");
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
@@ -1205,8 +1214,9 @@ export class Stage {
       });
       return;
     }
-    if (this.clientKeysHeld(st)) return;
-    const up = st.runPlain ? null : st.ks?.plannedShiftUp() ?? null;
+    // The stage's own Shift goes up at its planned time once no key that it holds is down, also while the client holds
+    // another key (review-119 N1); a key that the client holds keeps the run open after it.
+    const up = st.runPlain || !st.ks || st.ks.shiftHoldsDown ? null : st.ks.plannedShiftUp();
     if (up !== null) {
       st.kTimer = this.clock.timer(up - now, () => {
         st.kTimer = null;
@@ -1217,6 +1227,7 @@ export class Stage {
       });
       return;
     }
+    if (this.clientKeysHeld(st)) return;
     st.runTimer = this.clock.timer(RUN_IDLE_MS, () => { st.runTimer = null; this.idleEnd(page, st); });
   }
 
@@ -1273,11 +1284,11 @@ export class Stage {
    * The planned key events in the order of their times, each at its time, up to and including `target`. False when the
    * plan ended or failed before `target` went (the end of the plan takes the queue).
    */
-  private async playKeys(page: StagePage, st: TabState, a: Action, target: KeyItem): Promise<boolean> {
+  private async playKeys(page: StagePage, st: TabState, a: Action, target: KeyItem, stop?: () => boolean): Promise<boolean> {
     while (st.kq.length) {
       const it = st.kq[0];
       await this.until(a, it.ev.t);
-      if (a.over || st.kq[0] !== it) return false;
+      if (a.over || st.kq[0] !== it || stop?.()) return false;
       st.kq.shift();
       this.sendKey(page, st, it);
       if (it === target) return true;
@@ -1290,6 +1301,7 @@ export class Stage {
     const ev = it.ev, params = this.keyParams(page, st, it);
     const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params);
     it.sent = p;
+    p.then(() => { it.answeredAt = this.clock.now(); }, () => {});
     if (ev.type === "keyUp") st.keys.delete(ev.code);
     else if (!ev.repeat && (ev.type as string) !== "char") st.keys.set(ev.code, { at: this.clock.now(), params, own: !it.client });
     // An error of an event that no step waits for (an early-answered release, the stream's own Shift, a typed key): the
@@ -1351,8 +1363,12 @@ export class Stage {
       items = [{ ev: { t: now, type: "char" as KeyEv["type"], key: String(p.key ?? ""), code: String(p.code ?? ""), keyCode: Number(p.windowsVirtualKeyCode ?? 0), location: 0, modifiers: this.clientBits(st), own: false }, client: p, e }];
     } else {
       const evs = s.next(keyOf(p, this.clientBits(st)), now);
-      // A press of a Shift that is down already (the stream's own, which the client now holds): no event.
-      if (!evs.length) { this.count("keysDownAlready"); e.answer({ result: {} }); return; }
+      // A press of a Shift that is down already (the stream's own, which the client now holds): no event, and the key is the
+      // client's now: the stage sends no release of its own for it (review-119 N2, P2).
+      if (!evs.length) {
+        for (const k of st.keys.values()) if (k.own && k.params.key === p.key) k.own = false;
+        this.count("keysDownAlready"); e.answer({ result: {} }); return;
+      }
       items = evs.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
     }
     this.enqueue(st, items);
@@ -1383,7 +1399,7 @@ export class Stage {
     const s = this.stream(page, st), mac = !this.linux();
     st.runOpen = true;
     for (const k of keys) {
-      const commands = mac ? MAC_KEY_COMMANDS[k.code + (k.modifiers & SHIFT ? "+Shift" : "")] : undefined;
+      const commands = mac ? macCommands(k) : undefined;
       const press = s.next(k, Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t))).map((ev) => ({ ev, typed: ev.own ? {} : { commands } }));
       this.enqueue(st, press);
       if (!(await this.playKeys(page, st, a, press[press.length - 1]))) return false;
@@ -1405,7 +1421,7 @@ export class Stage {
   private async typingRule(page: StagePage, st: TabState, text: string): Promise<{ typed: true; plan: ReturnType<typeof typingPace> & {}; before: FocusRead; via: FocusVia } | { typed: false; why: string }> {
     if (!text) return { typed: false, why: "empty" };
     if ([...text].some((ch) => !charKey(ch))) return { typed: false, why: /[\n\t]/.test(text) ? "lineFeedOrTab" : "noUsKey" };
-    if (this.clientBits(st)) return { typed: false, why: "modifierHeld" };
+    if (this.clientKeysHeld(st)) return { typed: false, why: "keyHeld" };
     const plan = typingPace(text, page.person, this.o.random, STAGE_TYPE_MAX_MS);
     if (!plan) return { typed: false, why: "tooLong" };
     const f = await this.focused(page, st);
@@ -1458,7 +1474,8 @@ export class Stage {
     const ins = s.insert(Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t)));
     const pre = ins.events.map((ev) => ({ ev, typed: {} }));
     this.enqueue(st, pre);
-    if (pre.length && !(await this.playKeys(page, st, a, pre[pre.length - 1]))) return this.keyNotSent(page, st, a, e, pre);
+    // Every planned event of the run goes first: an early-answered release, the stream's own Shift (review-119 B1).
+    if (st.kq.length && !(await this.playKeys(page, st, a, st.kq[st.kq.length - 1]))) return this.keyNotSent(page, st, a, e, pre);
     if (!rule.typed) {
       // The text as it is (C11, the cases of no change: a text that the typing rule refuses).
       this.count("textAsIs"); this.count(`textAsIs:${rule.why}`);
@@ -1479,8 +1496,10 @@ export class Stage {
     const t0 = ins.t, mac = !this.linux();
     const items: KeyItem[] = rule.plan.plan.events.map((ev) => ({ ev: { ...ev, t: ev.t + t0 }, typed: { commands: mac && !ev.own ? [] : undefined } }));
     this.enqueue(st, items);
-    const last = items[items.length - 1];
-    if (!(await this.playKeys(page, st, a, last))) return this.typedEnded(page, st, a, e, text, items);
+    const last = items[items.length - 1], typing = (st.typing = { navigated: false });
+    const played = await this.playKeys(page, st, a, last, () => typing.navigated);
+    if (st.typing === typing) st.typing = null;
+    if (!played) return this.typedEnded(page, st, a, e, text, items, typing.navigated, rule.via);
     s.after(Math.max(...items.filter((x) => x.ev.type !== "keyUp").map((x) => x.ev.t)));
     // The answer after Chrome answered the plan's events (they went at their times, none awaited before the next).
     const r = await this.settle(a, Promise.all(items.map((x) => x.sent!)));
@@ -1500,20 +1519,50 @@ export class Stage {
   }
 
   /**
-   * The end of a typed text's plan before its last event (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS; C11, the
-   * keys and the text): the release of each key that the plan holds (the end's own releases, or at the limit here), and
-   * the characters whose keys did not go as one Input.insertText, as the client's own call, whose answer is Chrome's.
+   * The end of a typed text's plan before its last event (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS, a navigation
+   * of the main frame; C11, the keys and the text). A character is typed when its keyDown reached the page: Chrome drops
+   * each input event that it gets while a dialog is open, so a keyDown sent after the first event that has no answer at the
+   * end did not (review-119 N4). After the dialog's close, with the lock taken again in the order of arrival (as the
+   * pointer part's ended events), the stage releases each key of the plan that is down, then sends the characters that did
+   * not go as one Input.insertText when the field still has the focus (sentence 13's test; review-119 P1), whose answer is
+   * Chrome's. Else (or at a navigation) no character goes, and the call gets an error that names the end and the count.
+   * With every character typed, the call gets its answer after Chrome's answers of its events (review-119 B2 a).
    */
-  private async typedEnded(page: StagePage, st: TabState, a: Action, e: Entry, text: string, items: KeyItem[]): Promise<void> {
+  private async typedEnded(page: StagePage, st: TabState, a: Action, e: Entry, text: string, items: KeyItem[], navigated = false, via: FocusVia = null): Promise<void> {
     st.kq = st.kq.filter((x) => !items.includes(x));
     if (a.failed) { e.answer({ error: a.failBody ?? { code: -32000, message: "the input stage stopped the plan at an error of an event" } }); return; }
-    const chars = items.filter((x) => !x.ev.own && x.ev.type !== "keyUp");
-    const rest = [...text].slice(chars.filter((x) => x.sent).length).join("");
     this.count("typedTextsEnded");
-    if (a.ended === "limit") for (const x of items) if (x.sent === undefined && x.ev.type === "keyUp" && st.keys.has(x.ev.code)) this.sendKey(page, st, { ev: x.ev, typed: {} });
-    if (!rest) { e.answer({ result: {} }); return; }
+    const end = a.over ? a.endedAt : this.clock.now();
+    const held = items.findIndex((x) => x.sent && !(x.answeredAt !== undefined && x.answeredAt <= end));
+    const typed = items.filter((x, i) => !x.ev.own && x.ev.type !== "keyUp" && x.sent && (held < 0 || i <= held)).length;
+    const rest = [...text].slice(typed).join(""), why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
+    const sent = items.filter((x) => x.sent).map((x) => x.sent!.catch(() => {}));
+    if (a.over) await this.dialogGone(st);
+    if (st.gone === "session") return;
+    if (a.over) await this.retake(page, st, false);
+    // The release of each key of the plan that is down (the stage's own: no client call asked for it alone).
+    const codes = new Set(items.filter((x) => x.ev.type === "keyUp" && !x.sent).map((x) => x.ev.code));
+    for (const code of codes) {
+      const k = st.keys.get(code);
+      if (k?.own) sent.push(this.sendKey(page, st, { ev: { t: 0, type: "keyUp", key: k.params.key, code, keyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0, modifiers: 0, own: true }, typed: {} }).catch(() => {}));
+    }
+    if (st.heldGone) { e.answer({ error: st.heldGone }); return; }
+    if (!rest) { this.answerWith(page, e, Promise.all(sent).then(() => ({}))); return; }
+    const still = !navigated && !st.gone && (await this.stillFocused(page, via));
+    if (!still) {
+      this.count("typedTextsCut");
+      e.answer({ error: { code: -32000, message: `The input stage ended a typed text at ${why}, and ${[...rest].length} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
+      return;
+    }
     const r = await this.endedSend(page, st, e, { ...e.params, text: rest });
     if (r) this.answerWith(page, e, r.sent);
+  }
+
+  /** The field that the typing rule's read marked still has the focus (sentence 13's test), on the page or on its frame's node. */
+  private async stillFocused(page: StagePage, via: FocusVia): Promise<boolean> {
+    if (!via) return (await this.read(page.ownRead(FIELD_STILL, []))) === true;
+    const r = await this.read(page.send(via.child, "Runtime.callFunctionOn", { objectId: via.node, functionDeclaration: FIELD_STILL_IN, returnByValue: true }));
+    return r !== TIMEOUT && (r as any)?.result?.value === true;
   }
 
   /**
@@ -1537,23 +1586,47 @@ export class Stage {
     if (a?.over) return pass();
     const g = await this.fieldRead(page, st, e.child, node, fill);
     if (!g) { why("fieldNoRead"); return pass(); }
-    // fill's own script selects the text: the field needs only the focus of its document. Playwright's focusNode reads the
-    // window's focus too, after the activation above (so a field of a window that comes forward has it).
-    if (g.kind === "other" || (fill ? g.active : g.focused)) { why(g.kind === "other" ? "fieldNotText" : "fieldFocused"); return pass(); }
-    a ??= await this.begin(page, st);
+    if (g.kind === "other") { why("fieldNotText"); return pass(); }
+    // A disabled or read-only field gets no click: Playwright's fill refuses it, and a script focus of a disabled field does
+    // nothing (review-119 N6).
+    if (g.disabled || g.readOnly) { why(g.disabled ? "fieldDisabled" : "fieldReadOnly"); return pass(); }
+    // An email or a number input with text: its caret cannot be read or set, and Playwright's script focus leaves it where
+    // the field's own selection is; a click would move it (review-119 B4). fill selects the text, so it gets the click.
+    if (!fill && g.kind === "input" && (g.type === "email" || g.type === "number") && g.len > 0) { why("focusNoCaret"); return pass(); }
+    // The field has the focus (sentence 13's test, after the activation for Playwright's focus call). Before fill, a field
+    // that fails it gets the lock and the activation, and the read again (review-119 N5).
+    let f = g;
+    if (f.focused) { why("fieldFocused"); return this.keepAction(st, a, pass); }
+    if (!a) {
+      a = await this.begin(page, st);
+      if (a.over) return pass();
+      const h = await this.fieldRead(page, st, e.child, node, fill);
+      if (!h) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+      if (h.focused) { why("fieldFocused"); return this.keepAction(st, a, pass); }
+      f = h;
+    }
     if (a.over) return pass();
-    const at = await this.clickPoint(page, st, e.child, node, g, fill);
-    if (!at) return pass();
+    const at = await this.clickPoint(page, st, e.child, node, f, fill);
+    if (!at) return this.keepAction(st, a, pass);
     // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
-    const want = g.kind === "input" && reset ? { s: 0, e: 0 } : typeof g.s === "number" && typeof g.e === "number" ? { s: g.s, e: g.e } : null;
+    const want = f.kind === "input" && reset ? { s: 0, e: 0 } : typeof f.s === "number" && typeof f.e === "number" ? { s: f.s, e: f.e } : null;
     this.count("focusClicks");
-    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click (${g.kind})`);
-    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(g.box.x1 - g.box.x0, g.box.y1 - g.box.y0))))) return pass();
-    if (!fill && want && (g.kind === "input" || g.kind === "textarea")) {
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click (${f.kind})`);
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass();
+    if (!fill && want && (f.kind === "input" || f.kind === "textarea")) {
       const h = await this.fieldRead(page, st, e.child, node, fill);
       if (!h || !h.active) why("focusClickMissed");
-      else if (h.s !== want.s || h.e !== want.e) { if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: the caret moves`); await this.caret(page, st, a, e.child, node, g, want); }
+      else if (h.s !== want.s || h.e !== want.e) { if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: the caret moves`); await this.caret(page, st, a, e.child, node, f, want); }
     }
+    return this.keepAction(st, a, pass);
+  }
+
+  /**
+   * After the focus or fill call's step (review-119 B7): its action stays open for the key run that follows (Playwright's
+   * keys or its insertText), as one action with one limit (STAGE_ACTION_MAX_MS from the focus call) and one activation.
+   */
+  private keepAction(st: TabState, a: Action | null, pass: () => Promise<void>): Promise<void> {
+    if (a && !a.over && st.action === a) st.runOpen = true;
     return pass();
   }
 
@@ -1567,7 +1640,7 @@ export class Stage {
     if (!v || typeof v.kind !== "string" || !v.box) return null;
     const m = await this.mapped(page, st, child, v);
     if (!m) { this.count("frameMapFails"); return null; }
-    return { ...v, box: m.box, ox: m.ox, oy: m.oy, lox: v.ox, loy: v.oy };
+    return { ...v, box: m.box, ox: m.ox, oy: m.oy, lox: v.ox, loy: v.oy, levels: m.levels };
   }
 
   /**
@@ -1593,8 +1666,18 @@ export class Stage {
     const p = { x: pick(xa, xb, b.x0, b.x1 - 1), y: pick(ya, yb, b.y0, b.y1 - 1) };
     // A field out of view (C11: notches first, then the click): the notches are board ab-t30.11's; until then no click.
     if (v && (p.x < 0 || p.y < 0 || p.x >= v.clientWidth || p.y >= v.clientHeight)) { this.noClick(page, "focusOutOfView"); return null; }
-    const hit = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: p.x - f.ox + f.lox }, { value: p.y - f.oy + f.loy }, { value: follow }], returnByValue: true }));
+    // The stage's own hit test (review-119 B3): the field's own document at the field's own point (the top page's point less
+    // the offset of the field's document), and each same-origin frame above it (FIELD_HIT); then at each cross-origin level
+    // the node at the mapped point of the parent's session is the frame's owner (DOM.getNodeForLocation).
+    const hit = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: p.x - f.ox }, { value: p.y - f.oy }, { value: follow }], returnByValue: true }));
     if (hit === TIMEOUT || (hit as any)?.result?.value !== true) { this.noClick(page, "focusCovered"); return null; }
+    for (let i = 0; i < f.levels.length; i++) {
+      const L = f.levels[i];
+      let px = p.x, py = p.y;
+      for (const up of f.levels.slice(i + 1)) { px -= up.r.x0; py -= up.r.y0; }
+      const at = await this.read(page.send(L.parent, "DOM.getNodeForLocation", { x: Math.round(px), y: Math.round(py), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false }));
+      if (at === TIMEOUT || (at as any)?.backendNodeId !== L.owner) { this.noClick(page, "focusCovered"); return null; }
+    }
     return p;
   }
 
@@ -1713,9 +1796,10 @@ export class Stage {
   }
 
   /** The cross-origin levels of a same-origin read (NODE_GEO's, FIELD_STATE's): the node's box and offset in the top page's points, or null. */
-  private async mapped(page: StagePage, st: TabState, child: string | undefined, v: any): Promise<{ ox: number; oy: number; box: Rect } | null> {
+  private async mapped(page: StagePage, st: TabState, child: string | undefined, v: any): Promise<{ ox: number; oy: number; box: Rect; levels: { parent: string | undefined; owner: number; r: Rect }[] } | null> {
     if (!v || typeof v.ox !== "number" || !v.box || v.flat === false) return null;
     let ox = v.ox, oy = v.oy, s = child;
+    const levels: { parent: string | undefined; owner: number; r: Rect }[] = [];
     if (!s && !v.top) return null;
     for (let level = 0; s && level < 8; level++) {
       let f = st.frames.get(s);
@@ -1734,11 +1818,12 @@ export class Stage {
       const r = box === TIMEOUT ? null : quadRect((box as any)?.model?.content);
       if (!r) return null;
       ox += r.x0; oy += r.y0;
+      levels.push({ parent: f.parent, owner: backendNodeId, r });
       s = f.parent;
     }
     if (s) return null;
     const b = v.box as Rect;
-    return { ox, oy, box: { x0: b.x0 - v.ox + ox, y0: b.y0 - v.oy + oy, x1: b.x1 - v.ox + ox, y1: b.y1 - v.oy + oy } };
+    return { ox, oy, box: { x0: b.x0 - v.ox + ox, y0: b.y0 - v.oy + oy, x1: b.x1 - v.ox + ox, y1: b.y1 - v.oy + oy }, levels };
   }
 
   /**

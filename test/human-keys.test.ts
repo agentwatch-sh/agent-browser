@@ -580,3 +580,14 @@ test("keys (board ab-t30.10): the stream's own Shift goes up at its planned time
     assert.ok(y.t >= x[0].t + 2000 && y.t < x[0].t + 2000 + 1600, "the next key's interval counts from the text's end");
   }
 });
+
+test("keys (review-119 N9): a client's chord of three modifiers: all of them within 80 ms of the first, so the key comes 40 to 120 ms after each", () => {
+  const ctl: Key = { key: "Control", code: "ControlLeft", keyCode: 17, modifiers: CONTROL }, sh: Key = { key: "Shift", code: "ShiftLeft", keyCode: 16, modifiers: SHIFT }, alt: Key = { key: "Alt", code: "AltLeft", keyCode: 18, modifiers: 1 };
+  for (let seed = 1; seed <= 400; seed++) {
+    const s = new KeyStream(MID, seededRandom(seed));
+    const c = s.next(ctl, 0), h = s.next(sh, 1), a = s.next(alt, h[0].t);
+    const k = s.next({ key: "ArrowLeft", code: "ArrowLeft", keyCode: 37, modifiers: CONTROL | SHIFT | 1 }, a[0].t + 1)[0];
+    assert.ok(a[0].t - c[0].t <= 80 + 1e-9, `seed ${seed}: the third modifier ${a[0].t - c[0].t} ms after the first`);
+    for (const m of [c[0], h[0], a[0]]) assert.ok(k.t - m.t >= 40 - 1e-9 && k.t - m.t <= 120 + 1e-9, `seed ${seed}: the key ${k.t - m.t} ms after ${m.key}`);
+  }
+});
