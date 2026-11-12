@@ -285,7 +285,8 @@ test("the wheel point's rule 2: an element of the chain with a wheel listener th
   const non = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { tag: "div", listener: "nonpassive", box: under } }, ...DOC() }));
   // 640,230 is not over it, but the page's move down brings it under that point (its column, rule 4): 640,490.
   assert.deepEqual(at(notchesOf(non.tab)[0]), [640, 490], "not passive: another point, whose column does not meet it");
-  assert.ok(non.tab.sent.some((s) => s.method === "DOMDebugger.getEventListeners"), "the listeners' read");
+  const read = non.tab.sent.find((s) => s.method === "DOMDebugger.getEventListeners")!;
+  assert.ok(read && String(read.params.objectId).startsWith("main:") && read.params.pierce === false && read.params.depth === -1, "the listeners' read: the scroller's whole subtree in the page's main world, with no pierce");
   const pas = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { tag: "div", listener: "passive", box: under } }, ...DOC() }));
   assert.deepEqual(at(notchesOf(pas.tab)[0]), [640, 360], "passive: the page's last point");
   assert.equal(movesOf(pas.tab).length, 0, "no path");

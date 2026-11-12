@@ -215,7 +215,8 @@ export async function stageScrollCases(o: StageContext): Promise<void> {
             same, traced, scrollLines, ...(row.measure ? { measure: true } : {}), ...(same && !row.measure ? {} : { stageState: pick(s.state), ownState: pick(q.state) }) } });
           (out.rows as unknown[]).push({ version, row: row.name, stage: s, own: q, same, traced, trace });
         }
-        if (version === "1.65.0" && !process.env.STAGE_SCROLL_ROWS) await harnessScroll(o, ctx, port, recs, out);
+        // The harness rows with Playwright 1.65.0: with all rows, or alone with STAGE_SCROLL_HARNESS=1.
+        if (version === "1.65.0" && (!process.env.STAGE_SCROLL_ROWS || process.env.STAGE_SCROLL_HARNESS === "1")) await harnessScroll(o, ctx, port, recs, out);
       } finally {
         await browser.close().catch(() => {});
         await plain.close().catch(() => {});

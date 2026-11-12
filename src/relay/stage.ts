@@ -1533,16 +1533,25 @@ export class Stage {
 
   /**
    * Rule 2's read: the boxes (DOM.getContentQuads) of the elements of the scroller (it, and every element inside it) that
-   * have a listener of `wheel` or `mousewheel` that is not passive (DOMDebugger.getEventListeners on the scroller, with its
-   * whole subtree), in the reader's points; the window's and the document's listeners do not count. The scroller's handle
-   * is of the stage's own group, which it releases.
+   * have a listener of `wheel` or `mousewheel` that is not passive, in the reader's points; the window's and the
+   * document's listeners do not count. The listeners are the page's own: DOMDebugger.getEventListeners reports the
+   * listeners of the world of its handle only (unless `pierce`, which also walks shadow roots and frames and reports every
+   * world, and after which the renderer of the input research's recorder page crashed, twice, live), so the stage resolves
+   * the scroller into the page's main world (DOM.describeNode, DOM.resolveNode: a handle, no script) and reads its whole
+   * subtree there with no `pierce`. The handles are of the stage's own group, which it releases.
    */
   private async wheelListeners(page: StagePage, rd: Reader, k: number): Promise<Rect[] | typeof TIMEOUT> {
     try {
       const root = await this.read(page.send(rd.child, "Runtime.callFunctionOn", { objectId: rd.obj, functionDeclaration: WHEEL_ROOT, arguments: [{ value: k }], returnByValue: false, objectGroup: STAGE_GROUP }));
       const id = root === TIMEOUT ? undefined : (root as any)?.result?.objectId;
       if (typeof id !== "string") return TIMEOUT;
-      const l = await this.read(page.send(rd.child, "DOMDebugger.getEventListeners", { objectId: id, depth: -1, pierce: true }));
+      const node = await this.read(page.send(rd.child, "DOM.describeNode", { objectId: id }));
+      const backendNodeId = node === TIMEOUT ? undefined : (node as any)?.node?.backendNodeId;
+      if (!Number.isInteger(backendNodeId)) return TIMEOUT;
+      const main = await this.read(page.send(rd.child, "DOM.resolveNode", { backendNodeId, objectGroup: STAGE_GROUP }));
+      const mainId = main === TIMEOUT ? undefined : (main as any)?.object?.objectId;
+      if (typeof mainId !== "string") return TIMEOUT;
+      const l = await this.read(page.send(rd.child, "DOMDebugger.getEventListeners", { objectId: mainId, depth: -1, pierce: false }));
       if (l === TIMEOUT) return TIMEOUT;
       const nodes = [...new Set<number>(((l as any)?.listeners ?? []).filter((x: any) => (x?.type === "wheel" || x?.type === "mousewheel") && x?.passive !== true && Number.isInteger(x?.backendNodeId)).map((x: any) => x.backendNodeId))];
       if (nodes.length > WHEEL_LISTENERS_MAX) return TIMEOUT;

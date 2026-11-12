@@ -156,7 +156,7 @@ the operator's published numbers (a report, not a bar, until board ab-t30.13 fit
 
 The scroll and the wheel (board ab-t30.11, `stage-scroll-live.ts`) are a part of the same group. `STAGE_PARTS=scroll`
 runs this part alone (the default is `pointer,keys,scroll`), and `STAGE_SCROLL_ROWS=<a regular expression>` only its rows
-whose names match (with no harness rows). Its page on `a.localhost` is taller and wider than the viewport. It holds a
+whose names match (with no harness rows, unless `STAGE_SCROLL_HARNESS=1`). Its page on `a.localhost` is taller and wider than the viewport. It holds a
 button and two fields below the fold, an inner scroller below the fold, a same-origin frame and a cross-origin frame on
 `b.localhost` whose own documents scroll, and in the first screen an element with a wheel listener that is not passive, a
 canvas with a wheel handler and a number input. Its variants add a listener of the window that prevents the wheel, or an

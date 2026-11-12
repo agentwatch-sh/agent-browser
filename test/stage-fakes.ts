@@ -129,8 +129,9 @@ export class FakeTab implements StagePage {
    */
   readonly sc: Record<string, { x: number; y: number }> = {};
   readonly wheels: { t: number; x: number; y: number; dx: number; dy: number; at: string; moved: string | null }[] = [];
-  /** The scrollers of each reader's last SCROLL_STATE (by its handle). */
+  /** The scrollers of each reader's last SCROLL_STATE (by its handle), and the scrollers that DOM.describeNode named. */
   private readonly marks = new Map<string, string[]>();
+  private readonly roots: string[] = [];
   /** The arguments of the last SCROLL_STATE (the client's rect). */
   private lastArgs: any[] | null = null;
   constructor(v: any, clock: FakeClock, o: { id?: number; person?: Person } = {}) {
@@ -536,7 +537,12 @@ export class FakeTab implements StagePage {
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCROLL_STATE) { this.lastArgs = (p.arguments ?? []).map((x: any) => x?.value); return this.scrollState(p.objectId, s.child); }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_POINTS) return this.wheelPoints(p.objectId, s.child, p.arguments[0].value, p.arguments[1].value, p.arguments[2]?.value ?? null);
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === WHEEL_ROOT) return { result: { type: "object", subtype: "node", objectId: `root:${p.objectId}:${p.arguments[0].value}` } };
-    if (s.method === "DOMDebugger.getEventListeners") return this.subtreeListeners(String(p.objectId));
+    // The scroller of WHEEL_ROOT in the page's main world: DOM.describeNode gives its backendNodeId (1000 + the reader's
+    // index), DOM.resolveNode its main world's handle. DOMDebugger.getEventListeners reports the page's listeners only on a
+    // handle of the main world and with no pierce (else the listeners of the handle's own world, none here).
+    if (s.method === "DOM.describeNode" && String(p.objectId).startsWith("root:")) { this.roots.push(String(p.objectId)); return { node: { nodeId: 0, backendNodeId: 999 + this.roots.length, nodeType: 1, nodeName: "DIV" } }; }
+    if (s.method === "DOM.resolveNode" && this.roots[p.backendNodeId - 1000]) return { object: { type: "object", subtype: "node", objectId: `main:${this.roots[p.backendNodeId - 1000]}` } };
+    if (s.method === "DOMDebugger.getEventListeners") return String(p.objectId).startsWith("main:") && p.pierce !== true ? this.subtreeListeners(String(p.objectId).slice(5)) : { listeners: [] };
     // The quads of a node (500 + i) or a scroller (700 + i) of a listener, and the html element (499: the whole document).
     if (s.method === "DOM.getContentQuads" && typeof p.backendNodeId === "number" && p.backendNodeId < 900) {
       const b = p.backendNodeId === 499 ? { x: -1e6, y: -1e6, width: 2e6, height: 2e6 } : p.backendNodeId >= 700 ? this.clientBox(Object.keys(V.page.scrollers)[p.backendNodeId - 700]) : this.liveBox(Object.keys(V.page.nodes)[p.backendNodeId - 500]);
