@@ -50,6 +50,8 @@ export const ACT_LIMITS = {
   queueMs: 120_000,
   /** A popup's window must be outside the screen in this time. */
   popupMs: 2_000,
+  /** Each CDP command of the act's own session waits at most this long (C10's wait of the request): a page that stalls ends the act. */
+  cdpMs: 30_000,
 } as const;
 /** The receiver's hello feature of the act (C4): the service tests for membership in the hello's list. */
 export const ACT_FEATURE = "act";
@@ -281,7 +283,7 @@ export class SignInAct {
 
   private send(r: Run, method: string, params: Record<string, unknown> = {}): Promise<any> {
     if (r.lost) return Promise.reject(new Error("the act tab is gone"));
-    return this.o.model.call("debugger.sendCommand", [{ tabId: r.tab }, method, params]);
+    return this.o.model.call("debugger.sendCommand", [{ tabId: r.tab }, method, params], { wait: this.limits.cdpMs });
   }
 
   /** An evaluation in the act's own isolated world of the current document, made again at each call (a navigation drops it). */
@@ -345,8 +347,9 @@ export class SignInAct {
     }
     if (!outside) return "window";
     // Form rule 1: the record's page, on its exact origin.
+    // Page.navigate answers when the navigation commits: the load's own wait bounds it (a server that never answers).
     const loaded = this.navigated(r);
-    await this.send(r, "Page.navigate", { url: `${rec.origin}${rec.path}` });
+    void this.send(r, "Page.navigate", { url: `${rec.origin}${rec.path}` }).catch(() => {});
     if (!(await loaded)) return "timeout";
     let read = await this.evaluate<PageRead & { viewport: { width: number; height: number } }>(r, call(READ_PAGE));
     r.viewport = read.viewport ?? r.viewport;

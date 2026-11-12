@@ -21,7 +21,7 @@
 // It never touches another Chrome, Xvfb, profile or folder: it signals only the pids that its run started.
 //   flock <heavy.lock> timeout 1500 node test/live/sign-in-act/check.ts --display 171 --chrome-extension <checkout>
 
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -176,11 +176,13 @@ async function stopService(): Promise<void> {
   await Promise.race([exited, sleep(15_000).then(() => { s.kill("SIGKILL"); })]);
 }
 const track = (pid: number | null | undefined, name: string) => { if (!pid) return; const p = proc(pid); if (p) { started.set(pid, p.start); guard.track(pid, name); } };
-const cli = (args: string[], url: string) => {
-  const r = spawnSync(process.execPath, [BIN, ...args, "--state-dir", cliState, "--cdp-url", url], { encoding: "utf8", timeout: 240_000 });
-  seen.push(r.stdout, r.stderr);
-  return r;
-};
+/** The CLI as a child, with no block of this process's event loop: the local site of this process must keep answering. */
+const cli = (args: string[], url: string) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+  execFile(process.execPath, [BIN, ...args, "--state-dir", cliState, "--cdp-url", url], { encoding: "utf8", timeout: 240_000 }, (e, stdout, stderr) => {
+    seen.push(stdout, stderr);
+    resolve({ status: e ? (typeof (e as any).code === "number" ? (e as any).code : null) : 0, stdout, stderr });
+  });
+});
 
 let code = 0;
 try {
@@ -291,11 +293,11 @@ try {
   check("after the act the tracker host is reachable again from the agent's own tab (the act's rules are gone)", tracker.some((r) => r.path === "/control"));
 
   // 7. The CLI: sign-ins, sign-in again, sign-in of another name.
-  const list = cli(["sign-ins", "--json"], url);
+  const list = await cli(["sign-ins", "--json"], url);
   check("agent-browser sign-ins lists the credential", list.status === 0 && JSON.parse(list.stdout).signIns.some((x: any) => x.name === "staging" && x.origin === ORIGIN), list.stdout + list.stderr);
-  const again = cli(["sign-in", "staging"], url);
+  const again = await cli(["sign-in", "staging"], url);
   check("agent-browser sign-in staging signs in again", again.status === 0 && again.stdout === `Signed in to ${ORIGIN}. Your tabs of this site were closed for the sign-in; open the site again: it loads signed in.\n`, again.stdout + again.stderr.slice(-300));
-  const other = cli(["sign-in", "missing"], url);
+  const other = await cli(["sign-in", "missing"], url);
   check("agent-browser sign-in of another name gets C11's text and exits 1", other.status === 1 && other.stderr === "agent-browser: Not signed in: There is no stored sign-in named missing for this repo.\n", other.stderr);
 
   // 8. The secret scan, with its twin.

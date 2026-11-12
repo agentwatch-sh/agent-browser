@@ -56,6 +56,10 @@ export class ActWorld {
   current: FakePage | null = null;
   /** Where a submit goes (the URL of the next page), or null: no navigation (a sign-in by fetch that fails). */
   submitTo: string | null = `${ORIGIN}/home`;
+  /** The wait (C10) of each debugger.sendCommand of the act. */
+  readonly waits: number[] = [];
+  /** A server that never answers: Page.navigate gets no answer and no page loads. */
+  stall = false;
   /** A test's hook at each Input call (a page that flips the field's type, a WebSocket that opens). */
   onInput: (method: string, params: any) => void = () => {};
   watchHit = false;
@@ -91,7 +95,7 @@ export class ActWorld {
     switch (method) {
       case "Page.getFrameTree": return { frameTree: { frame: { id: "F31", url: "about:blank" } } };
       case "Page.createIsolatedWorld": return { executionContextId: this.ctx++ };
-      case "Page.navigate": this.rec("navigate", params.url); this.navigate(params.url); return { frameId: "F31" };
+      case "Page.navigate": this.rec("navigate", params.url); if (this.stall) return new Promise(() => {}); this.navigate(params.url); return { frameId: "F31" };
       case "Page.resetNavigationHistory": this.historyCleared = true; this.rec("resetHistory"); return {};
       case "Fetch.enable": this.fetchOn = true; this.rec("fetchOn"); return {};
       case "Fetch.disable": this.fetchOn = false; this.rec("fetchOff"); return {};
@@ -141,7 +145,8 @@ export class ActWorld {
   readonly model: ActModelPort = {
     notReady: () => this.notReady,
     entries: () => this.entries,
-    call: async (op: string, args: any[] = []) => {
+    call: async (op: string, args: any[] = [], o: { wait?: number } = {}) => {
+      if (op === "debugger.sendCommand") this.waits.push(o.wait ?? -1);
       await new Promise((r) => setImmediate(r));
       switch (op) {
         case "windows.create": { this.rec("windows.create", args); const a = this.windowCreate(args); if (a?.error) throw new Error(a.error); return a; }

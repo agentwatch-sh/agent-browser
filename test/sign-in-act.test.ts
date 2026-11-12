@@ -44,6 +44,7 @@ test("a sign-in: the act window, its hidden tab, the place outside the screen, t
   }
   for (const k of w.keys()) assert.ok(k.rules && k.outside && k.lock, "each key after the rules' confirmation and the place outside the screen, under the input lock");
   assert.equal(w.log.filter((r) => r.what === "act_end").length, 1, "act_end once, last");
+  assert.ok(w.waits.length > 10 && w.waits.every((x) => x === 30_000), "each command of the act's own session waits at most 30 s (C10's wait), not the bridge's 600 s");
   assert.deepEqual(w.log.find((r) => r.what === "act_rules")!.detail, { tab: 31, origin: ORIGIN, send_to: [ORIGIN] });
   // The values reached only the act tab's Input calls: the username into its field, the password into its field.
   assert.equal(w.typed.size, 0, "the clean end emptied the inputs");
@@ -176,6 +177,14 @@ test("the window off the screen: no key while windows.get reports it on the scre
   assert.equal(w.keys().length, 0);
   assert.equal(w.first("navigate"), -1, "the page never loads on the screen");
   assert.ok(w.first("act_end") > 0);
+});
+
+test("a sign-in page that never loads (Page.navigate gets no answer) ends the act `timeout` within the load's wait; the clean end and act_end follow", { timeout: 10_000 }, async () => {
+  const w = new ActWorld();
+  w.stall = true;
+  await assert.rejects(w.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.timeout));
+  assert.equal(w.keys().length, 0);
+  assert.ok(w.first("act_end") > w.first("navigate"));
 });
 
 test("form rules before the first key: another origin, two password fields, a GET form and a form to another place get no key and no act_rules; act_end follows", async () => {
