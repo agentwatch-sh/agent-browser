@@ -26,6 +26,7 @@ import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { AGENT_ARGS, assertSafeChromeArgs } from "../../agent.ts";
 import { BINARY_REL } from "./deb.ts";
+import { RECEIVER_ID } from "../package/pins.ts";
 import { displayInUse, abstractDisplays, DISPLAY_FIRST, DISPLAY_LAST, type DisplayFs } from "./display.ts";
 import type { ChromeTools, ChromeCopy } from "./google-chrome.ts";
 import { Mutex } from "./mutex.ts";
@@ -531,18 +532,29 @@ export class ChromeUnit {
     return true;
   }
 
+  /**
+   * The profile's Preferences before each Chrome start: the downloads' folder; and for the stored sign-ins (C11, the
+   * sign-in act; the design, sections 7.3 and 4.3 T17): no password saving, no leak check, no autofill, and the receiver
+   * allowed in incognito (`extensions.settings.<receiver ID>.incognito`), so that it can open the act window.
+   */
   private writeDownloadPrefs(): void {
     const p = this.d.paths.preferences;
     let prefs: unknown = {};
     try { prefs = JSON.parse(readFileSync(p, "utf8")); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") prefs = null; }
-    if (prefs === null || typeof prefs !== "object" || Array.isArray(prefs)) { this.d.log("unit: the Preferences file is not a JSON object; downloads keep Chrome's own folder"); return; }
+    if (prefs === null || typeof prefs !== "object" || Array.isArray(prefs)) { this.d.log("unit: the Preferences file is not a JSON object; downloads keep Chrome's own folder, and the sign-in act has no private window"); return; }
     const o = prefs as Record<string, any>;
+    const obj = (x: unknown): Record<string, any> => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : {});
     const folder = this.d.paths.downloads;
-    for (const [section, values] of [["download", { default_directory: folder, prompt_for_download: false, directory_upgrade: true }], ["savefile", { default_directory: folder }]] as const) {
-      const cur = o[section] && typeof o[section] === "object" && !Array.isArray(o[section]) ? o[section] : {};
-      o[section] = { ...cur, ...values };
+    for (const [section, values] of [["download", { default_directory: folder, prompt_for_download: false, directory_upgrade: true }], ["savefile", { default_directory: folder }],
+      ["profile", { password_manager_enabled: false, password_manager_leak_detection: false }],
+      ["autofill", { enabled: false, profile_enabled: false, credit_card_enabled: false }]] as const) {
+      o[section] = { ...obj(o[section]), ...values };
     }
+    o.credentials_enable_service = false;
+    const ext = obj(o.extensions), settings = obj(ext.settings);
+    settings[RECEIVER_ID] = { ...obj(settings[RECEIVER_ID]), incognito: true };
+    o.extensions = { ...ext, settings };
     this.privateDir(join(this.d.paths.profile, "Default"));
     writeJsonDurable(p, o);
   }

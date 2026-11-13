@@ -15,6 +15,7 @@ import { readRecord, writeJsonDurable } from "../src/service/unit/record.ts";
 import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, HEALTHY_MS, SUPERVISE_MS, CHROME_INSTALLING, CHROME_NOT_INSTALLED, ChromeUnit, configFrom, ConfigError, DEFAULT_CONFIG, KIND_CHROMIUM, KIND_GOOGLE, NotOwnerError, signalGroup, spawnDetached, StartError, STOPPED_DURING_INSTALL, XVFB_TRIES, type UnitEvent } from "../src/service/unit/unit.ts";
 import { AUTH_NAME, COOKIE_LEN, writeXauthority, xauthEntry } from "../src/service/unit/xauth.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { RECEIVER_ID } from "../src/service/package/pins.ts";
 
 const CHROMIUM = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
 function unitIn(w: World, o: { tools?: FakeTools; cfg?: typeof DEFAULT_CONFIG | null; displays?: { first: number; last: number }; mayAct?: (what: string) => Promise<boolean> } = {}) {
@@ -152,6 +153,33 @@ test("Chrome's environment is built from scratch: only PATH, HOME (the unit's ow
     assert.equal(statSync(w.paths.downloads).mode & 0o777, 0o700);
     const prefs = JSON.parse(readFileSync(w.paths.preferences, "utf8"));
     assert.equal(prefs.download.default_directory, w.paths.downloads);
+  } finally { w.close(); }
+});
+
+test("Chrome's preferences before each start (the stored sign-ins, C11): no password saving, no leak check, no autofill, and the receiver allowed in incognito; the other keys stay", async () => {
+  const w = new World();
+  try {
+    mkdirSync(join(w.paths.profile, "Default"), { recursive: true });
+    writeFileSync(w.paths.preferences, JSON.stringify({ profile: { name: "Person 1" }, extensions: { settings: { [RECEIVER_ID]: { location: 1 }, otherextension: { incognito: false } } }, autofill: { enabled: true } }));
+    const { u } = unitIn(w, { cfg: CHROMIUM });
+    await u.start();
+    const check = () => {
+      const p = JSON.parse(readFileSync(w.paths.preferences, "utf8"));
+      assert.equal(p.credentials_enable_service, false);
+      assert.deepEqual(p.profile, { name: "Person 1", password_manager_enabled: false, password_manager_leak_detection: false });
+      assert.deepEqual(p.autofill, { enabled: false, profile_enabled: false, credit_card_enabled: false });
+      assert.deepEqual(p.extensions.settings[RECEIVER_ID], { location: 1, incognito: true });
+      assert.deepEqual(p.extensions.settings.otherextension, { incognito: false }, "another extension's settings stay");
+      assert.equal(p.download.default_directory, w.paths.downloads);
+    };
+    check();
+    // Chrome drops a key (round 1: autofill.enabled): the next start writes it again.
+    const p = JSON.parse(readFileSync(w.paths.preferences, "utf8"));
+    delete p.autofill.enabled; delete p.extensions.settings[RECEIVER_ID].incognito;
+    writeFileSync(w.paths.preferences, JSON.stringify(p));
+    await u.stop();
+    await u.start();
+    check();
   } finally { w.close(); }
 });
 

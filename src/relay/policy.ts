@@ -44,6 +44,12 @@ export const MODEL_SET = new Set(["Browser.getVersion", "Browser.close", "Browse
   "Browser.grantPermissions", "Browser.resetPermissions", "Browser.getWindowForTarget", "Browser.getWindowBounds", "Browser.setWindowBounds",
   "Target.setAutoAttach", "Target.setDiscoverTargets", "Target.getTargets", "Target.getTargetInfo", "Target.createTarget", "Target.closeTarget",
   "Target.activateTarget", "Target.attachToTarget", "Target.detachFromTarget", "Target.attachToBrowserTarget", "Target.getBrowserContexts"]);
+/**
+ * The methods of the sign-in act (C11, the sign-in act; board ab-v16.97.4): only the service's model, which has the act,
+ * answers them on the root and on a browser session. The relay's model refuses them as calls outside its set, and every
+ * model refuses them on a page session.
+ */
+export const SIGN_IN_METHODS: ReadonlySet<string> = new Set(["AgentBrowser.signIn", "AgentBrowser.signIns"]);
 /** The calls that the model answers on a page session (Playwright sends the window calls there). */
 export const PAGE_MODEL_SET = new Set([...MODEL_SET].filter((m) => (m.startsWith("Target.") && m !== "Target.setAutoAttach") || m.includes("Window")));
 
@@ -204,13 +210,14 @@ export const FOCUS_EMULATION = "Emulation.setFocusEmulationEnabled";
 
 /**
  * Where a call goes. `child`: the call is a Target.detachFromTarget of a child session (a frame or a worker) of the
- * page's tab. `windowPerPage`: each page has a window of its own (Linux), and the model answers FOCUS_EMULATION.
+ * page's tab. `windowPerPage`: each page has a window of its own (Linux), and the model answers FOCUS_EMULATION. `act`:
+ * the model has the sign-in act (the service's), so it answers SIGN_IN_METHODS on the root and on a browser session.
  */
-export function route(method: string, params: any, onPage: boolean, o: { child?: boolean; windowPerPage?: boolean } = {}): Route {
+export function route(method: string, params: any, onPage: boolean, o: { child?: boolean; windowPerPage?: boolean; act?: boolean } = {}): Route {
   const refused = refusal(method, params, onPage);
   if (refused) return { refused };
-  // A page call on the root or a browser session names no tab.
-  if (!onPage) return MODEL_SET.has(method) ? "model" : { refused: TEXT.generic(method) };
+  // A page call on the root or a browser session names no tab. The sign-in act's methods: only a model with the act.
+  if (!onPage) return MODEL_SET.has(method) || (o.act && SIGN_IN_METHODS.has(method)) ? "model" : { refused: TEXT.generic(method) };
   if (o.windowPerPage && method === FOCUS_EMULATION) return "model";
   if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && o.child)) return "chrome";
   if (PAGE_MODEL_SET.has(method)) return "model";

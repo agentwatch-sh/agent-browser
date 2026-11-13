@@ -1,0 +1,973 @@
+{
+ "contract": "C4, C5 and C10 of docs/protocol.md: the receiver's part of the stored sign-ins (board ab-v16.97.3; agent-browser's stored sign-ins design, sections 7.3, 7.6, 7.8 and 10). The act window (C10 windows.create with the mark act), the act's rules A to E (C5, act_rules), the read of the act store's cookies (act_cookies) and the act's end (act_end). agent-browser's service builds the requests; the receiver answers them. Every value is a sample, and every cookie value is a made-up test value.",
+ "setScopes": {
+  "lists": {
+   "md": [
+    "example.com"
+   ]
+  },
+  "scopes": {
+   "my-repo": "md",
+   "md-gone": null
+  },
+  "default": null
+ },
+ "scope": "my-repo",
+ "features": [
+  "scopes",
+  "act"
+ ],
+ "actWindow": {
+  "note": "The act window: incognito true and the mark act, with the caller's scope. The receiver checks its incognito access first (chrome.extension.isAllowedIncognitoAccess), ends a left act, refuses while another incognito tab is open, then opens the window. The act tab (31) gets the scope for the list rules, but bridge.tabScopes leaves it out, and the copy holds act:30, not tab:31.",
+  "req": {
+   "t": "req",
+   "id": "5f3a9c01-40",
+   "op": "windows.create",
+   "args": [
+    {
+     "url": "about:blank",
+     "focused": false,
+     "incognito": true
+    },
+    "my-repo",
+    "act"
+   ]
+  },
+  "chrome": [
+   "windows.create",
+   [
+    {
+     "url": "about:blank",
+     "focused": false,
+     "incognito": true
+    }
+   ]
+  ],
+  "res": {
+   "t": "res",
+   "ch": "bridge",
+   "id": "5f3a9c01-40",
+   "ok": true,
+   "data": {
+    "id": 30,
+    "incognito": true,
+    "focused": false,
+    "alwaysOnTop": false,
+    "left": 0,
+    "top": 0,
+    "width": 1280,
+    "height": 800,
+    "state": "normal",
+    "type": "normal",
+    "tabs": [
+     {
+      "id": 31,
+      "windowId": 30,
+      "index": 0,
+      "active": true,
+      "incognito": true,
+      "url": "",
+      "pendingUrl": "about:blank",
+      "title": "",
+      "status": "loading"
+     }
+    ]
+   }
+  },
+  "copy": {
+   "act:30": true
+  }
+ },
+ "windowGet": {
+  "note": "windows.get of the act window answers as for any window: the service reads its place after the move at the X level, before the act's first key. The bounds are a sample of a window to the right of a 1280 x 800 screen.",
+  "req": {
+   "t": "req",
+   "id": "5f3a9c01-41",
+   "op": "windows.get",
+   "args": [
+    30
+   ]
+  },
+  "chrome": [
+   "windows.get",
+   [
+    30
+   ]
+  ],
+  "res": {
+   "t": "res",
+   "ch": "bridge",
+   "id": "5f3a9c01-41",
+   "ok": true,
+   "data": {
+    "id": 30,
+    "incognito": true,
+    "focused": false,
+    "alwaysOnTop": false,
+    "left": 1400,
+    "top": 0,
+    "width": 1280,
+    "height": 800,
+    "state": "normal",
+    "type": "normal"
+   }
+  }
+ },
+ "windowErrors": [
+  {
+   "note": "The pair rule: incognito true only with the mark act.",
+   "setup": "none",
+   "req": {
+    "t": "req",
+    "id": "a1",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": true
+     },
+     "my-repo"
+    ]
+   },
+   "error": "bad args"
+  },
+  {
+   "note": "The pair rule: the mark act only with incognito true.",
+   "setup": "none",
+   "req": {
+    "t": "req",
+    "id": "a2",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank"
+     },
+     "my-repo",
+     "act"
+    ]
+   },
+   "error": "bad args"
+  },
+  {
+   "note": "incognito is true or absent.",
+   "setup": "none",
+   "req": {
+    "t": "req",
+    "id": "a3",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": false
+     },
+     "my-repo",
+     "act"
+    ]
+   },
+   "error": "bad args"
+  },
+  {
+   "note": "The mark is the string act.",
+   "setup": "none",
+   "req": {
+    "t": "req",
+    "id": "a4",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": true
+     },
+     "my-repo",
+     "popup"
+    ]
+   },
+   "error": "bad args"
+  },
+  {
+   "note": "An act window opens at about:blank only, as any new window.",
+   "setup": "none",
+   "req": {
+    "t": "req",
+    "id": "a5",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "https://staging.example.com/login",
+      "incognito": true
+     },
+     "my-repo",
+     "act"
+    ]
+   },
+   "error": "bad args"
+  },
+  {
+   "note": "The scope needs a list, as for any new window.",
+   "setup": "none",
+   "req": {
+    "t": "req",
+    "id": "a6",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": true
+     },
+     "md-gone",
+     "act"
+    ]
+   },
+   "error": "no list for this scope"
+  },
+  {
+   "note": "The receiver is not allowed in incognito (chrome.extension.isAllowedIncognitoAccess answers false): no window opens. The service's start writes the allow into the profile; without it the act takes the design's fallback.",
+   "setup": "no incognito access",
+   "req": {
+    "t": "req",
+    "id": "a7",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": true
+     },
+     "my-repo",
+     "act"
+    ]
+   },
+   "error": "not allowed in incognito"
+  },
+  {
+   "note": "Chrome gives no window (an extension that is not allowed in incognito gets none): the same text.",
+   "setup": "no window",
+   "req": {
+    "t": "req",
+    "id": "a8",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": true
+     },
+     "my-repo",
+     "act"
+    ]
+   },
+   "error": "not allowed in incognito"
+  },
+  {
+   "note": "Another incognito tab is open (for example one that the operator opened in the live view): all incognito windows share one context, so no act window opens.",
+   "setup": "another incognito tab",
+   "req": {
+    "t": "req",
+    "id": "a9",
+    "op": "windows.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "incognito": true
+     },
+     "my-repo",
+     "act"
+    ]
+   },
+   "error": "another private window is open"
+  },
+  {
+   "note": "No op moves or resizes an act window: the service moves it outside the screen at the X level.",
+   "setup": "act window 30",
+   "req": {
+    "t": "req",
+    "id": "a10",
+    "op": "windows.update",
+    "args": [
+     30,
+     {
+      "left": 0,
+      "top": 0
+     }
+    ]
+   },
+   "error": "not an agent window"
+  },
+  {
+   "note": "No client tab goes into an act window.",
+   "setup": "act window 30",
+   "req": {
+    "t": "req",
+    "id": "a11",
+    "op": "tabs.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "windowId": 30
+     },
+     "my-repo"
+    ]
+   },
+   "error": "not an agent window"
+  },
+  {
+   "note": "An incognito tab that is no act tab is no agent tab.",
+   "setup": "another incognito tab",
+   "req": {
+    "t": "req",
+    "id": "a12",
+    "op": "debugger.attach",
+    "args": [
+     40
+    ]
+   },
+   "error": "not an agent tab"
+  },
+  {
+   "note": "No op selects or closes an act tab: the act's caller closes it only through act_end (review-ce44 B1).",
+   "setup": "act window 30",
+   "req": {
+    "t": "req",
+    "id": "a13",
+    "op": "tabs.update",
+    "args": [
+     31,
+     {
+      "active": true
+     }
+    ]
+   },
+   "error": "not an agent tab"
+  },
+  {
+   "note": "No tabs.remove of an act tab (no attach for a close).",
+   "setup": "act window 30",
+   "req": {
+    "t": "req",
+    "id": "a14",
+    "op": "tabs.remove",
+    "args": [
+     31
+    ]
+   },
+   "error": "not an agent tab"
+  },
+  {
+   "note": "No client's Page.close of an act tab on its own session.",
+   "setup": "act window 30 attached",
+   "req": {
+    "t": "req",
+    "id": "a15",
+    "op": "debugger.sendCommand",
+    "args": [
+     {
+      "tabId": 31
+     },
+     "Page.close"
+    ]
+   },
+   "error": "not an agent tab"
+  },
+  {
+   "note": "No op selects the operator's incognito tab.",
+   "setup": "another incognito tab",
+   "req": {
+    "t": "req",
+    "id": "a16",
+    "op": "tabs.update",
+    "args": [
+     40,
+     {
+      "active": true
+     }
+    ]
+   },
+   "error": "not an agent tab"
+  },
+  {
+   "note": "No op closes the operator's incognito tab (no attach for a close).",
+   "setup": "another incognito tab",
+   "req": {
+    "t": "req",
+    "id": "a17",
+    "op": "tabs.remove",
+    "args": [
+     40
+    ]
+   },
+   "error": "not an agent tab"
+  },
+  {
+   "note": "No op moves the operator's incognito window (the receiver reads the window with windows.get first).",
+   "setup": "another incognito tab",
+   "req": {
+    "t": "req",
+    "id": "a18",
+    "op": "windows.update",
+    "args": [
+     41,
+     {
+      "left": 0
+     }
+    ]
+   },
+   "error": "not an agent window"
+  },
+  {
+   "note": "No client tab goes into the operator's incognito window, or into the window of an act popup (the receiver reads the window with windows.get first).",
+   "setup": "another incognito tab",
+   "req": {
+    "t": "req",
+    "id": "a19",
+    "op": "tabs.create",
+    "args": [
+     {
+      "url": "about:blank",
+      "windowId": 41
+     },
+     "my-repo"
+    ]
+   },
+   "error": "not an agent window"
+  }
+ ],
+ "incognitoTab": {
+  "id": 40,
+  "windowId": 41,
+  "incognito": true,
+  "url": "about:blank"
+ },
+ "rulesReq": {
+  "t": "req",
+  "id": "m10",
+  "op": "act_rules",
+  "tab": 31,
+  "origin": "https://staging.example.com",
+  "send_to": [
+   "https://staging.example.com",
+   "https://auth.example.com:8443"
+  ]
+ },
+ "rules": [
+  {
+   "id": 10,
+   "priority": 4,
+   "action": {
+    "type": "block"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "excludedRequestDomains": [
+     "staging.example.com",
+     "auth.example.com"
+    ]
+   }
+  },
+  {
+   "id": 11,
+   "priority": 4,
+   "action": {
+    "type": "block"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "resourceTypes": [
+     "main_frame"
+    ],
+    "excludedRequestMethods": [
+     "get"
+    ],
+    "excludedRequestDomains": [
+     "staging.example.com",
+     "auth.example.com"
+    ]
+   }
+  },
+  {
+   "id": 12,
+   "priority": 4,
+   "action": {
+    "type": "block"
+   },
+   "condition": {
+    "initiatorDomains": [
+     "staging.example.com",
+     "auth.example.com"
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "excludedRequestDomains": [
+     "staging.example.com",
+     "auth.example.com"
+    ]
+   }
+  },
+  {
+   "id": 13,
+   "priority": 4,
+   "action": {
+    "type": "block"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "requestDomains": [
+     "staging.example.com",
+     "auth.example.com"
+    ]
+   }
+  },
+  {
+   "id": 14,
+   "priority": 5,
+   "action": {
+    "type": "allow"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "urlFilter": "|https://staging.example.com/"
+   }
+  },
+  {
+   "id": 15,
+   "priority": 5,
+   "action": {
+    "type": "allow"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "urlFilter": "|wss://staging.example.com/"
+   }
+  },
+  {
+   "id": 16,
+   "priority": 5,
+   "action": {
+    "type": "allow"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "urlFilter": "|https://auth.example.com:8443/"
+   }
+  },
+  {
+   "id": 17,
+   "priority": 5,
+   "action": {
+    "type": "allow"
+   },
+   "condition": {
+    "tabIds": [
+     31
+    ],
+    "excludedResourceTypes": [
+     "main_frame"
+    ],
+    "urlFilter": "|wss://auth.example.com:8443/"
+   }
+  }
+ ],
+ "rulesRes": {
+  "t": "res",
+  "id": "m10",
+  "ok": true,
+  "data": {
+   "rules": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+   ]
+  }
+ },
+ "badRules": [
+  {
+   "note": "send_to holds origin.",
+   "req": {
+    "t": "req",
+    "id": "m20",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://staging.example.com",
+    "send_to": [
+     "https://auth.example.com"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "An origin exactly as the URL parser gives it: no path.",
+   "req": {
+    "t": "req",
+    "id": "m21",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://staging.example.com/login",
+    "send_to": [
+     "https://staging.example.com/login"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "No default port.",
+   "req": {
+    "t": "req",
+    "id": "m22",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://staging.example.com:443",
+    "send_to": [
+     "https://staging.example.com:443"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "Lowercase.",
+   "req": {
+    "t": "req",
+    "id": "m23",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://Staging.example.com",
+    "send_to": [
+     "https://Staging.example.com"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "http: or https: only.",
+   "req": {
+    "t": "req",
+    "id": "m24",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "wss://staging.example.com",
+    "send_to": [
+     "wss://staging.example.com"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "Each origin once.",
+   "req": {
+    "t": "req",
+    "id": "m25",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://staging.example.com",
+    "send_to": [
+     "https://staging.example.com",
+     "https://staging.example.com"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "At least one origin.",
+   "req": {
+    "t": "req",
+    "id": "m26",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://staging.example.com",
+    "send_to": []
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "At most 32 origins.",
+   "req": {
+    "t": "req",
+    "id": "m27",
+    "op": "act_rules",
+    "tab": 31,
+    "origin": "https://staging.example.com",
+    "send_to": [
+     "https://staging.example.com",
+     "https://s0.example.com",
+     "https://s1.example.com",
+     "https://s2.example.com",
+     "https://s3.example.com",
+     "https://s4.example.com",
+     "https://s5.example.com",
+     "https://s6.example.com",
+     "https://s7.example.com",
+     "https://s8.example.com",
+     "https://s9.example.com",
+     "https://s10.example.com",
+     "https://s11.example.com",
+     "https://s12.example.com",
+     "https://s13.example.com",
+     "https://s14.example.com",
+     "https://s15.example.com",
+     "https://s16.example.com",
+     "https://s17.example.com",
+     "https://s18.example.com",
+     "https://s19.example.com",
+     "https://s20.example.com",
+     "https://s21.example.com",
+     "https://s22.example.com",
+     "https://s23.example.com",
+     "https://s24.example.com",
+     "https://s25.example.com",
+     "https://s26.example.com",
+     "https://s27.example.com",
+     "https://s28.example.com",
+     "https://s29.example.com",
+     "https://s30.example.com",
+     "https://s31.example.com"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "tab is a tab id.",
+   "req": {
+    "t": "req",
+    "id": "m28",
+    "op": "act_rules",
+    "tab": "31",
+    "origin": "https://staging.example.com",
+    "send_to": [
+     "https://staging.example.com"
+    ]
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "Tab 7 is no act tab.",
+   "req": {
+    "t": "req",
+    "id": "m29",
+    "op": "act_rules",
+    "tab": 7,
+    "origin": "https://staging.example.com",
+    "send_to": [
+     "https://staging.example.com"
+    ]
+   },
+   "error": "not an act tab"
+  }
+ ],
+ "cookieStores": [
+  {
+   "id": "0",
+   "tabIds": [
+    7
+   ]
+  },
+  {
+   "id": "1",
+   "tabIds": [
+    31
+   ]
+  }
+ ],
+ "cookies": [
+  {
+   "storeId": "1",
+   "name": "test_session",
+   "value": "test-session-value-1",
+   "domain": "staging.example.com",
+   "hostOnly": true,
+   "path": "/",
+   "secure": true,
+   "httpOnly": true,
+   "sameSite": "lax",
+   "session": true
+  },
+  {
+   "storeId": "1",
+   "name": "test_pref",
+   "value": "test-pref-value-2",
+   "domain": ".staging.example.com",
+   "hostOnly": false,
+   "path": "/",
+   "secure": true,
+   "httpOnly": false,
+   "sameSite": "no_restriction",
+   "session": false,
+   "expirationDate": 1893456000
+  },
+  {
+   "storeId": "1",
+   "name": "test_chips",
+   "value": "test-chips-value-3",
+   "domain": "staging.example.com",
+   "hostOnly": true,
+   "path": "/",
+   "secure": true,
+   "httpOnly": true,
+   "sameSite": "no_restriction",
+   "session": true,
+   "partitionKey": {
+    "topLevelSite": "https://example.com",
+    "hasCrossSiteAncestor": false
+   }
+  },
+  {
+   "storeId": "0",
+   "name": "test_agent",
+   "value": "test-agent-value-4",
+   "domain": "staging.example.com",
+   "hostOnly": true,
+   "path": "/",
+   "secure": true,
+   "httpOnly": true,
+   "sameSite": "lax",
+   "session": true
+  }
+ ],
+ "cookiesReq": {
+  "t": "req",
+  "id": "m11",
+  "op": "act_cookies",
+  "tab": 31,
+  "domain": "staging.example.com"
+ },
+ "cookiesRes": {
+  "t": "res",
+  "id": "m11",
+  "ok": true,
+  "data": {
+   "cookies": [
+    {
+     "name": "test_session",
+     "value": "test-session-value-1",
+     "domain": "staging.example.com",
+     "hostOnly": true,
+     "path": "/",
+     "secure": true,
+     "httpOnly": true,
+     "sameSite": "lax",
+     "session": true
+    },
+    {
+     "name": "test_pref",
+     "value": "test-pref-value-2",
+     "domain": ".staging.example.com",
+     "hostOnly": false,
+     "path": "/",
+     "secure": true,
+     "httpOnly": false,
+     "sameSite": "no_restriction",
+     "session": false,
+     "expirationDate": 1893456000
+    },
+    {
+     "name": "test_chips",
+     "value": "test-chips-value-3",
+     "domain": "staging.example.com",
+     "hostOnly": true,
+     "path": "/",
+     "secure": true,
+     "httpOnly": true,
+     "sameSite": "no_restriction",
+     "session": true,
+     "partitionKey": {
+      "topLevelSite": "https://example.com",
+      "hasCrossSiteAncestor": false
+     }
+    }
+   ]
+  }
+ },
+ "badCookies": [
+  {
+   "note": "A host, not an origin.",
+   "req": {
+    "t": "req",
+    "id": "m30",
+    "op": "act_cookies",
+    "tab": 31,
+    "domain": "https://staging.example.com"
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "No port.",
+   "req": {
+    "t": "req",
+    "id": "m31",
+    "op": "act_cookies",
+    "tab": 31,
+    "domain": "staging.example.com:8443"
+   },
+   "error": "bad request"
+  },
+  {
+   "note": "Tab 7 is no act tab: the receiver reads no cookie of the agent's context for the service.",
+   "req": {
+    "t": "req",
+    "id": "m32",
+    "op": "act_cookies",
+    "tab": 7,
+    "domain": "staging.example.com"
+   },
+   "error": "not an act tab"
+  }
+ ],
+ "endReq": {
+  "t": "req",
+  "id": "m12",
+  "op": "act_end"
+ },
+ "endRes": {
+  "t": "res",
+  "id": "m12",
+  "ok": true,
+  "data": {
+   "closed": 1
+  }
+ },
+ "errors": {
+  "bridge": [
+   "not allowed in incognito",
+   "another private window is open",
+   "not an agent window"
+  ],
+  "main": [
+   "bad request",
+   "not an act tab",
+   "rules not held",
+   "rules not removed",
+   "act not closed",
+   "no cookie store",
+   "cookies failed"
+  ]
+ },
+ "rulesNote": "Rules A to E for the act tab 31 (and each act popup or replaced act tab that joins: its id goes into the tabIds of A, B, D and E). Rule C has no tabIds, and its initiatorDomains are the hosts of send_to (review-ce44)."
+}

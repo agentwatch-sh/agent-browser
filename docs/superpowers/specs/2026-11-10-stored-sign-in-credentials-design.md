@@ -237,7 +237,7 @@ to that agent. This is why the act uses a tab, a window and a browser context of
 | T2 | The agent watches the network or intercepts the submit, reads the body, or sends it to another host | No client session exists on the act tab, so no client's `Network` or `Fetch` acts on it. Only the service has a session there | stopped |
 | T3 | The agent puts a script in first (a main-world listener, an isolated-world init script, a window reference: C7), or uses its own tab of the same origin: the origin's storage, Cache Storage, a service worker, `BroadcastChannel` (review-104 B1; round 1, case K1: in one context the agent's service worker served the agent's page at the sign-in path, and the agent's tab got the typed value by `BroadcastChannel` and by the `storage` event) | The act runs in a new incognito window: a browser context of its own, new for each act, that no client can make or reach (C11 refuses every other context). Round 1: in the act's context, the agent's page was not served, the agent's storage and caches were not visible, no worker controlled the page, and no broadcast or `storage` event reached the agent's tab. The act tab has no opener and no window name | stopped. If the incognito window cannot be had (section 7.3, the fallback): the service worker is bypassed, and the same-origin channels stay a stated limit |
 | T4 | The agent changes the form's action to another host | The agent cannot reach the act tab. The form rules (section 7.4) refuse a form that sends to another origin, and the block stops a request to another host | stopped |
-| T5 | The site's own page sends the password away (a third-party script, or a script of the site that a change of its storage steers) | The block: from the first key, the receiver blocks every request except a top-level GET, of the act tab, of its popups, of its dedicated workers and of the site's service workers, to a host outside `send_to`, every resource type (WebSocket, beacon, image, fetch included). Before the first key, an open WebSocket to another host stops the act. The guard fails a request whose URL holds the password in five forms. Round 1: a page script sent each typed value through six channels; with the block, no request of any channel reached the other host, and the sign-in worked. With the earlier guard alone, the other host got the whole password by an image URL in base64url, by the site's service worker and by a WebSocket, and parts of it (4 to 18 characters) by all six channels; the earlier guard stopped the whole value only in the fetch, the beacon and the dedicated worker's fetch | stopped for other hosts. Not stopped: a send to the site's own origin or to another `send_to` origin (any path, a hash, an encryption, a compression, a part of the value, a WebSocket), a subdomain or another port of a `send_to` host by a WebSocket, a top-level or popup GET to a host on the scope's list with a changed or partial value, DNS prefetch and preconnect, and WebRTC (section 7.6) |
+| T5 | The site's own page sends the password away (a third-party script, or a script of the site that a change of its storage steers) | The block: from the first key, the receiver blocks every request except a top-level GET, of the act tab, of its popups, of its dedicated workers and of the site's service workers, to a host outside `send_to`, every resource type (WebSocket, beacon, image, fetch included). Before the first key, an open WebSocket to another host stops the act. The guard fails a request whose URL holds the password in five forms. Round 1: a page script sent each typed value through six channels; with the block, no request of any channel reached the other host, and the sign-in worked. With the earlier guard alone, the other host got the whole password by an image URL in base64url, by the site's service worker and by a WebSocket, and parts of it (4 to 18 characters) by all six channels; the earlier guard stopped the whole value only in the fetch, the beacon and the dedicated worker's fetch | stopped for other hosts. Not stopped: a send to the site's own origin or to another `send_to` origin (any path, a hash, an encryption, a compression, a part of the value, a WebSocket), a subdomain or another port of a `send_to` host by a WebSocket, a top-level GET to a host on the scope's list with a changed or partial value, the first requests of an act popup before the service's session holds its `Fetch`, DNS prefetch and preconnect, and WebRTC (section 7.6) |
 | T6 | A page of the exact origin that is not the sign-in page (another path, a page that the agent made) | The act loads the credential's own sign-in path in its own context, so no page or worker of the agent serves it (T3). The agent names only the credential | stopped |
 | T7 | A redirect during the sign-in (to another origin, to a host on no list) | The origin check before the first key: the page must be on the credential's exact origin. After the submit, the scope's list rules apply in the act tab (C4, C5). The block stops a request outside `send_to` that is not a top-level GET; the guard fails a URL with the password, on any origin | stopped |
 | T8 | A failed sign-in leaves the password in the field (C4, C5) | The act empties the fields, and the act window and its whole context close at the end of each act. Three failed results in a row stop the credential (section 7.7) | stopped |
@@ -681,9 +681,11 @@ starts it, as any request that needs the browser does, and Chrome does not stop 
   space", `chrome.debugger` has no `Browser.setWindowBounds`, and a minimized state changes nothing on an Xvfb
   with no window manager (all round 1). The service runs Xvfb and holds its X authority, so it moves the act window
   at the X level to the right of the screen's area (as `xdotool windowmove` did in round 1). Round 1: the
-  framebuffer then held no pixel of the window, Chrome reported the new bounds, and the sign-in worked there. The
-  act types no key until `windows.get` reports the window outside the screen; else it ends with "The agent browser
-  could not move the sign-in window off the screen."
+  framebuffer then held no pixel of the window, Chrome reported the new bounds, and the sign-in worked there. The act
+  types no key until `windows.get` reports the window outside the screen; else it ends with "The agent browser could
+  not move the sign-in window off the screen." The service finds the act window, and the window of each act popup, by
+  a title that it sets in that tab's page: a new random value for each act and each act popup (`aw-act-` and 8 random
+  bytes in hex; the X move takes no title of another form), never by the bounds of a window (board ab-v16.97.4).
 - **The live view (review-104 B2).** From the act's start to its end, agentwatch's live view sends no frame of the
   display to any viewer (a fixed frame "A stored sign-in runs" in its place) and plays no input from it. The
   service sends the act's start and end as a `sign_in` event with `phase` (section 8). So a test login, which any
@@ -722,8 +724,8 @@ scripts cannot change the service's reads.
    only new requests, so this check covers the ones that the page opened before it.
 7. **The type watch (review-104 B2).** Before the first key, the service puts a `MutationObserver` on the password
    field's `type` attribute in its isolated world. When the type changes (a click on a "show password" control),
-   the observer empties the field in its own callback, before the page paints again, and the act ends with "The
-   page showed the password field as text, so the agent browser stopped." Round 1: the observer saw the change
+   the observer empties the field in its own callback, before the page paints again, and the act ends with "The page
+   showed the password field as text, so the agent browser ended the sign-in." (C11's text: it names no stop, I2) Round 1: the observer saw the change
    after 3 of 19 keys, the field was empty, and the act stopped.
 
 The first build reads only the main frame. A sign-in form in a frame gets "no sign-in form that the agent browser
@@ -769,7 +771,8 @@ worker each sent the whole password to the other host, and `Fetch` paused neithe
 worker with no attach of it. Round 1 measured rules A, B and C: with them, no request of any channel reached the
 other host. Rules D and E are designed, not measured.
 
-**The guard.** The service also keeps `Fetch` on in the act tab for every URL, at the request stage. For each paused
+**The guard.** The service also keeps `Fetch` on in the act tab and in each act popup that its session holds, for
+every URL, at the request stage. For each paused
 request:
 
 - When its URL holds the password (plain, URL-encoded, JSON-escaped, base64 or base64url), on any origin: it fails
@@ -778,17 +781,24 @@ request:
   body: it fails (this covers a request that rule D lets pass by its host but whose origin is not exact).
 - Every other request continues unchanged.
 
-A blocked or failed request is no reason to stop the act: a third-party script's request fails, and the sign-in
-goes on (round 1). The service sends the operator an event with the host of each blocked or failed request (not
-its path); the pane shows it on the credential's row. When the site's own sign-in request goes to another origin,
-the sign-in fails, and the pane's list of blocked hosts tells the operator which origin to add to `send_to`.
+A blocked or failed request is no reason to end the act: a third-party script's request fails, and the sign-in goes on
+(round 1). No event, prompt, report or log line names the host of a blocked or failed request, because a host that the
+page chooses can carry the password (contract C11 and C12, review-112 B1; board ab-v16.97.4 brings this section to the
+contract): the act's `end` event and its log line give only the number of requests that the block stopped (`blocked`)
+and the number that the guard failed (`guarded`). When the site's own sign-in request goes to another origin, the
+sign-in fails, and the operator finds the origin to add to `send_to` from the site's own page, not from the act. A
+paused request whose event is too large for the link fails: the guard cannot read it.
 
 **What the block and the guard do not stop**, stated plainly: a send to the site's own origin or to another origin
 of `send_to`, at any path (the site's own endpoints); a hash, an encryption or a compression of the password; a
 part of the value (the person's input types a key at a time, about 5 characters a second, so a script can send
 each prefix to a `send_to` origin); a WebSocket to a `send_to` origin; a WebSocket to a subdomain or another port
-of a `send_to` host from a service worker (rule C is by host); a top-level or popup navigation by GET to a host on
-the scope's list, with a changed or partial value (the guard finds only the whole value); DNS prefetch and
+of a `send_to` host from a service worker (rule C is by host); a top-level navigation by GET of the act tab or an act
+popup to a host on the scope's list, with a changed or partial value (the guard finds only the whole value); the
+requests of an act popup before the service's session holds its `Fetch` (its first navigation among them), so a popup
+that the page opens after the password's last key, or in the moment before the service learns of it, can send a GET
+with the whole value (board ab-v16.97.4, review-124 B2: the act ends at an act popup that opens before the password's
+last key); DNS prefetch and
 preconnect (`<link rel=dns-prefetch>`), which make no request that a rule sees; and WebRTC (a STUN or TURN request,
 or a data channel), which no rule and no `Fetch` sees (not measured).
 
@@ -839,7 +849,10 @@ In this order, also after a refusal in the middle of the act:
      `localStorage` items written by a tab of the origin): before the act the agent's pages showed "not signed
      in"; after the move, "signed in", by the cookie and by the token that the site kept in `localStorage`.
 3. It clears the tab's history (`Page.resetNavigationHistory`).
-4. It turns `Fetch` off, removes the block's rules, and closes the act window and its popups. Chrome drops the
+4. It turns `Fetch` off and sends the receiver's `act_end` (C4): the receiver closes each tab of the act (the act
+window and its popups) first, then removes the block's rules, so no page of the act is left when the rules go
+(chrome-extension's order, board ab-v16.97.3); the service closes no window itself. An act whose rules request failed
+or came late sends `act_end` too. Chrome drops the
    act's context with its last window: its cookies, its storage, its HTTP cache and its history (round 1: no row of
    the act's pages in the profile's `History` file; no profile file held the username or the password).
 5. It fills the Buffers of the values with zeros, and drops the opened record.
@@ -874,11 +887,14 @@ The answer of `AgentBrowser.signIn`, the CLI's output and the MCP tool's text:
 | an open connection | `The sign-in page keeps a connection to another site open.` |
 | the rules | `The agent browser could not hold the sign-in's rules.` |
 | the window | `The agent browser could not move the sign-in window off the screen.` |
-| the type watch | `The page showed the password field as text, so the agent browser stopped.` |
+| no act window (board ab-v16.97.4: a receiver with no feature `act`, no incognito window) | `The agent browser could not open the sign-in window.` |
+| an act popup before the last key (board ab-v16.97.4, review-124 B2) | `The sign-in page opened another window, so the agent browser ended the sign-in.` |
+| the type watch | `The page showed the password field as text, so the agent browser ended the sign-in.` |
 | not accepted | `The site did not accept the stored sign-in.` |
 | a second factor | `The site asks for a second factor. The agent browser cannot answer it: ask the operator.` |
 | a host on no list | `The site went to a host on no list after the sign-in.` |
 | timeout | `The site did not finish the sign-in in 30 s.` |
+| a lost act tab (board ab-v16.97.4: its session ended, it closed, or a call of the act failed) | `The agent browser lost the sign-in window before the sign-in finished.` |
 | a leak of the site | `The site keeps the password where its pages can read it, so the agent browser did not keep the sign-in.` |
 | the move | `The sign-in worked, but the agent browser could not move it to your tabs.` |
 
@@ -920,21 +936,28 @@ With Q2 b, the first condition goes: every repo whose list covers the host may u
 
 - No log line of either side holds a username, a password, a passphrase, a sealed record, a pane's seal, a form
   value, a page's text, a URL path or a query. The C12 log rule gains these words (section 10).
-- The service logs one line for each act: the user, the scope, the repo key, the credential's id and name, the
-  origin, the result's code, the time it took. For each request that the block or the guard stopped: the host
-  only. The move logs stage 1c's import line (counts only).
+- The service logs one line for each request of `AgentBrowser.signIn` (C11): the user, the scope, the session's `repo`
+(no repo key: the answer Q2 b needs none, and the token design's revision removed it), the act id, the credential's id
+and name (none for a refusal by check 1 or 2), the origin, the result's code, the time it took, and the number of
+requests that the block stopped and the number that the guard failed; never their hosts. The move logs stage 1c's
+import line (counts only).
 - The daemon logs one line for each operator act: the user, the op, the credential's id and name.
 
 **The audit.**
 
-- The service sends a `sign_in` event at each act's start (`phase: "start"`: `scope`, `repo`, `id`, `name`,
-  `origin`, `at`), so the daemon blanks the live view, and at its end (`phase: "end"`: the same, and `result` (the
-  code of section 7.9), `ms` and `blocked`, the hosts of the requests that the block or the guard stopped). The
-  daemon also ends the blank 60 s after a start with no end.
+- The service sends a `sign_in` event at each act's start (`phase: "start"`: `act`, an id of 16 hex digits for the
+request, `scope`, `repo`, `id`, `name`, `origin`, `at`), so the daemon blanks the live view, and at its end
+(`phase: "end"`: the same, and `result` (the code of section 7.9), `ms`, `blocked` and `guarded` (the numbers of the
+requests that the block and the guard stopped, never their hosts) and `stopped_now`). A request that a check refuses
+is no act: one `end` with its own `act` and no `start`, at most 10 of them for one scope in any 60 s, then one a
+minute with `dropped`, the number that did not go (C12). The daemon also ends the blank 60 s after a start with no
+end.
 - The daemon keeps the last 200 events in its own state (no secret), and the pane shows the last 20 of each
   credential: which scope and repo used it, when, and with which result.
-- `status` gives `sign_ins`: `{"state":"none"|"locked"|"open","records":<count>,"acts":<count since the
-  start>,"pane_key":"<the public half>"}`, with no name of a credential.
+- `status` gives `sign_ins`:
+`{"state":"none"|"locked"|"open","records":<count>,"acts":<count since the start>,"pane_key":"<the public half>","stopped":[<ids>],"unprotected":null|"dumpable"|"signal"}`
+(C12): the ids of the stopped credentials and the reason of a protection of the service's memory that does not hold,
+with no name and no origin of a credential.
 
 ## 9. A second factor
 
@@ -1364,7 +1387,9 @@ Recommendation: a, with b or c as a later task when a site needs it. No answer: 
 - **The block and the guard** stop every request except a top-level GET to a host outside `send_to`, and the guard sees five forms of the
   password. Not stopped: the site's own origins of `send_to` (a hash, an encryption, a compression, a part of the
   value, a WebSocket), a service worker's WebSocket to a subdomain or another port of a `send_to` host, a top-level
-  or popup GET to a host on the scope's list with a changed or partial value, DNS prefetch and preconnect, and WebRTC
+  GET of the act tab or an act popup to a host on the scope's list with a changed or partial value, the first requests
+  of an act popup before the service's session holds its `Fetch` (a popup that opens after the password's last key, or
+  in the moment before the service learns of it), DNS prefetch and preconnect, and WebRTC
   (section 7.6).
 - **The display**: a program of the user with the display's X authority can read the display and the act window's
   title, move the window back onto the screen and send it input (T16). A site's own reveal control that shows the

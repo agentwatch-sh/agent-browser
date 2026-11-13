@@ -398,7 +398,8 @@ export class SignInStore {
     if (this.state() === "none") return { error: TEXT.notSetUp };
     if (!this.openKey) return { error: TEXT.locked };
     const offer = req.offer === true;
-    const value = this.openSeal(req, { name: r.name, origin: r.origin, path: r.path, send_to: r.send_to.join(" "), offer: String(offer) });
+    // The binding holds the credential's id too (review-118 note 6): a seal opens only for the id that it was made for.
+    const value = this.openSeal(req, { id: r.id, name: r.name, origin: r.origin, path: r.path, send_to: r.send_to.join(" "), offer: String(offer) });
     if (!value || typeof value.username !== "string" || typeof value.password !== "string") return { error: TEXT.sealed };
     if (this.removed.has(r.id)) return { error: TEXT.removed };
     // An offer gets an id that the service never saw: not one of the last snapshot, and none that it sealed (open point 10).
@@ -448,6 +449,25 @@ export class SignInStore {
   }
 
   // ---- for the sign-in act (C11; stage 1e part 2, board ab-v16.97.4) ----
+
+  /**
+   * The records that the act may use, from the last snapshot: each record whose plain fields have their shape, whose
+   * `approved` is true, and whose id is no removed id; a name that two such records share breaks both (C12, names and
+   * ids), so neither is here. Their plain fields only: whether a record opens is check 5's (openForUse).
+   */
+  private approved(): { fields: RecordFields; file: Record<string, unknown> }[] {
+    const all = (this.snap?.records ?? []).map((file) => ({ fields: recordFields(file), file }))
+      .filter((x): x is { fields: RecordFields; file: Record<string, unknown> } => x.fields !== null && x.fields.approved && !this.removed.has(x.fields.id));
+    const count = new Map<string, number>();
+    for (const x of all) count.set(x.fields.name, (count.get(x.fields.name) ?? 0) + 1);
+    return all.filter((x) => count.get(x.fields.name) === 1);
+  }
+  /** C11's check 2: the one approved record of `name` in the last snapshot, or null (none, an offer that waits, or two of one name). */
+  named(name: string): { fields: RecordFields; file: Record<string, unknown> } | null {
+    return this.approved().find((x) => x.fields.name === name) ?? null;
+  }
+  /** AgentBrowser.signIns: the approved records' plain fields (C11: the names and the origins are no secrets). */
+  usable(): RecordFields[] { return this.approved().map((x) => x.fields); }
 
   /**
    * C11's checks 4 and 5 for one record of the last snapshot: the store is open, and the record opens (its shape, its

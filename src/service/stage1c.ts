@@ -454,11 +454,43 @@ export class Stage1c implements ServicePart {
         this.log(`signin: the sign-in for ${state.domain} was not imported (${e instanceof ReceiverError ? e.kind : "error"})`);
         return { error: sendText(state.domain, why).text };
       }
-      const n = (k: string) => (Number.isSafeInteger(counts?.[k]) ? (counts[k] as number) : 0);
-      const errors = Array.isArray(counts?.errors) ? counts.errors.length : 0;
-      this.log(`signin: imported a sign-in for ${state.domain}: ${n("cookies_set")} cookies set, ${dropped} box cookies dropped, ${n("local") + n("session")} storage keys, ${n("idb_databases")} databases, ${n("cache_entries")} cache entries, ${errors} problems`);
+      const errors = this.importLine(state.domain, counts, dropped);
       if (errors) this.emitEv({ t: "ev", ev: "error", op: "import", user: (req.by as { user: string }).user, domain: state.domain, counts: { errors } });
       return { data: counts };
+    };
+    const p = this.imports.then(run, run);
+    this.imports = p.catch(() => {});
+    return p;
+  }
+
+  /** The import's one log line (counts only, never a value); its number of problems. */
+  private importLine(domain: string, counts: Record<string, unknown>, dropped: number): number {
+    const n = (k: string) => (Number.isSafeInteger(counts?.[k]) ? (counts[k] as number) : 0);
+    const errors = Array.isArray(counts?.errors) ? counts.errors.length : 0;
+    this.log(`signin: imported a sign-in for ${domain}: ${n("cookies_set")} cookies set, ${dropped} box cookies dropped, ${n("local") + n("session")} storage keys, ${n("idb_databases")} databases, ${n("cache_entries")} cache entries, ${errors} problems`);
+    return errors;
+  }
+
+  /**
+   * The sign-in act's move (C11, the clean end and the move; board ab-v16.97.4): stage 1c's import path inside the
+   * service, not C12's op `import`. The payload check (C2) and the box's own sign-in rule with set_sessions' box, then
+   * C4's import, one at a time with the operator's sends; the import's log line (counts only) and no `error` event (the
+   * act's `end` event gives the move's result). True when the receiver imported it with no problem.
+   */
+  moveSignIn(payload: unknown): Promise<boolean> {
+    let checked: ReturnType<typeof checkPayload>;
+    try { checked = checkPayload(payload, this.box?.hosts ?? null, this.box?.cookie_names ?? []); }
+    catch (e) {
+      this.log(`signin: the sign-in act's move was refused (${e instanceof PayloadError ? `field ${e.field}` : e instanceof TooLargeError ? "too large" : "error"})`);
+      return Promise.resolve(false);
+    }
+    const { state, dropped } = checked;
+    const run = async (): Promise<boolean> => {
+      if (!this.receiver.isUp()) { this.log(`signin: the sign-in for ${state.domain} was not imported (down)`); return false; }
+      let counts: Record<string, unknown>;
+      try { counts = await this.receiver.request("import", { state }, IMPORT_WAIT_MS); }
+      catch (e) { this.log(`signin: the sign-in for ${state.domain} was not imported (${e instanceof ReceiverError ? e.kind : "error"})`); return false; }
+      return this.importLine(state.domain, counts, dropped) === 0;
     };
     const p = this.imports.then(run, run);
     this.imports = p.catch(() => {});

@@ -89,6 +89,20 @@ async function setUp(w: World, records: object[] = []): Promise<any> {
 /** A record file as the daemon writes it from an answer of sign_in_seal or sign_in_reseal. */
 const fileOf = (a: any, extra: object = {}) => ({ ...a.data.record, state: a.data.record.approved ? "usable" : "offered", added: { at: "2026-11-10T20:00:00Z", by: "ann", via: "web" }, changed: null, sealed: a.data.sealed, ...extra });
 
+// ------------------------------------------------------------------ the credential's id in the binding (board ab-v16.97.4)
+
+test("sign_in_seal's binding holds the credential's id (review-118 note 6): a seal made for one id does not open for another id with the same name, origin, path, send_to and offer", async () => {
+  const w = world();
+  try {
+    await setUp(w);
+    const other = { ...REC, id: "c-0000000b" };
+    const req = sealReq(w, REC);
+    assert.deepEqual(await w.ask("sign_in_seal", { ...req, record: other }), { error: "the sealed value cannot be opened" });
+    assert.ok((await w.ask("sign_in_seal", sealReq(w, other))).data?.record, "a seal for its own id opens");
+    assert.ok(P.vector.fields.id, "the shared vector's binding has the id");
+  } finally { w.close(); }
+});
+
 // ------------------------------------------------------------------ the pane's seal (open point 1 of PR #112)
 
 test("the pane's seal: the vectors' shared seal of screen-seal.js opens with its binding's bytes and the test pane key; the tests' sealer makes the same text; each other binding, byte, sender or pane key does not open", () => {
@@ -115,12 +129,12 @@ test("the pane's seal: the vectors' shared seal of screen-seal.js opens with its
   assert.throws(() => bindingInfo("mail", v.fields), "a reserved purpose");
 });
 
-test("each pane's seal of the vectors' lines is a seal of screen-seal.js that opens with its own request's binding (op, rid, at, and a seal's record and offer), and with no other", () => {
+test("each pane's seal of the vectors' lines is a seal of screen-seal.js that opens with its own request's binding (op, rid, at, and a seal's record with its id and offer), and with no other", () => {
   const key = privateKeyOf(PANE_SECRET), pane = { key, pub: publicRaw(key) };
   const lines = [...control.requests, ...control.badRequests, ...control.unprotected.cases.flatMap((c: any) => c.requests)].map((v: any) => v.req)
     .filter((r: any) => r.sealed && typeof r.sealed === "object" && typeof r.sealed.rid === "string" && typeof r.sealed.at === "string" && (r.op !== "sign_in_seal" || typeof r.offer === "boolean"));
   assert.ok(lines.length >= 39, `${lines.length} seals`);
-  const fieldsOf = (r: any) => ({ op: r.op, rid: r.sealed.rid, at: r.sealed.at, ...(r.op === "sign_in_seal" ? { name: r.record.name, origin: r.record.origin, path: r.record.path, send_to: r.record.send_to.join(" "), offer: String(r.offer) } : {}) });
+  const fieldsOf = (r: any) => ({ op: r.op, rid: r.sealed.rid, at: r.sealed.at, ...(r.op === "sign_in_seal" ? { id: r.record.id, name: r.record.name, origin: r.record.origin, path: r.record.path, send_to: r.record.send_to.join(" "), offer: String(r.offer) } : {}) });
   const want: Record<string, string[]> = { sign_ins_setup: ["passphrase"], sign_ins_unlock: ["passphrase"], sign_ins_rekey: ["new", "old"], sign_in_seal: ["password", "username"] };
   for (const r of lines) {
     const f = fieldsOf(r);
@@ -129,6 +143,7 @@ test("each pane's seal of the vectors' lines is a seal of screen-seal.js that op
     assert.ok(Object.values(got).every((x) => control.signInScan.canaries.includes(x)), `${r.id}: the canaries`);
     assert.throws(() => openPaneSeal(r.sealed.text, r.sealed.sender, bindingInfo("browser-sign-in", { ...f, op: r.op === "sign_ins_unlock" ? "sign_ins_setup" : "sign_ins_unlock" }), pane), `${r.id}: another op`);
     if (r.op === "sign_in_seal") assert.throws(() => openPaneSeal(r.sealed.text, r.sealed.sender, bindingInfo("browser-sign-in", { ...f, offer: String(!r.offer) }), pane), `${r.id}: an offer's seal never opens for the operator's request, and the reverse`);
+    if (r.op === "sign_in_seal") assert.throws(() => openPaneSeal(r.sealed.text, r.sealed.sender, bindingInfo("browser-sign-in", { ...f, id: "c-ffffffff" }), pane), `${r.id}: a seal opens only for its credential's id (board ab-v16.97.4)`);
   }
   // The fake's scripted texts are seals of the vectors too.
   const byId = (id: string) => control.requests.find((v: any) => v.req.id === id).req.sealed.text;

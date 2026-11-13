@@ -167,7 +167,10 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root);
+        // Local (C11, the sign-in act's check 1): the agent door is a Unix socket of this user, admitted by its checks above; a
+        // connection with the MCP's ticket has its MCP session's admission, which is local (the MCP port's uid check, walk
+        // and token). A remote admission (stage 5) is not a path of this endpoint.
+        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, "local");
         // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
         // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
         const agent = !a.own;

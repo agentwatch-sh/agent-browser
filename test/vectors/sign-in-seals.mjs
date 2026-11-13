@@ -61,7 +61,8 @@ function binding(req) {
   if (req.op === "sign_in_seal") {
     const r = req.record;
     if (!r || typeof r !== "object" || typeof req.offer !== "boolean" || !Array.isArray(r.send_to)) return null;
-    Object.assign(fields, { name: r.name, origin: r.origin, path: r.path, send_to: r.send_to.join(" "), offer: String(req.offer) });
+    // The credential's id is in the binding (board ab-v16.97.4; review-118 note 6).
+    Object.assign(fields, { id: r.id, name: r.name, origin: r.origin, path: r.path, send_to: r.send_to.join(" "), offer: String(req.offer) });
   }
   return Object.values(fields).every((x) => typeof x === "string") ? { purpose: "browser-sign-in", fields } : null;
 }
@@ -94,7 +95,7 @@ for (const c of v.unprotected.cases) c.sign_ins.pane_key = PANE_KEY;
 for (const e of v.events) if (e.ev.ev === "sign_ins") e.ev.pane_key = PANE_KEY;
 
 // The shared vector: one seal with its binding, the binding's bytes, its test keys and its payload, for both sides' tests.
-const fields = { op: "sign_in_seal", rid: "VGhlU2hhcmVkVmVjdG9yMQ", at: "2026-11-10T20:00:00Z", name: "staging", origin: "https://staging.example.com", path: "/login", send_to: "https://staging.example.com https://login.staging.example.com", offer: "false" };
+const fields = { op: "sign_in_seal", rid: "VGhlU2hhcmVkVmVjdG9yMQ", at: "2026-11-10T20:00:00Z", id: "c-0a1b2c3d", name: "staging", origin: "https://staging.example.com", path: "/login", send_to: "https://staging.example.com https://login.staging.example.com", offer: "false" };
 const shared = { purpose: "browser-sign-in", fields };
 const sharedPayload = { username: "fixture-user-not-a-secret@example.test", password: "pässwörd \"q\" \\ 😀-fixture-not-a-secret" };
 const sk = keysOf("paneSeal");

@@ -85,7 +85,10 @@ starts Xvfb and Chrome, and the check gives each of their pids to `track()` and 
 `service-link/check.ts` (board ab-v16.94.9: the same, with the native link, the real agent package and the host shim,
 whose pid it tracks too; `--display 174`, and `--chrome-extension <checkout>` to compare the CRX with `git show`), and
 `service-use/check.ts` (board ab-v16.94.11: the same service, with no start op: a first use starts Chrome, the grace
-time of the stop by use stops it, and a new use starts it again; `--display 171`).
+time of the stop by use stops it, and a new use starts it again; `--display 171`), and `sign-in-act/check.ts` (board
+ab-v16.97.4: the same service through `sign-in-act/service.ts`, with the run's copy of the receiver 0.3.7 that it reads
+with `git show` from `--chrome-extension <checkout>`; a sign-in with test values on a local login page, the act window
+outside the screen and hidden from the client, the block, the move, the CLI and the secret scan; `--display 171`).
 
 No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own

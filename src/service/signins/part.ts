@@ -38,6 +38,8 @@ export class SignInsPart implements ServicePart {
   }
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
+  /** The sign-in act's `sign_in` events (C12), on the control door's stream. */
+  emitEvent(ev: Record<string, unknown>): void { this.emit(ev); }
   features(): readonly string[] { return [SIGN_INS_FEATURE]; }
   status(): Record<string, unknown> { return { sign_ins: this.store.status() }; }
   stop(): void { this.store.stop(); }

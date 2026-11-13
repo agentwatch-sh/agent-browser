@@ -38,6 +38,8 @@ import { senderData, type SenderData } from "./package/sender.ts";
 import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
+import { SignInAct } from "./signins/act.ts";
+import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
@@ -170,6 +172,9 @@ export class Stage1a implements Handler {
   private sessionsRead = false;
 
   endpointState(): EndpointState { return this.agentDoor.state(); }
+
+  /** The repo of the scope's session in the last set_sessions, or null (C12's `sign_in` event; the sign-in act's log line). */
+  repoOf(scope: string): string | null { return this.sessions.find((s) => s.scope === scope)?.repo ?? null; }
 
   /** A scope of a session of the last set_sessions (none that ended since): only such a scope's use starts Chrome (board ab-v16.94.11). */
   liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope); }
@@ -447,8 +452,27 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
       await link.start();
     }
-    agent = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
+    const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
       ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}) });
+    agent = opened;
+    // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
+    // Chrome unit. The model then answers AgentBrowser.signIn and signIns; without them it refuses both (C11).
+    if (signIns && link && port && stage1c && part) {
+      const model = opened.relay.model, lists = stage1c;
+      model.setSignIns(new SignInAct({
+        model: model.actPort(),
+        receiver: { features: () => port.features(), request: (op, body, ms) => port.act(op, body, ms) },
+        store: signIns.store,
+        screen: xScreen({
+          display: () => { const d = part?.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
+          xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
+        }),
+        move: { move: (payload) => lists.moveSignIn(payload) },
+        emit: (ev) => signIns.emitEvent(ev),
+        log: o.log,
+        repoOf: (scope) => state.repoOf(scope),
+      }));
+    }
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;
   // C10: the carrier's deadlines, each second.
