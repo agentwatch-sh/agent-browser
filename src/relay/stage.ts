@@ -1055,6 +1055,8 @@ export class Stage {
     }
     this.freeTail(st);
     this.close(st, page.id);
+    // A collected part keeps its limit (review-126 note 6): the close stopped its gap, which goes again.
+    if (st.col && !st.running) this.kick(page, st);
   }
 
   /** The lock again for an ended plan's events (the order of arrival), and the activation before its first press or key press. */
@@ -2289,8 +2291,8 @@ export class Stage {
   }
 
   /**
-   * The typing rule (C11, the keys and the text): a text whose typing plan fits in what is left of the key run's
-   * STAGE_TYPE_MAX_MS is short. A short text is typed when each character has a key on the US layout (no line feed, no
+   * The typing rule (C11, the keys and the text): a text whose typing plan at the person's speed fits in what is left of
+   * the key run's STAGE_TYPE_MAX_MS is short (no fast end: the operator's answer on board item ab-2qb). A short text is typed when each character has a key on the US layout (no line feed, no
    * tab), the client holds no key (a held Shift or Control would change the typed keys), and the focused element is an
    * input of a text type or a textarea; else it goes as it is. A long text goes as a person's paste when the paste rule
    * allows it (the operator's answer on board item ab-8fu), else as it is.
@@ -2298,7 +2300,8 @@ export class Stage {
   private async typingRule(page: StagePage, st: TabState, text: string): Promise<Rule> {
     if (!text) return { how: "asIs", why: "empty" };
     const left = STAGE_TYPE_MAX_MS - st.runSpent;
-    const plan = left > 0 ? typingPace(text, page.person, this.o.random, left) : null;
+    // At the person's speed only (board item ab-2qb): no fast end.
+    const plan = left > 0 ? typingPace(text, page.person, this.o.random, left, {}, false) : null;
     if (plan) {
       if ([...text].some((ch) => !charKey(ch))) return { how: "asIs", why: /[\n\t]/.test(text) ? "lineFeedOrTab" : "noUsKey" };
       if (this.clientKeysHeld(st)) return { how: "asIs", why: "keyHeld" };
@@ -2409,8 +2412,7 @@ export class Stage {
   private async typeText(page: StagePage, st: TabState, a: Action, o: { e: Entry; text: string; plan: ReturnType<typeof typingPace> & {}; via: FocusVia; t0: number; want: string | null; part?: boolean }): Promise<void> {
     const s = this.stream(page, st), e = o.e;
     this.count(o.part ? "typedParts" : "typedTexts");
-    if (o.plan.pace === "fast") this.count(o.part ? "typedPartsFast" : "typedTextsFast");
-    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: typed keys (${o.part ? "a collected part, " : ""}${o.plan.pace === "fast" ? "the fast end" : "the person's speed"}, ${Math.round(o.plan.plan.ms)} ms)`);
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: typed keys (${o.part ? "a collected part, " : ""}${Math.round(o.plan.plan.ms)} ms)`);
     const mac = !this.linux(), noKey = [...o.text].filter((ch) => !charKey(ch));
     const items: KeyItem[] = [
       ...o.plan.plan.events.map((ev) => ({ ev: { ...ev, t: ev.t + o.t0 }, typed: { commands: mac && !ev.own ? [] : undefined } })),
@@ -2671,7 +2673,7 @@ export class Stage {
     const lo = H.min ?? 50, hi = H.max ?? 250;
     const opts: StreamOptions = Number.isFinite(holdMin) && holdMin > lo ? { holdMs: [holdMin, Math.max(holdMin, hi)] } : {};
     const left = STAGE_TYPE_MAX_MS - st.runSpent;
-    const plan = left > 0 ? typingPace(text, page.person, this.o.random, left, opts) : null;
+    const plan = left > 0 ? typingPace(text, page.person, this.o.random, left, opts, false) : null;
     const typedVia = plan ? await this.focused(page, st) : null;
     const rule = plan ? null : await this.pasteRule(page, st);
     if (a.over) return this.partKeys(page, st, a, items, e);

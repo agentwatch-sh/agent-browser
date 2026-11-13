@@ -495,10 +495,11 @@ export function planText(text: string, person: Person, random: Random, o: Stream
 /**
  * The typing rule's pace (design 7.2, rule 3; C11's typing rule): the plan at the person's speed when it fits in `maxMs`
  * (STAGE_TYPE_MAX_MS, 10 s), else the plan at the fast end when that fits, else null (the text goes as one inserted text:
- * the answer Q2 a).
+ * the answer Q2 a). With `fastEnd` false (the input stage: the operator's answer on board item ab-2qb, 2026-11-13) only
+ * the plan at the person's speed: a longer text goes as a person's paste.
  */
-export function typingPace(text: string, person: Person, random: Random, maxMs = person.params.keys.typeMaxMs, o: StreamOptions = {}): { pace: Pace; plan: ReturnType<typeof planText> } | null {
-  for (const pace of ["person", "fast"] as const) {
+export function typingPace(text: string, person: Person, random: Random, maxMs = person.params.keys.typeMaxMs, o: StreamOptions = {}, fastEnd = true): { pace: Pace; plan: ReturnType<typeof planText> } | null {
+  for (const pace of fastEnd ? (["person", "fast"] as const) : (["person"] as const)) {
     const plan = planText(text, person, random, { ...o, pace });
     if (plan.ms <= maxMs) return { pace, plan };
   }

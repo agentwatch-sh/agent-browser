@@ -4181,7 +4181,7 @@
     "focused": "7.3.18",
     "clipboard": true
    },
-   "note": "pressSequentially of 130 characters into a focused input (board ab-t30.19): each printable call gets its answer at once; RUN_IDLE_MS after the last one the part goes; its typing plan does not fit in STAGE_TYPE_MAX_MS even at the fast end, so it goes as a person's paste (the chord of fill-long), with no key event of a character.",
+   "note": "pressSequentially of 130 characters into a focused input (board ab-t30.19): each printable call gets its answer at once; RUN_IDLE_MS after the last one the part goes; its typing plan at the person's speed does not fit in STAGE_TYPE_MAX_MS (no fast end: the operator's answer on board item ab-2qb), so it goes as a person's paste (the chord of fill-long), with no key event of a character.",
    "out": [
     {
      "method": "Input.dispatchKeyEvent",
@@ -5036,7 +5036,7 @@
   {
    "id": "fill-long",
    "row": "`fill(text)`, `clear()`",
-   "note": "A fill of 114 characters into a focused input (board ab-t30.19, the operator's answer on board item ab-8fu): even at the fast end of the spread (100 ms a key) the plan does not fit in STAGE_TYPE_MAX_MS, so the text goes as a person's paste: after one person's time from one press to the next, Control (a rawKeyDown of the stage's own), V 40 to 120 ms after it (a rawKeyDown with modifiers 2 and no text; the text is on the clipboard of the service's own display from just before it until its answer), V's release after its hold, Control's 20 to 80 ms after it. The field's value is then the text: the call's answer comes after Chrome's answers.",
+   "note": "A fill of 114 characters into a focused input (board ab-t30.19, the operator's answer on board item ab-8fu): the plan at the person's speed does not fit in STAGE_TYPE_MAX_MS (no fast end: the operator's answer on board item ab-2qb), so the text goes as a person's paste: after one person's time from one press to the next, Control (a rawKeyDown of the stage's own), V 40 to 120 ms after it (a rawKeyDown with modifiers 2 and no text; the text is on the clipboard of the service's own display from just before it until its answer), V's release after its hold, Control's 20 to 80 ms after it. The field's value is then the text: the call's answer comes after Chrome's answers.",
    "platform": "linux",
    "seed": 41,
    "clock": 0,

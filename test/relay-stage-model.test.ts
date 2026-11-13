@@ -181,6 +181,30 @@ test("review-126 note 2: the stage pastes nothing from a grant's request until t
   } finally { await h.close(); }
 });
 
+test("review-126 B3 through the model: the client has the answers of a collected part (pressSequentially), so the part's text goes before the tab's close (Target.closeTarget) and before the detach at the end of the client's session (Target.detachFromTarget, and the connection's close as Playwright's browser.close() over connectOverCDP gives it)", async () => {
+  for (const end of ["closeTarget", "detachFromTarget", "close"] as const) {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const p = await page(h, c);
+      const from = h.fake.requests.length;
+      const word = "hello";
+      for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await c.send(m, params, p.sessionId);
+      assert.ok(!cmds(h, from).some((x) => x.method.startsWith("Input.")), `${end}: the collected calls have their answers, with no event yet`);
+      if (end === "closeTarget") await c.send("Target.closeTarget", { targetId: p.targetId });
+      else if (end === "detachFromTarget") await c.send("Target.detachFromTarget", { sessionId: p.sessionId });
+      else await c.close();
+      const done = end === "closeTarget" ? "tabs.remove" : "debugger.detach";
+      await until(() => h.fake.requests.slice(from).some((r) => r.op === done), `${end}: ${done}`);
+      const ops = h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? `${r.args[1]}${r.args[1] === "Input.insertText" ? `:${r.args[2].text}` : ""}` : r.op));
+      const ins = ops.indexOf(`Input.insertText:${word}`), last = ops.indexOf(done);
+      assert.ok(ins >= 0 && ins < last, `${end}: the part's text (${ins}) before ${done} (${last}): ${ops.join(", ")}`);
+      assert.equal(h.relay.model.stageCounts().partsFlushed, 1, `${end}: counted`);
+    } finally { await h.close(); }
+  }
+});
+
 test("the build switch: the model is off unless its option or the relay's variable (the live rows) turns it on", () => {
   const saved = process.env[STAGE_TEST_ENV];
   const b = new Bridge(() => {});

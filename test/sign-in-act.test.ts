@@ -82,21 +82,36 @@ test("the fill types the username and the password into their own fields: the ge
   assert.deepEqual(ins, [PASS_INSERT], "ä has no US key: the password goes as one Input.insertText; the username as keys");
 });
 
-test("board ab-t30.19: the act never uses the clipboard (C11, the paste): the model's act port has no clipboard, and a long value (its typing plan above 10 s) goes as one Input.insertText, with no Control+V", async () => {
+test("board ab-t30.19 (review-126 note 8): the act's own path never reaches the clipboard (C11, the paste): the act's modules import neither the input stage nor the clipboard's owner; the model's act port has no clipboard, its call goes to the bridge as it is (the stage never sees it), and its input lock is the stage's lock alone; the act run with that lock: a long password (its typing plan above 10 s) goes as one Input.insertText, with no Control+V, and the stage's clipboard gets no call", async () => {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const dir = new URL("../src/service/signins/", import.meta.url);
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".ts"))) {
+    const src = readFileSync(new URL(f, dir), "utf8"), imports = [...src.matchAll(/^import[^;]*from "([^"]+)"/gm)].map((m) => m[1]);
+    assert.ok(!imports.some((x) => /relay\/stage|unit\/clipboard|relay\/model/.test(x)), `${f}: its imports ${imports.join(", ")}`);
+    assert.ok(!/clipboard|\bpaste\b/i.test(src), `${f}: no word of the clipboard`);
+  }
   const { Model } = await import("../src/relay/model.ts");
   const { Bridge } = await import("../src/relay/bridge.ts");
-  const used: string[] = [];
-  const model = new Model(new Bridge(() => {}), () => {}, { stage: true, clipboard: { hold: async () => { used.push("hold"); return true; }, clear: () => { used.push("clear"); } } });
-  const port = model.actPort() as Record<string, unknown>;
-  assert.ok(!Object.keys(port).some((k) => /clip|paste/i.test(k)), `the port's members: ${Object.keys(port).join(", ")}`);
+  const used: string[] = [], ops: [string, unknown[]][] = [];
+  const bridge = new Bridge(() => {});
+  (bridge as any).call = async (op: string, args: unknown[] = []) => { ops.push([op, args]); return {}; };
+  const model = new Model(bridge, () => {}, { stage: true, clipboard: { hold: async () => { used.push("hold"); return true; }, clear: () => { used.push("clear"); } } });
+  const port = model.actPort() as Record<string, any>;
+  assert.deepEqual(Object.keys(port).sort(), ["call", "entries", "hide", "inputLock", "listen", "notReady", "person", "random"]);
   const LONG_PASS = "Test-Pass-Word-".repeat(16);
+  const sent: [string, unknown[]][] = [["debugger.sendCommand", [{ tabId: 31 }, "Input.insertText", { text: LONG_PASS }]], ["debugger.sendCommand", [{ tabId: 31 }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "v", code: "KeyV", modifiers: 2 }]]];
+  await port.inputLock(async () => { for (const [op, args] of sent) await port.call(op, args); });
+  assert.deepEqual(ops, sent, "the act's calls reach the bridge as they are");
+  assert.deepEqual(model.stageCounts(), {}, "the stage never sees them");
+  // The act itself, with the model's real input lock (the stage's) in its port.
   const w = new ActWorld({ password: LONG_PASS, username: "plainuser" });
   const ins: string[] = [], chords: unknown[] = [];
   w.onInput = (m, p) => { if (m === "Input.insertText") ins.push(p.text); if (m === "Input.dispatchKeyEvent" && (p.modifiers ?? 0) & 2) chords.push(p); };
-  await w.act().signIn(LOCAL, { name: "staging" });
+  await w.act({ model: { ...w.model, inputLock: port.inputLock } }).signIn(LOCAL, { name: "staging" });
   assert.deepEqual(ins, [LONG_PASS], "the long password as one Input.insertText");
   assert.deepEqual(chords, [], "no key with Control (no Control+V)");
   assert.deepEqual(used, [], "the stage's clipboard got no call");
+  assert.deepEqual(model.stageCounts(), {}, "the stage saw no call of the act");
 });
 
 test("check 1: a remote admission, then the readiness; the refusal names no credential, opens no window, and sends one end with no start", async () => {

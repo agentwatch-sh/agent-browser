@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { charKey, CONTROL, SHIFT } from "../src/human/keys.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
+import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS } from "../src/relay/stage.ts";
 import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -317,6 +317,44 @@ test("a session's end during a paste: nothing goes back; the clipboard is cleare
   assert.equal(r.stage.lock.held, 0);
 });
 
+// ================================================================ the flush (review-126 B3)
+
+test("review-126 B3: the flush before a close of the tab or at its session's end: a collected part that has not gone goes at once as one Input.insertText of its text (no paste, no keys), within STAGE_FLUSH_MS; a part whose plan runs (typed, pasted) ends as at STAGE_ACTION_MAX_MS and its rest goes as one Input.insertText; the field holds the text once; with no part, no flush", async () => {
+  // A collected part of 300 characters (a paste) and one of 11 (typed), each flushed before its gap ends.
+  for (const text of [LONG.slice(0, 300), "hello world"]) {
+    let flushed: Promise<void> | null = null, at = -1, done = -1;
+    const r = await runVector(own(typeCalls(text), PAGE()), { maxMs: 60_000, tab: (t) => {
+      t.clock.timer(300, () => { at = t.clock.now(); flushed = t.stage.flush(t); void flushed?.then(() => { done = t.clock.now(); }); });
+    } });
+    await r.clock.advance(STAGE_FLUSH_MS);
+    const ins = r.tab.sent.filter((s) => s.method === "Input.insertText");
+    assert.ok(flushed && done >= at && done - at <= 50, `${text.length} characters: the flush ends ${done - at} ms after it starts`);
+    assert.deepEqual(ins.map((s) => s.params.text), [text], `${text.length} characters: one Input.insertText of the part`);
+    assert.equal(keyEvents(r.tab).length, 0, "no key event");
+    assert.equal(r.tab.valueOf("n"), text);
+    assert.deepEqual([r.stage.counts.partFlushes, r.stage.counts.partsFlushed], [1, 1]);
+    assert.equal(r.stage.lock.held, 0);
+  }
+  // A part whose plan runs: typed (40 characters), and pasted (2,500 characters, V's answer late): the flush 300 ms in.
+  for (const [text, hook] of [["the lazy dog jumps over a big fox and th", undefined], [LONG, (t: FakeTab) => { t.busy = (s) => (s.params?.key === "v" && s.params.type === "rawKeyDown" ? 1000 : 0); }]] as const) {
+    let flushed: Promise<void> | null = null, at = -1, done = -1;
+    const r = await runVector(own([...typeCalls(text), evaluate()], PAGE(TEXTAREA())), { maxMs: 200_000, tab: (t) => {
+      hook?.(t);
+      // The part goes at the evaluate's arrival; the flush comes during its plan.
+      const tick = () => { if (keyEvents(t).length) t.clock.timer(300, () => { at = t.clock.now(); flushed = t.stage.flush(t); void flushed?.then(() => { done = t.clock.now(); }); }); else t.clock.timer(5, tick); };
+      t.clock.timer(5, tick);
+    } });
+    await r.clock.advance(STAGE_FLUSH_MS);
+    assert.ok(flushed && done >= at && done - at <= STAGE_FLUSH_MS, `${text.length} characters: the flush ends ${Math.round(done - at)} ms after it starts`);
+    assert.equal(r.tab.valueOf("n"), text, `${text.length} characters: the text once`);
+    assert.equal(r.stage.counts.limitEnds, 1, `${text.length} characters: the plan ends as at the limit`);
+    assert.ok(!keyEvents(r.tab).some((s) => s.t > at + 1 && s.params.text), `${text.length} characters: no key of a character after the flush`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+  const n = await runVector(own([insert("abc")], PAGE()));
+  assert.equal(n.stage.flush(n.tab), null, "no part: no flush");
+});
+
 // ================================================================ two tabs of one display (review-126 B4)
 
 /**
@@ -327,7 +365,7 @@ async function twoPastes(callsA: any[], callsB: any[], pageA: Partial<any>, page
   const clock = new FakeClock(), logs: string[] = [];
   const mk = (id: number, calls: any[], page: Partial<any>) => {
     const v = own(calls, page), t = new FakeTab(v, clock, { id }), answers: { id: number; t: number; body: any }[] = [];
-    const send = (c: any) => t.queue(undefined, c.method, c.params, (body) => { answers.push({ id: c.id, t: clock.now(), body }); for (const x of v.in) if (x.after === c.id) later(x); });
+    const send = (c: any) => t.queue(c.session === "child" ? "child" : undefined, c.method, c.params, (body) => { answers.push({ id: c.id, t: clock.now(), body }); for (const x of v.in) if (x.after === c.id) later(x); });
     const later = (c: any) => (c.waitMs ? clock.timer(c.waitMs, () => send(c)) : send(c));
     return { t, v, answers, start: () => { for (const c of v.in) if (c.at !== undefined) clock.timer(c.at, () => later(c)); } };
   };
@@ -368,6 +406,26 @@ test("review-126 B4: no paste puts a text on the clipboard while an earlier past
   assert.equal(q.stage.counts["noPaste:vPending"], 1, "tab 2's first long text while tab 1's V has no answer");
   assert.equal(q.B.t.pastes.length, 1, "tab 2's later long text, after the end of tab 1, is a paste");
   assert.equal(q.B.t.valueOf("n"), L3);
+  assert.equal(q.stage.lock.held, 0);
+});
+
+test("review-126 note 3: an input call on a frame's own session (an out-of-process frame) goes under the input lock: another tab's Control+V into its own frame waits while a paste has its text on the clipboard, and goes after the clear, as the client sent it, with Chrome's answer; with no other action it goes at once", async () => {
+  const CTRL = { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 17, code: "ControlLeft", commands: [], key: "Control", text: "", unmodifiedText: "", autoRepeat: false, location: 1, isKeypad: false };
+  const V = { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 86, code: "KeyV", commands: [], key: "v", text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false };
+  const childKeys = (at: number) => [{ at, session: "child", method: "Input.dispatchKeyEvent", params: CTRL }, { session: "child", method: "Input.dispatchKeyEvent", params: V }];
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)], childKeys(400), PAGE(INPUT({ focused: false })), PAGE(), (A) => {
+    A.busy = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown" ? 1000 : 0);
+  });
+  const hold = r.A.t.clipLog.find((x) => x.op === "hold")!, clear = r.A.t.clipLog.find((x) => x.op === "clear")!;
+  const child = r.B.t.sent.filter((s) => s.child === "child" && s.method === "Input.dispatchKeyEvent");
+  assert.ok(hold.t < 400 && clear.t > 400, `tab 1's text on the clipboard from ${Math.round(hold.t)} to ${Math.round(clear.t)} ms`);
+  assert.equal(child.length, 2, "both frame keys go");
+  assert.ok(child[0].t >= clear.t, `the frame's Control at ${Math.round(child[0].t)} ms, after the clear at ${Math.round(clear.t)} ms`);
+  assert.deepEqual(child.map((s) => s.params), [CTRL, V], "as the client sent them");
+  assert.ok(r.B.answers.every((x) => !x.body.error), "Chrome's answers");
+  assert.equal(r.stage.counts.childInputs, 2);
+  const q = await runVector(own(childKeys(0), PAGE()));
+  assert.ok(q.tab.sent.filter((s) => s.child === "child").every((s) => s.t <= 1), "alone: at once");
   assert.equal(q.stage.lock.held, 0);
 });
 

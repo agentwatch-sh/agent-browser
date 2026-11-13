@@ -292,7 +292,7 @@ test("the key run's time with a person's timing (board ab-t30.19, replacing the 
 
 // ================================================================ the typing rule
 
-test("the typing rule: typed keys into an input or a textarea; the text as it is into a contenteditable (rule 1), with a character that has no US key, a line feed or a tab (rule 2), with a modifier that the client holds, and above STAGE_TYPE_MAX_MS even at the fast end (rule 3)", async () => {
+test("the typing rule: typed keys into an input or a textarea; the text as it is into a contenteditable (rule 1), with a character that has no US key, a line feed or a tab (rule 2), with a modifier that the client holds, and above STAGE_TYPE_MAX_MS at the person's speed (rule 3)", async () => {
   const cases: [string, any, string, string | null][] = [
     ["Hello world", INPUT({ focused: true }), "typed", null],
     ["Hello world", TEXTAREA({ focused: true }), "typed", null],
@@ -322,26 +322,41 @@ test("the typing rule: typed keys into an input or a textarea; the text as it is
   assert.equal(r.tab.sent.filter((s) => s.pass === 2).length, 1);
 });
 
-test("the typing rule 3: the plan at the person's speed when it fits in STAGE_TYPE_MAX_MS, else at the fast end; the typed plan's time is at most STAGE_TYPE_MAX_MS (the plan's own times are played)", async () => {
-  let fastSeen = 0;
+test("the typing rule 3 (board ab-t30.20, the operator's answer on board item ab-2qb: \"Paste it\"): a text is typed only when its plan at the person's speed fits in STAGE_TYPE_MAX_MS; every longer text goes as a person's paste (also one that fits at the fast end: 100 to 120 ms a key), and with no clipboard or on the Mac as it is; no text goes at the fast end; the same for a collected part", async () => {
+  let typed = 0, pasted = 0;
   for (let seed = 1; seed <= 12; seed++) {
-    for (const n of [20, 45, 60, 80]) {
+    for (const n of [20, 30, 40, 45, 50, 60, 80]) {
       const text = "the lazy dog jumps over a big fox and then runs into the woods to find food".repeat(2).slice(0, n);
-      const r = await runVector(own([insert(text)], FIELD), { seed });
-      const keys = keyEvents(r.tab);
-      if (!keys.length) { assert.equal(r.stage.counts["textAsIs:tooLong"], 1, `${n} chars, seed ${seed}: as it is only when too long`); continue; }
-      const span = keys.at(-1)!.t - keys[0].t;
-      assert.ok(span <= STAGE_TYPE_MAX_MS, `${n} chars, seed ${seed}: typed in ${span} ms`);
-      if (r.stage.counts.typedTextsFast) {
-        fastSeen++;
-        const downs = keys.filter((s) => s.params.type === "keyDown");
-        const gaps = downs.slice(1).map((s, i) => s.t - downs[i].t).sort((x, y) => x - y), med = gaps[gaps.length >> 1];
-        // The fast end: 100 to 120 ms a key, longer only where the same key comes twice (after its own release).
-        assert.ok(gaps[0] >= F.fastKeyMs[0] - 1 && med >= F.fastKeyMs[0] - 1 && med <= F.fastKeyMs[1] + 1, `the fast end: the least gap ${gaps[0]}, the median ${med}`);
+      const r = await runVector(own([insert(text)], { ...FIELD, clipboard: true }), { seed });
+      assert.equal(r.tab.valueOf("7.3.18"), text, `${n} chars, seed ${seed}: the text`);
+      if (r.stage.counts.typedTexts) {
+        typed++;
+        const downs = keyEvents(r.tab).filter((s) => s.params.type === "keyDown");
+        const gaps = downs.slice(1).map((s, i) => s.t - downs[i].t).sort((x, y) => x - y);
+        assert.ok(downs.at(-1)!.t - downs[0].t <= STAGE_TYPE_MAX_MS, `${n} chars, seed ${seed}: typed in ${downs.at(-1)!.t - downs[0].t} ms`);
+        // The fast end has no gap below 100 ms (F.fastKeyMs); a person's spread has some.
+        assert.ok(gaps[0] < F.fastKeyMs[0], `${n} chars, seed ${seed}: the person's speed (the least gap ${Math.round(gaps[0])} ms)`);
+        assert.ok(n <= 50, `${n} chars, seed ${seed}: typed`);
+      } else {
+        pasted++;
+        assert.deepEqual([r.stage.counts.pastes, r.stage.counts.typedTexts], [1, undefined], `${n} chars, seed ${seed}: a person's paste`);
+        assert.ok(n >= 40, `${n} chars, seed ${seed}: pasted`);
       }
     }
   }
-  assert.ok(fastSeen > 0, "some texts go at the fast end");
+  // Before ab-2qb, 32 of these 84 texts (45 to 80 characters) went typed at the fast end: now each of them is pasted.
+  assert.deepEqual([typed, pasted], [52, 32]);
+  const text = "the lazy dog jumps over a big fox and then runs into the woods to find food".slice(0, 60);
+  for (const [platform, clip] of [["linux", false], ["mac", true]] as const) {
+    const v = own([insert(text)], { ...FIELD, clipboard: clip });
+    const r = await runVector({ ...v, platform });
+    assert.deepEqual([r.stage.counts["textAsIs:tooLong"], r.stage.counts.typedTexts, r.tab.sent.filter((s) => s.pass === 1).length], [1, undefined, 1], `${platform}${clip ? "" : ", no clipboard"}: as it is`);
+  }
+  // A collected part (pressSequentially of 60 characters): a person's paste; with no clipboard the client's own keys.
+  const p = await runVector(own(typeCalls(text), { ...FIELD, clipboard: true }), { seed: 1 });
+  assert.deepEqual([p.stage.counts.pastedParts, p.stage.counts.typedParts, p.tab.valueOf("7.3.18")], [1, undefined, text]);
+  const q = await runVector(own(typeCalls(text), FIELD), { seed: 1 });
+  assert.deepEqual([q.stage.counts["partsAsKeys:noClipboard"], q.stage.counts.typedParts, q.tab.valueOf("7.3.18")], [1, undefined, text]);
 });
 
 test("the typing rule: a text as it is goes after one person's time from one press to the next (keyboard.type with a character that has no US key)", async () => {
@@ -922,7 +937,8 @@ test("review-119b R3: a busy page (a keydown handler that blocks 2.5 s at b): at
   assert.equal(A.t.valueOf("n"), TEXT, "with another tab: the text once");
   // At STAGE_ACTION_MAX_MS: a key run of 19 s (a key each 900 ms keeps it open), then a typed text; a key of the text at
   // 24.6 s blocks 1.5 s (no wait end), and the limit ends the plan while its answer is held.
-  const T40 = "The quick brown fox jumps over the dogs.", runCalls = Array.from({ length: 22 }, (_, i) => [{ at: i * 900, ...kd("x") }, { at: i * 900 + 120, ...ku("x") }]).flat();
+  // Board ab-t30.20 (no fast end): a part that fits at the person's speed (22 + 14 characters).
+  const T40 = "The quick fox.", runCalls = Array.from({ length: 22 }, (_, i) => [{ at: i * 900, ...kd("x") }, { at: i * 900 + 120, ...ku("x") }]).flat();
   // Board ab-t30.19: the keys are a collected part, in the action of Playwright's focus call at 0 (one limit from it); the
   // text joins the part, which goes 1 s after it as a typed part that the limit meets.
   const l = await runVector(own([{ at: 0, ...focusCall("7.3.18", true) }, ...runCalls.map((c) => ({ ...c, at: c.at + 10 })), { at: 19_500, ...insert(T40) }], FIELD), { maxMs: 200_000, tab: (t) => {
@@ -932,6 +948,18 @@ test("review-119b R3: a busy page (a keydown handler that blocks 2.5 s at b): at
   assert.equal(l.stage.counts.limitEnds, 1, "the plan ends at STAGE_ACTION_MAX_MS");
   assert.equal(l.stage.counts.typedTextsEnded, 1, "the typed text ends at the limit");
   assert.equal(l.tab.valueOf("7.3.18"), "x".repeat(22) + T40, "at the limit: the text once");
+});
+
+test("review-126 note 6: STAGE_ACTION_MAX_MS during a collection (the part is in the action of Playwright's focus call) does not leave the part with no limit: it goes RUN_IDLE_MS after its last call, with the whole text", async () => {
+  // 28 keys, one each 900 ms from 10 ms: the last keyUp at 24.43 s, the limit at 25 s, the gap's end at 25.43 s.
+  const runCalls = Array.from({ length: 28 }, (_, i) => [{ at: i * 900 + 10, ...kd("x") }, { at: i * 900 + 130, ...ku("x") }]).flat();
+  const r = await runVector(own([{ at: 0, ...focusCall("7.3.18", true) }, ...runCalls], FIELD), { maxMs: 60_000 });
+  const lastCall = Math.max(...[...r.arrived.values()]), first = keyEvents(r.tab).find((s) => s.params.key === "x")!;
+  assert.equal(r.stage.counts.limitEnds, 1, "the limit ends the focus call's action during the collection");
+  assert.ok(first && first.t >= lastCall + RUN_IDLE_MS - 1 && first.t <= lastCall + RUN_IDLE_MS + 50, `the part's first key ${first ? Math.round(first.t - lastCall) : "never"} ms after its last call`);
+  assert.equal(r.tab.valueOf("7.3.18"), "x".repeat(28));
+  await r.clock.advance(RUN_IDLE_MS + 10);
+  assert.equal(r.stage.lock.held, 0);
 });
 
 test("review-119b O1: at the end of a typed text the activation goes before the focus read: another tab's action that took the window's focus while the lock was free gives no false error", async () => {

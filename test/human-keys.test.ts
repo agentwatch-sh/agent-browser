@@ -347,13 +347,16 @@ test("keys rule the run's time: a person's speed for the first 12 s of a run, th
   assert.ok(b.t - a.t >= 100 && b.t - a.t <= 120, "a stream at the fast end from its start");
 });
 
-test("keys: the plan of a text, and the typing rule's pace: a text that fits in 10 s at the person's speed, else at the fast end, else none (the answer Q2 a)", () => {
+test("keys: the plan of a text, and the typing rule's pace: a text that fits in 10 s at the person's speed, else at the fast end, else none (the answer Q2 a); with no fast end (the input stage, board item ab-2qb) the person's speed or none", () => {
   const short = "see you at noon", mid = "Meet me at the old oak tree at noon, then we go home", long = "x".repeat(140);
   assert.equal(typingPace(short, MID, seededRandom(1))?.pace, "person");
   const m = typingPace(mid, MID, seededRandom(2));
   assert.equal(m?.pace, "fast", `${mid.length} characters`);
   assert.ok(m!.plan.ms <= 10000 && planText(mid, MID, seededRandom(2)).ms > 10000);
   assert.equal(typingPace(long, MID, seededRandom(3)), null);
+  // The input stage (board item ab-2qb: no fast end): the person's speed only, else none.
+  assert.equal(typingPace(short, MID, seededRandom(1), 10000, {}, false)?.pace, "person");
+  assert.equal(typingPace(mid, MID, seededRandom(2), 10000, {}, false), null, `${mid.length} characters: none at the person's speed`);
   const ev = planText("Hello", MID, seededRandom(44)).events;
   assert.deepEqual(ev.filter((e) => e.type !== "keyUp").map((e) => e.key), ["Shift", "H", "e", "l", "l", "o"]);
   for (const c of ev.filter((e) => !e.own && e.type === "keyDown")) {

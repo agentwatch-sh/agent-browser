@@ -180,12 +180,14 @@ test("hold: the owner takes CLIPBOARD with a real server time (a zero-length pro
   } finally { await w.end(); }
 });
 
-test("clear: the selection goes (SetSelectionOwner None) and the text with it: a later request is refused; the owner's own clear is no take by another client; another client's take (a SelectionClear) clears the text too", async () => {
+test("clear: the selection goes (SetSelectionOwner None, with the time of its acquisition: ICCCM 2.3, review-126 note 5) and the text with it: a later request is refused; the owner's own clear is no take by another client; another client's take (a SelectionClear) clears the text too", async () => {
   const w = await world();
   try {
     await w.clip.hold("secret");
     w.clip.clear();
     await until(() => !w.x.owners.has(w.x.atom("CLIPBOARD")));
+    const [took, gave] = w.x.ownerTimes.slice(-2);
+    assert.ok(took > 0 && gave === took, `the selection taken at ${took} and given up with ${gave}`);
     assert.equal(w.clip.holding, false);
     assert.equal(w.clip.counts.takenByOther, undefined, "the owner's own clear");
     await w.clip.hold("secret two");
@@ -265,6 +267,19 @@ test("a clear while a hold runs (the stage's limit, an end of the paste's plan) 
   } finally { await w.end(); }
 });
 
+test("review-126 note 12: one hold at a time: a second hold during the first one's wait for the server time makes the first take nothing, and starts after it; the connection stays and the second text is held", async () => {
+  const w = await world();
+  try {
+    const a = w.clip.hold("one"), b = w.clip.hold("two");
+    assert.deepEqual([await a, await b], [false, true]);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(w.clip.holding, true, "the second text is still held after the first hold's limit (waitMs 150)");
+    assert.deepEqual([w.clip.counts.connectionEnds, w.clip.counts.holdFails], [undefined, undefined]);
+    const r = await readClipboard({ display: w.display, xauth: w.xauth, socketDir: w.dir, waitMs: 500 });
+    assert.equal(r.text, "two");
+  } finally { await w.end(); }
+});
+
 test("readClipboard (the live rows' check that the clipboard is empty after a paste): no owner gives none; with the owner's text, the text", async () => {
   const w = await world();
   try {
@@ -283,6 +298,7 @@ test("the relay's door of the live rows: only with the stage's test value and AG
   const env = (v: string | undefined, t = "test") => ({ [STAGE_TEST_ENV]: t, ...(v === undefined ? {} : { [STAGE_CLIPBOARD_ENV]: v }) });
   assert.equal(relayTestClipboard(env(undefined), (l) => logs.push(l)), null);
   assert.equal(relayTestClipboard(env("169:/tmp/x", "1"), (l) => logs.push(l)), null, "not the test value");
-  for (const v of ["0:/tmp/x", "90:/tmp/x", "169", "x:/tmp/x", "169:relative"]) assert.equal(relayTestClipboard(env(v), (l) => logs.push(l)), null, v);
+  // The display as a number (review-126 note 4): "00" and "090" are :0 and :90.
+  for (const v of ["0:/tmp/x", "90:/tmp/x", "00:/tmp/x", "090:/tmp/x", "0090:/tmp/x", "169", "x:/tmp/x", "169:relative"]) assert.equal(relayTestClipboard(env(v), (l) => logs.push(l)), null, v);
   assert.ok(relayTestClipboard(env("169:/tmp/run/xauth"), (l) => logs.push(l)) instanceof XClipboard);
 });
