@@ -377,7 +377,7 @@ test("keys: an inserted text (a character with no US key) goes after every plann
 
 test("keys: the stream fits C11's key vectors (test/vectors/stage.json) of the per-key path: press-chord, with its answers; type ('Hi') and type-delay are collected parts (board ab-t30.19), typed by the plan of a text", () => {
   const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
-  for (const id of ["type", "type-delay"]) assert.deepEqual(V.vectors.find((v: any) => v.id === id).out.map((o: any) => Object.keys(o)[0]), ["typing"], `${id}: one typed part`);
+  for (const id of ["type", "type-delay"]) assert.deepEqual(V.vectors.find((v: any) => v.id === id).out.map((o: any) => typeof o.typing), ["string"], `${id}: one typed part`);
   for (const id of ["press-chord"]) {
     const vec = V.vectors.find((v: any) => v.id === id);
     for (let seed = 0; seed < 50; seed++) {
