@@ -63,6 +63,8 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   test: { type: "boolean" }, "test-display": { type: "string" }, "test-chrome-source": { type: "string" },
   // The MCP path in --test mode only (stage 1d part 2b, board ab-v16.94.5): a free port on 127.0.0.1, never a default.
   "test-mcp-port": { type: "string" },
+  // The merge guard's stand-in host in --test mode only (board ab-v16.99): a *.localhost host, never a default.
+  "test-merge-guard-host": { type: "string" },
 };
 /** The flags that service takes and other commands take too: `service stop --all`. */
 const SERVICE_SHARED: ReadonlySet<string> = new Set(["all"]);

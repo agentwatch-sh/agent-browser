@@ -54,7 +54,8 @@ test("a relay that starts with no link change detaches the tab that the relay be
     const { tab, sessionId } = await page(first, c);
     await c.send("Fetch.enable", { patterns: [{ urlPattern: "*b-fetch*" }] }, sessionId);
     await c.send("Emulation.setUserAgentOverride", { userAgent: "probe-old-client" }, sessionId);
-    assert.deepEqual(state.get(tab.id), { fetch: [{ urlPattern: "*b-fetch*" }], userAgent: "probe-old-client" });
+    // The merge guard keeps its own patterns on beside the client's (C11, the merge guard; board ab-v16.99).
+    assert.deepEqual(state.get(tab.id), { fetch: [...first.relay.model.guard.patterns, { urlPattern: "*b-fetch*" }], userAgent: "probe-old-client" });
 
     // The old relay ends (its standard input ends); the receiver sees no link change, so its own cleanup does not run.
     first.fake.input.end();

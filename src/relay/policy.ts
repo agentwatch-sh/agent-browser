@@ -122,6 +122,9 @@ export function refusal(method: string, params: any, onPage: boolean): string | 
   if (domain === "SystemInfo") return `${NA}system information (${method})${APPROVAL}`;
   if (domain === "Tracing" && !onPage) return `${NA}browser-wide tracing (${method}). Trace a page: browser.startTracing(page).`;
   if (domain === "Extensions" || method === "Target.exposeDevToolsProtocol" || method === "Network.setRequestInterception") return TEXT.generic(method);
+  // The merge guard (board ab-v16.99; C11, the merge guard): a page's Content Security Policy stays in force, so on GitHub
+  // only GitHub's own scripts run in a worker (its worker-src), and a page's own requests go through the tab's session.
+  if (method === "Page.setBypassCSP" && p.enabled === true) return TEXT.generic(method);
   const cookies = cookieRefusal(method, p);
   if (cookies) return cookies;
   const url = urlRefusal(method, p);
