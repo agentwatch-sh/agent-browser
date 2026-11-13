@@ -21,7 +21,8 @@
 //      browser_sign_ins lists the name and the origin only, browser_sign_in signs in (a new session of the site, moved
 //      to the client's tabs), another name gets C11's text as the tool's error; for live-2, which
 //      --test-mcp-remote-scope gives the remote admission (stage 5's stand-in), tools/list holds neither, each call gets
-//      check 1's text, and no call reaches the act (no sign_in event, no act line in the log);
+//      check 1's text from the act's own check 1: browser_sign_in sends its one refusal end (result remote, no start, no
+//      credential), browser_sign_ins none, and no call signs in at the site;
 //   8. the secret scan: no answer, event, control line, client message, CLI output, MCP result, log line or profile file holds a
 //      test value in any of its five forms; its twin finds a planted one;
 //   9. stop: Chrome, Xvfb and the shim end; the temp folders go.
@@ -362,7 +363,11 @@ try {
   check("the remote browser_sign_in and browser_sign_ins each get check 1's text as the tool's error", remote.results.length === 2 && remote.results.every((x: any) => x.isError === true && x.content.length === 1 && x.content[0].text === REMOTE_TEXT), JSON.stringify(remote.results));
   await sleep(1000);
   const tail = serviceErr.slice(log1);
-  check("no remote call reached the act: no sign_in event, no new session of the site, no act line in the log", signInEvents().length === ev1 && signIns.length === sid1 && !/sign-in: act [0-9a-f]+: .*scope live-2/.test(tail), `${signInEvents().length - ev1} events`);
+  const remoteEvents = signInEvents().slice(ev1);
+  const rEnd = remoteEvents[0];
+  check("the remote browser_sign_in sent check 1's one refusal end: result remote, scope live-2, an act id of its own, no start, no credential", remoteEvents.length === 1 && rEnd.phase === "end" && rEnd.result === "remote" && rEnd.scope === "live-2" && /^[0-9a-f]{16}$/.test(rEnd.act) && rEnd.id === null && rEnd.name === null && rEnd.origin === null && !d.lines.some((l) => l.t === "ev" && l.ev === "sign_in" && l.phase === "start" && l.act === rEnd.act), JSON.stringify(remoteEvents));
+  check("browser_sign_ins sent no event, and no remote call signed in at the site (no new session)", signIns.length === sid1, `${signIns.length - sid1} new`);
+  check("the act's log line of the remote call names no credential: result remote", new RegExp(`sign-in: act ${rEnd?.act}: user [^,]*, scope live-2, repo local/test, no credential, result remote, `).test(tail), tail.match(/sign-in: act [0-9a-f]+: .*scope live-2.*/)?.[0]?.slice(0, 160) ?? "no line");
   check("the service logged the MCP path's line of each remote refusal", tail.includes("mcp: MCP session") && tail.includes("(scope live-2): a tools/call of browser_sign_in refused (a remote admission)") && tail.includes("(scope live-2): a tools/call of browser_sign_ins refused (a remote admission)"));
   check("no MCP line of the log holds a connection token or its fingerprint", ![TOKEN_L, TOKEN_R, fp(TOKEN_L), fp(TOKEN_R)].some((t) => serviceErr.includes(t)));
 

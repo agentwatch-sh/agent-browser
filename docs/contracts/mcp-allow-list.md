@@ -48,7 +48,8 @@ adds it to the list.
 **What the service does with it (stage 1d).**
 
 - `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a
-  request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.
+  request with a local admission while the service has the sign-in act; a request that a remote token admitted gets no
+  tool of `service_tools`.
 - In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each
   other property and its entry in `required`.
 - `tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call

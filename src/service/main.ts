@@ -102,6 +102,14 @@ export function testMcpRemoteScope(raw: string): string {
 }
 
 /**
+ * The service's MCP option (stage 1d part 2b; board ab-v16.97.5): the port's socket, and with `--test-mcp-remote-scope`
+ * the port's set of the one scope whose requests get the admission `remote` (the live check's stand-in).
+ */
+export function mcpOption<L>(listen: L, remoteScope: string | undefined): { listen: L; port?: { remote: ReadonlySet<string> } } {
+  return { listen, ...(remoteScope !== undefined ? { port: { remote: new Set([remoteScope]) } } : {}) };
+}
+
+/**
  * `--test-merge-guard-host` (board ab-v16.99; C11, the merge guard): a stand-in of GitHub for the live check, beside GitHub's
  * own hosts. Only a normalized host under .localhost (a loopback name in Chrome), never a real host, so a test page can
  * never mark or unmark a real host.
@@ -208,7 +216,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       link: { socket: linkSocketFor(resolve(controlDoor)) },
       // The MCP path (stage 1d part 2b): only with its socket.
       // --test-mcp-remote-scope: that scope's MCP connections get the remote admission (the live check's stand-in).
-      ...(listen ? { mcp: { listen, ...(remoteScope !== undefined ? { port: { remote: new Set([remoteScope]) } } : {}) } } : {}),
+      ...(listen ? { mcp: mcpOption(listen, remoteScope) } : {}),
       // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
       ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
       // The merge guard's stand-in host (board ab-v16.99): --test only.

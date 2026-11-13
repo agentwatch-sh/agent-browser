@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import { parseStat } from "../src/relay/peer.ts";
 import { checkCall, filterTools, readAllowList, SERVICE_TOOLS } from "../src/service/mcp/allow-list.ts";
 import { MCP_FAILED } from "../src/service/mcp/port.ts";
 import { McpTransport } from "../src/service/mcp/transport.ts";
-import { ActRefusal } from "../src/service/signins/act.ts";
+import { ActRefusal, SignInAct } from "../src/service/signins/act.ts";
 import { ACT_TEXT, signedInText } from "../src/service/signins/act-rules.ts";
 import { until } from "./fake-bridge.ts";
 
@@ -32,7 +32,10 @@ const CANARY_PASS = "Test-Canary-Pass-9Zr7-not-a-secret";
 const holdsCanary = (s: string) => s.includes(CANARY_USER) || s.includes(CANARY_PASS);
 type Admission = "local" | "remote" | undefined;
 
-/** A fake of the act's two methods: it records each call (the method, the caller and the arguments). */
+/**
+ * A fake of the act's two methods: it records each call (the method, the caller and the arguments), and, as the real act
+ * does, its check 1 refuses a caller whose admission is not local (the real act's own path: the test with SignInAct below).
+ */
 function fakeAct(o: { signIn?: (params: Record<string, unknown>) => Promise<object>; signIns?: () => object } = {}) {
   const calls: { method: string; scope: string; admission: string; params?: Record<string, unknown> }[] = [];
   return {
@@ -40,10 +43,12 @@ function fakeAct(o: { signIn?: (params: Record<string, unknown>) => Promise<obje
     host: {
       signIn: async (c: { scope: string; admission: "local" | "remote" }, params: Record<string, unknown>) => {
         calls.push({ method: "signIn", scope: c.scope, admission: c.admission, params });
+        if (c.admission !== "local") throw new ActRefusal("remote", ACT_TEXT.remote);
         return o.signIn ? o.signIn(params) : { signedIn: true, name: "staging", origin: ORIGIN };
       },
       signIns: (c: { scope: string; admission: "local" | "remote" }) => {
         calls.push({ method: "signIns", scope: c.scope, admission: c.admission });
+        if (c.admission !== "local") throw new ActRefusal("remote", ACT_TEXT.remote);
         return o.signIns ? o.signIns() : { state: "open", signIns: [{ name: "staging", origin: ORIGIN }] };
       },
     },
@@ -128,7 +133,7 @@ test("tools/list: a local admission with the act gets the list's tools, then bro
 
 // ------------------------------------------------------------------ a remote admission
 
-test("a remote admission (and a request with no admission word): a call of either tool gets check 1's tool error at once, whatever its arguments; it never reaches the act, the browser gate or the MCP, and its log line names no argument", { timeout: 60_000 }, async () => {
+test("a remote admission (and a request with no admission word): a call of either tool goes at once to the act's method with the admission remote and no argument, and gets the act's check 1 as the tool's error, whatever its arguments; it passes no browser gate, is no use, never reaches the MCP, and its log line names no argument", { timeout: 60_000 }, async () => {
   const act = fakeAct();
   await withAct({ act }, async ({ t, h, log, admission, gates }) => {
     const sid = await init(h.url("web-1"));
@@ -144,13 +149,60 @@ test("a remote admission (and a request with no admission word): a call of eithe
         assert.deepEqual([r.status, r.body], [200, toolError(id, REMOTE)], `${String(a)}: ${name} ${JSON.stringify(args)}`);
       }
     }
-    assert.deepEqual(act.calls, [], "no call reached the act");
+    const want = [["signIn", "remote", {}], ["signIns", "remote", undefined], ["signIn", "remote", {}], ["signIn", "remote", {}], ["signIns", "remote", undefined]];
+    assert.deepEqual(act.calls.map((c) => [c.method, c.admission, c.params]), [...want, ...want], "each call went to the act's method with the admission remote and no argument of the client");
+    assert.ok(act.calls.every((c) => c.scope === "web-1"));
     assert.deepEqual(gates, [], "no call passed the browser gate: a remote call needs no browser and is no use");
     assert.deepEqual(seen, [], "no call reached the MCP");
     assert.equal(t.activity().calls, 0);
     assert.ok(log.includes("mcp: MCP session 1 (scope web-1): a tools/call of browser_sign_in refused (a remote admission)"), log.join("\n"));
     assert.ok(log.includes("mcp: MCP session 1 (scope web-1): a tools/call of browser_sign_ins refused (a remote admission)"));
     assert.ok(!log.join("\n").includes("staging") && !holdsCanary(log.join("\n")), "no argument in the log");
+  });
+});
+
+test("a remote call through the real act (SignInAct, with traps for its ports): browser_sign_in is refused by the act's own check 1 and sends the one refusal end (result remote, an act id of its own, no start, no credential) and the act's log line; browser_sign_ins is refused by check 1 and sends no event; neither reads the store or the model, opens a window or passes the browser gate", { timeout: 60_000 }, async () => {
+  const touched: string[] = [];
+  const trap = (what: string) => (..._args: unknown[]): never => { touched.push(what); throw new Error(`the test's trap: ${what}`); };
+  const events: Record<string, any>[] = [];
+  const lines: string[] = [];
+  const real = new SignInAct({
+    model: { notReady: trap("model.notReady"), entries: trap("model.entries"), call: trap("model.call"), hide: trap("model.hide"), listen: trap("model.listen"), inputLock: trap("model.inputLock"), person: trap("model.person"), random: {} as never },
+    receiver: { features: trap("receiver.features"), request: trap("receiver.request") },
+    store: { state: trap("store.state"), named: trap("store.named"), usable: trap("store.usable"), openForUse: trap("store.openForUse"), limit: trap("store.limit"), actStarted: trap("store.actStarted"), actEnded: trap("store.actEnded") },
+    screen: { size: trap("screen.size"), moveOff: trap("screen.moveOff") },
+    move: { move: trap("move.move") },
+    emit: (ev) => events.push(ev), log: (l) => lines.push(l), repoOf: (scope) => (scope === "web-1" ? "owner/repo" : null),
+  });
+  await withAct({ act: { calls: [], host: real } as unknown as ReturnType<typeof fakeAct> }, async ({ t, h, log, admission, gates }) => {
+    const sid = await init(h.url("web-1"));
+    admission.now = "remote";
+    const one = await post(h.url("web-1"), call(80, "browser_sign_in", { name: "staging", password: CANARY_PASS }), sid);
+    assert.deepEqual([one.status, one.body], [200, toolError(80, REMOTE)]);
+    assert.equal(events.length, 1, "one event");
+    const ev = events[0];
+    assert.deepEqual({ ...ev, act: "<act>", at: "<at>", ms: 0 }, { t: "ev", ev: "sign_in", phase: "end", act: "<act>", scope: "web-1", repo: "owner/repo", id: null, name: null, origin: null, at: "<at>", result: "remote", ms: 0, blocked: 0, guarded: 0, stopped_now: false }, "the refusal end of check 1: no start, no credential");
+    assert.match(ev.act, /^[0-9a-f]{16}$/, "an act id of its own");
+    assert.equal(lines.length, 1, "the act's one log line");
+    assert.match(lines[0], new RegExp(`^sign-in: act ${ev.act}: user .*, scope web-1, repo owner/repo, no credential, result remote, `));
+    const list = await post(h.url("web-1"), call(81, "browser_sign_ins", {}), sid);
+    assert.deepEqual([list.status, list.body], [200, toolError(81, REMOTE)]);
+    assert.equal(events.length, 1, "browser_sign_ins sends no event (AgentBrowser.signIns sends none)");
+    assert.deepEqual(touched, [], "no call read the store or the model, or opened a window");
+    assert.deepEqual(gates, [], "no browser gate");
+    assert.equal(t.activity().calls, 0, "no use");
+    assert.ok(!holdsCanary(JSON.stringify(events) + lines.join("\n") + log.join("\n")), "no argument in the event or the log");
+  });
+});
+
+test("with no act, a remote call of either tool gets check 1's text from the transport (there is no act, so no event)", { timeout: 60_000 }, async () => {
+  await withAct({ act: null }, async ({ h, admission }) => {
+    const sid = await init(h.url("web-1"));
+    admission.now = "remote";
+    for (const [k, name] of ["browser_sign_in", "browser_sign_ins"].entries()) {
+      const r = await post(h.url("web-1"), call(90 + k, name, {}), sid);
+      assert.deepEqual([r.status, r.body], [200, toolError(90 + k, REMOTE)], name);
+    }
   });
 });
 
@@ -293,6 +345,24 @@ test("a call that waits at the browser gate and whose client closes never starts
   });
 });
 
+test("a client's cancel while the call waits at the browser gate ends the call: its id is free at once, its POST gets the cancelled answer, and no act starts when the gate opens", { timeout: 60_000 }, async () => {
+  let open!: (v: boolean) => void;
+  const act = fakeAct();
+  await withAct({ act, gate: () => new Promise<boolean>((r) => { open = r; }) }, async ({ h, gates }) => {
+    const sid = await init(h.url("web-1"));
+    const first = post(h.url("web-1"), call(65, "browser_sign_in", { name: "staging" }), sid);
+    await until(() => gates.length === 1, "the call waits at the gate");
+    assert.equal((await post(h.url("web-1"), { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 65, reason: "the test cancels it" } }, sid)).status, 202);
+    const again = await post(h.url("web-1"), { jsonrpc: "2.0", id: 65, method: "ping" }, sid);
+    assert.deepEqual([again.status, again.body], [200, { jsonrpc: "2.0", id: 65, result: {} }], "the id is free at once");
+    open(true);
+    const r = await first;
+    assert.deepEqual([r.status, r.body], [200, { jsonrpc: "2.0", id: 65, error: { code: -32800, message: "Request cancelled: the client sent notifications/cancelled for this request." } }]);
+    await new Promise((x) => setTimeout(x, 200));
+    assert.deepEqual(act.calls, [], "no act starts");
+  });
+});
+
 test("an exception of the act that is no refusal: the request path rejects (the port's fixed 500), and its text reaches no answer and no log line", { timeout: 60_000 }, async () => {
   const act = fakeAct({ signIn: async () => { throw new Error(`a test failure that names ${CANARY_PASS}`); } });
   await withAct({ act }, async ({ h, log }) => {
@@ -334,6 +404,7 @@ test("the format's vectors through the code: each call gets its answer (checkCal
 
 test("through the real port and the MCP part: a connection that the uid check and the walk admit (this process, under its own root) is local, so the transport gets the word local and runs the act; the test stand-in of a remote scope gets the word remote and no act", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { McpPart } = await import("../src/service/mcp/part.ts");
+  const { mcpOption } = await import("../src/service/main.ts");
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-sign-in-port-"));
   const token = "abt1_" + Buffer.from("test, not a token: the sign-in tools", "latin1").toString("base64url");
   const fp = createHash("sha256").update(token, "latin1").digest("hex");
@@ -345,7 +416,8 @@ test("through the real port and the MCP part: a connection that the uid check an
     for (const remote of [false, true]) {
       const act = fakeAct();
       const log: string[] = [];
-      const p = new McpPart({ listen: { port: 0 }, stateFolder: join(dir, remote ? "r" : "l"), log: (l) => log.push(l), ...(remote ? { port: { remote: new Set(["t-act"]) } as any } : {}) });
+      // main.ts's own option of the MCP path: --test-mcp-remote-scope t-act, or no flag.
+      const p = new McpPart({ ...mcpOption({ port: 0 }, remote ? "t-act" : undefined), stateFolder: join(dir, remote ? "r" : "l"), log: (l) => log.push(l) });
       parts.push(p);
       p.setSessions(sessions);
       await (p.open as any)({ url: (s: string) => s, readiness: () => ({ controlOff: false, notReady: null, sites: 1 }), act: () => act.host });
@@ -360,7 +432,7 @@ test("through the real port and the MCP part: a connection that the uid check an
       } else {
         assert.ok(!namesOf(l).includes("browser_sign_in") && !namesOf(l).includes("browser_sign_ins"), "the remote stand-in: no service tool");
         assert.deepEqual(r.body, toolError(3, REMOTE));
-        assert.deepEqual(act.calls, [], "the remote stand-in never reaches the act");
+        assert.deepEqual(act.calls.map((c) => [c.method, c.scope, c.admission, c.params]), [["signIn", "t-act", "remote", {}]], "the remote stand-in reaches only the act's check 1, with no argument");
       }
       assert.ok(!log.join("\n").includes(token) && !log.join("\n").includes(fp));
     }
@@ -369,16 +441,18 @@ test("through the real port and the MCP part: a connection that the uid check an
 
 // ------------------------------------------------------------------ the live check's stand-in of a remote admission
 
-test("--test-mcp-remote-scope takes one scope name, goes with --test and --test-mcp-port, and gives that scope's MCP connections the remote admission (main.ts passes it to the port)", async () => {
+test("--test-mcp-remote-scope takes one scope name, and main.ts's mcpOption gives the port that one scope as remote (no flag: no set)", async () => {
   const { testMcpRemoteScope, SERVICE_USAGE } = await import("../src/service/main.ts");
   for (const ok of ["live-2", "a", "web_1.x", "A".repeat(64)]) assert.equal(testMcpRemoteScope(ok), ok);
   for (const bad of ["", "-x", ".x", "a b", "a/b", "A".repeat(65), "x\n"]) assert.throws(() => testMcpRemoteScope(bad), /--test-mcp-remote-scope must be a scope name/, JSON.stringify(bad));
   assert.match(SERVICE_USAGE, /\[--test-mcp-port PORT \[--test-mcp-remote-scope SCOPE\]\]/);
+  // The pairing with --test and --test-mcp-port: test/service-cli.test.ts (the refusals); the port's behaviour: the test
+  // through the real port above, with main.ts's own mcpOption.
+  const { mcpOption } = await import("../src/service/main.ts");
+  assert.deepEqual(mcpOption({ port: 0 }, "live-2"), { listen: { port: 0 }, port: { remote: new Set(["live-2"]) } });
+  assert.deepEqual(mcpOption({ port: 0 }, undefined), { listen: { port: 0 } });
   const main = readFileSync(new URL("../src/service/main.ts", import.meta.url), "utf8");
-  assert.ok(main.includes(`if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");`));
-  assert.ok(main.includes("...(listen ? { mcp: { listen, ...(remoteScope !== undefined ? { port: { remote: new Set([remoteScope]) } } : {}) } } : {}),"), "main.ts gives the port the scope");
-  const port = readFileSync(new URL("../src/service/mcp/port.ts", import.meta.url), "utf8");
-  assert.ok(port.includes(`this.o.handler.request(req, res, conn.scope, browser, this.o.remote?.has(conn.scope) ? "remote" : conn.admission);`), "the port gives the handler the connection's admission, or remote for the stand-in's scope");
+  assert.ok(main.includes("...(listen ? { mcp: mcpOption(listen, remoteScope) } : {}),"), "main.ts gives the service mcpOption's value");
 });
 
 // ------------------------------------------------------------------ a real MCP client
@@ -406,12 +480,41 @@ test("a real MCP client (the MCP SDK's Client and StreamableHTTPClientTransport 
         }
       } finally { await client.close(); }
     }
-    assert.deepEqual(act.calls.map((c) => [c.method, c.admission]), [["signIn", "local"], ["signIns", "local"]], "only the local client reached the act");
+    assert.deepEqual(act.calls.map((c) => [c.method, c.admission]), [["signIn", "local"], ["signIns", "local"], ["signIn", "remote"], ["signIns", "remote"]], "the remote client's calls reach only the act's check 1");
   });
 });
 
-test("service.ts gives the MCP part the act that it gives the model, so the MCP tools run the same act as AgentBrowser.signIn", () => {
-  const service = readFileSync(new URL("../src/service/service.ts", import.meta.url), "utf8");
-  assert.ok(service.includes("      act: () => act,\n"), "the MCP part's open takes the act's getter");
-  assert.ok(service.includes("model.setSignIns(act = new SignInAct({"), "the one act of the model");
+test("the service's wiring (service.ts, by behaviour): with the store, the native link, the lists and the Chrome unit the service makes the act, and its MCP path's tools/list holds browser_sign_in and browser_sign_ins for a local admission, with no Chrome start; without the store, neither", { skip: process.platform !== "linux", timeout: 90_000 }, async () => {
+  const { startService } = await import("../src/service/service.ts");
+  const { FakeTools, World } = await import("./fake-unit-world.ts");
+  const token = "abt1_" + Buffer.from("test, not a token: the service's wiring", "latin1").toString("base64url");
+  const self = parseStat(readFileSync(`/proc/${process.pid}/stat`, "latin1"))!;
+  const auth = { Authorization: `Bearer ${token}` };
+  const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
+  for (const withStore of [true, false]) {
+    const w = new World();
+    const tools = new FakeTools();
+    const dir = mkdtempSync(join(tmpdir(), "ab-mcp-sign-in-svc-"));
+    mkdirSync(join(dir, "lists"));
+    writeFileSync(join(dir, "lists", "owner.repo.json"), JSON.stringify({ allow: ["a.example"], repo: "owner/repo" }));
+    const s = await startService({
+      agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null,
+      lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
+      unit: { paths: w.paths, owner: async () => ({ active: "active", sub: "running", mainPid: process.pid }), tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5 } },
+      link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true, pid: 4242 }) },
+      mcp: { listen: { port: 0 } },
+      ...(withStore ? { signIns: { protections: () => null } } : {}),
+    } as any);
+    try {
+      await s.state.handle({ t: "req", id: "c", op: "config", by: { kind: "daemon", user: "ann", via: "config" }, enabled: true, control: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] } as any);
+      await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [{ scope: "web-1", repo: "owner/repo", roots: [{ pid: process.pid, start: self.start }], cgroup: null, lifetime_id: null, mcp_token: createHash("sha256").update(token, "latin1").digest("hex") }], remote: [], box: { hosts: [], cookie_names: [] } } as any);
+      const url = `http://${(s.state.status() as any).mcp.address}/mcp/web-1`;
+      const sid = await init(url, auth);
+      const names = namesOf(await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid, auth));
+      assert.ok(names.length >= Object.keys(LIST.tools).length, `the list's tools: ${names.length}`);
+      if (withStore) assert.deepEqual(names.slice(-2), ["browser_sign_in", "browser_sign_ins"], "the act reaches the MCP path");
+      else assert.ok(!names.includes("browser_sign_in") && !names.includes("browser_sign_ins"), "no act: no service tool");
+      assert.equal(w.named("chromium").length, 0, "tools/list starts no Chrome");
+    } finally { await s.stop(); w.close(); rmSync(dir, { recursive: true, force: true }); }
+  }
 });

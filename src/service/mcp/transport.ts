@@ -22,9 +22,10 @@
 //   board ab-v16.97.5): the transport answers them itself, and a call never reaches the MCP's code. The port gives each
 //   request the admission of its connection (`local`: steps 1 and 2, the uid check and the walk); a request with no word
 //   is remote. Only a local request, while the service has the act, gets them in `tools/list` and runs the act's method
-//   for the MCP session's scope. A remote request's call gets the tool error of the act's check 1 at once, whatever its
-//   arguments: it never reaches the act or the browser gate. A local call is a tool call: it passes the browser gate, it
-//   counts as a use until the act ends (also after its client left), and no cancel stops a running act.
+//   for the MCP session's scope. A remote request's call goes at once to the act's method with the admission remote, and
+//   the act's own check 1 refuses it, whatever its arguments (browser_sign_in: its one refusal end, result remote); it
+//   passes no browser gate and is no use. A local call is a tool call: it passes the browser gate, it counts as a use
+//   until the act ends (also after its client left), and no cancel stops a running act (a cancel at the gate ends it).
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
 //   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
@@ -290,8 +291,11 @@ export class McpTransport implements McpHandler {
       const act = this.o.act?.() ?? null;
       const mine = serviceCall(this.o.list, params, admission, act !== null);
       if (mine === "remote") {
-        // A request that a remote token admitted never reaches the act (check 1), the browser gate or the MCP.
-        answer(res, 200, toolResult(msg.id, `Not signed in: ${ACT_TEXT.remote}`, true));
+        // A request that a remote token admitted (C11, check 1): the act's own check 1 refuses it at once, with its text
+        // and, for browser_sign_in, its one refusal end (result remote). It passes no browser gate, is no use, and never
+        // reaches the MCP.
+        const refusal = await this.refuseRemote(params.name as string, scope, act, msg.id);
+        answer(res, 200, refusal);
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name as string} refused (a remote admission)`);
         return;
       }
@@ -370,6 +374,26 @@ export class McpTransport implements McpHandler {
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
     const mine = admission === "local" && (this.o.act?.() ?? null) !== null ? serviceTools(this.o.list) : [];
     return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
+  }
+
+  /**
+   * A call of one of the service's own tools that a remote token admitted (C11, the sign-in act's check 1; the design,
+   * sections 5.7 and 7.1): the act's method with the admission `remote` and no argument of the client, so the act's own
+   * check 1 refuses it before it reads a name, the store or the model: browser_sign_in sends the act's one refusal end
+   * (result remote) and its log line, browser_sign_ins sends no event (as AgentBrowser.signIns). With no act there is no
+   * store and no event: the transport gives check 1's text itself. Any other outcome of the act gives check 1's text too.
+   */
+  private async refuseRemote(tool: string, scope: string, act: SignInHost | null, id: unknown): Promise<Message> {
+    const text = `Not signed in: ${ACT_TEXT.remote}`;
+    if (act === null) return toolResult(id, text, true);
+    const caller = { scope, admission: "remote" as const };
+    try {
+      if (tool === "browser_sign_ins") act.signIns(caller);
+      else await act.signIn(caller, {});
+    } catch (e) {
+      if (e instanceof ActRefusal) return toolResult(id, e.message, true);
+    }
+    return toolResult(id, text, true);
   }
 
   /**
