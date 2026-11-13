@@ -23,6 +23,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { UsageError } from "../errors.ts";
+import { normalizeEntry } from "../relay/scopes.ts";
 import { defaultDaemonCommandFile } from "./admission.ts";
 import { agentDoorAddress } from "./agent-door.ts";
 import { encodeLine, serviceHello } from "./control.ts";
@@ -37,7 +38,7 @@ import { stopAll } from "./unit/stop-all.ts";
 import { SIGN_INS_FEATURE } from "./signins/part.ts";
 import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT]]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT] [--test-merge-guard-host HOST.localhost]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
@@ -90,6 +91,17 @@ export function testMcpPort(raw: string): number {
   return n;
 }
 
+/**
+ * `--test-merge-guard-host` (board ab-v16.99; C11, the merge guard): a stand-in of GitHub for the live check, beside GitHub's
+ * own hosts. Only a normalized host under .localhost (a loopback name in Chrome), never a real host, so a test page can
+ * never mark or unmark a real host.
+ */
+export function testMergeGuardHost(raw: string): string {
+  const h = normalizeEntry(raw);
+  if (h === null || h !== raw || !h.endsWith(".localhost")) throw new UsageError("--test-merge-guard-host must be a host under .localhost (a stand-in of GitHub), in its normalized form");
+  return h;
+}
+
 /** The test-only source of Google Chrome (`--test-chrome-source FILE`): {"repo":"<abs folder>","key":"<abs file>","fingerprints":["<40 hex>"]}. */
 export function testChromeSource(file: string): ChromeSource {
   let o: any;
@@ -122,7 +134,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source", "test-mcp-port"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
@@ -166,6 +178,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const testPort = str("test-mcp-port");
   const listen = await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
+  const guardHost = test && str("test-merge-guard-host") ? testMergeGuardHost(str("test-merge-guard-host")!) : undefined;
   let s;
   try {
     s = await startService({
@@ -185,6 +198,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       ...(listen ? { mcp: { listen } } : {}),
       // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
       ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
+      // The merge guard's stand-in host (board ab-v16.99): --test only.
+      ...(guardHost ? { mergeGuard: { testHosts: [guardHost] } } : {}),
     });
   } catch (e) {
     if (e instanceof NotOwnerAtStart) { log(`service: ${e.message}`); return 1; }
