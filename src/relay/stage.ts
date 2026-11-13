@@ -2292,9 +2292,10 @@ export class Stage {
 
   /**
    * The typing rule (C11, the keys and the text): a text whose typing plan at the person's speed fits in what is left of
-   * the key run's STAGE_TYPE_MAX_MS is short (no fast end: the operator's answer on board item ab-2qb). A short text is typed when each character has a key on the US layout (no line feed, no
-   * tab), the client holds no key (a held Shift or Control would change the typed keys), and the focused element is an
-   * input of a text type or a textarea; else it goes as it is. A long text goes as a person's paste when the paste rule
+   * the key run's STAGE_TYPE_MAX_MS is short (no fast end: the operator's answer on board item ab-2qb). A short text is
+   * typed when each character has a key on the US layout (no line feed, no tab), the client holds no key (a held Shift
+   * or Control would change the typed keys), and the focused element is an input of a text type or a textarea; else it
+   * goes as it is. A long text goes as a person's paste when the paste rule
    * allows it (the operator's answer on board item ab-8fu), else as it is.
    */
   private async typingRule(page: StagePage, st: TabState, text: string): Promise<Rule> {
@@ -2578,7 +2579,8 @@ export class Stage {
    * Whether a call joins the tab's collected part (C11, the collected keys): a keyDown of one printable character with a
    * key on the US layout (its `key` is its `text`; no modifiers, no auto-repeat, no editing command) while the client
    * holds no key and no collected key is down; the keyUp of the collected key that is down; an Input.insertText of a
-   * text while a part is open and no collected key is down. Not in a plain rest of a run, nor on a frame's session.
+   * text while a part is open and no collected key is down. Never on a frame's session; also after the run's
+   * STAGE_TYPE_MAX_MS (review-126 B5).
    */
   private joins(st: TabState, e: Entry): boolean {
     if (e.ended || e.failedWith || st.gone || e.child) return false;
