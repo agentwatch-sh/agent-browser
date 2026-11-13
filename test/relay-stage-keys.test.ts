@@ -124,6 +124,11 @@ test("keys (the per-key path: keys that are not collected): the early answer giv
     const evalSent = r.tab.sent.findIndex((s) => s.pass === calls.length);
     assert.ok(evalSent > r.tab.sent.indexOf(ups.at(-1)!), `seed ${seed}: the evaluate goes after the last keyUp`);
     assert.equal(ev.filter((s) => s.params.type === "rawKeyDown").map((s) => s.params.key).join(""), TEXT, `seed ${seed}: the keys in order`);
+    // Board ab-t30.19: no fast end after a time of the run (the old 12 s rule): the person's speed to the run's end.
+    const downs = ev.filter((s) => s.params.type === "rawKeyDown"), late = downs.filter((s) => s.t - downs[0].t > 3000).map((s, i, a) => (i ? s.t - a[i - 1].t : 0)).slice(1).sort((x, y) => x - y);
+    // The fast end is 100 to 120 ms a key; the person's intervals spread far wider.
+    const p10 = late[Math.floor(late.length * 0.1)], p90 = late[Math.floor(late.length * 0.9)];
+    assert.ok(late.length > 10 && p90 - p10 > 3 * (F.fastKeyMs[1] - F.fastKeyMs[0]), `seed ${seed}: the person's spread after 3 s (p10 ${Math.round(p10)}, p90 ${Math.round(p90)} ms)`);
   }
   assert.ok(early > 0, `${early} early answers`);
   assert.ok(overlaps / pairs > 0.1, `some overlap (${overlaps} of ${pairs})`);
