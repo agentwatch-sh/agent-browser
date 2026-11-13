@@ -313,6 +313,8 @@ export class Model {
   stageCounts(): Record<string, number> { return { ...(this.stage?.counts ?? {}) }; }
   /** The clipboard of the service's own display for the stage's paste (C11, the paste; board ab-t30.19): the service sets it. */
   setClipboard(c: StageClipboard | null): void { if (this.stage) this.stage.clipboard = c; }
+  /** The stage's clipboard (the tests). */
+  get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
   /** Whether an open connection holds a grant of the clipboard (C11, the paste): a content setting acts on the whole profile, so the stage then pastes nothing. */
   clipboardGranted(): boolean { for (const c of this.conns) if (c.grants.some((g) => g.type === "clipboard")) return true; return false; }
 

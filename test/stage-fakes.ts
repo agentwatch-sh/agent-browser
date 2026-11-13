@@ -556,11 +556,11 @@ export class FakeTab implements StagePage {
       return;
     }
     const ctl = this.mods.has("Control") || this.mods.has("Meta");
-    // Chrome's paste (board ab-t30.19): Control+V reads the clipboard in its keyDown's default action; an input drops line breaks.
+    // Chrome's paste (board ab-t30.19): Control+V reads the clipboard in its keyDown's default action; an input has a space for each line break (the probe).
     if (this.mods.has("Control") && p.key === "v" && !p.autoRepeat) {
       this.pastes.push({ t: this.clock.now(), field: this.focusedId, len: this.clipText === null ? 0 : [...this.clipText].length });
       if (this.clipText === null || node?.refusesPaste) return;
-      const t = typeof node?.pasteAs === "string" ? node.pasteAs : node?.tag === "input" ? this.clipText.replace(/[\r\n]/g, "") : this.clipText;
+      const t = typeof node?.pasteAs === "string" ? node.pasteAs : node?.tag === "input" ? this.clipText.replace(/\r\n|\r|\n/g, " ") : this.clipText;
       return put(t);
     }
     if (p.text && !ctl) { if (node?.mask === "digits" && !/^[0-9]$/.test(p.text)) return; return put(String(p.text)); }

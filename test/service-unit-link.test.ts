@@ -156,6 +156,32 @@ test("the fail-closed watch on the link's port: a linked receiver that confirmed
   } finally { await r.close(); }
 });
 
+test("board ab-t30.19: with the input stage on, the service gives the stage the X selection owner of its unit's own Xvfb (its display and its X authority file), and none while the unit runs no Xvfb", { timeout: 30_000 }, async (t) => {
+  const { STAGE_TEST_ENV } = await import("../src/relay/stage.ts");
+  const { XClipboard } = await import("../src/service/unit/clipboard.ts");
+  const w = new World();
+  const dir = mkdtempSync(join(tmpdir(), "ab-clip-"));
+  const saved = process.env[STAGE_TEST_ENV];
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; });
+  const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1280x900x24"] });
+  const ch = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"] });
+  writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, display_size: [1280, 900], xvfb_pid: x.pid, xvfb_start: x.start, chrome_pid: ch.pid, chrome_start: ch.start, chrome: { kind: "chromium", version: "" }, chrome_bin: "/usr/bin/chromium" });
+  const pidfds: Pidfds = { open: (pid) => pid, signal: () => 0, close: () => {} };
+  const tools = new FakeTools();
+  process.env[STAGE_TEST_ENV] = "test";
+  const s = await startService({
+    agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null,
+    lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
+    unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000 } },
+    link: { socket: join(dir, "link.sock"), pidfds, shim: { node: "/usr/bin/node", bin: "/ab/bin/agent-browser.js" }, xdotool: null },
+  });
+  try {
+    const clip = s.agent.relay.model.stageClipboard as InstanceType<typeof XClipboard> | null;
+    assert.ok(clip instanceof XClipboard, "the stage has the service's X selection owner");
+    assert.deepEqual(clip!.target(), { display: 173, xauth: w.paths.xauth }, "the unit's own Xvfb and its X authority file");
+  } finally { await s.stop(); }
+});
+
 test("the service at an adoption ends the old owner's host among its Chrome's children through a pidfd (note 7), and never its own shim or a renderer", { timeout: 30_000 }, async (t) => {
   const w = new World();
   const dir = mkdtempSync(join(tmpdir(), "ab-old-"));

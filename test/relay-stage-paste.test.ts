@@ -13,7 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { charKey, CONTROL, SHIFT } from "../src/human/keys.ts";
-import { CLIPBOARD_HOLD_MS, RUN_IDLE_MS, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
+import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -110,6 +110,23 @@ test("a refused paste (a paste handler that prevents it: the field's value did n
   assert.ok(keys[0].t >= chordOf(p.tab).ctrlUp!.t);
   assert.equal(p.tab.valueOf("n"), MID + MID);
   assert.deepEqual([p.stage.counts.pastesRefused, p.tab.clipLog.map((x) => x.op).join(",")], [1, "hold,clear"]);
+});
+
+test("a long text with line breaks into an input (the probe: Chrome inserts a space for each line break there, as Input.insertText does): a paste, counted as one, with no second input", async () => {
+  const text = (MID + "\n").repeat(3);
+  const r = await runVector(own([fillCall("n", text), insert(text)], PAGE(INPUT({ focused: false }))));
+  assert.equal(r.tab.valueOf("n"), text.replace(/\n/g, " "));
+  assert.deepEqual([r.stage.counts.pastes, r.stage.counts.pasteValueDiffers, r.tab.sent.filter((s) => s.method === "Input.insertText").length], [1, undefined, 0]);
+});
+
+test("a collected part as the client's own keys (no clipboard): at most PLAIN_IN_FLIGHT (8) of its events without an answer; each character once, in order", async () => {
+  // A page that takes 2 ms for each key event (Chrome queues the rest): the answers come one by one.
+  const r = await runVector(own(typeCalls(LONG.slice(0, 400)), { nodes: { n: INPUT() }, focused: "n" }), { tab: (t) => { t.busy = (s) => (s.method === "Input.dispatchKeyEvent" ? 2 : 0); } });
+  assert.equal(r.tab.valueOf("n"), LONG.slice(0, 400));
+  const ev = keyEvents(r.tab);
+  let most = 0;
+  for (const e of ev) most = Math.max(most, ev.filter((x) => x.t <= e.t && (x.answered ?? Infinity) > e.t).length);
+  assert.ok(most <= PLAIN_IN_FLIGHT && most >= 2, `at most ${most} key events without an answer`);
 });
 
 test("a paste handler of the page that inserts its own text (a value that is neither the text nor the old value): counted, logged with no text, no repair (no second input)", async () => {

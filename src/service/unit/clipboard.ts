@@ -286,6 +286,8 @@ export class XClipboard implements StageClipboard {
   constructor(o: ClipboardOptions) { this.o = o; }
   private count(k: string): void { this.counts[k] = (this.counts[k] ?? 0) + 1; }
 
+  /** The display that the owner reaches now (the tests: the service gives its unit's own Xvfb). */
+  target(): ClipboardDisplay | null { return this.o.display(); }
   /** Whether the owner holds a text now (the tests and the live rows). */
   get holding(): boolean { return this.text !== null; }
 
