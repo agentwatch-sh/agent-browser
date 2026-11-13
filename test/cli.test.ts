@@ -103,6 +103,21 @@ after(async () => {
   c?.remove();
 });
 
+/** How many calls of `method` the fake browser got for the tab. */
+const callCount = (targetId: string, method: string) => fake.callsFor(targetId).filter((x) => x.method === method).length;
+
+/**
+ * Waits until the fake browser got more than `before` calls of `method` for the tab, within `ms` (board ab-b84.29: the
+ * net tests wait for the event that they need, not a fixed time, so a slow start of the CLI on a loaded box breaks nothing).
+ */
+async function untilCall(targetId: string, method: string, before: number, ms = 20_000): Promise<void> {
+  const t0 = Date.now();
+  while (callCount(targetId, method) <= before) {
+    if (Date.now() - t0 > ms) throw new Error(`the fake browser got no ${method} for the tab in ${ms} ms`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 /** Run a command for the test consumer with --json, and check the one-document contract. */
 async function run(args: string[], opts: { input?: string; consumer?: Consumer; extra?: string[] } = {}): Promise<CliRun> {
   const r = await cli([...args, ...flags(opts.consumer ?? c, fake.ws, opts.extra), "--json"], { input: opts.input });
@@ -298,17 +313,23 @@ test("a full session: every tab command prints its documented JSON shape", async
 test("net records a tab's traffic as one JSON document, redacted", async () => {
   const opened = await run(["open", fx.base + "/", "--name", "netted"]);
   const page = fake.pages.get(opened.json.tab.targetId)!;
-  const pending = run(["net", "netted", "--seconds", "1", "--match", "/api/"]);
-  await new Promise((r) => setTimeout(r, 600));
-  fake.traffic(page, { method: "POST", url: `${fx.base}/api/gen?key=K3Y`, postData: '{"prompt":"a cat","api_key":"abc123"}', body: '{"token":"zzz","clips":[]}' });
-  fake.traffic(page, { url: `${fx.base}/other`, body: "not matched" });
-  const r = await pending;
-  assert.equal(r.json.seconds, 1);
-  assert.deepEqual(r.json.entries, [{
-    kind: "http", method: "POST", url: `${fx.base}/api/gen?key=<redacted>`, body: '{"prompt":"a cat","api_key":"<redacted>"}', status: 200,
-    mime: "application/json", resp: '{"token":"<redacted>","clips":[]}',
-  }]);
-  await run(["close", "netted"]);
+  try {
+    const enables = callCount(page.targetId, "Network.enable");
+    const pending = run(["net", "netted", "--seconds", "1", "--match", "/api/"]);
+    // The recording starts at its Network.enable (its listeners come before it): the traffic goes after that call.
+    await untilCall(page.targetId, "Network.enable", enables);
+    fake.traffic(page, { method: "POST", url: `${fx.base}/api/gen?key=K3Y`, postData: '{"prompt":"a cat","api_key":"abc123"}', body: '{"token":"zzz","clips":[]}' });
+    fake.traffic(page, { url: `${fx.base}/other`, body: "not matched" });
+    const r = await pending;
+    assert.equal(r.json.seconds, 1);
+    assert.deepEqual(r.json.entries, [{
+      kind: "http", method: "POST", url: `${fx.base}/api/gen?key=<redacted>`, body: '{"prompt":"a cat","api_key":"<redacted>"}', status: 200,
+      mime: "application/json", resp: '{"token":"<redacted>","clips":[]}',
+    }]);
+  } finally {
+    // Also when an assertion fails: a tab left open would change the next tests' tab lists (board ab-b84.29).
+    await run(["close", "netted"]);
+  }
 });
 
 test("a redirect off the allowlist is refused by host, and its URL is never printed", async () => {
@@ -327,16 +348,26 @@ test("a redirect off the allowlist is refused by host, and its URL is never prin
 test("net stops recording when the tab navigates off the allowlist", async () => {
   const opened = await run(["open", fx.base + "/", "--name", "wander"]);
   const page = fake.pages.get(opened.json.tab.targetId)!;
-  const pending = run(["net", "wander", "--seconds", "1.5"]);
-  await new Promise((r) => setTimeout(r, 600));
-  fake.traffic(page, { url: `${fx.base}/api/before`, body: "{}" });
-  await new Promise((r) => setTimeout(r, 200)); // its body is read before the navigation; an entry still in flight then is dropped
-  fake.navigate(page, "https://login.elsewhere.invalid/inbox");
-  fake.traffic(page, { url: "https://login.elsewhere.invalid/api/mail", body: '{"subject":"private"}' });
-  const r = await pending;
-  assert.deepEqual(r.json.entries.map((e: any) => e.url), [`${fx.base}/api/before`]);
-  assert.ok(!r.stdout.includes("private"));
-  fake.pages.delete(page.targetId); // off the list now, so no command can close it
+  try {
+    const enables = callCount(page.targetId, "Network.enable");
+    const bodies = callCount(page.targetId, "Network.getResponseBody");
+    const pending = run(["net", "wander", "--seconds", "1.5"]);
+    // The recording starts at its Network.enable (its listeners come before it): the traffic goes after that call.
+    await untilCall(page.targetId, "Network.enable", enables);
+    fake.traffic(page, { url: `${fx.base}/api/before`, body: "{}" });
+    // Its body is read before the navigation; an entry still in flight then is dropped. The fake answers the read at once;
+    // the short wait after it gives the CLI's process the answer in a read of its own, before the navigation's events.
+    await untilCall(page.targetId, "Network.getResponseBody", bodies);
+    await new Promise((r) => setTimeout(r, 250));
+    fake.navigate(page, "https://login.elsewhere.invalid/inbox");
+    fake.traffic(page, { url: "https://login.elsewhere.invalid/api/mail", body: '{"subject":"private"}' });
+    const r = await pending;
+    assert.deepEqual(r.json.entries.map((e: any) => e.url), [`${fx.base}/api/before`]);
+    assert.ok(!r.stdout.includes("private"));
+  } finally {
+    // Off the list now, so no command can close it; also when an assertion fails (board ab-b84.29).
+    fake.pages.delete(page.targetId);
+  }
   const tooLong = await run(["net", "any", "--seconds", "3601"]);
   assert.equal(tooLong.json.error.code, "usage");
 });
