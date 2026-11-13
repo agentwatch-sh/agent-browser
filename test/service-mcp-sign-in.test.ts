@@ -359,3 +359,17 @@ test("through the real port and the MCP part: a connection that the uid check an
     }
   } finally { for (const p of parts) await p.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ------------------------------------------------------------------ the live check's stand-in of a remote admission
+
+test("--test-mcp-remote-scope takes one scope name, goes with --test and --test-mcp-port, and gives that scope's MCP connections the remote admission (main.ts passes it to the port)", async () => {
+  const { testMcpRemoteScope, SERVICE_USAGE } = await import("../src/service/main.ts");
+  for (const ok of ["live-2", "a", "web_1.x", "A".repeat(64)]) assert.equal(testMcpRemoteScope(ok), ok);
+  for (const bad of ["", "-x", ".x", "a b", "a/b", "A".repeat(65), "x\n"]) assert.throws(() => testMcpRemoteScope(bad), /--test-mcp-remote-scope must be a scope name/, JSON.stringify(bad));
+  assert.match(SERVICE_USAGE, /\[--test-mcp-port PORT \[--test-mcp-remote-scope SCOPE\]\]/);
+  const main = readFileSync(new URL("../src/service/main.ts", import.meta.url), "utf8");
+  assert.ok(main.includes(`if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");`));
+  assert.ok(main.includes("...(listen ? { mcp: { listen, ...(remoteScope !== undefined ? { port: { remote: new Set([remoteScope]) } } : {}) } } : {}),"), "main.ts gives the port the scope");
+  const port = readFileSync(new URL("../src/service/mcp/port.ts", import.meta.url), "utf8");
+  assert.ok(port.includes(`this.o.handler.request(req, res, conn.scope, browser, this.o.remote?.has(conn.scope) ? "remote" : conn.admission);`), "the port gives the handler the connection's admission, or remote for the stand-in's scope");
+});
