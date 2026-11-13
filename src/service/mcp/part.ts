@@ -30,7 +30,7 @@ export type McpPartOptions = {
   log: (line: string) => void;
   /** Tests only: the list, the port's reader, uid and platform, and the transport's test seams. */
   list?: AllowList;
-  port?: Partial<Pick<McpPortOptions, "reader" | "uid" | "platform" | "compare" | "headersMs" | "idleMs">>;
+  port?: Partial<Pick<McpPortOptions, "reader" | "uid" | "platform" | "compare" | "headersMs" | "idleMs" | "remote">>;
   transport?: Partial<Pick<McpTransportOptions, "worker" | "perScope" | "perService">>;
   /** Tests only: the open waits for this (the order of the service's start). */
   openGate?: Promise<void>;
@@ -52,17 +52,18 @@ export class McpPart implements ServicePart {
 
   /**
    * Open the port, once the agent door runs: `url` gives the scope's CDP URL on the agent door, `readiness` what step 8
-   * reads, and `use` the service's start at a use (board ab-v16.94.11). A failure leaves the part `failed` (fail closed:
-   * no MCP port; the socket unit keeps the port).
+   * reads, `use` the service's start at a use (board ab-v16.94.11), and `act` the service's sign-in act while it has one
+   * (the stored sign-ins' MCP tools, board ab-v16.97.5). A failure leaves the part `failed` (fail closed: no MCP port; the
+   * socket unit keeps the port).
    */
-  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"] }): Promise<void> {
+  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"] }): Promise<void> {
     try {
       if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
       if ("failed" in listen) throw new Error(listen.failed);
       const list = this.o.list ?? readAllowList();
       const transport = new McpTransport({
-        list, stateFolder: this.o.stateFolder, log: this.o.log, ...this.o.transport,
+        list, stateFolder: this.o.stateFolder, log: this.o.log, ...this.o.transport, act: o.act,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
       const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });

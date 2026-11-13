@@ -31,9 +31,10 @@ export const WWW_AUTHENTICATE = 'Bearer realm="agent-browser"';
 export type Refusal = { readonly step: number; readonly status: number; readonly body: string };
 /**
  * An admitted connection: its scope (the walk's), the roots that admitted its holders, those of them that admitted a
- * holder by their cgroup only (the walk met no root), and the pid of a later session's 403.
+ * holder by their cgroup only (the walk met no root), the pid of a later session's 403, and its admission: `local`, as
+ * steps 1 and 2 admit only by the uid check and the walk (C11, the sign-in act's check 1; a remote token is stage 5's).
  */
-export type Admitted = { readonly scope: string; readonly roots: readonly Root[]; readonly byCgroup: readonly Root[]; readonly pid: number };
+export type Admitted = { readonly scope: string; readonly roots: readonly Root[]; readonly byCgroup: readonly Root[]; readonly pid: number; readonly admission: "local" };
 
 /** One item of set_sessions as the MCP path keeps it: the session's scope, its roots and its fingerprint (C12; in memory only). */
 export type McpItem = { readonly scope: string; readonly roots: readonly Root[]; readonly mcp_token: string | null };
@@ -104,7 +105,7 @@ export function admitConnection(o: { reader: McpReader; snapshot: McpSnapshot; c
   if (scopes.size !== 1) return session403(2, lowest);
   const again = clientLine(o.reader.tcp(), o.client, o.service);
   if (again === null || !sameLine(again, line)) return session403(2, lowest);
-  return { scope: [...scopes][0], roots, byCgroup, pid: lowest };
+  return { scope: [...scopes][0], roots, byCgroup, pid: lowest, admission: "local" };
 }
 
 /** A request as the admission reads it: the method, the raw request target, and the raw header lines (name, value, ...). */

@@ -6,9 +6,11 @@
 // outside the scope's folder gets the format's JSON-RPC error. The format's test (checkList) runs in npm test against the
 // pinned version's own `tools/list`, which the MCP gives with no browser.
 //
-// The service's own tools of the format (`service_tools`, board ab-v16.97.5, stage 1e) are in the file, exactly as the
-// format gives them, and the runtime of this stage serves none of them: they stay out of `tools/list`, and a call of one
-// gets the -32601 of a tool that the runtime does not serve, until stage 1e answers them.
+// The service's own tools of the format (`service_tools`: browser_sign_in and browser_sign_ins, the stored sign-ins'
+// MCP tools; board ab-v16.97.5) are in the file, exactly as the format gives them. The transport serves them itself, for
+// a request with a local admission only, while the service has the sign-in act (serviceTools, serviceCall): a request
+// that a remote token admitted gets none of them in `tools/list`, and its call of one gets the tool error of the act's
+// check 1 and never reaches the act (C11, the sign-in act).
 
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve, join } from "node:path";
@@ -17,7 +19,7 @@ import { isDeepStrictEqual } from "node:util";
 
 /** The rule of one allowed tool: the keys that the service passes, the keys of them that name a file or a path, and the pinned input schema. */
 export type ToolRule = { readonly keys: readonly string[]; readonly paths: readonly string[]; readonly schema: Record<string, unknown> };
-/** One of the service's own tools (stage 1e; this stage serves none). */
+/** One of the service's own tools (the stored sign-ins' MCP tools: the transport answers them itself). */
 export type ServiceToolRule = { readonly keys: readonly string[]; readonly description: string; readonly schema: Record<string, unknown> };
 /** The list file (docs/contracts/mcp-allow-list.md, "The file"). */
 export type AllowList = {
@@ -37,7 +39,7 @@ export const NEVER_CAPABILITIES: readonly string[] = Object.freeze(["core-instal
 export const RUN_CODE = "browser_run_code_unsafe";
 /** The list file of the pinned version. */
 export const LIST_FILE = fileURLToPath(new URL("./allow-list.json", import.meta.url));
-/** The service's own tools, exactly as the format gives them (docs/contracts/mcp-allow-list.md; stage 1e serves them). */
+/** The service's own tools, exactly as the format gives them (docs/contracts/mcp-allow-list.md; the transport serves them). */
 export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.freeze({
   browser_sign_in: { keys: ["name"], description: "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.", schema: { type: "object", properties: { name: { type: "string", description: "The name of a stored sign-in" } }, required: ["name"], additionalProperties: false } },
   browser_sign_ins: { keys: [], description: "List the stored sign-ins that this session may use, and the state of the store.", schema: { type: "object", properties: {}, additionalProperties: false } },
@@ -170,7 +172,8 @@ export function checkList(list: AllowList, pinned: readonly PinnedTool[], pin: s
 }
 
 /**
- * `tools/list`'s tools without each tool that the list does not name (the service's own tools of stage 1e stay out too),
+ * `tools/list`'s tools without each tool that the list does not name (the MCP's own; the service's own tools come from
+ * serviceTools),
  * and each tool's input schema with only the keys of its `keys`: each other property and its `required` entry are
  * dropped (review-115 note 6).
  */
@@ -251,4 +254,36 @@ export function checkCall(list: AllowList, params: { name?: unknown; arguments?:
     }
   }
   return null;
+}
+
+/**
+ * How the MCP port admitted a request (C11, the sign-in act's check 1): `local` for a connection that steps 1 and 2
+ * admitted (the uid check of its TCP line and the walk to a root of its scope), `remote` for a request that a remote
+ * token admitted with no walk (stage 5). A request with no word is remote, so a new path to the transport fails closed.
+ */
+export type Admission = "local" | "remote";
+
+/** The service's own tools as `tools/list` gives them (the format: after the tools of `tools`, in the format's order). */
+export function serviceTools(list: AllowList): { name: string; description: string; inputSchema: Record<string, unknown> }[] {
+  return Object.entries(list.service_tools ?? {}).map(([name, r]) => ({ name, description: r.description, inputSchema: r.schema }));
+}
+
+/**
+ * A `tools/call` of one of the service's own tools (the format, "What the service does with it"): null when `params`
+ * names none of them (checkCall then reads it); `"remote"` for each request whose admission is not `local`, whatever its
+ * arguments and whether the service has the act (the tool error of the sign-in act's check 1); the format's -32601 while
+ * the service has no sign-in act (`served` false); its -32602 for `arguments` that are no JSON object, or a key that the
+ * tool's `keys` does not name; else the tool and its arguments, for the act's method.
+ */
+export function serviceCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, admission: Admission | undefined, served: boolean): null | "remote" | Refused | { tool: string; args: Record<string, unknown> } {
+  const name = typeof params.name === "string" ? params.name : "";
+  const own = list.service_tools ?? {};
+  const rule = Object.hasOwn(own, name) ? own[name] : undefined;
+  if (rule === undefined) return null;
+  if (admission !== "local") return "remote";
+  if (!served) return refuseTool(name);
+  const args = params.arguments === undefined ? {} : params.arguments;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return refuseArguments(name);
+  for (const key of Object.keys(args)) if (!rule.keys.includes(key)) return refuseKey(name, key);
+  return { tool: name, args: args as Record<string, unknown> };
 }

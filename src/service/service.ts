@@ -427,9 +427,12 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
   // before the first hello (C12). Its MCP connects back to the agent door with a ticket; until the agent door opens, step
   // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
+  // The sign-in act, once the service makes it (below): the MCP's own tools of the stored sign-ins run through it.
+  let act: SignInAct | null = null;
   if (mcp) {
     await mcp.open({
       url: (scope) => agentDoorUrl(o.agentDoor, scope),
+      act: () => act,
       readiness: (scope) => {
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
@@ -470,10 +473,12 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       opened.relay.model.setClipboard(clipboard);
     }
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
-    // Chrome unit. The model then answers AgentBrowser.signIn and signIns; without them it refuses both (C11).
+    // Chrome unit. The model then answers AgentBrowser.signIn and signIns, and the MCP path serves browser_sign_in and
+    // browser_sign_ins for a local admission (board ab-v16.97.5); without them the model refuses both methods, and the MCP
+    // path lists neither tool (C11).
     if (signIns && link && port && stage1c && part) {
       const model = opened.relay.model, lists = stage1c;
-      model.setSignIns(new SignInAct({
+      model.setSignIns(act = new SignInAct({
         model: model.actPort(),
         receiver: { features: () => port.features(), request: (op, body, ms) => port.act(op, body, ms) },
         store: signIns.store,

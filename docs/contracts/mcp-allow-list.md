@@ -48,7 +48,8 @@ adds it to the list.
 **What the service does with it (stage 1d).**
 
 - `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a
-  request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.
+  request with a local admission while the service has the sign-in act; a request that a remote token admitted gets no
+  tool of `service_tools`.
 - In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each
   other property and its entry in `required`.
 - `tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call
@@ -57,17 +58,19 @@ adds it to the list.
   call reaches the MCP's code, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the argument <key> of <tool>`.
 - `tools/call` whose `arguments` is not a JSON object: the service refuses it before the call reaches the MCP's code,
   with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the arguments of <tool> must be a JSON object`.
-- Until stage 1e (board ab-v16.97.5) serves them, the service's own tools are in no `tools/list`, and a `tools/call` of
-  one gets the `-32601` answer of a tool that `tools` does not name.
+- The service's own tools are in a `tools/list` only for a request with a local admission while the service has the
+  sign-in act (C11), after the tools of `tools`, each as `{"name","description","inputSchema"}` with its `description`
+  and its `schema`. While the service has no sign-in act, a `tools/call` of one with a local admission gets the `-32601`
+  answer of a tool that `tools` does not name.
 - An argument whose key is in the tool's `paths`: the service refuses it when the path is outside the scope's
   folder, `<state>/mcp/<scope>/`, after `realpath` (C11), with the JSON-RPC error `-32602` and the message
   `Not available in the agent browser: <key> must name a file in the session's folder <folder>`.
 - `tools/call` of a tool of `service_tools`: the service answers it itself, and the call never reaches the MCP's code.
   For a request that a remote token admitted, the answer is the tool error of the sign-in act's check 1, a result with
   `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, whatever its
-  arguments. For a request with a local admission, an argument key that the tool's `keys` does not name gets the
-  `-32602` answer above; else the service runs the sign-in act's method for the MCP session's scope (C11, the sign-in
-  act).
+  arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the
+  tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method for the
+  MCP session's scope (C11, the sign-in act).
 
 **The test (stage 1d, in `npm test`, with no browser).** The MCP answers `initialize` and `tools/list` with no
 CDP connection (the design, section 18), so the test needs no Chrome. It fails when any of these is false:

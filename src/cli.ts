@@ -66,6 +66,8 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   "test-mcp-port": { type: "string" },
   // The merge guard's stand-in host in --test mode only (board ab-v16.99): a *.localhost host, never a default.
   "test-merge-guard-host": { type: "string" },
+  // The MCP's stand-in of a remote admission in --test mode only (board ab-v16.97.5): one scope, for the live check.
+  "test-mcp-remote-scope": { type: "string" },
 };
 /** The flags that service takes and other commands take too: `service stop --all`. */
 const SERVICE_SHARED: ReadonlySet<string> = new Set(["all"]);

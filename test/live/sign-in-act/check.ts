@@ -16,7 +16,14 @@
 //      gone, the tracker host got no request of the act tab;
 //   6. the move: the client's new tab of the site loads signed in (the cookie and the localStorage token moved);
 //   7. the CLI: sign-ins lists the credential, sign-in signs in again, sign-in of another name gets C11's text, exit 1;
-//   8. the secret scan: no answer, event, control line, client message, CLI output, log line or profile file holds a
+//   7b. the MCP (board ab-v16.97.5), with a real MCP client (the MCP SDK's own, mcp-client.ts) over the MCP path
+//      (--test-mcp-port 0): for the local scope live-1, tools/list holds browser_sign_in and browser_sign_ins,
+//      browser_sign_ins lists the name and the origin only, browser_sign_in signs in (a new session of the site, moved
+//      to the client's tabs), another name gets C11's text as the tool's error; for live-2, which
+//      --test-mcp-remote-scope gives the remote admission (stage 5's stand-in), tools/list holds neither, each call gets
+//      check 1's text from the act's own check 1: browser_sign_in sends its one refusal end (result remote, no start, no
+//      credential), browser_sign_ins none, and no call signs in at the site;
+//   8. the secret scan: no answer, event, control line, client message, CLI output, MCP result, log line or profile file holds a
 //      test value in any of its five forms; its twin finds a planted one;
 //   9. stop: Chrome, Xvfb and the shim end; the temp folders go.
 //
@@ -55,6 +62,10 @@ const USER = "test-user.live@login.localhost";
 const PASS = "Test-Live-Pass-4Kq2-not-a-secret";
 const PASSPHRASE = "test passphrase of the live check 2026";
 const CANARIES = [USER, PASS, PASSPHRASE];
+// Made-up connection tokens of this run for the MCP path (C12: set_sessions carries only their fingerprints).
+const TOKEN_L = `abt1_${randomBytes(32).toString("base64url")}`, TOKEN_R = `abt1_${randomBytes(32).toString("base64url")}`;
+const fp = (t: string) => createHash("sha256").update(t, "ascii").digest("hex");
+const MCP_CLIENT = fileURLToPath(new URL("./mcp-client.ts", import.meta.url));
 
 const t0 = Date.now();
 const log = (s: string) => process.stdout.write(`[${((Date.now() - t0) / 1000).toFixed(1)} s] ${s}\n`);
@@ -84,6 +95,9 @@ const seen: string[] = [];
 
 // ---- the local site: login.localhost (the sign-in page, its POST, the signed-in page) and tracker.localhost (it records)
 const sessions = new Set<string>();
+/** The site's sessions in the order of their sign-ins, and the session of each request of /home (the move's proof). */
+const signIns: string[] = [];
+const homes: (string | null)[] = [];
 const tracker: { path: string; body: string; at: number }[] = [];
 let actWindow: { from: number; to: number } | null = null;
 let port = 0;
@@ -110,12 +124,14 @@ const http = createServer((req, res) => {
       if (f.get("u") === USER && f.get("p") === PASS) {
         const sid = randomBytes(16).toString("hex");
         sessions.add(sid);
+        signIns.push(sid);
         res.writeHead(303, { "Set-Cookie": `test_session=${sid}; Path=/; HttpOnly; SameSite=Lax`, Location: "/home" }).end();
       } else res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" }).end(loginPage("not accepted"));
       return;
     }
     if (req.url === "/login") { res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" }).end(loginPage()); return; }
     const signedIn = cookie !== undefined && sessions.has(cookie);
+    if (req.url === "/home") homes.push(cookie ?? null);
     res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" }).end(`<!doctype html><title>home</title><p id="state">${signedIn ? "signed in" : "not signed in"}</p>${signedIn ? `<script>localStorage.setItem("test_token", "test-token-1")</script>` : ""}`);
   });
 });
@@ -139,6 +155,8 @@ let n = 0;
 const req = async (d: Door, op: string, by: object, fields: object = {}, ms = 30_000) => { const id = `q${++n}`; d.send({ t: "req", id, op, by, ...fields }); return d.next((l) => l.t === "res" && l.id === id, ms); };
 const TOKEN = { kind: "token", user: "live", via: "cli" }, DAEMON = { kind: "daemon", user: "live", via: "daemon" }, OPERATOR = { kind: "operator", user: "live", via: "web" };
 const me = proc(process.pid)!;
+const LIVE_1 = { scope: "live-1", repo: "local/test", roots: [{ pid: process.pid, start: me.start }], cgroup: null, lifetime_id: "lt-live", mcp_token: fp(TOKEN_L) };
+const BOX = { hosts: ["box.localhost"], cookie_names: [] };
 
 /** X windows of the run's own display (its Xvfb, its X authority): their name and place. */
 function xWindows(): { id: string; name: string; x: number; y: number; w: number; h: number }[] {
@@ -154,7 +172,8 @@ function xWindows(): { id: string; name: string; x: number; y: number; w: number
 
 async function startService(): Promise<Door> {
   service = spawn(process.execPath, ["--disable-sigusr1", BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
-    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json")], { stdio: ["ignore", "ignore", "pipe"] });
+    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"),
+    "--test-mcp-port", "0", "--test-mcp-remote-scope", "live-2"], { stdio: ["ignore", "ignore", "pipe"] });
   guard.track(service.pid, "service");
   started.set(service.pid!, proc(service.pid!)?.start ?? -1);
   service.stderr!.on("data", (d) => { serviceErr += d; });
@@ -166,7 +185,7 @@ async function startService(): Promise<Door> {
   d.send({ t: "hello", v: 1, side: "daemon", version: "live", features: [] });
   const cfg = await req(d, "config", { kind: "daemon", user: "live", via: "config" }, { enabled: true, control: true, chrome_bin: null, chrome_args: [], display_size: "1280x900" });
   if (!cfg.ok) throw new Error(`config: ${JSON.stringify(cfg)}`);
-  const ss = await req(d, "set_sessions", DAEMON, { sessions: [{ scope: "live-1", repo: "local/test", roots: [{ pid: process.pid, start: me.start }], cgroup: null, lifetime_id: "lt-live", mcp_token: null }], remote: [], box: { hosts: ["box.localhost"], cookie_names: [] } });
+  const ss = await req(d, "set_sessions", DAEMON, { sessions: [LIVE_1], remote: [], box: BOX });
   if (!ss.ok) throw new Error(`set_sessions: ${JSON.stringify(ss)}`);
   return d;
 }
@@ -302,11 +321,61 @@ try {
   const other = await cli(["sign-in", "missing"], url);
   check("agent-browser sign-in of another name gets C11's text and exits 1", other.status === 1 && other.stderr === "agent-browser: Not signed in: There is no stored sign-in named missing for this repo.\n", other.stderr);
 
+  // 7b. The MCP: a real MCP client over the MCP path, for the local scope live-1 and the remote stand-in live-2.
+  const mcpAddress = (await req(d, "status", DAEMON)).data.mcp.address as string;
+  check("status: the MCP path is ready on 127.0.0.1", typeof mcpAddress === "string" && mcpAddress.startsWith("127.0.0.1:"), String(mcpAddress));
+  /** The MCP client as a child (so the port's walk reads it), with its job on its standard input once `before` is done. */
+  const mcpClient = (scope: string, token: string, calls: { name: string; arguments: Record<string, unknown> }[], before?: (pid: number) => Promise<void>) => new Promise<any>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--disable-sigusr1", "--no-warnings", MCP_CLIENT], { stdio: ["pipe", "pipe", "pipe"] });
+    track(child.pid, `the MCP client of ${scope}`);
+    let out = "", err = "";
+    child.stdout!.on("data", (x) => { out += x; });
+    child.stderr!.on("data", (x) => { err += x; });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 300_000);
+    child.once("close", () => { clearTimeout(timer); seen.push(out, err); try { resolve(JSON.parse(out.split("\n")[0])); } catch { resolve({ error: `no answer: ${err.slice(-300)}` }); } });
+    void (before ? before(child.pid!) : Promise.resolve()).then(() => { child.stdin!.end(JSON.stringify({ url: `http://${mcpAddress}/mcp/${scope}`, token, calls }) + "\n"); }, (e) => { child.kill("SIGKILL"); reject(e); });
+  });
+  const signInEvents = () => d.lines.filter((l) => l.t === "ev" && l.ev === "sign_in");
+  const ev0 = signInEvents().length, sid0 = signIns.length;
+  const local = await mcpClient("live-1", TOKEN_L, [{ name: "browser_sign_ins", arguments: {} }, { name: "browser_sign_in", arguments: { name: "staging" } }, { name: "browser_sign_in", arguments: { name: "missing" } }]);
+  check("the local MCP client (scope live-1) connects, and its tools/list holds browser_sign_in and browser_sign_ins", !local.error && local.tools.includes("browser_sign_in") && local.tools.includes("browser_sign_ins"), local.error ?? `${local.tools.length} tools`);
+  const listed = local.results[0];
+  check("browser_sign_ins gives the store's state and the credential's name and origin, and no other field", !listed.isError && listed.content.length === 1 && listed.content[0].text === JSON.stringify({ state: "open", signIns: [{ name: "staging", origin: ORIGIN }] }), JSON.stringify(listed));
+  const signed = local.results[1];
+  check("browser_sign_in signs in: C11's success text", !signed.isError && signed.content.length === 1 && signed.content[0].text === `Signed in to ${ORIGIN}. Your tabs of this site were closed for the sign-in; open the site again: it loads signed in.`, JSON.stringify(signed));
+  const missing = local.results[2];
+  check("browser_sign_in of another name gets C11's text as the tool's error", missing.isError === true && missing.content[0].text === "Not signed in: There is no stored sign-in named missing for this repo.", JSON.stringify(missing));
+  await until("the MCP act's events", () => signInEvents().length >= ev0 + 3, 30_000);
+  const mcpEvents = signInEvents().slice(ev0);
+  const mcpStart = mcpEvents.find((e) => e.phase === "start"), mcpEnd = mcpEvents.find((e) => e.phase === "end" && e.result === "signed_in");
+  check("the MCP act's sign_in events: a start and an end (signed_in) of scope live-1 with one act id, and one refusal end (no_such_name)", !!mcpStart && mcpEnd?.act === mcpStart.act && mcpEnd.scope === "live-1" && mcpEvents.some((e) => e.phase === "end" && e.result === "no_such_name" && e.scope === "live-1"), JSON.stringify(mcpEvents.map((e) => [e.phase, e.scope, e.result ?? null])));
+  check("the MCP act signed in at the site (one new session of the site)", signIns.length === sid0 + 1, `${signIns.length - sid0} new`);
+  const t3 = await open(`${ORIGIN}/home`);
+  check("after the MCP act the client's new tab of the site is signed in, with the session of the MCP act (the move)", (await text(t3.sessionId)) === "signed in" && homes[homes.length - 1] === signIns[signIns.length - 1]);
+  // The remote stand-in: live-2's root is its MCP client (a child), and the service gives its requests the word remote.
+  const ev1 = signInEvents().length, log1 = serviceErr.length, sid1 = signIns.length;
+  const remote = await mcpClient("live-2", TOKEN_R, [{ name: "browser_sign_in", arguments: { name: "staging" } }, { name: "browser_sign_ins", arguments: {} }], async (pid) => {
+    const r = await req(d, "set_sessions", DAEMON, { sessions: [LIVE_1, { scope: "live-2", repo: "local/test", roots: [{ pid, start: proc(pid)!.start }], cgroup: null, lifetime_id: "lt-live-2", mcp_token: fp(TOKEN_R) }], remote: [], box: BOX });
+    if (!r.ok) throw new Error(`set_sessions with live-2: ${JSON.stringify(r)}`);
+  });
+  check("the remote stand-in's MCP client (scope live-2) connects, and its tools/list holds neither tool", !remote.error && remote.tools.length > 0 && !remote.tools.includes("browser_sign_in") && !remote.tools.includes("browser_sign_ins"), remote.error ?? remote.tools.join(","));
+  const REMOTE_TEXT = "Not signed in: Stored sign-ins work only for sessions of this box.";
+  check("the remote browser_sign_in and browser_sign_ins each get check 1's text as the tool's error", remote.results.length === 2 && remote.results.every((x: any) => x.isError === true && x.content.length === 1 && x.content[0].text === REMOTE_TEXT), JSON.stringify(remote.results));
+  await sleep(1000);
+  const tail = serviceErr.slice(log1);
+  const remoteEvents = signInEvents().slice(ev1);
+  const rEnd = remoteEvents[0];
+  check("the remote browser_sign_in sent check 1's one refusal end: result remote, scope live-2, an act id of its own, no start, no credential", remoteEvents.length === 1 && rEnd.phase === "end" && rEnd.result === "remote" && rEnd.scope === "live-2" && /^[0-9a-f]{16}$/.test(rEnd.act) && rEnd.id === null && rEnd.name === null && rEnd.origin === null && !d.lines.some((l) => l.t === "ev" && l.ev === "sign_in" && l.phase === "start" && l.act === rEnd.act), JSON.stringify(remoteEvents));
+  check("browser_sign_ins sent no event, and no remote call signed in at the site (no new session)", signIns.length === sid1, `${signIns.length - sid1} new`);
+  check("the act's log line of the remote call names no credential: result remote", new RegExp(`sign-in: act ${rEnd?.act}: user [^,]*, scope live-2, repo local/test, no credential, result remote, `).test(tail), tail.match(/sign-in: act [0-9a-f]+: .*scope live-2.*/)?.[0]?.slice(0, 160) ?? "no line");
+  check("the service logged the MCP path's line of each remote refusal", tail.includes("mcp: MCP session") && tail.includes("(scope live-2): a tools/call of browser_sign_in refused (a remote admission)") && tail.includes("(scope live-2): a tools/call of browser_sign_ins refused (a remote admission)"));
+  check("no MCP line of the log holds a connection token or its fingerprint", ![TOKEN_L, TOKEN_R, fp(TOKEN_L), fp(TOKEN_R)].some((t) => serviceErr.includes(t)));
+
   // 8. The secret scan, with its twin.
   const forms = CANARIES.flatMap((v) => passwordForms(v));
   const holds = (t: string) => forms.some((f) => t.includes(f));
   check("the scan's twin finds a planted test value", holds(`x ${Buffer.from(PASS).toString("base64url")} y`));
-  check("no control line, answer, event, client message or CLI output holds a test value", !seen.some(holds));
+  check("no control line, answer, event, client message, CLI output or MCP result holds a test value", !seen.some(holds));
   check("no log line of the service holds a test value", !holds(serviceErr));
   const bytes = forms.map((f) => Buffer.from(f, "utf8"));
   const profileHits: string[] = [];

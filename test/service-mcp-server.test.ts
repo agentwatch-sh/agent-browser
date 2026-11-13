@@ -83,13 +83,13 @@ test("the format's vectors: the example list holds, each bad list breaks exactly
   assert.deepEqual(LIST.service_tools, SERVICE_TOOLS, "the list file holds the format's service_tools");
 });
 
-test("the format's calls: each pinned tool's call passes or gets its answer; the service's own tools wait for stage 1e (-32601 now)", () => {
+test("the format's calls: each pinned tool's call passes or gets its answer; checkCall refuses the service's own tools (-32601: no call of one reaches the MCP), which the transport answers itself (test/service-mcp-sign-in.test.ts)", () => {
   const real = (map: Record<string, string> = {}) => (p: string) => map[p] ?? p;
   let n = 0;
   for (const c of V.calls) {
     const service = Object.hasOwn(SERVICE_TOOLS, c.call.name);
     const got = checkCall(V.list, c.call, V.folder, real(c.realpath));
-    if (service) { assert.deepEqual(got, { code: -32601, message: `Not available in the agent browser: ${c.call.name}` }, `${c.note}: stage 1e serves it`); continue; }
+    if (service) { assert.deepEqual(got, { code: -32601, message: `Not available in the agent browser: ${c.call.name}` }, `${c.note}: the MCP's code never serves it`); continue; }
     n++;
     assert.deepEqual(got, c.answer === "pass" ? null : c.answer, c.note);
   }
@@ -97,7 +97,7 @@ test("the format's calls: each pinned tool's call passes or gets its answer; the
   // A call whose arguments are no object, and a path value that is no string.
   assert.deepEqual(checkCall(V.list, { name: "browser_navigate", arguments: ["x"] }, V.folder), { code: -32602, message: "Not available in the agent browser: the arguments of browser_navigate must be a JSON object" });
   assert.deepEqual(checkCall(V.list, { name: "browser_take_screenshot", arguments: { filename: 5 } }, V.folder), refusePath("filename", V.folder));
-  // tools/list: only the list's tools (and no service tool before stage 1e).
+  // tools/list of the MCP: only the list's tools (the transport adds the service's own tools for a local admission).
   assert.deepEqual(filterTools(V.list, V.pinnedTools).map((t: any) => t.name), Object.keys(V.list.tools));
 });
 
@@ -294,11 +294,15 @@ test("the agent door takes the service's own pid only with a live ticket of the 
 // ------------------------------------------------------------------ item 3: the transport
 
 type Http = { url: (scope: string) => string; server: Server; close: () => Promise<void> };
-/** A plain HTTP server in front of the transport: the path's scope is the connection's scope (the port's admission is tested in service-mcp-port.test.ts). */
+/**
+ * A plain HTTP server in front of the transport: the path's scope is the connection's scope, and each request has the
+ * port's admission `local` (the port's admission is tested in service-mcp-port.test.ts; a remote admission in
+ * service-mcp-sign-in.test.ts).
+ */
 async function front(t: McpTransport): Promise<Http> {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const scope = /^\/mcp\/([^/?]+)/.exec(req.url ?? "")?.[1] ?? "none";
-    void t.request(req, res, scope);
+    void t.request(req, res, scope, undefined, "local");
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;
@@ -912,7 +916,7 @@ const answerOf = (name: string) => ((MCP_ANSWERS as Record<string, { code: numbe
 async function gatedFront(t: McpTransport, gate: () => Promise<boolean>): Promise<Http> {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const scope = /^\/mcp\/([^/?]+)/.exec(req.url ?? "")?.[1] ?? "none";
-    void t.request(req, res, scope, gate);
+    void t.request(req, res, scope, gate, "local");
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;

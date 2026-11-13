@@ -23,7 +23,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { UsageError } from "../errors.ts";
-import { normalizeEntry } from "../relay/scopes.ts";
+import { normalizeEntry, SCOPE } from "../relay/scopes.ts";
 import { defaultDaemonCommandFile } from "./admission.ts";
 import { agentDoorAddress } from "./agent-door.ts";
 import { encodeLine, serviceHello } from "./control.ts";
@@ -38,7 +38,7 @@ import { stopAll } from "./unit/stop-all.ts";
 import { SIGN_INS_FEATURE } from "./signins/part.ts";
 import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT] [--test-merge-guard-host HOST.localhost]]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
@@ -92,6 +92,24 @@ export function testMcpPort(raw: string): number {
 }
 
 /**
+ * `--test-mcp-remote-scope` (board ab-v16.97.5; C11, the sign-in act): the one scope whose MCP connections get the
+ * admission `remote`, a stand-in of stage 5's remote token for the live check of the stored sign-ins' MCP tools. Only a
+ * scope name (C11's pattern). It only takes rights away: the port still runs steps 1 to 8 for each request.
+ */
+export function testMcpRemoteScope(raw: string): string {
+  if (!SCOPE.test(raw)) throw new UsageError("--test-mcp-remote-scope must be a scope name: a letter or a digit, then letters, digits, '.', '_' or '-', at most 64 in all");
+  return raw;
+}
+
+/**
+ * The service's MCP option (stage 1d part 2b; board ab-v16.97.5): the port's socket, and with `--test-mcp-remote-scope`
+ * the port's set of the one scope whose requests get the admission `remote` (the live check's stand-in).
+ */
+export function mcpOption<L>(listen: L, remoteScope: string | undefined): { listen: L; port?: { remote: ReadonlySet<string> } } {
+  return { listen, ...(remoteScope !== undefined ? { port: { remote: new Set([remoteScope]) } } : {}) };
+}
+
+/**
  * `--test-merge-guard-host` (board ab-v16.99; C11, the merge guard): a stand-in of GitHub for the live check, beside GitHub's
  * own hosts. Only a normalized host under .localhost (a loopback name in Chrome), never a real host, so a test page can
  * never mark or unmark a real host.
@@ -134,7 +152,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
@@ -179,6 +198,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const listen = await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   const guardHost = test && str("test-merge-guard-host") ? testMergeGuardHost(str("test-merge-guard-host")!) : undefined;
+  const remoteScope = test && str("test-mcp-remote-scope") !== undefined ? testMcpRemoteScope(str("test-mcp-remote-scope")!) : undefined;
   let s;
   try {
     s = await startService({
@@ -195,7 +215,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       // The native link (stage 1b part 2): link.sock next to control.sock, in the service's run folder.
       link: { socket: linkSocketFor(resolve(controlDoor)) },
       // The MCP path (stage 1d part 2b): only with its socket.
-      ...(listen ? { mcp: { listen } } : {}),
+      // --test-mcp-remote-scope: that scope's MCP connections get the remote admission (the live check's stand-in).
+      ...(listen ? { mcp: mcpOption(listen, remoteScope) } : {}),
       // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
       ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
       // The merge guard's stand-in host (board ab-v16.99): --test only.
