@@ -55,7 +55,10 @@ const check = (step: string, ok: boolean, note = "") => { results.push({ step, o
 /** A measure: recorded, never a failure (C11 states its result as a limit or a fact). */
 const measure = (step: string, note: string) => { results.push({ step, ok: true, note }); log(`MEASURE ${step}: ${note}`); };
 /** A step that must end in `ms`: a hang becomes a failure, so the run never holds the shared lock for long. */
-const within = <T>(what: string, p: Promise<T>, ms = 20_000): Promise<T> => Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${what}: no answer in ${ms / 1000} s`), ms).unref())]);
+function within<T>(what: string, p: Promise<T>, ms = 20_000): Promise<T> {
+  const late = new Promise<T>((_, reject) => { setTimeout(() => { reject(new Error(`${what}: no answer in ${ms / 1000} s`)); }, ms).unref(); });
+  return Promise.race([p, late]);
+}
 const until = async (what: string, f: () => boolean, ms: number) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error(`${what}: not in ${ms / 1000} s`); await sleep(100); } };
 function proc(pid: number): { start: number; ppid: number } | null {
   try {
@@ -142,7 +145,7 @@ const http = createServer((req, res) => {
     const m = /^\/o\/r\/pull\/(\d+)$/.exec(path);
     if (m) { const n = Number(m[1]); html(prPage(n, KINDS[n] ?? "none")); return; }
     if (path === "/o/r") { html(repoPage); return; }
-    if (path === "/csp") { html(`<!doctype html><title>csp</title><pre id="out"></pre>`, 200, { "Content-Security-Policy": "worker-src 'self'" }); return; }
+    if (path === "/csp") { html(`<!doctype html><title>csp</title><p>a page with worker-src 'self'</p><pre id="out"></pre>`, 200, { "Content-Security-Policy": "worker-src 'self'" }); return; }
     res.writeHead(404).end();
   });
 });
@@ -309,12 +312,12 @@ try {
   let sid = await open(`${WEB()}/o/r/pull/2`);
   check("raw CDP: the marked PR's page loads", (await loaded(sid, (t) => t.includes("Merge pull request"))) !== "");
   await ev(sid, "document.getElementById('merge').submit(), 1");
-  check("raw CDP: the merge form's submit() gets the 403 page with the rule's text", (await loaded(sid, (t) => t.includes("agentwatch issue triage"))).trim() === GUARD_TEXT.marked);
+  check("raw CDP: the merge form's submit() gets the 403 page with the rule's text", (await loaded(sid, (t) => t.trim() === GUARD_TEXT.marked)).trim() === GUARD_TEXT.marked);
   await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/2` }, sid);
   await loaded(sid, (t) => t.includes("Merge pull request"));
   const box = await ev(sid, "(() => { const r = document.getElementById('merge-button').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()");
   for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await c.send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: type === "mouseMoved" ? "none" : "left", clickCount: 1 }, sid);
-  check("raw CDP: a click on the merge button by Input events gets the 403 page", (await loaded(sid, (t) => t.includes("agentwatch issue triage"))).trim() === GUARD_TEXT.marked);
+  check("raw CDP: a click on the merge button by Input events gets the 403 page", (await loaded(sid, (t) => t.trim() === GUARD_TEXT.marked)).trim() === GUARD_TEXT.marked);
   await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/2` }, sid);
   await loaded(sid, (t) => t.includes("Merge pull request"));
   const st = await ev(sid, "fetch('/o/r/pull/2/ready_for_review', { method: 'POST' }).then((r) => r.text().then((t) => r.status + ' ' + t))");
@@ -338,11 +341,11 @@ try {
   const redirected = await ev(sid, "fetch('/r307', { method: 'POST', body: 'via=redirect' }).then((r) => r.status, (e) => 'error')");
   check("raw CDP from another site: a POST that its server redirects (307) to the stand-in's merge does not reach it", writes.filter((w) => w.body === "via=redirect").length === 0, `the page saw ${redirected}`);
   await ev(sid, "document.getElementById('cross').submit(), 1");
-  check("raw CDP from another site: its form's POST to the marked PR's merge gets the 403 page", (await loaded(sid, (t) => t.includes("agentwatch issue triage"))).trim() === GUARD_TEXT.marked);
+  check("raw CDP from another site: its form's POST to the marked PR's merge gets the 403 page", (await loaded(sid, (t) => t.trim() === GUARD_TEXT.marked)).trim() === GUARD_TEXT.marked);
   // A page with a policy like GitHub's (worker-src 'self'): no blob worker can start there.
   await c.send("Page.navigate", { url: `${WEB()}/csp` }, sid);
   await loaded(sid, () => true);
-  const blob = await ev(sid, "(() => { try { new Worker(URL.createObjectURL(new Blob(['1']))); return 'started'; } catch (e) { return 'refused: ' + e.name; } })()");
+  const blob = await ev(sid, "new Promise((done) => { try { const w = new Worker(URL.createObjectURL(new Blob(['postMessage(1)']))); w.onmessage = () => done('ran'); w.onerror = () => done('refused (an error event)'); setTimeout(() => done('no answer in 3 s'), 3000); } catch (e) { done('refused: ' + e.name); } })");
   measure("a page with worker-src 'self' (GitHub's own rule names only its own worker scripts): a blob worker", String(blob));
   // The unmarked PR: the raw client's merge goes.
   sid = await open(`${WEB()}/o/r/pull/1`);

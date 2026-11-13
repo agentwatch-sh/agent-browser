@@ -118,7 +118,8 @@ call to `api.github.com`, a GraphQL mutation to `api.github.com/graphql`. The mo
 | A client's own `Fetch` (Playwright's `page.route`, `route.continue({url})`, `route.fulfill`, raw `Fetch.*`) | a client gets a request of a guarded host only after the judge; its continue of a refused write becomes the 403; a change of a guarded request, and a rewrite of another request to a guarded host, are refused; a client cannot act on a request that the model holds; a redirect to a guarded host is a new request at the request stage, which the model judges | — |
 | A client's `Fetch.disable` or a new `Fetch.enable` | the model keeps its own patterns on | — |
 | A worker of the page that the client's auto-attach brings (Playwright and the MCP attach workers and hold them at their start) | the model turns its `Fetch` on in that child session before the client lets it run | — |
-| A worker that no client attaches; `Page.setBypassCSP` | `Page.setBypassCSP` with `enabled` true is refused, so GitHub's `worker-src` stays in force: only GitHub's own worker scripts run there (a limit, section 8) | blocks every write of a request with no tab (a shared or a service worker) |
+| A dedicated worker that no client attaches | its request goes through the tab's own session (measured in the live check, with a raw client and no auto-attach): judged | — |
+| A shared or a service worker; `Page.setBypassCSP` | `Page.setBypassCSP` with `enabled` true is refused, so GitHub's `worker-src` stays in force: only GitHub's own worker scripts run there (a limit, section 8) | blocks every write of a request with no tab |
 | A popup that the page opens; another tab of the scope; a tab with no client (the CLI between its commands; a popup that no client took; a page's script after its client left) | a tab that a client holds | blocks every write of every tab where layer 1 is off |
 | A request from another tab or another site (a cross-site form, a 307 redirect of a POST) | judged in the tab that makes it; a redirect is a new request | the same |
 | The MCP tools (`browser_click`, `browser_type`, `browser_press_key`, `browser_evaluate`, ...) | the MCP is a Playwright client of the agent door: the rows above | the same |
@@ -188,10 +189,10 @@ never reaches the journal).
   registry (`CACHE_DIR/issue-triage/prs.json`); a later C12 field could give it one.
 - A GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that
   names a marked PR only by a node id that the model never saw in a marked PR's answer.
-- A request of a GitHub worker that no client's auto-attach brings (a dedicated worker of a client with no auto-attach;
-  a shared worker; a service worker that answers a page's request): layer 1 does not see it. With `Page.setBypassCSP`
-  refused, GitHub's `worker-src` lets only GitHub's own worker scripts run there; the floor blocks the writes of a worker
-  with no tab.
+- A request of a shared worker or a service worker of a GitHub page (no tab's session sees it). With
+  `Page.setBypassCSP` refused, GitHub's `worker-src` lets only GitHub's own worker scripts run there; the floor blocks the
+  writes of a worker with no tab. A dedicated worker's request goes through the tab's own session, also when the client
+  attaches no worker (measured in the live check).
 - A write of a tab with no client while the receiver has no floor (receiver 0.3.7 and older), for example the request
   of a click that a page sends after the CLI's command ended.
 - A write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer (Chrome lets
