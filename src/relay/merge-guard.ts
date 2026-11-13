@@ -263,15 +263,18 @@ export class MergeGuard {
    */
   private readonly netClients = new Set<string>();
   /**
-   * The sessions where the guard turned Network on for the service worker's bypass: a tab's own session, and the session of each
-   * dedicated worker that the client's auto-attach brings (review-125b check 3). There the guard holds the client's Network calls
-   * of the bypass and hides the Network events until the client turns Network on.
+   * The sessions where the service worker's bypass is on (the operator's ab-u92: on GitHub only): a tab's own session while its
+   * main frame is on a guarded host, and the session of each dedicated worker of such a tab that the client's auto-attach
+   * brings (review-125b check 3). There the guard holds the client's Network calls of the bypass and hides the Network events
+   * until the client turns Network on.
    */
-  private readonly netArmed = new Set<string>();
-  /** The tabs whose bypass is on: the floor leaves these to layer 1 (bridge.mergeGuard names them). */
-  private readonly bypassed = new Set<number>();
-  /** Each arm's own mark: a late answer of an arm that a detach or a link change ended changes nothing. */
-  private readonly armMarks = new Map<number, object>();
+  private readonly bypassOn = new Set<string>();
+  /** The sessions whose bypass the guard turned off, until Chrome answered its Network.disable: their events stay hidden. */
+  private readonly netHeld = new Set<string>();
+  /** The sessions where the client asked for the bypass itself (Network.setBypassServiceWorker true): a turn off keeps it. */
+  private readonly clientBypass = new Set<string>();
+  /** The dedicated workers' sessions of the armed tabs: the bypass follows their tab's. */
+  private readonly workers = new Set<string>();
   /** The paused requests of a guarded host that the guard holds until its own answer goes (`${tabId}/${requestId}`): no client command acts on one. */
   private readonly held = new Set<string>();
   private readonly notices = new Map<string, number>();
@@ -299,8 +302,10 @@ export class MergeGuard {
   /** A PR's verdict: marked, unmarked, or undefined (unknown). */
   verdict(key: string) { return this.verdicts.get(key); }
   isArmed(tabId: number, sessionId?: string) { return this.armed.has(this.key(tabId, sessionId)); }
-  /** The tab's bypass is on, so the floor leaves it to layer 1. */
-  isBypassed(tabId: number) { return this.bypassed.has(tabId); }
+  /** The service worker's bypass is on in the session (the tab's own session when no sessionId). */
+  isBypassed(tabId: number, sessionId?: string) { return this.bypassOn.has(this.key(tabId, sessionId)); }
+  /** A URL of a guarded host (where the bypass is on). */
+  guardedUrl(url: unknown): boolean { return typeof url === "string" && this.base(url) !== null; }
 
   /** What the guard keeps (the tests and the harness; no client sees it). */
   state() {
@@ -312,14 +317,14 @@ export class MergeGuard {
   // ------------------------------------------------------------------ the tabs and the floor
 
   /**
-   * The guard's Fetch and the service worker's bypass on a tab's own session, before a client gets a session of it: then the
-   * receiver's floor (bridge.mergeGuard) leaves the tab to layer 1. True when both are on. Each step waits at most the arm's
-   * limit. A Fetch.enable that fails leaves the tab off. When Network.enable or the bypass fails or does not answer in time,
-   * the guard's Fetch stays on and the floor keeps the tab (fail closed); a late answer leaves the tab to layer 1 then.
+   * The guard's Fetch on a tab's own session, before a client gets a session of it: then the receiver's floor
+   * (bridge.mergeGuard) leaves the tab to layer 1. True when it is on. A Fetch.enable that fails or does not answer in the
+   * arm's limit leaves the tab off. When the tab's page is on a guarded host, the service worker's bypass comes next
+   * (bypassTab); a bypass that fails or does not answer in time leaves the tab to the floor's rule for a request with no tab.
    */
   async arm(tabId: number): Promise<boolean> {
     const k = this.key(tabId);
-    if (this.armed.has(k)) return this.bypassed.has(tabId);
+    if (this.armed.has(k)) return true;
     const limit = this.o.armLimitMs ?? ARM_LIMIT_MS;
     const fetchOn = this.o.send({ tabId }, "Fetch.enable", { patterns: [...this.patterns] });
     fetchOn.catch(() => {});
@@ -328,34 +333,77 @@ export class MergeGuard {
       this.notice(`arm fetch ${why}`, `${GUARD_TEXT.logPrefix} the guard's Fetch did not start in tab ${tabId} (${why}); the receiver's floor keeps blocking its writes to GitHub`);
       return false;
     }
-    const mark = {};
     this.armed.add(k);
     this.clients.set(k, null);
-    this.armMarks.set(tabId, mark);
-    // No request of a page goes through a service worker (GitHub registers its own): Chrome applies the bypass only while
-    // Network is on (measured), so the guard keeps Network on in the tab, and a client's Network.disable never turns it off.
-    // From here Network can be on in Chrome: the client's Network calls are held and the tab's Network events hidden.
-    this.netArmed.add(k);
-    const bypass = (async () => {
-      await this.o.send({ tabId }, "Network.enable", GUARD_NETWORK);
-      await this.o.send({ tabId }, "Network.setBypassServiceWorker", { bypass: true });
-    })();
-    try { await limited(bypass, limit); } catch (e) {
-      const why = (e as Error).message;
-      this.notice(`arm bypass ${why}`, `${GUARD_TEXT.logPrefix} the service worker's bypass did not start in tab ${tabId} (${why}); the guard's Fetch stays on, and the receiver's floor keeps blocking its writes to GitHub until the bypass answers`);
-      // A late answer (for example after the page's dialog closed): the floor leaves the tab to layer 1 then.
-      bypass.then(() => { if (this.armMarks.get(tabId) === mark) { this.bypassed.add(tabId); void this.syncFloor().catch(() => {}); } }, () => {});
-      return false;
-    }
-    this.bypassed.add(tabId);
+    // The floor names the tab whether or not the bypass is on: a request that a page's service worker sends has no tab, so the
+    // floor blocks its write also in a named tab (measured).
     await this.syncFloor();
+    if (this.guardedUrl(this.tabUrls.get(tabId))) await this.bypassTab(tabId, true);
     return true;
   }
 
   /**
+   * The service worker's bypass of a tab (the operator's ab-u92: on GitHub only): on (true) while its main frame is on a guarded
+   * host, off (false) on another host; in the tab's own session and in its dedicated workers' sessions. It waits at most the
+   * arm's limit; a late answer still takes effect, as the calls are in Chrome's queue. False when it did not answer in time.
+   */
+  async bypassTab(tabId: number, on: boolean): Promise<boolean> {
+    const k = this.key(tabId);
+    const keys = [k, ...[...this.workers].filter((w) => w.startsWith(`${tabId}|`))];
+    const runs = keys.map((key) => (on ? this.bypassIn(key) : this.unbypassIn(key)));
+    if (!runs.some((r) => r !== null)) return true;
+    const all = Promise.all(runs);
+    all.catch(() => {});
+    try { await limited(all, this.o.armLimitMs ?? ARM_LIMIT_MS); return true; } catch (e) {
+      const why = (e as Error).message;
+      this.notice(`bypass ${on} ${why}`, `${GUARD_TEXT.logPrefix} the service worker's bypass did not ${on ? "start" : "end"} in tab ${tabId} (${why})${on ? "; the receiver's floor keeps blocking the writes of a request with no tab" : ""}`);
+      return false;
+    }
+  }
+
+  /** The bypass on in a session: Network on with the smallest buffers when the client has not turned it on, then the bypass. */
+  private bypassIn(k: string): Promise<void> | null {
+    if (this.bypassOn.has(k)) return null;
+    this.bypassOn.add(k);
+    const target = this.target(k);
+    return (async () => {
+      if (!this.netClients.has(k)) await this.o.send(target, "Network.enable", GUARD_NETWORK);
+      await this.o.send(target, "Network.setBypassServiceWorker", { bypass: true });
+    })();
+  }
+
+  /** The bypass off in a session: the client's own bypass value again, and Network off when the client has not turned it on. */
+  private unbypassIn(k: string): Promise<void> | null {
+    if (!this.bypassOn.has(k)) return null;
+    this.bypassOn.delete(k);
+    const target = this.target(k), off = !this.netClients.has(k);
+    if (off) this.netHeld.add(k);
+    return (async () => {
+      await this.o.send(target, "Network.setBypassServiceWorker", { bypass: this.clientBypass.has(k) });
+      if (off) await this.o.send(target, "Network.disable", {});
+    })().finally(() => { this.netHeld.delete(k); });
+  }
+
+  private target(k: string): Target {
+    const [tab, sid] = k.split("|");
+    return sid ? { tabId: Number(tab), sessionId: sid } : { tabId: Number(tab) };
+  }
+
+  /** A client's Page.navigate of the tab, or the model's own navigation of a new tab: the bypass first, to a guarded address. */
+  async beforeNavigate(tabId: number, url: unknown): Promise<void> {
+    if (this.guardedUrl(url)) await this.bypassTab(tabId, true);
+  }
+
+  /** The tab's main frame committed a URL (C10's tabs.onUpdated): the bypass follows its host, in an armed tab. */
+  committed(tabId: number, url: unknown): void {
+    if (typeof url !== "string" || !url || !this.armed.has(this.key(tabId))) return;
+    void this.bypassTab(tabId, this.guardedUrl(url));
+  }
+
+  /**
    * A child session (a frame or a worker of an armed tab) that Chrome attached: the guard's Fetch on it, before the client's
-   * release; in a dedicated worker's session also the service worker's bypass (a blob worker of a page that a service worker
-   * controls sends its requests through that worker, measured: review-125b check 3).
+   * release; in a dedicated worker's session of a tab whose bypass is on also the bypass (a blob worker of a page that a service
+   * worker controls sends its requests through that worker, measured: review-125b check 3).
    */
   armChild(tabId: number, sessionId: string, type?: string): void {
     if (!this.armed.has(this.key(tabId))) return;
@@ -364,15 +412,14 @@ export class MergeGuard {
     this.clients.set(k, null);
     this.o.send(target, "Fetch.enable", { patterns: [...this.patterns] }).catch(() => { this.armed.delete(k); });
     if (type !== "worker") return;
-    this.netArmed.add(k);
-    this.o.send(target, "Network.enable", GUARD_NETWORK).catch(() => {});
-    this.o.send(target, "Network.setBypassServiceWorker", { bypass: true }).catch(() => {});
+    this.workers.add(k);
+    if (this.bypassOn.has(this.key(tabId))) this.bypassIn(k)?.catch(() => {});
   }
 
   /** A child session ended. */
   childGone(tabId: number, sessionId: string): void {
     const k = this.key(tabId, sessionId);
-    this.armed.delete(k); this.clients.delete(k); this.netArmed.delete(k); this.netClients.delete(k);
+    this.armed.delete(k); this.clients.delete(k); this.bypassOn.delete(k); this.netHeld.delete(k); this.netClients.delete(k); this.clientBypass.delete(k); this.workers.delete(k);
     for (const [id, g] of this.given) if (g.key === k) this.given.delete(id);
   }
 
@@ -381,10 +428,7 @@ export class MergeGuard {
     const prefix = `${tabId}|`;
     for (const k of [...this.armed]) if (k.startsWith(prefix)) this.armed.delete(k);
     for (const k of [...this.clients.keys()]) if (k.startsWith(prefix)) this.clients.delete(k);
-    for (const k of [...this.netClients]) if (k.startsWith(prefix)) this.netClients.delete(k);
-    for (const k of [...this.netArmed]) if (k.startsWith(prefix)) this.netArmed.delete(k);
-    this.bypassed.delete(tabId);
-    this.armMarks.delete(tabId);
+    for (const set of [this.netClients, this.bypassOn, this.netHeld, this.clientBypass, this.workers]) for (const k of [...set]) if (k.startsWith(prefix)) set.delete(k);
     for (const [id, g] of [...this.given]) if (g.key.startsWith(prefix)) this.given.delete(id);
     for (const id of [...this.held]) if (id.startsWith(`${tabId}/`)) this.held.delete(id);
   }
@@ -393,17 +437,17 @@ export class MergeGuard {
   forget(tabId: number): void { this.disarm(tabId); this.tabUrls.delete(tabId); }
 
   /** The link changed: no attachment is left; the verdicts stay (they are GitHub's answers, not a connection's). */
-  reset(): void { this.armed.clear(); this.clients.clear(); this.netClients.clear(); this.netArmed.clear(); this.bypassed.clear(); this.armMarks.clear(); this.given.clear(); this.held.clear(); this.tabUrls.clear(); this.floor = "unknown"; this.generation++; }
+  reset(): void { this.armed.clear(); this.clients.clear(); this.netClients.clear(); this.bypassOn.clear(); this.netHeld.clear(); this.clientBypass.clear(); this.workers.clear(); this.given.clear(); this.held.clear(); this.tabUrls.clear(); this.floor = "unknown"; this.generation++; }
 
   /** The link came up: the receiver gets the guard's hosts at once, and says whether it has the floor. */
   linkUp(): Promise<void> { this.floor = "unknown"; this.generation++; return this.syncFloor(); }
 
-  /** One bridge.mergeGuard at a time, with the hosts and every tab where the guard's Fetch and the bypass are on (a full replace). */
+  /** One bridge.mergeGuard at a time, with the hosts and every tab where the guard's Fetch is on (a full replace). */
   private syncFloor(): Promise<void> {
     const run = this.floorChain.then(async () => {
       if (this.floor === "absent") return;
       const generation = this.generation;
-      const tabs = [...this.bypassed].filter((t) => this.armed.has(this.key(t))).sort((a, b) => a - b);
+      const tabs = [...new Set([...this.armed].filter((k) => k.endsWith("|")).map((k) => Number(k.slice(0, -1))))].sort((a, b) => a - b);
       try {
         await this.o.op([{ hosts: [...this.hosts], tabs }]);
         // Only an answer of the current link confirms the floor.
@@ -583,12 +627,19 @@ export class MergeGuard {
     const p = params ?? {};
     const armed = this.armed.has(k);
     if (method.startsWith("Network.")) {
-      // The service worker's bypass on a session where the guard turned it on (the lead's focused change; review-125b).
-      if (!this.netArmed.has(k)) return { method, params: p };
-      if (method === "Network.setBypassServiceWorker") return p.bypass === true ? { answer: {} } : { refuse: GUARD_TEXT.serviceWorker };
-      if (method === "Network.disable") { this.netClients.delete(k); return { answer: {} }; }
+      // The service worker's bypass (the lead's focused change; review-125b; the operator's ab-u92): the guard keeps the client's
+      // own Network state on each session of an armed tab, and holds the calls of the bypass only while the bypass is on there.
+      if (!armed) return { method, params: p };
+      const on = this.bypassOn.has(k);
+      if (method === "Network.setBypassServiceWorker") {
+        if (p.bypass === true) this.clientBypass.add(k); else if (!on) this.clientBypass.delete(k);
+        if (!on) return { method, params: p };
+        return p.bypass === true ? { answer: {} } : { refuse: GUARD_TEXT.serviceWorker };
+      }
+      if (method === "Network.disable") { this.netClients.delete(k); return on ? { answer: {} } : { method, params: p }; }
       if (method === "Network.enable") {
         this.netClients.add(k);
+        if (!on) return { method, params: p };
         return { method, params: p, after: () => { void this.o.send(target, "Network.setBypassServiceWorker", { bypass: true }).catch(() => {}); } };
       }
       return { method, params: p };
@@ -643,7 +694,7 @@ export class MergeGuard {
   /** A Network event of a session where the guard turned Network on, that its client did not ask for (it did not turn Network on): no client gets it. */
   hidesNetwork(tabId: number, sessionId: string | undefined): boolean {
     const k = this.key(tabId, sessionId);
-    return this.netArmed.has(k) && !this.netClients.has(k);
+    return (this.bypassOn.has(k) || this.netHeld.has(k)) && !this.netClients.has(k);
   }
 
   /** A paused request whose event was too large for the link (C10's bridge.tooLarge): on a page of a guarded host it fails. */

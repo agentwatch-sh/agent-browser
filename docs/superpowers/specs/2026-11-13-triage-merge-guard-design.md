@@ -212,6 +212,37 @@ The cost (each one in a client's tab, on every site; review-125b F2 asked for ev
   dedicated worker's session that the client's auto-attach brings, before the client lets it run, with the same rules
   as the tab's session. A worker that no auto-attach brings stays a limit with no floor (section 8).
 
+### 4.3 The bypass on GitHub only (the operator's ab-u92)
+
+The daemon lead asked for the operator's word on the bypass on every site. The operator's answer (board item ab-u92,
+2026-11-13, through the box's manager): "On GitHub only": "Other sites keep their service workers. On GitHub, a PR page
+that an agent opens through a link from another site can need one reload before a merge or a comment works. The guard
+stays complete." So, from this change on (it replaces the rule of sections 4.1 and 4.2 where they differ):
+
+- The floor names each tab where the guard's `Fetch` is on, whether or not the bypass is on (as before the first focused
+  change). A request that a page's service worker sends has no tab, so the floor blocks its write also from a named tab
+  (measured: "the floor, no bypass" in section 4.1, 0 merges).
+- The bypass (`Network` on with the 0 buffers when the client has not turned it on, then `Network.setBypassServiceWorker`
+  true; in the tab's session and in its dedicated workers' sessions) is on only while the tab's main frame is on a guarded
+  host. The model turns it on at the arm when the tab's URL is on a guarded host, before a client's `Page.navigate` to a
+  guarded address, before its own navigation of a new tab of `Target.createTarget` to a guarded address, and at C10's
+  `tabs.onUpdated` with a URL on a guarded host (a link, a redirect, a history step; Chrome gives it also for a
+  navigation that a service worker answers, which never reaches the guard's `Fetch`). It turns the bypass off at
+  `tabs.onUpdated` with a URL on another host: `Network.setBypassServiceWorker` with the client's own last value, and
+  `Network.disable` when the client has not turned `Network` on. Each step waits at most the arm's limit.
+- The client's own `Network` state: the guard notes the client's `Network.enable`, `Network.disable` and bypass value on
+  each session at all times. A turn on sends `Network.enable` only when the client has `Network` off (so the client's
+  buffers and settings stay), and a turn off sends `Network.disable` only then. While the bypass is on, the rules of
+  section 4.1 hold (a client's `Network.disable` is answered and takes effect at the turn off; its `Network.enable` goes,
+  and the bypass follows; its events are hidden while it has `Network` off; its bypass false is refused). While it is
+  off, the client's `Network` calls and its events are as before.
+- A PR page that loaded under GitHub's worker gave the model no answer, so its PR stays unknown, and a write from it gets
+  the unknown text, which says to load the PR's page again; the reload goes with the bypass on and gives the verdict.
+- Cases where the rule is weaker than "on every site" (C11 states them): with no floor, a page's request that a service
+  worker takes before the commit turns the bypass on; the first page of another site that a tab reaches from GitHub loads
+  with the bypass still on (it goes off at the commit), so it skips its worker until a reload. A navigation from GitHub
+  that does not commit leaves the bypass on (the safe side).
+
 ## 5. Where each refusal sits
 
 - **Layer 1, the model** (`src/relay/merge-guard.ts`, in `src/relay/model.ts`): its own `Fetch` in each tab that a client

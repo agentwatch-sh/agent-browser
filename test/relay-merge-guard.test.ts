@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { ARM_LIMIT_MS, GUARD_NETWORK, GUARD_TEXT } from "../src/relay/merge-guard.ts";
-import { harness, until, type Harness } from "./fake-bridge.ts";
+import { harness, lineOf, until, type Harness } from "./fake-bridge.ts";
 
 const S = "github-standin.localhost";
 const MARKED = `<title>[agentwatch triage] Fix a typo · Pull Request #2</title><a href="/o/r/pull/2">#2</a> agentwatch-triage/issue-7 <i>PR_kwDOtest00000002</i>`;
@@ -354,32 +354,85 @@ test("a child session that the client's auto-attach brings (a worker) gets the g
 });
 
 // The lead's focused change (board ab-v16.99): a page's service worker (GitHub registers its own on signed-in pages) could take
-// a page's requests away from the tab's session. The model turns the page's service worker off in each tab that it arms.
+// a page's requests away from the tab's session. The operator's ab-u92: the model turns the page's service worker off in a tab
+// that a client holds while the tab's main frame is on GitHub, and only then.
 const SW_TEXT = "Not available in the agent browser: Network.setBypassServiceWorker with bypass false. The merge guard keeps a page's service worker off in each tab that a client holds (the merge guard of pull requests from agentwatch issue triage).";
+const GH = "https://github.com/o/r/pull/1";
+/** A list with GitHub and a.example, so that a client may navigate to both. */
+const GH_LINE = lineOf(["a.example", "github.com"]);
+/** The fake's tab commits a URL (C10's tabs.onUpdated). */
+const commit = (h: Harness, tab: any, url: string) => h.fake.emit("tabs.onUpdated", { tabId: tab.id, changeInfo: { url }, tab: { ...h.fake.chromeTab(tab), url } });
+/** The calls of the tab's own session that reached "Chrome", from the index `from`. */
+const tabCalls = (h: Harness, tabId: number, from = 0) => h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[0].tabId === tabId && !r.args[0].sessionId).map((r) => `${r.args[1]} ${JSON.stringify(r.args[2])}`);
 
-test("the arm sends Network.setBypassServiceWorker {bypass: true} right after the guard's Fetch.enable (with Network on), before bridge.mergeGuard and before the client has the tab's session", async () => {
+test("a client's tab of another site (the operator's ab-u92): the arm sends the guard's Fetch and the floor op names the tab; no Network call; the client's Network calls and events are as before", async () => {
   const h = await harness();
   try {
-    await h.ready();
+    await h.ready(GH_LINE);
     const c = await h.connect();
-    const { tab } = await page(h, c);
-    const calls = h.fake.requests.filter((r) => (r.op === "debugger.sendCommand" && r.args[0].tabId === tab.id && !r.args[0].sessionId) || (r.op === "bridge.mergeGuard" && r.args[0].tabs.includes(tab.id)));
-    assert.deepEqual(calls.slice(0, 4).map((r) => r.op === "bridge.mergeGuard" ? "bridge.mergeGuard" : `${r.args[1]} ${JSON.stringify(r.args[2])}`),
-      [`Fetch.enable ${JSON.stringify({ patterns: [...h.relay.model.guard.patterns] })}`, `Network.enable ${JSON.stringify(GUARD_NETWORK)}`, `Network.setBypassServiceWorker ${JSON.stringify({ bypass: true })}`, "bridge.mergeGuard"]);
-    assert.equal(h.relay.model.guard.isArmed(tab.id), true);
+    const { tab, sessionId } = await page(h, c);
+    assert.deepEqual(tabCalls(h, tab.id), [`Fetch.enable ${JSON.stringify({ patterns: [...h.relay.model.guard.patterns] })}`]);
+    assert.ok(h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor names the tab at its Fetch");
+    assert.equal(h.relay.model.guard.isBypassed(tab.id), false);
+    const from = h.fake.requests.length;
+    assert.deepEqual(await c.send("Network.disable", {}, sessionId), {});
+    assert.deepEqual(await c.send("Network.setBypassServiceWorker", { bypass: false }, sessionId), {});
+    assert.deepEqual(tabCalls(h, tab.id, from), ["Network.disable {}", `Network.setBypassServiceWorker ${JSON.stringify({ bypass: false })}`], "both reached Chrome");
+    const got = c.waitForEvent("Network.requestWillBeSent", { sessionId, timeoutMs: 3000 });
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Network.requestWillBeSent", params: { requestId: "n1", request: { url: "https://a.example/", method: "GET", headers: {} } } });
+    assert.equal((await got).requestId, "n1", "the tab's Network events as before");
   } finally { await h.close(); }
 });
 
-test("a bypass that fails leaves the tab to the floor: no bridge.mergeGuard names it; the guard's Fetch stays on, and the tab's Network events stay hidden from a client that did not turn Network on (review-125b item 4)", async () => {
+test("a client's Page.navigate to a guarded address: the service worker's bypass first (Network.enable with the smallest buffers, then the bypass), then the navigation; to another address no Network call (the operator's ab-u92)", async () => {
+  const h = await harness();
+  try {
+    await h.ready(GH_LINE);
+    const c = await h.connect();
+    const { tab, sessionId } = await page(h, c);
+    let from = h.fake.requests.length;
+    await c.send("Page.navigate", { url: "https://a.example/" }, sessionId);
+    assert.deepEqual(tabCalls(h, tab.id, from), [`Page.navigate ${JSON.stringify({ url: "https://a.example/" })}`]);
+    from = h.fake.requests.length;
+    await c.send("Page.navigate", { url: GH }, sessionId);
+    assert.deepEqual(tabCalls(h, tab.id, from), [`Network.enable ${JSON.stringify(GUARD_NETWORK)}`, `Network.setBypassServiceWorker ${JSON.stringify({ bypass: true })}`, `Page.navigate ${JSON.stringify({ url: GH })}`]);
+    assert.equal(h.relay.model.guard.isBypassed(tab.id), true);
+  } finally { await h.close(); }
+});
+
+test("the bypass follows the tab's commits (tabs.onUpdated; the operator's ab-u92): on at a guarded host, also by a link that the page follows; off at another host, where the client's Network calls go to Chrome again and Network goes off as the client asked", async () => {
+  const h = await harness();
+  try {
+    await h.ready(GH_LINE);
+    const c = await h.connect();
+    const { tab, sessionId } = await page(h, c);
+    let from = h.fake.requests.length;
+    commit(h, tab, GH);
+    await until(() => tabCalls(h, tab.id, from).length >= 2, "the bypass at the commit");
+    assert.deepEqual(tabCalls(h, tab.id, from), [`Network.enable ${JSON.stringify(GUARD_NETWORK)}`, `Network.setBypassServiceWorker ${JSON.stringify({ bypass: true })}`]);
+    from = h.fake.requests.length;
+    assert.deepEqual(await c.send("Network.disable", {}, sessionId), {});
+    assert.equal(await failure(c.send("Network.setBypassServiceWorker", { bypass: false }, sessionId)), SW_TEXT);
+    assert.deepEqual(tabCalls(h, tab.id, from), [], "held while the bypass is on");
+    commit(h, tab, "https://a.example/");
+    await until(() => tabCalls(h, tab.id, from).length >= 2, "the bypass off at the commit");
+    assert.deepEqual(tabCalls(h, tab.id, from), [`Network.setBypassServiceWorker ${JSON.stringify({ bypass: false })}`, "Network.disable {}"]);
+    from = h.fake.requests.length;
+    assert.deepEqual(await c.send("Network.disable", {}, sessionId), {});
+    assert.deepEqual(tabCalls(h, tab.id, from), ["Network.disable {}"], "as before");
+  } finally { await h.close(); }
+});
+
+test("a bypass that fails at a client's Page.navigate to GitHub (review-125b item 4): the floor names the tab at its Fetch; the guard's Fetch stays on, and the tab's Network events stay hidden from a client that did not turn Network on", async () => {
   const h = await harness();
   try {
     h.fake.command = (_t, method) => (method === "Network.setBypassServiceWorker" ? { error: JSON.stringify({ code: -32000, message: "Not supported" }) } : undefined);
-    await h.ready();
+    await h.ready(GH_LINE);
     const c = await h.connect();
     const { tab, sessionId } = await page(h, c);
+    await c.send("Page.navigate", { url: GH }, sessionId);
     assert.equal(h.relay.model.guard.isArmed(tab.id), true, "the guard's Fetch stays on");
-    assert.equal(h.relay.model.guard.isBypassed(tab.id), false);
-    assert.ok(!h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor keeps the tab");
+    assert.ok(h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor names the tab");
     assert.ok(h.logs.some((l) => l.includes(`the service worker's bypass did not start in tab ${tab.id}`)), h.logs.join("\n"));
     const got: string[] = [];
     c.on("Network.requestWillBeSent", (p, sid) => { if (sid === sessionId) got.push(p.requestId); });
@@ -389,57 +442,61 @@ test("a bypass that fails leaves the tab to the floor: no bridge.mergeGuard name
   } finally { await h.close(); }
 });
 
-test("a page whose dialog holds the arm's Network.enable (review-125b F1): the client gets its session at the arm's limit and its calls go to Chrome; the floor keeps the tab until Network.enable answers, then the bypass follows and the floor leaves the tab to layer 1", async () => {
+test("a page whose renderer holds the bypass's Network.enable (review-125b F1; a dialog): a client's Page.navigate to GitHub goes at the arm's limit; the floor names the tab at its Fetch; the bypass follows the late answer", async () => {
   const h = await harness();
   try {
     let release!: () => void;
     const held = new Promise((r) => { release = () => r({}); });
     h.fake.command = (t, method) => (method === "Network.enable" && !t.sessionId ? held : undefined);
-    await h.ready();
+    await h.ready(GH_LINE);
     const c = await h.connect();
-    const t0 = Date.now();
     const { tab, sessionId } = await page(h, c);
+    assert.ok(h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor names the tab");
+    const t0 = Date.now();
+    await c.send("Page.navigate", { url: GH }, sessionId);
     const took = Date.now() - t0;
-    assert.ok(took >= ARM_LIMIT_MS - 100 && took < ARM_LIMIT_MS + 3000, `the session came at the arm's limit (${took} ms)`);
-    assert.equal(h.relay.model.guard.isArmed(tab.id), true);
-    assert.equal(h.relay.model.guard.isBypassed(tab.id), false);
-    assert.ok(!h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor keeps the tab");
-    assert.deepEqual(await c.send("Page.handleJavaScriptDialog", { accept: true }, sessionId), {}, "the client's calls go to Chrome (a dialog from before its session is not Chrome's to close: the live check)");
+    assert.ok(took >= ARM_LIMIT_MS - 100 && took < ARM_LIMIT_MS + 3000, `the navigation went at the arm's limit (${took} ms)`);
+    assert.ok(h.fake.sent("debugger.sendCommand", "Page.navigate").length >= 1);
+    assert.ok(!h.fake.sent("debugger.sendCommand", "Network.setBypassServiceWorker").length, "no bypass before Network.enable answers");
     release();
-    await until(() => h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor op with the tab after the late answer");
-    const calls = h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[0].tabId === tab.id && !r.args[0].sessionId && r.args[1].startsWith("Network."));
-    assert.deepEqual(calls.map((r) => r.args[1]), ["Network.enable", "Network.setBypassServiceWorker"]);
-    assert.equal(h.relay.model.guard.isBypassed(tab.id), true);
+    await until(() => h.fake.sent("debugger.sendCommand", "Network.setBypassServiceWorker").length === 1, "the bypass after the late answer");
   } finally { await h.close(); }
 });
 
-test("a dedicated worker that the client's auto-attach brings gets the guard's Fetch and the service worker's bypass before it runs (review-125b check 3); a frame gets the guard's Fetch only", async () => {
+test("a dedicated worker that the client's auto-attach brings in a tab on GitHub gets the guard's Fetch and the service worker's bypass before it runs (review-125b check 3); a frame gets the guard's Fetch only; a worker of a tab of another site gets the guard's Fetch only", async () => {
   const h = await harness();
   try {
-    await h.ready();
+    await h.ready(GH_LINE);
     const c = await h.connect();
     const { tab, sessionId } = await page(h, c);
     const child = (sid: string, type: string) => h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Target.attachedToTarget", params: { sessionId: sid, waitingForDebugger: true,
       targetInfo: { targetId: `${sid}T`, type, title: "", url: "blob:https://github.com/x", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
-    const seen = c.waitForEvent("Target.attachedToTarget", { sessionId, predicate: (p: any) => p.sessionId === "W1" });
+    const of = (sid: string) => h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[0].sessionId === sid).map((r) => `${r.args[1]} ${JSON.stringify(r.args[2])}`);
+    const fetchOn = `Fetch.enable ${JSON.stringify({ patterns: [...h.relay.model.guard.patterns] })}`;
+    let seen = c.waitForEvent("Target.attachedToTarget", { sessionId, predicate: (p: any) => p.sessionId === "W0" });
+    child("W0", "worker");
+    await seen;
+    assert.deepEqual(of("W0"), [fetchOn], "a tab of another site: the guard's Fetch only");
+    await c.send("Page.navigate", { url: GH }, sessionId);
+    seen = c.waitForEvent("Target.attachedToTarget", { sessionId, predicate: (p: any) => p.sessionId === "W1" });
     child("W1", "worker");
     await seen;
-    const of = (sid: string) => h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[0].sessionId === sid).map((r) => `${r.args[1]} ${JSON.stringify(r.args[2])}`);
-    assert.deepEqual(of("W1"), [`Fetch.enable ${JSON.stringify({ patterns: [...h.relay.model.guard.patterns] })}`, `Network.enable ${JSON.stringify(GUARD_NETWORK)}`, "Network.setBypassServiceWorker {\"bypass\":true}"], "sent before the client got the worker's session");
+    assert.deepEqual(of("W1"), [fetchOn, `Network.enable ${JSON.stringify(GUARD_NETWORK)}`, "Network.setBypassServiceWorker {\"bypass\":true}"], "sent before the client got the worker's session");
     assert.equal(await failure(c.send("Network.setBypassServiceWorker", { bypass: false }, "W1")), SW_TEXT);
     child("F1", "iframe");
     await until(() => of("F1").length > 0, "the frame's Fetch");
     await sleep(20);
-    assert.deepEqual(of("F1"), [`Fetch.enable ${JSON.stringify({ patterns: [...h.relay.model.guard.patterns] })}`]);
+    assert.deepEqual(of("F1"), [fetchOn]);
   } finally { await h.close(); }
 });
 
-test("a client's Network.setBypassServiceWorker on an armed tab: bypass false is refused with the merge guard's text, bypass true is answered with no change; neither reaches Chrome", async () => {
+test("a client's Network.setBypassServiceWorker in a tab on GitHub: bypass false is refused with the merge guard's text, bypass true is answered with no change; no call reaches Chrome", async () => {
   const h = await harness();
   try {
-    await h.ready();
+    await h.ready(GH_LINE);
     const c = await h.connect();
     const { sessionId } = await page(h, c);
+    await c.send("Page.navigate", { url: GH }, sessionId);
     const before = h.fake.sent("debugger.sendCommand").length;
     assert.equal(await failure(c.send("Network.setBypassServiceWorker", { bypass: false }, sessionId)), SW_TEXT);
     assert.deepEqual(await c.send("Network.setBypassServiceWorker", { bypass: true }, sessionId), {});
@@ -447,27 +504,39 @@ test("a client's Network.setBypassServiceWorker on an armed tab: bypass false is
   } finally { await h.close(); }
 });
 
-test("Network stays on in an armed tab: a client's Network.disable is answered and never reaches Chrome; the tab's Network events go to the client only while it turned Network on; its Network.enable goes to Chrome and the bypass follows", async () => {
+test("Network stays on in a tab on GitHub: a client's Network.disable is answered and never reaches Chrome; the tab's Network events go to the client only while it turned Network on; its Network.enable goes to Chrome and the bypass follows", async () => {
   const h = await harness();
   try {
-    await h.ready();
+    await h.ready(GH_LINE);
     const c = await h.connect();
     const { tab, sessionId } = await page(h, c);
+    await c.send("Page.navigate", { url: GH }, sessionId);
     const got: string[] = [];
     c.on("Network.requestWillBeSent", (p, sid) => { if (sid === sessionId) got.push(p.requestId); });
-    const net = (id: string) => h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Network.requestWillBeSent", params: { requestId: id, request: { url: "https://a.example/", method: "GET", headers: {} } } });
-    const mark = async (id: string) => { await c.send("Runtime.evaluate", { expression: "1" }, sessionId); return id; };
-    net("n1"); await mark("n1");
+    const net = (id: string) => h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Network.requestWillBeSent", params: { requestId: id, request: { url: "https://github.com/", method: "GET", headers: {} } } });
+    const mark = async () => { await c.send("Runtime.evaluate", { expression: "1" }, sessionId); };
+    net("n1"); await mark();
     const before = h.fake.sent("debugger.sendCommand", "Network.setBypassServiceWorker").length;
     assert.deepEqual(await c.send("Network.enable", {}, sessionId), {});
     await until(() => h.fake.sent("debugger.sendCommand", "Network.setBypassServiceWorker").length === before + 1, "the bypass after the client's Network.enable");
-    assert.ok(h.fake.sent("debugger.sendCommand", "Network.enable").length === 2, "the guard's and the client's Network.enable reached Chrome");
-    net("n2"); await mark("n2");
+    net("n2"); await mark();
     const sentBefore = h.fake.sent("debugger.sendCommand").length;
     assert.deepEqual(await c.send("Network.disable", {}, sessionId), {});
     assert.equal(h.fake.sent("debugger.sendCommand").length, sentBefore, "no call reached Chrome for the client's Network.disable");
-    net("n3"); await mark("n3");
+    net("n3"); await mark();
     await until(() => got.length >= 1, "the event of the client's Network");
     assert.deepEqual(got, ["n2"], "only the event while the client turned Network on");
+  } finally { await h.close(); }
+});
+
+test("Target.createTarget with a guarded url and no auto-attach of the client: the model turns the bypass on before its own navigation of the new tab (the operator's ab-u92)", async () => {
+  const h = await harness();
+  try {
+    await h.ready(GH_LINE);
+    const c = await h.connect();
+    const { targetId } = await c.send("Target.createTarget", { url: GH });
+    const tab = [...h.fake.tabs.values()].find((t) => t.targetId === targetId)!;
+    await until(() => tabCalls(h, tab.id).some((x) => x.startsWith("Page.navigate")), "the model's navigation");
+    assert.deepEqual(tabCalls(h, tab.id).filter((x) => /^(Network\.|Page\.navigate)/.test(x)), [`Network.enable ${JSON.stringify(GUARD_NETWORK)}`, `Network.setBypassServiceWorker ${JSON.stringify({ bypass: true })}`, `Page.navigate ${JSON.stringify({ url: GH })}`]);
   } finally { await h.close(); }
 });

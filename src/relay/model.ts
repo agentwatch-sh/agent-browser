@@ -692,6 +692,8 @@ export class Model {
     const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined);
     if (off !== null) return fail(await this.navigationRefusal(off, c.scope));
     // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
+    // A client's Page.navigate of a tab to a guarded address: the service worker's bypass first (the operator's ab-u92).
+    if (to === "chrome" && method === "Page.navigate" && !child) await this.guard.beforeNavigate(tab!.id, params?.url);
     if (to === "chrome" && (method.startsWith("Fetch.") || method.startsWith("Network."))) {
       const g = this.guard.command(tab!.id, child, method, params);
       const target = child ? { tabId: tab!.id, sessionId: child } : { tabId: tab!.id };
@@ -1667,6 +1669,8 @@ export class Model {
     if (off !== null) { this.log(`relay: new tab ${tab.id} is not navigated: ${await this.navigationRefusal(off, tab.scope)}`); return; }
     try {
       await this.ensureAttached(tab);
+      // The service worker's bypass first, to a guarded address (C11, the merge guard; the operator's ab-u92).
+      await this.guard.beforeNavigate(tab.id, url);
       await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.navigate", { url }]);
     } catch (e) { this.log(`relay: the navigation of new tab ${tab.id} failed: ${(e as Error).message}`); }
   }
@@ -1820,6 +1824,8 @@ export class Model {
       case "tabs.onCreated": void this.onCreated(ev).catch((e) => this.log(`relay: new tab ${ev.tab?.id}: ${e.message}`)); return;
       case "tabs.onUpdated": {
         this.guard.url(ev.tabId, ev.tab?.url ?? ev.changeInfo?.url);
+        // The service worker's bypass follows the main frame's host (the operator's ab-u92: on GitHub only, C11).
+        this.guard.committed(ev.tabId, ev.tab?.url ?? ev.changeInfo?.url);
         const tab = this.tabs.get(ev.tabId);
         if (!tab?.scope || !tab.targetId) return;
         for (const c of this.conns) if (c.discover && c.scope === tab.scope) c.event(undefined, "Target.targetInfoChanged", { targetInfo: this.infoOf(tab, ev.tab) });

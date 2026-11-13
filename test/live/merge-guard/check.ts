@@ -96,7 +96,7 @@ let port = 0;
 const NODE = (n: number) => `PR_kwDOstand000000${n}`;
 /** The stand-in's PRs: #2 with every sign of agentwatch's feature, #3 with the bare label triage only, #4 with the bare title [triage] only, #5 with the head branch only, #1 and #6 unmarked. */
 type Kind = "feature" | "label triage" | "title [triage]" | "head" | "none";
-const KINDS: Record<number, Kind> = { 1: "none", 2: "feature", 3: "label triage", 4: "title [triage]", 5: "head", 6: "none" };
+const KINDS: Record<number, Kind> = { 1: "none", 2: "feature", 3: "label triage", 4: "title [triage]", 5: "head", 6: "none", 7: "none", 8: "feature", 9: "none" };
 const prPage = (n: number, kind: Kind) => {
   const prefix = kind === "feature" ? "[agentwatch triage] " : kind === "title [triage]" ? "[triage] " : "";
   const head = kind === "feature" || kind === "head" ? "agentwatch-triage/issue-7" : `fix-typo-${n}`;
@@ -142,6 +142,12 @@ const http = createServer((req, res) => {
     const html = (s: string, status = 200, extra: Record<string, string> = {}) => res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...extra }).end(s);
     if (host === OTHER) {
       if (path === "/cross") { html(otherPage.replace("PORT", String(port))); return; }
+      // The operator's ab-u92: the other site's own service worker (scope "/"). It serves /sw-only, which the server does not
+      // have, and at /post-merge-8 it posts the stand-in's marked PR's merge itself (a request with no tab).
+      if (path === "/osw.js") { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end(`self.addEventListener('install', (e) => self.skipWaiting()); self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim())); self.addEventListener('fetch', (e) => { const u = new URL(e.request.url); if (u.pathname === '/sw-only') e.respondWith(new Response('<!doctype html><title>sw only</title><p>served by the other site worker</p>', { headers: { 'Content-Type': 'text/html' } })); else if (u.pathname === '/post-merge-8') e.respondWith(fetch('http://${S}:${port}/o/r/pull/8/merge', { method: 'POST', body: 'via=other-sw', mode: 'no-cors' }).then(() => new Response('posted'), (err) => new Response('error ' + err))); });`); return; }
+      if (path === "/osw-setup") { html(`<!doctype html><title>osw setup</title><p id="state">setup</p><script>navigator.serviceWorker.register("/osw.js", { scope: "/" }).then(() => navigator.serviceWorker.ready).then(() => navigator.serviceWorker.controller ? 0 : new Promise((r) => { navigator.serviceWorker.addEventListener("controllerchange", r); setTimeout(r, 3000); })).then(() => { document.getElementById("state").textContent = navigator.serviceWorker.controller ? "controlled" : "registered"; }, (e) => { document.getElementById("state").textContent = "error " + e; });</script>`); return; }
+      if (path === "/sw-only") { res.writeHead(404, { "Content-Type": "text/plain" }).end("not on the server"); return; }
+      if (path === "/link") { html(`<!doctype html><title>links</title><p>links</p><a id="pr7" href="http://${S}:${port}/o/r/pull/7">7</a> <a id="pr8" href="http://${S}:${port}/o/r/pull/8">8</a>`); return; }
       if (path === "/r307") { res.writeHead(307, { Location: `http://${S}:${port}/o/r/pull/2/merge`, ...cors }).end(); return; }
       if (path === "/frame") { html(`<!doctype html><title>frame</title><script>fetch("http://${S}:${port}/o/r/pull/2/merge", { method: "POST", body: "via=frame", mode: "no-cors" }).catch(() => {});</script>`); return; }
       if (req.method !== "GET") { res.writeHead(200, { "Content-Type": "text/plain", ...cors }).end("other: ok"); return; }
@@ -666,10 +672,42 @@ try {
   await loaded(cross, (t) => t.includes("another site"));
   w = await swRound(cross, "sw-cross");
   check(`the page's service worker (${mode}): a tab that starts on another site and navigates into the stand-in is not under it, and the merge gets the 403`, w.ok, JSON.stringify({ ...w, f: w.f.slice(0, 60) }));
+  // The operator's ab-u92: the bypass on GitHub only. Another site's own service worker works in a client's tab; a link from it
+  // into the stand-in's PR page (under the stand-in's worker) gives an unknown PR until one reload; a client's Page.navigate
+  // into the stand-in gets the bypass first, so its verdict comes at once.
+  const viaCount = (via: string) => writes.filter((x) => x.body === `via=${via}`).length;
+  const os = await open(`http://${OTHER}:${port}/osw-setup`);
+  const oreg = (await loaded(os, (t) => /controlled|registered|error/.test(t))).trim();
+  await c.send("Page.navigate", { url: `http://${OTHER}:${port}/sw-only` }, os);
+  const only = (await loaded(os, (t) => t.length > 0)).trim();
+  check(`ab-u92 (${mode}): another site's own service worker serves a page that only it has, in a client's tab`, only.includes("served by the other site worker"), `${oreg}; ${only.slice(0, 60)}`);
+  const viaWorker = String(await ev(os, "fetch('/post-merge-8').then((r) => r.text(), (e) => 'error ' + e)"));
+  if (UNPACKED) check("ab-u92 (the floor): a write that another site's service worker sends to the stand-in has no tab, and the floor blocks it also from a named tab", viaCount("other-sw") === 0, viaWorker);
+  else measure("ab-u92 (receiver 0.3.7): a write that another site's service worker sends to the stand-in (no tab, cross-site; C11's limit with no floor)", `${viaWorker}; writes that reached the stand-in: ${viaCount("other-sw")}`);
+  for (const [n, marked] of [[7, false], [8, true]] as const) {
+    await c.send("Page.navigate", { url: `http://${OTHER}:${port}/link` }, os);
+    await loaded(os, (t) => t.includes("links"));
+    await ev(os, `document.getElementById('pr${n}').click(), 1`);
+    await loaded(os, (t) => t.includes("Merge pull request"));
+    const under = await ev(os, "!!navigator.serviceWorker.controller");
+    await sleep(300);
+    const first = String(await ev(os, `fetch('/o/r/pull/${n}/merge', { method: 'POST', body: 'via=link-${n}' }).then((r) => r.text().then((t) => r.status + ' ' + t))`));
+    check(`ab-u92 (${mode}): a link from another site into PR ${n}'s page (under the stand-in's worker: ${under}): the PR is unknown, and its merge gets the text that says to load the page again`, under === true && first.startsWith("403 ") && bodyText(first) === GUARD_TEXT.unknown && viaCount(`link-${n}`) === 0, first.slice(0, 90));
+    await c.send("Page.reload", {}, os);
+    await loaded(os, (t) => t.includes("Merge pull request"));
+    const again = String(await ev(os, `fetch('/o/r/pull/${n}/merge', { method: 'POST', body: 'via=reload-${n}' }).then((r) => r.text().then((t) => r.status + ' ' + t))`));
+    if (!marked) check(`ab-u92 (${mode}): after one reload (the bypass on), the unmarked PR's merge goes`, again.startsWith("200") && viaCount("reload-7") === 1, again.slice(0, 60));
+    else check(`ab-u92 (${mode}): after one reload, the marked PR's merge gets the rule's text`, again.startsWith("403 ") && bodyText(again) === GUARD_TEXT.marked && viaCount("reload-8") === 0, again.slice(0, 90));
+  }
+  await c.send("Page.navigate", { url: `http://${OTHER}:${port}/link` }, os);
+  await loaded(os, (t) => t.includes("links"));
+  await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/9` }, os);
+  await loaded(os, (t) => t.includes("Merge pull request"));
+  const direct = String(await ev(os, "fetch('/o/r/pull/9/merge', { method: 'POST', body: 'via=direct-9' }).then((r) => r.text().then((t) => r.status + ' ' + t))"));
+  check(`ab-u92 (${mode}): a client's Page.navigate from another site into the stand-in gets the bypass first: not under the worker, and the unmarked PR's merge goes at once`, (await ev(os, "!!navigator.serviceWorker.controller")) === false && direct.startsWith("200") && viaCount("direct-9") === 1, direct.slice(0, 60));
   // review-125b check 3: a blob worker of a page that the service worker controls (a page that loaded before the arm), with no
   // auto-attach of the client (a measure: no session sees it) and with one (the model's bypass in the worker's session).
   const blobMerge = (via: string) => `new Promise((done) => { const w = new Worker(URL.createObjectURL(new Blob([${JSON.stringify(`fetch(${JSON.stringify(`${WEB()}/o/r/pull/2/merge`)}, { method: 'POST', body: 'via=VIA' }).then((r) => postMessage('status ' + r.status), (e) => postMessage('error ' + e));`)}.replace('VIA', '${via}')]))); w.onmessage = (e) => done(e.data); w.onerror = () => done('worker error'); setTimeout(() => done('no answer'), 6000); })`;
-  const viaCount = (via: string) => writes.filter((x) => x.body === `via=${via}`).length;
   const createdTab = await c.send("Target.createTarget", { url: `${WEB()}/o/r/pull/2` });
   const created = (await c.send("Target.attachToTarget", { targetId: createdTab.targetId, flatten: true })).sessionId as string;
   await c.send("Runtime.enable", {}, created);
@@ -745,7 +783,7 @@ try {
       late = String(await within("the late merge", b.send("Runtime.evaluate", { expression: "location.pathname === '/o/r/pull/1' ? fetch('/o/r/pull/1/merge', { method: 'POST', body: 'via=late' }).then((r) => String(r.status), (e) => 'error ' + e) : 'not yet'", awaitPromise: true, returnByValue: true }, bs), 3000).then((r: any) => r.result.value, (e: Error) => e.message));
       if (late !== "200") await sleep(250);
     }
-    check(`F1 (${mode}): after the dialog closed, the tab's unmarked PR's merge goes${UNPACKED ? " (the late bypass named the tab to the floor)" : ""}`, late === "200" && viaCount("late") >= 1, late);
+    check(`F1 (${mode}): after the dialog closed, the tab's unmarked PR's merge goes${UNPACKED ? " (the floor names the tab at its Fetch)" : ""}`, late === "200" && viaCount("late") >= 1, late);
     await b.close();
   }
 
@@ -757,7 +795,7 @@ try {
   check("the log names a refusal of each reason once (marked, unknown) with a method, the host, a tab and the count", lines.some((l) => /^merge guard: refused a write to github-standin\.localhost \((POST|PUT), tab \d+\): marked; refused so far: \d+$/.test(l)) && lines.some((l) => /: unknown; refused so far: \d+$/.test(l)));
   check("no log line of the guard holds a URL path, a query or a page's text", !lines.some((l) => /\/o\/r|pull\/|_graphql|test-csrf|Fix a typo|via=/.test(l)));
   // The frame of another site with the policy bypassed (the floor mode only) is a measured limit that C11 states.
-  const marked = writes.filter((w) => w.body !== "via=frame" && w.body !== "via=wb-none" && (/\/pull\/[2345]\/|\/pulls\/2\//.test(w.path) || (w.path === "/_graphql" && !w.body.includes(NODE(1)))));
+  const marked = writes.filter((w) => w.body !== "via=frame" && w.body !== "via=wb-none" && w.body !== "via=other-sw" && (/\/pull\/[23458]\/|\/pulls\/2\//.test(w.path) || (w.path === "/_graphql" && !w.body.includes(NODE(1)))));
   check("the stand-in got no write of a marked PR in the whole run (but the measured frame of another site in the floor mode)", marked.length === 0, JSON.stringify(marked));
   log(`the stand-in's writes: ${JSON.stringify(writes.map((w) => `${w.method} ${w.host === API ? "api " : ""}${w.path}`))}`);
 

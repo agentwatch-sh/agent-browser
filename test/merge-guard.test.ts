@@ -411,86 +411,119 @@ test("the floor's states: no answer yet, an answer of the current link, an error
   assert.equal(g.floor, "absent", "an older receiver");
 });
 
-test("the service worker's bypass (the lead's focused change): the arm sends it after the guard's Fetch, with Network on; a failure leaves the tab off; a client's bypass false is refused and bypass true is answered with no change", async () => {
+const GH = "https://github.com/o/r/pull/1";
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const pass = (method: string, params: object) => ({ method, params });
+
+test("the bypass on GitHub only (the operator's ab-u92): the arm names the tab to the floor at its Fetch; it turns the service worker's bypass on only in a tab whose page is on a guarded host; there a client's bypass that is not true is refused and bypass true is answered", async () => {
   const { g, sent, ops } = guard();
+  assert.equal(await g.arm(6), true);
+  assert.deepEqual(sent.map((s) => s.method), ["Fetch.enable"], "a tab of another site: no Network call");
+  assert.deepEqual(ops.at(-1), [{ hosts: ["github.com"], tabs: [6] }], "the floor names the tab at its Fetch");
+  assert.equal(g.isBypassed(6), false);
+  assert.deepEqual(g.command(6, undefined, "Network.setBypassServiceWorker", { bypass: false }), pass("Network.setBypassServiceWorker", { bypass: false }), "the bypass is off: as before");
+  assert.deepEqual(g.command(6, undefined, "Network.disable", {}), pass("Network.disable", {}));
+  assert.equal(g.hidesNetwork(6, undefined), false);
+  sent.length = 0;
+  g.url(7, GH);
   assert.equal(await g.arm(7), true);
   assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Fetch.enable", { patterns: [...g.patterns] }], ["Network.enable", GUARD_NETWORK], ["Network.setBypassServiceWorker", { bypass: true }]]);
   assert.deepEqual(GUARD_NETWORK, { maxTotalBufferSize: 0, maxResourceBufferSize: 0 }, "review-125b F2: Chrome keeps no Network data for the guard");
+  assert.deepEqual(ops.at(-1), [{ hosts: ["github.com"], tabs: [6, 7] }]);
+  assert.equal(g.isBypassed(7), true);
   assert.deepEqual(g.command(7, undefined, "Network.setBypassServiceWorker", { bypass: false }), { refuse: GUARD_TEXT.serviceWorker });
+  assert.deepEqual(g.command(7, undefined, "Network.setBypassServiceWorker", {}), { refuse: GUARD_TEXT.serviceWorker }, "a bypass that is not true");
   assert.deepEqual(g.command(7, undefined, "Network.setBypassServiceWorker", { bypass: true }), { answer: {} });
-  assert.deepEqual(g.command(9, undefined, "Network.setBypassServiceWorker", { bypass: false }), { method: "Network.setBypassServiceWorker", params: { bypass: false } }, "a tab that the guard did not arm: as before");
-  assert.deepEqual(g.command(7, "W1", "Network.setBypassServiceWorker", { bypass: false }), { method: "Network.setBypassServiceWorker", params: { bypass: false } }, "a child session: as before");
+  assert.deepEqual(g.command(9, undefined, "Network.setBypassServiceWorker", { bypass: false }), pass("Network.setBypassServiceWorker", { bypass: false }), "a tab that the guard did not arm: as before");
   g.armChild(7, "F1");
-  assert.equal(g.isArmed(7, "F1"), true);
-  assert.deepEqual(g.command(7, "F1", "Network.setBypassServiceWorker", { bypass: false }), { method: "Network.setBypassServiceWorker", params: { bypass: false } }, "a child session with the guard's Fetch: as before");
-  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), { method: "Network.disable", params: {} }, "a child session with the guard's Fetch: as before");
-  assert.equal(ops.length, 1);
+  assert.deepEqual(g.command(7, "F1", "Network.setBypassServiceWorker", { bypass: false }), pass("Network.setBypassServiceWorker", { bypass: false }), "a frame: as before");
+  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), pass("Network.disable", {}), "a frame: as before");
   {
     const bad = guard({ send: (s) => { if (s.method === "Fetch.enable") throw new Error("Not supported"); return {}; } });
+    bad.g.url(5, GH);
     assert.equal(await bad.g.arm(5), false);
     assert.equal(bad.g.isArmed(5), false, "a failed Fetch.enable: nothing went, the tab is off");
     assert.equal(bad.g.hidesNetwork(5, undefined), false);
     assert.deepEqual(bad.ops, []);
   }
-  // review-125b item 4: a partial arm. The guard's Fetch went, so the tab is the guard's (its Fetch commands held, its Network
-  // calls held, its Network events hidden), and the floor keeps it: no bridge.mergeGuard names it.
+  // review-125b item 4: a partial arm. The guard's Fetch went, so the tab is the guard's and the floor names it; the rules of the
+  // bypass hold (its Network calls held, its Network events hidden), as Network can be on in Chrome.
   for (const failing of ["Network.enable", "Network.setBypassServiceWorker"]) {
     const bad = guard({ send: (s) => { if (s.method === failing) throw new Error("Not supported"); return {}; } });
-    assert.equal(await bad.g.arm(5), false, failing);
+    bad.g.url(5, GH);
+    assert.equal(await bad.g.arm(5), true, failing);
     assert.equal(bad.g.isArmed(5), true, `${failing}: the guard's Fetch stays on`);
-    assert.equal(bad.g.isBypassed(5), false, failing);
     assert.equal(bad.g.hidesNetwork(5, undefined), true, `${failing}: no Network event reaches a client that did not turn Network on`);
     assert.deepEqual(bad.g.command(5, undefined, "Network.disable", {}), { answer: {} }, failing);
-    assert.deepEqual(bad.ops, [], `${failing}: the floor keeps the tab`);
-    assert.ok(bad.logs.some((l) => l === `merge guard: the service worker's bypass did not start in tab 5 (Not supported); the guard's Fetch stays on, and the receiver's floor keeps blocking its writes to GitHub until the bypass answers`), bad.logs.join("\n"));
+    assert.deepEqual(bad.ops.at(-1), [{ hosts: ["github.com"], tabs: [5] }], `${failing}: the floor names the tab; a request of a service worker has no tab`);
+    assert.ok(bad.logs.some((l) => l === "merge guard: the service worker's bypass did not start in tab 5 (Not supported); the receiver's floor keeps blocking the writes of a request with no tab"), bad.logs.join("\n"));
   }
 });
 
-test("the arm's limit (review-125b F1): a Network call that a page's dialog holds ends the wait at the limit; the guard's Fetch stays on, the floor keeps the tab, and a late answer leaves the tab to layer 1 then; a late answer of an earlier arm changes nothing", async () => {
+test("the bypass follows the tab's main frame (the operator's ab-u92): a commit on a guarded host turns it on, a commit elsewhere turns it off; a client's Page.navigate to a guarded address turns it on first, to another address changes nothing; a turn on and off keep the client's own Network state", async () => {
+  const { g, sent } = guard();
+  await g.arm(7);
+  // While the bypass is off, the client's own Network calls go to Chrome, and the guard notes them.
+  assert.deepEqual(g.command(7, undefined, "Network.enable", { maxTotalBufferSize: 1000 }), pass("Network.enable", { maxTotalBufferSize: 1000 }));
+  assert.deepEqual(g.command(7, undefined, "Network.setBypassServiceWorker", { bypass: true }), pass("Network.setBypassServiceWorker", { bypass: true }));
+  sent.length = 0;
+  g.committed(7, GH);
+  await tick();
+  assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Network.setBypassServiceWorker", { bypass: true }]], "the client's Network is on: only the bypass, so its buffers stay");
+  assert.equal(g.isBypassed(7), true);
+  assert.deepEqual(g.command(7, undefined, "Network.disable", {}), { answer: {} }, "the bypass is on: the client's Network.disable is held");
+  assert.equal(g.hidesNetwork(7, undefined), true);
+  sent.length = 0;
+  g.committed(7, "https://a.example/");
+  await tick(); await tick();
+  assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Network.setBypassServiceWorker", { bypass: true }], ["Network.disable", {}]], "off: the client's own bypass value again, and Network off as the client asked");
+  assert.equal(g.isBypassed(7), false);
+  assert.equal(g.hidesNetwork(7, undefined), false);
+  assert.deepEqual(g.command(7, undefined, "Network.disable", {}), pass("Network.disable", {}), "the bypass is off: as before");
+  sent.length = 0;
+  await g.beforeNavigate(7, "https://github.com/o/r/pull/2");
+  assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Network.enable", GUARD_NETWORK], ["Network.setBypassServiceWorker", { bypass: true }]], "a client's Page.navigate to GitHub: the bypass first (the client's Network is off now)");
+  sent.length = 0;
+  await g.beforeNavigate(7, "https://a.example/x");
+  assert.deepEqual(sent, [], "a navigation to another address changes nothing before its commit");
+  g.committed(7, GH);
+  await tick();
+  assert.deepEqual(sent, [], "on already");
+  g.committed(9, GH);
+  await tick();
+  assert.deepEqual(sent, [], "a tab that the guard did not arm");
+  assert.equal(g.isBypassed(9), false);
+  // A turn off while the client has Network on keeps it on.
+  g.command(7, undefined, "Network.enable", {});
+  sent.length = 0;
+  g.committed(7, "https://a.example/");
+  await tick();
+  assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Network.setBypassServiceWorker", { bypass: true }]], "no Network.disable: the client has Network on");
+});
+
+test("the arm's limit (review-125b F1): in a tab on a guarded host, a Network call that a page's dialog holds ends the wait at the limit; the floor names the tab at its Fetch, the rules of the bypass hold, and the bypass follows a late answer; a tab of another site makes no Network call at the arm", async () => {
   assert.equal(ARM_LIMIT_MS, 3000);
   let release!: () => void;
   const held = new Promise((r) => { release = () => r({}); });
   const { g, sent, ops, logs } = guard({ armLimitMs: 50, send: (s) => (s.method === "Network.enable" && s.target.tabId === 7 ? held : {}) });
+  g.url(7, GH);
   const t0 = Date.now();
-  assert.equal(await g.arm(7), false);
+  assert.equal(await g.arm(7), true);
   assert.ok(Date.now() - t0 < 1000, "the arm ends at its limit");
-  assert.equal(g.isArmed(7), true, "the guard's Fetch stays on");
-  assert.equal(g.isBypassed(7), false);
-  assert.deepEqual(ops, [], "the floor keeps the tab");
+  assert.equal(g.isArmed(7), true);
+  assert.deepEqual(ops.at(-1), [{ hosts: ["github.com"], tabs: [7] }], "the floor names the tab at its Fetch");
   assert.equal(g.hidesNetwork(7, undefined), true);
-  assert.ok(logs.some((l) => l === "merge guard: the service worker's bypass did not start in tab 7 (no answer in 50 ms); the guard's Fetch stays on, and the receiver's floor keeps blocking its writes to GitHub until the bypass answers"), logs.join("\n"));
+  assert.ok(logs.some((l) => l === "merge guard: the service worker's bypass did not start in tab 7 (no answer in 50 ms); the receiver's floor keeps blocking the writes of a request with no tab"), logs.join("\n"));
   assert.ok(!sent.some((s) => s.method === "Network.setBypassServiceWorker"), "no bypass before Network.enable answers");
-  assert.equal(await g.arm(8), true, "another tab");
-  assert.deepEqual(ops.at(-1), [{ hosts: ["github.com"], tabs: [8] }], "the floor op names only the tabs whose bypass is on");
   release();
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(sent.filter((s) => s.target.tabId === 7).at(-1)!.method, "Network.setBypassServiceWorker", "the late answer: the bypass");
-  assert.equal(g.isBypassed(7), true);
-  assert.deepEqual(ops.at(-1), [{ hosts: ["github.com"], tabs: [7, 8] }], "then the floor leaves the tab to layer 1");
-  g.disarm(7);
-  assert.equal(g.isBypassed(7), false, "a detach ends it");
-  g.reset();
-  assert.equal(g.isBypassed(8), false, "a link change ends it");
-  // A late answer of an arm that a detach ended changes nothing.
-  let release2!: () => void;
-  const held2 = new Promise((r) => { release2 = () => r({}); });
-  const late = guard({ armLimitMs: 50, send: (s) => (s.method === "Network.enable" ? held2 : {}) });
-  assert.equal(await late.g.arm(8), false);
-  late.g.disarm(8);
-  release2();
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(late.g.isBypassed(8), false);
-  assert.deepEqual(late.ops, []);
-  // And one that a link change ended.
-  let release3!: () => void;
-  const held3 = new Promise((r) => { release3 = () => r({}); });
-  const reset = guard({ armLimitMs: 50, send: (s) => (s.method === "Network.enable" ? held3 : {}) });
-  assert.equal(await reset.g.arm(4), false);
-  reset.g.reset();
-  release3();
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(reset.g.isBypassed(4), false);
-  assert.deepEqual(reset.ops, []);
+  // A client's Page.navigate to GitHub waits at most the limit too.
+  const slow = guard({ armLimitMs: 50, send: (s) => (s.method === "Network.enable" ? new Promise(() => {}) : {}) });
+  await slow.g.arm(3);
+  const t1 = Date.now();
+  await slow.g.beforeNavigate(3, GH);
+  assert.ok(Date.now() - t1 < 1000, "the navigation goes at the limit");
   // The guard's own Fetch.enable has the same limit: with no answer, the tab is off.
   const noFetch = guard({ armLimitMs: 50, send: (s) => (s.method === "Fetch.enable" ? new Promise(() => {}) : {}) });
   assert.equal(await noFetch.g.arm(9), false);
@@ -498,31 +531,42 @@ test("the arm's limit (review-125b F1): a Network call that a page's dialog hold
   assert.ok(noFetch.logs.some((l) => l === "merge guard: the guard's Fetch did not start in tab 9 (no answer in 50 ms); the receiver's floor keeps blocking its writes to GitHub"), noFetch.logs.join("\n"));
 });
 
-test("a dedicated worker's session (review-125b check 3): the guard's Fetch and the service worker's bypass before the client lets it run; there the client's bypass false is refused, its Network.disable answered, its Network events hidden until it turns Network on; a frame's session as before", async () => {
+test("a dedicated worker's session (review-125b check 3; ab-u92): the bypass follows its tab's: on in a worker of a tab on GitHub before the client lets it run, off with the tab's; there the client's bypass false is refused, its Network.disable answered, its Network events hidden until it turns Network on; a frame's session as before", async () => {
   const { g, sent } = guard();
   await g.arm(7);
   sent.length = 0;
   g.armChild(7, "W1", "worker");
   g.armChild(7, "F1", "iframe");
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(sent.map((s) => [s.target.sessionId, s.method, s.params]), [
-    ["W1", "Fetch.enable", { patterns: [...g.patterns] }], ["W1", "Network.enable", GUARD_NETWORK], ["W1", "Network.setBypassServiceWorker", { bypass: true }],
-    ["F1", "Fetch.enable", { patterns: [...g.patterns] }]]);
+  await tick();
+  assert.deepEqual(sent.map((s) => [s.target.sessionId, s.method]), [["W1", "Fetch.enable"], ["F1", "Fetch.enable"]], "the tab's bypass is off: the guard's Fetch only");
+  sent.length = 0;
+  g.committed(7, GH);
+  await tick(); await tick();
+  assert.deepEqual(sent.map((s) => [s.target.sessionId, s.method, s.params]), [[undefined, "Network.enable", GUARD_NETWORK], ["W1", "Network.enable", GUARD_NETWORK], [undefined, "Network.setBypassServiceWorker", { bypass: true }], ["W1", "Network.setBypassServiceWorker", { bypass: true }]]);
   assert.deepEqual(g.command(7, "W1", "Network.setBypassServiceWorker", { bypass: false }), { refuse: GUARD_TEXT.serviceWorker });
-  assert.deepEqual(g.command(7, "W1", "Network.setBypassServiceWorker", {}), { refuse: GUARD_TEXT.serviceWorker }, "a bypass that is not true");
   assert.deepEqual(g.command(7, "W1", "Network.disable", {}), { answer: {} });
   assert.equal(g.hidesNetwork(7, "W1"), true);
   g.command(7, "W1", "Network.enable", {});
   assert.equal(g.hidesNetwork(7, "W1"), false);
-  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), { method: "Network.disable", params: {} }, "a frame: as before");
+  sent.length = 0;
+  g.armChild(7, "W2", "worker");
+  await tick(); await tick();
+  assert.deepEqual(sent.map((s) => [s.target.sessionId, s.method]), [["W2", "Fetch.enable"], ["W2", "Network.enable"], ["W2", "Network.setBypassServiceWorker"]], "a worker of a tab whose bypass is on: the bypass before it runs");
+  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), pass("Network.disable", {}), "a frame: as before");
   assert.equal(g.hidesNetwork(7, "F1"), false);
+  sent.length = 0;
+  g.committed(7, "https://a.example/");
+  await tick(); await tick();
+  assert.deepEqual(sent.filter((s) => s.target.sessionId === "W1").map((s) => [s.method, s.params]), [["Network.setBypassServiceWorker", { bypass: false }]], "W1's client has Network on");
+  assert.deepEqual(sent.filter((s) => s.target.sessionId === "W2").map((s) => [s.method, s.params]), [["Network.setBypassServiceWorker", { bypass: false }], ["Network.disable", {}]]);
   g.childGone(7, "W1");
   assert.equal(g.hidesNetwork(7, "W1"), false, "the worker's end: its state goes");
-  assert.deepEqual(g.command(7, "W1", "Network.disable", {}), { method: "Network.disable", params: {} });
+  assert.deepEqual(g.command(7, "W1", "Network.disable", {}), pass("Network.disable", {}));
 });
 
-test("Network on an armed tab (the lead's focused change): a client's Network.disable is answered and keeps Network on; its Network.enable goes to Chrome and the bypass follows; the tab's Network events go to the client only while it turned Network on", async () => {
+test("Network on a tab on GitHub (the lead's focused change; ab-u92): a client's Network.disable is answered and keeps Network on; its Network.enable goes to Chrome and the bypass follows; the tab's Network events go to the client only while it turned Network on; a detach and a link change end the client's state", async () => {
   const { g, sent } = guard();
+  g.url(7, GH);
   await g.arm(7);
   assert.equal(g.hidesNetwork(7, undefined), true, "no client asked for Network");
   assert.equal(g.hidesNetwork(7, "F1"), false, "a child session: as before");
@@ -536,15 +580,31 @@ test("Network on an armed tab (the lead's focused change): a client's Network.di
   assert.deepEqual(sent.map((s) => [s.target, s.method, s.params]), [[{ tabId: 7 }, "Network.setBypassServiceWorker", { bypass: true }]], "the bypass again after the client's Network.enable");
   assert.deepEqual(g.command(7, undefined, "Network.disable", {}), { answer: {} });
   assert.equal(g.hidesNetwork(7, undefined), true);
-  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), { method: "Network.disable", params: {} }, "a child session: as before");
-  assert.deepEqual(g.command(9, undefined, "Network.disable", {}), { method: "Network.disable", params: {} }, "a tab that the guard did not arm: as before");
-  assert.deepEqual(g.command(7, undefined, "Network.setCacheDisabled", { cacheDisabled: true }), { method: "Network.setCacheDisabled", params: { cacheDisabled: true } }, "another Network call: as before");
+  assert.deepEqual(g.command(7, undefined, "Network.setCacheDisabled", { cacheDisabled: true }), pass("Network.setCacheDisabled", { cacheDisabled: true }), "another Network call: as before");
   g.command(7, undefined, "Network.enable", {});
   g.disarm(7);
+  assert.equal(g.isBypassed(7), false, "a detach ends it");
   await g.arm(7);
   assert.equal(g.hidesNetwork(7, undefined), true, "a new arm after a detach: the next client starts with no Network");
   g.command(7, undefined, "Network.enable", {});
   g.reset();
+  assert.equal(g.isBypassed(7), false, "a link change ends it");
+  g.url(7, GH);
   await g.arm(7);
   assert.equal(g.hidesNetwork(7, undefined), true, "a new arm after a link change: the next client starts with no Network");
+});
+
+test("a turn off of the bypass (ab-u92) keeps the session's Network events hidden from a client with Network off until Chrome answers the guard's Network.disable", async () => {
+  let answer!: () => void;
+  const disabled = new Promise((r) => { answer = () => r({}); });
+  const { g } = guard({ send: (s) => (s.method === "Network.disable" ? disabled : {}) });
+  g.url(7, GH);
+  await g.arm(7);
+  g.committed(7, "https://a.example/");
+  await tick(); await tick();
+  assert.equal(g.isBypassed(7), false);
+  assert.equal(g.hidesNetwork(7, undefined), true, "Network is still on in Chrome");
+  answer();
+  await tick(); await tick();
+  assert.equal(g.hidesNetwork(7, undefined), false);
 });
