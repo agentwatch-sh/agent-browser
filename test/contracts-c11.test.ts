@@ -2725,6 +2725,8 @@ const SIGN_IN_CHANGED: Record<string, string[]> = {
     "There is one browser context. Every target has `\"browserContextId\":\"agentwatch-default\"`, also in the answers and events from Chrome that the model passes on. The sign-in act's window is in an incognito context of its own; no answer and no event of any client holds it or its tab.",
   ],
   "Permissions and content settings.": [
+    // Board ab-t30.19: a sentence with no text before (the paste rule 3).
+    "With the stage on, while a connection holds a grant of `clipboard`, the input stage pastes nothing (the input stage, the paste).",
     "What one profile shares between scopes, stated plainly: a content setting is per origin pattern and acts on the whole profile, so a grant of one scope applies to another scope's tab on the same host; the sent sign-ins (cookies, storage, workers) and the sessions that the sign-in act moves into it are in the profile for every scope; only navigation is guarded per scope.",
   ],
   "Refusals.": [
