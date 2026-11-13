@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { checkCrx, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, pinnedLastFile, prepareAgentPackage, stageCrx, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, OPERATOR_BLOBS, OPERATOR_DIR, RECEIVER_ID, SENDER_ID } from "../src/service/package/pins.ts";
 import { filesOf, senderData, storedZip } from "../src/service/package/sender.ts";
+import { FAKE_STATE } from "../src/service/fake.ts";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const tmp = (t: { after: (f: () => void) => void }) => { const d = mkdtempSync(join(tmpdir(), "ab-pkg-")); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
@@ -57,6 +58,19 @@ test("the pins name the CRX of the pinned commit: its SHA-256, its header ID and
   assert.equal(extensionId(RECEIVER_KEY), RECEIVER_ID);
   const info = checkCrx();
   assert.deepEqual({ id: info.extensionId, version: info.version, sha256: info.sha256 }, { id: RECEIVER_ID, version: AGENT_VERSION, sha256: AGENT_CRX_SHA256 });
+});
+
+test("the fake's extension_version and each extension_version of the vectors are the pinned receiver's version (review-127 N1)", () => {
+  const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
+  assert.equal(FAKE_STATE.extension_version, AGENT_VERSION);
+  const found: unknown[] = [];
+  const walk = (x: unknown): void => {
+    if (Array.isArray(x)) x.forEach(walk);
+    else if (x && typeof x === "object") for (const [k, v] of Object.entries(x)) { if (k === "extension_version") found.push(v); else walk(v); }
+  };
+  walk(control);
+  // The state, the status answer and the two ready events.
+  assert.deepEqual(found, [AGENT_VERSION, AGENT_VERSION, AGENT_VERSION, AGENT_VERSION]);
 });
 
 test("each file of the shipped operator/ folder is the pinned commit's file (its git blob id), and no other file is there", () => {

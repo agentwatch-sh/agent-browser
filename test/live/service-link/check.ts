@@ -25,7 +25,7 @@
 //
 // It never touches another Chrome, Xvfb, profile or folder: it signals only the pids that its run started, and its own
 // code removes its temp folders at its end. Run it under the box's heavy lock:
-//   flock <heavy.lock> timeout 1500 node test/live/service-link/check.ts --display 174
+//   flock <heavy.lock> timeout 1500 node test/live/service-link/check.ts --display 172
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -44,8 +44,9 @@ import { harnessGuard, reservedDisplay } from "../guard.ts";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
-const display = Number(arg("--display") ?? "174");
-const refused = reservedDisplay(display, "--display") ?? ([169, 173].includes(display) ? `--display names :${display}, another harness's display` : null);
+// :172 by default; :169 and :173 to :175 are other harnesses' displays on taylor (review-127 N2), as in service-use/check.ts.
+const display = Number(arg("--display") ?? "172");
+const refused = reservedDisplay(display, "--display") ?? ([169, 173, 174, 175].includes(display) ? `--display names :${display}, another harness's display` : null);
 if (!Number.isSafeInteger(display) || refused) { process.stderr.write(`service-link: ${refused ?? "--display must be a number"}\n`); process.exit(2); }
 if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`)) { process.stderr.write(`service-link: :${display} is in use; this check runs on a free display only\n`); process.exit(2); }
 const CHROMIUM_TREE = "/usr/lib/chromium";
