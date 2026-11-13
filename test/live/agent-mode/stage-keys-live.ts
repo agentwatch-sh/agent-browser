@@ -11,9 +11,14 @@
 //   Playwright's default timeout through the stage, and the page's state is the same as with Playwright's own input on a
 //   second Chromium with no stage (launched by the same Playwright from this run's profile folder, never a downloaded
 //   browser).
-// - The design's open points 1 and 2 (section 16): a date picker and a combobox that open at a click (does the next
-//   action pass after the stage's focus click?), and a tag input and an input mask (how does the value differ: the named
-//   exception). These rows are measures: they report, and they pass when the facts are read.
+// - The design's open points 1 and 2 (section 16), with the operator's answer on board item ab-pf8 (board ab-t30.18): a
+//   field whose click opens a panel (a date picker and a combobox with a click listener on the field, an ARIA combobox and
+//   a field with aria-haspopup whose page listens on the document) gets no focus click, so the next click passes, with
+//   the same page state as Playwright's own input and the trace line of its sign. A widget with no sign (the page listens
+//   on the document, no ARIA) is a measure: the rule misses it, the next click times out, and the stage's count of new
+//   covering elements sees it. The tag input keeps a person's keys (the person's result: chips), and the input mask gives
+//   Playwright's value. The long pressSequentially's bound is a measure too: 2,500 characters with Playwright's default
+//   timeout (how many characters go in 30 s).
 // - The harness rows R3, R4 and K1 to K4 (board ab-t30.2's harness): the input research's recorder page through the
 //   stage with Playwright 1.65.0, scored as the harness scores, against STAGE_REFERENCE (the keys' reference is the
 //   literature's until part B's parameters, board ab-t30.13), and against STAGE_PERSON when it names a reference of the
@@ -38,7 +43,7 @@ const RECORDER = join(HERE, "../../../docs/research/2026-11-09-click-box-input-s
 function keysPage(port: number): string {
   return `<!doctype html><html><head><meta charset=utf-8><title>stage keys</title><style>
 body{margin:0;font:16px sans-serif;height:1200px;position:relative}
-input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monospace;box-sizing:border-box}
+input,textarea,button,#ce,#chips,#dpop,#cblist,#acblist,#hpop,#plpop,#tapop{position:absolute;font:16px monospace;box-sizing:border-box}
 #t{left:100px;top:60px;width:300px;height:30px}#num{left:440px;top:60px;width:120px;height:30px}#em{left:600px;top:60px;width:260px;height:30px}
 #ta{left:100px;top:110px;width:400px;height:90px}#ta2{left:540px;top:110px;width:400px;height:90px}
 #ce{left:100px;top:220px;width:300px;height:40px;border:1px solid #888}
@@ -48,6 +53,13 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 #after{left:150px;top:520px;width:140px;height:40px}
 #cb{left:420px;top:420px;width:200px;height:30px}#cblist{display:none;left:420px;top:452px;width:220px;height:160px;background:#fdd;z-index:10}
 #after2{left:450px;top:520px;width:140px;height:40px}
+#acb{left:670px;top:420px;width:200px;height:30px}#acblist{display:none;left:670px;top:452px;width:220px;height:160px;background:#dfd;z-index:10}
+#after3{left:700px;top:520px;width:140px;height:40px}
+#hp{left:980px;top:340px;width:200px;height:30px}#hpop{display:none;left:980px;top:372px;width:280px;height:180px;background:#ffd;z-index:10}
+#after4{left:1010px;top:460px;width:140px;height:40px}
+#pl{left:670px;top:640px;width:200px;height:30px}#plpop{display:none;left:670px;top:420px;width:220px;height:218px;background:#fdf;z-index:10}
+#cc{left:980px;top:562px;width:200px;height:30px}#en{left:100px;top:662px;width:200px;height:30px}
+#tap{left:480px;top:600px;width:170px;height:60px}#tapop{display:none;left:480px;top:520px;width:170px;height:78px;background:#dff;z-index:10}
 #xf{position:absolute;left:100px;top:700px;width:360px;height:120px;border:3px solid #000;padding:4px}
 #sf{position:absolute;left:960px;top:220px;width:300px;height:100px;border:2px solid #000}
 #xf2{position:absolute;left:520px;top:700px;width:360px;height:120px;border:3px solid #000;padding:4px}
@@ -62,10 +74,14 @@ input,textarea,button,#ce,#chips,#dpop,#cblist{position:absolute;font:16px monos
 <input id=mask placeholder="(555) 123-4567"><input id=tags placeholder="tags"><div id=chips></div>
 <input id=dp placeholder="date"><div id=dpop>calendar</div><button id=after>After</button>
 <input id=cb placeholder="color"><div id=cblist>red blue green</div><button id=after2>After 2</button>
+<input id=acb role=combobox aria-expanded=false aria-autocomplete=list aria-controls=acblist placeholder="fruit"><div id=acblist role=listbox>apple pear plum</div><button id=after3>After 3</button>
+<input id=hp aria-haspopup=dialog placeholder="when"><div id=hpop role=dialog>calendar</div><button id=after4>After 4</button>
+<input id=pl placeholder="no sign"><div id=plpop>suggestions</div>
+<input id=cc placeholder="counted"><input id=en placeholder="empty handler"><textarea id=tap></textarea><div id=tapop>panel</div>
 <iframe id=xf src="http://b.localhost:${port}/kframe?o=cross"></iframe><iframe id=sf src="/kframe?o=same"></iframe><iframe id=xf2 src="http://b.localhost:${port}/kframe?o=cross2"></iframe><iframe id=xs src="http://b.localhost:${port}/kframe?o=cross3"></iframe>
 <div id=banner>We use cookies. <a href="#ok" id=bannerok>OK</a></div><div id=banner2>Sign up for news.</div>
 <script>
-window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, shiftDowns: 0, keydowns: 0, banner: 0, banner2: 0 };
+window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, after3: 0, after4: 0, cc: 0, shiftDowns: 0, keydowns: 0, banner: 0, banner2: 0 };
 document.getElementById('banner').addEventListener('mousedown', () => __k.banner++);
 document.getElementById('banner2').addEventListener('mousedown', () => __k.banner2++);
 document.getElementById('ta2').value = 'set by a script';
@@ -78,9 +94,22 @@ const tags = document.getElementById('tags');
 tags.addEventListener('keydown', (e) => { if (e.key === ',' || e.key === 'Enter') { e.preventDefault(); if (tags.value) { __k.chips.push(tags.value); tags.value = ''; document.getElementById('chips').textContent = __k.chips.join(' | '); } } });
 document.getElementById('dp').addEventListener('click', () => { document.getElementById('dpop').style.display = 'block'; });
 document.getElementById('cb').addEventListener('click', () => { document.getElementById('cblist').style.display = 'block'; });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { document.getElementById('dpop').style.display = 'none'; document.getElementById('cblist').style.display = 'none'; } });
+// Board ab-t30.18: an ARIA combobox, a field with aria-haspopup and a field with no sign, each opened by a listener of the
+// document (a page framework's delegation: no listener on the field itself).
+document.addEventListener('click', (e) => { const id = e.target && e.target.id; if (id === 'acb') { document.getElementById('acblist').style.display = 'block'; e.target.setAttribute('aria-expanded', 'true'); } if (id === 'hp') document.getElementById('hpop').style.display = 'block'; if (id === 'pl') document.getElementById('plpop').style.display = 'block'; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') for (const id of ['dpop', 'cblist', 'acblist', 'hpop', 'plpop']) document.getElementById(id).style.display = 'none'; });
 document.getElementById('after').addEventListener('click', () => __k.after++);
 document.getElementById('after2').addEventListener('click', () => __k.after2++);
+document.getElementById('after3').addEventListener('click', () => __k.after3++);
+document.getElementById('after4').addEventListener('click', () => __k.after4++);
+// review-123 B1: an input whose page counts its clicks (a click listener that opens nothing: the sign's cost), an input with
+// an empty click handler (a framework's no-op: no sign), and a textarea whose click opens a panel (no listener sign: the
+// cover count sees it).
+document.getElementById('cc').addEventListener('click', () => __k.cc++);
+document.getElementById('en').onclick = function noop() {};
+document.getElementById('tap').addEventListener('click', () => { document.getElementById('tapop').style.display = 'block'; });
+// The bound row (board ab-t30.18): the time of each keydown in the text area, for the time of a character after STAGE_ACTION_MAX_MS.
+window.__kt = []; document.getElementById('ta').addEventListener('keydown', () => __kt.push(performance.now()));
 </script></body></html>`;
 }
 const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margin:0}input{position:absolute;left:20px;top:30px;width:200px;height:30px;font:16px monospace}</style></head><body><input id=fi>`
@@ -114,7 +143,9 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
 }
 
 /** A row: its action (with `before` steps), the fields that it decides, and `measure` for the open points' widgets (a report). */
-type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2; frame?: boolean; frames?: string[]; extra?: string[]; trace?: RegExp; fieldDown?: string };
+type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2 | "bound"; frame?: boolean; frames?: string[]; extra?: string[]; trace?: RegExp; fieldDown?: string;
+  /** In place of the same state: the stage's state and Playwright's own (board ab-t30.18: the tag input's chips, the person's result). */
+  check?: (stage: any, own: any) => boolean };
 const T40 = "The quick brown fox jumps over the dogs.", T140 = "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text in one step, as a paste.";
 const click = (p: any, sel: string) => p.locator(sel).click();
 const ROWS: Row[] = [
@@ -154,10 +185,29 @@ const ROWS: Row[] = [
   { name: "a field in a cross-origin frame of a page scrolled 300 px: fill()", before: (p) => p.evaluate(() => scrollTo(0, 300)), act: (p) => p.frameLocator("#xs").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross3"], extra: ["banner2"], trace: /^a focus click/, fieldDown: "cross3" },
   { name: "a field in a cross-origin frame of a page scrolled 30 px, under a fixed banner over the frame's lower part: fill()", before: (p) => p.evaluate(() => scrollTo(0, 30)), act: (p) => p.frameLocator("#xs").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross3"], extra: ["banner2"], trace: /^no focus click \(focusCovered\)/ },
   { name: "a long pressSequentially() (600 characters) with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(14).slice(0, 600)), fields: ["ta"] },
-  { name: "open point 1: a date picker that opens at a click; then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], measure: 1 },
-  { name: "open point 1: a combobox that opens at a click; then a click on the button under it", act: async (p) => { await p.locator("#cb").fill("blue"); await p.locator("#after2").click({ timeout: 10_000 }); }, fields: ["cb"], extra: ["after2", "cblist"], measure: 1 },
-  { name: "open point 2: a tag input (a comma makes a chip)", act: (p) => p.locator("#tags").fill("red,green,blue"), fields: ["tags"], extra: ["chips"], measure: 2 },
-  { name: "open point 2: an input mask (a phone number)", act: (p) => p.locator("#mask").fill("5551234567"), fields: ["mask"], measure: 2 },
+  // Open point 1 with the operator's answer on ab-pf8 (board ab-t30.18): a field with a widget sign gets no focus click, so
+  // its panel never opens, and the next click passes, as with Playwright's own input; the trace names the sign.
+  { name: "open point 1: a date picker that opens at a click (a click listener on the field): fill(); then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], trace: /^no focus click \(focusWidget: listener\)$/ },
+  { name: "open point 1: a combobox that opens at a click (a click listener on the field): fill(); then a click on the button under it", act: async (p) => { await p.locator("#cb").fill("blue"); await p.locator("#after2").click({ timeout: 10_000 }); }, fields: ["cb"], extra: ["after2", "cblist"], trace: /^no focus click \(focusWidget: listener\)$/ },
+  { name: "open point 1: the date picker: pressSequentially(); then a click on the button under it", act: async (p) => { await p.locator("#dp").pressSequentially("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], trace: /^no focus click \(focusWidget: listener\)$/ },
+  { name: "open point 1: an ARIA combobox (role combobox; the page listens on the document): fill(); then a click on the button under its list", act: async (p) => { await p.locator("#acb").fill("plum"); await p.locator("#after3").click({ timeout: 10_000 }); }, fields: ["acb"], extra: ["after3", "acblist"], trace: /^no focus click \(focusWidget: combobox\)$/ },
+  { name: "open point 1: a field with aria-haspopup=dialog (the page listens on the document): fill(); then a click on the button under its dialog", act: async (p) => { await p.locator("#hp").fill("2026-11-12"); await p.locator("#after4").click({ timeout: 10_000 }); }, fields: ["hp"], extra: ["after4", "hpop"], trace: /^no focus click \(focusWidget: haspopup\)$/ },
+  // A measure: a widget with no sign (the page listens on the document, no ARIA). The rule misses it: the focus click opens
+  // its panel over the button, and the next click times out; the stage's count of new covering elements sees it.
+  { name: "open point 1, a measure: a widget with no sign (the page listens on the document, no ARIA): fill(); then a click on the button under its panel", act: async (p) => { await p.locator("#pl").fill("x"); await p.locator("#after3").click({ timeout: 10_000 }); }, fields: ["pl"], extra: ["after3", "plpop"], measure: 1, trace: /^a focus click: 1 new covering element$/ },
+  // Open point 2 with the operator's answer (keep typing): the tag input gets a person's keys and makes chips (the person's
+  // result, which differs from Playwright's fill); the input mask gives the same value as Playwright's.
+  { name: "open point 2: a tag input (a comma makes a chip): the person's chips", act: (p) => p.locator("#tags").fill("red,green,blue"), fields: ["tags"], extra: ["chips"],
+    check: (s, q) => JSON.stringify([s.chips, s.values.tags, q.chips, q.values.tags]) === JSON.stringify([["red", "green"], "blue", [], "red,green,blue"]) },
+  { name: "open point 2: an input mask (a phone number)", act: (p) => p.locator("#mask").fill("5551234567"), fields: ["mask"] },
+  // review-123 B1: the listener sign's cost (an input whose page counts its clicks: the page sees no click through the stage,
+  // as with Playwright's own input), an empty handler (no sign: the click goes), and a textarea whose click opens a panel (a
+  // measure: no listener sign on a textarea, so its click opens the panel, and the cover count sees it).
+  { name: "review-123: an input whose page counts its clicks (a click listener that opens nothing): fill(): no click, as with Playwright's own input", act: (p) => p.locator("#cc").fill("counted"), fields: ["cc"], extra: ["ccClicks"], trace: /^no focus click \(focusWidget: listener\)$/ },
+  { name: "review-123: an input with an empty click handler (a framework's no-op): fill(): the focus click", act: (p) => p.locator("#en").fill("empty"), fields: ["en"], trace: /^a focus click \(input\)$/ },
+  { name: "review-123, a measure: a textarea whose click opens a panel: fill(): the focus click, and the cover count sees the panel", act: (p) => p.locator("#tap").fill("tap"), fields: ["tap"], extra: ["tapop"], measure: 1, trace: /^a focus click: 1 new covering element$/ },
+  // A measure (board ab-t30.18): the long pressSequentially's bound: how many characters go within Playwright's 30 s.
+  { name: "the long pressSequentially bound, a measure: 2,500 characters with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(57).slice(0, 2500)), fields: ["ta"], measure: "bound" },
 ];
 
 /** The page's state after a row: the fields' values, the submits, the dialogs, the chips, the clicks under the widgets, the widgets' state, the frame's field. */
@@ -165,8 +215,10 @@ async function stateOf(p: any): Promise<any> {
   const s = await p.evaluate(() => {
     const v = (id: string) => { const el = document.getElementById(id) as any; return el.isContentEditable ? el.textContent : el.value; };
     const k = (window as any).__k;
-    return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips,
-      after: k.after, after2: k.after2, dpop: getComputedStyle(document.getElementById("dpop")!).display, cblist: getComputedStyle(document.getElementById("cblist")!).display, shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner, banner2: k.banner2 };
+    const shown = (id: string) => getComputedStyle(document.getElementById(id)!).display;
+    return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb", "acb", "hp", "pl", "cc", "en", "tap"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips,
+      after: k.after, after2: k.after2, after3: k.after3, after4: k.after4, ccClicks: k.cc, dpop: shown("dpop"), cblist: shown("cblist"), acblist: shown("acblist"), hpop: shown("hpop"), plpop: shown("plpop"), tapop: shown("tapop"),
+      shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner, banner2: k.banner2 };
   });
   s.frames = {} as Record<string, unknown>;
   // The mousedowns on each frame's field (the stage's focus click; not compared: Playwright's own fill gives none).
@@ -212,7 +264,10 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
             if (row.before) await row.before(p);
             const r = await timed(() => row.act(p));
             await sleep(500);
-            return { ...r, state: await stateOf(p) };
+            // The bound row: the keys of the text area, and those that came less than 40 ms after the key before (the rest at
+            // Playwright's own speed after STAGE_ACTION_MAX_MS: the fast end is 100 to 120 ms a key), with their time.
+            const keys = row.measure === "bound" ? await p.evaluate(() => { const kt = (window as any).__kt as number[]; let n = 0, ms = 0, first = -1; for (let i = 1; i < kt.length; i++) { const g = kt[i] - kt[i - 1]; if (g < 40) { n++; ms += g; if (first < 0) first = i; } } return { keys: kt.length, plainKeys: n, plainMs: Math.round(ms), firstPlain: first, firstPlainAtMs: first > 0 ? Math.round(kt[first] - kt[0]) : null }; }) : undefined;
+            return { ...r, state: await stateOf(p), ...(keys ? { keys } : {}) };
           };
           const lines0 = stageLines().length;
           const sp = await ctx.newPage();
@@ -221,10 +276,12 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           const q = await run(pp).finally(() => pp.close().catch(() => {}));
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
           const fieldLines = trace.filter((l) => /^(a focus click|no focus click|the hit test|typed keys|a text as it is)/.test(l));
-          const same = JSON.stringify(compared(row, s.state)) === JSON.stringify(compared(row, q.state));
+          const same = row.check ? row.check(s.state, q.state) : JSON.stringify(compared(row, s.state)) === JSON.stringify(compared(row, q.state));
           const traced = (!row.trace || fieldLines.some((l) => row.trace!.test(l))) && (!row.fieldDown || s.state.frameDowns[row.fieldDown] === 1);
-          const ok = row.measure ? true : s.ok && q.ok && same && traced;
-          const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same, ...(row.trace ? { traced, frameDowns: s.state.frameDowns } : {}),
+          // A measure reports; it passes when its facts are read (with a trace, when the stage's line is there).
+          const ok = row.measure ? traced : s.ok && q.ok && same && traced;
+          const bound = row.measure === "bound" ? { typed: String(s.state.values.ta ?? "").length, of: 2500, keys: (s as any).keys, ownKeys: (q as any).keys } : {};
+          const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}), ...bound }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same, ...(row.trace ? { traced, frameDowns: s.state.frameDowns } : {}),
             shiftDowns: [s.state.shiftDowns, q.state.shiftDowns], fieldLines, ...(same ? {} : { stageState: compared(row, s.state), ownState: compared(row, q.state) }) };
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail });
           (out.rows as unknown[]).push({ version, row: row.name, measure: row.measure ?? null, stage: s, own: q, same, trace });
