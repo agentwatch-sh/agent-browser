@@ -373,3 +373,32 @@ test("--test-mcp-remote-scope takes one scope name, goes with --test and --test-
   const port = readFileSync(new URL("../src/service/mcp/port.ts", import.meta.url), "utf8");
   assert.ok(port.includes(`this.o.handler.request(req, res, conn.scope, browser, this.o.remote?.has(conn.scope) ? "remote" : conn.admission);`), "the port gives the handler the connection's admission, or remote for the stand-in's scope");
 });
+
+// ------------------------------------------------------------------ a real MCP client
+
+test("a real MCP client (the MCP SDK's Client and StreamableHTTPClientTransport of the pinned playwright-core's bundle) lists the tools and calls them over the transport: a local admission signs in, a remote one gets check 1's tool error", { timeout: 60_000 }, async () => {
+  const { createRequire } = await import("node:module");
+  const sdk = createRequire(import.meta.url)(join(new URL("../node_modules/playwright-core/lib/utilsBundle.js", import.meta.url).pathname));
+  const act = fakeAct();
+  await withAct({ act }, async ({ h, admission }) => {
+    for (const a of ["local", "remote"] as const) {
+      admission.now = a;
+      const client = new sdk.Client({ name: "test-client", version: "0" });
+      await client.connect(new sdk.StreamableHTTPClientTransport(new URL(h.url("web-1"))));
+      try {
+        const names = (await client.listTools()).tools.map((x: any) => x.name);
+        const one = await client.callTool({ name: "browser_sign_in", arguments: { name: "staging" } });
+        const list = await client.callTool({ name: "browser_sign_ins", arguments: {} });
+        if (a === "local") {
+          assert.deepEqual(names.slice(-2), ["browser_sign_in", "browser_sign_ins"]);
+          assert.deepEqual(one, { content: [{ type: "text", text: signedInText(ORIGIN) }] });
+          assert.deepEqual(JSON.parse((list as any).content[0].text), { state: "open", signIns: [{ name: "staging", origin: ORIGIN }] });
+        } else {
+          assert.ok(!names.includes("browser_sign_in") && !names.includes("browser_sign_ins"));
+          assert.deepEqual([one, list], [{ content: [{ type: "text", text: REMOTE }], isError: true }, { content: [{ type: "text", text: REMOTE }], isError: true }]);
+        }
+      } finally { await client.close(); }
+    }
+    assert.deepEqual(act.calls.map((c) => [c.method, c.admission]), [["signIn", "local"], ["signIns", "local"]], "only the local client reached the act");
+  });
+});
