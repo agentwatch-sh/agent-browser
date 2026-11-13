@@ -710,6 +710,8 @@ test("at each allowlist line: each close vector follows C11", () => {
 const SIGN_IN_METHODS = ["AgentBrowser.signIn", "AgentBrowser.signIns"];
 function route(session, method, params = {}, child = false, act = false) {
   if (session === "root") return endpoint.modelSet.includes(method) || (act && SIGN_IN_METHODS.includes(method)) ? "the model" : "refused";
+  // The client's mark of a secret (board ab-t30.22): the one AgentBrowser.* call that the model answers on a page session.
+  if (method === "AgentBrowser.setSecretInput") return "the model";
   if (/^AgentBrowser\./.test(method)) return "refused";
   if (method === "Target.setAutoAttach") return "Chrome";
   if (method === "Target.getTargetInfo") return params.targetId === undefined ? "Chrome" : "the model";
@@ -1500,12 +1502,14 @@ const STAGE_ITEMS: string[] = [
   "`test/vectors/stage.json`.",
   "The build switch.",
   // board ab-t30.19 (before: Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch. The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
-  "Board tasks ab-t30.9 to ab-t30.12 and ab-t30.19 build the stage behind a build switch.",
-  "The switch stays off until all five tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
+  // board ab-t30.22 (before: Board tasks ab-t30.9 to ab-t30.12 and ab-t30.19 build the stage behind a build switch. The switch stays off until all five tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
+  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 build the stage behind a build switch.",
+  "The switch stays off until all six tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
   "While the switch is off, the model sends each call as the rest of this file says, and no rule of this part applies.",
   "In this file, \"with the stage on\" names a rule that applies only while the switch is on.",
   // board ab-t30.19: sentences with no text before.
-  "With the switch on, the daemon's relay (`agent-browser relay`, the daemon's child) has no clipboard of its own display, so a long text never pastes there: it goes as Playwright's own input (the paste, below, rule 2).",
+  // board ab-t30.22 (before: With the switch on, the daemon's relay (`agent-browser relay`, the daemon's child) has no clipboard of its own display, so a long text never pastes there: it goes as Playwright's own input (the paste, below, rule 2).)
+  "With the switch on, the daemon's relay (`agent-browser relay`, the daemon's child) has no display at all, so a long text never pastes there: it goes as Playwright's own input (the paste, below, rule 2).",
   "Every client.",
   "With the stage on, the stage shapes the input of every client of agent mode on every site, on Linux and on the Mac:",
   "Playwright, the Playwright MCP inside the service, and agent-browser's own commands over the endpoint (the answer Q1 a).",
@@ -1522,7 +1526,9 @@ const STAGE_ITEMS: string[] = [
   "`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.insertText`, of every `type`;",
   "`Input.dispatchDragEvent` while a drag of the stage runs (the drag, below);",
   "`DOM.scrollIntoViewIfNeeded` and `DOM.setFileInputFiles`;",
-  "each utility call that a recognizer matches (the recognizers, below).",
+  // board ab-t30.22 (before: each utility call that a recognizer matches (the recognizers, below).)
+  "each utility call that a recognizer matches (the recognizers, below);",
+  "`AgentBrowser.setSecretInput`, the client's mark of a secret, which the model answers (the paste, below).",
   "It passes every other call as the rest of this file says.",
   // board ab-t30.19 (before: On a child session of a cross-origin frame, the stage takes only `DOM.scrollIntoViewIfNeeded` and the utility calls of the hit-target, focus and fill recognizers.)
   "On a child session of a cross-origin frame, the stage takes only `DOM.scrollIntoViewIfNeeded`, the utility calls of the hit-target, focus and fill recognizers, and each `Input.*` call (review-126 note 3).",
@@ -1885,7 +1891,12 @@ const STAGE_ITEMS: string[] = [
   "Linux.",
   "On the Mac, Chrome shares the operator's own clipboard, so the stage never pastes there (an open point of the input design's stage 4).",
   "The stage has the clipboard of the service's own display: the X selection owner of the unit's own Xvfb (`src/service/unit/clipboard.ts`).",
-  "The daemon's relay (`agent-browser relay`) has none, because its display is the daemon's: there a long text never pastes, and it goes as Playwright's own input.",
+  // board ab-t30.22 (before: The daemon's relay (`agent-browser relay`) has none, because its display is the daemon's: there a long text never pastes, and it goes as Playwright's own input.)
+  "The daemon's relay (`agent-browser relay`) has none, because it has no display at all: agentwatch starts it with only `PATH`, `HOME`, `LANG` and `XDG_RUNTIME_DIR` in its environment, so no `DISPLAY`, no `XAUTHORITY` and no variable of the stage's tests reaches it.",
+  "There a long text never pastes, and it goes as Playwright's own input.",
+  "The live rows' door (`relayTestClipboard`, `src/service/unit/clipboard.ts`) gives the relay a clipboard only when both test variables are set: `AGENT_BROWSER_INPUT_STAGE=test`, and `AGENT_BROWSER_STAGE_CLIPBOARD` with a display and the X authority file of that display.",
+  "The door refuses only the displays `:0` (a desktop) and `:90` (the operator's agent browser on taylor), and agentwatch's private Chrome display can be any of `:90` to `:189`.",
+  "This is safe, because agentwatch never passes the test variables to the relay: the door stays shut there, and only a live row of a test opens it, on the run's own Xvfb.",
   "No connection holds a grant of the clipboard (`clipboardReadWrite` or `clipboardSanitizedWrite`: permissions and content settings, below), and no change of its setting is under way: a grant counts from the client's `Browser.grantPermissions` until a `Browser.resetPermissions` or the close of its connection has cleared the setting (review-126 note 2).",
   "Its content setting acts on the whole profile, and a page with it can read the clipboard.",
   "The client holds no key.",
@@ -1899,6 +1910,12 @@ const STAGE_ITEMS: string[] = [
   "The measure (board ab-t30.19 on Chromium 156, a `keydown` handler of 3 s): a CDP session that detached 500 ms after the send of `V` got no error, and `V`'s answer came 3,017 to 3,021 ms after its send, after the page read the selection (3,008 to 3,010 ms); at a navigation of the main frame that started 500 ms after the send of `V`, Chrome answered `V` at once (512 and 515 ms), a page of the same site still read the selection at 3,008 ms, 18 ms before its `Page.frameNavigated`, and a page of another site, whose `Page.frameNavigated` came at 519 ms, never read it.",
   "The detach of the agent browser's debugger at a session's end is not measured.",
   "So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection, and the path is then open while that page's handler runs (an open point).",
+  // board ab-t30.22: sentences with no text before (the field rule, the client's mark, and what the stage knows of a part's field).
+  "The field is no field of a secret (board ab-t30.22): by the typing rule's read, its type is not `password`, and its `autocomplete` attribute has none of the tokens `current-password`, `new-password` and `one-time-code`, in any case.",
+  "The client has not marked its texts on the tab as secrets (the client's mark, below).",
+  "When rule 7 or rule 8 does not hold, and the rules before it hold, the text goes as one `Input.insertText`, as a password manager's fill does: a `fill` or a `keyboard.insertText` as the client's own call, and a collected part as one `Input.insertText` of its text in place of its key events; the stage counts it.",
+  "So with the stage on, a secret never goes through the clipboard: it goes typed when its typing plan fits (the typing rule), else as one `Input.insertText` or as Playwright's own input.",
+  "The stage reads the field of a collected part at the part's end, before the part's events go: the focused element then is the field of the part's first key, because no key of the part has reached the page, and a Tab, an Enter and every other call end a part (a page script can still move the focus while a part is collected).",
   "The paste goes after one person's time from one press to the next: the stage's own `Control` (a `rawKeyDown` with `modifiers` 2), then `V` 40 to 120 ms after it (a `rawKeyDown` with `modifiers` 2 and no text, as a keyboard gives it), the release of `V` after a person's hold, and the release of `Control` 20 to 80 ms after it.",
   "The text is on the CLIPBOARD selection only from the time of `V` to the answer of its `keyDown`: Chrome reads the selection in that key's default action, and the stage then gives the selection up and clears the text at once, also at every end of the paste's plan, before the lock is free.",
   "When the owner does not hold the text within `CLIPBOARD_HOLD_MS = 500`, `V` does not go, `Control` goes up, and the text goes as Playwright's own input.",
@@ -1926,6 +1943,16 @@ const STAGE_ITEMS: string[] = [
   "A held call at the tab's end goes with no lock, as the client sent it, to a target that ended or that Chrome detached (dialogs, above).",
   "The sign-in act (below) never uses the clipboard: its own fill sends a long value as one `Input.insertText`.",
   "Its calls go to the bridge through the model's act port, which has no clipboard, and the stage never sees them (review-126 note 8).",
+  // board ab-t30.22: sentences with no text before (the client's mark of a secret).
+  "The client's mark of a secret (board ab-t30.22).",
+  "A client marks its texts on a tab as secrets with `AgentBrowser.setSecretInput` with `{\"enabled\":true}` on the tab's own page session, and it ends the mark with `{\"enabled\":false}`.",
+  "The model answers it itself with `{}`, and it never reaches Chrome.",
+  "With the stage on, the call is a step of the tab's gate (the calls that the stage takes, above): it ends the tab's key run first, so a collected part before it goes with the mark as it was, and its answer comes after the events of the tab's earlier calls.",
+  "The mark holds for every text of the tab (each `Input.insertText` and each collected part) until `{\"enabled\":false}`, or until the stage forgets the tab: at the end of the client's last session on the tab, and at the tab's end.",
+  "With the switch off, the model answers `{}` and keeps nothing, because no text pastes.",
+  "A call whose `enabled` is not `true` or `false` gets the error `enabled must be true or false`; on the root, on a browser session and on a frame's own session the call is refused, as every other `AgentBrowser.*` call is.",
+  "A client that does not send it sees no change.",
+  "agent-browser's own `type --stdin` (the way of agentwatch's skill for a secret) sends `{\"enabled\":true}` before its first input call and `{\"enabled\":false}` after its last one; it ignores an error answer (a Chrome or an endpoint that does not know the method), and its text then goes as before.",
   "The time of a key run.",
   "The key run's time with a person's timing (the time of its steps in the tab's gate: its typed keys and texts, its pastes and its other keys; the step of a collected call takes no time) is at most `STAGE_TYPE_MAX_MS`.",
   "A part or a text whose typing plan does not fit in what is left goes as a paste (above).",
@@ -2827,6 +2854,8 @@ test("C11 states the fixes of review-112: the Network domain from the navigation
   // review-112b: the routing text names the refusal of every other AgentBrowser.* call on a page session, as route() does.
   assert.ok(says(C11, "- Every other `Browser.*`, `Target.*` or `AgentBrowser.*` call on a page session is refused, as on the root."), "C11 names AgentBrowser.* on a page session");
   assert.ok(!says(C11, "- Every other `Browser.*` or `Target.*` call on a page session is refused, as on the root."), "the old routing sentence is gone");
+  // board ab-t30.22: the client's mark of a secret, the one AgentBrowser.* call that the model answers on a page session.
+  assert.ok(says(C11, "- Every other `Browser.*`, `Target.*` or `AgentBrowser.*` call on a page session is refused, as on the root. The one exception is `AgentBrowser.setSecretInput` on the tab's own page session, the client's mark of a secret, which the model answers (the input stage, the paste)."), "C11 names the mark's exception");
 });
 
 // The table of what the agent sees: the cause, the result (C12's `end` event and the log line) and the text.

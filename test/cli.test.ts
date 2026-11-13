@@ -400,6 +400,23 @@ test("type: inserted text first, key events when the field ignores it (the Sheet
   await run(["close", "editor"]);
 });
 
+test("board ab-t30.22: type --stdin marks its text as a secret for the input stage (C11, the paste: AgentBrowser.setSecretInput, enabled true before its first input call and false after its last); a Chrome that does not know the method answers an error, and the text goes as before; a type with the text in argv sends no mark", async () => {
+  const opened = await run(["open", fx.base + "/editor", "--name", "marks"]);
+  const t = opened.json.tab.targetId, page = fake.pages.get(t)!;
+  const seen = (from: number) => fake.callsFor(t).slice(from).filter((x) => x.method === "AgentBrowser.setSecretInput" || x.method.startsWith("Input.")).map((x) => x.method === "AgentBrowser.setSecretInput" ? `mark ${x.params.enabled}` : "input");
+  let from = fake.callsFor(t).length;
+  let r = await run(["type", "marks", "--stdin", "--into", "#notes"], { input: "test-secret" });
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.equal(page.select("#notes")[0].text, "test-secret");
+  const marks = seen(from);
+  assert.deepEqual([marks[0], marks[marks.length - 1], marks.filter((m) => m.startsWith("mark")).length], ["mark true", "mark false", 2], marks.join(", "));
+  from = fake.callsFor(t).length;
+  r = await run(["type", "marks", "plain", "--into", "#notes"]);
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.ok(seen(from).length > 0 && seen(from).every((m) => m === "input"), "no mark");
+  await run(["close", "marks"]);
+});
+
 test("human output without --json", async () => {
   await run(["open", fx.base + "/", "--name", "plain"]);
   const r = await cli(["tabs", ...flags(c, fake.ws)]);

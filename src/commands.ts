@@ -345,10 +345,10 @@ export const commands = {
     });
   },
 
-  async type(o: BrowserOptions | Settings, p: { tab: string; text: string; into?: string; anyScope?: boolean }): Promise<TypeResult> {
+  async type(o: BrowserOptions | Settings, p: { tab: string; text: string; into?: string; anyScope?: boolean; secret?: boolean }): Promise<TypeResult> {
     if (typeof p.text !== "string") throw new UsageError("text is required");
     return onTab(o, p, async (tab, info) => {
-      await tab.type(p.text, p.into ? idx(p.into) : undefined);
+      await tab.type(p.text, p.into ? idx(p.into) : undefined, p.secret === true);
       return { ok: true, command: "type", tab: info, into: p.into ?? null, length: p.text.length };
     });
   },

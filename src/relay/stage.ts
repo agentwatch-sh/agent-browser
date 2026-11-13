@@ -52,11 +52,11 @@ import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace,
 import { draw, uniform, type Random } from "../human/random.ts";
 import { notches, notchGapMs, Wheel, wheelPlan } from "../human/wheel.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
-import { PLAYWRIGHT_FOCUS, startsAction } from "./policy.ts";
+import { PLAYWRIGHT_FOCUS, SECRET_INPUT, startsAction } from "./policy.ts";
 
 // ------------------------------------------------------------------ the switch and the constants (C11)
 
-/** The build switch: off until board tasks ab-t30.9 to ab-t30.12 are all merged ("don't do this half baked"). */
+/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 are all merged ("don't do this half baked"). */
 export const STAGE_BUILD_ON = false;
 /** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch). */
 export const STAGE_TEST_ENV = "AGENT_BROWSER_INPUT_STAGE";
@@ -184,7 +184,7 @@ export const TWO_FRAMES = "function () { return new Promise((r) => requestAnimat
 /** The obstacle's box again (the second read): the panel has closed, so it is the trigger's box. */
 export const OBSTACLE_AGAIN = "function () { const a = this[0].getBoundingClientRect(); return { x0: a.left, y0: a.top, x1: a.right, y1: a.bottom }; }";
 /** The focused element of a document (its shadow roots and its same-origin frames followed), as the typing rule reads it: a cross-origin frame stops the read. */
-const FOCUS_BODY = (doc: string) => `const TT = ${JSON.stringify(TEXT_TYPES)}; let el = ${doc}.activeElement; for (let i = 0; el && i < 16; i++) { if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; } if (el.localName === 'iframe' || el.localName === 'frame') { let d = null; try { d = el.contentDocument; } catch (x) {} if (!d) return { frame: true }; el = d.activeElement; continue; } break; } if (!el || el.localName === 'body' || el.localName === 'html') return null; globalThis.__agentBrowserStageField = el; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined, typing = (tag === 'input' && TT.includes(type)) || tag === 'textarea'; let s = null, e = null; if (typing) { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } return { tag, type, editable: !!el.isContentEditable, typing, value: typing ? String(el.value) : null, s, e };`;
+const FOCUS_BODY = (doc: string) => `const TT = ${JSON.stringify(TEXT_TYPES)}; let el = ${doc}.activeElement; for (let i = 0; el && i < 16; i++) { if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; } if (el.localName === 'iframe' || el.localName === 'frame') { let d = null; try { d = el.contentDocument; } catch (x) {} if (!d) return { frame: true }; el = d.activeElement; continue; } break; } if (!el || el.localName === 'body' || el.localName === 'html') return null; globalThis.__agentBrowserStageField = el; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined, typing = (tag === 'input' && TT.includes(type)) || tag === 'textarea'; let s = null, e = null; if (typing) { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } return { tag, type, editable: !!el.isContentEditable, typing, ac: typing ? String(el.getAttribute('autocomplete') || '') : null, value: typing ? String(el.value) : null, s, e };`;
 /** The typing rule's read of the focused element (C11, the typing rule 1), in the stage's own isolated world on the top page; it marks that element (a global of the world, which no page script sees) for FIELD_STILL. */
 export const FOCUSED_FIELD = `() => { ${FOCUS_BODY("document")} }`;
 /** The same read in a cross-origin frame, on a node's handle of that frame (Playwright's utility world): `away` when that frame's document does not have the focus. */
@@ -411,7 +411,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup" | "field" | "scroll" | "childInput";
+type Kind = "mouse" | "key" | "text" | "setup" | "field" | "scroll" | "childInput" | "mark";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -478,6 +478,8 @@ const textOf = (items: ColItem[]) => items.map((i) => ("text" in i ? i.text : i.
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
 class TabState {
   readonly pending: Entry[] = [];
+  /** The client's mark of a secret (C11, the paste, rule 8): no text of the tab pastes while it holds. */
+  secret = false;
   /** The point of the stage's last pointer event in the page. */
   last: Pt | null = null;
   lastWasMove = false;
@@ -599,8 +601,12 @@ export function keyOf(p: any, held: number): Key {
     ...(p?.type === "keyDown" || p?.type === "rawKeyDown" ? { type: p.type } : {}),
   };
 }
-/** The typing rule's read of the focused element (FOCUSED_FIELD, FOCUSED_IN). */
-type FocusRead = { tag: string; type?: string; editable: boolean; typing: boolean; value: string | null; s: number | null; e: number | null };
+/** The typing rule's read of the focused element (FOCUSED_FIELD, FOCUSED_IN); `ac`: a text field's autocomplete attribute. */
+type FocusRead = { tag: string; type?: string; editable: boolean; typing: boolean; ac?: string | null; value: string | null; s: number | null; e: number | null };
+/** The autocomplete tokens of a secret's field (C11, the paste, rule 7; board ab-t30.22). */
+const SECRET_TOKENS = ["current-password", "new-password", "one-time-code"];
+/** The field rule: a password field, or a field whose autocomplete has a token of a secret (in any case). */
+export const secretField = (f: FocusRead): boolean => f.type === "password" || String(f.ac ?? "").toLowerCase().split(/\s+/).some((t) => SECRET_TOKENS.includes(t));
 /** Where that read ran: null for the top page (the stage's own world), else a node of a cross-origin frame's session. */
 type FocusVia = { child: string; node: string } | null;
 /** The focus click's read of a field (FIELD_STATE), with its box and offset in the top page's points; lox, loy: the same-origin sum alone. */
@@ -753,6 +759,8 @@ export class Stage {
     if (!child && method === "Input.dispatchMouseEvent") kind = "mouse";
     else if (!child && method === "Input.dispatchKeyEvent") kind = "key";
     else if (!child && method === "Input.insertText") kind = "text";
+    // The client's mark of a secret (C11, the paste; board ab-t30.22): a step of the tab's gate, which the stage answers.
+    else if (!child && method === SECRET_INPUT) kind = "mark";
     // An input call on a frame's own session (review-126 note 3): under the input lock, as the client sent it.
     else if (child && method.startsWith("Input.")) kind = "childInput";
     else if (method === "DOM.scrollIntoViewIfNeeded") kind = "scroll";
@@ -790,6 +798,8 @@ export class Stage {
         await this.endRun(page, st);
         if (st.action && !st.action.over && !st.buttons.size && !st.keys.size && !st.rest) this.close(st, page.id);
       }
+      // The client's mark of a secret: after the tab's key run ended (its part went with the mark as it was).
+      if (e.kind === "mark") { st.secret = e.params.enabled === true; e.answer({ result: {} }); return; }
       // fill's text is the next Input.insertText only when no other call comes between.
       if (e.kind !== "text" && e.kind !== "field") st.fillNext = false;
       if (e.kind === "setup") return await this.setupStep(page, st, e);
@@ -979,6 +989,8 @@ export class Stage {
   private async goneStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     if (st.gone === "session") return;
     if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
+    // The client's mark of a gone tab never reaches Chrome: no text of the tab is left to mark.
+    if (e.kind === "mark") { e.answer({ result: {} }); return; }
     // The client's own release goes: the stage's release after the last call is only for what the client did not release.
     if (e.kind === "mouse" && e.params.type === "mouseReleased") st.buttons.delete(e.params.button);
     if (e.kind === "key" && e.params.type === "keyUp") st.keys.delete(e.params.code);
@@ -2381,8 +2393,9 @@ export class Stage {
 
   /**
    * The paste rule (C11, the paste): on Linux, with the clipboard of the service's own display, while no connection
-   * holds a grant of the clipboard, while no earlier paste's V waits for its answer, while the client holds no key, into
-   * an input of a text type or a textarea (the typing rule's read of the focused element). The reason when it does not hold.
+   * holds a grant of the clipboard, while no earlier paste's V waits for its answer, while the client holds no key, while
+   * the client's mark of a secret does not hold, into an input of a text type or a textarea (the typing rule's read of
+   * the focused element) that is no field of a secret (board ab-t30.22). The reason when it does not hold.
    */
   private async pasteRule(page: StagePage, st: TabState): Promise<{ before: FocusRead; via: FocusVia } | { why: string }> {
     if (!this.linux()) return { why: "mac" };
@@ -2391,9 +2404,12 @@ export class Stage {
     // An earlier paste's V with no answer (review-126 B4), or with an error answer (review-126b note 2): its page can still read the selection.
     if (this.vPending()) return { why: "vPending" };
     if (this.clientKeysHeld(st)) return { why: "keyHeld" };
+    // A secret never goes through the clipboard (board ab-t30.22): the client's mark, and the field rule.
+    if (st.secret) return { why: "secretMark" };
     const f = await this.focused(page, st);
     if (!f) return { why: "readFails" };
     if (!f.read.typing) return { why: f.read.editable ? "contenteditable" : "notTextField" };
+    if (secretField(f.read)) return { why: "secretField" };
     return { before: f.read, via: f.via };
   }
 
@@ -2725,7 +2741,8 @@ export class Stage {
   /**
    * The collected part's text (C11, the collected keys): typed when its typing plan fits in what is left of the run's
    * STAGE_TYPE_MAX_MS (each hold at least the client's least hold: a client's delay), else a person's paste when the
-   * paste rule allows it, else the client's own keys at once (Playwright's own input). Its events go after the run's
+   * paste rule allows it, else one Input.insertText of its text for a secret (the field rule and the client's mark:
+   * board ab-t30.22), else the client's own keys at once (Playwright's own input). Its events go after the run's
    * planned events, under the lock, with the activation.
    */
   private async part(page: StagePage, st: TabState, items: ColItem[], holdMin: number): Promise<void> {
@@ -2749,6 +2766,20 @@ export class Stage {
     if (plan) return this.typeText(page, st, a, { e, text, plan, via: typedVia?.via ?? null, t0: ins.t, want: null, part: true });
     if (rule && !("why" in rule)) return this.pasteText(page, st, a, { e, text, via: rule.via, t0: ins.t, before: rule.before, want: this.wantOf(rule.before, text, false), fallback: items });
     const why = rule && "why" in rule ? rule.why : "noPlan";
+    // A secret (board ab-t30.22: the field rule, the client's mark): one Input.insertText of the part's text, as a
+    // password manager's fill does, in place of its key events.
+    if (why === "secretField" || why === "secretMark") {
+      this.count("partsAsText"); this.count(`partsAsText:${why}`);
+      await this.until(a, ins.t);
+      if (a.over) return this.partKeys(page, st, a, items, e);
+      const pr = this.sendEvent(page, st, undefined, "Input.insertText", { text });
+      s.after(this.clock.now());
+      const r = await this.settle(a, pr);
+      if ("ended" in r) { this.answerWith(page, e, pr); return; }
+      if (!r.ok) return this.fail(page, st, e, r.error);
+      e.answer({ result: r.value ?? {} });
+      return;
+    }
     this.count("partsAsKeys"); this.count(`partsAsKeys:${why}`);
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a collected part as the client's own keys (${why})`);
     await this.until(a, ins.t);

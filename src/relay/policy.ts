@@ -215,6 +215,12 @@ export type Route = "model" | "chrome" | { refused: string };
  * it for each page unless it connects with noDefaults.
  */
 export const FOCUS_EMULATION = "Emulation.setFocusEmulationEnabled";
+/**
+ * The client's mark of a secret (C11, the input stage, the paste; board ab-t30.22): `{enabled: true}` on the tab's own
+ * page session marks the tab's texts as secrets, which the stage never pastes, until `{enabled: false}` or the stage
+ * forgets the tab. The model answers it (the one AgentBrowser.* call on a page session); it never reaches Chrome.
+ */
+export const SECRET_INPUT = "AgentBrowser.setSecretInput";
 
 /**
  * Where a call goes. `child`: the call is a Target.detachFromTarget of a child session (a frame or a worker) of the
@@ -228,7 +234,7 @@ export function route(method: string, params: any, onPage: boolean, o: { child?:
   if (!onPage) return MODEL_SET.has(method) || (o.act && SIGN_IN_METHODS.has(method)) ? "model" : { refused: TEXT.generic(method) };
   if (o.windowPerPage && method === FOCUS_EMULATION) return "model";
   if (method === "Target.setAutoAttach" || (method === "Target.getTargetInfo" && !params?.targetId) || (method === "Target.detachFromTarget" && o.child)) return "chrome";
-  if (PAGE_MODEL_SET.has(method)) return "model";
+  if (PAGE_MODEL_SET.has(method) || method === SECRET_INPUT) return "model";
   // The sign-in act's domain (C11's table, from stage 1e): refused on a page session, so it never reaches Chrome
   // (board ab-v16.97.1, review-112 B6).
   if (method.startsWith("Browser.") || method.startsWith("Target.") || method.startsWith("AgentBrowser.")) return { refused: TEXT.generic(method) };

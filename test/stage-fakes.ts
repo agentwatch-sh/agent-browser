@@ -516,12 +516,12 @@ export class FakeTab implements StagePage {
     this.stage.event(this, undefined, "Page.frameNavigated", { frame: { id: "main", url } });
   }
 
-  /** The typing rule's read of a focused node (FOCUSED_FIELD's value). */
+  /** The typing rule's read of a focused node (FOCUSED_FIELD's value); `ac`: the field's autocomplete attribute (board ab-t30.22). */
   private focusRead(id: string | null): any {
     const n = id ? this.v.page.nodes[id] : null;
     if (!n) return null;
     const typing = (n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text")) || n.tag === "textarea", fl = this.fields.get(id!);
-    return { tag: n.tag, type: n.tag === "input" ? n.type ?? "text" : undefined, editable: !!n.contenteditable, typing, value: typing && fl ? fl.value : null, s: typing && fl && n.type !== "email" && n.type !== "number" ? fl.s : null, e: typing && fl && n.type !== "email" && n.type !== "number" ? fl.e : null };
+    return { tag: n.tag, type: n.tag === "input" ? n.type ?? "text" : undefined, editable: !!n.contenteditable, typing, ac: typing ? n.autocomplete ?? "" : null, value: typing && fl ? fl.value : null, s: typing && fl && n.type !== "email" && n.type !== "number" ? fl.s : null, e: typing && fl && n.type !== "email" && n.type !== "number" ? fl.e : null };
   }
   /** The marked field still has the focus: it is the focused node, and its document has the focus. */
   private stillFocused(): boolean {

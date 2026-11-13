@@ -1495,11 +1495,18 @@ export class Tab {
    * (Tab.drive "window"), a person's typing (input.ts): the field gets the focus by a click, with the caret where
    * el.focus() would put it, and the text goes as keys by the keyboard model (src/human/keys.ts: a person's holds and
    * times, rollover, a real Shift key), never as inserted text (a character with no US key excepted).
+   * `secret` (type --stdin): the text is marked as a secret for the endpoint's input stage, which never pastes it
+   * (AgentBrowser.setSecretInput, enabled before the first input call and ended after the last; C11, the paste; board
+   * ab-t30.22). A Chrome or an endpoint that does not know the mark answers an error, and the text goes as before.
    */
-  async type(text: string, selector?: string): Promise<void> {
-    if (this.drive === "window") return this.byHand((h) => this.typeNow(text, selector, h));
-    await this.assertAllowed();
-    await this.whileDrawn(() => this.typeNow(text, selector), { repeat: true });
+  async type(text: string, selector?: string, secret = false): Promise<void> {
+    const mark = (enabled: boolean) => (secret ? this.send("AgentBrowser.setSecretInput", { enabled }).then(() => {}, () => {}) : Promise.resolve());
+    await mark(true);
+    try {
+      if (this.drive === "window") return await this.byHand((h) => this.typeNow(text, selector, h));
+      await this.assertAllowed();
+      await this.whileDrawn(() => this.typeNow(text, selector), { repeat: true });
+    } finally { await mark(false); }
   }
 
   private async typeNow(text: string, selector?: string, h?: Hands): Promise<void> {
