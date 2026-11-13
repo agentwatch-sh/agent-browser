@@ -26,7 +26,7 @@
 // - The paste at a navigation (board ab-t30.21, probe 3's case): tab 1's page, whose keydown handler of Control+V runs
 //   3 s and starts a navigation of the same site (the server answers it 500 ms later), gets a long fill; Chrome answers
 //   its V at the navigation's start, and the page reads the selection at the handler's end. Tab 2's long fill (another
-//   site, a handler of Control+V of 2.5 s) in that time goes as Playwright's own input, because the stage waits for the page's answer of its read after
+//   site, a handler of Control+V of 2.5 s before its first input event) in that time goes as Playwright's own input, because the stage waits for the page's answer of its read after
 //   V's answer; tab 1's page never pastes tab 2's text; tab 2's long fill after tab 1's navigation is a paste.
 // - The flush (review-126 B3): a pressSequentially, then page.close() at once, and then browser.close() of a second
 //   connectOverCDP at once: the field holds the text (the page sends each value of its textarea to the server, which
@@ -147,13 +147,14 @@ const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margi
 const VALUES = new Map<string, { seq: number; len: number; hash: number }>();
 /** Board ab-t30.21: what each page of the paste at a navigation sent (by its token): its V's mark, its pastes, its input events, with the server's times. */
 const NAV = new Map<string, { t: number; ev: string }[]>();
-/** The page of the paste at a navigation: a textarea; with busy, a keydown handler of Control+V that sends a mark, starts a navigation of the same site (nav=1) and runs that long; each paste (its length and hash) and each input event go to /np. */
+/** The page of the paste at a navigation: a textarea; with busy, a keydown handler of Control+V that sends a mark, starts a navigation of the same site (nav=1) and runs that long (first=1: only before the page's first input event); each paste (its length and hash) and each input event go to /np. */
 const NAV_PAGE = `<!doctype html><html><head><meta charset=utf-8><title>navpaste</title></head><body><textarea id=ta style="width:600px;height:200px"></textarea><script>
-const P = new URLSearchParams(location.search), tok = P.get('tok'), busy = Number(P.get('busy') || 0), nav = P.get('nav') === '1';
+const P = new URLSearchParams(location.search), tok = P.get('tok'), busy = Number(P.get('busy') || 0), nav = P.get('nav') === '1', first = P.get('first') === '1';
 const send = (b) => navigator.sendBeacon('/np?tok=' + encodeURIComponent(tok), b);
-addEventListener('keydown', (e) => { if (busy && e.ctrlKey && e.key === 'v') { send('v'); if (nav) location.href = '/slow-next?tok=' + encodeURIComponent(tok); const end = performance.now() + busy; while (performance.now() < end) {} } }, true);
+let inputs = 0;
+addEventListener('keydown', (e) => { if (busy && e.ctrlKey && e.key === 'v' && !(first && inputs > 0)) { send('v'); if (nav) location.href = '/slow-next?tok=' + encodeURIComponent(tok); const end = performance.now() + busy; while (performance.now() < end) {} } }, true);
 addEventListener('paste', (e) => { const t = e.clipboardData.getData('text/plain'); let x = 2166136261; for (let i = 0; i < t.length; i++) { x ^= t.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; } send('paste ' + t.length + ' ' + x); }, true);
-addEventListener('input', (e) => send('input ' + e.inputType), true);
+addEventListener('input', (e) => { inputs++; send('input ' + e.inputType); }, true);
 </script></body></html>`;
 /** The page's hash of a value (FNV-1a of its UTF-16 units). */
 const fnv = (v: string) => { let x = 2166136261; for (let i = 0; i < v.length; i++) { x ^= v.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; } return x; };
@@ -413,8 +414,8 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
 /**
  * Board ab-t30.21 (probe 3's case): tab 1's long fill into a page whose keydown handler of Control+V runs 3 s and starts
  * a navigation of the same site (the server answers it 500 ms later); 300 ms after tab 1's V reached its page, tab 2's
- * long fill into a page of another site, whose handler of Control+V runs 2.5 s (a text that it pasted would stay on the
- * selection past tab 1's read); after tab 1's navigation, tab 2's second long fill. The row passes when tab 1's
+ * long fill into a page of another site, whose handler of Control+V runs 2.5 s before the page's first input event (a
+ * text that it pasted would stay on the selection past tab 1's read); after tab 1's navigation, tab 2's second long fill. The row passes when tab 1's
  * page never pasted a text of tab 2, tab 2's first text went as Playwright's own input (no paste: the stage's line
  * "no paste: vPending"), before tab 1's page read the selection, and tab 2's second text was one paste of the whole text.
  */
@@ -427,8 +428,10 @@ async function navPasteRow(o: StageContext, version: string, ctx: any, port: num
   const evs = (tok: string) => NAV.get(tok) ?? [];
   try {
     await pA.goto(`http://a.localhost:${port}/navpaste?tok=${tokA}&busy=3000&nav=1`);
-    // Tab 2's handler of Control+V runs 2.5 s too: a text that it pasted would stay on the selection past tab 1's read at 3 s.
-    await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}&busy=2500`);
+    // Tab 2's handler of Control+V runs 2.5 s before the page's first input event: a text that its first fill pasted would
+    // stay on the selection past tab 1's read at 3 s. (Its second fill's paste then gets no slow handler, which would end
+    // the paste's plan at STAGE_EVENT_WAIT_MS.)
+    await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}&busy=2500&first=1`);
     await sleep(300);
     const t0 = Date.now();
     const fa = timed(() => pA.locator("#ta").fill(T2500));
