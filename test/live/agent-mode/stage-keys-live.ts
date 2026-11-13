@@ -348,7 +348,8 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           if (row.paste !== undefined) {
             const P = s.state.pastes as [string, number, boolean, boolean][], Q = q.state.pastes as unknown[];
             const fromPaste = Object.entries(s.state.inputs as Record<string, number>).filter(([k]) => k.endsWith(":insertFromPaste"));
-            if (row.paste === null) pasteOk = P.length === 0 && Object.keys(s.state.inputs).some((k) => k.endsWith(":insertText"));
+            // review-129 note 5: the insertText input is the row's own field's.
+            if (row.paste === null) pasteOk = P.length === 0 && row.fields.some((f) => (s.state.inputs as Record<string, number>)[`${f}:insertText`] > 0);
             else if (row.paste === "lines") pasteOk = P.every((x) => x[0] === "ta" && x[3]);
             else pasteOk = P.length === 1 && P[0][0] === row.paste.field && P[0][1] === row.paste.len && P[0][2] === !!row.paste.refused && P[0][3]
               && (row.paste.refused ? fromPaste.length === 0 : fromPaste.length === 1 && fromPaste[0][1] === 1);

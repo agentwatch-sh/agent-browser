@@ -719,6 +719,9 @@ test("board ab-t30.22, the field rule (C11, the paste, rule 7): no paste into a 
     ["autocomplete new-password in a section", INPUT({ autocomplete: "section-signup new-password" })],
     ["autocomplete one-time-code (a tel field)", INPUT({ type: "tel", autocomplete: "one-time-code" })],
     ["a textarea with One-Time-Code", TEXTAREA({ autocomplete: "One-Time-Code" })],
+    // review-129 (the lead's choice): a card's number and its code are secrets too.
+    ["autocomplete cc-number", INPUT({ autocomplete: "cc-number" })],
+    ["autocomplete cc-csc in a section", INPUT({ autocomplete: "section-pay cc-csc" })],
   ];
   for (const [name, node] of cases) {
     const f = await runVector(own([insert(LONG)], PAGE(node)));
@@ -729,6 +732,10 @@ test("board ab-t30.22, the field rule (C11, the paste, rule 7): no paste into a 
     const s = await runVector(own([insert(SHORT_SECRET)], PAGE(node)));
     assert.deepEqual([typedText(s.tab), insertsOf(s.tab, SHORT_SECRET).length, s.tab.clipLog.length], [SHORT_SECRET, 0, 0], `${name}: a short text is typed`);
   }
+  // review-129 bar 4: the stage's trace line of a secret's part (no text in it).
+  const tr = await runVector(own([...typeCalls(MID + MID), evaluate()], PAGE(INPUT({ type: "password" }))), { trace: true });
+  assert.ok(tr.logs.some((l) => /^relay: the input stage: tab \d+: a collected part as one Input\.insertText \(secretField\)$/.test(l)), "the trace line");
+  noText(tr.logs, MID);
   const plain = await runVector(own([insert(LONG)], PAGE(INPUT({ autocomplete: "username" }))));
   assert.deepEqual([plain.tab.pastes.length, plain.stage.counts["noPaste:secretField"]], [1, undefined], "a field with autocomplete username pastes");
 });
@@ -751,4 +758,36 @@ test("board ab-t30.22: a mark whose step runs after the tab's end (it waited in 
   const r = await runVector(own([{ ...insert(LONG), at: 0 }, { ...mark(true), at: 0 }], PAGE()), { tab: (t) => { t.clock.timer(1, () => t.stage.drop(t.id, "tab")); } });
   assert.deepEqual(answerOf(r, 2).body, { result: {} });
   assert.ok(!r.tab.sent.some((s) => s.method.startsWith("AgentBrowser.")), "the mark never reaches Chrome");
+});
+
+// ================================================================ review-129 (the fix round of board ab-t30.22)
+
+test("review-129 B1: while the client's mark holds, a long collected part into a contenteditable goes as the client's own keys (rule 5 comes before rule 8), and a long fill there as the client's own Input.insertText; no clipboard call", async () => {
+  const CE = { tag: "div", contenteditable: true, box: { x: 200, y: 300, width: 300, height: 30 }, text: 0, focused: true };
+  const p = await runVector(own([mark(true), ...typeCalls(MID + MID), mark(false)], PAGE(CE)));
+  assert.deepEqual([typedText(p.tab), p.stage.counts["partsAsKeys:contenteditable"], p.stage.counts["partsAsText:secretMark"], insertsOf(p.tab, MID + MID).length, p.tab.clipLog.length],
+    [MID + MID, 1, undefined, 0, 0], "the part as the client's own keys");
+  const f = await runVector(own([mark(true), insert(LONG)], PAGE(CE)));
+  assert.deepEqual([insertsOf(f.tab, LONG).length, f.stage.counts["noPaste:contenteditable"], f.tab.clipLog.length], [1, 1, 0], "the fill's text as one Input.insertText");
+});
+
+test("review-129 note 1: a long part into a password field that does not take Input.insertText (its value stays the old one) then goes as the client's own keys, counted, with no clipboard call; a long fill there keeps the client's own Input.insertText as its result (one call, no keys)", async () => {
+  // The page's field drops an inserted text (a hook answers the stage's Input.insertText with no edit of the field).
+  const drops = (text: string) => (s: Sent) => (s.method === "Input.insertText" && s.params.text === text ? {} : undefined);
+  const p = await runVector(own([...typeCalls(MID + MID), evaluate()], PAGE(INPUT({ type: "password" }))), { hook: drops(MID + MID) });
+  assert.deepEqual([insertsOf(p.tab, MID + MID).length, typedText(p.tab), p.stage.counts["secretPartsRefused"], p.tab.fields.get("n")?.value, p.tab.clipLog.length],
+    [1, MID + MID, 1, MID + MID, 0], "one Input.insertText, then the client's own keys");
+  const f = await runVector(own([insert(LONG)], PAGE(INPUT({ type: "password" }))), { hook: drops(LONG) });
+  assert.deepEqual([insertsOf(f.tab, LONG).length, keyEvents(f.tab).length, f.stage.counts["secretPartsRefused"], f.tab.clipLog.length], [1, 0, undefined, 0], "the fill: the client's own call only");
+});
+
+test("review-129 bar 1: the stage reads the field again right before V: a field that the page makes a password field after the paste rule's read (at the chord's Control) gets no paste: V does not go, Control goes up, and the text goes as for a secret (a fill: the client's Input.insertText; a part: one Input.insertText of its text); no clipboard call", async () => {
+  const toPassword = (t: FakeTab) => { const h = t.hook; t.hook = (s: Sent) => { if (s.method === "Input.dispatchKeyEvent" && s.params.key === "Control" && s.params.type === "rawKeyDown") t.v.page.nodes.n.type = "password"; return h(s); }; };
+  const f = await runVector(own([insert(LONG)], PAGE()), { tab: toPassword });
+  const c = chordOf(f.tab);
+  assert.ok(c.ctrl && c.ctrlUp && !c.v, "Control down and up, no V");
+  assert.deepEqual([insertsOf(f.tab, LONG).length, f.tab.clipLog.length, f.tab.pastes.length, f.stage.counts["pasteFieldChanged:secretField"], f.tab.fields.get("n")?.value], [1, 0, 0, 1, LONG], "the fill's text as one Input.insertText");
+  const p = await runVector(own([...typeCalls(MID + MID), evaluate()], PAGE()), { tab: toPassword });
+  assert.deepEqual([insertsOf(p.tab, MID + MID).length, typedText(p.tab).length, p.tab.clipLog.length, p.stage.counts["pasteFieldChanged:secretField"], p.tab.fields.get("n")?.value], [1, 0, 0, 1, MID + MID], "the part as one Input.insertText");
+  assert.ok(!chordOf(p.tab).v, "no V");
 });

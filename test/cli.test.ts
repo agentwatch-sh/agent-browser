@@ -417,6 +417,31 @@ test("board ab-t30.22: type --stdin marks its text as a secret for the input sta
   await run(["close", "marks"]);
 });
 
+test("review-129 bar 4: type --stdin fails closed on the mark: an error answer that says the method is not known or not available lets the text go as before; any other error answer stops the text (no input call, a clear error); an error of the type itself still ends the mark (false in the finally)", async () => {
+  const opened = await run(["open", fx.base + "/editor", "--name", "marks2"]);
+  const t = opened.json.tab.targetId, page = fake.pages.get(t)!;
+  const seen = (from: number) => fake.callsFor(t).slice(from).filter((x) => x.method === "AgentBrowser.setSecretInput" || x.method.startsWith("Input.")).map((x) => x.method === "AgentBrowser.setSecretInput" ? `mark ${x.params.enabled}` : "input");
+  // An endpoint that predates the mark: its refusal of the method.
+  fake.failOnce.set("AgentBrowser.setSecretInput", "Not available in the agent browser: AgentBrowser.setSecretInput.");
+  let r = await run(["type", "marks2", "--stdin", "--into", "#notes"], { input: "test-secret-a" });
+  assert.equal(r.json.ok, true, r.stdout);
+  assert.equal(page.select("#notes")[0].text, "test-secret-a");
+  // Any other error answer (the stage stopped the mark's step): no input call, and the command fails.
+  let from = fake.callsFor(t).length;
+  fake.failOnce.set("AgentBrowser.setSecretInput", "the input stage stopped the plan at an error of an event");
+  r = await run(["type", "marks2", "--stdin", "--into", "#notes"], { input: "test-secret-b" });
+  assert.equal(r.json.ok, false, r.stdout);
+  assert.equal(r.json.error.message, "type: the agent browser did not take the mark of a secret, so no text was sent (AgentBrowser.setSecretInput: the input stage stopped the plan at an error of an event)");
+  assert.deepEqual(seen(from), ["mark true"], "no input call");
+  assert.ok(!r.stdout.includes("test-secret-b") && !r.stderr.includes("test-secret-b"), "the text is never echoed");
+  // An error of the type itself (no text field has the focus): the mark still ends.
+  from = fake.callsFor(t).length;
+  r = await run(["type", "marks2", "--stdin", "--into", "#label"], { input: "test-secret-c" });
+  assert.match(r.json.error.message, /^type: no text field has the focus/);
+  assert.deepEqual(seen(from), ["mark true", "mark false"]);
+  await run(["close", "marks2"]);
+});
+
 test("human output without --json", async () => {
   await run(["open", fx.base + "/", "--name", "plain"]);
   const r = await cli(["tabs", ...flags(c, fake.ws)]);

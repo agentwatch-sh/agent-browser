@@ -1496,12 +1496,18 @@ export class Tab {
    * el.focus() would put it, and the text goes as keys by the keyboard model (src/human/keys.ts: a person's holds and
    * times, rollover, a real Shift key), never as inserted text (a character with no US key excepted).
    * `secret` (type --stdin): the text is marked as a secret for the endpoint's input stage, which never pastes it
-   * (AgentBrowser.setSecretInput, enabled before the first input call and ended after the last; C11, the paste; board
-   * ab-t30.22). A Chrome or an endpoint that does not know the mark answers an error, and the text goes as before.
+   * (AgentBrowser.setSecretInput, enabled before the first input call and ended after the last, also after an error;
+   * C11, the paste; board ab-t30.22). It fails closed (review-129): an error answer that says the method is not known
+   * or not available (a Chrome, or an endpoint that predates the mark: nothing pastes there) lets the text go as
+   * before; any other error answer stops it before its first input call. An error of the mark's end changes nothing.
    */
   async type(text: string, selector?: string, secret = false): Promise<void> {
-    const mark = (enabled: boolean) => (secret ? this.send("AgentBrowser.setSecretInput", { enabled }).then(() => {}, () => {}) : Promise.resolve());
-    await mark(true);
+    const MARK = "AgentBrowser.setSecretInput";
+    const unknown = (e: unknown) => e instanceof CDPError && (e.code === -32601 || e.message.includes(`Not available in the agent browser: ${MARK}.`));
+    if (secret) await this.send(MARK, { enabled: true }).catch((e) => {
+      if (!unknown(e)) throw new Error(`type: the agent browser did not take the mark of a secret, so no text was sent (${(e as Error).message})`);
+    });
+    const mark = (enabled: boolean) => (secret ? this.send(MARK, { enabled }).then(() => {}, () => {}) : Promise.resolve());
     try {
       if (this.drive === "window") return await this.byHand((h) => this.typeNow(text, selector, h));
       await this.assertAllowed();

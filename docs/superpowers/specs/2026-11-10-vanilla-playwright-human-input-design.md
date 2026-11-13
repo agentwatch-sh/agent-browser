@@ -726,12 +726,18 @@ contract text.
 - **A secret never goes through the clipboard (board ab-t30.22).** agentwatch's skill sends a secret with `type
   --stdin`, and Playwright clients fill passwords, while a page of the same site can read the selection in the open
   point of the pending V (below). So the stage never pastes into a field of a secret (an `input` of type `password`, or
-  a field whose `autocomplete` has `current-password`, `new-password` or `one-time-code`) or a text that the client
+  a field whose `autocomplete` has `current-password`, `new-password`, `one-time-code`, `cc-number` or `cc-csc`) or a
+  text that the client
   marks as a secret (`AgentBrowser.setSecretInput` with `{"enabled":true}` on the tab's own session, until
   `{"enabled":false}` or the end of the client's last session on the tab; the model answers it, in the tab's gate).
   Such a text goes typed when its plan fits, else as one `Input.insertText`, as a password manager's fill does (a
-  collected part too, in place of its key events). The stage reads the field of a collected part at the part's end,
-  before its events go. agent-browser's own `type --stdin` sets the mark.
+  collected part too, in place of its key events, and as the client's own keys when the field did not take it). The
+  stage reads the field of a collected part at the part's end, before its events go, and every field again right
+  before V (review-129). A contenteditable, a field that is no text field and a failed read keep Playwright's own input
+  also while the mark holds. Other fields paste, also one that holds a secret with no sign of it (a text field that CSS
+  masks, a "show password" toggle, another card field): the mark is the way for them. agent-browser's own `type
+  --stdin` sets the mark, and it fails closed: an error answer that does not say "not known" or "not available" stops
+  its text.
 - **The collected keys.** A key run reaches the stage one key at a time, so the stage learns its length by
   collecting it: each printable key call, its release, and a text in the run get their answers at once (a new
   exception to "no answer before its events", section 4.5). The run's part ends at the tab's next call that does not

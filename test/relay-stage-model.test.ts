@@ -809,7 +809,7 @@ const focusedInput = (h: Harness) => {
   h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && String(params.expression).includes("__agentBrowserStageField") ? { result: { type: "object", value: { tag: "input", type: "text", editable: false, typing: true, ac: "", value: "", s: 0, e: 0 } } } : undefined);
 };
 
-test("board ab-t30.22, the client's mark with the build switch off (C11, the paste): AgentBrowser.setSecretInput on the tab's own session answers {} and never reaches Chrome; with no boolean enabled it fails; on the root and on a frame's own session it is refused", async () => {
+test("board ab-t30.22, the client's mark with the build switch off (C11, the paste): AgentBrowser.setSecretInput on the tab's own session answers {} and never reaches Chrome; with no boolean enabled it fails; on the root, on a browser session and on a frame's own session it is refused", async () => {
   const saved = process.env[STAGE_TEST_ENV];
   delete process.env[STAGE_TEST_ENV];
   const h = await harness({ clipboard: fakeClipboard() });
@@ -824,6 +824,9 @@ test("board ab-t30.22, the client's mark with the build switch off (C11, the pas
     await assert.rejects(c.send(MARK, {}, p.sessionId), /enabled must be true or false/);
     await assert.rejects(c.send(MARK, { enabled: "yes" }, p.sessionId), /enabled must be true or false/);
     await assert.rejects(c.send(MARK, { enabled: true }), /Not available in the agent browser: AgentBrowser\.setSecretInput\./);
+    // review-129 bar 4: a browser session (Target.attachToBrowserTarget) is refused as the root is.
+    const { sessionId: browserSession } = await c.send("Target.attachToBrowserTarget", {});
+    await assert.rejects(c.send(MARK, { enabled: true }, browserSession), /Not available in the agent browser: AgentBrowser\.setSecretInput\./, "refused on a browser session");
     assert.deepEqual(cmds(h, from), [], "no call reaches Chrome");
     // A frame's own session (an out-of-process frame of the tab): refused, as every other AgentBrowser.* call.
     h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
