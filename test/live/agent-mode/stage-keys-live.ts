@@ -341,7 +341,10 @@ async function harnessKeys(o: StageContext, ctx: any, port: number, recs: Rec[],
   const step = async (kind: StepKind, name: string, fn: () => Promise<unknown>, width?: number) => {
     const t0 = now();
     let ok = true, error: string | undefined;
-    try { await fn(); } catch (e) { ok = false; error = String((e as Error).message).split("\n")[0].slice(0, 200); }
+    // Board ab-t30.19: the keys of keyboard.type and pressSequentially are a collected part, whose events go after the
+    // answers of its calls and before the tab's next call: the step ends with one call (as a client's next one), so that
+    // its window holds its keys.
+    try { await fn(); if (kind === "type") await page.evaluate(() => 0); } catch (e) { ok = false; error = String((e as Error).message).split("\n")[0].slice(0, 200); }
     marks.push({ name, source: "stage", kind, ok, t0, t1: now(), ...(width ? { width } : {}), ...(error ? { error } : {}) });
     await sleep(700);
   };

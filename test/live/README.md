@@ -156,6 +156,12 @@ as with Playwright's own input; the widgets' rows are measures. The harness rows
 recorder's keys through the stage against `STAGE_REFERENCE`, and against `STAGE_PERSON` when it names a reference of
 the operator's published numbers (a report, not a bar, until board ab-t30.13 fits the parameters). It writes
 `stage-keys-live.json`, `stage-keys-harness-results.json` and `stage-keys-harness-report.txt` in the run folder.
+The paste rows (board ab-t30.19) check that a long `fill` and `pressSequentially` go as one person's paste (the page sees
+one trusted `paste` of the whole text and one `insertFromPaste`), that a short text is typed, that a field that refuses a
+paste gets the client's text, and that the CLIPBOARD selection of the run's display has no owner after each row. For
+them the run gives the relay `AGENT_BROWSER_STAGE_CLIPBOARD=<DISPLAY_N>:<the run's X authority file>` (the relay's door
+of the live rows, only with `AGENT_BROWSER_INPUT_STAGE=test`), so that its stage has the X selection owner of the run's
+own Xvfb; the relay of the daemon has none.
 
 The scroll and the wheel (board ab-t30.11, `stage-scroll-live.ts`) are a part of the same group. `STAGE_PARTS=scroll`
 runs this part alone (the default is `pointer,keys,scroll`), and `STAGE_SCROLL_ROWS=<a regular expression>` only its rows
