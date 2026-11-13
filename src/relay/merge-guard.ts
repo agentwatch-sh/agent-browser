@@ -481,7 +481,7 @@ export class MergeGuard {
     if (pr.kind !== "pull") return;
     const ownPage = !pr.api && (pr.rest === null || HEADER_PAGES.has(pr.rest)) && contentType.startsWith("text/html") && text.includes(`/pull/${pr.number}`);
     const ownObject = pr.api && pr.rest === null && contentType.includes("json") && new RegExp(`"number"\\s*:\\s*${pr.number}\\b`).test(text);
-    if ((ownPage || ownObject) && this.verdicts.get(pr.key) !== "marked") this.set(pr.key, "unmarked");
+    if (ownPage || ownObject) this.set(pr.key, "unmarked"); // set() keeps a marked PR marked: the one place of that rule
   }
 
   private set(key: string, v: "marked" | "unmarked"): void {

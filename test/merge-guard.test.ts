@@ -116,6 +116,7 @@ test("the judge: a marked or unknown PR page refuses every write; a named marked
   assert.equal(g.judge(8, write("https://github.com/_private/browser/stats", { headers: { Referer: "https://github.com/o/r/pull/2/files" } })), "marked", "the Referer names the marked page");
   g.url(9, "https://github.com/o/r/pull/5");
   assert.equal(g.judge(9, write("https://github.com/o/r/pull/5/merge")), "unknown", "a PR page with no verdict");
+  assert.equal(g.judge(9, write("https://github.com/o/r/issue_comments")), "unknown", "any write from a PR page with no verdict, also one that is no merge");
   g.url(10, "https://github.com/o/r/pull/1");
   assert.equal(g.judge(10, write("https://github.com/o/r/pull/1/merge")), null, "an unmarked PR's merge from its own page goes");
   assert.equal(g.judge(10, write("https://github.com/o/r/pull/1/ready_for_review")), null);
@@ -163,6 +164,8 @@ test("the verdicts: any 2xx answer of a PR's URL with a marker marks it for good
   assert.equal(g.verdict("github.com/o/r#3"), "marked", "a JSON part of a PR's page marks");
   g.learn(pr("https://github.com/o/r/pull/3"), UNMARKED_HTML.replaceAll("/pull/1", "/pull/3"), "text/html");
   assert.equal(g.verdict("github.com/o/r#3"), "marked", "a marked PR stays marked");
+  g.learn(pr("https://api.github.com/repos/o/r/pulls/3"), "{\"number\": 3, \"title\": \"x\", \"labels\": []}", "application/json");
+  assert.equal(g.verdict("github.com/o/r#3"), "marked", "also after an API object with no marker");
   g.learn(pr("https://github.com/o/r/pull/4/page_data/merge_box"), "{\"title\":\"x\"}", "application/json");
   assert.equal(g.verdict("github.com/o/r#4"), undefined, "a part of a page with no marker says nothing");
   g.learn(pr("https://github.com/o/r/pull/4"), "<html>Sign in</html>", "text/html");
