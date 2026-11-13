@@ -331,7 +331,7 @@ try {
     child.stdout!.on("data", (x) => { out += x; });
     child.stderr!.on("data", (x) => { err += x; });
     const timer = setTimeout(() => child.kill("SIGKILL"), 300_000);
-    child.once("exit", () => { clearTimeout(timer); seen.push(out, err); try { resolve(JSON.parse(out.split("\n")[0])); } catch { resolve({ error: `no answer: ${err.slice(-300)}` }); } });
+    child.once("close", () => { clearTimeout(timer); seen.push(out, err); try { resolve(JSON.parse(out.split("\n")[0])); } catch { resolve({ error: `no answer: ${err.slice(-300)}` }); } });
     void (before ? before(child.pid!) : Promise.resolve()).then(() => { child.stdin!.end(JSON.stringify({ url: `http://${mcpAddress}/mcp/${scope}`, token, calls }) + "\n"); }, (e) => { child.kill("SIGKILL"); reject(e); });
   });
   const signInEvents = () => d.lines.filter((l) => l.t === "ev" && l.ev === "sign_in");

@@ -144,7 +144,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-merge-guard-host", "test-mcp-remote-scope"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
   if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
