@@ -11,8 +11,12 @@
 
 import { fileURLToPath } from "node:url";
 
-/** The release commit of chrome-extension: receiver 0.3.6 (agentwatch's pin today; chrome-extension main reaches it). */
-export const CHROME_EXTENSION_COMMIT = "7e2d9a4a5d9bfcdacee4ea219101f2bed79053ab";
+/**
+ * The release commit of chrome-extension: receiver 0.3.8 (board ab-v16.97.10; chrome-extension main reaches it in its merge
+ * 4ea1a53). It holds the sign-in act of 0.3.7 (C10's act ops and the act window) and the merge guard's floor (C5 rule 9,
+ * C10's bridge.mergeGuard). agentwatch's own pin of the old path is the daemon lead's, and it moves with stage 3.
+ */
+export const CHROME_EXTENSION_COMMIT = "443f96850cd9f4e970db4f467f36f40597dc8544";
 /** The receiver's extension ID (C1): the key that signs agent.crx fixes it. */
 export const RECEIVER_ID = "ifhfjdmdbgbnmllffiadajepajbcdnai";
 /** The sender's extension ID (C1): the `key` of operator/manifest.json fixes it. */
@@ -20,16 +24,19 @@ export const SENDER_ID = "bpfkgknpndlpkcffmaaelkfcbpackiip";
 /** The native messaging host name (C1): the receiver connects to it, so it stays. */
 export const NATIVE_HOST_NAME = "sh.agentwatch.browser";
 /** The SHA-256 of the commit's release/agent.crx (`git show <commit>:release/agent.crx | sha256sum`). */
-export const AGENT_CRX_SHA256 = "84525f44f290441d42606415f8086a9855ea0eb463bcd696a160f42c325a579a";
+export const AGENT_CRX_SHA256 = "4b278926576641876d49d68d970c250561c26d43228746346ca79628c85ddf21";
 /** The receiver's version in the pinned CRX (its manifest's `version`). */
-export const AGENT_VERSION = "0.3.6";
+export const AGENT_VERSION = "0.3.8";
 
 /** The pinned CRX, as it ships with agent-browser. */
 export const AGENT_CRX = fileURLToPath(new URL("./chrome-extension/agent.crx", import.meta.url));
 /** The pinned operator/ folder (the sender), as it ships with agent-browser. */
 export const OPERATOR_DIR = fileURLToPath(new URL("./chrome-extension/operator/", import.meta.url));
 
-/** The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). */
+/**
+ * The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). The sender
+ * 0.2.0 is the same at 443f968 as at the old pin 7e2d9a4 (receiver 0.3.6): no file of operator/ changed between them.
+ */
 export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "icons/icon-128.png": "35a8fbde4c35431f1ffe9e0519d740bd0fed302d",
   "icons/icon-16.png": "41044c0b8a102a28827fe60bf53fbe40d0349d36",

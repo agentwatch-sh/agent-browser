@@ -73,7 +73,7 @@
    "version": "157.0.7000.1-1",
    "pid": 4242
   },
-  "extension_version": "0.3.6",
+  "extension_version": "0.3.8",
   "update": "current",
   "endpoint": {
    "form": "pidfd"
@@ -399,7 +399,7 @@
      "chrome_kind": "google-chrome",
      "chrome_version": "157.0.7000.1-1",
      "chrome_pid": 4242,
-     "extension_version": "0.3.6",
+     "extension_version": "0.3.8",
      "update": "current",
      "endpoint": {
       "form": "pidfd"
@@ -4934,7 +4934,7 @@
     "ev": "ready",
     "chrome_pid": 4242,
     "chrome_version": "157.0.7000.1-1",
-    "extension_version": "0.3.6",
+    "extension_version": "0.3.8",
     "endpoint": {
      "form": "pidfd"
     }
@@ -4947,7 +4947,7 @@
     "ev": "ready",
     "chrome_pid": 4242,
     "chrome_version": "157.0.7000.1-1",
-    "extension_version": "0.3.6",
+    "extension_version": "0.3.8",
     "endpoint": {
      "form": null,
      "reason": "node:ffi is not available"

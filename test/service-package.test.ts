@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { checkCrx, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, pinnedLastFile, prepareAgentPackage, stageCrx, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, OPERATOR_BLOBS, OPERATOR_DIR, RECEIVER_ID, SENDER_ID } from "../src/service/package/pins.ts";
 import { filesOf, senderData, storedZip } from "../src/service/package/sender.ts";
+import { FAKE_STATE } from "../src/service/fake.ts";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const tmp = (t: { after: (f: () => void) => void }) => { const d = mkdtempSync(join(tmpdir(), "ab-pkg-")); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
@@ -46,14 +47,30 @@ function copyIn(tools: string, version = "158.0.7100.1-1") {
 
 // ------------------------------------------------------------------ the pins and the shipped files
 
-test("the pins name the CRX of the pinned commit: its SHA-256, its header ID and its manifest key's ID, version 0.3.6", () => {
-  assert.equal(CHROME_EXTENSION_COMMIT, "7e2d9a4a5d9bfcdacee4ea219101f2bed79053ab");
+test("the pins name the CRX of the pinned commit: its SHA-256, its header ID and its manifest key's ID, version 0.3.8", () => {
+  assert.equal(CHROME_EXTENSION_COMMIT, "443f96850cd9f4e970db4f467f36f40597dc8544");
+  assert.equal(AGENT_CRX_SHA256, "4b278926576641876d49d68d970c250561c26d43228746346ca79628c85ddf21");
+  assert.equal(AGENT_VERSION, "0.3.8");
   assert.equal(sha(REAL), AGENT_CRX_SHA256);
-  assert.equal(REAL.length, 71580);
+  assert.equal(REAL.length, 84481);
+  assert.equal(crxManifest(REAL).version, "0.3.8");
   assert.equal(crxHeaderId(REAL), RECEIVER_ID);
   assert.equal(extensionId(RECEIVER_KEY), RECEIVER_ID);
   const info = checkCrx();
   assert.deepEqual({ id: info.extensionId, version: info.version, sha256: info.sha256 }, { id: RECEIVER_ID, version: AGENT_VERSION, sha256: AGENT_CRX_SHA256 });
+});
+
+test("the fake's extension_version and each extension_version of the vectors are the pinned receiver's version (review-127 N1)", () => {
+  const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
+  assert.equal(FAKE_STATE.extension_version, AGENT_VERSION);
+  const found: unknown[] = [];
+  const walk = (x: unknown): void => {
+    if (Array.isArray(x)) x.forEach(walk);
+    else if (x && typeof x === "object") for (const [k, v] of Object.entries(x)) { if (k === "extension_version") found.push(v); else walk(v); }
+  };
+  walk(control);
+  // The state, the status answer and the two ready events.
+  assert.deepEqual(found, [AGENT_VERSION, AGENT_VERSION, AGENT_VERSION, AGENT_VERSION]);
 });
 
 test("each file of the shipped operator/ folder is the pinned commit's file (its git blob id), and no other file is there", () => {
@@ -105,7 +122,7 @@ test("a CRX with another SHA-256, another header ID or another key is refused", 
   const d = tmp(t);
   const ok = writeCrx(d, crx());
   const s = sha(readFileSync(ok));
-  assert.equal(checkCrx(ok, { sha256: s }).version, "0.3.6");
+  assert.equal(checkCrx(ok, { sha256: s }).version, "0.3.6", "the version of the CRX's own manifest (the fixture's, not the pin's)");
   assert.throws(() => checkCrx(ok), { message: "the agent extension package does not match its pinned SHA-256" });
   const other = writeCrx(d, crx({ ids: [SENDER_ID] }), "b.crx");
   assert.throws(() => checkCrx(other, { sha256: sha(readFileSync(other)) }), { message: "the agent extension package header names another extension ID" });
@@ -159,7 +176,7 @@ test("the CRX is staged in the tools folder at 0600 in a 0700 folder, named by i
   const tools = tmp(t);
   const info = checkCrx();
   const p = stageCrx(info, tools);
-  assert.equal(p, join(tools, "agent-crx", `0.3.6-${AGENT_CRX_SHA256.slice(0, 12)}.crx`));
+  assert.equal(p, join(tools, "agent-crx", `0.3.8-${AGENT_CRX_SHA256.slice(0, 12)}.crx`));
   assert.equal(statSync(p).mode & 0o777, 0o600);
   assert.equal(statSync(join(tools, "agent-crx")).mode & 0o777, 0o700);
   assert.equal(sha(readFileSync(p)), AGENT_CRX_SHA256);
@@ -188,10 +205,10 @@ test("the extension file goes next to the copy's binary only: extensions/<receiv
   const tools = tmp(t);
   const copy = copyIn(tools);
   const version = prepareAgentPackage(copy, tools, join(tools, "google-chrome"));
-  assert.equal(version, "0.3.6");
+  assert.equal(version, "0.3.8");
   const file = join(tools, "google-chrome", copy.version, "opt", "google", "chrome", "extensions", `${RECEIVER_ID}.json`);
   assert.equal(extensionFile(copy), file);
-  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { external_crx: join(tools, "agent-crx", `0.3.6-${AGENT_CRX_SHA256.slice(0, 12)}.crx`), external_version: "0.3.6" });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { external_crx: join(tools, "agent-crx", `0.3.8-${AGENT_CRX_SHA256.slice(0, 12)}.crx`), external_version: "0.3.8" });
   assert.equal(statSync(file).mode & 0o777, 0o644);
   assert.equal(statSync(join(file, "..")).mode & 0o777, 0o755);
   // A second start writes the same file again (a new file, then a rename).
@@ -204,7 +221,7 @@ test("the file of the last start is used only while its staged CRX has the pinne
   const copy = copyIn(tools);
   assert.equal(pinnedLastFile(copy, tools), null, "no file yet");
   prepareAgentPackage(copy, tools, join(tools, "google-chrome"));
-  assert.equal(pinnedLastFile(copy, tools), "0.3.6", "the pinned staged CRX");
+  assert.equal(pinnedLastFile(copy, tools), "0.3.8", "the pinned staged CRX");
   assert.equal(pinnedLastFile(copy, tools, "0".repeat(64)), null, "another pin: the old package never starts");
   // The staged CRX changed on disk (another SHA-256): no fallback.
   const staged = JSON.parse(readFileSync(extensionFile(copy), "utf8")).external_crx;
@@ -212,10 +229,10 @@ test("the file of the last start is used only while its staged CRX has the pinne
   assert.equal(pinnedLastFile(copy, tools), null, "a staged CRX with another SHA-256");
   // A file that names a CRX outside agent-crx/: no fallback, also with the pinned bytes.
   const outside = writeCrx(tools, REAL, "elsewhere.crx");
-  writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: outside, external_version: "0.3.6" }));
+  writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: outside, external_version: "0.3.8" }));
   assert.equal(pinnedLastFile(copy, tools), null, "a CRX outside agent-crx/");
   // A relative path, also one that names the staged CRX from the service's own folder: no fallback (review-110b).
-  writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: "agent-crx/x.crx", external_version: "0.3.6" }));
+  writeFileSync(extensionFile(copy), JSON.stringify({ external_crx: "agent-crx/x.crx", external_version: "0.3.8" }));
   assert.equal(pinnedLastFile(copy, tools), null, "a relative CRX path");
 });
 
@@ -236,7 +253,7 @@ test("a symlinked tools folder does not refuse a valid copy, and a symlinked ext
   mkdirSync(real);
   symlinkSync(real, join(d, "tools"));
   const copy = copyIn(join(d, "tools"));
-  assert.equal(prepareAgentPackage(copy, join(d, "tools"), join(d, "tools", "google-chrome")), "0.3.6");
+  assert.equal(prepareAgentPackage(copy, join(d, "tools"), join(d, "tools", "google-chrome")), "0.3.8");
   const ext = join(real, "google-chrome", copy.version, "opt", "google", "chrome", "extensions");
   rmSync(ext, { recursive: true });
   mkdirSync(join(d, "x"));
