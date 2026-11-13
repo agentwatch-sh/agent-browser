@@ -44,6 +44,10 @@ if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lo
 const CE = arg("--chrome-extension");
 if (!CE) { process.stderr.write("merge-guard: --chrome-extension <checkout> is needed: the receiver 0.3.7 comes from its main (read only)\n"); process.exit(2); }
 const CE_COMMIT = "eda8df0";
+// review-125 note A: with --unpacked-receiver <a receiver folder of a chrome-extension checkout> (no pack, no key), the
+// service's Chrome also loads that receiver unpacked (C12's chrome_args: --load-extension), which has the floor: then
+// Page.setBypassCSP goes, and the run checks the paths that a bypassed policy could open.
+const UNPACKED = arg("--unpacked-receiver");
 const CHROMIUM_TREE = "/usr/lib/chromium";
 const S = "github-standin.localhost", API = `api.${S}`, OTHER = "other.localhost";
 
@@ -132,6 +136,7 @@ const http = createServer((req, res) => {
     if (host === OTHER) {
       if (path === "/cross") { html(otherPage.replace("PORT", String(port))); return; }
       if (path === "/r307") { res.writeHead(307, { Location: `http://${S}:${port}/o/r/pull/2/merge`, ...cors }).end(); return; }
+      if (path === "/frame") { html(`<!doctype html><title>frame</title><script>fetch("http://${S}:${port}/o/r/pull/2/merge", { method: "POST", body: "via=frame", mode: "no-cors" }).catch(() => {});</script>`); return; }
       if (req.method !== "GET") { res.writeHead(200, { "Content-Type": "text/plain", ...cors }).end("other: ok"); return; }
       html("<!doctype html><title>other</title><p>other</p>"); return;
     }
@@ -145,7 +150,9 @@ const http = createServer((req, res) => {
     const m = /^\/o\/r\/pull\/(\d+)$/.exec(path);
     if (m) { const n = Number(m[1]); html(prPage(n, KINDS[n] ?? "none")); return; }
     if (path === "/o/r") { html(repoPage); return; }
-    if (path === "/csp") { html(`<!doctype html><title>csp</title><p>a page with worker-src 'self'</p><pre id="out"></pre>`, 200, { "Content-Security-Policy": "worker-src 'self'" }); return; }
+    if (path === "/csp") { html(`<!doctype html><title>csp</title><p>a page with worker-src 'self'</p><pre id="out"></pre>`, 200, { "Content-Security-Policy": "worker-src 'self'; frame-src 'none'" }); return; }
+    // A service worker script of the stand-in itself (as GitHub's own): at a message it posts the marked PR's merge.
+    if (path === "/sw.js") { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end("self.addEventListener('message', (e) => { fetch('/o/r/pull/2/merge', { method: 'POST', body: 'via=sw' }).then((r) => e.source.postMessage('status ' + r.status), (err) => e.source.postMessage('error ' + err)); });"); return; }
     res.writeHead(404).end();
   });
 });
@@ -183,7 +190,7 @@ async function startService(): Promise<Door> {
   const d = await door();
   await d.next((l) => l.t === "hello");
   d.send({ t: "hello", v: 1, side: "daemon", version: "live", features: [] });
-  const cfg = await req(d, "config", { kind: "daemon", user: "live", via: "config" }, { enabled: true, control: true, chrome_bin: null, chrome_args: [], display_size: "1280x900" });
+  const cfg = await req(d, "config", { kind: "daemon", user: "live", via: "config" }, { enabled: true, control: true, chrome_bin: null, chrome_args: UNPACKED ? [`--load-extension=${UNPACKED}`] : [], display_size: "1280x900" });
   if (!cfg.ok) throw new Error(`config: ${JSON.stringify(cfg)}`);
   const ss = await req(d, "set_sessions", DAEMON, { sessions: [{ scope: "live-1", repo: "local/test", roots: [{ pid: process.pid, start: me.start }], cgroup: null, lifetime_id: "lt-live", mcp_token: null }], remote: [], box: { hosts: ["box.localhost"], cookie_names: [] } });
   if (!ss.ok) throw new Error(`set_sessions: ${JSON.stringify(ss)}`);
@@ -224,8 +231,13 @@ try {
   track(ready.chrome_pid, "chrome");
   track(JSON.parse(readFileSync(join(state, "unit.json"), "utf8")).xvfb_pid, "xvfb");
   await until("the receiver confirms the lists", () => /lists: the receiver took the lists of 1 scopes/.test(serviceErr), 60_000);
-  await until("the guard's floor op at the link up", () => serviceErr.includes("merge guard: the receiver has no floor"), 30_000);
-  check("the receiver 0.3.7 has no floor yet: the service's log says that only the tabs that a client holds are guarded", serviceErr.includes("merge guard: the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded"));
+  if (!UNPACKED) {
+    await until("the guard's floor op at the link up", () => serviceErr.includes("merge guard: the receiver has no floor"), 30_000);
+    check("the receiver 0.3.7 has no floor yet: the service's log says that only the tabs that a client holds are guarded", serviceErr.includes("merge guard: the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded"));
+  } else {
+    await sleep(2000);
+    check("the unpacked receiver of the branch has the floor: no log line says that the receiver has no floor", !serviceErr.includes("merge guard: the receiver has no floor"));
+  }
   const url = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
 
   // 2. A real Playwright client.
@@ -329,7 +341,30 @@ try {
   const workerWrites = writes.filter((w) => w.body === "via=worker").length;
   measure("raw CDP with no auto-attach: a worker's fetch of the marked PR's merge", `${wraw.slice(0, 40)}; writes that reached the stand-in: ${workerWrites}`);
   check("raw CDP: the worker's write of the marked PR does not reach the stand-in", workerRefused && workerWrites === 0, wraw.slice(0, 120));
-  check("raw CDP: Page.setBypassCSP with enabled true is refused", await c.send("Page.setBypassCSP", { enabled: true }, sid).then(() => "no error", (e: Error) => e.message).then((m) => m.includes("Not available in the agent browser: Page.setBypassCSP.")));
+  const bypass = await c.send("Page.setBypassCSP", { enabled: true }, sid).then(() => "no error", (e: Error) => e.message);
+  if (!UNPACKED) check("raw CDP: with no floor (the receiver 0.3.7), Page.setBypassCSP with enabled true is refused", bypass.includes("Not available in the agent browser: Page.setBypassCSP."), bypass);
+  else {
+    check("raw CDP: with the floor, Page.setBypassCSP with enabled true goes to Chrome", bypass === "no error", bypass);
+    // The paths that a bypassed policy could open, on a page of the stand-in whose own policy names no worker or frame.
+    await c.send("Page.navigate", { url: `${WEB()}/csp` }, sid);
+    await loaded(sid, (t) => t.includes("worker-src"));
+    const before = writes.length;
+    const post = (via: string) => `fetch(${JSON.stringify(`${WEB()}/o/r/pull/2/merge`)}, { method: 'POST', body: 'via=${via}' }).then((r) => 'status ' + r.status, (e) => 'error ' + e)`;
+    const dedicated = await ev(sid, `new Promise((done) => { const w = new Worker(URL.createObjectURL(new Blob(["${post("blob-worker").replace(/"/g, '\\"')}.then((t) => postMessage(t))"]))); w.onmessage = (e) => done(e.data); w.onerror = () => done('refused'); setTimeout(() => done('no answer'), 5000); })`);
+    check("with the floor and the policy bypassed: a blob dedicated worker's merge gets the guard's 403", String(dedicated) === "status 403", String(dedicated));
+    const shared = await ev(sid, `new Promise((done) => { const w = new SharedWorker(URL.createObjectURL(new Blob(["onconnect = (e) => { const p = e.ports[0]; ${post("shared-worker").replace(/"/g, '\\"')}.then((t) => p.postMessage(t)); };"]))); w.port.onmessage = (e) => done(e.data); w.onerror = () => done('refused'); setTimeout(() => done('no answer'), 5000); })`);
+    check("with the floor and the policy bypassed: a blob shared worker's merge is blocked by the floor (no tab)", String(shared).startsWith("error"), String(shared));
+    const sw = await ev(sid, "navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).then((reg) => new Promise((done) => { navigator.serviceWorker.onmessage = (e) => done(e.data); reg.active.postMessage('go'); setTimeout(() => done('no answer'), 5000); }), (e) => 'error ' + e)");
+    check("with the floor: a service worker's merge is blocked by the floor (no tab)", String(sw).startsWith("error"), String(sw));
+    const own = await ev(sid, post("page"));
+    check("with the floor and the policy bypassed: the page script's own merge gets the guard's 403", String(own) === "status 403", String(own));
+    const frame = await ev(sid, `new Promise((done) => { const f = document.createElement('iframe'); f.src = 'http://${OTHER}:${port}/frame'; f.onload = () => done('loaded'); document.body.appendChild(f); setTimeout(() => done('no load'), 5000); })`);
+    await sleep(1500);
+    const frameWrites = writes.slice(before).filter((w) => w.body === "via=frame").length;
+    measure("with the floor and the policy bypassed: a frame of another site that posts the marked PR's merge (no auto-attach of the client)", `${frame}; its writes that reached the stand-in: ${frameWrites} (a cross-site request; C11 names it as a limit)`);
+    check("with the floor and the policy bypassed: no worker's or page's write reached the stand-in", writes.slice(before).filter((w) => /via=(blob-worker|shared-worker|sw|page)/.test(w.body)).length === 0, JSON.stringify(writes.slice(before)));
+    await c.send("Page.setBypassCSP", { enabled: false }, sid);
+  }
   // A page that is no PR page: a marked PR's merge by URL, and a PR with no verdict.
   await c.send("Page.navigate", { url: `${WEB()}/o/r` }, sid);
   await loaded(sid, (t) => t.includes("o/r"));
@@ -359,8 +394,9 @@ try {
   log(`the service's merge guard lines:\n${lines.join("\n")}`);
   check("the log names a refusal of each reason once (marked, unknown) with a method, the host, a tab and the count", lines.some((l) => /^merge guard: refused a write to github-standin\.localhost \((POST|PUT), tab \d+\): marked; refused so far: \d+$/.test(l)) && lines.some((l) => /: unknown; refused so far: \d+$/.test(l)));
   check("no log line of the guard holds a URL path, a query or a page's text", !lines.some((l) => /\/o\/r|pull\/|_graphql|test-csrf|Fix a typo|via=/.test(l)));
-  const marked = writes.filter((w) => /\/pull\/[2345]\/|\/pulls\/2\//.test(w.path) || (w.path === "/_graphql" && !w.body.includes(NODE(1))));
-  check("the stand-in got no write of a marked PR in the whole run", marked.length === 0, JSON.stringify(marked));
+  // The frame of another site with the policy bypassed (the floor mode only) is a measured limit that C11 states.
+  const marked = writes.filter((w) => w.body !== "via=frame" && (/\/pull\/[2345]\/|\/pulls\/2\//.test(w.path) || (w.path === "/_graphql" && !w.body.includes(NODE(1)))));
+  check("the stand-in got no write of a marked PR in the whole run (but the measured frame of another site in the floor mode)", marked.length === 0, JSON.stringify(marked));
   log(`the stand-in's writes: ${JSON.stringify(writes.map((w) => `${w.method} ${w.host === API ? "api " : ""}${w.path}`))}`);
 
   // 5. Stop.

@@ -185,18 +185,99 @@ test("a client cannot act on a request that the guard holds, cannot rewrite a re
   } finally { await h.close(); }
 });
 
-test("Page.setBypassCSP with enabled true is refused before any bridge request; enabled false goes", async () => {
+// review-125 note A: Page.setBypassCSP (enabled true) is refused only while the model has no floor that the receiver
+// confirmed on the current link; with the floor it goes to Chrome as before.
+const BYPASS = "Not available in the agent browser: Page.setBypassCSP.";
+async function bypass(h: Harness, c: CDPConnection, sessionId: string) {
+  const before = h.fake.sent("debugger.sendCommand", "Page.setBypassCSP").length;
+  const r = await failure(c.send("Page.setBypassCSP", { enabled: true }, sessionId));
+  const reached = h.fake.sent("debugger.sendCommand", "Page.setBypassCSP").length > before;
+  return { r, reached };
+}
+
+test("Page.setBypassCSP with enabled true: refused while bridge.mergeGuard has no answer yet; it goes once the receiver confirmed the floor; enabled false always goes", async () => {
   const h = await harness();
   try {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    h.fake.op = async ({ op }) => (op === "bridge.mergeGuard" ? gate.then(() => null) : undefined);
     await h.ready();
+    assert.equal(h.relay.model.guard.floor, "unknown", "the link up's op has no answer yet; the model is ready");
     const c = await h.connect();
-    const { sessionId } = await page(h, c);
-    const before = h.fake.requests.length;
-    assert.equal(await failure(c.send("Page.setBypassCSP", { enabled: true }, sessionId)), "Not available in the agent browser: Page.setBypassCSP.");
-    assert.deepEqual(h.fake.requests.slice(before), []);
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    void c.send("Target.createTarget", { url: "about:blank" });
+    await until(() => h.fake.sent("bridge.mergeGuard").length >= 1, "the op");
+    // The tab's session comes after the floor's chain: the session of a page that a client opens while the op has no answer.
+    open();
+    const { sessionId } = await attached;
+    assert.equal(h.relay.model.guard.floor, "on");
+    assert.deepEqual(await bypass(h, c, sessionId), { r: "no error", reached: true }, "the floor is confirmed: as before");
     await c.send("Page.setBypassCSP", { enabled: false }, sessionId);
-    assert.equal(h.fake.sent("debugger.sendCommand", "Page.setBypassCSP").length, 1);
+    // A raw page session while the op of the link up has no answer: refused.
+    const h2 = await harness();
+    try {
+      h2.fake.op = async ({ op }) => (op === "bridge.mergeGuard" ? new Promise(() => {}) : undefined);
+      await h2.ready();
+      const c2 = await h2.connect();
+      await c2.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+      const att2 = c2.waitForEvent("Target.attachedToTarget", { timeoutMs: 300 }).catch(() => null);
+      void c2.send("Target.createTarget", { url: "about:blank" }).catch(() => {});
+      assert.equal(await att2, null, "a new session waits for the floor's chain (the arm sends its op after the link up's op)");
+      assert.equal(h2.relay.model.guard.floor, "unknown", "no answer yet: no floor is confirmed (the unit tests show the refusal in this state)");
+    } finally { await h2.close(); }
   } finally { await h.close(); }
+});
+
+test("Page.setBypassCSP with enabled true: refused with an older receiver (unknown op), after an error of bridge.mergeGuard, and after a link change until the new link's answer", async () => {
+  // unknown op
+  const old = await harness();
+  try {
+    old.fake.op = ({ op }) => (op === "bridge.mergeGuard" ? { error: "unknown op" } : undefined);
+    await old.ready();
+    const c = await old.connect();
+    const { sessionId } = await page(old, c);
+    assert.equal(old.relay.model.guard.floor, "absent");
+    assert.deepEqual(await bypass(old, c, sessionId), { r: BYPASS, reached: false });
+  } finally { await old.close(); }
+  // an error
+  const err = await harness();
+  try {
+    let fail = false;
+    err.fake.op = ({ op }) => (op === "bridge.mergeGuard" && fail ? { error: "timeout" } : undefined);
+    await err.ready();
+    const c = await err.connect();
+    const first = await page(err, c);
+    assert.deepEqual(await bypass(err, c, first.sessionId), { r: "no error", reached: true });
+    fail = true;
+    const second = await page(err, c);
+    assert.equal(err.relay.model.guard.floor, "unknown", "an error confirms no floor");
+    assert.deepEqual(await bypass(err, c, second.sessionId), { r: BYPASS, reached: false });
+  } finally { await err.close(); }
+  // a link change: the old link's floor goes; the new link's answer confirms it again
+  const lc = await harness();
+  try {
+    await lc.ready();
+    const c = await lc.connect();
+    const { sessionId } = await page(lc, c);
+    assert.deepEqual(await bypass(lc, c, sessionId), { r: "no error", reached: true });
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    lc.fake.op = async ({ op }) => (op === "bridge.mergeGuard" ? gate.then(() => null) : undefined);
+    lc.fake.line({ t: "link", up: false });
+    await c.closedPromise;
+    assert.equal(lc.relay.model.guard.floor, "unknown", "a link change");
+    lc.fake.line({ t: "link", up: true, version: "0.3.1" });
+    lc.fake.line({ t: "allowlist", lists: { a: ["a.example"] }, scopes: {}, default: "a" });
+    await until(() => lc.fake.sent("bridge.mergeGuard").length >= 3, "the new link's op");
+    assert.equal(lc.relay.model.guard.floor, "unknown", "no answer yet on the new link");
+    open();
+    await until(() => lc.relay.model.notReady() === null, "the new link to be ready");
+    const c2 = await lc.connect();
+    const p2 = await page(lc, c2);
+    assert.equal(lc.relay.model.guard.floor, "on");
+    assert.deepEqual(await bypass(lc, c2, p2.sessionId), { r: "no error", reached: true });
+  } finally { await lc.close(); }
 });
 
 test("an older receiver: bridge.mergeGuard gets unknown op, the floor is absent, the log says so once, and the tab is still guarded while a client holds it", async () => {

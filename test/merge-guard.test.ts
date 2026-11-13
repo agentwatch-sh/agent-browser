@@ -4,6 +4,7 @@
 // host of the service's --test mode.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { refusal, route } from "../src/relay/policy.ts";
 import { bodyOf, classify, formsIn, GITHUB_HOSTS, globMatch, GUARD_TEXT, MARKER_FORMS, markersIn, MergeGuard, nodeIdsIn, prOf, refusalOf, TRIAGE_MARKER, wanted, type Pr } from "../src/relay/merge-guard.ts";
 
 const H = GITHUB_HOSTS;
@@ -367,4 +368,45 @@ test("the stand-in host: --test-merge-guard-host takes only a normalized host un
   assert.match(main, /const guardHost = test && str\("test-merge-guard-host"\) \? testMergeGuardHost\(str\("test-merge-guard-host"\)!\) : undefined;/);
   assert.match(main, /\.\.\.\(guardHost \? \{ mergeGuard: \{ testHosts: \[guardHost\] \} \} : \{\}\)/);
   assert.match(main, /"test-merge-guard-host"\]\) if \(v\[k\] !== undefined && !test\) throw new UsageError/);
+});
+
+test("Page.setBypassCSP with enabled true is refused while the floor is not confirmed (review-125 note A), and goes with it; enabled false always goes", () => {
+  const text = "Not available in the agent browser: Page.setBypassCSP.";
+  assert.equal(refusal("Page.setBypassCSP", { enabled: true }, true), text, "no floor named: refused");
+  assert.equal(refusal("Page.setBypassCSP", { enabled: true }, true, { floor: false }), text);
+  assert.equal(refusal("Page.setBypassCSP", { enabled: true }, true, { floor: true }), null);
+  assert.equal(refusal("Page.setBypassCSP", { enabled: false }, true, { floor: false }), null);
+  assert.deepEqual(route("Page.setBypassCSP", { enabled: true }, true, { floor: false }), { refused: text });
+  assert.equal(route("Page.setBypassCSP", { enabled: true }, true, { floor: true }), "chrome");
+});
+
+test("the floor's states: no answer yet, an answer of the current link, an error, unknown op, and an answer from before a link change", async () => {
+  let answer: (v: unknown) => void = () => {}, fail: (e: Error) => void = () => {};
+  const { g } = guard({ op: () => new Promise((res, rej) => { answer = res; fail = rej; }) });
+  const up = g.linkUp();
+  assert.equal(g.floor, "unknown", "no answer yet");
+  await sleep(1);
+  answer(null); await up;
+  assert.equal(g.floor, "on", "the answer of the current link");
+  // A new link up (also with no reset before it) starts with no confirmed floor, until its own answer.
+  const up1 = g.linkUp();
+  assert.equal(g.floor, "unknown", "a link up: no answer yet");
+  await sleep(1);
+  answer(null); await up1;
+  assert.equal(g.floor, "on");
+  const armed = g.arm(7);
+  await sleep(1);
+  fail(new Error("timeout")); await armed;
+  assert.equal(g.floor, "unknown", "an error confirms no floor");
+  // An answer that comes after a link change confirms nothing.
+  const late = g.linkUp();
+  await sleep(1);
+  const stale = answer;
+  g.reset();
+  stale(null); await late;
+  assert.equal(g.floor, "unknown", "an answer from before the link change");
+  const up2 = g.linkUp();
+  await sleep(1);
+  fail(new Error("unknown op")); await up2;
+  assert.equal(g.floor, "absent", "an older receiver");
 });

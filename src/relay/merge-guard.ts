@@ -242,6 +242,8 @@ export class MergeGuard {
   private readonly held = new Set<string>();
   private readonly notices = new Map<string, number>();
   private floorChain: Promise<void> = Promise.resolve();
+  /** The link's generation: an answer of bridge.mergeGuard from before a link change confirms nothing (review-125 note A). */
+  private generation = 0;
   /** The receiver's floor (layer 2): on (it answered bridge.mergeGuard), absent (unknown op: an older receiver), or unknown. */
   floor: "on" | "absent" | "unknown" = "unknown";
   readonly counts = { writes: 0, refused: 0, marked: 0, unknown: 0, untied: 0, clientRefused: 0, reads: 0, readFailed: 0 };
@@ -320,25 +322,32 @@ export class MergeGuard {
   forget(tabId: number): void { this.disarm(tabId); this.tabUrls.delete(tabId); }
 
   /** The link changed: no attachment is left; the verdicts stay (they are GitHub's answers, not a connection's). */
-  reset(): void { this.armed.clear(); this.clients.clear(); this.given.clear(); this.held.clear(); this.tabUrls.clear(); this.floor = "unknown"; }
+  reset(): void { this.armed.clear(); this.clients.clear(); this.given.clear(); this.held.clear(); this.tabUrls.clear(); this.floor = "unknown"; this.generation++; }
 
   /** The link came up: the receiver gets the guard's hosts at once, and says whether it has the floor. */
-  linkUp(): Promise<void> { this.floor = "unknown"; return this.syncFloor(); }
+  linkUp(): Promise<void> { this.floor = "unknown"; this.generation++; return this.syncFloor(); }
 
   /** One bridge.mergeGuard at a time, with the hosts and every armed tab (a full replace). */
   private syncFloor(): Promise<void> {
     const run = this.floorChain.then(async () => {
       if (this.floor === "absent") return;
+      const generation = this.generation;
       const tabs = [...new Set([...this.armed].filter((k) => k.endsWith("|")).map((k) => Number(k.slice(0, -1))))].sort((a, b) => a - b);
       try {
         await this.o.op([{ hosts: [...this.hosts], tabs }]);
-        this.floor = "on";
+        // Only an answer of the current link confirms the floor.
+        if (generation === this.generation) this.floor = "on";
       } catch (e) {
         const why = (e as Error).message;
+        if (generation !== this.generation) return;
         if (why === "unknown op") {
           this.floor = "absent";
           this.o.log(`${GUARD_TEXT.logPrefix} the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded`);
-        } else this.notice(`floor ${why}`, `${GUARD_TEXT.logPrefix} bridge.mergeGuard failed (${why})`);
+        } else {
+          // An error confirms no floor (fail closed) until a later answer does.
+          this.floor = "unknown";
+          this.notice(`floor ${why}`, `${GUARD_TEXT.logPrefix} bridge.mergeGuard failed (${why})`);
+        }
       }
     });
     this.floorChain = run.catch(() => {});

@@ -490,7 +490,8 @@ export class Model {
     if (link !== this.link) return;
     await this.targetsAndDetach(link, fromMap);
     // The merge guard's floor (C10, bridge.mergeGuard): the receiver gets the guard's hosts and says whether it has the floor.
-    if (link === this.link) await this.guard.linkUp();
+    // Readiness does not wait for its answer: until the answer the floor is not confirmed (C11, the merge guard).
+    if (link === this.link) void this.guard.linkUp();
     // Ready only now (with the allowlist line): no connection meets a tab that still carries an earlier client's
     // state, and each scope's tabs from before the link up are in the model.
     if (link === this.link) this.info = info;
@@ -682,7 +683,8 @@ export class Model {
       if (!tab) return fail(TEXT.noSession);
       onPage = true;
     }
-    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null });
+    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null,
+      floor: this.guard.floor === "on" });
     if (typeof to === "object") return fail(to.refused);
     // Layer 1 of the guard (C11; the per-scope design, section 6): a navigation of the tab's main frame, or a new tab's
     // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off

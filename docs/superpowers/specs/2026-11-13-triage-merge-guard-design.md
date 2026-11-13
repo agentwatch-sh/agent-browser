@@ -119,7 +119,7 @@ call to `api.github.com`, a GraphQL mutation to `api.github.com/graphql`. The mo
 | A client's `Fetch.disable` or a new `Fetch.enable` | the model keeps its own patterns on | — |
 | A worker of the page that the client's auto-attach brings (Playwright and the MCP attach workers and hold them at their start) | the model turns its `Fetch` on in that child session before the client lets it run | — |
 | A dedicated worker that no client attaches | its request goes through the tab's own session (measured in the live check, with a raw client and no auto-attach): judged | — |
-| A shared or a service worker; `Page.setBypassCSP` | `Page.setBypassCSP` with `enabled` true is refused, so GitHub's `worker-src` stays in force: only GitHub's own worker scripts run there (a limit, section 8) | blocks every write of a request with no tab |
+| A shared or a service worker; `Page.setBypassCSP` | while the receiver gives no confirmed floor on the current link, `Page.setBypassCSP` with `enabled` true is refused, so GitHub's `worker-src` stays in force: only GitHub's own worker scripts run there (a limit, section 8); with the floor it goes as before (review-125 note A) | blocks every write of a request with no tab |
 | A popup that the page opens; another tab of the scope; a tab with no client (the CLI between its commands; a popup that no client took; a page's script after its client left) | a tab that a client holds | blocks every write of every tab where layer 1 is off |
 | A request from another tab or another site (a cross-site form, a 307 redirect of a POST) | judged in the tab that makes it; a redirect is a new request | the same |
 | The MCP tools (`browser_click`, `browser_type`, `browser_press_key`, `browser_evaluate`, ...) | the MCP is a Playwright client of the agent door: the rows above | the same |
@@ -190,9 +190,11 @@ never reaches the journal).
 - A GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that
   names a marked PR only by a node id that the model never saw in a marked PR's answer.
 - A request of a shared worker or a service worker of a GitHub page (no tab's session sees it). With
-  `Page.setBypassCSP` refused, GitHub's `worker-src` lets only GitHub's own worker scripts run there; the floor blocks the
+  `Page.setBypassCSP` refused while no floor is confirmed, GitHub's `worker-src` lets only GitHub's own worker scripts run there; the floor blocks the
   writes of a worker with no tab. A dedicated worker's request goes through the tab's own session, also when the client
   attaches no worker (measured in the live check).
+- With a confirmed floor and the page's policy bypassed, a write of a frame of another site in a GitHub page that the
+  client's auto-attach does not bring: the browser sends it as a cross-site request (review-125 note A).
 - A write of a tab with no client while the receiver has no floor (receiver 0.3.7 and older), for example the request
   of a click that a page sends after the CLI's command ended.
 - A write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer (Chrome lets
@@ -223,7 +225,9 @@ never reaches the journal).
   service, which serves sessions from stage 3, and in the relay of the old path.
 - Layer 2 comes with the chrome-extension receiver version that adds `bridge.mergeGuard` (the next repack after its PR,
   0.3.8 if no other release comes first), and with the agent-browser pin that names that receiver (the service checks
-  the pinned CRX). The relay of the old path gets the floor only when agentwatch's daemon carrier passes the op on.
+  the pinned CRX). The relay of the old path has the floor once that receiver release is pinned: agentwatch's carrier
+  passes the op on unchanged, with no agentwatch change (the daemon lead, review-125 note B). Until then
+  `Page.setBypassCSP` with `enabled` true stays refused on both paths.
 - agentwatch's `triage enable` can require: the service's commit (C12's hello) at or after the merge of ab-v16.99, and the
   receiver's version (C12 `status`, `extension_version`) at or after the floor's release. Both hold only on the agent
   mode path of the service, from stage 3 on.
