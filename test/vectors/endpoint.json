@@ -150,7 +150,9 @@
     {"session": "root", "method": "AgentBrowser.signIn", "params": {"name": "staging"}, "note": "The sign-in act (C11): withAct is where the call goes in the service's model with the act (from stage 1e part 2, board ab-v16.97.4). The relay, and the model before that stage, have no act: the call is outside their set.", "to": "refused", "withAct": "the model"},
     {"session": "root", "method": "AgentBrowser.signIns", "params": {}, "note": "As AgentBrowser.signIn: refused until the model has the act, then the model's.", "to": "refused", "withAct": "the model"},
     {"session": "page", "method": "AgentBrowser.signIn", "params": {"name": "staging"}, "note": "Refused on a page session, with the act too: it never reaches Chrome (review-112 B6).", "to": "refused", "withAct": "refused"},
-    {"session": "page", "method": "AgentBrowser.signIns", "params": {}, "note": "Refused on a page session, with the act too.", "to": "refused", "withAct": "refused"}
+    {"session": "page", "method": "AgentBrowser.signIns", "params": {}, "note": "Refused on a page session, with the act too.", "to": "refused", "withAct": "refused"},
+    {"session": "root", "method": "AgentBrowser.setSecretInput", "params": {"enabled": true}, "note": "The client's mark of a secret (C11, the input stage, the paste; board ab-t30.22): it names no tab, so it is refused on the root.", "to": "refused"},
+    {"session": "page", "method": "AgentBrowser.setSecretInput", "params": {"enabled": true}, "note": "The model's on a page session: the model answers it, and it never reaches Chrome.", "to": "the model"}
   ],
   "cookieLimits": ["`DOMStorage.*`", "`IndexedDB.*`", "`Runtime`", "`rawCookieLine`", "`context.request`", "`page.request`", "`route.fetch()`", "`routeFromHAR`"],
   "procsNote": "The fake process tables of the session check (C11, the scope's session). world: the table; pid, ppid (field 4), start (field 22 on Linux; pbi_start_tvsec * 1000000 + pbi_start_tvusec on the Mac), state (field 3; Z on the Mac is SZOMB) and cgroup (the 0:: line; null on the Mac) of each process, as the relay reads them at the line and at the check. Every value is a sample. The relay's uid is 1001.",

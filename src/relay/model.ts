@@ -28,7 +28,7 @@ import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_E
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
 import { Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StagePage } from "./stage.ts";
-import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
 
@@ -2363,6 +2363,14 @@ export class Model {
     // On a page session with one window per page only (route): the page draws in its window, so focus emulation
     // would only make it report the focus while another page has it.
     [FOCUS_EMULATION]: async () => ({}),
+    // The client's mark of a secret (C11, the input stage, the paste; board ab-t30.22), on the tab's own page session:
+    // with the stage on, a step of the tab's gate that the stage answers; with the switch off, {} (no text pastes).
+    [SECRET_INPUT]: async (c, p, sid, tab) => {
+      if (!tab || !sid || !c.sessions.has(sid)) throw new Error(TEXT.generic(SECRET_INPUT));
+      if (typeof p?.enabled !== "boolean") throw new Error("enabled must be true or false");
+      if (!this.stage) return {};
+      return new Promise<object>((resolve, reject) => this.forward(tab, undefined, SECRET_INPUT, { enabled: p.enabled }, (b: any) => (b.error ? reject(new Error(b.error.message)) : resolve(b.result ?? {}))));
+    },
     // The sign-in act (C11): only a model with the act routes them here (route), on the root and on a browser session.
     "AgentBrowser.signIn": async (c, p) => {
       if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIn"));

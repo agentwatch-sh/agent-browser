@@ -172,7 +172,7 @@ for (const id of [...POINTER, ...KEYS, ...SCROLL]) {
 // ================================================================ the build switch, the constants, the recognizers
 
 test("the build switch: off in the build; the model's option turns it on or off; the relay's variable turns it on only with the value \"test\"", () => {
-  assert.equal(STAGE_BUILD_ON, false, "the stage stays off until ab-t30.9 to ab-t30.12 are all merged");
+  assert.equal(STAGE_BUILD_ON, false, "the stage stays off until ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 are all merged");
   assert.equal(stageOn(undefined, {}), false);
   assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "1" }), false);
   assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "on" }), false);

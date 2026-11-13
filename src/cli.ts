@@ -195,6 +195,8 @@ export async function paramsFor(spec: CommandSpec, positionals: string[], v: Val
   if (positionals.length > taken.length) throw usage();
   taken.forEach((p, i) => { if (positionals[i] !== undefined) params[p.name] = positionals[i]; });
   if (v.stdin && fromStdin) params[fromStdin.name] = await readAll(stdin);
+  // A text on stdin is how agentwatch's skill sends a secret: type marks it, so the input stage never pastes it (board ab-t30.22).
+  if (v.stdin && spec.name === "type") params.secret = true;
   for (const p of spec.params) {
     if (!p.cli.startsWith("--")) continue;
     const raw = v[p.cli.slice(2)];

@@ -16,7 +16,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { charKey } from "../src/human/keys.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
-import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, RUN_IDLE_MS, STAGE_ACTION_MAX_MS, STAGE_GROUP } from "../src/relay/stage.ts";
+import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, FOCUSED_FIELD, RUN_IDLE_MS, STAGE_ACTION_MAX_MS, STAGE_GROUP } from "../src/relay/stage.ts";
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -340,7 +340,8 @@ test("the review-126 round and board ab-t30.20: the design states the flush, the
     "3. The plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (10 s). With the first values, about 40 to 50 characters fit at a person's mean speed. The stage never plans at the fast end of the person's spread (about 100 to 120 ms a key): the operator's answer on board item ab-2qb (section 15; board ab-t30.20). A longer text goes as a person's paste when the paste rule allows it (section 7.5). This holds for `fill`, `keyboard.insertText` and the collected parts of `pressSequentially`, `locator.type` and `keyboard.type`.",
     "By the operator's answer on board item ab-2qb, the limit is the plan at the person's speed alone: a text that fits only at the fast end goes as a paste too.",
     "- **The paste.** A text whose typing plan at the person's speed does not fit in what is left of the key run's `STAGE_TYPE_MAX_MS` goes as a person's paste (no fast end: the operator's answer on board item ab-2qb, section 15):",
-    "with no clipboard (the daemon's relay: its display is the daemon's, so there a long text never pastes), while a connection holds a grant of the clipboard (from the grant's request until a reset or the connection's close has cleared the setting: review-126 note 2), while an earlier paste's V of any tab has no answer (review-126 B4, below),",
+    // board ab-t30.22 (before: with no clipboard (the daemon's relay: its display is the daemon's, so there a long text never pastes), ...)
+    "with no clipboard (the daemon's relay: it has no display at all, so there a long text never pastes), while a connection holds a grant of the clipboard (from the grant's request until a reset or the connection's close has cleared the setting: review-126 note 2), while an earlier paste's V of any tab has no answer (review-126 B4, below),",
     "and the part's ended or failed action is closed before the tab's next call, so that call never waits for its own tab's lock (review-126 B1).",
     "After a dialog the client's own keys of a part that Chrome dropped while the dialog was open go again, and after any end each wait for Chrome's answers of them has the limit `STAGE_EVENT_WAIT_MS` (review-126 B2).",
     "- **The flush (review-126 B3).**",
@@ -376,6 +377,22 @@ test("review-126b R2 and note 2: the design states that no input event goes with
     "No input event goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys with no modifiers and no commands cannot paste.",
   ]) assert.ok(D.includes(t), `the design says: ${t}`);
   assert.ok(!D.includes("A frame's own session gets no input while a text is on the selection"), "the old sentence is gone");
+});
+
+test("board ab-t30.22: the design's section 7.5 states that a secret never goes through the clipboard (the field rule, the client's mark, one Input.insertText, the part's field), and that the daemon's relay has no display at all", () => {
+  const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  for (const t of [
+    "with no clipboard (the daemon's relay: it has no display at all, so there a long text never pastes)",
+    // review-129 (before: ... `current-password`, `new-password` or `one-time-code`) ...; ... (a collected part too, in place of its key events). The stage reads the field of a collected part at the part's end, before its events go. agent-browser's own `type --stdin` sets the mark.)
+    "So the stage never pastes into a field of a secret (an `input` of type `password`, or a field whose `autocomplete` has `current-password`, `new-password`, `one-time-code`, `cc-number` or `cc-csc`) or a text that the client marks as a secret (`AgentBrowser.setSecretInput` with `{\"enabled\":true}` on the tab's own session, until `{\"enabled\":false}` or the end of the client's last session on the tab; the model answers it, in the tab's gate).",
+    "Such a text goes typed when its plan fits, else as one `Input.insertText`, as a password manager's fill does (a collected part too, in place of its key events, and as the client's own keys when the field did not take it).",
+    // review-129b B1 (before: ... and every field again right before V (review-129).)
+    "The stage reads the field of a collected part at the part's end, before its events go, and every field again at V's time, after the gap that follows Control and before the clipboard's hold (review-129b); a page can still change the field in that hold and in V's send.",
+    "A contenteditable, a field that is no text field and a failed read keep Playwright's own input also while the mark holds.",
+    "Other fields paste, also one that holds a secret with no sign of it (a text field that CSS masks, a \"show password\" toggle, another card field): the mark is the way for them.",
+    "agent-browser's own `type --stdin` sets the mark, and it fails closed: an error answer that does not say \"not known\" or \"not available\" stops its text.",
+  ]) assert.ok(D.includes(t), `the design says: ${t}`);
+  assert.ok(!D.includes("the daemon's relay: its display is the daemon's"), "the old text is gone");
 });
 
 // ================================================================ the page-side texts (node:vm, a small DOM model)
@@ -451,6 +468,18 @@ test("FIELD_STATE's widget signs, as the page reads them: the role combobox (a t
   assert.equal(plain(runOn(t, FIELD_STATE, [false], vm.createContext({}))).widget, "autocomplete");
   // fill's retarget (follow): a label's control, whose signs count.
   assert.equal(read({}, (el, doc) => { el.attrs.role = "combobox"; }, true, (el, doc) => { const l = new El("label"); doc.body.append(l); l.control = el; return l; }), "combobox", "the label's control");
+});
+
+test("board ab-t30.22: the typing rule's read of the focused element (FOCUSED_FIELD, as the page runs it) gives the field's type and its autocomplete attribute as the page wrote it, which the field rule reads; no autocomplete is an empty text, and an element that is no text field gives none", () => {
+  const doc = new Doc();
+  const ctx = vm.createContext({ document: doc });
+  const read = (el: El) => { doc.body.append(el); doc.activeElement = el; return plain(vm.runInContext(`(${FOCUSED_FIELD})()`, ctx)); };
+  const pw = read(new El("input", { type: "password" }));
+  assert.deepEqual([pw.tag, pw.type, pw.typing, pw.ac], ["input", "password", true, ""]);
+  assert.equal(read(new El("input", { autocomplete: "section-a Current-Password" })).ac, "section-a Current-Password");
+  assert.equal(read(new El("textarea", { autocomplete: "one-time-code" })).ac, "one-time-code");
+  const ce = new El("div", { autocomplete: "one-time-code" }); ce.isContentEditable = true;
+  assert.equal(read(ce).ac, null, "a contenteditable is no text field of the rule");
 });
 
 test("FIELD_ELEMENT gives the field's element (fill's retarget: a label's control)", () => {

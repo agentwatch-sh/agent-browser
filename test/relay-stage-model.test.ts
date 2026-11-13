@@ -800,3 +800,83 @@ test("review-126b R1 through the model (part B1's note): with the build switch o
     assert.deepEqual(order, ["first starts", "first ends", "second starts", "second ends"]);
   } finally { await h.close(); }
 });
+
+// ================================================================ the client's mark of a secret (board ab-t30.22)
+
+const MARK = "AgentBrowser.setSecretInput";
+/** The stage's read of a focused text input (the fake's world answers it). */
+const focusedInput = (h: Harness) => {
+  h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && String(params.expression).includes("__agentBrowserStageField") ? { result: { type: "object", value: { tag: "input", type: "text", editable: false, typing: true, ac: "", value: "", s: 0, e: 0 } } } : undefined);
+};
+
+test("board ab-t30.22, the client's mark with the build switch off (C11, the paste): AgentBrowser.setSecretInput on the tab's own session answers {} and never reaches Chrome; with no boolean enabled it fails; on the root, on a browser session and on a frame's own session it is refused", async () => {
+  const saved = process.env[STAGE_TEST_ENV];
+  delete process.env[STAGE_TEST_ENV];
+  const h = await harness({ clipboard: fakeClipboard() });
+  try {
+    assert.equal(h.relay.model.stageOn, false);
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const from = h.fake.requests.length;
+    assert.deepEqual(await c.send(MARK, { enabled: true }, p.sessionId), {});
+    assert.deepEqual(await c.send(MARK, { enabled: false }, p.sessionId), {});
+    await assert.rejects(c.send(MARK, {}, p.sessionId), /enabled must be true or false/);
+    await assert.rejects(c.send(MARK, { enabled: "yes" }, p.sessionId), /enabled must be true or false/);
+    await assert.rejects(c.send(MARK, { enabled: true }), /Not available in the agent browser: AgentBrowser\.setSecretInput\./);
+    // review-129 bar 4: a browser session (Target.attachToBrowserTarget) is refused as the root is.
+    const { sessionId: browserSession } = await c.send("Target.attachToBrowserTarget", {});
+    await assert.rejects(c.send(MARK, { enabled: true }, browserSession), /Not available in the agent browser: AgentBrowser\.setSecretInput\./, "refused on a browser session");
+    assert.deepEqual(cmds(h, from), [], "no call reaches Chrome");
+    // A frame's own session (an out-of-process frame of the tab): refused, as every other AgentBrowser.* call.
+    h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+      targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://a.example/f", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(c.send(MARK, { enabled: true }, "FR1"), /Not available in the agent browser: AgentBrowser\.setSecretInput\./, "refused on a frame's own session");
+    assert.ok(!cmds(h, from).some((x) => x.method === MARK), "the mark never reaches Chrome");
+  } finally { await h.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
+});
+
+test("board ab-t30.22, the client's mark with the stage on (C11, the paste, rule 8): a step of the tab's gate; while it holds, a long Input.insertText goes as one Input.insertText with no clipboard call; after enabled false, and after the end of the client's last session on the tab, a long text pastes again", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    focusedInput(h);
+    const from = h.fake.requests.length;
+    assert.deepEqual(await c.send(MARK, { enabled: true }, p.sessionId), {});
+    await c.send("Input.insertText", { text: "y".repeat(2500) }, p.sessionId);
+    assert.deepEqual(clip.log, [], "no clipboard call while the mark holds");
+    assert.equal(h.relay.model.stageCounts()["noPaste:secretMark"], 1);
+    assert.ok(cmds(h, from).some((x) => x.method === "Input.insertText" && x.params.text.length === 2500), "the text as one Input.insertText");
+    assert.ok(!cmds(h, from).some((x) => x.method === MARK), "the mark never reaches Chrome");
+    assert.deepEqual(await c.send(MARK, { enabled: false }, p.sessionId), {});
+    await c.send("Input.insertText", { text: "z".repeat(2500) }, p.sessionId);
+    assert.ok(clip.log.includes("hold 2500"), "after enabled false a long text pastes");
+    // The mark holds until the stage forgets the tab: the end of the client's last session on it.
+    assert.deepEqual(await c.send(MARK, { enabled: true }, p.sessionId), {});
+    await c.send("Target.detachFromTarget", { sessionId: p.sessionId });
+    const { sessionId } = await c.send("Target.attachToTarget", { targetId: p.targetId, flatten: true });
+    clip.log.length = 0;
+    await c.send("Input.insertText", { text: "w".repeat(2500) }, sessionId);
+    assert.ok(clip.log.includes("hold 2500"), "a new session of the tab has no mark");
+  } finally { await h.close(); }
+});
+
+test("review-129b N5: in a model with the sign-in act (the service's model), the mark is refused on the root and on a browser session with C11's text, and the tab's own session answers {}", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    h.relay.model.setSignIns({ signIn: async () => ({}), signIns: async () => ({}) } as any);
+    const c = await h.connect();
+    const p = await page(h, c);
+    assert.deepEqual(await c.send(MARK, { enabled: true }, p.sessionId), {});
+    const refusal = (e: Error) => e.message === "AgentBrowser.setSecretInput: Not available in the agent browser: AgentBrowser.setSecretInput.";
+    await assert.rejects(c.send(MARK, { enabled: true }), refusal, "the root");
+    const { sessionId: browserSession } = await c.send("Target.attachToBrowserTarget", {});
+    await assert.rejects(c.send(MARK, { enabled: true }, browserSession), refusal, "a browser session");
+    assert.deepEqual(await c.send("AgentBrowser.signIns", {}), {}, "the act's own method is the model's on the root");
+  } finally { await h.close(); }
+});

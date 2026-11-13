@@ -89,6 +89,7 @@ input,textarea,button,#ce,#chips,#dpop,#cblist,#acblist,#hpop,#plpop,#tapop{posi
 <input id=cc placeholder="counted"><input id=en placeholder="empty handler"><textarea id=tap></textarea><div id=tapop>panel</div>
 <iframe id=xf src="http://b.localhost:${port}/kframe?o=cross"></iframe><iframe id=sf src="/kframe?o=same"></iframe><iframe id=xf2 src="http://b.localhost:${port}/kframe?o=cross2"></iframe><iframe id=xs src="http://b.localhost:${port}/kframe?o=cross3"></iframe>
 <div id=banner>We use cookies. <a href="#ok" id=bannerok>OK</a></div><div id=banner2>Sign up for news.</div>
+<div style="position:absolute;left:20px;top:1400px"><input id=pw type=password autocomplete=current-password><input id=otp autocomplete=one-time-code></div>
 <script>
 window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, after3: 0, after4: 0, cc: 0, shiftDowns: 0, keydowns: 0, banner: 0, banner2: 0, pastes: [], inputs: {} };
 // Board ab-t30.19: each paste (its field, the length of its text, whether the page prevented it) and the inputType of each input event, after the page's own handlers.
@@ -238,6 +239,18 @@ const ROWS: Row[] = [
   { name: "the paste: pressSequentially() of 300 characters into a field that refuses a paste: the client's own keys after the refused paste", act: (p) => p.locator("#np").pressSequentially(T2500.slice(0, 300)), fields: ["np"], paste: { field: "np", len: 300, refused: true } },
   { name: "the paste: pressSequentially() of 30 lines (1,229 characters with their Enter keys) into a textarea within Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially(LINES), fields: ["ta"], paste: "lines" },
   { name: "the paste (review-126 B5): pressSequentially() of 60 lines (2,459 characters with their Enter keys) into a textarea within Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially(LINES60), fields: ["ta"], paste: "lines" },
+  // Board ab-t30.22: a secret never goes through the clipboard. A password field and a one-time-code field get no paste:
+  // one Input.insertText (the page sees insertText and no paste; the stage's line names the field rule). The client's
+  // mark (AgentBrowser.setSecretInput on a CDP session of the page; Chrome with no stage refuses it, and the act goes on)
+  // keeps a long text in a plain field from the paste. The row "the paste: fill() of 2,500 characters into an input"
+  // shows that a plain field still pastes.
+  { name: "a secret: fill() of 2,500 characters into a password field: one Input.insertText (no paste)", act: (p) => p.locator("#pw").fill(T2500), fields: ["pw"], paste: null, trace: /^a text as it is \(tooLong, no paste: secretField\)$/ },
+  { name: "a secret: pressSequentially() of 300 characters into a one-time-code field: one Input.insertText of the part (no paste)", act: (p) => p.locator("#otp").pressSequentially(T2500.slice(0, 300)), fields: ["otp"], paste: null, trace: /^a collected part as one Input\.insertText \(secretField\)$/ },
+  { name: "a secret: the client's mark (AgentBrowser.setSecretInput), then fill() of 2,500 characters into a textarea: one Input.insertText (no paste)", act: async (p) => {
+    const cdp = await p.context().newCDPSession(p);
+    await cdp.send("AgentBrowser.setSecretInput", { enabled: true }).catch(() => {});
+    try { await p.locator("#ta").fill(T2500); } finally { await cdp.send("AgentBrowser.setSecretInput", { enabled: false }).catch(() => {}); await cdp.detach().catch(() => {}); }
+  }, fields: ["ta"], paste: null, trace: /^a text as it is \(tooLong, no paste: secretMark\)$/ },
   // Open point 1 with the operator's answer on ab-pf8 (board ab-t30.18): a field with a widget sign gets no focus click, so
   // its panel never opens, and the next click passes, as with Playwright's own input; the trace names the sign.
   { name: "open point 1: a date picker that opens at a click (a click listener on the field): fill(); then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], trace: /^no focus click \(focusWidget: listener\)$/ },
@@ -267,7 +280,7 @@ async function stateOf(p: any): Promise<any> {
     const v = (id: string) => { const el = document.getElementById(id) as any; return el.isContentEditable ? el.textContent : el.value; };
     const k = (window as any).__k;
     const shown = (id: string) => getComputedStyle(document.getElementById(id)!).display;
-    return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb", "acb", "hp", "pl", "cc", "en", "tap", "np"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips, pastes: k.pastes, inputs: k.inputs,
+    return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb", "acb", "hp", "pl", "cc", "en", "tap", "np", "pw", "otp"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips, pastes: k.pastes, inputs: k.inputs,
       after: k.after, after2: k.after2, after3: k.after3, after4: k.after4, ccClicks: k.cc, dpop: shown("dpop"), cblist: shown("cblist"), acblist: shown("acblist"), hpop: shown("hpop"), plpop: shown("plpop"), tapop: shown("tapop"),
       shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner, banner2: k.banner2 };
   });
@@ -335,7 +348,8 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           if (row.paste !== undefined) {
             const P = s.state.pastes as [string, number, boolean, boolean][], Q = q.state.pastes as unknown[];
             const fromPaste = Object.entries(s.state.inputs as Record<string, number>).filter(([k]) => k.endsWith(":insertFromPaste"));
-            if (row.paste === null) pasteOk = P.length === 0 && Object.keys(s.state.inputs).some((k) => k.endsWith(":insertText"));
+            // review-129 note 5: the insertText input is the row's own field's.
+            if (row.paste === null) pasteOk = P.length === 0 && row.fields.some((f) => (s.state.inputs as Record<string, number>)[`${f}:insertText`] > 0);
             else if (row.paste === "lines") pasteOk = P.every((x) => x[0] === "ta" && x[3]);
             else pasteOk = P.length === 1 && P[0][0] === row.paste.field && P[0][1] === row.paste.len && P[0][2] === !!row.paste.refused && P[0][3]
               && (row.paste.refused ? fromPaste.length === 0 : fromPaste.length === 1 && fromPaste[0][1] === 1);
