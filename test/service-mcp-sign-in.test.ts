@@ -238,6 +238,12 @@ test("a call of browser_sign_in counts as a use while its act runs, also after i
   const act = fakeAct({ signIn: () => { started++; return new Promise((r) => { finish = () => r({ signedIn: true, name: "staging", origin: ORIGIN }); }); } });
   await withAct({ act }, async ({ t, h }) => {
     const sid = await init(h.url("web-1"));
+    // The worker (the MCP) gets nothing of the act's calls: no request, and no cancel when a client cancels or leaves.
+    const w = t.workerOf("web-1")!;
+    const toWorker: string[] = [];
+    const req = w.request.bind(w), note = w.notify.bind(w);
+    w.request = (s, m) => { toWorker.push(`request ${String(m.method)} ${JSON.stringify(m.id)}`); return req(s, m); };
+    w.notify = (s, m) => { toWorker.push(`notify ${String(m.method)} ${JSON.stringify((m.params as any)?.requestId)}`); note(s, m); };
     // A cancel: the act runs on, and the POST gets its answer.
     const first = post(h.url("web-1"), call(50, "browser_sign_in", { name: "staging" }), sid);
     await until(() => started === 1, "the act starts");
@@ -259,6 +265,7 @@ test("a call of browser_sign_in counts as a use while its act runs, also after i
     assert.equal(t.activity().calls, 1, "the act still counts as a use after its client closed");
     finish();
     await until(() => t.activity().calls === 0, "the use ends with the act");
+    assert.deepEqual(toWorker.filter((x) => / 5[01]$/.test(x) && !x.startsWith("notify notifications/cancelled 50")), [], "no request and no cancel of the closed call reached the MCP");
   });
 });
 
@@ -401,4 +408,10 @@ test("a real MCP client (the MCP SDK's Client and StreamableHTTPClientTransport 
     }
     assert.deepEqual(act.calls.map((c) => [c.method, c.admission]), [["signIn", "local"], ["signIns", "local"]], "only the local client reached the act");
   });
+});
+
+test("service.ts gives the MCP part the act that it gives the model, so the MCP tools run the same act as AgentBrowser.signIn", () => {
+  const service = readFileSync(new URL("../src/service/service.ts", import.meta.url), "utf8");
+  assert.ok(service.includes("      act: () => act,\n"), "the MCP part's open takes the act's getter");
+  assert.ok(service.includes("model.setSignIns(act = new SignInAct({"), "the one act of the model");
 });
