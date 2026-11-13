@@ -88,7 +88,12 @@ whose pid it tracks too; `--display 174`, and `--chrome-extension <checkout>` to
 time of the stop by use stops it, and a new use starts it again; `--display 171`), and `sign-in-act/check.ts` (board
 ab-v16.97.4: the same service through `sign-in-act/service.ts`, with the run's copy of the receiver 0.3.7 that it reads
 with `git show` from `--chrome-extension <checkout>`; a sign-in with test values on a local login page, the act window
-outside the screen and hidden from the client, the block, the move, the CLI and the secret scan; `--display 171`).
+outside the screen and hidden from the client, the block, the move, the CLI and the secret scan; `--display 171`), and
+`merge-guard/check.ts` (board ab-v16.99: the same service through `merge-guard/service.ts`, with `--test`'s stand-in host
+`github-standin.localhost` and the run's copy of the receiver 0.3.7; a real Playwright client and a raw CDP client on a
+stand-in of a GitHub PR page on `*.localhost` hosts only: a marked PR's merge, Ready for review, auto-merge and approve get
+the guard's 403 and the stand-in gets no write, an unmarked PR's go, and the log names no URL path; `--display 171` or
+`172`).
 
 No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
