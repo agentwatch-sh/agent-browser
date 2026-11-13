@@ -2543,14 +2543,16 @@ export class Stage {
     v.pasteV = true;
     // Control first; the text goes on the clipboard only at V's time (Chrome asks for it after V's keyDown: measured).
     let played = chord.length < 2 || (await this.playKeys(page, st, a, items[chord.length - 2], () => typing.navigated));
-    // The field again right before V (review-129 bar 1), in the gap after Control: a page can change the field after the
-    // paste rule's read.
-    const again = played && !a.over && !typing.navigated ? await this.focused(page, st, o.via ?? undefined) : null;
     if (played) await this.until(a, vDown.t);
     if (!played || a.over || typing.navigated) { if (st.typing === typing) st.typing = null; return this.pasteEnded(page, st, a, o, items, typing.navigated); }
-    // A field of a secret now (or the client's mark) gets no paste, and the text goes as for a secret; a field that is no
-    // text field (or no read) gets Playwright's own input. V does not go, and the chord's Control goes up at its time.
-    const changed = !again || !again.read.typing ? "notTextField" : secretField(again.read) ? "secretField" : st.secret ? "secretMark" : null;
+    // The field again at V's time, after the gap and before the clipboard's hold (review-129 bar 1, review-129b B1): a
+    // page can change the field after the paste rule's read. (The client's mark cannot change here: it is a step of the
+    // tab's gate.) The read can make V late by its limit; the hold and V's send stay after it.
+    const again = await this.focused(page, st, o.via ?? undefined);
+    if (a.over || typing.navigated) { if (st.typing === typing) st.typing = null; return this.pasteEnded(page, st, a, o, items, typing.navigated); }
+    // A field of a secret now gets no paste, and the text goes as for a secret; a field that is no text field (or no
+    // read) gets Playwright's own input. V does not go, and the chord's Control goes up at its time.
+    const changed = !again || !again.read.typing ? "notTextField" : secretField(again.read) ? "secretField" : null;
     if (changed) {
       if (st.typing === typing) st.typing = null;
       this.count(`pasteFieldChanged:${changed}`);
@@ -2558,7 +2560,7 @@ export class Stage {
       st.kq = st.kq.filter((x) => x.ev.code !== "KeyV" || !items.includes(x));
       const ctrlUp = items.filter((x) => x.ev.code !== "KeyV" && x.ev.type === "keyUp").at(-1);
       if (ctrlUp && !(await this.playKeys(page, st, a, ctrlUp))) return this.pasteEnded(page, st, a, o, items, false);
-      return again && changed !== "notTextField" ? this.secretText(page, st, a, { ...o, before: again.read, via: again.via }) : this.ownInput(page, st, a, o);
+      return again && changed !== "notTextField" ? this.secretText(page, st, a, { ...o, before: again.read, via: again.via, want: this.wantOf(again.read, o.text, false) }) : this.ownInput(page, st, a, o);
     }
     // No text goes on the clipboard while an earlier paste's V has no answer: that page can still read the selection.
     const vOpen = this.vPending();
@@ -2613,8 +2615,8 @@ export class Stage {
    * A secret's long text (C11, the paste, rules 7 and 8; board ab-t30.22): never the clipboard. A fill's or a
    * keyboard.insertText's text is the client's own Input.insertText (ownInput: its result is the client's). A collected
    * part (`fallback`) goes as one Input.insertText of its text, as a password manager's fill does; then the field's value:
-   * when the field did not take the text (its old value), the part goes as the client's own keys, counted (review-129
-   * note 1).
+   * when the field did not take the text (its old value, and not `want`, the value that the text gives in place of the
+   * selection), the part goes as the client's own keys, counted (review-129 note 1, review-129b N2).
    */
   private async secretText(page: StagePage, st: TabState, a: Action, o: PasteJob): Promise<void> {
     if (!o.fallback) return this.ownInput(page, st, a, o);
@@ -2623,8 +2625,10 @@ export class Stage {
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, o.e, pr); return; }
     if (!r.ok) return this.fail(page, st, o.e, r.error);
+    // Its old value, and not the value that the text gives in place of the selection (review-129b N2: a part that
+    // replaces a selection with the same text took it).
     const after = await this.focused(page, st, o.via ?? undefined);
-    if (after && after.read.value === o.before.value && !a.over) {
+    if (after && after.read.value === o.before.value && after.read.value !== o.want && !a.over) {
       this.count("secretPartsRefused");
       this.o.log(`relay: the input stage: tab ${page.id}: a field did not take a secret's text (its value did not change); the part goes as the client's own keys`);
       return this.partKeys(page, st, a, o.fallback, o.e);
@@ -2812,7 +2816,7 @@ export class Stage {
       if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a collected part as one Input.insertText (${why})`);
       await this.until(a, ins.t);
       if (a.over) return this.partKeys(page, st, a, items, e);
-      return this.secretText(page, st, a, { e, text, via: rule.secret.via, t0: ins.t, before: rule.secret.before, want: null, fallback: items });
+      return this.secretText(page, st, a, { e, text, via: rule.secret.via, t0: ins.t, before: rule.secret.before, want: this.wantOf(rule.secret.before, text, false), fallback: items });
     }
     this.count("partsAsKeys"); this.count(`partsAsKeys:${why}`);
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a collected part as the client's own keys (${why})`);

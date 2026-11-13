@@ -864,3 +864,19 @@ test("board ab-t30.22, the client's mark with the stage on (C11, the paste, rule
     assert.ok(clip.log.includes("hold 2500"), "a new session of the tab has no mark");
   } finally { await h.close(); }
 });
+
+test("review-129b N5: in a model with the sign-in act (the service's model), the mark is refused on the root and on a browser session with C11's text, and the tab's own session answers {}", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    h.relay.model.setSignIns({ signIn: async () => ({}), signIns: async () => ({}) } as any);
+    const c = await h.connect();
+    const p = await page(h, c);
+    assert.deepEqual(await c.send(MARK, { enabled: true }, p.sessionId), {});
+    const refusal = (e: Error) => e.message === "AgentBrowser.setSecretInput: Not available in the agent browser: AgentBrowser.setSecretInput.";
+    await assert.rejects(c.send(MARK, { enabled: true }), refusal, "the root");
+    const { sessionId: browserSession } = await c.send("Target.attachToBrowserTarget", {});
+    await assert.rejects(c.send(MARK, { enabled: true }, browserSession), refusal, "a browser session");
+    assert.deepEqual(await c.send("AgentBrowser.signIns", {}), {}, "the act's own method is the model's on the root");
+  } finally { await h.close(); }
+});

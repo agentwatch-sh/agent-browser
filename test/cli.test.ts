@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { COMMAND_SPECS, commands } from "../src/commands.ts";
 import { redact } from "../src/outline.ts";
 import { resolveOptions } from "../src/options.ts";
+import { Tab } from "../src/browser.ts";
+import { CDPError } from "../src/cdp.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg, planRecording } from "../src/record.ts";
@@ -440,6 +442,18 @@ test("review-129 bar 4: type --stdin fails closed on the mark: an error answer t
   assert.match(r.json.error.message, /^type: no text field has the focus/);
   assert.deepEqual(seen(from), ["mark true", "mark false"]);
   await run(["close", "marks2"]);
+});
+
+test("review-129b N1: type --stdin stops its text, before any input call, on a closed connection and on no answer of the mark in its time limit (60 s), with the clear error", async () => {
+  const MARK = "AgentBrowser.setSecretInput";
+  for (const err of [new CDPError(MARK, "connection closed"), new CDPError(MARK, "no response after 60000 ms")]) {
+    const calls: string[] = [];
+    const tab = Object.assign(Object.create(Tab.prototype), { drive: "focus-emulation",
+      send: async (m: string, p: any, ms?: number) => { calls.push(`${m}${m === MARK ? ` ${p.enabled}${ms === undefined ? "" : ` ${ms}`}` : ""}`); if (m === MARK && p.enabled) throw err; return {}; },
+      assertAllowed: async () => { calls.push("assertAllowed"); }, whileDrawn: async () => { calls.push("whileDrawn"); }, typeNow: async () => { calls.push("typeNow"); } });
+    await assert.rejects(tab.type("test-secret-d", undefined, true), (e: Error) => e.message === `type: the agent browser did not take the mark of a secret, so no text was sent (${err.message})`, err.message);
+    assert.deepEqual(calls, [`${MARK} true`], `${err.message}: no input call, no other call`);
+  }
 });
 
 test("human output without --json", async () => {
