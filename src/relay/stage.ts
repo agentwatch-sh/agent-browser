@@ -724,7 +724,7 @@ export class Stage {
   }
 
   private count(k: string, n = 1): void { this.counts[k] = (this.counts[k] ?? 0) + n; }
-  /** Whether a paste's V keyDown of any tab has no answer yet (review-126 B4), or got an error answer (review-126b note 2). */
+  /** Whether a paste's V keyDown of any tab is in the closed set (its answer or its read's answer has not come: review-126 B4, board ab-t30.21), or the path stays closed after an error or the read's limit (review-126b note 2). */
   private vPending(): boolean { if (this.failedV.size) return true; for (const s of this.pendingV.values()) if (s.size) return true; return false; }
   /**
    * A paste's V in the closed set (C11, the paste, rule 6): until its answer; then until the page answers the stage's read
@@ -2450,7 +2450,7 @@ export class Stage {
     if (!this.linux()) return { why: "mac" };
     if (!this.clipboard) return { why: "noClipboard" };
     if (page.clipboardGranted?.()) return { why: "clipboardGrant" };
-    // An earlier paste's V with no answer (review-126 B4), or with an error answer (review-126b note 2): its page can still read the selection.
+    // An earlier paste's V in the closed set (review-126 B4, board ab-t30.21), or after an error answer (review-126b note 2): its page can still read the selection.
     if (this.vPending()) return { why: "vPending" };
     if (this.clientKeysHeld(st)) return { why: "keyHeld" };
     const f = await this.focused(page, st);
@@ -2613,7 +2613,7 @@ export class Stage {
     }
     // The read after V's answer goes where the field is at V's time (board ab-t30.21).
     v.pasteV = { via: again!.via };
-    // No text goes on the clipboard while an earlier paste's V has no answer: that page can still read the selection.
+    // No text goes on the clipboard while an earlier paste's V is in the closed set: that page can still read the selection.
     const vOpen = this.vPending();
     st.pasting = !vOpen;
     let ok = false;
@@ -2624,7 +2624,7 @@ export class Stage {
       if (st.typing === typing) st.typing = null;
       if (a.over) return this.pasteEnded(page, st, a, o, items, typing.navigated);
       this.count(vOpen ? "pasteVPending" : "pasteHoldFails");
-      this.o.log(vOpen ? `relay: the input stage: tab ${page.id}: an earlier paste's V has no answer yet; the text goes as Playwright's own input`
+      this.o.log(vOpen ? `relay: the input stage: tab ${page.id}: an earlier paste's V or its read has no answer yet; the text goes as Playwright's own input`
         : `relay: the input stage: tab ${page.id}: the clipboard did not take the text${inTime ? "" : ` in ${CLIPBOARD_HOLD_MS} ms`}; the text goes as Playwright's own input`);
       // V does not go; the chord's Control goes up at its time, then Playwright's own input of the text.
       st.kq = st.kq.filter((x) => x.ev.code !== "KeyV" || !items.includes(x));
