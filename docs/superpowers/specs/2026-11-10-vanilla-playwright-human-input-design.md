@@ -57,7 +57,8 @@ work opened a public site.
    default is 5 s).
 4. **Text (section 7).** For `fill` and `insertText` into a text field, typed keys take the place of the
    inserted text when every character has a key on the US layout, the text has no line feed or tab, and the
-   typing plan fits in 10 s (about 40 to 80 characters). A longer text goes as a person's paste: Control+V from
+   typing plan at the person's speed fits in 10 s (about 40 to 50 characters; no fast end, by the operator's answer
+   on board item ab-2qb). A longer text goes as a person's paste: Control+V from
    the clipboard of the service's own display, which holds the text only for that paste (the operator's answer on
    board item ab-8fu; board ab-t30.19). Else the text goes as Playwright sends it (Q2). The printable keys of
    `pressSequentially` and `type` are collected, so that a long run is pasted too (section 7.5). A date, color or
@@ -550,21 +551,24 @@ The stage's limits, so that a translated action ends inside the defaults:
 - The Playwright MCP inside the service gets `timeouts.action: 30000` in its `createConnection`
   configuration (the service design, section 8.2), not the MCP's 5 s default. Then a long fill or an
   activation's worst case does not end an MCP action that a person's input would finish.
-- `fill` and `insertText`: typed keys only when the plan fits in `STAGE_TYPE_MAX_MS` (first value 10 s);
-  the stage first moves the plan to the fast end of the person's spread when that makes it fit (section 7). A longer
+- `fill` and `insertText`: typed keys only when the plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (first
+  value 10 s); the stage never moves the plan to the fast end of the person's spread (the operator's answer on board
+  item ab-2qb, section 15; board ab-t30.20). A longer
   text goes as a person's paste (section 7.5): measured by board ab-t30.19, a `fill` of 2,500 characters took 1.4 to
   1.5 s through the stage with each of the three Playwright versions of section 13.2.
 - A key run of `pressSequentially` or `type`: the stage collects the run's printable keys and answers each at once
-  (section 7.5), and the run's text goes typed or pasted at its end. The run's time with a person's timing is at most
-  `STAGE_TYPE_MAX_MS` in all (its typed parts, its pastes and its other keys); a part that does not fit in what is
-  left is pasted, and at the end of that time the rest of the run goes as the client sends it, counted. So the stage
-  adds at most about `STAGE_TYPE_MAX_MS` and one part to Playwright's own time of a run. Measured by board ab-t30.19:
-  a `pressSequentially` of 2,500 characters took 1.8 to 2.1 s through the stage (Playwright's own: about 6 s; each key
-  call has its answer at once, and the paste went before the client's next call), and one
-  of 30 lines (1,229 characters with their Enter keys) 17 to 20 s, with each of the three versions. This takes the
-  place of the rule of a key run before board ab-t30.19 (the person's speed for 12 s, the fast end until 25 s, then
-  Playwright's own speed), whose bound (about 850 characters reached Playwright's 30 s timeout: board ab-t30.18) the
-  operator's answer on board item ab-8fu removed.
+  (section 7.5), and the run's text goes typed or pasted at its end. The run's time with a person's timing is at
+  most `STAGE_TYPE_MAX_MS` in all (its typed parts, its pastes and its other keys); a part that does not fit in what
+  is left is pasted, and at the end of that time the rest of the run goes with no person's timing, counted: its
+  printable keys are still collected with their answers at once, and each part goes as the client's own keys at once
+  (review-126 B5). So the stage adds at most about `STAGE_TYPE_MAX_MS` and one part to Playwright's own time of a
+  run. Measured by board ab-t30.19: a `pressSequentially` of 2,500 characters took 1.8 to 2.1 s through the stage
+  (Playwright's own: about 6 s; each key call has its answer at once, and the paste went before the client's next
+  call), and one of 30 lines (1,229 characters with their Enter keys) 17 to 20 s, with each of the three versions;
+  in the review-126 round 13.1 to 13.6 s, and one of 60 lines (2,459 characters) took 15.7 to 16.9 s (Playwright's
+  own: 5.3 to 5.6 s). This takes the place of the rule of a key run before board ab-t30.19 (the person's speed for
+  12 s, the fast end until 25 s, then Playwright's own speed), whose bound (about 850 characters reached
+  Playwright's 30 s timeout: board ab-t30.18) the operator's answer on board item ab-8fu removed.
 - `STAGE_ACTION_MAX_MS` ends any lock hold in the same way (section 4.4).
 - **A whole test of `@playwright/test`.** Its default test timeout is 30 s for the whole test, and the
   stage's time adds up over the test's actions (review-96, B8). With M3 and M5's times, 15 to 20 translated
@@ -641,10 +645,11 @@ The stage types the text as keys when all of these are true. Else it sends the `
    the same US layout. The text has no line feed and no tab: a text with one goes as `Input.insertText`
    (review-96, B4: as Enter, a line feed sends a message in a chat field with Enter-to-send, and a tab moves
    the focus).
-3. The plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (10 s). When it does not, the stage plans at
-   the fast end of the person's spread (about 100 to 120 ms a key); when that fits, it types at that speed.
-   With the first values, about 40 to 60 characters fit at a person's mean speed, and about 80 at the fast
-   end. A longer text goes as a person's paste when the paste rule allows it (section 7.5).
+3. The plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (10 s). With the first values, about 40 to 50
+   characters fit at a person's mean speed. The stage never plans at the fast end of the person's spread
+   (about 100 to 120 ms a key): the operator's answer on board item ab-2qb (section 15; board ab-t30.20). A
+   longer text goes as a person's paste when the paste rule allows it (section 7.5). This holds for `fill`,
+   `keyboard.insertText` and the collected parts of `pressSequentially`, `locator.type` and `keyboard.type`.
 4. On the Mac, the same, with the Mac's editing commands for keys such as Backspace (`src/record.ts`
    `macCommands`).
 
@@ -684,7 +689,9 @@ press, or on `shiftKey` in a key handler, sees a person's Shift.
   events only from an input method. The first build sends no composition events.
 - **A very long text**: above the limit of rule 3. By the operator's answer to Q2 (a), the build typed up
   to the limit at the fast end and sent the whole text as one `Input.insertText` above it. By the operator's later
-  answer on board item ab-8fu, a text above the limit goes as a person's paste (section 7.5).
+  answer on board item ab-8fu, a text above the limit goes as a person's paste (section 7.5). By the operator's
+  answer on board item ab-2qb, the limit is the plan at the person's speed alone: a text that fits only at the fast
+  end goes as a paste too.
 
 ### 7.4 `clear`
 
@@ -697,40 +704,63 @@ The operator answered board item ab-8fu on 2026-11-12: "can we do a simulated co
 as a person's paste, and only a short text is typed. C11 (the collected keys, the paste, the time of a key run) is the
 contract text.
 
-- **The paste.** A text whose typing plan does not fit in what is left of the key run's `STAGE_TYPE_MAX_MS` goes as
-  a person's paste: the stage's own Control, then V 40 to 120 ms after it (a `rawKeyDown` with `modifiers` 2 and no
-  text), the releases with a person's timing. The text is on the CLIPBOARD selection of the service's own display only
-  from V's time to the answer of V's keyDown: Chrome reads the selection in that key's default action. The owner is
-  the service's own X client (`src/service/unit/clipboard.ts`, no package: a small client of the X11 core protocol). The
-  probe of board ab-t30.19 (display 169, Chromium 156) measured it: a CDP Control+V, with or without `commands`, made
-  Chrome paste the selection; the page got trusted `keydown` events of Control and v, a `paste` event with the text in
-  `clipboardData`, `beforeinput` and `input` with `insertFromPaste`, and the `keyup` events; a page's `paste` or
-  `beforeinput` handler that prevents it left the value unchanged; Chrome asked for the selection 2 to 17 ms after V's
-  send, never before it; a text of 300,000 bytes went as an incremental transfer.
+- **The paste.** A text whose typing plan at the person's speed does not fit in what is left of the key run's
+  `STAGE_TYPE_MAX_MS` goes as a person's paste (no fast end: the operator's answer on board item ab-2qb, section
+  15): the stage's own Control, then V 40 to 120 ms after it (a `rawKeyDown` with `modifiers` 2 and no text), the
+  releases with a person's timing. The text is on the CLIPBOARD selection of the service's own display only from V's
+  time to the answer of V's keyDown: Chrome reads the selection in that key's default action. The owner is the
+  service's own X client (`src/service/unit/clipboard.ts`, no package: a small client of the X11 core protocol). The
+  probe of board ab-t30.19 (display 169, Chromium 156) measured it: a CDP Control+V, with or without `commands`,
+  made Chrome paste the selection; the page got trusted `keydown` events of Control and v, a `paste` event with the
+  text in `clipboardData`, `beforeinput` and `input` with `insertFromPaste`, and the `keyup` events; a page's
+  `paste` or `beforeinput` handler that prevents it left the value unchanged; Chrome asked for the selection 2 to 17
+  ms after V's send, never before it; a text of 300,000 bytes went as an incremental transfer.
 - **When the paste does not go.** On the Mac (Chrome shares the operator's own clipboard: open point 7), with no
-  clipboard (the relay: its display is the daemon's), while a connection holds a grant of the clipboard, while the
+  clipboard (the daemon's relay: its display is the daemon's, so there a long text never pastes), while a connection
+  holds a grant of the clipboard (from the grant's request until a reset or the connection's close has cleared the
+  setting: review-126 note 2), while an earlier paste's V of any tab has no answer (review-126 B4, below), while the
   client holds a key, and into a field that is not an input of a text type or a textarea: Playwright's own input (the
   client's `Input.insertText`, or the client's own keys of a collected part). A page that refuses the paste (the
   field's value does not change) gets Playwright's own input of the text after it. A paste handler that inserts its own
   text is counted, with no repair.
-- **The collected keys.** A key run reaches the stage one key at a time, so the stage learns its length by collecting
-  it: each printable key call, its release, and a text in the run get their answers at once (a new exception to "no
-  answer before its events", section 4.5). The run's part ends at the tab's next call that does not join it (a key with
-  no text, Enter, Tab, any other call) or 1 s after its last call; the tab's next call waits until the part's events
-  have gone. The part goes typed when it fits, else pasted, else as the client's own keys. Every end of a part's plan
-  (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`, a navigation, the end of a session or of the tab, an error of
-  an event) frees the lock and opens the gate, and each wait has its limit (review-123b R1).
+- **The collected keys.** A key run reaches the stage one key at a time, so the stage learns its length by
+  collecting it: each printable key call, its release, and a text in the run get their answers at once (a new
+  exception to "no answer before its events", section 4.5). The run's part ends at the tab's next call that does not
+  join it (a key with no text, Enter, Tab, any other call) or 1 s after its last call; the tab's next call waits
+  until the part's events have gone. The part goes typed when it fits at the person's speed, else pasted, else as
+  the client's own keys; after the run's `STAGE_TYPE_MAX_MS` the run's printable keys are still collected, and each
+  part goes as the client's own keys at once (review-126 B5). Every end of a part's plan (a dialog,
+  `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`, a navigation, the end of a session or of the tab, an error of an
+  event) frees the lock and opens the gate, each wait has its limit (review-123b R1), and the part's ended or failed
+  action is closed before the tab's next call, so that call never waits for its own tab's lock (review-126 B1).
+  After a dialog the client's own keys of a part that Chrome dropped while the dialog was open go again, and after
+  any end each wait for Chrome's answers of them has the limit `STAGE_EVENT_WAIT_MS` (review-126 B2). A part keeps
+  its limit when `STAGE_ACTION_MAX_MS` ends the action that it is in (review-126 note 6).
+- **The flush (review-126 B3).** The client has the answers of a part's calls before the part goes, so before a
+  close of the tab (`Target.closeTarget`) and before the detach at the end of the client's last session on the tab
+  (`Target.detachFromTarget`, the close of its connection: Playwright's `browser.close()` over `connectOverCDP`),
+  the rest of the part goes first, in the tab's gate: one `Input.insertText` of a collected part's text, or the rest
+  of a running part's text as one `Input.insertText` after its plan ends as at `STAGE_ACTION_MAX_MS`. One call goes
+  within the limit also for a long text, where the client's own keys would take seconds. The close waits for it at
+  most `STAGE_FLUSH_MS = 5000`.
 - **The named exception, a second side.** A page's key handler that acts on typed keys (a tag input that makes a chip
   at a comma) sees a short text's keys, as before, but a long `pressSequentially` or `type` as a paste, where
   Playwright's own input sends keys. The live rows of board ab-t30.19 hold the tag input's short text (the person's
   chips, as before).
-- **Why no page of another scope reads the text.** The one browser's clipboard serves the tabs of every scope. A page
-  reads it only with the Clipboard API and a grant (with none, `navigator.clipboard.readText()` waits on a prompt that
-  nobody answers, and `document.execCommand("paste")` is refused: the probe), and the stage pastes nothing while any
-  connection holds a grant of the clipboard. The focus is no guard: Playwright gives each page that it drives the focus
-  by emulation, and in the probe a page in a window that was not in front, with a grant, read the clipboard. The text
-  is on the selection for one paste only, on the service's own display (its X server admits only the cookie of the
-  service's own X authority file).
+- **Why no page of another scope reads the text.** The one browser's clipboard serves the tabs of every scope. A
+  page reads it only with the Clipboard API and a grant (with none, `navigator.clipboard.readText()` waits on a
+  prompt that nobody answers, and `document.execCommand("paste")` is refused: the probe), and the stage pastes
+  nothing while any connection holds a grant of the clipboard. The focus is no guard by itself: in the probe a page
+  in a window that was not in front, with a grant, read the clipboard under Playwright's focus emulation; in agent
+  mode with one window per page the model answers that emulation itself, so only the page in front has the focus,
+  but no rule rests on it. The text is on the selection for one paste only, on the service's own display (its X
+  server admits only the cookie of the service's own X authority file). No paste puts its text on the selection
+  while an earlier paste's V has no answer (review-126 B4): Chrome reads the selection in V's default action, after
+  the page's keydown handler, and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s,
+  Chrome asked for the selection 3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held
+  another page's text pasted that text. A frame's own session gets no input while a text is on the selection: its
+  input calls take the input lock (review-126 note 3), and the second probe measured that Chrome takes a key, an
+  `Input.insertText` and a Control+V on an out-of-process frame's own session.
 
 ## 8. Scrolling
 
@@ -996,7 +1026,8 @@ task 4, section 14) is a pull request in agent-browser only.
    - the constants: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`,
      `STAGE_MOVES_IN_FLIGHT = 8`,
      `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`,
-     `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500` (board ab-t30.19, which removed the 12 s of a key run);
+     `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500` (board ab-t30.19, which removed the 12 s of a key run),
+     `STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3);
    - the rule that the stage is on for every client on Linux and on the Mac, with no client setting.
 2. **"The window comes forward for input"**: on Linux with one window per page, the first move of a
    translated pointer action on a page that is not the front page is an input that starts an action too. So
@@ -1237,6 +1268,14 @@ these answers:
   simulated copy/paste for long text input? and we use a person typing for short input only?" Board task
   ab-t30.19 builds it (a long text as a person's paste, a person's typing for a short text only). **Built** by board
   task ab-t30.19 (section 7.5; C11, the collected keys and the paste).
+- **Board item ab-2qb: no fast end for a text.** The question: "A text that a person can type in 10 s only at their
+  fastest speed: should the agent browser paste it instead?" The operator chose (2026-11-13, confirmed): "Paste it":
+  "Only a text that fits in 10 s at a person's usual speed (about 40 to 50 characters) is typed. Every longer text
+  goes as a person's paste. The key times look more like a person's (recommended)." Board task ab-t30.20 builds it
+  in PR #126 (the review-126 round of board task ab-t30.19): a text is typed only when its plan at the person's
+  speed fits in what is left of `STAGE_TYPE_MAX_MS`, and every longer text goes as a person's paste, with the
+  fallbacks of section 7.5 (section 7.2, rule 3; C11, the typing rule's rule 3). The words of Q2 a and of board item
+  ab-8fu above stay as they are.
 
 The questions below stay as the operator read them.
 

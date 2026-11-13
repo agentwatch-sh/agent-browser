@@ -2724,6 +2724,17 @@ export class Stage {
           if (st.gone) { cut = evs.length - i; break; }
         }
       }
+      // A flush (a close of the tab, the end of its client's last session: review-126 B3): the release of a key whose
+      // press went, then the rest of the part's text as one Input.insertText, so that it goes within STAGE_FLUSH_MS.
+      if (st.flushing && i < evs.length) {
+        const [m0, p0] = evs[i];
+        if (m0 === "Input.dispatchKeyEvent" && p0.type === "keyUp") { all.push(this.sendEvent(page, st, undefined, m0, { ...p0, timestamp: this.stamp(page, st) }).catch(() => {})); st.keys.delete(String(p0.code)); i++; }
+        const rest = evs.slice(i).filter(([m, p]) => m === "Input.insertText" || p.type !== "keyUp").map(([, p]) => String(p.text ?? "")).join("");
+        if (rest) { const pr = this.sendEvent(page, st, undefined, "Input.insertText", { text: rest }); all.push(pr.then(() => {}, (err) => { broke ??= err; })); }
+        this.count("partKeysFlushed");
+        i = evs.length;
+        continue;
+      }
       if (i >= evs.length) {
         // The last answers, within STAGE_EVENT_WAIT_MS; a plan's end in that time (a dialog) sends the dropped events again.
         await this.within(Promise.race([Promise.all(all), ...(resumed ? [] : [a.endSignal])]), STAGE_EVENT_WAIT_MS);

@@ -286,6 +286,21 @@ test("review-126 B2: a collected part as the client's own keys (no clipboard) th
   assert.ok((r.stage.counts.partKeysAgain ?? 0) >= 1, "the events that the dialog dropped go again after the close");
 });
 
+test("review-126 B2: no event of a part's own keys goes after the end of the session, also after a resume (the dialog's close)", async () => {
+  let dropAt = -1;
+  const text = LONG.slice(0, 400);
+  const r = await runVector(own([...typeCalls(text), evaluate(), ANSWER(500)], { nodes: { n: INPUT() }, focused: "n" }), { maxMs: 60_000, tab: (t) => {
+    dialogAt(t, 20, null);
+    t.busy = (s) => (s.method === "Input.dispatchKeyEvent" ? 2 : 0);
+    // The session ends 200 ms after the client's Page.handleJavaScriptDialog: the part resumed, and it sends.
+    t.hook = (s) => { if (s.method === "Page.handleJavaScriptDialog") t.clock.timer(200, () => { dropAt = t.clock.now(); t.stage.drop(t.id, "session"); }); return undefined; };
+  } });
+  const after = keyEvents(r.tab).filter((s) => s.t > dropAt && s.params.type === "keyDown");
+  assert.ok(dropAt > 0 && keyEvents(r.tab).some((s) => s.t > dropAt - 200 && s.t < dropAt && s.params.type === "keyDown"), "the part sent after the resume, before the end");
+  assert.deepEqual(after.map((s) => s.params.key), [], "no keyDown after the session's end");
+  assert.equal(r.stage.lock.held, 0);
+});
+
 test("a page that never answers any key of a typed part: the part's end opens the gate within its limits (no repeat of review-123b R1), and the lock is free", async () => {
   const never = (s: Sent) => (s.method === "Input.dispatchKeyEvent" ? new Promise(() => {}) : undefined);
   const r = await runVector(own([...typeCalls("hello"), evaluate()], PAGE()), { hook: never, maxMs: 60_000 });
@@ -350,6 +365,24 @@ test("review-126 B3: the flush before a close of the tab or at its session's end
     assert.equal(r.stage.counts.limitEnds, 1, `${text.length} characters: the plan ends as at the limit`);
     assert.ok(!keyEvents(r.tab).some((s) => s.t > at + 1 && s.params.text), `${text.length} characters: no key of a character after the flush`);
     assert.equal(r.stage.lock.held, 0);
+  }
+  // A part as the client's own keys (no clipboard; a page that takes 2 ms for each key event): at the flush the release of
+  // a key whose press went, then the rest of the text as one Input.insertText (the client's 800 events would take 1.6 s).
+  {
+    const text = LONG.slice(0, 400);
+    let flushed: Promise<void> | null = null, at = -1, done = -1;
+    const r = await runVector(own([...typeCalls(text), evaluate()], { nodes: { n: TEXTAREA() }, focused: "n" }), { maxMs: 60_000, tab: (t) => {
+      t.busy = (s) => (s.method === "Input.dispatchKeyEvent" ? 2 : 0);
+      const tick = () => { if (keyEvents(t).length) t.clock.timer(300, () => { at = t.clock.now(); flushed = t.stage.flush(t); void flushed?.then(() => { done = t.clock.now(); }); }); else t.clock.timer(5, tick); };
+      t.clock.timer(5, tick);
+    } });
+    await r.clock.advance(STAGE_FLUSH_MS);
+    const ins = r.tab.sent.filter((s) => s.method === "Input.insertText"), keysAfter = keyEvents(r.tab).filter((s) => s.t > at + 1 && s.params.type === "keyDown");
+    assert.ok(flushed && done - at <= STAGE_EVENT_WAIT_MS, `the own keys: the flush ends ${Math.round(done - at)} ms after it starts`);
+    assert.equal(ins.length, 1, "the rest as one Input.insertText");
+    assert.deepEqual(keysAfter.map((s) => s.params.key), [], "no keyDown after the flush");
+    assert.equal(r.tab.valueOf("n"), text, "the own keys: the text once");
+    assert.equal(r.stage.counts.partKeysFlushed, 1);
   }
   const n = await runVector(own([insert("abc")], PAGE()));
   assert.equal(n.stage.flush(n.tab), null, "no part: no flush");

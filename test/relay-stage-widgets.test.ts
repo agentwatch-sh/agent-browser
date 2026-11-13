@@ -319,7 +319,7 @@ test("board ab-t30.19: the design's section 6.3 states the new time of a key run
   const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   const AB8FU = "\"can we do a simulated copy/paste for long text input? and we use a person typing for short input only?\"";
   for (const t of [
-    "The run's time with a person's timing is at most `STAGE_TYPE_MAX_MS` in all (its typed parts, its pastes and its other keys); a part that does not fit in what is left is pasted, and at the end of that time the rest of the run goes as the client sends it, counted.",
+    "The run's time with a person's timing is at most `STAGE_TYPE_MAX_MS` in all (its typed parts, its pastes and its other keys); a part that does not fit in what is left is pasted, and at the end of that time the rest of the run goes with no person's timing, counted: its printable keys are still collected with their answers at once, and each part goes as the client's own keys at once (review-126 B5).",
     "So the stage adds at most about `STAGE_TYPE_MAX_MS` and one part to Playwright's own time of a run.",
     "### 7.5 A long text as a person's paste (board ab-t30.19)",
     `The operator answered board item ab-8fu on 2026-11-12: ${AB8FU} So a long text goes as a person's paste, and only a short text is typed.`,
@@ -328,6 +328,33 @@ test("board ab-t30.19: the design's section 6.3 states the new time of a key run
     "7. **The paste on the Mac, and a live view** (board ab-t30.19).",
   ]) assert.ok(D.includes(t.replace(/\s+/g, " ")), `the design says: ${t}`);
   for (const old of ["This is the state until board task ab-t30.19", "until then the rule of Q2 a holds", "`STAGE_RUN_SLOW_MS` (first value 12 s)", "about 1,400 characters"]) assert.ok(!D.includes(old), `the design no longer says: ${old}`);
+});
+
+test("the review-126 round and board ab-t30.20: the design states the flush, the pending V, the frame's input, the grant from its request and the daemon's relay (section 7.5), the typing rule's rule 3 with no fast end (sections 1, 6.3, 7.2, 7.3), the constant STAGE_FLUSH_MS (section 12.1), and section 15's record of board item ab-2qb with the operator's words unchanged (Q2 a's and ab-8fu's words stay)", () => {
+  const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const Q = "\"A text that a person can type in 10 s only at their fastest speed: should the agent browser paste it instead?\"";
+  const A = "\"Paste it\": \"Only a text that fits in 10 s at a person's usual speed (about 40 to 50 characters) is typed. Every longer text goes as a person's paste. The key times look more like a person's (recommended).\"";
+  for (const t of [
+    "typing plan at the person's speed fits in 10 s (about 40 to 50 characters; no fast end, by the operator's answer on board item ab-2qb).",
+    "- `fill` and `insertText`: typed keys only when the plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (first value 10 s); the stage never moves the plan to the fast end of the person's spread (the operator's answer on board item ab-2qb, section 15; board ab-t30.20).",
+    "3. The plan at the person's speed fits in `STAGE_TYPE_MAX_MS` (10 s). With the first values, about 40 to 50 characters fit at a person's mean speed. The stage never plans at the fast end of the person's spread (about 100 to 120 ms a key): the operator's answer on board item ab-2qb (section 15; board ab-t30.20). A longer text goes as a person's paste when the paste rule allows it (section 7.5). This holds for `fill`, `keyboard.insertText` and the collected parts of `pressSequentially`, `locator.type` and `keyboard.type`.",
+    "By the operator's answer on board item ab-2qb, the limit is the plan at the person's speed alone: a text that fits only at the fast end goes as a paste too.",
+    "- **The paste.** A text whose typing plan at the person's speed does not fit in what is left of the key run's `STAGE_TYPE_MAX_MS` goes as a person's paste (no fast end: the operator's answer on board item ab-2qb, section 15):",
+    "with no clipboard (the daemon's relay: its display is the daemon's, so there a long text never pastes), while a connection holds a grant of the clipboard (from the grant's request until a reset or the connection's close has cleared the setting: review-126 note 2), while an earlier paste's V of any tab has no answer (review-126 B4, below),",
+    "and the part's ended or failed action is closed before the tab's next call, so that call never waits for its own tab's lock (review-126 B1).",
+    "After a dialog the client's own keys of a part that Chrome dropped while the dialog was open go again, and after any end each wait for Chrome's answers of them has the limit `STAGE_EVENT_WAIT_MS` (review-126 B2).",
+    "- **The flush (review-126 B3).**",
+    "The close waits for it at most `STAGE_FLUSH_MS = 5000`.",
+    "The focus is no guard by itself: in the probe a page in a window that was not in front, with a grant, read the clipboard under Playwright's focus emulation; in agent mode with one window per page the model answers that emulation itself, so only the page in front has the focus, but no rule rests on it.",
+    "No paste puts its text on the selection while an earlier paste's V has no answer (review-126 B4): Chrome reads the selection in V's default action, after the page's keydown handler, and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s, Chrome asked for the selection 3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held another page's text pasted that text.",
+    "A frame's own session gets no input while a text is on the selection: its input calls take the input lock (review-126 note 3), and the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session.",
+    "`STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3);",
+    `- **Board item ab-2qb: no fast end for a text.** The question: ${Q} The operator chose (2026-11-13, confirmed): ${A} Board task ab-t30.20 builds it in PR #126 (the review-126 round of board task ab-t30.19): a text is typed only when its plan at the person's speed fits in what is left of \`STAGE_TYPE_MAX_MS\`, and every longer text goes as a person's paste, with the fallbacks of section 7.5 (section 7.2, rule 3; C11, the typing rule's rule 3). The words of Q2 a and of board item ab-8fu above stay as they are.`,
+    // The operator's earlier words stay.
+    "- **Q2: a.** A text that fits in 10 s is typed; a longer text goes as one text with no keys (section 7.3).",
+    "- **a. Type a text that fits in 10 s (at the person's speed, or else at the fast end of the person's spread), and insert a longer text as one text (recommended).**",
+  ]) assert.ok(D.includes(t.replace(/\s+/g, " ")), `the design says: ${t}`);
+  for (const old of ["about 40 to 80 characters", "and about 80 at the fast end", "the stage first moves the plan to the fast end", "The focus is no guard: Playwright gives each page", "(the relay: its display is the daemon's)"]) assert.ok(!D.includes(old), `the design no longer says: ${old}`);
 });
 
 // ================================================================ the page-side texts (node:vm, a small DOM model)

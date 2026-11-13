@@ -233,7 +233,9 @@ test("the ends at a failure: an X server that does not answer (the hold ends fal
   try {
     w.x.stall = true;
     const t0 = Date.now();
-    assert.equal(await w.clip.hold("abc"), false);
+    // Bounded here (review-126: mutation row 56 needs a named red test, not a file that never ends).
+    const held = await Promise.race([w.clip.hold("abc"), new Promise((r) => setTimeout(() => r("no answer in 2 s"), 2000))]);
+    assert.equal(held, false, "a request that waits for the X server has its limit");
     assert.ok(Date.now() - t0 < 1000, "the hold ends at its limit");
     assert.equal(w.clip.holding, false);
     w.x.stall = false;

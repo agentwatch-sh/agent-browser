@@ -23,6 +23,9 @@
 //   and insertFromPaste), a short text is typed, a field that refuses the paste gets the client's text, a text of many
 //   lines passes, and the CLIPBOARD selection of the run's display has no owner after each paste (the relay's stage has
 //   the owner of the run's own Xvfb through the live rows' door, AGENT_BROWSER_STAGE_CLIPBOARD).
+// - The flush (review-126 B3): a pressSequentially, then page.close() at once, and then browser.close() of a second
+//   connectOverCDP at once: the field holds the text (the page sends each value of its textarea to the server, which
+//   keeps the last one), as with Playwright's own input.
 // - The harness rows R3, R4 and K1 to K4 (board ab-t30.2's harness): the input research's recorder page through the
 //   stage with Playwright 1.65.0, scored as the harness scores, against STAGE_REFERENCE (the keys' reference is the
 //   literature's until part B's parameters, board ab-t30.13), and against STAGE_PERSON when it names a reference of the
@@ -118,11 +121,26 @@ document.getElementById('after4').addEventListener('click', () => __k.after4++);
 document.getElementById('cc').addEventListener('click', () => __k.cc++);
 document.getElementById('en').onclick = function noop() {};
 document.getElementById('tap').addEventListener('click', () => { document.getElementById('tapop').style.display = 'block'; });
+// review-126 B3: with ?tok=, the length and a hash (FNV-1a of the UTF-16 units) of each value of the textarea go to the
+// server, and once more at pagehide (the last one counts: a page that the client closes at once can tell no other way).
+// Small bodies: the browser keeps at most 64 KB of keepalive requests in flight.
+const tok = new URLSearchParams(location.search).get('tok');
+if (tok) {
+  let seq = 0;
+  const fnv = (v) => { let x = 2166136261; for (let i = 0; i < v.length; i++) { x ^= v.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; } return x; };
+  const body = () => { const v = document.getElementById('ta').value; return (++seq) + ' ' + v.length + ' ' + fnv(v); };
+  addEventListener('input', (e) => { if (e.target.id === 'ta') fetch('/value?tok=' + tok, { method: 'POST', body: body(), keepalive: true }).catch(() => {}); });
+  addEventListener('pagehide', () => navigator.sendBeacon('/value?tok=' + tok, body()));
+}
 </script></body></html>`;
 }
 const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margin:0}input{position:absolute;left:20px;top:30px;width:200px;height:30px;font:16px monospace}</style></head><body><input id=fi>`
   + `<script>window.__fd = 0; document.getElementById('fi').addEventListener('mousedown', () => __fd++);</script></body></html>`;
 
+/** review-126 B3: the last value of each page's textarea (by its token): its number, its length and its hash. */
+const VALUES = new Map<string, { seq: number; len: number; hash: number }>();
+/** The page's hash of a value (FNV-1a of its UTF-16 units). */
+const fnv = (v: string) => { let x = 2166136261; for (let i = 0; i < v.length; i++) { x ^= v.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; } return x; };
 /** The server of the keys page, its frame, and the recorder (with its box and its /log). */
 function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
   const HTML = readFileSync(RECORDER, "utf8");
@@ -137,6 +155,17 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
       req.setEncoding("utf8");
       req.on("data", (d) => (body += d));
       req.on("end", () => { try { recs.push(...(JSON.parse(body) as Rec[])); } catch { /* a broken beacon */ } res.writeHead(204).end(); });
+      return;
+    }
+    if (req.method === "POST" && u.pathname === "/value") {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (d) => (body += d));
+      req.on("end", () => {
+        const tok = u.searchParams.get("tok") ?? "", [seq, len, hash] = body.split(" ").map(Number), old = VALUES.get(tok);
+        if (!old || seq > old.seq) VALUES.set(tok, { seq, len, hash });
+        res.writeHead(204).end();
+      });
       return;
     }
     const html = (s: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(s);
@@ -159,6 +188,8 @@ type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) 
 const T40 = "The quick brown fox jumps over the dogs.", T140 = "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text in one step, as a paste.";
 const T2500 = "The quick brown fox jumps over the lazy dog, 42 times; ".repeat(46).slice(0, 2500);
 const LINES = Array.from({ length: 30 }, (_, i) => `Line ${String(i + 1).padStart(2, "0")}: the quick brown fox jumps.`).join("\n");
+/** review-126 B5: 60 lines, 2,459 characters with their Enter keys. */
+const LINES60 = Array.from({ length: 60 }, (_, i) => `Line ${String(i + 1).padStart(2, "0")}: the quick brown fox jumps over.`).join("\n");
 const click = (p: any, sel: string) => p.locator(sel).click();
 const ROWS: Row[] = [
   { name: "fill() an input with text and no focus", act: (p) => p.locator("#t").fill("jane.doe@example.com"), fields: ["t"] },
@@ -168,7 +199,7 @@ const ROWS: Row[] = [
   { name: "fill() a contenteditable (the text as it is)", act: (p) => p.locator("#ce").fill("Hello there"), fields: ["ce"] },
   { name: "fill() with a line feed (the text as it is)", act: (p) => p.locator("#ta").fill("two\nlines"), fields: ["ta"] },
   { name: "fill() of 40 characters", act: (p) => p.locator("#t").fill(T40), fields: ["t"] },
-  { name: "fill() above the limit (140 characters, the text as it is)", act: (p) => p.locator("#ta").fill(T140), fields: ["ta"] },
+  { name: "fill() above the limit (138 characters: a person's paste)", act: (p) => p.locator("#ta").fill(T140), fields: ["ta"], paste: { field: "ta", len: T140.length } },
   { name: "clear()", act: (p) => p.locator("#t").clear(), fields: ["t"] },
   { name: "pressSequentially() into an empty textarea with no focus", act: (p) => p.locator("#ta").pressSequentially("Meet me at 10:45."), fields: ["ta"] },
   { name: "pressSequentially() into a textarea whose text a script set (the caret at its end)", act: (p) => p.locator("#ta2").pressSequentially(" and more"), fields: ["ta2"] },
@@ -206,6 +237,7 @@ const ROWS: Row[] = [
   { name: "the paste: fill() of 2,500 characters into a field that refuses a paste: the client's text after the refused paste", act: (p) => p.locator("#np").fill(T2500), fields: ["np"], paste: { field: "np", len: 2500, refused: true } },
   { name: "the paste: pressSequentially() of 300 characters into a field that refuses a paste: the client's own keys after the refused paste", act: (p) => p.locator("#np").pressSequentially(T2500.slice(0, 300)), fields: ["np"], paste: { field: "np", len: 300, refused: true } },
   { name: "the paste: pressSequentially() of 30 lines (1,229 characters with their Enter keys) into a textarea within Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially(LINES), fields: ["ta"], paste: "lines" },
+  { name: "the paste (review-126 B5): pressSequentially() of 60 lines (2,459 characters with their Enter keys) into a textarea within Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially(LINES60), fields: ["ta"], paste: "lines" },
   // Open point 1 with the operator's answer on ab-pf8 (board ab-t30.18): a field with a widget sign gets no focus click, so
   // its panel never opens, and the next click passes, as with Playwright's own input; the trace names the sign.
   { name: "open point 1: a date picker that opens at a click (a click listener on the field): fill(); then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], trace: /^no focus click \(focusWidget: listener\)$/ },
@@ -319,7 +351,9 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail });
           (out.rows as unknown[]).push({ version, row: row.name, measure: row.measure ?? null, stage: s, own: q, same, trace });
         }
-        if (version === "1.65.0" && !process.env.STAGE_KEY_ROWS) await harnessKeys(o, ctx, port, recs, out);
+        if (!only || only.test("the flush")) await flushRows(o, pw, version, ctx, plain, KEYS_URL, out);
+        // STAGE_HARNESS=1: the harness rows also with STAGE_KEY_ROWS (a run of a few rows and the harness).
+        if (version === "1.65.0" && (!process.env.STAGE_KEY_ROWS || process.env.STAGE_HARNESS === "1")) await harnessKeys(o, ctx, port, recs, out);
       } finally {
         await browser.close().catch(() => {});
         await plain.close().catch(() => {});
@@ -328,6 +362,42 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
   } finally {
     writeFileSync(join(o.run, "stage-keys-live.json"), JSON.stringify(out, null, 1) + "\n");
     server.close();
+  }
+}
+
+/**
+ * review-126 B3: a pressSequentially, then at once page.close(), or browser.close() of a second connectOverCDP: the
+ * textarea's last value (the page sends each one) is the text, through the stage and with Playwright's own input.
+ */
+async function flushRows(o: StageContext, pw: any, version: string, ctx: any, plain: any, url: string, out: Record<string, unknown>): Promise<void> {
+  const SHORT = "Thanks, see you at 10.";
+  const cases: { name: string; text: string; end: "page" | "browser" }[] = [
+    { name: `the flush (review-126 B3): pressSequentially('${SHORT}'), then page.close() at once: the field holds the text`, text: SHORT, end: "page" },
+    { name: "the flush (review-126 B3): pressSequentially(<2,500 characters>), then page.close() at once: the field holds the text", text: T2500, end: "page" },
+    { name: `the flush (review-126 B3): pressSequentially('${SHORT}'), then browser.close() of a second connectOverCDP at once: the field holds the text`, text: SHORT, end: "browser" },
+  ];
+  for (const c of cases) {
+    const one = async (where: "stage" | "own") => {
+      const tok = `${version}-${where}-${Math.random().toString(36).slice(2)}`;
+      let b2: any = null, p: any;
+      if (where === "stage" && c.end === "browser") { b2 = await pw.chromium.connectOverCDP(o.url("stage"), { timeout: 20_000 }); p = await b2.contexts()[0].newPage(); }
+      else p = await (where === "stage" ? ctx : plain).newPage();
+      await p.goto(`${url}?tok=${tok}`);
+      await sleep(300);
+      const t0 = Date.now();
+      const r = await timed(async () => { await p.locator("#ta").pressSequentially(c.text); if (b2) await b2.close(); else await p.close(); });
+      const want = { len: c.text.length, hash: fnv(c.text) }, has = () => { const v = VALUES.get(tok); return !!v && v.len === want.len && v.hash === want.hash; };
+      for (let end = Date.now() + 8000; Date.now() < end && !has(); ) await sleep(100);
+      const got = VALUES.get(tok);
+      if (b2) await p.close().catch(() => {});
+      return { ok: r.ok, ms: Date.now() - t0, actMs: r.ms, ...(r.error ? { error: r.error } : {}), same: has(), len: got?.len ?? 0 };
+    };
+    const s = await one("stage"), q = await one("own");
+    // Playwright's own input over its own Chromium (launchPersistentContext): its browser.close() would end that Chromium, so the
+    // browser row compares with its page.close().
+    const ok = s.ok && s.same && q.ok && q.same;
+    o.record({ group: G, case: `${c.name} (Playwright ${version})`, status: ok ? "pass" : "fail", ms: s.actMs, detail: { stage: s, own: q } });
+    (out.rows as unknown[]).push({ version, row: c.name, stage: s, own: q, same: s.same });
   }
 }
 
@@ -362,6 +432,11 @@ async function harnessKeys(o: StageContext, ctx: any, port: number, recs: Rec[],
     await step("click", "locator('#b').click()", () => page.locator("#b").click(), widthOf("b"));
     await step("fill", "locator('#ta').fill(...) (no focus)", () => page.locator("#ta").fill(TEXTS[3]));
     await step("type", "keyboard.type(...) (a second text for K1 per key)", async () => { await page.keyboard.press("End"); await page.keyboard.type(" " + TEXTS[3] + " " + TEXTS[1]); });
+    // Board ab-t30.20 (no fast end): a text is typed only when it fits at the person's speed (about 40 to 50 characters), so
+    // the harness's longer texts above are pasted; four short texts give K1 and K2 typed keys to measure.
+    for (const [i, t] of ["Meet me at the gate.", "Call me back at noon.", "The cat sat on the mat.", "Bring two red pens, please."].entries()) {
+      await step("type", `keyboard.type(...) (a short text ${i + 1} for K1 and K2)`, async () => { await page.keyboard.press("End"); await page.keyboard.type(" " + t); });
+    }
     // Board ab-t30.19: long texts as a person's paste (R4 counts each as a long text with no keys of its characters, and as a paste).
     await step("fill", "locator('#ta').fill(<2,500 characters>) (a person's paste)", () => page.locator("#ta").fill(T2500));
     await step("type", "locator('#f').pressSequentially(<300 characters>) (a person's paste)", async () => { await page.locator("#f").fill(""); await page.locator("#f").pressSequentially(T2500.slice(0, 300)); });

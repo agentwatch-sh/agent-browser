@@ -950,6 +950,18 @@ test("review-119b R3: a busy page (a keydown handler that blocks 2.5 s at b): at
   assert.equal(l.tab.valueOf("7.3.18"), "x".repeat(22) + T40, "at the limit: the text once");
 });
 
+test("review-126 (C11:1010 exactly): which calls join a collected part: an Input.insertText joins only an open part and only with a text that is not empty (alone it opens no part); a call on a frame's own session never joins", async () => {
+  const alone = await runVector(own([insert("é")], FIELD));
+  assert.deepEqual([alone.stage.counts.collectedCalls, alone.stage.counts.collectedParts], [undefined, undefined], "an Input.insertText alone opens no part");
+  const empty = await runVector(own([...typeCalls("ab"), insert(""), ...typeCalls("c")], FIELD));
+  assert.deepEqual([empty.stage.counts.collectedCalls, empty.stage.counts.collectedParts], [6, 2], "an empty text does not join: it ends the part, and c opens another");
+  const joined = await runVector(own([...typeCalls("ab"), insert("é"), ...typeCalls("c")], FIELD));
+  assert.deepEqual([joined.stage.counts.collectedCalls, joined.stage.counts.collectedParts], [7, 1], "a text joins an open part");
+  assert.equal(joined.tab.valueOf("7.3.18"), "abéc");
+  const frame = await runVector(own([{ session: "child", ...kd("a") }, { session: "child", ...ku("a") }], FIELD));
+  assert.deepEqual([frame.stage.counts.collectedCalls, frame.stage.counts.childInputs], [undefined, 2], "a frame's own session never joins");
+});
+
 test("review-126 note 6: STAGE_ACTION_MAX_MS during a collection (the part is in the action of Playwright's focus call) does not leave the part with no limit: it goes RUN_IDLE_MS after its last call, with the whole text", async () => {
   // 28 keys, one each 900 ms from 10 ms: the last keyUp at 24.43 s, the limit at 25 s, the gap's end at 25.43 s.
   const runCalls = Array.from({ length: 28 }, (_, i) => [{ at: i * 900 + 10, ...kd("x") }, { at: i * 900 + 130, ...ku("x") }]).flat();
